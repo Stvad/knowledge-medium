@@ -1,17 +1,24 @@
-import { useState, useEffect } from 'react';
-import { v4 as uuidv4 } from 'uuid';
+import {useState, useEffect} from 'react'
+import {v4 as uuidv4} from 'uuid'
 import {Block, RendererRegistry} from './types'
-import { useRendererRegistry } from './hooks/useRendererRegistry';
-import { removeBlock, moveBlock } from './utils/block-operations';
+import {useRendererRegistry} from './hooks/useRendererRegistry'
+import {removeBlock, moveBlock} from './utils/block-operations'
+import {useDocument} from '@automerge/automerge-repo-react-hooks'
+import {updateText} from '@automerge/automerge/next'
+import type {AutomergeUrl} from '@automerge/automerge-repo'
+
+interface BlockDoc {
+    blocks: Block[];
+}
 
 function BlockComponent({
-    block,
-    onUpdate,
-    onDelete,
-    onIndent,
-    onUnindent,
-    rendererRegistry
-}: {
+                            block,
+                            onUpdate,
+                            onDelete,
+                            onIndent,
+                            onUnindent,
+                            rendererRegistry,
+                        }: {
     block: Block;
     onUpdate: (block: Block) => void;
     onDelete: () => void;
@@ -19,33 +26,28 @@ function BlockComponent({
     onUnindent: () => void;
     rendererRegistry: RendererRegistry;
 }) {
-    const [isEditing, setIsEditing] = useState(false);
+    const [isEditing, setIsEditing] = useState(false)
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            const newBlock: Block = {
-                id: uuidv4(),
-                content: '',
-                properties: {},
-                children: [],
-            };
+            e.preventDefault()
+            const newBlock: Block = emptyBlock()
             onUpdate({
                 ...block,
                 children: [...block.children, newBlock],
-            });
+            })
         } else if (e.key === 'Backspace' && block.content === '') {
-            e.preventDefault();
-            onDelete();
+            e.preventDefault()
+            onDelete()
         } else if (e.key === 'Tab') {
-            e.preventDefault();
+            e.preventDefault()
             if (e.shiftKey) {
-                onUnindent();
+                onUnindent()
             } else {
-                onIndent();
+                onIndent()
             }
         }
-    };
+    }
 
     const getRenderer = () => {
         if (isEditing) return rendererRegistry.default
@@ -57,12 +59,12 @@ function BlockComponent({
         }
         return Renderer
     }
-// Determine which renderer to use
+
     const Renderer = getRenderer()
-    console.log({ block, Renderer, rendererRegistry });
 
     return (
-        <div className={`block ${block.properties.type === 'renderer' ? 'custom-block' : ''}`}>
+        <div className={`block ${block.properties.type === 'renderer' ? 'custom-block' : ''}`}
+             onKeyDown={handleKeyDown}>
             <div className="block-actions">
                 <button onClick={() => setIsEditing(!isEditing)}>
                     {isEditing ? 'Done' : 'Edit'}
@@ -99,22 +101,46 @@ function BlockComponent({
                 />
             ))}
         </div>
-    );
+    )
 }
 
-function App() {
-    const [blocks, setBlocks] = useState<Block[]>(() => {
-        const savedBlocks = localStorage.getItem('blocks')
-        if (savedBlocks) return JSON.parse(savedBlocks)
+const emptyBlock = () => {
+    return {
+        id: uuidv4(),
+        content: '',
+        properties: {},
+        children: [],
+    }
+}
 
-        return exampleBlocks
-    })
-
-    const rendererRegistry = useRendererRegistry(blocks)
-
+function App2({docUrl}: { docUrl: AutomergeUrl }) {
+    const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
+    console.log({doc})
+    // const parsedDoc = doc?.state ? JSON.parse(doc.state) as BlockDoc : null
+    // const blocks = parsedDoc?.blocks || exampleBlocks //todo empty
+    // const rendererRegistry = useRendererRegistry(blocks)
     useEffect(() => {
-        localStorage.setItem('blocks', JSON.stringify(blocks))
-    }, [blocks])
+        changeDoc(d => {
+            d.state = JSON.stringify({blocks: exampleBlocks})
+        })
+    }, [])
+}
+
+
+function App({docUrl}: { docUrl: AutomergeUrl }) {
+    const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
+    const parsedDoc = doc?.state ? JSON.parse(doc.state) as BlockDoc : null
+    const blocks = parsedDoc?.blocks || exampleBlocks //todo empty
+    console.log({blocks})
+    const {registry: rendererRegistry, refreshRegistry} = useRendererRegistry(blocks)
+
+
+    const updateBlocksState = async (newBlocks: Block[]) => {
+        changeDoc(d => {
+            d.state = JSON.stringify({blocks: newBlocks})
+        })
+        await refreshRegistry()
+    }
 
     return (
         <div style={{padding: '1rem'}}>
@@ -123,22 +149,22 @@ function App() {
                     key={block.id}
                     block={block}
                     onUpdate={(updatedBlock) => {
-                        setBlocks(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)));
+                        updateBlocksState(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)))
                     }}
                     onDelete={() => {
-                        setBlocks(removeBlock(blocks, block.id));
+                        updateBlocksState(removeBlock(blocks, block.id))
                     }}
                     onIndent={() => {
-                        setBlocks(moveBlock(blocks, block.id, 'indent'));
+                        updateBlocksState(moveBlock(blocks, block.id, 'indent'))
                     }}
                     onUnindent={() => {
-                        setBlocks(moveBlock(blocks, block.id, 'unindent'));
+                        updateBlocksState(moveBlock(blocks, block.id, 'unindent'))
                     }}
                     rendererRegistry={rendererRegistry}
                 />
             ))}
         </div>
-    );
+    )
 }
 
 const exampleBlocks = [{
@@ -177,5 +203,4 @@ export default function CustomBlockRenderer({ block, onUpdate }) {
     ],
 }]
 
-
-export default App;
+export default App

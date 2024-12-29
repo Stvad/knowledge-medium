@@ -1,4 +1,4 @@
-import {useState, useEffect} from 'react'
+import {useState, useCallback, useEffect} from 'react'
 import {Block, RendererRegistry} from '../types'
 import {wrappedComponentFromModule} from './useDynamicComponent'
 import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
@@ -17,29 +17,29 @@ export function useRendererRegistry(blocks: Block[]) {
         renderer: RendererBlockRenderer,
     })
 
-    // Find and compile renderer blocks
-    useEffect(() => {
-        async function updateRegistry() {
-            const newRegistry = {...registry}
+    const refreshRegistry = useCallback(async () => {
+        console.log('Manually refreshing renderer registry')
+        const newRegistry = {...registry}
 
-            const rendererBlocks = getRendererBlocks(blocks)
+        const rendererBlocks = getRendererBlocks(blocks)
 
-            for (const block of rendererBlocks) {
-                try {
-                    const DynamicComp = await wrappedComponentFromModule(block.content);
-                    if (DynamicComp) {
-                        newRegistry[block.id] = DynamicComp;
-                    }
-                } catch (error) {
-                    console.error(`Failed to compile renderer ${block.id}:`, error)
+        for (const block of rendererBlocks) {
+            try {
+                const DynamicComp = await wrappedComponentFromModule(block.content)
+                if (DynamicComp) {
+                    newRegistry[block.id] = DynamicComp
                 }
+            } catch (error) {
+                console.error(`Failed to compile renderer ${block.id}:`, error)
             }
-
-            setRegistry(newRegistry)
         }
 
-        updateRegistry()
-    }, [blocks])
+        setRegistry(newRegistry)
+    }, [blocks, registry])
 
-    return registry
+    useEffect(() => {
+        refreshRegistry()
+    }, [])
+
+    return {registry, refreshRegistry}
 }
