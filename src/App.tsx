@@ -1,10 +1,9 @@
-import {useState, useEffect} from 'react'
+import {useState} from 'react'
 import {v4 as uuidv4} from 'uuid'
 import {Block, RendererRegistry} from './types'
 import {useRendererRegistry} from './hooks/useRendererRegistry'
 import {removeBlock, moveBlock} from './utils/block-operations'
 import {useDocument} from '@automerge/automerge-repo-react-hooks'
-import {updateText} from '@automerge/automerge/next'
 import type {AutomergeUrl} from '@automerge/automerge-repo'
 
 interface BlockDoc {
@@ -113,24 +112,11 @@ const emptyBlock = () => {
     }
 }
 
-function App2({docUrl}: { docUrl: AutomergeUrl }) {
-    const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
-    console.log({doc})
-    // const parsedDoc = doc?.state ? JSON.parse(doc.state) as BlockDoc : null
-    // const blocks = parsedDoc?.blocks || exampleBlocks //todo empty
-    // const rendererRegistry = useRendererRegistry(blocks)
-    useEffect(() => {
-        changeDoc(d => {
-            d.state = JSON.stringify({blocks: exampleBlocks})
-        })
-    }, [])
-}
-
 
 function App({docUrl}: { docUrl: AutomergeUrl }) {
     const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
     const parsedDoc = doc?.state ? JSON.parse(doc.state) as BlockDoc : null
-    const blocks = parsedDoc?.blocks || exampleBlocks //todo empty
+    const blocks = parsedDoc?.blocks || getExampleBlocks() //todo empty
     console.log({blocks})
     const {registry: rendererRegistry, refreshRegistry} = useRendererRegistry(blocks)
 
@@ -167,20 +153,22 @@ function App({docUrl}: { docUrl: AutomergeUrl }) {
     )
 }
 
-const exampleBlocks = [{
-    id: uuidv4(),
-    content: 'Hello World\nThis is a multiline\ntext block',
-    properties: {},
-    children: [
-        {
-            id: uuidv4(),
-            content: 'A normal text block\nwith multiple lines',
-            properties: {},
-            children: [],
-        },
-        {
-            id: uuidv4(),
-            content: `
+const getExampleBlocks = () => {
+    const rendererId = uuidv4()
+    return [{
+        id: uuidv4(),
+        content: 'Hello World\nThis is a multiline\ntext block',
+        properties: {},
+        children: [
+            {
+                id: uuidv4(),
+                content: 'A normal text block\nwith multiple lines',
+                properties: {},
+                children: [],
+            },
+            {
+                id: rendererId,
+                content: `
 import React from 'react'
 
 export default function CustomBlockRenderer({ block, onUpdate }) {
@@ -191,16 +179,17 @@ export default function CustomBlockRenderer({ block, onUpdate }) {
         </button>
     </div>;
 }`,
-            properties: {type: 'renderer'},
-            children: [],
-        },
-        {
-            id: uuidv4(),
-            content: 'This block uses the custom renderer',
-            properties: {renderer: '3'},
-            children: [],
-        },
-    ],
-}]
+                properties: {type: 'renderer'},
+                children: [],
+            },
+            {
+                id: uuidv4(),
+                content: 'This block uses the custom renderer',
+                properties: {renderer: rendererId},
+                children: [],
+            },
+        ],
+    }]
+}
 
 export default App

@@ -1,6 +1,6 @@
 import {useState, useEffect} from 'react'
 import * as Babel from '@babel/standalone'
-import {BlockRenderer} from '../types'
+import {BlockRenderer, BlockRendererProps} from '../types'
 
 import { ErrorBoundary } from 'react-error-boundary';
 
@@ -10,7 +10,7 @@ function FallbackComponent({ error }: { error: Error }) {
 
 export async function wrappedComponentFromModule(code: string): Promise<BlockRenderer> {
     const Component = await componentFromModule(code);
-    return (props: BlockRenderer) => (
+    return (props: BlockRendererProps) => (
         <ErrorBoundary FallbackComponent={FallbackComponent}>
             {Component && <Component {...props} />}
         </ErrorBoundary>

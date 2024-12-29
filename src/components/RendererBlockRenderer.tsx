@@ -44,7 +44,7 @@ export function RendererBlockRenderer({ block, onUpdate }: RendererBlockRenderer
                 />
             ) : (
                 <div className="block-content">
-                    <DynamicBlockRenderer code={block.content} />
+                    <DynamicBlockRenderer code={block.content} block={block} />
                 </div>
             )}
             <BlockProperties

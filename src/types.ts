@@ -11,10 +11,12 @@ export interface Block {
     children: Block[];
 }
 
-export type BlockRenderer = React.ComponentType<{
+export interface BlockRendererProps {
     block: Block;
     onUpdate: (block: Block) => void;
-}>;
+}
+
+export type BlockRenderer = React.ComponentType<BlockRendererProps>;
 
 export interface RendererRegistry {
     [key: string]: BlockRenderer;
