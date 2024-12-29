@@ -1,14 +1,29 @@
-import { BlockProperties as BlockPropertiesType } from '../types';
+import {BlockProperties as BlockPropertiesType, Block} from '../types'
 
 interface BlockPropertiesProps {
-    properties: BlockPropertiesType;
+    block: Block;
     show: boolean;
     onChange: (properties: BlockPropertiesType) => void;
 }
 
-export function BlockProperties({ properties, show, onChange }: BlockPropertiesProps) {
+export function BlockProperties({ block, show, onChange }: BlockPropertiesProps) {
+    const properties = block.properties || {};
     return (
         <div className={`block-properties ${show ? '' : 'hidden'}`}>
+            <div className="property-row">
+                <input
+                    className="key"
+                    type="text"
+                    value="id"
+                    disabled
+                />
+                <input
+                    className="value"
+                    type="text"
+                    value={block.id || ''}
+                    disabled
+                />
+            </div>
             {Object.entries(properties).map(([key, value]) => (
                 <div key={key} className="property-row">
                     <input

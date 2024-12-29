@@ -1,38 +1,58 @@
-import { useState, useEffect } from 'react';
-import * as Babel from '@babel/standalone';
+import {useState, useEffect} from 'react'
+import * as Babel from '@babel/standalone'
+import {BlockRenderer} from '../types'
 
+import { ErrorBoundary } from 'react-error-boundary';
 
+function FallbackComponent({ error }: { error: Error }) {
+    return <div>Something went wrong: {error.message}</div>;
+}
 
-export function useDynamicComponent(code: string) {
-    const [DynamicComp, setDynamicComp] = useState<React.ComponentType | null>(null);
-    const [error, setError] = useState<Error | null>(null);
+export async function wrappedComponentFromModule(code: string): Promise<BlockRenderer> {
+    const Component = await componentFromModule(code);
+    return (props: BlockRenderer) => (
+        <ErrorBoundary FallbackComponent={FallbackComponent}>
+            {Component && <Component {...props} />}
+        </ErrorBoundary>
+    );
+}
 
-    useEffect(() => {
-        async function compileAndRender() {
-            try {
-                const transpiledCode = Babel.transform(code, {
-                    filename: 'dynamic-block.tsx',
-                    presets: ['react', 'typescript'],
-                }).code;
+export async function componentFromModule(code: string): Promise<BlockRenderer> {
+    try {
+        const transpiledCode = Babel.transform(code, {
+            filename: 'dynamic-block.tsx',
+            presets: ['react', 'typescript'],
+        }).code;
 
-                if (!transpiledCode) {
-                    throw new Error('Transpiled code is empty');
-                }
-
-                const blob = new Blob([transpiledCode], { type: 'text/javascript' });
-                const blobUrl = URL.createObjectURL(blob);
-                const module = await import(/* @vite-ignore */ blobUrl);
-                setDynamicComp(() => module.default);
-                setError(null);
-            } catch (err) {
-                console.error('Compilation error:', err);
-                setError(err instanceof Error ? err : new Error('Unknown error'));
-                setDynamicComp(null);
-            }
+        if (!transpiledCode) {
+            throw new Error('Transpiled code is empty');
         }
 
-        compileAndRender();
+        const blob = new Blob([transpiledCode], { type: 'text/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+        const module = await import(/* @vite-ignore */ blobUrl);
+        
+        return module.default;
+    } catch (err) {
+        console.error('Compilation error:', err);
+        return () => (
+            <div className="error">
+                Failed to compile component: {err instanceof Error ? err.message : 'Unknown error'}
+            </div>
+        );
+    }
+}
+
+export function useDynamicComponent(code: string) {
+    const [DynamicComp, setDynamicComp] = useState<BlockRenderer | null>(null);
+
+    useEffect(() => {
+        async function loadComponent() {
+            setDynamicComp(await wrappedComponentFromModule(code));
+        }
+
+        loadComponent();
     }, [code]);
 
-    return { DynamicComp, error };
+    return  DynamicComp ;
 }
