@@ -52,13 +52,17 @@ export function DefaultBlockRenderer(
     {
         block,
         onUpdate,
-        ContentRenderer = TextAreaContentRenderer,
+        ContentRenderer : DefaultContentRenderer = TextAreaContentRenderer,
     }: BlockRendererProps & { ContentRenderer?: BlockRenderer },
 ) {
     const [showProperties, setShowProperties] = useState(false)
+    const [isEditing, setIsEditing] = useState(false)
+    // todo how does having a rendered view work for this case? - add it
+
+    const ContentRenderer =  isEditing ?  TextAreaContentRenderer : DefaultContentRenderer
 
     return (
-        <>
+        <div className={'block'}>
             <div className="block-actions">
                 <div className="block-actions">
                     <button onClick={() => setShowProperties(!showProperties)}>
@@ -66,6 +70,9 @@ export function DefaultBlockRenderer(
                     </button>
                     <button onClick={() => navigator.clipboard.writeText(block.id)}>
                         Copy ID
+                    </button>
+                    <button onClick={() => setIsEditing(!isEditing)}>
+                        {isEditing ? 'Done' : 'Edit'}
                     </button>
                 </div>
 
@@ -76,6 +83,6 @@ export function DefaultBlockRenderer(
                 onChange={(newProps) => onUpdate({...block, properties: newProps})}
             />}
             <BlockChildren block={block} onUpdate={onUpdate}/>
-        </>
+        </div>
     )
 }

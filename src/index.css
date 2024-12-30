@@ -23,6 +23,10 @@ body {
   position: relative;
 }
 
+.page {
+  padding: 1em;
+}
+
 .block:hover .block-actions {
   opacity: 1;
 }

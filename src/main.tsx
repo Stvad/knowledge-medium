@@ -22,9 +22,6 @@ if (isValidAutomergeUrl(rootDocUrl)) {
     handle = repo.find(rootDocUrl)
 } else {
     handle = repo.create<{state:string}>({state: "[]"})
-    // handle.change(d => {
-    //     d.blocks = []
-    // })
 }
 const docUrl = document.location.hash = handle.url
 

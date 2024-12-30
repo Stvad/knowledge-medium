@@ -1,31 +1,17 @@
 import {BlockRendererProps} from '../types.ts'
-import {useState} from 'react'
 import {useRenderer} from '../context/RendererContext'
-import {DefaultBlockRenderer} from './DefaultBlockRenderer.tsx'
 
 type BlockComponentProps = BlockRendererProps
 
 export function BlockComponent({block, onUpdate}: BlockComponentProps) {
-    const [isEditing, setIsEditing] = useState(false)
-
-    const registryRenderer = useRenderer(block)
-    const Renderer = isEditing ? DefaultBlockRenderer : registryRenderer
+    const Renderer = useRenderer(block)
 
     //todo maybe support 2 modes
     // full replaces - where all the things are handled by renderer
     // or partial, where there some common things the base compenent provides
     // like children, editing mode, the bullet thing in the future etc
 
-    return (
-        <div className={`block`}>
-            <div className="block-actions">
-                <button onClick={() => setIsEditing(!isEditing)}>
-                    {isEditing ? 'Done' : 'Edit'}
-                </button>
-            </div>
-            <Renderer block={block} onUpdate={onUpdate}/>
-        </div>
-    )
+    return <Renderer block={block} onUpdate={onUpdate}/>
 }
 
 export const BlockChildren = ({block, onUpdate}: BlockComponentProps) => {

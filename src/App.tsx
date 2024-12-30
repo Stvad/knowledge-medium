@@ -27,25 +27,25 @@ function App({docUrl}: { docUrl: AutomergeUrl }) {
 
     return (
         <RendererContext.Provider value={{registry: rendererRegistry, refreshRegistry}}>
-            <div style={{padding: '1rem'}}>
-            {blocks.map((block) => (
-                <BlockComponent
-                    key={block.id}
-                    block={block}
-                    onUpdate={(updatedBlock) => {
-                        updateBlocksState(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)))
-                    }}
-                    // onDelete={() => {
-                    //     updateBlocksState(removeBlock(blocks, block.id))
-                    // }}
-                    // onIndent={() => {
-                    //     updateBlocksState(moveBlock(blocks, block.id, 'indent'))
-                    // }}
-                    // onUnindent={() => {
-                    //     updateBlocksState(moveBlock(blocks, block.id, 'unindent'))
-                    // }}
-                />
-            ))}
+            <div className={"page"}>
+                {blocks.map((block) => (
+                    <BlockComponent
+                        key={block.id}
+                        block={block}
+                        onUpdate={(updatedBlock) => {
+                            updateBlocksState(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)))
+                        }}
+                        // onDelete={() => {
+                        //     updateBlocksState(removeBlock(blocks, block.id))
+                        // }}
+                        // onIndent={() => {
+                        //     updateBlocksState(moveBlock(blocks, block.id, 'indent'))
+                        // }}
+                        // onUnindent={() => {
+                        //     updateBlocksState(moveBlock(blocks, block.id, 'unindent'))
+                        // }}
+                    />
+                ))}
             </div>
         </RendererContext.Provider>
     )
