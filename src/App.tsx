@@ -1,10 +1,10 @@
 import {v4 as uuidv4} from 'uuid'
 import {Block} from './types'
 import {useRendererRegistry} from './hooks/useRendererRegistry'
-import {removeBlock, moveBlock} from './utils/block-operations'
 import {useDocument} from '@automerge/automerge-repo-react-hooks'
 import type {AutomergeUrl} from '@automerge/automerge-repo'
 import {BlockComponent} from './components/BlockComponent.tsx'
+import {RendererContext} from './context/RendererContext'
 
 interface BlockDoc {
     blocks: Block[];
@@ -26,7 +26,8 @@ function App({docUrl}: { docUrl: AutomergeUrl }) {
     }
 
     return (
-        <div style={{padding: '1rem'}}>
+        <RendererContext.Provider value={{registry: rendererRegistry, refreshRegistry}}>
+            <div style={{padding: '1rem'}}>
             {blocks.map((block) => (
                 <BlockComponent
                     key={block.id}
@@ -34,19 +35,19 @@ function App({docUrl}: { docUrl: AutomergeUrl }) {
                     onUpdate={(updatedBlock) => {
                         updateBlocksState(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)))
                     }}
-                    onDelete={() => {
-                        updateBlocksState(removeBlock(blocks, block.id))
-                    }}
-                    onIndent={() => {
-                        updateBlocksState(moveBlock(blocks, block.id, 'indent'))
-                    }}
-                    onUnindent={() => {
-                        updateBlocksState(moveBlock(blocks, block.id, 'unindent'))
-                    }}
-                    rendererRegistry={rendererRegistry}
+                    // onDelete={() => {
+                    //     updateBlocksState(removeBlock(blocks, block.id))
+                    // }}
+                    // onIndent={() => {
+                    //     updateBlocksState(moveBlock(blocks, block.id, 'indent'))
+                    // }}
+                    // onUnindent={() => {
+                    //     updateBlocksState(moveBlock(blocks, block.id, 'unindent'))
+                    // }}
                 />
             ))}
-        </div>
+            </div>
+        </RendererContext.Provider>
     )
 }
 

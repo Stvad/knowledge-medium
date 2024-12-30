@@ -2,6 +2,7 @@ import {useState, KeyboardEvent} from 'react'
 import {Block, BlockRendererProps, BlockRenderer} from '../types'
 import {BlockProperties} from './BlockProperties'
 import {emptyBlock} from '../utils/block-operations.ts'
+import {BlockChildren} from './BlockComponent.tsx'
 
 function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -47,11 +48,13 @@ function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
     />
 }
 
-export function DefaultBlockRenderer({
-                                         block,
-                                         onUpdate,
-                                         ContentRenderer = TextAreaContentRenderer,
-                                     }: BlockRendererProps & { ContentRenderer?: BlockRenderer }) {
+export function DefaultBlockRenderer(
+    {
+        block,
+        onUpdate,
+        ContentRenderer = TextAreaContentRenderer,
+    }: BlockRendererProps & { ContentRenderer?: BlockRenderer },
+) {
     const [showProperties, setShowProperties] = useState(false)
 
     return (
@@ -72,6 +75,7 @@ export function DefaultBlockRenderer({
                 block={block}
                 onChange={(newProps) => onUpdate({...block, properties: newProps})}
             />}
+            <BlockChildren block={block} onUpdate={onUpdate}/>
         </>
     )
 }
