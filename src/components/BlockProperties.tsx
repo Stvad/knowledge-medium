@@ -2,14 +2,21 @@ import {BlockProperties as BlockPropertiesType, Block} from '../types'
 
 interface BlockPropertiesProps {
     block: Block;
-    show: boolean;
     onChange: (properties: BlockPropertiesType) => void;
 }
 
-export function BlockProperties({ block, show, onChange }: BlockPropertiesProps) {
+export function BlockProperties({ block, onChange }: BlockPropertiesProps) {
     const properties = block.properties || {};
+    const updateKey = (newKey: string, key: string, value: string | undefined) => {
+        if (newKey && newKey !== key) {
+            const newProps = {...properties}
+            delete newProps[key]
+            newProps[newKey] = value
+            onChange(newProps)
+        }
+    }
     return (
-        <div className={`block-properties ${show ? '' : 'hidden'}`}>
+        <div className={`block-properties`}>
             <div className="property-row">
                 <input
                     className="key"
@@ -33,23 +40,11 @@ export function BlockProperties({ block, show, onChange }: BlockPropertiesProps)
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                                 e.preventDefault();
-                                const newKey = e.currentTarget.value;
-                                if (newKey && newKey !== key) {
-                                    const newProps = { ...properties };
-                                    delete newProps[key];
-                                    newProps[newKey] = value;
-                                    onChange(newProps);
-                                }
+                                updateKey(e.currentTarget.value, key, value)
                             }
                         }}
                         onBlur={(e) => {
-                            const newKey = e.target.value;
-                            if (newKey && newKey !== key) {
-                                const newProps = { ...properties };
-                                delete newProps[key];
-                                newProps[newKey] = value;
-                                onChange(newProps);
-                            }
+                            updateKey(e.target.value, key, value)
                         }}
                     />
                     <input
@@ -57,6 +52,7 @@ export function BlockProperties({ block, show, onChange }: BlockPropertiesProps)
                         type="text"
                         value={value}
                         onChange={(e) => {
+                            //todo debounce
                             onChange({
                                 ...properties,
                                 [key]: e.target.value,

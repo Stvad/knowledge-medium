@@ -1,4 +1,5 @@
-import { Block } from '../types';
+import {Block} from '../types'
+import {v4 as uuidv4} from 'uuid'
 
 export function removeBlock(blocks: Block[], idToRemove: string): Block[] {
     return blocks.filter(block => block.id !== idToRemove)
@@ -82,5 +83,14 @@ export function moveBlock(blocks: Block[], blockId: string, direction: 'indent' 
                 }))
             };
         });
+    }
+}
+
+export const emptyBlock = () => {
+    return {
+        id: uuidv4(),
+        content: '',
+        properties: {},
+        children: [],
     }
 }
