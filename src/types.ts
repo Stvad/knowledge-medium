@@ -23,3 +23,7 @@ export type BlockRenderer = ComponentType<BlockRendererProps>;
 export interface RendererRegistry {
     [key: string]: BlockRenderer;
 }
+
+export interface BlockDoc {
+    blocks: Block[];
+}

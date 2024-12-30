@@ -1,14 +1,11 @@
 import {v4 as uuidv4} from 'uuid'
-import {Block} from './types'
+import {Block, BlockDoc} from './types'
 import {useRendererRegistry} from './hooks/useRendererRegistry'
 import {useDocument} from '@automerge/automerge-repo-react-hooks'
 import type {AutomergeUrl} from '@automerge/automerge-repo'
 import {BlockComponent} from './components/BlockComponent.tsx'
 import {RendererContext} from './context/RendererContext'
 
-interface BlockDoc {
-    blocks: Block[];
-}
 
 function App({docUrl}: { docUrl: AutomergeUrl }) {
     const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
@@ -25,9 +22,59 @@ function App({docUrl}: { docUrl: AutomergeUrl }) {
         await refreshRegistry()
     }
 
+    const exportState = () => {
+        if (!doc?.state) return
+        const blob = new Blob([doc.state], { type: 'application/json' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = 'document-state.json'
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+    }
+
+    const importState = (event: React.ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (!file) return
+
+        const reader = new FileReader()
+        reader.onload = (e) => {
+            const content = e.target?.result as string
+            try {
+                // Validate JSON structure
+                const parsed = JSON.parse(content) as BlockDoc
+                if (!Array.isArray(parsed.blocks)) {
+                    throw new Error('Invalid document structure')
+                }
+                
+                changeDoc(d => {
+                    d.state = content
+                })
+            } catch (err) {
+                console.error('Failed to import document:', err)
+                alert('Invalid document format')
+            }
+        }
+        reader.readAsText(file)
+    }
+
     return (
         <RendererContext.Provider value={{registry: rendererRegistry, refreshRegistry}}>
-            <div className={"page"}>
+            <div className="page">
+                <div className="document-controls">
+                    <button onClick={exportState}>Export Document</button>
+                    <label>
+                        Import Document
+                        <input 
+                            type="file" 
+                            accept=".json"
+                            onChange={importState}
+                            style={{ marginLeft: '8px' }}
+                        />
+                    </label>
+                </div>
                 {blocks.map((block) => (
                     <BlockComponent
                         key={block.id}

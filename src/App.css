@@ -5,6 +5,15 @@
   text-align: center;
 }
 
+.document-controls {
+    padding: 8px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
 .logo {
   height: 6em;
   padding: 1.5em;
