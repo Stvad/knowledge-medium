@@ -1,16 +1,10 @@
 import {createContext, useContext} from 'react'
 import {Block, RendererRegistry} from '../types'
-import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
-import {RendererBlockRenderer} from '../components/RendererBlockRenderer'
+import {defaultRegistry} from '../hooks/useRendererRegistry.tsx'
 
 interface RendererContextType {
     registry: RendererRegistry
     refreshRegistry: () => Promise<void>
-}
-
-const defaultRegistry: RendererRegistry = {
-    default: DefaultBlockRenderer,
-    renderer: RendererBlockRenderer,
 }
 
 export const RendererContext = createContext<RendererContextType>({

@@ -11,12 +11,13 @@ const getRendererBlocks = (blocks: Block[]): Block[] =>
             : getRendererBlocks(block.children),
     )
 
+export const defaultRegistry: RendererRegistry = {
+    default: DefaultBlockRenderer,
+    renderer: RendererBlockRenderer,
+}
 
 export function useRendererRegistry(blocks: Block[]) {
-    const [registry, setRegistry] = useState<RendererRegistry>({
-        default: DefaultBlockRenderer,
-        renderer: RendererBlockRenderer,
-    })
+    const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
 
     const refreshRegistry = useCallback(async () => {
         console.log('Manually refreshing renderer registry')
@@ -29,6 +30,9 @@ export function useRendererRegistry(blocks: Block[]) {
                 const DynamicComp = await wrappedComponentFromModule(block.content)
                 if (DynamicComp) {
                     newRegistry[block.id] = DynamicComp
+                    if (block.properties.rendererName) {
+                        newRegistry[block.properties.rendererName] = DynamicComp
+                    }
                 }
             } catch (error) {
                 console.error(`Failed to compile renderer ${block.id}:`, error)

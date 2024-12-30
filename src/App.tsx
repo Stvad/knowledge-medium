@@ -2,7 +2,7 @@ import {v4 as uuidv4} from 'uuid'
 import {Block, BlockDoc} from './types'
 import {useRendererRegistry} from './hooks/useRendererRegistry'
 import {useDocument} from '@automerge/automerge-repo-react-hooks'
-import type {AutomergeUrl} from '@automerge/automerge-repo'
+import {AutomergeUrl, updateText} from '@automerge/automerge-repo'
 import {BlockComponent} from './components/BlockComponent.tsx'
 import {RendererContext} from './context/RendererContext'
 
@@ -17,7 +17,8 @@ function App({docUrl}: { docUrl: AutomergeUrl }) {
 
     const updateBlocksState = async (newBlocks: Block[]) => {
         changeDoc(d => {
-            d.state = JSON.stringify({blocks: newBlocks})
+            // d.state = JSON.stringify({blocks: newBlocks})
+            updateText(d, ['state'], JSON.stringify({blocks: newBlocks}))
         })
         await refreshRegistry()
     }
@@ -113,17 +114,22 @@ const getExampleBlocks = () => {
             },
             {
                 id: rendererId,
-                content: `
-import React from 'react'
-
-export default function CustomBlockRenderer({ block, onUpdate }) {
+                content: `import { DefaultBlockRenderer } from "@/components/DefaultBlockRenderer"; 
+ 
+function CustomBlockRenderer({ block, onUpdate }) {
     return <div style={{ color: "green" }}>
         Custom renderer for: {block.content}
         <button onClick={() => onUpdate({ ...block, content: block.content + '!' })}>
-            Add !
+            Add !!
         </button>
-    </div>;
-}`,
+    </div>
+}
+
+
+// By default renderer is responsible for rendering everything in the block (including controls/etc), 
+// but we often want to just update the content of the block and leave everything else untouched, Here is an example of doing that
+export default ({ block, onUpdate }) => <DefaultBlockRenderer block={block} onUpdate={onUpdate} ContentRenderer={CustomBlockRenderer}/> 
+`,
                 properties: {type: 'renderer'},
                 children: [],
             },
