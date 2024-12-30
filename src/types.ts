@@ -1,3 +1,5 @@
+import type {ComponentType} from 'react'
+
 export interface BlockProperties {
     type?: string;
     renderer?: string;  // Reference to another block's ID that defines a renderer
@@ -16,7 +18,7 @@ export interface BlockRendererProps {
     onUpdate: (block: Block) => void;
 }
 
-export type BlockRenderer = React.ComponentType<BlockRendererProps>;
+export type BlockRenderer = ComponentType<BlockRendererProps>;
 
 export interface RendererRegistry {
     [key: string]: BlockRenderer;

@@ -9,7 +9,7 @@ interface BlockChildrenParams {
     rendererRegistry: RendererRegistry
 }
 
-const BlockChildren = ({block, onUpdate, rendererRegistry}: BlockChildrenParams) => {
+export const BlockChildren = ({block, onUpdate, rendererRegistry}: BlockChildrenParams) => {
     return <>
         {block.children.map((child) => (
             <BlockComponent

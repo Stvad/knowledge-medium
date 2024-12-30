@@ -1,17 +1,10 @@
-import  { useState } from 'react';
-import { Block } from '../types';
-import { BlockProperties } from './BlockProperties';
+import {useState, KeyboardEvent} from 'react'
+import {Block, BlockRendererProps, BlockRenderer} from '../types'
+import {BlockProperties} from './BlockProperties'
 import {emptyBlock} from '../utils/block-operations.ts'
 
-interface DefaultBlockRendererProps {
-    block: Block;
-    onUpdate: (block: Block) => void;
-}
-
-export function DefaultBlockRenderer({ block, onUpdate }: DefaultBlockRendererProps) {
-    const [showProperties, setShowProperties] = useState(false);
-
-    const handleKeyDown = (e: React.KeyboardEvent) => {
+function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
+    const handleKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
             const newBlock: Block = emptyBlock()
@@ -32,6 +25,34 @@ export function DefaultBlockRenderer({ block, onUpdate }: DefaultBlockRendererPr
         }
     }
 
+    return <textarea
+        value={block.content}
+        onChange={(e) => onUpdate({...block, content: e.target.value})}
+        rows={Math.min(5, block.content.split('\n').length)}
+        onKeyDown={handleKeyDown}
+        style={{
+            width: '100%',
+            resize: 'vertical',
+            minHeight: '1.5em',
+            background: 'transparent',
+            border: '1px solid #444',
+            color: 'inherit',
+            padding: '4px 8px',
+            margin: '2px 0',
+            borderRadius: '4px',
+            boxSizing: 'border-box',
+            fontFamily: 'inherit',
+            fontSize: 'inherit',
+        }}
+    />
+}
+
+export function DefaultBlockRenderer({
+                                         block,
+                                         onUpdate,
+                                         ContentRenderer = TextAreaContentRenderer,
+                                     }: BlockRendererProps & { ContentRenderer?: BlockRenderer }) {
+    const [showProperties, setShowProperties] = useState(false)
 
     return (
         <>
@@ -46,30 +67,11 @@ export function DefaultBlockRenderer({ block, onUpdate }: DefaultBlockRendererPr
                 </div>
 
             </div>
-            <textarea
-                value={block.content}
-                onChange={(e) => onUpdate({...block, content: e.target.value})}
-                rows={Math.min(5, block.content.split('\n').length)}
-                onKeyDown={handleKeyDown}
-                style={{
-                    width: '100%',
-                    resize: 'vertical',
-                    minHeight: '1.5em',
-                    background: 'transparent',
-                    border: '1px solid #444',
-                    color: 'inherit',
-                    padding: '4px 8px',
-                    margin: '2px 0',
-                    borderRadius: '4px',
-                    boxSizing: 'border-box',
-                    fontFamily: 'inherit',
-                    fontSize: 'inherit',
-                }}
-            />
+            <ContentRenderer block={block} onUpdate={onUpdate}/>
             {showProperties && <BlockProperties
                 block={block}
-                onChange={(newProps) => onUpdate({ ...block, properties: newProps })}
+                onChange={(newProps) => onUpdate({...block, properties: newProps})}
             />}
         </>
-    );
+    )
 }

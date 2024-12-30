@@ -1,37 +1,28 @@
-import {useState} from 'react'
 import {Editor} from '@monaco-editor/react'
 import {BlockRendererProps} from '../types'
-import {DynamicBlockRenderer} from './DynamicBlockRenderer'
+import {DefaultBlockRenderer} from './DefaultBlockRenderer.tsx'
 
-
-export function RendererBlockRenderer({block, onUpdate}: BlockRendererProps) {
-    const [isEditing, setIsEditing] = useState(true)
-
-    // ${block.properties.type === 'renderer' ? 'custom-block' : ''}
-
-    return (
-        <>
-            {isEditing ? (
-                <Editor
-                    height="400px"
-                    defaultLanguage="typescript"
-                    defaultValue={block.content}
-                    onChange={(value) => {
-                        if (value !== undefined) {
-                            onUpdate({...block, content: value})
-                        }
-                    }}
-                    options={{
-                        minimap: {enabled: false},
-                        fontSize: 14,
-                        scrollBeyondLastLine: false,
-                    }}
-                />
-            ) : (
-                <div className="block-content">
-                    <DynamicBlockRenderer code={block.content} block={block}/>
-                </div>
-            )}
-        </>
-    )
+const MonacoContentRenderer = ({block, onUpdate}: BlockRendererProps) => {
+    return <Editor
+        height="400px"
+        defaultLanguage="typescript"
+        defaultValue={block.content}
+        onChange={(value) => {
+            if (value !== undefined) {
+                onUpdate({...block, content: value})
+            }
+        }}
+        options={{
+            minimap: {enabled: false},
+            fontSize: 14,
+            scrollBeyondLastLine: false,
+        }}
+    />
 }
+
+
+export const RendererBlockRenderer = ({block, onUpdate}: BlockRendererProps) =>
+    <DefaultBlockRenderer
+        block={block}
+        onUpdate={onUpdate}
+        ContentRenderer={MonacoContentRenderer}/>
