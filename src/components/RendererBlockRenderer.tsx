@@ -17,8 +17,14 @@ const MonacoContentRenderer = ({block, onUpdate}: BlockRendererProps) => {
 
     const handleEditorMount = (editor: MonacoEditor, monaco: any) => {
         monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-            //todo unclear if this is the correct  option
+            //todo: enabling jsx support unclear if this is the correct option
             jsx: monaco.languages.typescript.JsxEmit.Preserve,
+
+            // todo figure out module/type import stuff
+            // moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+            // module: monaco.languages.typescript.ModuleKind.ESNext,
+            // esModuleInterop: true,
+            // allowJs: true
         });
 
         return editor.onDidBlurEditorText(() => onChange(editor.getValue()))

@@ -31,7 +31,7 @@ export function useRendererRegistry(blocks: Block[], safeMode?: boolean) {
         }
 
         console.log('Manually refreshing renderer registry')
-        const newRegistry = {...registry}
+        const newRegistry = {...defaultRegistry}
 
         const rendererBlocks = getRendererBlocks(blocks)
 

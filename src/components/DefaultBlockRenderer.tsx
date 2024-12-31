@@ -1,10 +1,27 @@
 import {useState, KeyboardEvent} from 'react'
 import {Block, BlockRendererProps, BlockRenderer} from '../types'
+import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import remarkBreaks from 'remark-breaks';
+
 import {BlockProperties} from './BlockProperties'
 import {emptyBlock} from '../utils/block-operations.ts'
 import {BlockChildren} from './BlockComponent.tsx'
 
-function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
+export function MarkdownContentRenderer({block}: BlockRendererProps) {
+    return <div style={{
+        padding: '4px 8px',
+        margin: '2px 0',
+    }}>
+        <Markdown
+            remarkPlugins={[remarkGfm, remarkBreaks]}
+        >
+            {block.content}
+        </Markdown>
+    </div>
+}
+
+export function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
     const handleKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
@@ -52,7 +69,7 @@ export function DefaultBlockRenderer(
     {
         block,
         onUpdate,
-        ContentRenderer : DefaultContentRenderer = TextAreaContentRenderer,
+        ContentRenderer : DefaultContentRenderer = MarkdownContentRenderer,
     }: BlockRendererProps & { ContentRenderer?: BlockRenderer },
 ) {
     const [showProperties, setShowProperties] = useState(false)
