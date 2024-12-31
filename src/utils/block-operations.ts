@@ -86,11 +86,12 @@ export function moveBlock(blocks: Block[], blockId: string, direction: 'indent' 
     }
 }
 
-export const emptyBlock = () => {
-    return {
-        id: uuidv4(),
-        content: '',
-        properties: {},
-        children: [],
-    }
-}
+export const emptyBlock = () => createBlock()
+
+export const createBlock = (overrides?: Partial<Block>) => ({
+    id: uuidv4(),
+    content: '',
+    properties: {},
+    children: [],
+    ...overrides,
+})

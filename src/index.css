@@ -20,7 +20,42 @@ body {
 .block {
   margin-left: 20px;
   margin-bottom: 10px;
-  position: relative;
+  display: flex;
+  flex-direction: row;
+    position: relative;
+}
+
+.block-body {
+  flex: 1;
+}
+
+.block-controls {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.block-bullet {
+  cursor: default;
+  width: 16px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  color: #666;
+}
+
+.block-bullet.has-children {
+  cursor: pointer;
+}
+
+.block-bullet.has-children:hover {
+  color: #000;
+}
+
+.block-content {
+  flex: 1;
 }
 
 .page {

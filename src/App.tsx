@@ -115,7 +115,7 @@ const getExampleBlocks = () => {
                 id: rendererId,
                 content: `import { DefaultBlockRenderer } from "@/components/DefaultBlockRenderer"; 
  
-function CustomBlockRenderer({ block, onUpdate }) {
+function ContentRenderer({ block, onUpdate }) {
     return <div style={{ color: "green" }}>
         Custom renderer for: {block.content}
         <button onClick={() => onUpdate({ ...block, content: block.content + '!' })}>
@@ -125,9 +125,10 @@ function CustomBlockRenderer({ block, onUpdate }) {
 }
 
 
-// By default renderer is responsible for rendering everything in the block (including controls/etc), 
-// but we often want to just update the content of the block and leave everything else untouched, Here is an example of doing that
-export default ({ block, onUpdate }) => <DefaultBlockRenderer block={block} onUpdate={onUpdate} ContentRenderer={CustomBlockRenderer}/> 
+// By default, renderer is responsible for rendering everything in the block (including controls/etc), 
+// but we often want to just update how content of the block is rendered and leave everything else untouched, 
+// Here is an example of doing that
+export default ({ block, onUpdate }) => <DefaultBlockRenderer block={block} onUpdate={onUpdate} ContentRenderer={ContentRenderer}/> 
 `,
                 properties: {type: 'renderer'},
                 children: [],

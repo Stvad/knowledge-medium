@@ -2,7 +2,7 @@ import {useState, KeyboardEvent} from 'react'
 import {Block, BlockRendererProps, BlockRenderer} from '../types'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks';
+import remarkBreaks from 'remark-breaks'
 
 import {BlockProperties} from './BlockProperties'
 import {emptyBlock} from '../utils/block-operations.ts'
@@ -65,41 +65,57 @@ export function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
     />
 }
 
+interface DefaultBlockRendererProps extends BlockRendererProps {
+    ContentRenderer?: BlockRenderer;
+    EditContentRenderer?: BlockRenderer;
+}
+
 export function DefaultBlockRenderer(
     {
         block,
         onUpdate,
-        ContentRenderer : DefaultContentRenderer = MarkdownContentRenderer,
-    }: BlockRendererProps & { ContentRenderer?: BlockRenderer },
+        ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
+        EditContentRenderer = TextAreaContentRenderer,
+    }: DefaultBlockRendererProps,
 ) {
     const [showProperties, setShowProperties] = useState(false)
     const [isEditing, setIsEditing] = useState(false)
-    // todo how does having a rendered view work for this case? - add it
 
-    const ContentRenderer =  isEditing ?  TextAreaContentRenderer : DefaultContentRenderer
+    const ContentRenderer = isEditing ? EditContentRenderer : DefaultContentRenderer
+
+    const [isCollapsed, setIsCollapsed] = useState(false)
+    const hasChildren = block.children.length > 0
 
     return (
         <div className={'block'}>
             <div className="block-actions">
-                <div className="block-actions">
-                    <button onClick={() => setShowProperties(!showProperties)}>
-                        {showProperties ? 'Hide Props' : 'Show Props'}
-                    </button>
-                    <button onClick={() => navigator.clipboard.writeText(block.id)}>
-                        Copy ID
-                    </button>
-                    <button onClick={() => setIsEditing(!isEditing)}>
-                        {isEditing ? 'Done' : 'Edit'}
-                    </button>
-                </div>
-
+                <button onClick={() => setShowProperties(!showProperties)}>
+                    {showProperties ? 'Hide Props' : 'Show Props'}
+                </button>
+                <button onClick={() => navigator.clipboard.writeText(block.id)}>
+                    Copy ID
+                </button>
+                <button onClick={() => setIsEditing(!isEditing)}>
+                    {isEditing ? 'Done' : 'Edit'}
+                </button>
             </div>
-            <ContentRenderer block={block} onUpdate={onUpdate}/>
-            {showProperties && <BlockProperties
-                block={block}
-                onChange={(newProps) => onUpdate({...block, properties: newProps})}
-            />}
-            <BlockChildren block={block} onUpdate={onUpdate}/>
+
+            <div className="block-controls">
+                <span
+                    className={`block-bullet ${hasChildren ? 'has-children' : ''}`}
+                    onClick={() => hasChildren && setIsCollapsed(!isCollapsed)}
+                >
+                    {hasChildren ? (isCollapsed ? '▸' : '▾') : '•'}
+                </span>
+            </div>
+            <div className={"block-body"}>
+                <ContentRenderer block={block} onUpdate={onUpdate}/>
+                {showProperties && <BlockProperties
+                    block={block}
+                    onChange={(newProps) => onUpdate({...block, properties: newProps})}
+                />}
+                {!isCollapsed && <BlockChildren block={block} onUpdate={onUpdate}/>}
+            </div>
         </div>
     )
 }
