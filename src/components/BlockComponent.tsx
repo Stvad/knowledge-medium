@@ -1,5 +1,5 @@
 import {BlockRendererProps} from '../types.ts'
-import {useRenderer} from '../context/RendererContext'
+import {useRenderer} from '../hooks/useRendererRegistry.tsx'
 
 type BlockComponentProps = BlockRendererProps
 

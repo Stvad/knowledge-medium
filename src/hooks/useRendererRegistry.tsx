@@ -1,8 +1,13 @@
-import {useState, useCallback, useEffect} from 'react'
+import {useState, useCallback, useEffect, createContext, useContext} from 'react'
 import {Block, RendererRegistry} from '../types'
 import {wrappedComponentFromModule} from './useDynamicComponent'
 import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
 import {RendererBlockRenderer} from '../components/RendererBlockRenderer.tsx'
+
+interface RendererContextType {
+    registry: RendererRegistry
+    refreshRegistry: () => Promise<void>
+}
 
 const getRendererBlocks = (blocks: Block[]): Block[] =>
     blocks.flatMap(block =>
@@ -16,10 +21,15 @@ export const defaultRegistry: RendererRegistry = {
     renderer: RendererBlockRenderer,
 }
 
-export function useRendererRegistry(blocks: Block[]) {
+export function useRendererRegistry(blocks: Block[], safeMode?: boolean) {
     const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
 
     const refreshRegistry = useCallback(async () => {
+        if (safeMode) {
+            console.log('Safe mode enabled - using default registry only')
+            return
+        }
+
         console.log('Manually refreshing renderer registry')
         const newRegistry = {...registry}
 
@@ -47,4 +57,25 @@ export function useRendererRegistry(blocks: Block[]) {
     }, [])
 
     return {registry, refreshRegistry}
+}
+
+export const RendererContext = createContext<RendererContextType>({
+    registry: defaultRegistry,
+    refreshRegistry: async () => {
+        console.warn('RendererContext not initialized')
+    },
+})
+
+export const useRenderer = (block: Block) => {
+    const {registry} = useContext(RendererContext)
+
+    if (block.properties.type === 'renderer') {
+        return registry.renderer
+    }
+
+    if (block.properties.renderer && registry[block.properties.renderer]) {
+        return registry[block.properties.renderer]
+    }
+
+    return registry.default
 }

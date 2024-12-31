@@ -1,18 +1,17 @@
 import {v4 as uuidv4} from 'uuid'
 import {Block, BlockDoc} from './types'
-import {useRendererRegistry} from './hooks/useRendererRegistry'
+import {useRendererRegistry, RendererContext} from './hooks/useRendererRegistry'
 import {useDocument} from '@automerge/automerge-repo-react-hooks'
 import {AutomergeUrl, updateText} from '@automerge/automerge-repo'
 import {BlockComponent} from './components/BlockComponent.tsx'
-import {RendererContext} from './context/RendererContext'
 
 
-function App({docUrl}: { docUrl: AutomergeUrl }) {
+function App({docUrl, safeMode}: { docUrl: AutomergeUrl, safeMode: boolean }) {
     const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
     const parsedDoc = doc?.state ? JSON.parse(doc.state) as BlockDoc : null
     const blocks = parsedDoc?.blocks || getExampleBlocks() //todo empty
     console.log({blocks})
-    const {registry: rendererRegistry, refreshRegistry} = useRendererRegistry(blocks)
+    const {registry: rendererRegistry, refreshRegistry} = useRendererRegistry(blocks, safeMode)
 
 
     const updateBlocksState = async (newBlocks: Block[]) => {
