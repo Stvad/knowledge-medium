@@ -42,6 +42,9 @@ const MonacoContentRenderer = ({block, onUpdate}: BlockRendererProps) => {
             minimap: {enabled: false},
             fontSize: 14,
             scrollBeyondLastLine: false,
+            scrollbar: {
+                alwaysConsumeMouseWheel: false,
+            },
         }}
     />
 }
