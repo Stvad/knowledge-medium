@@ -1,6 +1,7 @@
 import {Block} from '../types.ts'
 import {Repo, DocHandle} from '@automerge/automerge-repo'
 import {createBlockDoc} from './block-operations.ts'
+import {isNotNullish} from './types.ts'
 
 export const importState = async (state: { blocks: Block[] }, repo: Repo) => {
     const blockDocsMap = new Map<string, DocHandle<Block>>()
@@ -32,7 +33,7 @@ export const importState = async (state: { blocks: Block[] }, repo: Repo) => {
         if (block.childIds?.length) {
             const childDocs = block.childIds
                 .map(childId => blockDocsMap.get(childId))
-                .filter(Boolean)
+                .filter(isNotNullish)
 
             blockDoc.change((doc: Block) => {
                 doc.childIds = childDocs.map(d => d.url)
