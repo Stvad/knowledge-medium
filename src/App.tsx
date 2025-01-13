@@ -1,30 +1,22 @@
-import {v4 as uuidv4} from 'uuid'
-import {Block, BlockDoc} from './types'
+import {Block} from './types'
 import {useRendererRegistry, RendererContext} from './hooks/useRendererRegistry'
-import {useDocument} from '@automerge/automerge-repo-react-hooks'
-import {AutomergeUrl, updateText} from '@automerge/automerge-repo'
+import {useRepo} from '@automerge/automerge-repo-react-hooks'
+import {AutomergeUrl} from '@automerge/automerge-repo'
 import {BlockComponent} from './components/BlockComponent.tsx'
+import {importState} from './utils/state.ts'
+import {getAllChildrenBlocks} from './utils/block-operations.ts'
 
 
 function App({docUrl, safeMode}: { docUrl: AutomergeUrl, safeMode: boolean }) {
-    const [doc, changeDoc] = useDocument<{ state: string }>(docUrl)
-    const parsedDoc = doc?.state ? JSON.parse(doc.state) as BlockDoc : null
-    const blocks = parsedDoc?.blocks || getExampleBlocks() //todo empty
-    console.log({blocks})
-    const {registry: rendererRegistry, refreshRegistry} = useRendererRegistry(blocks, safeMode)
+    const repo = useRepo()
+    const {registry: rendererRegistry, refreshRegistry} = useRendererRegistry([docUrl], safeMode)
 
+    const exportState = async () => {
+        
+        const blocks = await getAllChildrenBlocks(repo, docUrl)
 
-    const updateBlocksState = async (newBlocks: Block[]) => {
-        changeDoc(d => {
-            // d.state = JSON.stringify({blocks: newBlocks})
-            updateText(d, ['state'], JSON.stringify({blocks: newBlocks}))
-        })
-        await refreshRegistry()
-    }
-
-    const exportState = () => {
-        if (!doc?.state) return
-        const blob = new Blob([doc.state], { type: 'application/json' })
+        const exportData = { blocks }
+        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
@@ -35,23 +27,29 @@ function App({docUrl, safeMode}: { docUrl: AutomergeUrl, safeMode: boolean }) {
         URL.revokeObjectURL(url)
     }
 
-    const importState = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const importFromFile = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0]
         if (!file) return
 
         const reader = new FileReader()
-        reader.onload = (e) => {
+        reader.onload = async(e) => {
             const content = e.target?.result as string
             try {
                 // Validate JSON structure
-                const parsed = JSON.parse(content) as BlockDoc
-                if (!Array.isArray(parsed.blocks)) {
+                const state = JSON.parse(content) as { blocks: Block[] }
+                if (!Array.isArray(state.blocks)) {
                     throw new Error('Invalid document structure')
                 }
                 
-                changeDoc(d => {
-                    d.state = content
-                })
+                // Create all block docs first and store in a map
+                const blockDocsMap = await importState(state, repo)
+
+                //navigate to the first block
+                const firstBlock = blockDocsMap.get(state.blocks[0].id)
+                if (firstBlock) {
+                    window.location.href = `/#${firstBlock.url}`
+                }
+                
             } catch (err) {
                 console.error('Failed to import document:', err)
                 alert('Invalid document format')
@@ -70,18 +68,18 @@ function App({docUrl, safeMode}: { docUrl: AutomergeUrl, safeMode: boolean }) {
                         <input 
                             type="file" 
                             accept=".json"
-                            onChange={importState}
+                            onChange={importFromFile}
                             style={{ marginLeft: '8px' }}
                         />
                     </label>
                 </div>
-                {blocks.map((block) => (
+                {/* {blocks.map((block) => ( */}
                     <BlockComponent
-                        key={block.id}
-                        block={block}
-                        onUpdate={(updatedBlock) => {
-                            updateBlocksState(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)))
-                        }}
+                        // key={block.id}
+                        blockId={docUrl}
+                        // onUpdate={(updatedBlock) => {
+                            // updateBlocksState(blocks.map((b) => (b.id === updatedBlock.id ? updatedBlock : b)))
+                        // }}
                         // onDelete={() => {
                         //     updateBlocksState(removeBlock(blocks, block.id))
                         // }}
@@ -92,55 +90,10 @@ function App({docUrl, safeMode}: { docUrl: AutomergeUrl, safeMode: boolean }) {
                         //     updateBlocksState(moveBlock(blocks, block.id, 'unindent'))
                         // }}
                     />
-                ))}
+                {/* ))} */}
             </div>
         </RendererContext.Provider>
     )
-}
-
-const getExampleBlocks = () => {
-    const rendererId = uuidv4()
-    return [{
-        id: uuidv4(),
-        content: 'Hello World\nThis is a multiline\ntext block',
-        properties: {},
-        children: [
-            {
-                id: uuidv4(),
-                content: 'A normal text block\nwith multiple lines',
-                properties: {},
-                children: [],
-            },
-            {
-                id: rendererId,
-                content: `import { DefaultBlockRenderer } from "@/components/DefaultBlockRenderer"; 
- 
-function ContentRenderer({ block, onUpdate }) {
-    return <div style={{ color: "green" }}>
-        Custom renderer for: {block.content}
-        <button onClick={() => onUpdate({ ...block, content: block.content + '!' })}>
-            Add !!
-        </button>
-    </div>
-}
-
-
-// By default, renderer is responsible for rendering everything in the block (including controls/etc), 
-// but we often want to just update how content of the block is rendered and leave everything else untouched, 
-// Here is an example of doing that
-export default ({ block, onUpdate }) => <DefaultBlockRenderer block={block} onUpdate={onUpdate} ContentRenderer={ContentRenderer}/> 
-`,
-                properties: {type: 'renderer'},
-                children: [],
-            },
-            {
-                id: uuidv4(),
-                content: 'This block uses the custom renderer',
-                properties: {renderer: rendererId},
-                children: [],
-            },
-        ],
-    }]
 }
 
 export default App

@@ -7,12 +7,12 @@ import {useCallback} from 'react'
 
 type MonacoEditor = editor.IStandaloneCodeEditor
 
-const MonacoContentRenderer = ({block, onUpdate}: BlockRendererProps) => {
+const MonacoContentRenderer = ({block, changeBlock}: BlockRendererProps) => {
     const onChange = useCallback((value: string | undefined) => {
         if (value !== undefined && value !== block.content) {
-            onUpdate({...block, content: value})
+            changeBlock((block) =>  block.content = value )
         }
-    }, [block, onUpdate])
+    }, [block, changeBlock])
     const debouncedOnChange = debounce(onChange, 300)
 
     const handleEditorMount = (editor: MonacoEditor, monaco: any) => {
@@ -50,8 +50,5 @@ const MonacoContentRenderer = ({block, onUpdate}: BlockRendererProps) => {
 }
 
 
-export const RendererBlockRenderer = ({block, onUpdate}: BlockRendererProps) =>
-    <DefaultBlockRenderer
-        block={block}
-        onUpdate={onUpdate}
-        ContentRenderer={MonacoContentRenderer}/>
+export const RendererBlockRenderer = (props: BlockRendererProps) => 
+    <DefaultBlockRenderer {...props} ContentRenderer={MonacoContentRenderer}/>

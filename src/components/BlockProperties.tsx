@@ -2,17 +2,17 @@ import {BlockProperties as BlockPropertiesType, Block} from '../types'
 
 interface BlockPropertiesProps {
     block: Block;
-    onChange: (properties: BlockPropertiesType) => void;
+    changeProps: (changeFn: (properties: BlockPropertiesType) => void) => void;
 }
 
-export function BlockProperties({ block, onChange }: BlockPropertiesProps) {
-    const properties = block.properties || {};
+export function BlockProperties({block, changeProps}: BlockPropertiesProps) {
+    const properties = block.properties || {}
     const updateKey = (newKey: string, key: string, value: string | undefined) => {
         if (newKey && newKey !== key) {
-            const newProps = {...properties}
-            delete newProps[key]
-            newProps[newKey] = value
-            onChange(newProps)
+            changeProps(properties => {
+                delete properties[key]
+                properties[newKey] = value
+            })
         }
     }
     return (
@@ -39,7 +39,7 @@ export function BlockProperties({ block, onChange }: BlockPropertiesProps) {
                         defaultValue={key}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') {
-                                e.preventDefault();
+                                e.preventDefault()
                                 updateKey(e.currentTarget.value, key, value)
                             }
                         }}
@@ -53,24 +53,22 @@ export function BlockProperties({ block, onChange }: BlockPropertiesProps) {
                         value={value}
                         onChange={(e) => {
                             //todo debounce
-                            onChange({
-                                ...properties,
-                                [key]: e.target.value,
-                            });
+                            changeProps(properties => {
+                                properties[key] = e.target.value
+                            })
                         }}
                     />
                 </div>
             ))}
             <button
                 onClick={() => {
-                    onChange({
-                        ...properties,
-                        [`property${Object.keys(properties).length + 1}`]: '',
-                    });
+                    changeProps(properties => {
+                        properties[`property${Object.keys(properties).length + 1}`] = ''
+                    })
                 }}
             >
                 Add Property
             </button>
         </div>
-    );
+    )
 }

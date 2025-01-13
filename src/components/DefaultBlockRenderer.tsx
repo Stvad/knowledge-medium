@@ -1,14 +1,15 @@
 import {useState, KeyboardEvent} from 'react'
-import {Block, BlockRendererProps, BlockRenderer} from '../types'
+import {BlockRendererProps, BlockRenderer} from '../types'
+import {useRepo} from '@automerge/automerge-repo-react-hooks'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 
 import {BlockProperties} from './BlockProperties'
-import {emptyBlock} from '../utils/block-operations.ts'
+import {createBlockDoc} from '../utils/block-operations.ts'
 import {BlockChildren} from './BlockComponent.tsx'
 
-export function MarkdownContentRenderer({block}: BlockRendererProps) {
+export function MarkdownContentRenderer({ block }: BlockRendererProps) {
     return <div style={{
         padding: '4px 8px',
         margin: '2px 0',
@@ -21,15 +22,12 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
     </div>
 }
 
-export function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
+export function TextAreaContentRenderer({ block, changeBlock }: BlockRendererProps) {
+    const repo = useRepo()
     const handleKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
-            const newBlock: Block = emptyBlock()
-            onUpdate({
-                ...block,
-                children: [...block.children, newBlock],
-            })
+            createBlockDoc(repo, { parentId: block.id })
         } else if (e.key === 'Backspace' && block.content === '') {
             e.preventDefault()
             // onDelete()
@@ -45,7 +43,7 @@ export function TextAreaContentRenderer({block, onUpdate}: BlockRendererProps) {
 
     return <textarea
         value={block.content}
-        onChange={(e) => onUpdate({...block, content: e.target.value})}
+        onChange={(e) => changeBlock((b => b.content = e.target.value))}
         rows={Math.min(5, block.content.split('\n').length)}
         onKeyDown={handleKeyDown}
         style={{
@@ -73,7 +71,7 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
 export function DefaultBlockRenderer(
     {
         block,
-        onUpdate,
+        changeBlock,
         ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
         EditContentRenderer = TextAreaContentRenderer,
     }: DefaultBlockRendererProps,
@@ -84,7 +82,7 @@ export function DefaultBlockRenderer(
     const ContentRenderer = isEditing ? EditContentRenderer : DefaultContentRenderer
 
     const [isCollapsed, setIsCollapsed] = useState(false)
-    const hasChildren = block.children.length > 0
+    const hasChildren = block.childIds.length > 0
 
     return (
         <div className={'block'}>
@@ -108,13 +106,13 @@ export function DefaultBlockRenderer(
                     {hasChildren ? (isCollapsed ? '▸' : '▾') : '•'}
                 </span>
             </div>
-            <div className={"block-body"}>
-                <ContentRenderer block={block} onUpdate={onUpdate}/>
+            <div className={'block-body'}>
+                <ContentRenderer block={block} changeBlock={changeBlock} />
                 {showProperties && <BlockProperties
                     block={block}
-                    onChange={(newProps) => onUpdate({...block, properties: newProps})}
+                    changeProps={(changeFn) => changeBlock((b) => changeFn(b.properties))}
                 />}
-                {!isCollapsed && <BlockChildren block={block} onUpdate={onUpdate}/>}
+                {!isCollapsed && <BlockChildren block={block} />}
             </div>
         </div>
     )

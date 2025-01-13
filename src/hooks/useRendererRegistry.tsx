@@ -3,26 +3,28 @@ import {Block, RendererRegistry} from '../types'
 import {wrappedComponentFromModule} from './useDynamicComponent'
 import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
 import {RendererBlockRenderer} from '../components/RendererBlockRenderer.tsx'
+import {Repo} from '@automerge/automerge-repo'
+import {useRepo} from '@automerge/automerge-repo-react-hooks'
+import {getAllChildrenBlocks} from '../utils/block-operations.ts'
 
 interface RendererContextType {
     registry: RendererRegistry
     refreshRegistry: () => Promise<void>
 }
 
-const getRendererBlocks = (blocks: Block[]): Block[] =>
-    blocks.flatMap(block =>
-        block.properties.type === 'renderer'
-            ? [block, ...getRendererBlocks(block.children)]
-            : getRendererBlocks(block.children),
-    )
+const getRendererBlocks = async (repo: Repo, blockId: string): Promise<Block[]> => {
+    const allBlocks = await getAllChildrenBlocks(repo, blockId)
+    return allBlocks.filter(block => block.properties.type === 'renderer')
+}
 
 export const defaultRegistry: RendererRegistry = {
     default: DefaultBlockRenderer,
     renderer: RendererBlockRenderer,
 }
 
-export function useRendererRegistry(blocks: Block[], safeMode?: boolean) {
+export function useRendererRegistry(rootBlockIds: string[], safeMode?: boolean) {
     const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
+    const repo = useRepo()
 
     const refreshRegistry = useCallback(async () => {
         if (safeMode) {
@@ -33,7 +35,9 @@ export function useRendererRegistry(blocks: Block[], safeMode?: boolean) {
         console.log('Manually refreshing renderer registry')
         const newRegistry = {...defaultRegistry}
 
-        const rendererBlocks = getRendererBlocks(blocks)
+        const rendererBlocks = await Promise.all(
+            rootBlockIds.map(url => getRendererBlocks(repo, url))
+        ).then(arrays => arrays.flat())
 
         for (const block of rendererBlocks) {
             try {
@@ -50,7 +54,7 @@ export function useRendererRegistry(blocks: Block[], safeMode?: boolean) {
         }
 
         setRegistry(newRegistry)
-    }, [blocks, registry])
+    }, [rootBlockIds, registry])
 
     useEffect(() => {
         refreshRegistry()
@@ -66,8 +70,9 @@ export const RendererContext = createContext<RendererContextType>({
     },
 })
 
-export const useRenderer = (block: Block) => {
+export const useRenderer = (block?: Block) => {
     const {registry} = useContext(RendererContext)
+    if (!block) return registry.default
 
     if (block.properties.type === 'renderer') {
         return registry.renderer

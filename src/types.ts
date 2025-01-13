@@ -2,20 +2,22 @@ import type {ComponentType} from 'react'
 
 export interface BlockProperties {
     type?: string;
-    renderer?: string;  // Reference to another block's ID that defines a renderer
+    renderer?: string;  // Reference to another block's document URL for renderer
     [key: string]: string | undefined;
 }
 
+// Each block is its own Automerge document
 export interface Block {
     id: string;
     content: string;
     properties: BlockProperties;
-    children: Block[];
+    childIds: string[];  // URLs of child block documents
+    parentId?: string;   // URL of parent block document
 }
 
 export interface BlockRendererProps {
     block: Block;
-    onUpdate: (block: Block) => void;
+    changeBlock: (changeFn: (block: Block) => void) => void;
 }
 
 export type BlockRenderer = ComponentType<BlockRendererProps>;
@@ -24,6 +26,7 @@ export interface RendererRegistry {
     [key: string]: BlockRenderer;
 }
 
-export interface BlockDoc {
-    blocks: Block[];
+// Temporary interface during migration - will be removed later
+export interface RootDoc {
+    rootBlockIds: string[];  // URLs of root-level blocks
 }
