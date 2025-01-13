@@ -92,3 +92,10 @@ export default function CustomRenderer({ block, onUpdate }) {
 - @babel/standalone - Runtime TypeScript/React compilation
 - @automerge/automerge - CRDT for block storage
 - react-error-boundary - Component error handling
+- Uses shadcn/ui components with Tailwind CSS for styling
+- Dark mode support via `theme-toggle` component
+
+## UI Components
+- All reusable UI components are in `src/components/ui/`
+- Components use CSS variables for theming defined in `src/index.css`
+- Dark mode is handled via the `dark` class on the root element

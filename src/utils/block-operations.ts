@@ -1,7 +1,7 @@
 import {Block} from '../types'
 import {Repo, DocHandle, isValidAutomergeUrl, AutomergeUrl} from '@automerge/automerge-repo'
 
-export async function createBlockDoc(repo: Repo, props: Partial<Block>): Promise<DocHandle<Block>> {
+export function createBlockDoc(repo: Repo, props: Partial<Block>): DocHandle<Block> {
     const handle = repo.create<Block>()
     const url = handle.url
     
@@ -18,7 +18,7 @@ export async function createBlockDoc(repo: Repo, props: Partial<Block>): Promise
     return handle
 }
 
-export async function addChildBlock(repo: Repo, parentId: AutomergeUrl, childId: AutomergeUrl) {
+export function addChildBlock(repo: Repo, parentId: AutomergeUrl, childId: AutomergeUrl) {
     const parentHandle = repo.find<Block>(parentId)
     
     parentHandle.change(doc => {
@@ -31,7 +31,7 @@ export async function addChildBlock(repo: Repo, parentId: AutomergeUrl, childId:
     })
 }
 
-export async function removeChildBlock(repo: Repo, parentId: AutomergeUrl, childId: AutomergeUrl) {
+export function removeChildBlock(repo: Repo, parentId: AutomergeUrl, childId: AutomergeUrl) {
     const parentHandle = repo.find<Block>(parentId)
     
     parentHandle.change(doc => {
@@ -44,18 +44,18 @@ export async function removeChildBlock(repo: Repo, parentId: AutomergeUrl, child
     })
 }
 
-export async function moveBlock(
+export function moveBlock(
     repo: Repo, 
     blockUrl: AutomergeUrl,
     fromParentUrl: AutomergeUrl | undefined,
     toParentUrl: AutomergeUrl | undefined
 ) {
     if (fromParentUrl) {
-        await removeChildBlock(repo, fromParentUrl, blockUrl)
+        removeChildBlock(repo, fromParentUrl, blockUrl)
     }
     
     if (toParentUrl) {
-        await addChildBlock(repo, toParentUrl, blockUrl)
+        addChildBlock(repo, toParentUrl, blockUrl)
     }
 }
 

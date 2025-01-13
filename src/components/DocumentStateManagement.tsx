@@ -3,6 +3,10 @@ import { Block } from '../types'
 import { getAllChildrenBlocks } from '../utils/block-operations'
 import { importState } from '../utils/state'
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
+import { Button } from './ui/button'
+import { Input } from './ui/input'
+import { Label } from './ui/label'
+import { ThemeToggle } from './ui/theme-toggle'
 
 interface DocumentControlsProps {
     docUrl: AutomergeUrl
@@ -15,7 +19,6 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
         const exportData = { blocks }
         const jsonString = JSON.stringify(exportData, null, 2)
         
-        // Create download link using native browser download attribute
         const downloadLink = document.createElement('a')
         downloadLink.download = 'document-state.json'
         downloadLink.href = `data:application/json;charset=utf-8,${encodeURIComponent(jsonString)}`
@@ -49,17 +52,27 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
     }
 
     return (
-        <div className="document-controls">
-            <button onClick={exportState}>Export Document</button>
-            <label>
-                Import Document
-                <input 
-                    type="file" 
+        <div className="flex items-center justify-between p-4 border-b border-border">
+            <div className="flex items-center gap-4">
+            <Button 
+                variant="outline"
+                onClick={exportState}
+            >
+                Export Document
+            </Button>
+            
+            <div className="flex items-center gap-2">
+                <Label htmlFor="import-file">Import Document</Label>
+                <Input
+                    id="import-file"
+                    type="file"
                     accept=".json"
                     onChange={importFromFile}
-                    style={{ marginLeft: '8px' }}
+                    className="w-auto"
                 />
-            </label>
+            </div>
+            </div>
+            <ThemeToggle />
         </div>
     )
 } 
