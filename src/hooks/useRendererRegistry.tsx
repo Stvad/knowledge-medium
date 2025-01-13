@@ -3,7 +3,7 @@ import {Block, RendererRegistry} from '../types'
 import {wrappedComponentFromModule} from './useDynamicComponent'
 import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
 import {RendererBlockRenderer} from '../components/RendererBlockRenderer.tsx'
-import {Repo} from '@automerge/automerge-repo'
+import {AutomergeUrl, isValidAutomergeUrl, Repo} from '@automerge/automerge-repo'
 import {useRepo} from '@automerge/automerge-repo-react-hooks'
 import {getAllChildrenBlocks} from '../utils/block-operations.ts'
 
@@ -13,7 +13,17 @@ interface RendererContextType {
 }
 
 const getRendererBlocks = async (repo: Repo, blockId: string): Promise<Block[]> => {
-    const allBlocks = await getAllChildrenBlocks(repo, blockId)
+    if (!isValidAutomergeUrl(blockId)) return []
+
+    const getTopmostParent = async (blockId: AutomergeUrl): Promise<Block | undefined> => {
+        const block = await repo.find<Block>(blockId).doc()
+        if (!block?.parentId) return block
+        return getTopmostParent(block.parentId as AutomergeUrl)
+    }
+    const parentBlock = await getTopmostParent(blockId as AutomergeUrl)
+    
+    const topmostId = parentBlock?.id || blockId
+    const allBlocks = await getAllChildrenBlocks(repo, topmostId)
     return allBlocks.filter(block => block.properties.type === 'renderer')
 }
 

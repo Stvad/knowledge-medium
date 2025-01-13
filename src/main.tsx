@@ -35,7 +35,7 @@ const isSafeMode = new URLSearchParams(window.location.search).has('safeMode')
 createRoot(document.getElementById('root')!).render(
     <StrictMode>
         <RepoContext.Provider value={repo}>
-            <App docUrl={docUrl} safeMode={isSafeMode} />
+            <App docId={docUrl} safeMode={isSafeMode} />
         </RepoContext.Provider>
     </StrictMode>,
 )
