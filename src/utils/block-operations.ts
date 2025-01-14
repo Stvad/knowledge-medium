@@ -1,8 +1,8 @@
-import {Block} from '../types'
+import {BlockData} from '../types'
 import {Repo, DocHandle, isValidAutomergeUrl, AutomergeUrl} from '@automerge/automerge-repo'
 
-export function createBlockDoc(repo: Repo, props: Partial<Block>): DocHandle<Block> {
-    const handle = repo.create<Block>()
+export function createBlockDoc(repo: Repo, props: Partial<BlockData>): DocHandle<BlockData> {
+    const handle = repo.create<BlockData>()
     const url = handle.url
     
     handle.change(doc => {
@@ -19,26 +19,26 @@ export function createBlockDoc(repo: Repo, props: Partial<Block>): DocHandle<Blo
 }
 
 export function addChildBlock(repo: Repo, parentId: AutomergeUrl, childId: AutomergeUrl) {
-    const parentHandle = repo.find<Block>(parentId)
+    const parentHandle = repo.find<BlockData>(parentId)
     
     parentHandle.change(doc => {
         doc.childIds.push(childId)
     })
     
-    const childHandle = repo.find<Block>(childId)
+    const childHandle = repo.find<BlockData>(childId)
     childHandle.change(doc => {
         doc.parentId = parentId
     })
 }
 
 export function removeChildBlock(repo: Repo, parentId: AutomergeUrl, childId: AutomergeUrl) {
-    const parentHandle = repo.find<Block>(parentId)
+    const parentHandle = repo.find<BlockData>(parentId)
     
     parentHandle.change(doc => {
         doc.childIds = doc.childIds.filter(id => id !== childId)
     })
     
-    const childHandle = repo.find<Block>(childId)
+    const childHandle = repo.find<BlockData>(childId)
     childHandle.change(doc => {
         doc.parentId = undefined
     })
@@ -59,10 +59,10 @@ export function moveBlock(
     }
 }
 
-export const getAllChildrenBlocks = async (repo: Repo, blockId: string): Promise<Block[]> => {
+export const getAllChildrenBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
     if (!isValidAutomergeUrl(blockId)) return []
 
-    const blockDoc = repo.find<Block>(blockId)
+    const blockDoc = repo.find<BlockData>(blockId)
     const exportBlock = await blockDoc?.doc()
     if (!exportBlock) return []
 

@@ -1,5 +1,5 @@
 import {useState, useCallback, useEffect, createContext, useContext} from 'react'
-import {Block, RendererRegistry} from '../types'
+import {BlockData, RendererRegistry} from '../types'
 import {wrappedComponentFromModule} from './useDynamicComponent'
 import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
 import {RendererBlockRenderer} from '../components/RendererBlockRenderer.tsx'
@@ -12,11 +12,11 @@ interface RendererContextType {
     refreshRegistry: () => Promise<void>
 }
 
-const getRendererBlocks = async (repo: Repo, blockId: string): Promise<Block[]> => {
+const getRendererBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
     if (!isValidAutomergeUrl(blockId)) return []
 
-    const getTopmostParent = async (blockId: AutomergeUrl): Promise<Block | undefined> => {
-        const block = await repo.find<Block>(blockId).doc()
+    const getTopmostParent = async (blockId: AutomergeUrl): Promise<BlockData | undefined> => {
+        const block = await repo.find<BlockData>(blockId).doc()
         if (!block?.parentId) return block
         return getTopmostParent(block.parentId as AutomergeUrl)
     }
@@ -80,16 +80,19 @@ export const RendererContext = createContext<RendererContextType>({
     },
 })
 
+import { Block } from '../data/block'
+
 export const useRenderer = (block?: Block) => {
+    const blockData = block?.use()
     const {registry} = useContext(RendererContext)
     if (!block) return registry.default
 
-    if (block.properties.type === 'renderer') {
+    if (blockData?.properties.type === 'renderer') {
         return registry.renderer
     }
 
-    if (block.properties.renderer && registry[block.properties.renderer]) {
-        return registry[block.properties.renderer]
+    if (blockData?.properties.renderer && registry[blockData.properties.renderer]) {
+        return registry[blockData.properties.renderer]
     }
 
     return registry.default

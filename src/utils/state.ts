@@ -1,12 +1,12 @@
-import {Block} from '../types.ts'
+import {BlockData} from '../types.ts'
 import {Repo, DocHandle} from '@automerge/automerge-repo'
 import {createBlockDoc} from './block-operations.ts'
 import {isNotNullish} from './types.ts'
 
-export const importState = async (state: { blocks: Block[] }, repo: Repo) => {
-    const blockDocsMap = new Map<string, DocHandle<Block>>()
+export const importState = async (state: { blocks: BlockData[] }, repo: Repo) => {
+    const blockDocsMap = new Map<string, DocHandle<BlockData>>()
     await Promise.all(state.blocks.map(async block => {
-        const doc = await createBlockDoc(repo, block)
+        const doc = createBlockDoc(repo, block)
         blockDocsMap.set(block.id, doc)
     }))
 
@@ -15,7 +15,7 @@ export const importState = async (state: { blocks: Block[] }, repo: Repo) => {
         const blockDoc = blockDocsMap.get(block.id)
         if (!blockDoc) continue
 
-        blockDoc.change((doc: Block) => {
+        blockDoc.change((doc: BlockData) => {
             doc.id = blockDoc.url
         })
 
@@ -23,7 +23,7 @@ export const importState = async (state: { blocks: Block[] }, repo: Repo) => {
         if (block.parentId) {
             const parentDoc = blockDocsMap.get(block.parentId)
             if (parentDoc) {
-                blockDoc.change((doc: Block) => {
+                blockDoc.change((doc: BlockData) => {
                     doc.parentId = parentDoc.url
                 })
             }
@@ -35,7 +35,7 @@ export const importState = async (state: { blocks: Block[] }, repo: Repo) => {
                 .map(childId => blockDocsMap.get(childId))
                 .filter(isNotNullish)
 
-            blockDoc.change((doc: Block) => {
+            blockDoc.change((doc: BlockData) => {
                 doc.childIds = childDocs.map(d => d.url)
             })
         }

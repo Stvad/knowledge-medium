@@ -1,23 +1,17 @@
-import React, { StrictMode } from 'react'
+import React, {StrictMode} from 'react'
 import ReactDOM from 'react-dom'
-import { createRoot } from 'react-dom/client'
+import {createRoot} from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { isValidAutomergeUrl, Repo } from '@automerge/automerge-repo'
-import { BrowserWebSocketClientAdapter } from '@automerge/automerge-repo-network-websocket'
-import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb"
-import { RepoContext } from '@automerge/automerge-repo-react-hooks'
+import {isValidAutomergeUrl} from '@automerge/automerge-repo'
+import {RepoContext} from '@automerge/automerge-repo-react-hooks'
 import {v4 as uuidv4} from 'uuid'
 import {importState} from './utils/state.ts'
-import {Block} from './types.ts'
+import {BlockData} from './types.ts'
+import {repo} from '@/data/repo.ts'
 
 window.React = React
 window.ReactDOM = ReactDOM
-
-const repo = new Repo({
-    network: [new BrowserWebSocketClientAdapter("wss://sync.automerge.org")],
-    storage: new IndexedDBStorageAdapter(),
-})
 
 const rootDocUrl = `${document.location.hash.substring(1)}`
 let handle
@@ -41,7 +35,7 @@ createRoot(document.getElementById('root')!).render(
 )
 
 
-function getExampleBlocks(): Block[] {
+function getExampleBlocks(): BlockData[] {
     const rootId = uuidv4()
     const child1Id = uuidv4()
     const child2Id = uuidv4()

@@ -1,49 +1,53 @@
 import { useState, KeyboardEvent } from 'react'
 import { BlockRendererProps, BlockRenderer } from '../types'
-import { useRepo } from '@automerge/automerge-repo-react-hooks'
+
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 
 import { BlockProperties } from './BlockProperties'
-import {createBlockDoc, addChildBlock} from '../utils/block-operations'
+
 import { BlockChildren } from './BlockComponent'
 
 import { Button } from './ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
 
 export function MarkdownContentRenderer({ block }: BlockRendererProps) {
+  const blockData = block.use()
+  if (!blockData) return null
+  
   return (
     <Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-      {block.content}
+      {blockData.content}
     </Markdown>
   )
 }
 
-export function TextAreaContentRenderer({ block, changeBlock }: BlockRendererProps) {
-  const repo = useRepo()
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+export function TextAreaContentRenderer({ block }: BlockRendererProps) {
+  const blockData = block.use()
+  if (!blockData) return null
+
+  const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      const childBlock = createBlockDoc(repo, { parentId: block.id })
-      addChildBlock(repo, block.parentId, childBlock.url)
-    } else if (e.key === 'Backspace' && block.content === '') {
+      await block.createSiblingBelow({})
+    } else if (e.key === 'Backspace' && blockData.content === '') {
       e.preventDefault()
     } else if (e.key === 'Tab') {
       e.preventDefault()
       if (e.shiftKey) {
-        // onUnindent()
+        block.outdent()
       } else {
-        // onIndent()
+        block.indent()
       }
     }
   }
 
   return (
     <textarea
-      value={block.content}
-      onChange={(e) => changeBlock((b) => { b.content = e.target.value })}
-      rows={Math.min(5, block.content.split('\n').length)}
+      value={blockData.content}
+      onChange={(e) => block.change(b => { b.content = e.target.value })}
+      rows={Math.min(5, blockData.content.split('\n').length)}
       onKeyDown={handleKeyDown}
       className="w-full resize-y min-h-[1.5em] bg-transparent dark:bg-neutral-800 border-none p-0 leading-normal font-inherit focus-visible:outline-none"
     />
@@ -57,18 +61,20 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
 
 export function DefaultBlockRenderer({
   block,
-  changeBlock,
   ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
   EditContentRenderer = TextAreaContentRenderer,
 }: DefaultBlockRendererProps) {
   const [showProperties, setShowProperties] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
 
-  const isCollapsed = block.properties['system:collapsed'] === 'true'
-  const setIsCollapsed = (collapsed: boolean) => changeBlock((b) => b.properties['system:collapsed'] = collapsed ? 'true' : 'false')
+  const blockData = block.use()
+  if (!blockData) return null
+
+  const isCollapsed = blockData.properties['system:collapsed'] === 'true'
+  const setIsCollapsed = (collapsed: boolean) => block.change(b => b.properties['system:collapsed'] = collapsed ? 'true' : 'false')
 
   const ContentRenderer = isEditing ? EditContentRenderer : DefaultContentRenderer
-  const hasChildren = block.childIds.length > 0
+  const hasChildren = blockData?.childIds?.length > 0
 
   return (
     <div className="group relative ml-4">
@@ -89,7 +95,7 @@ export function DefaultBlockRenderer({
           <div className="flex-grow">
             <div className="relative">
               <div className="min-h-[1.5em]">
-                <ContentRenderer block={block} changeBlock={changeBlock} />
+                <ContentRenderer block={block} />
               </div>
 
               <div className="absolute right-0 top-0 opacity-0 transition-opacity group-hover:opacity-100 flex gap-1">
@@ -112,10 +118,7 @@ export function DefaultBlockRenderer({
               </div>
 
               {showProperties && (
-                <BlockProperties
-                  block={block}
-                  changeProps={(changeFn) => changeBlock((b) => changeFn(b.properties))}
-                />
+                <BlockProperties block={block} />
               )}
 
               <CollapsibleContent>

@@ -1,4 +1,5 @@
 import type {ComponentType} from 'react'
+import {Block} from '@/data/block.ts'
 
 export interface BlockProperties {
     type?: string;
@@ -7,7 +8,7 @@ export interface BlockProperties {
 }
 
 // Each block is its own Automerge document
-export interface Block {
+export interface BlockData {
     id: string;
     content: string;
     properties: BlockProperties;
@@ -17,7 +18,6 @@ export interface Block {
 
 export interface BlockRendererProps {
     block: Block;
-    changeBlock: (changeFn: (block: Block) => void) => void;
 }
 
 export type BlockRenderer = ComponentType<BlockRendererProps>;

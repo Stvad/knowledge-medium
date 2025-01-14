@@ -7,12 +7,15 @@ import { useCallback } from 'react'
 
 type MonacoEditor = editor.IStandaloneCodeEditor
 
-const MonacoContentRenderer = ({ block, changeBlock }: BlockRendererProps) => {
+const MonacoContentRenderer = ({ block }: BlockRendererProps) => {
+    const blockData = block.use()
+    if (!blockData) return null
+
     const onChange = useCallback((value: string | undefined) => {
-        if (value !== undefined && value !== block.content) {
-            changeBlock((block) => block.content = value)
+        if (value !== undefined && value !== blockData.content) {
+            block.change(doc => doc.content = value)
         }
-    }, [block, changeBlock])
+    }, [block, blockData])
     const debouncedOnChange = debounce(onChange, 300)
 
     const handleEditorMount = (editor: MonacoEditor, monaco: any) => {
@@ -28,8 +31,8 @@ const MonacoContentRenderer = ({ block, changeBlock }: BlockRendererProps) => {
             <Editor
                 height="400px"
                 defaultLanguage="typescript"
-                defaultValue={block.content}
-                defaultPath={`${block.id}.tsx`}
+                defaultValue={blockData.content}
+                defaultPath={`${blockData.id}.tsx`}
                 onChange={debouncedOnChange}
                 onMount={handleEditorMount}
                 options={{

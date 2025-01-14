@@ -1,33 +1,30 @@
-import {Block} from '../types.ts'
+import {Block} from '../data/block'
 import {useRenderer} from '../hooks/useRendererRegistry.tsx'
-import {useDocument} from '@automerge/automerge-repo-react-hooks'
-import {AutomergeUrl} from '@automerge/automerge-repo'
+import {useRepo} from '@automerge/automerge-repo-react-hooks'
 
 interface BlockComponentProps {
     blockId: string;
 }
 
 export function BlockComponent({blockId}: BlockComponentProps) {
-    const [block, changeBlock] = useDocument<Block>(blockId as AutomergeUrl)
+    const repo = useRepo()
+    const block = new Block(repo, blockId)
+    const blockData = block.use()
     const Renderer = useRenderer(block)
     
-    if (!block) {
+    if (!blockData) {
         return <div>Loading block...</div>
     }
-    //todo maybe support 2 modes
-    // full replaces - where all the things are handled by renderer
-    // or partial, where there some common things the base compenent provides
-    // like children, editing mode, the bullet thing in the future etc
 
-    return <Renderer block={block} changeBlock={changeBlock}/>
+    return <Renderer block={block}/>
 }
 
 export const BlockChildren = ({block}: { block: Block }) => {
     return <>
-        {block.childIds.map((childUrl) => (
+        {block.use()?.childIds.map((childId) => (
             <BlockComponent
-                key={childUrl}
-                blockId={childUrl}
+                key={childId}
+                blockId={childId}
             />
         ))}
     </>

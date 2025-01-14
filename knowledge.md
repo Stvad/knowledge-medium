@@ -5,6 +5,7 @@ A Workflowy-like editor with dynamic block rendering capabilities. Blocks can co
 
 ## Dependency management
 - `yarn` is used for package management
+- Run `yarn tsc -b` to type check the project (uses TypeScript's build mode with project references)
 
 ## Architecture
 

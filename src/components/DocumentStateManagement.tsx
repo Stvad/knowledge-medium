@@ -1,5 +1,5 @@
 import { AutomergeUrl } from '@automerge/automerge-repo'
-import { Block } from '../types'
+import { BlockData } from '../types'
 import { getAllChildrenBlocks } from '../utils/block-operations'
 import { importState } from '../utils/state'
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
@@ -33,7 +33,7 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
         reader.onload = async(e) => {
             const content = e.target?.result as string
             try {
-                const state = JSON.parse(content) as { blocks: Block[] }
+                const state = JSON.parse(content) as { blocks: BlockData[] }
                 if (!Array.isArray(state.blocks)) {
                     throw new Error('Invalid document structure')
                 }

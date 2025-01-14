@@ -1,21 +1,24 @@
-import { BlockProperties as BlockPropertiesType, Block } from '../types'
+
+import { Block } from '../data/block'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 
 interface BlockPropertiesProps {
   block: Block;
-  changeProps: (changeFn: (properties: BlockPropertiesType) => void) => void;
 }
 
-export function BlockProperties({ block, changeProps }: BlockPropertiesProps) {
-  const properties = block.properties || {}
+export function BlockProperties({ block }: BlockPropertiesProps) {
+  const blockData = block.use()
+  if (!blockData) return null
+  
+  const properties = blockData.properties || {}
 
   const updateKey = (newKey: string, key: string, value: string | undefined) => {
     if (newKey && newKey !== key) {
-      changeProps(properties => {
-        delete properties[key]
-        properties[newKey] = value
+      block.change(doc => {
+        delete doc.properties[key]
+        doc.properties[newKey] = value
       })
     }
   }
@@ -24,7 +27,7 @@ export function BlockProperties({ block, changeProps }: BlockPropertiesProps) {
     <div className="mt-4 space-y-3 border-l-2 border-muted pl-4">
       <div className="flex gap-2 items-center">
         <Label className="w-24">ID</Label>
-        <Input value={block.id} disabled className="bg-muted/50" />
+        <Input value={blockData.id} disabled className="bg-muted/50" />
       </div>
 
       {Object.entries(properties).map(([key, value]) => (
@@ -43,9 +46,8 @@ export function BlockProperties({ block, changeProps }: BlockPropertiesProps) {
           <Input
             value={value || ''}
             onChange={(e) => {
-              changeProps(properties => {
-                  //todo debounce
-                  properties[key] = e.target.value
+              block.change(doc => {
+                doc.properties[key] = e.target.value
               })
             }}
           />
@@ -56,8 +58,8 @@ export function BlockProperties({ block, changeProps }: BlockPropertiesProps) {
         variant="outline"
         size="sm"
         onClick={() => {
-          changeProps(properties => {
-            properties[`property${Object.keys(properties).length + 1}`] = ''
+          block.change(doc => {
+            doc.properties[`property${Object.keys(doc.properties).length + 1}`] = ''
           })
         }}
       >
