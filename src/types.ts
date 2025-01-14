@@ -16,6 +16,7 @@ export interface BlockData {
     properties: BlockProperties;
     childIds: string[];  // URLs of child block documents
     parentId?: string;   // URL of parent block document
+    // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
 }
 
 export interface BlockRendererProps {

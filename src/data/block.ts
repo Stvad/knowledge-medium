@@ -110,6 +110,42 @@ export class Block {
     })
   }
 
+  async changeOrder(shift: number) {
+    const doc = this.handle.docSync()
+    if (!doc) throw new Error(`Block not found: ${this.id}`)
+    if (!doc.parentId) return // Can't change order of root level block
+
+    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
+    const parentDoc = parent.docSync()
+    if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
+
+    const currentIndex = [...parentDoc.childIds].indexOf(this.id)
+    const newIndex = currentIndex + shift
+
+    if (newIndex < 0 || newIndex >= parentDoc.childIds.length) return
+
+    parent.change((parent) => {
+      parent.childIds.splice(currentIndex, 1)
+      parent.childIds.splice(newIndex, 0, this.id)
+    })
+  }
+
+  /**
+  *
+  * Doesn't actually delete the doc for now, just removes it from the parent
+  */
+  async delete() {
+    const doc = this.handle.docSync()
+    if (!doc) throw new Error(`Block not found: ${this.id}`)
+    if (!doc.parentId) return // Can't delete root level block
+
+    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
+    parent.change((parent) => {
+      const index = [...parent.childIds].indexOf(this.id)
+      parent.childIds.splice(index, 1)
+    })
+  }
+
   async createSiblingBelow(data: Partial<BlockData> = {}) {
     const doc = await this.handle.doc()
     if (!doc) throw new Error(`Block not found: ${this.id}`)
@@ -137,13 +173,8 @@ export class Block {
     return useDocument<BlockData>(this.id)[0]
   }
 
-  useProperty<T extends BlockPropertyValue>(
-    name: string,
-  ): [T | undefined, (value: T) => void];
-  useProperty<T extends BlockPropertyValue>(
-    name: string,
-    initialValue: T,
-  ): [T, (value: T) => void];
+  useProperty<T extends BlockPropertyValue>(name: string): [T | undefined, (value: T) => void];
+  useProperty<T extends BlockPropertyValue>(name: string, initialValue: T): [T, (value: T) => void];
   useProperty<T extends BlockPropertyValue>(name: string, initialValue?: T) {
     const doc = this.use()
     const value = (doc?.properties[name] ?? initialValue) as T | undefined

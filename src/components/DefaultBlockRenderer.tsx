@@ -42,6 +42,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       await block.createSiblingBelow({})
     } else if (e.key === 'Backspace' && blockData.content === '') {
       e.preventDefault()
+      block.delete()
     } else if (e.key === 'Tab') {
       e.preventDefault()
       if (e.shiftKey) {
@@ -49,6 +50,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       } else {
         block.indent()
       }
+    } else if (e.key === 'ArrowUp' && e.metaKey && e.shiftKey) {
+      e.preventDefault()
+      block.changeOrder(-1)
+    } else if (e.key === 'ArrowDown' && e.metaKey && e.shiftKey) {
+      e.preventDefault()
+      block.changeOrder(1)
     }
   }
 
