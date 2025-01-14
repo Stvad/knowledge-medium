@@ -1,10 +1,12 @@
 import type {ComponentType} from 'react'
 import {Block} from '@/data/block.ts'
 
+export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined
+
 export interface BlockProperties {
     type?: string;
     renderer?: string;  // Reference to another block's document URL for renderer
-    [key: string]: string | undefined;
+    [key: string]: BlockPropertyValue;
 }
 
 // Each block is its own Automerge document

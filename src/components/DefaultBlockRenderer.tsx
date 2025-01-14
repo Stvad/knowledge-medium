@@ -1,30 +1,39 @@
-import { useState, KeyboardEvent } from 'react'
-import { BlockRendererProps, BlockRenderer } from '../types'
+import {KeyboardEvent} from 'react'
+import {BlockRendererProps, BlockRenderer} from '../types'
 
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
 
-import { BlockProperties } from './BlockProperties'
+import {BlockProperties} from './BlockProperties'
 
-import { BlockChildren } from './BlockComponent'
+import {BlockChildren} from './BlockComponent'
 
-import { Button } from './ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from './ui/collapsible'
+import {Button} from './ui/button'
+import {Collapsible, CollapsibleContent, CollapsibleTrigger} from './ui/collapsible'
+import {Block} from '@/data/block.ts'
 
-export function MarkdownContentRenderer({ block }: BlockRendererProps) {
+export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
+  const [_, setIsEditing] = useIsEditing(block)
+
   if (!blockData) return null
-  
+
   return (
-    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]}>
-      {blockData.content}
-    </Markdown>
+    <div
+      className="min-h-[1.7em] whitespace-pre-wrap"
+      onClick={() => setIsEditing(true)}
+    >
+      <Markdown remarkPlugins={[remarkGfm]}>
+        {blockData.content}
+      </Markdown>
+    </div>
   )
 }
 
-export function TextAreaContentRenderer({ block }: BlockRendererProps) {
+export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
+  const [_, setIsEditing] = useIsEditing(block)
+
   if (!blockData) return null
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -46,10 +55,13 @@ export function TextAreaContentRenderer({ block }: BlockRendererProps) {
   return (
     <textarea
       value={blockData.content}
-      onChange={(e) => block.change(b => { b.content = e.target.value })}
+      onChange={(e) => block.change(b => {
+        b.content = e.target.value
+      })}
       rows={Math.min(5, blockData.content.split('\n').length)}
       onKeyDown={handleKeyDown}
-      className="w-full resize-y min-h-[1.5em] bg-transparent dark:bg-neutral-800 border-none p-0 leading-normal font-inherit focus-visible:outline-none"
+      className="w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none"
+      onBlur={() => setIsEditing(false)}
     />
   )
 }
@@ -59,19 +71,21 @@ interface DefaultBlockRendererProps extends BlockRendererProps {
   EditContentRenderer?: BlockRenderer;
 }
 
+const useIsEditing = (block: Block) => {
+  return block.useProperty<boolean>('system:isEditing', false)
+}
+
 export function DefaultBlockRenderer({
-  block,
-  ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
-  EditContentRenderer = TextAreaContentRenderer,
-}: DefaultBlockRendererProps) {
-  const [showProperties, setShowProperties] = useState(false)
-  const [isEditing, setIsEditing] = useState(false)
+                                       block,
+                                       ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
+                                       EditContentRenderer = TextAreaContentRenderer,
+                                     }: DefaultBlockRendererProps) {
+  const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
+  const [isEditing] = useIsEditing(block)
+  const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
 
   const blockData = block.use()
   if (!blockData) return null
-
-  const isCollapsed = blockData.properties['system:collapsed'] === 'true'
-  const setIsCollapsed = (collapsed: boolean) => block.change(b => b.properties['system:collapsed'] = collapsed ? 'true' : 'false')
 
   const ContentRenderer = isEditing ? EditContentRenderer : DefaultContentRenderer
   const hasChildren = blockData?.childIds?.length > 0
@@ -88,43 +102,31 @@ export function DefaultBlockRenderer({
                 </Button>
               </CollapsibleTrigger>
             ) : (
-              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 mx-auto" />
+              <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 mx-auto"/>
             )}
           </div>
-          
-          <div className="flex-grow">
-            <div className="relative">
-              <div className="min-h-[1.5em]">
-                <ContentRenderer block={block} />
-              </div>
 
-              <div className="absolute right-0 top-0 opacity-0 transition-opacity group-hover:opacity-100 flex gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6"
-                  onClick={() => setShowProperties(!showProperties)}
-                >
-                  {showProperties ? '⚙️' : '⚙️'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6"
-                  onClick={() => setIsEditing(!isEditing)}
-                >
-                  {isEditing ? 'Done' : 'Edit'}
-                </Button>
-              </div>
+          <div className="flex-grow relative flex flex-col">
+            <ContentRenderer block={block}/>
 
-              {showProperties && (
-                <BlockProperties block={block} />
-              )}
-
-              <CollapsibleContent>
-                <BlockChildren block={block} />
-              </CollapsibleContent>
+            <div className="absolute right-0 top-0 opacity-0 transition-opacity group-hover:opacity-100 flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6"
+                onClick={() => setShowProperties(!showProperties)}
+              >
+                {showProperties ? '⚙️' : '⚙️'}
+              </Button>
             </div>
+
+            {showProperties && (
+              <BlockProperties block={block}/>
+            )}
+
+            <CollapsibleContent>
+              <BlockChildren block={block}/>
+            </CollapsibleContent>
           </div>
         </div>
       </Collapsible>
