@@ -41,4 +41,5 @@ export interface RootDoc {
 
 export interface BlockContext {
     topLevel?: boolean
+    safeMode?: boolean
 }

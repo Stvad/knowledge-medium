@@ -18,9 +18,10 @@ export function BlockComponent({blockId, context}: BlockComponentProps) {
         return <div>Loading block...</div>
     }
 
-    return <Renderer block={block}/>
+    return <Renderer block={block} context={context}/>
 }
 
+//todo propagate context to children
 export const BlockChildren = ({block}: { block: Block }) => {
     return <>
         {block.use()?.childIds.map((childId) => (
