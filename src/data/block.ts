@@ -1,8 +1,8 @@
-import {DocHandle, Repo, AutomergeUrl, isValidAutomergeUrl} from '@automerge/automerge-repo'
-import {BlockData as BlockData, BlockPropertyValue} from '@/types.ts'
-import {ChangeOptions as AutomergeCahngeOptions} from '@automerge/automerge'
-import {createBlockDoc} from '@/utils/block-operations.ts'
-import {useDocument} from '@automerge/automerge-repo-react-hooks'
+import { DocHandle, Repo, AutomergeUrl, isValidAutomergeUrl } from '@automerge/automerge-repo'
+import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
+import { ChangeOptions as AutomergeCahngeOptions, insertAt, deleteAt } from '@automerge/automerge'
+import { createBlockDoc } from '@/utils/block-operations.ts'
+import { useDocument } from '@automerge/automerge-repo-react-hooks'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
@@ -58,13 +58,13 @@ export class Block {
     // 1. Remove this block from current parent's children
     parent.change((parent) => {
       const index = getChildIndex(parent, this.id)
-      parent.childIds.splice(index, 1)
+      deleteAt(parent.childIds, index)
     })
 
     // 2. Add this block to grandparent's children after the parent
     grandparent.change((grandparent) => {
       const parentIndex = getChildIndex(grandparent, doc.parentId!)
-      grandparent.childIds.splice(parentIndex + 1, 0, this.id)
+      insertAt(grandparent.childIds, parentIndex + 1, this.id)
     })
 
     this.updateParentId(parentDoc.parentId)
@@ -86,27 +86,12 @@ export class Block {
     const newParent = this.repo.find<BlockData>(newParentId as AutomergeUrl)
 
     // 1. Remove from current parent's children
-    parent.change((parent) => {
-      parent.childIds.splice(currentIndex, 1)
-    })
+    parent.change((parent) => deleteAt(parent.childIds, currentIndex))
 
     // 2. Add to new parent's children
-    newParent.change((newParent) => {
-      newParent.childIds.push(this.id)
-    })
+    newParent.change((newParent) => newParent.childIds.push(this.id))
 
     this.updateParentId(newParentId)
-  }
-
-  private updateParentId = (newParentId: string) =>
-    this.change((doc) => {
-      doc.parentId = newParentId
-    })
-
-  private getDocOrThrow = async () => {
-    const doc = await this.handle.doc()
-    if (!doc) throw new Error(`Block not found: ${this.id}`)
-    return doc
   }
 
   async changeOrder(shift: number) {
@@ -123,8 +108,8 @@ export class Block {
     if (newIndex < 0 || newIndex >= parentDoc.childIds.length) return
 
     parent.change((parent) => {
-      parent.childIds.splice(currentIndex, 1)
-      parent.childIds.splice(newIndex, 0, this.id)
+      deleteAt(parent.childIds, currentIndex)
+      insertAt(parent.childIds, newIndex, this.id)
     })
   }
 
@@ -139,7 +124,7 @@ export class Block {
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
     parent.change((parent) => {
       const index = getChildIndex(parent, this.id)
-      parent.childIds.splice(index, 1)
+      deleteAt(parent.childIds, index)
     })
   }
 
@@ -154,7 +139,7 @@ export class Block {
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
     parent.change((parent) => {
-      parent.childIds.splice(getChildIndex(parent, this.id) + 1, 0, newBlock.id)
+      insertAt(parent.childIds, getChildIndex(parent, this.id) + 1, newBlock.id)
     })
 
     return new Block(this.repo, newBlock.id)
@@ -171,15 +156,26 @@ export class Block {
     const value = (doc?.properties[name] ?? initialValue) as T | undefined
 
     const setValue = (newValue: T) => {
-      this.change((doc) => (doc.properties[name] = newValue))
+      this.change((doc) => doc.properties[name] = newValue)
     }
 
     return [value, setValue]
   }
+
+  private updateParentId = (newParentId: string) =>
+    this.change((doc) => {
+      doc.parentId = newParentId
+    })
+
+  private getDocOrThrow = async () => {
+    const doc = await this.handle.doc()
+    if (!doc) throw new Error(`Block not found: ${this.id}`)
+    return doc
+  }
 }
 
 const getChildIndex = (parent: BlockData, childId: string) => {
-  // https://github.com/automerge/automerge/pull/717
+  // Doing unpacking because https://github.com/automerge/automerge/pull/717
   // I should probably go use jazz.tools 😛
   return [...parent.childIds].indexOf(childId)
 }
