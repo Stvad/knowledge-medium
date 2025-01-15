@@ -1,9 +1,4 @@
-import {
-  DocHandle,
-  Repo,
-  AutomergeUrl,
-  isValidAutomergeUrl,
-} from '@automerge/automerge-repo'
+import {DocHandle, Repo, AutomergeUrl, isValidAutomergeUrl} from '@automerge/automerge-repo'
 import {BlockData as BlockData, BlockPropertyValue} from '@/types.ts'
 import {ChangeOptions as AutomergeCahngeOptions} from '@automerge/automerge'
 import {createBlockDoc} from '@/utils/block-operations.ts'
@@ -14,6 +9,9 @@ export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
 
 /**
  * I want to abstract away the details of the storage lay away from the component, so i can plug in jazz.tools or similar later
+ *
+ * There is also whole undo/redo stuff on the app level.
+ * https://github.com/onsetsoftware/automerge-repo-undo-redo/ seems to do it in a good way for Automerge
  */
 export class Block {
   static new(repo: Repo, data: Partial<BlockData>) {
@@ -44,13 +42,12 @@ export class Block {
   /**
    * todo we should outdent outside the view point, but that's not something this function can be aware of
    */
-  outdent() {
-    const doc = this.handle.docSync()
-    if (!doc) throw new Error(`Block not found: ${this.id}`)
+  async outdent() {
+    const doc = await this.getDocOrThrow()
     if (!doc.parentId) return // Already at root level, can't outdent further
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    const parentDoc = parent.docSync()
+    const parentDoc = await parent.doc()
     if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
     if (!parentDoc.parentId) return // Parent is root, can't outdent further
 
@@ -60,35 +57,29 @@ export class Block {
 
     // 1. Remove this block from current parent's children
     parent.change((parent) => {
-      const index = [...parent.childIds].indexOf(this.id)
+      const index = getChildIndex(parent, this.id)
       parent.childIds.splice(index, 1)
     })
 
     // 2. Add this block to grandparent's children after the parent
     grandparent.change((grandparent) => {
-      const parentIndex = [...grandparent.childIds].indexOf(
-        doc.parentId as AutomergeUrl,
-      )
+      const parentIndex = getChildIndex(grandparent, doc.parentId!)
       grandparent.childIds.splice(parentIndex + 1, 0, this.id)
     })
 
-    // 3. Update this block's parentId
-    this.change((doc) => {
-      doc.parentId = parentDoc.parentId
-    })
+    this.updateParentId(parentDoc.parentId)
   }
 
-  indent() {
-    const doc = this.handle.docSync()
-    if (!doc) throw new Error(`Block not found: ${this.id}`)
+  async indent() {
+    const doc = await this.getDocOrThrow()
     if (!doc.parentId) return // Can't indent root level block
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    const parentDoc = parent.docSync()
+    const parentDoc = await parent.doc()
     if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
 
     // Find previous sibling to become new parent
-    const currentIndex = [...parentDoc.childIds].indexOf(this.id)
+    const currentIndex = getChildIndex(parentDoc, this.id)
     if (currentIndex <= 0) return // No previous sibling, can't indent
 
     const newParentId = parentDoc.childIds[currentIndex - 1]
@@ -104,22 +95,29 @@ export class Block {
       newParent.childIds.push(this.id)
     })
 
-    // 3. Update this block's parentId
+    this.updateParentId(newParentId)
+  }
+
+  private updateParentId = (newParentId: string) =>
     this.change((doc) => {
       doc.parentId = newParentId
     })
+
+  private getDocOrThrow = async () => {
+    const doc = await this.handle.doc()
+    if (!doc) throw new Error(`Block not found: ${this.id}`)
+    return doc
   }
 
   async changeOrder(shift: number) {
-    const doc = this.handle.docSync()
-    if (!doc) throw new Error(`Block not found: ${this.id}`)
+    const doc = await this.getDocOrThrow()
     if (!doc.parentId) return // Can't change order of root level block
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    const parentDoc = parent.docSync()
+    const parentDoc = await parent.doc()
     if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
 
-    const currentIndex = [...parentDoc.childIds].indexOf(this.id)
+    const currentIndex = getChildIndex(parentDoc, this.id)
     const newIndex = currentIndex + shift
 
     if (newIndex < 0 || newIndex >= parentDoc.childIds.length) return
@@ -131,26 +129,23 @@ export class Block {
   }
 
   /**
-  *
-  * Doesn't actually delete the doc for now, just removes it from the parent
-  */
+   *
+   * Doesn't actually delete the doc for now, just removes it from the parent
+   */
   async delete() {
-    const doc = this.handle.docSync()
-    if (!doc) throw new Error(`Block not found: ${this.id}`)
+    const doc = await this.getDocOrThrow()
     if (!doc.parentId) return // Can't delete root level block
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
     parent.change((parent) => {
-      const index = [...parent.childIds].indexOf(this.id)
+      const index = getChildIndex(parent, this.id)
       parent.childIds.splice(index, 1)
     })
   }
 
   async createSiblingBelow(data: Partial<BlockData> = {}) {
-    const doc = await this.handle.doc()
-    if (!doc) throw new Error(`Block not found: ${this.id}`)
-    if (!doc.parentId)
-      throw new Error('Cannot create sibling for top-level block')
+    const doc = await this.getDocOrThrow()
+    if (!doc.parentId) return
 
     const newBlock = Block.new(this.repo, {
       ...data,
@@ -158,12 +153,8 @@ export class Block {
     })
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    console.log({parent: parent.docSync()})
     parent.change((parent) => {
-      // https://github.com/automerge/automerge/pull/717
-      // I should probably go use jazz.tools 😛
-      const index = [...parent.childIds].indexOf(this.id)
-      parent.childIds.splice(index + 1, 0, newBlock.id)
+      parent.childIds.splice(getChildIndex(parent, this.id) + 1, 0, newBlock.id)
     })
 
     return new Block(this.repo, newBlock.id)
@@ -185,4 +176,10 @@ export class Block {
 
     return [value, setValue]
   }
+}
+
+const getChildIndex = (parent: BlockData, childId: string) => {
+  // https://github.com/automerge/automerge/pull/717
+  // I should probably go use jazz.tools 😛
+  return [...parent.childIds].indexOf(childId)
 }
