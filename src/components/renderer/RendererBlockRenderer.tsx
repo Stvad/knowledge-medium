@@ -1,6 +1,6 @@
 import { Editor } from '@monaco-editor/react'
-import { BlockRendererProps } from '../types'
-import { DefaultBlockRenderer } from './DefaultBlockRenderer'
+import { BlockRendererProps, BlockRenderer } from '../../types.ts'
+import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import type { editor } from 'monaco-editor'
 import { debounce } from 'lodash'
 import { useCallback } from 'react'
@@ -49,5 +49,9 @@ const MonacoContentRenderer = ({ block }: BlockRendererProps) => {
     )
 }
 
-export const RendererBlockRenderer = (props: BlockRendererProps) => 
+
+export const RendererBlockRenderer: BlockRenderer = (props: BlockRendererProps) =>
     <DefaultBlockRenderer {...props} ContentRenderer={MonacoContentRenderer} />
+
+RendererBlockRenderer.canRender = ({block}: BlockRendererProps) => block.dataSync()?.properties.type === 'renderer'
+RendererBlockRenderer.priority = () => 5

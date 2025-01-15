@@ -1,5 +1,5 @@
-import type {ComponentType} from 'react'
-import {Block} from '@/data/block.ts'
+import { FunctionComponent } from 'react'
+import { Block } from '@/data/block.ts'
 
 export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined
 
@@ -21,9 +21,14 @@ export interface BlockData {
 
 export interface BlockRendererProps {
     block: Block;
+    context?: BlockContext;
 }
 
-export type BlockRenderer = ComponentType<BlockRendererProps>;
+export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
+    canRender?: (props: BlockRendererProps) => boolean;
+    priority?: (props: BlockRendererProps) => number;
+}
+
 
 export interface RendererRegistry {
     [key: string]: BlockRenderer;
@@ -32,4 +37,8 @@ export interface RendererRegistry {
 // Temporary interface during migration - will be removed later
 export interface RootDoc {
     rootBlockIds: string[];  // URLs of root-level blocks
+}
+
+export interface BlockContext {
+    topLevel?: boolean
 }

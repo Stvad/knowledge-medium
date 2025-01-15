@@ -1,6 +1,6 @@
 import {ErrorBoundary} from 'react-error-boundary'
-import {useDynamicComponent} from '../hooks/useDynamicComponent'
-import { Block } from '../data/block'
+import {useDynamicComponent} from '../../hooks/useDynamicComponent.tsx'
+import { Block } from '../../data/block.ts'
 
 function FallbackComponent({error}: { error: Error }) {
     return <div>Something went wrong: {error.message}</div>

@@ -1,11 +1,12 @@
 import {useState, useCallback, useEffect, createContext, useContext} from 'react'
-import {BlockData, RendererRegistry} from '../types'
+import { BlockData, RendererRegistry, BlockContext, BlockRendererProps } from '../types'
 import {wrappedComponentFromModule} from './useDynamicComponent'
-import {DefaultBlockRenderer} from '../components/DefaultBlockRenderer'
-import {RendererBlockRenderer} from '../components/RendererBlockRenderer.tsx'
+import {DefaultBlockRenderer} from '@/components/renderer/DefaultBlockRenderer.tsx'
+import {RendererBlockRenderer} from '@/components/renderer/RendererBlockRenderer.tsx'
 import {AutomergeUrl, isValidAutomergeUrl, Repo} from '@automerge/automerge-repo'
 import {useRepo} from '@automerge/automerge-repo-react-hooks'
 import {getAllChildrenBlocks} from '../utils/block-operations.ts'
+import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 
 interface RendererContextType {
     registry: RendererRegistry
@@ -21,7 +22,7 @@ const getRendererBlocks = async (repo: Repo, blockId: string): Promise<BlockData
         return getTopmostParent(block.parentId as AutomergeUrl)
     }
     const parentBlock = await getTopmostParent(blockId as AutomergeUrl)
-    
+
     const topmostId = parentBlock?.id || blockId
     const allBlocks = await getAllChildrenBlocks(repo, topmostId)
     return allBlocks.filter(block => block.properties.type === 'renderer')
@@ -30,6 +31,7 @@ const getRendererBlocks = async (repo: Repo, blockId: string): Promise<BlockData
 export const defaultRegistry: RendererRegistry = {
     default: DefaultBlockRenderer,
     renderer: RendererBlockRenderer,
+    layout: LayoutRenderer,
 }
 
 export function useRendererRegistry(rootBlockIds: string[], safeMode?: boolean) {
@@ -80,20 +82,26 @@ export const RendererContext = createContext<RendererContextType>({
     },
 })
 
-import { Block } from '../data/block'
-
-export const useRenderer = (block?: Block) => {
+export const useRenderer = ({block, context}: BlockRendererProps) => {
     const blockData = block?.use()
     const {registry} = useContext(RendererContext)
-    if (!block) return registry.default
-
-    if (blockData?.properties.type === 'renderer') {
-        return registry.renderer
-    }
 
     if (blockData?.properties.renderer && registry[blockData.properties.renderer]) {
         return registry[blockData.properties.renderer]
     }
 
-    return registry.default
+    /**
+     * todo, caching of renderer for each block?
+     * maybe do per/type?
+     * also allowing people to switch between renderers would be good
+     */
+
+    const possibleRenderers = Object.values(registry)
+      .filter(renderer => renderer.canRender?.({block, context}))
+
+    const firstPriority = possibleRenderers.
+      sort((a, b) =>
+      (b.priority?.({block, context}) || 0) - (a.priority?.({block, context}) || 0))[0]
+
+    return firstPriority ?? registry.default
 }

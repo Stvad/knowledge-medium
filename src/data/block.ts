@@ -32,6 +32,14 @@ export class Block {
     this.handle = repo.find<BlockData>(id)
   }
 
+  async data() {
+    return this.handle.doc()
+  }
+
+  dataSync() {
+    return this.handle.docSync()
+  }
+
   change(
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
