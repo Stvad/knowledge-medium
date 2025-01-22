@@ -136,7 +136,7 @@ export class Block {
     })
   }
 
-  async createSiblingBelow(data: Partial<BlockData> = {}) {
+  private async createSibling(data: Partial<BlockData> = {}, offset: number = 1) {
     const doc = await this.getDocOrThrow()
     if (!doc.parentId) return
 
@@ -147,10 +147,18 @@ export class Block {
 
     const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
     parent.change((parent) => {
-      insertAt(parent.childIds, getChildIndex(parent, this.id) + 1, newBlock.id)
+      insertAt(parent.childIds, getChildIndex(parent, this.id) + offset, newBlock.id)
     })
 
     return new Block(this.repo, newBlock.id)
+  }
+
+  async createSiblingBelow(data: Partial<BlockData> = {}) {
+    return this.createSibling(data, 1)
+  }
+
+  async createSiblingAbove(data: Partial<BlockData> = {}) {
+    return this.createSibling(data, 0) 
   }
 
   use() {
