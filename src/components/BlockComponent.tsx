@@ -1,17 +1,18 @@
 import { Block } from '../data/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
-import { BlockContext } from '@/types.ts'
+import { useContext } from 'react'
+import { BlockContext } from '@/context/block.tsx'
 
 interface BlockComponentProps {
     blockId: string;
-    context?: BlockContext;
 }
 
-export function BlockComponent({blockId, context}: BlockComponentProps) {
+export function BlockComponent({blockId}: BlockComponentProps) {
     const repo = useRepo()
     const block = new Block(repo, blockId)
     const blockData = block.use()
+    const context = useContext(BlockContext)
     const Renderer = useRenderer({block, context})
 
     if (!blockData) {
@@ -21,7 +22,6 @@ export function BlockComponent({blockId, context}: BlockComponentProps) {
     return <Renderer block={block} context={context}/>
 }
 
-//todo propagate context to children
 export const BlockChildren = ({block}: { block: Block }) => {
     return <>
         {block.use()?.childIds.map((childId) => (

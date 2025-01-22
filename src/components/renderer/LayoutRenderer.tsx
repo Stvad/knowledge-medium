@@ -1,9 +1,15 @@
 import { DocumentStateManagement } from '@/components/DocumentStateManagement.tsx'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
+import { NestedBlockContextProvider } from '@/context/block.tsx'
 
-export function LayoutRenderer({block, context}: BlockRendererProps) {
+/**
+ * This is like this to avoid re-rending on context changing bc of new object creation
+ * Plausibly over-optimizing, but wanted to keep an example/reminder on this.
+ */
+const CONTEXT_OVERRIDE = {topLevel: false}
 
+export function LayoutRenderer({block}: BlockRendererProps) {
   // todo think about composition
   // I actually want the below thing to pick the renderer itself, but if my logic is
   // pick layout for top level, and then I go and try to pick renderer fo the block, by default
@@ -20,7 +26,9 @@ export function LayoutRenderer({block, context}: BlockRendererProps) {
     <div className="min-h-screen bg-background text-foreground">
       <div className="container mx-auto py-4">
         <DocumentStateManagement docUrl={block.id}/>
-        <BlockComponent blockId={block.id} context={{...context, topLevel: false}}/>
+        <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
+          <BlockComponent blockId={block.id}/>
+        </NestedBlockContextProvider>
       </div>
     </div>
   )

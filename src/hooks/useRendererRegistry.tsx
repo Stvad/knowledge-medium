@@ -17,12 +17,11 @@ export const defaultRegistry: RendererRegistry = {
 export const useRenderer = ({block, context}: BlockRendererProps) => {
   const blockData = block?.use()
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
+  const repo = useRepo()
   // todo this should just have a cache of the renderers, initialized on first use
   // plausibly writen to a value within a system
   useEffect(() => {
-    if (!registry) {
-      loadRegistry(useRepo(), block.id, context?.safeMode!!).then(setRegistry)
-    }
+    loadRegistry(repo, block.id, context?.safeMode!!).then(setRegistry)
   }, [])
 
   if (blockData?.properties.renderer && registry[blockData.properties.renderer]) {

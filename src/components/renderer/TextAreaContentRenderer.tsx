@@ -1,10 +1,11 @@
 import { BlockRendererProps } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
-import { KeyboardEvent } from 'react'
+import { KeyboardEvent, useRef } from 'react'
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
   const [_, setIsEditing] = useIsEditing(block)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   if (!blockData) return null
 
@@ -33,6 +34,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   return (
     <textarea
+      ref={textareaRef}
       value={blockData.content}
       onChange={(e) => block.change(b => {
         b.content = e.target.value

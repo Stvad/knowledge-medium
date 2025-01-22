@@ -21,7 +21,7 @@ export interface BlockData {
 
 export interface BlockRendererProps {
     block: Block;
-    context?: BlockContext;
+    context?: BlockContextType;
 }
 
 export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
@@ -39,7 +39,9 @@ export interface RootDoc {
     rootBlockIds: string[];  // URLs of root-level blocks
 }
 
-export interface BlockContext {
+export interface BlockContextType {
     topLevel?: boolean
     safeMode?: boolean
+
+    [key: string]: any
 }

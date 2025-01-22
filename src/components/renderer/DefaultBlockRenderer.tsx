@@ -30,7 +30,7 @@ export function DefaultBlockRenderer(
   const hasChildren = blockData?.childIds?.length > 0
 
   return (
-    <div className="group relative ml-4">
+    <div className="group relative ml-4" data-block-id={block.id}>
       <Collapsible open={!isCollapsed}>
         <div className="flex items-start gap-2">
           <div className="flex items-center h-6 w-6 -ml-6">
