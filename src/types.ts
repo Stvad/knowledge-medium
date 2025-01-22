@@ -42,6 +42,12 @@ export interface RootDoc {
 export interface BlockContextType {
     topLevel?: boolean
     safeMode?: boolean
-
-    [key: string]: any
+    focusedBlockId?: string
+    setFocusedBlockId?: (id: string | undefined) => void
+    selection?: {
+        blockId: string
+        start: number
+        end: number
+    }
+    setSelection?: (selection: { blockId: string; start: number; end: number } | undefined) => void
 }
