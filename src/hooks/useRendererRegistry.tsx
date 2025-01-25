@@ -5,8 +5,8 @@ import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
 import { AutomergeUrl, isValidAutomergeUrl, Repo } from '@automerge/automerge-repo'
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
-import { getAllChildrenBlocks } from '../utils/block-operations.ts'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
+import { getAllChildrenBlocks } from '@/data/block.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,

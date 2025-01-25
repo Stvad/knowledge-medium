@@ -1,12 +1,12 @@
 import { AutomergeUrl } from '@automerge/automerge-repo'
 import { BlockData } from '../types'
-import { getAllChildrenBlocks } from '../utils/block-operations'
 import { importState } from '../utils/state'
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { ThemeToggle } from './ui/theme-toggle'
+import { getAllChildrenBlocks } from '@/data/block.ts'
 
 interface DocumentControlsProps {
     docUrl: AutomergeUrl

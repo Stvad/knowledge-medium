@@ -1,7 +1,6 @@
 import { DocHandle, Repo, AutomergeUrl, isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
 import { ChangeOptions as AutomergeCahngeOptions, insertAt, deleteAt } from '@automerge/automerge'
-import { createBlockDoc } from '@/utils/block-operations.ts'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 
 export type ChangeFn<T> = (doc: T) => void;
@@ -302,4 +301,36 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
 
   // Otherwise return parent
   return parent
+}
+
+
+export function createBlockDoc(repo: Repo, props: Partial<BlockData>): DocHandle<BlockData> {
+  const handle = repo.create<BlockData>()
+  const url = handle.url
+
+  handle.change(doc => {
+    doc.id = url
+    doc.content = props.content || ''
+    doc.properties = props.properties || {}
+    doc.childIds = props.childIds || []
+    if (props.parentId) {
+      doc.parentId = props.parentId
+    }
+  })
+
+  return handle
+}
+
+export const getAllChildrenBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
+  if (!isValidAutomergeUrl(blockId)) return []
+
+  const blockDoc = repo.find<BlockData>(blockId)
+  const exportBlock = await blockDoc?.doc()
+  if (!exportBlock) return []
+
+  const childBlocks = await Promise.all(
+    (exportBlock.childIds || []).map(id => getAllChildrenBlocks(repo, id)),
+  )
+
+  return [exportBlock, ...childBlocks.flat()]
 }

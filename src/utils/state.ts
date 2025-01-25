@@ -1,7 +1,7 @@
 import {BlockData} from '../types.ts'
 import {Repo, DocHandle} from '@automerge/automerge-repo'
-import {createBlockDoc} from './block-operations.ts'
 import {isNotNullish} from './types.ts'
+import { createBlockDoc } from '@/data/block.ts'
 
 export const importState = async (state: { blocks: BlockData[] }, repo: Repo) => {
     const blockDocsMap = new Map<string, DocHandle<BlockData>>()
