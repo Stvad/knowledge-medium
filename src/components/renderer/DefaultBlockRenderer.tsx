@@ -29,22 +29,44 @@ export function DefaultBlockRenderer(
   const ref = useRef<HTMLDivElement>(null)
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'ArrowDown') {
+    // todo shortcut customization/commands
+    if (e.key === 'ArrowUp' && e.metaKey && e.shiftKey) {
+      e.stopPropagation()
+      block.changeOrder(-1)
+    } else if (e.key === 'ArrowDown' && e.metaKey && e.shiftKey) {
+      e.stopPropagation()
+      block.changeOrder(1)
+    } else
+    if (e.key === 'ArrowDown' || e.key === 'k') {
       e.stopPropagation()
       e.preventDefault()
 
       const nextVisible = await nextVisibleBlock(block, topLevelBlockId!)
       if (nextVisible) setFocusedBlockId?.(nextVisible.id)
-    }
-    if (e.key === 'ArrowUp') {
+    } else
+    if (e.key === 'ArrowUp' || e.key === 'h') {
       e.stopPropagation()
       e.preventDefault()
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
       if (prevVisible) setFocusedBlockId?.(prevVisible.id)
-    }
+    } else
     if (e.key === 'i' || e.key === 'Enter') {
       e.preventDefault()
       setIsEditing(true)
+    } else
+    if (e.key === 'z') {
+      e.preventDefault()
+      e.stopPropagation()
+      setIsCollapsed(!isCollapsed)
+    } else
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.shiftKey) {
+        block.outdent()
+      } else {
+        block.indent()
+      }
     }
   }
 

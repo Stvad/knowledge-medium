@@ -107,7 +107,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }
     } else if (e.key === 'Backspace' && blockData.content === '') {
       e.preventDefault()
+      const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
       block.delete()
+
+      if (prevVisible) {
+        setFocusedBlockId?.(prevVisible.id)
+      }
     } else if (e.key === 'Tab') {
       e.preventDefault()
       if (e.shiftKey) {
