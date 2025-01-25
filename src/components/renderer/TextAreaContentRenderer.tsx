@@ -1,20 +1,25 @@
-import { BlockRendererProps, BlockData } from '@/types.ts'
+import { BlockRendererProps } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
 import { KeyboardEvent, useRef, useEffect } from 'react'
 import { useBlockContext } from '@/context/block.tsx'
-import { AutomergeUrl } from '@automerge/automerge-repo'
+import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
+import { delay } from '@/utils/async.ts'
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
   const [_, setIsEditing] = useIsEditing(block)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const { focusedBlockId, setFocusedBlockId, selection, setSelection } = useBlockContext()
+  const { focusedBlockId, setFocusedBlockId, selection, setSelection, topLevelBlockId} = useBlockContext()
 
   useEffect(() => {
+    /**
+     * Todo: we're currently updating selection all the time, causing rerender every time, which is not ideal
+     * think about this
+     */
     if (focusedBlockId === block.id && textareaRef.current) {
       textareaRef.current.focus()
       if (selection?.blockId === block.id) {
-        textareaRef.current.setSelectionRange(selection.start, selection.end)
+        textareaRef.current.setSelectionRange(selection.start, selection.end || null)
       }
     }
   }, [focusedBlockId, selection, block.id])
@@ -34,9 +39,13 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation()
     if (e.key === 'Escape') {
       setIsEditing(false)
-      setSelection?.(undefined)
+      //todo a better way, doing this to re-focus the block, so it handles kb shortcuts
+      setFocusedBlockId?.(undefined)
+      await delay(0)
+      setFocusedBlockId?.(block.id)
     }
     /**
      * these break incapsulation now
@@ -47,17 +56,10 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       const textarea = textareaRef.current
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault()
-        const parentDoc = await block.data()
-        if (parentDoc?.parentId) {
-          const parent = block.repo.find<BlockData>(parentDoc.parentId as AutomergeUrl)
-          const parentData = await parent.doc()
-          if (parentData) {
-            const currentIndex = [...parentData.childIds].indexOf(block.id)
-            if (currentIndex > 0) {
-              const prevBlockId = parentData.childIds[currentIndex - 1]
-              setFocusedBlockId?.(prevBlockId)
-            }
-          }
+        const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
+        if (prevVisible) {
+
+          setFocusedBlockId?.(prevVisible.id)
         }
       }
     }
@@ -67,25 +69,17 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
           textarea.selectionStart === textarea.value.length &&
           textarea.selectionEnd === textarea.value.length) {
         e.preventDefault()
-        const parentDoc = await block.handle.doc()
-        if (parentDoc?.parentId) {
-          const parent = block.repo.find<BlockData>(parentDoc.parentId as AutomergeUrl)
-          const parentData = await parent.doc()
-          if (parentData) {
-            const currentIndex = [...parentData.childIds].indexOf(block.id)
-            if (currentIndex < parentData.childIds.length - 1) {
-              const nextBlockId = parentData.childIds[currentIndex + 1]
-              setFocusedBlockId?.(nextBlockId)
-            }
-          }
-        }
+        const nextVisible = await nextVisibleBlock(block, topLevelBlockId!)
+        if (nextVisible) setFocusedBlockId?.(nextVisible.id)
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
-      // todo the case where we are at the end of the block and have children -> should create a new child
       e.preventDefault()
       const textarea = textareaRef.current
-      if (textarea && textarea.selectionStart < textarea.value.length) {
+      if (!textarea) return
+
+      // Case 1: Cursor is in middle of text
+      if (textarea.selectionStart < textarea.value.length) {
         // Split text at cursor position
         const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
         const afterCursor = textarea.value.slice(textarea.selectionStart)
@@ -99,8 +93,16 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         // Reset selection to start
         textarea.selectionStart = 0
         textarea.selectionEnd = 0
-      } else {
-        const newBlock = await block.createSiblingBelow({})
+      }
+      // Case 2: Cursor is at end of text and block has children
+      else if (textarea.selectionStart === textarea.value.length && 
+          blockData.childIds.length > 0) {
+        const newBlock = await block.createChild({position: 'first'})
+        if (newBlock) setFocusedBlockId?.(newBlock.id)
+      }
+      // Case 3: Cursor at end, no children
+      else {
+        const newBlock = await block.createSiblingBelow()
         if (newBlock) setFocusedBlockId?.(newBlock.id)
       }
     } else if (e.key === 'Backspace' && blockData.content === '') {
@@ -149,7 +151,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       // }}
       onBlur={() => {
         setIsEditing(false)
-        setSelection?.(undefined)
       }}
     />
   )

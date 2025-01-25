@@ -41,6 +41,7 @@ export interface RootDoc {
 
 export interface BlockContextType {
     topLevel?: boolean
+    topLevelBlockId?: string
     safeMode?: boolean
     focusedBlockId?: string
     setFocusedBlockId?: (id: string | undefined) => void

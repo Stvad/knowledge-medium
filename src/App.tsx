@@ -4,7 +4,7 @@ import { BlockContextProvider } from '@/context/block.tsx'
 
 const App = ({docId, safeMode}: { docId: AutomergeUrl, safeMode: boolean }) => {
   return (
-    <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
+    <BlockContextProvider initialValue={{topLevelBlockId: docId, topLevel: true, safeMode}}>
         <BlockComponent blockId={docId}/>
     </BlockContextProvider>
   )

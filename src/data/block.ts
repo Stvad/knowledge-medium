@@ -40,6 +40,12 @@ export class Block {
     return this.handle.docSync()
   }
 
+  async parent() {
+    const doc = await this.data()
+    if (!doc?.parentId) return null
+    return new Block(this.repo, doc.parentId)
+  }
+
   change(
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
@@ -188,10 +194,112 @@ export class Block {
     if (!doc) throw new Error(`Block not found: ${this.id}`)
     return doc
   }
+
+  async createChild({
+    data = {},
+    position = 'last'
+  }: {
+    data?: Partial<BlockData>,
+    position?: 'first' | 'last' | number
+  } = {}) {
+    const newBlock = Block.new(this.repo, {
+      ...data,
+      parentId: this.id,
+    })
+
+    this.change((doc) => {
+      if (position === 'first') {
+        doc.childIds.unshift(newBlock.id)
+      } else if (typeof position === 'number') {
+        doc.childIds.splice(position, 0, newBlock.id)
+      } else {
+        // Default to 'last'
+        doc.childIds.push(newBlock.id)
+      }
+    })
+
+    return newBlock
+  }
 }
 
 const getChildIndex = (parent: BlockData, childId: string) => {
   // Doing unpacking because https://github.com/automerge/automerge/pull/717
   // I should probably go use jazz.tools 😛
   return [...parent.childIds].indexOf(childId)
+}
+
+/**
+ * Returns the next visible block in the document
+ * Order: children first (if not collapsed), then next sibling, then parent's next sibling
+ */
+export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
+  const doc = await block.data()
+  if (!doc) return null
+  
+  // If block has children and is not collapsed, return first child
+  if (doc.childIds.length > 0 && !doc.properties['system:collapsed']) {
+    return new Block(block.repo, doc.childIds[0])
+  }
+
+  // Look for next sibling or parent's next sibling
+  let currentBlock = block
+  while (true) {
+    const parent = await currentBlock.parent()
+    // If no parent or we've reached top level, stop
+    if (!parent || currentBlock.id === topLevelBlockId) return null
+
+    const parentDoc = await parent.data()
+    if (!parentDoc) return null
+
+    const currentIndex = getChildIndex(parentDoc, currentBlock.id)
+
+    // If has next sibling, return it
+    if (currentIndex < parentDoc.childIds.length - 1) {
+      return new Block(block.repo, parentDoc.childIds[currentIndex + 1])
+    }
+
+    // No next sibling, move up to parent and try again
+    currentBlock = parent
+  }
+}
+
+/**
+ * Helper function to get the last visible descendant of a block
+ * If block is collapsed or has no children, returns the block itself
+ */
+const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
+  const doc = await block.data()
+  if(!doc) throw new Error('Cant get block data')
+  
+  if (doc.childIds.length === 0 || doc.properties['system:collapsed']) return block
+  
+  const lastChild = new Block(block.repo, doc.childIds[doc.childIds.length - 1] as string)
+  return getLastVisibleDescendant(lastChild)
+}
+
+/**
+ * Returns the previous visible block in the document
+ * Order: previous sibling's last visible descendant, previous sibling, parent
+ */
+export const previousVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
+  const doc = await block.data()
+  
+  const parent = await block.parent()
+  if (!parent) return null
+  const parentDoc = await parent.data()
+  if (!parentDoc) throw new Error(`Can't get parent data`)
+  const currentIndex = getChildIndex(parentDoc, block.id)
+
+  // If block has previous sibling
+  if (currentIndex > 0) {
+    const previousSibling = new Block(block.repo, parentDoc.childIds[currentIndex - 1] as string)
+    // Return the last visible descendant of the previous sibling
+    return getLastVisibleDescendant(previousSibling)
+  }
+
+  // If we reached top level block, stop
+  if (doc?.parentId === topLevelBlockId) return null
+
+  // Otherwise return parent
+  return parent
 }
