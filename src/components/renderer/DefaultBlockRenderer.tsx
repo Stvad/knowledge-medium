@@ -28,7 +28,6 @@ export function DefaultBlockRenderer(
   const { focusedBlockId, setFocusedBlockId, topLevelBlockId } = useBlockContext()
   const ref = useRef<HTMLDivElement>(null)
 
-
   const handleKeyDown = async (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'ArrowDown') {
       e.stopPropagation()
@@ -50,9 +49,13 @@ export function DefaultBlockRenderer(
   }
 
   useEffect(() => {
-    //  todo I want to support focused but not editing
-    if (focusedBlockId === block.id) {
-      // setIsEditing(true)
+    if (focusedBlockId === block.id
+      /**
+       * todo, doing this so the edit mode stuff handles focus, but I don't love it, see if there is a better way
+       * that doesn't create a logical dependency between the two
+       */
+      && !isEditing
+    ) {
       ref.current?.focus()
     }
   }, [focusedBlockId])
