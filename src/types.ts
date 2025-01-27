@@ -24,6 +24,9 @@ export interface BlockRendererProps {
     context?: BlockContextType;
 }
 
+/**
+ * Should this actually be an object with a `render` method?
+ */
 export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
     canRender?: (props: BlockRendererProps) => boolean;
     priority?: (props: BlockRendererProps) => number;

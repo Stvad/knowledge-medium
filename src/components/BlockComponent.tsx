@@ -11,13 +11,8 @@ interface BlockComponentProps {
 export function BlockComponent({blockId}: BlockComponentProps) {
     const repo = useRepo()
     const block = new Block(repo, blockId)
-    const blockData = block.use()
     const context = useContext(BlockContext)
     const Renderer = useRenderer({block, context})
-
-    if (!blockData) {
-        return <div>Loading block...</div>
-    }
 
     return <Renderer block={block} context={context}/>
 }

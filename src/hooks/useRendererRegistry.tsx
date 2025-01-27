@@ -7,11 +7,13 @@ import { AutomergeUrl, isValidAutomergeUrl, Repo } from '@automerge/automerge-re
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { getAllChildrenBlocks } from '@/data/block.ts'
+import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
   renderer: RendererBlockRenderer,
   layout: LayoutRenderer,
+  missingData: MissingDataRenderer,
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {
