@@ -1,44 +1,44 @@
 import {BlockData} from '../types.ts'
-import {Repo, DocHandle} from '@automerge/automerge-repo'
+import {Repo} from '@automerge/automerge-repo'
 import {isNotNullish} from './types.ts'
-import { createBlockDoc } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 
 export const importState = async (state: { blocks: BlockData[] }, repo: Repo) => {
-    const blockDocsMap = new Map<string, DocHandle<BlockData>>()
+    const blockMap = new Map<string, Block>()
+    
+    // First create all blocks
     await Promise.all(state.blocks.map(async block => {
-        const doc = createBlockDoc(repo, block)
-        blockDocsMap.set(block.id, doc)
+        const newBlock = Block.new(repo, block)
+        blockMap.set(block.id, newBlock)
     }))
 
-    // Update ids
+    // Update ids and references
     for (const block of state.blocks) {
-        const blockDoc = blockDocsMap.get(block.id)
-        if (!blockDoc) continue
+        const blockInstance = blockMap.get(block.id)
+        if (!blockInstance) continue
 
-        blockDoc.change((doc: BlockData) => {
-            doc.id = blockDoc.url
+        blockInstance.change((doc: BlockData) => {
+            doc.id = blockInstance.id
         })
 
         // Update parent reference
         if (block.parentId) {
-            const parentDoc = blockDocsMap.get(block.parentId)
-            if (parentDoc) {
-                blockDoc.change((doc: BlockData) => {
-                    doc.parentId = parentDoc.url
-                })
+            const parentBlock = blockMap.get(block.parentId)
+            if (parentBlock) {
+                blockInstance.updateParentId(parentBlock.id)
             }
         }
 
         // Update child references
         if (block.childIds?.length) {
-            const childDocs = block.childIds
-                .map(childId => blockDocsMap.get(childId))
+            const childBlocks = block.childIds
+                .map(childId => blockMap.get(childId))
                 .filter(isNotNullish)
 
-            blockDoc.change((doc: BlockData) => {
-                doc.childIds = childDocs.map(d => d.url)
+            blockInstance.change((doc: BlockData) => {
+                doc.childIds = childBlocks.map(b => b.id)
             })
         }
     }
-    return blockDocsMap
+    return blockMap
 }

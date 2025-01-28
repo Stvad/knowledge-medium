@@ -197,7 +197,7 @@ export class Block {
     return [value, setValue]
   }
 
-  private updateParentId = (newParentId: string) =>
+   updateParentId = (newParentId: string) =>
     this.change((doc) => {
       doc.parentId = newParentId
     })
@@ -327,7 +327,7 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
 }
 
 
-export function createBlockDoc(repo: Repo, props: Partial<BlockData>): DocHandle<BlockData> {
+function createBlockDoc(repo: Repo, props: Partial<BlockData>): DocHandle<BlockData> {
   const handle = repo.create<BlockData>()
   const url = handle.url
 

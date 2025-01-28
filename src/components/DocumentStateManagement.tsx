@@ -20,7 +20,7 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
         const jsonString = JSON.stringify(exportData, null, 2)
         
         const downloadLink = document.createElement('a')
-        downloadLink.download = 'document-state.json'
+        downloadLink.download = `document-state-${new Date().toUTCString()}.json`
         downloadLink.href = `data:application/json;charset=utf-8,${encodeURIComponent(jsonString)}`
         downloadLink.click()
     }
@@ -41,7 +41,7 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
                 const blockDocsMap = await importState(state, repo)
                 const firstBlock = blockDocsMap.get(state.blocks[0].id)
                 if (firstBlock) {
-                    window.location.href = `/#${firstBlock.url}`
+                    window.location.href = `/#${firstBlock.id}`
                 }
             } catch (err) {
                 console.error('Failed to import document:', err)

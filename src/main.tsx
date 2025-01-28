@@ -20,7 +20,7 @@ if (isValidAutomergeUrl(rootDocUrl)) {
 } else {
     const blockMap = await importState({blocks: getExampleBlocks()}, repo)
     console.log('Created example blocks:', blockMap)
-    handle = blockMap.values().next().value
+    handle = blockMap.values().next().value!.handle
     console.log('Created example blocks:', handle)
 }
 const docUrl = document.location.hash = handle.url
