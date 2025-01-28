@@ -6,9 +6,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { useIsEditing } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
-import { useBlockContext } from '@/context/block.tsx'
 import { useEffect, KeyboardEvent, useRef } from 'react'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
+import { useUIStateProperty } from '@/data/globalState'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -25,7 +25,8 @@ export function DefaultBlockRenderer(
   const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
   const [isEditing, setIsEditing] = useIsEditing(block)
   const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
-  const { focusedBlockId, setFocusedBlockId, topLevelBlockId } = useBlockContext()
+  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
+  const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
   const ref = useRef<HTMLDivElement>(null)
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLDivElement>) => {

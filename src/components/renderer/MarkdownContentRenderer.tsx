@@ -1,8 +1,8 @@
-import { BlockRendererProps } from '@/types.ts'
+import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useBlockContext } from '@/context/block.tsx'
+import { useUIStateProperty } from '@/data/globalState'
 import { useRef } from 'react'
 
 function getOffsetRelativeToParent(parent: HTMLElement, targetNode: Node, offset: number): number {
@@ -43,8 +43,9 @@ const getCursorLocation = (element: HTMLDivElement | null) => {
 
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
-  const [_, setIsEditing] = useIsEditing(block)
-  const { setFocusedBlockId, setSelection } = useBlockContext()
+  const [, setIsEditing] = useIsEditing(block)
+  const [, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
+  const [, setSelection] = useUIStateProperty<SelectionState>('selection')
   const ref = useRef<HTMLDivElement>(null)
 
   if (!blockData) return null
@@ -54,7 +55,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
       ref={ref}
       className="min-h-[1.7em] whitespace-pre-wrap"
       onClick={() => {
-        setFocusedBlockId?.(block.id)
+        setFocusedBlockId(block.id)
 
       }}
       onMouseDownCapture={(e) => {
@@ -66,10 +67,10 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
         e.stopPropagation()
 
         setIsEditing(true)
-        setFocusedBlockId?.(block.id)
+        setFocusedBlockId(block.id)
 
         const cursorLocation = getCursorLocation(ref.current)
-        setSelection?.({blockId: block.id, start: cursorLocation, end: cursorLocation})
+        setSelection({blockId: block.id, start: cursorLocation, end: cursorLocation})
       }}
     >
       <Markdown remarkPlugins={[remarkGfm]}>

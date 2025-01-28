@@ -1,7 +1,7 @@
 import { FunctionComponent } from 'react'
 import { Block } from '@/data/block.ts'
 
-export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined
+export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined | object
 
 export interface BlockProperties {
     type?: string;
@@ -42,16 +42,14 @@ export interface RootDoc {
     rootBlockIds: string[];  // URLs of root-level blocks
 }
 
+export interface SelectionState {
+    blockId: string
+    start: number
+    end: number
+}
+
 export interface BlockContextType {
     topLevel?: boolean
-    topLevelBlockId?: string
     safeMode?: boolean
-    focusedBlockId?: string
-    setFocusedBlockId?: (id: string | undefined) => void
-    selection?: {
-        blockId: string
-        start: number
-        end: number
-    }
-    setSelection?: (selection: { blockId: string; start: number; end: number } | undefined) => void
+    rootBlockId?: string
 }

@@ -1,15 +1,17 @@
-import { BlockRendererProps } from '@/types.ts'
+import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
 import { KeyboardEvent, useRef, useEffect } from 'react'
-import { useBlockContext } from '@/context/block.tsx'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
 import { delay } from '@/utils/async.ts'
+import { useUIStateProperty } from '@/data/globalState'
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
-  const [_, setIsEditing] = useIsEditing(block)
+  const [, setIsEditing] = useIsEditing(block)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const { focusedBlockId, setFocusedBlockId, selection, setSelection, topLevelBlockId} = useBlockContext()
+  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string | undefined>('focusedBlockId')
+  const [selection, setSelection] = useUIStateProperty<SelectionState>('selection')
+  const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
 
   useEffect(() => {
     /**
@@ -43,7 +45,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     if (e.key === 'Escape') {
       setIsEditing(false)
       //todo a better way, doing this to re-focus the block, so it handles kb shortcuts
-      setFocusedBlockId?.(undefined)
+      setFocusedBlockId(undefined)
       await delay(0)
       setFocusedBlockId?.(block.id)
     }

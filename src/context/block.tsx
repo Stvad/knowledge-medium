@@ -1,24 +1,13 @@
-import { createContext, useContext, useMemo, ReactNode, useState } from 'react'
+import { createContext, useContext, useMemo, ReactNode } from 'react'
 import { BlockContextType } from '@/types.ts'
 
 export const BlockContext = createContext<BlockContextType>({})
 
 export const BlockContextProvider = ({ children, initialValue}: { children: ReactNode, initialValue: BlockContextType }) => {
-  const [focusedBlockId, setFocusedBlockId] = useState<string>()
-  const [selection, setSelection] = useState<BlockContextType['selection']>()
-
-  const value = useMemo(() => ({
-    focusedBlockId,
-    setFocusedBlockId,
-    selection,
-    setSelection,
-    ...initialValue,
-  }), [focusedBlockId, selection, initialValue])
-
   return (
-    <BlockContext.Provider value={value}>
+    <BlockContext value={initialValue}>
       {children}
-    </BlockContext.Provider>
+    </BlockContext>
   )
 }
 
@@ -30,9 +19,9 @@ export const NestedBlockContextProvider = (
     ({...context, ...overrides}), [context, overrides])
 
   return (
-    <BlockContext.Provider value={value}>
+    <BlockContext value={value}>
       {children}
-    </BlockContext.Provider>
+    </BlockContext>
   )
 }
 

@@ -2,6 +2,7 @@ import { DocHandle, Repo, AutomergeUrl, isValidAutomergeUrl } from '@automerge/a
 import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
 import { ChangeOptions as AutomergeCahngeOptions, insertAt, deleteAt } from '@automerge/automerge'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
+import { memoize } from 'lodash'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
@@ -127,7 +128,6 @@ export class Block {
   }
 
   /**
-   *
    * Doesn't actually delete the doc for now, just removes it from the parent
    */
   async delete() {
@@ -164,6 +164,29 @@ export class Block {
 
   async createSiblingAbove(data: Partial<BlockData> = {}) {
     return this.createSibling(data, 0) 
+  }
+
+  /**
+   * Find a child block by its content, optionally creating it if it doesn't exist
+   * @param content Content to match against
+   * @param createIfNotExists If true and no matching child is found, creates a new child with the given content
+   * @returns The found or created child block, or null if not found and creation not requested
+   * Todo: rebuild with future data access layer for perf
+   */
+  async childByContent(content: string, createIfNotExists: true): Promise<Block> ;
+  async childByContent(content: string, createIfNotExists: boolean = false): Promise<Block | null> {
+    const doc = await this.getDocOrThrow()
+
+    for (const childId of doc.childIds) {
+      const child = new Block(this.repo, childId)
+      const childData = await child.data()
+
+      if (childData?.content === content) {
+        return child
+      }
+    }
+
+    return createIfNotExists ? this.createChild({data: {content}}) : null
   }
 
   use() {
@@ -226,6 +249,19 @@ const getChildIndex = (parent: BlockData, childId: string) => {
   // I should probably go use jazz.tools 😛
   return [...parent.childIds].indexOf(childId)
 }
+
+/**
+ * Gets the root block ID for any given block
+ * The root block is the topmost parent in the block hierarchy
+ * memoization mainly to be able to use this with `use` in react components
+ */
+export const getRootBlock = memoize(async (block: Block): Promise<Block> => {
+  const parent = await block.parent()
+  
+  if (!parent) return block
+  
+  return getRootBlock(parent)
+}, (block) => block.id)
 
 /**
  * Returns the next visible block in the document

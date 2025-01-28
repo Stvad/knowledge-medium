@@ -3,10 +3,10 @@ import { BlockData, RendererRegistry, BlockRendererProps } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
-import { AutomergeUrl, isValidAutomergeUrl, Repo } from '@automerge/automerge-repo'
+import { isValidAutomergeUrl, Repo } from '@automerge/automerge-repo'
 import { useRepo } from '@automerge/automerge-repo-react-hooks'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
-import { getAllChildrenBlocks } from '@/data/block.ts'
+import { getAllChildrenBlocks, getRootBlock, Block } from '@/data/block.ts'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 
 export const defaultRegistry: RendererRegistry = {
@@ -23,10 +23,10 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
   // todo this should just have a cache of the renderers, initialized on first use
   // plausibly writen to a value within a system
   useEffect(() => {
-    loadRegistry(repo, block.id, context?.safeMode!!).then(setRegistry)
+    loadRegistry(repo, block.id, context?.safeMode ?? false).then(setRegistry)
   }, [])
 
-  if (blockData?.properties.renderer && registry[blockData.properties.renderer]) {
+  if (blockData?.properties?.renderer && registry[blockData.properties.renderer]) {
     return registry[blockData.properties.renderer]
   }
 
@@ -75,14 +75,7 @@ const loadRegistry = async (repo: Repo, blockId: string, safeMode: boolean): Pro
 const getRendererBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
   if (!isValidAutomergeUrl(blockId)) return []
 
-  const getTopmostParent = async (blockId: AutomergeUrl): Promise<BlockData | undefined> => {
-    const block = await repo.find<BlockData>(blockId).doc()
-    if (!block?.parentId) return block
-    return getTopmostParent(block.parentId as AutomergeUrl)
-  }
-  const parentBlock = await getTopmostParent(blockId as AutomergeUrl)
-
-  const topmostId = parentBlock?.id || blockId
-  const allBlocks = await getAllChildrenBlocks(repo, topmostId)
+  const rootBlock = await getRootBlock(new Block(repo, blockId))
+  const allBlocks = await getAllChildrenBlocks(repo, rootBlock.id)
   return allBlocks.filter(block => block.properties.type === 'renderer')
 }
