@@ -317,10 +317,10 @@ const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
  * Order: previous sibling's last visible descendant, previous sibling, parent
  */
 export const previousVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
-  const doc = await block.data()
-  
+  if (block.id === topLevelBlockId) return null
   const parent = await block.parent()
   if (!parent) return null
+
   const parentDoc = await parent.data()
   if (!parentDoc) throw new Error(`Can't get parent data`)
   const currentIndex = getChildIndex(parentDoc, block.id)
@@ -332,10 +332,6 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
     return getLastVisibleDescendant(previousSibling)
   }
 
-  // If we reached top level block, stop
-  if (doc?.parentId === topLevelBlockId) return null
-
-  // Otherwise return parent
   return parent
 }
 
