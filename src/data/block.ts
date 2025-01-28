@@ -57,19 +57,13 @@ export class Block {
    * todo we should outdent outside the view point, but that's not something this function can be aware of
    */
   async outdent() {
-    const doc = await this.getDocOrThrow()
-    if (!doc.parentId) return // Already at root level, can't outdent further
+    const parent = await this.parent()
+    if (!parent) return // We are root
 
-    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    const parentDoc = await parent.doc()
-    if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
-    if (!parentDoc.parentId) return // Parent is root, can't outdent further
-
-    const grandparent = this.repo.find<BlockData>(
-      parentDoc.parentId as AutomergeUrl,
-    )
-
+    const grandparent = await parent.parent()
+    if (!grandparent) return // Parent is root
     // 1. Remove this block from current parent's children
+
     parent.change((parent) => {
       const index = getChildIndex(parent, this.id)
       deleteAt(parent.childIds, index)
@@ -77,20 +71,19 @@ export class Block {
 
     // 2. Add this block to grandparent's children after the parent
     grandparent.change((grandparent) => {
-      const parentIndex = getChildIndex(grandparent, doc.parentId!)
+      const parentIndex = getChildIndex(grandparent, parent.id)
       insertAt(grandparent.childIds, parentIndex + 1, this.id)
     })
 
-    this.updateParentId(parentDoc.parentId)
+    this.updateParentId(grandparent.id)
   }
 
   async indent() {
-    const doc = await this.getDocOrThrow()
-    if (!doc.parentId) return // Can't indent root level block
+    const parent = await this.parent()
+    if (!parent) return // Can't indent root level block
 
-    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    const parentDoc = await parent.doc()
-    if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
+    const parentDoc = await parent.data()
+    if (!parentDoc) throw new Error(`Parent block not found`)
 
     // Find previous sibling to become new parent
     const currentIndex = getChildIndex(parentDoc, this.id)
@@ -109,12 +102,11 @@ export class Block {
   }
 
   async changeOrder(shift: number) {
-    const doc = await this.getDocOrThrow()
-    if (!doc.parentId) return // Can't change order of root level block
+    const parent = await this.parent()
+    if (!parent) return // Can't change order of root level block
 
-    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
-    const parentDoc = await parent.doc()
-    if (!parentDoc) throw new Error(`Parent block not found: ${doc.parentId}`)
+    const parentDoc = await parent.data()
+    if (!parentDoc) throw new Error(`Parent block not found`)
 
     const currentIndex = getChildIndex(parentDoc, this.id)
     const newIndex = currentIndex + shift
@@ -131,10 +123,9 @@ export class Block {
    * Doesn't actually delete the doc for now, just removes it from the parent
    */
   async delete() {
-    const doc = await this.getDocOrThrow()
-    if (!doc.parentId) return // Can't delete root level block
+    const parent = await this.parent()
+    if (!parent) return // Can't delete root level block
 
-    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
     parent.change((parent) => {
       const index = getChildIndex(parent, this.id)
       deleteAt(parent.childIds, index)
@@ -142,15 +133,14 @@ export class Block {
   }
 
   private async createSibling(data: Partial<BlockData> = {}, offset: number = 1) {
-    const doc = await this.getDocOrThrow()
-    if (!doc.parentId) return
+    const parent = await this.parent()
+    if (!parent) return
 
     const newBlock = Block.new(this.repo, {
       ...data,
-      parentId: doc.parentId,
+      parentId: parent.id,
     })
 
-    const parent = this.repo.find<BlockData>(doc.parentId as AutomergeUrl)
     parent.change((parent) => {
       insertAt(parent.childIds, getChildIndex(parent, this.id) + offset, newBlock.id)
     })
@@ -190,6 +180,7 @@ export class Block {
   }
 
   use() {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
     return useDocument<BlockData>(this.id)[0]
   }
 
