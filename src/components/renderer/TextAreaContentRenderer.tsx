@@ -2,7 +2,6 @@ import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
 import { KeyboardEvent, useRef, useEffect } from 'react'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
-import { delay } from '@/utils/async.ts'
 import { useUIStateProperty } from '@/data/globalState'
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
@@ -44,16 +43,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     e.stopPropagation()
     if (e.key === 'Escape') {
       setIsEditing(false)
-      //todo a better way, doing this to re-focus the block, so it handles kb shortcuts
-      setFocusedBlockId(undefined)
-      await delay(0)
-      setFocusedBlockId?.(block.id)
     }
-    /**
-     * these break incapsulation now
-     * also broken and don't work between hierarchy levels
-     * also need to use visual first and last line
-     */
     if (e.key === 'ArrowUp') {
       const textarea = textareaRef.current
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
@@ -61,7 +51,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
         if (prevVisible) {
 
-          setFocusedBlockId?.(prevVisible.id)
+          setFocusedBlockId(prevVisible.id)
         }
       }
     }
@@ -72,7 +62,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
           textarea.selectionEnd === textarea.value.length) {
         e.preventDefault()
         const nextVisible = await nextVisibleBlock(block, topLevelBlockId!)
-        if (nextVisible) setFocusedBlockId?.(nextVisible.id)
+        if (nextVisible) setFocusedBlockId(nextVisible.id)
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -100,12 +90,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       else if (textarea.selectionStart === textarea.value.length && 
           blockData.childIds.length > 0) {
         const newBlock = await block.createChild({position: 'first'})
-        if (newBlock) setFocusedBlockId?.(newBlock.id)
+        if (newBlock) setFocusedBlockId(newBlock.id)
       }
       // Case 3: Cursor at end, no children
       else {
         const newBlock = await block.createSiblingBelow()
-        if (newBlock) setFocusedBlockId?.(newBlock.id)
+        if (newBlock) setFocusedBlockId(newBlock.id)
       }
     } else if (e.key === 'Backspace' && blockData.content === '') {
       e.preventDefault()
@@ -113,7 +103,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       block.delete()
 
       if (prevVisible) {
-        setFocusedBlockId?.(prevVisible.id)
+        setFocusedBlockId(prevVisible.id)
       }
     } else if (e.key === 'Tab') {
       e.preventDefault()
@@ -152,10 +142,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }}
       onKeyDown={handleKeyDown}
       className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none`}
-      // onFocus={() => {
-      //   setFocusedBlockId(block.id)
-      //   setIsEditing(true)
-      // }}
       onBlur={() => {
         setIsEditing(false)
       }}

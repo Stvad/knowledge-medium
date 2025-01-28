@@ -53,6 +53,7 @@ export function DefaultBlockRenderer(
     } else
     if (e.key === 'i' || e.key === 'Enter') {
       e.preventDefault()
+      e.stopPropagation()
       setIsEditing(true)
     } else
     if (e.key === 'z') {
@@ -81,7 +82,7 @@ export function DefaultBlockRenderer(
     ) {
       ref.current?.focus()
     }
-  }, [focusedBlockId])
+  }, [focusedBlockId, isEditing])
 
   const blockData = block.use()
   if (!blockData) return null
