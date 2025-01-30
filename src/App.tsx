@@ -3,8 +3,8 @@ import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
 import { Suspense, use, useEffect } from 'react'
 import { useUIStateProperty } from '@/data/globalState.ts'
-import { useRepo } from '@automerge/automerge-repo-react-hooks'
 import { getRootBlock, Block } from '@/data/block.ts'
+import { useRepo } from '@/context/repo.tsx'
 
 // a clutch, mb a better way exists? we need this so it runs within the block context
 function UIStateInitializer({ docId }: { docId: string }) {
@@ -16,7 +16,6 @@ function UIStateInitializer({ docId }: { docId: string }) {
 }
 
 const App = ({docId, safeMode}: { docId: AutomergeUrl, safeMode: boolean }) => {
-  // todo, remove this dependency/use my own repo
 
   const repo = useRepo()
   const rootBlock = use(getRootBlock(new Block(repo, docId)))

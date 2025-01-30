@@ -1,8 +1,9 @@
-import { DocHandle, Repo, AutomergeUrl, isValidAutomergeUrl } from '@automerge/automerge-repo'
+import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
 import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
 import { ChangeOptions as AutomergeCahngeOptions, insertAt, deleteAt } from '@automerge/automerge'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { memoize } from 'lodash'
+import { Repo } from '@/data/repo.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
@@ -14,22 +15,21 @@ export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
  * https://github.com/onsetsoftware/automerge-repo-undo-redo/ seems to do it in a good way for Automerge
  */
 export class Block {
-  static new(repo: Repo, data: Partial<BlockData>) {
-    const doc = createBlockDoc(repo, data)
-    return new Block(repo, doc.url)
-  }
-
+  // @ts-expect-error We are actually definitely specifying these in the constructor
   id: AutomergeUrl
-  handle: DocHandle<BlockData>
+  // @ts-expect-error same as above
+  private handle: DocHandle<BlockData>
 
   constructor(
     readonly repo: Repo,
-    id: string,
+    handleOrId: string | DocHandle<BlockData>,
   ) {
-    if (!isValidAutomergeUrl(id)) throw new Error('Invalid block id')
+    if (typeof handleOrId === 'string') {
+      return repo.find(handleOrId)
+    }
 
-    this.id = id
-    this.handle = repo.find<BlockData>(id)
+    this.id = handleOrId.url
+    this.handle = handleOrId
   }
 
   async data() {
@@ -90,7 +90,7 @@ export class Block {
     if (currentIndex <= 0) return // No previous sibling, can't indent
 
     const newParentId = parentDoc.childIds[currentIndex - 1]
-    const newParent = this.repo.find<BlockData>(newParentId as AutomergeUrl)
+    const newParent = this.repo.find(newParentId)
 
     // 1. Remove from current parent's children
     parent.change((parent) => deleteAt(parent.childIds, currentIndex))
@@ -136,7 +136,7 @@ export class Block {
     const parent = await this.parent()
     if (!parent) return
 
-    const newBlock = Block.new(this.repo, {
+    const newBlock = this.repo.create({
       ...data,
       parentId: parent.id,
     })
@@ -215,7 +215,7 @@ export class Block {
     data?: Partial<BlockData>,
     position?: 'first' | 'last' | number
   } = {}) {
-    const newBlock = Block.new(this.repo, {
+    const newBlock = this.repo.create({
       ...data,
       parentId: this.id,
     })
@@ -327,28 +327,10 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
 }
 
 
-function createBlockDoc(repo: Repo, props: Partial<BlockData>): DocHandle<BlockData> {
-  const handle = repo.create<BlockData>()
-  const url = handle.url
-
-  handle.change(doc => {
-    doc.id = url
-    doc.content = props.content || ''
-    doc.properties = props.properties || {}
-    doc.childIds = props.childIds || []
-    if (props.parentId) {
-      doc.parentId = props.parentId
-    }
-  })
-
-  return handle
-}
 
 export const getAllChildrenBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
-  if (!isValidAutomergeUrl(blockId)) return []
-
-  const blockDoc = repo.find<BlockData>(blockId)
-  const exportBlock = await blockDoc?.doc()
+  const blockDoc = repo.find(blockId)
+  const exportBlock = await blockDoc?.data()
   if (!exportBlock) return []
 
   const childBlocks = await Promise.all(

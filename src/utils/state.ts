@@ -1,14 +1,14 @@
 import {BlockData} from '../types.ts'
-import {Repo} from '@automerge/automerge-repo'
 import {isNotNullish} from './types.ts'
 import { Block } from '@/data/block.ts'
+import { Repo } from '@/data/repo.ts'
 
 export const importState = async (state: { blocks: BlockData[] }, repo: Repo) => {
     const blockMap = new Map<string, Block>()
     
     // First create all blocks
     await Promise.all(state.blocks.map(async block => {
-        const newBlock = Block.new(repo, block)
+        const newBlock = repo.create(block)
         blockMap.set(block.id, newBlock)
     }))
 

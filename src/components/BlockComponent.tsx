@@ -1,7 +1,7 @@
 import { Block } from '../data/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
-import { useRepo } from '@automerge/automerge-repo-react-hooks'
 import { useBlockContext } from '@/context/block.tsx'
+import { useRepo } from '@/context/repo.tsx'
 
 interface BlockComponentProps {
     blockId: string;

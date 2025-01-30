@@ -3,11 +3,12 @@ import { BlockData, RendererRegistry, BlockRendererProps } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
-import { isValidAutomergeUrl, Repo } from '@automerge/automerge-repo'
-import { useRepo } from '@automerge/automerge-repo-react-hooks'
+import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { getAllChildrenBlocks, getRootBlock, Block } from '@/data/block.ts'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
+import { useRepo } from '@/context/repo.tsx'
+import { Repo } from '@/data/repo.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,

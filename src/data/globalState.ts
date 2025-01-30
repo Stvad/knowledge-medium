@@ -1,10 +1,10 @@
 import { useBlockContext } from '@/context/block.tsx'
 import { Block } from '@/data/block.ts'
-import { useRepo } from '@automerge/automerge-repo-react-hooks'
 import { use } from 'react'
 import { BlockPropertyValue } from '@/types.ts'
 import { memoize } from 'lodash'
-import { Repo } from '@automerge/automerge-repo'
+import { useRepo } from '@/context/repo.tsx'
+import { Repo } from '@/data/repo.ts'
 
 /**
  * One of core principles of the system is to store all state within the system
