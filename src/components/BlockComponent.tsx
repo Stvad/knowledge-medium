@@ -9,7 +9,7 @@ interface BlockComponentProps {
 
 export function BlockComponent({blockId}: BlockComponentProps) {
     const repo = useRepo()
-    const block = new Block(repo, blockId)
+    const block = repo.find(blockId)
     const context = useBlockContext()
     const Renderer = useRenderer({block, context})
 

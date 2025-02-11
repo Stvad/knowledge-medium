@@ -1,12 +1,15 @@
 import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
 import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
-import { ChangeOptions as AutomergeCahngeOptions, insertAt, deleteAt } from '@automerge/automerge'
+import { insertAt, deleteAt } from '@automerge/automerge'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { memoize } from 'lodash'
 import { Repo } from '@/data/repo.ts'
+import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
 
 export type ChangeFn<T> = (doc: T) => void;
-export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
+export type ChangeOptions<T> = UndoRedoOptions<T>;
+
+export const defaultChangeScope = 'block-default'
 
 /**
  * I want to abstract away the details of the storage lay away from the component, so i can plug in jazz.tools or similar later
@@ -15,21 +18,14 @@ export type ChangeOptions<T> = AutomergeCahngeOptions<T>;
  * https://github.com/onsetsoftware/automerge-repo-undo-redo/ seems to do it in a good way for Automerge
  */
 export class Block {
-  // @ts-expect-error We are actually definitely specifying these in the constructor
   id: AutomergeUrl
-  // @ts-expect-error same as above
-  private handle: DocHandle<BlockData>
 
   constructor(
     readonly repo: Repo,
-    handleOrId: string | DocHandle<BlockData>,
+    readonly undoRedoManager: UndoRedoManager,
+    private readonly handle: DocHandle<BlockData>,
   ) {
-    if (typeof handleOrId === 'string') {
-      return repo.find(handleOrId)
-    }
-
-    this.id = handleOrId.url
-    this.handle = handleOrId
+    this.id = handle.url
   }
 
   async data() {
@@ -43,19 +39,33 @@ export class Block {
   async parent() {
     const doc = await this.data()
     if (!doc?.parentId) return null
-    return new Block(this.repo, doc.parentId)
+    return this.repo.find(doc.parentId)
   }
 
   change(
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
   ) {
-    this.handle.change(callback, options)
+    this._transaction(() => {
+         this._change(callback)
+       }, options)
+  }
+
+  _transaction(callback: () => void, options: ChangeOptions<BlockData> = {}) {
+    this.undoRedoManager.transaction(callback, {...options, scope: options.scope ?? defaultChangeScope, dependencies: [this.handle.documentId]})
+  }
+
+  _change(
+    callback: ChangeFn<BlockData>,
+    options: ChangeOptions<BlockData> = {},
+  ) {
+      this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!.change(callback, options)
   }
 
   /**
    * todo we should outdent outside the view point, but that's not something this function can be aware of
    */
+
   async outdent() {
     const parent = await this.parent()
     if (!parent) return // We are root
@@ -64,18 +74,20 @@ export class Block {
     if (!grandparent) return // Parent is root
     // 1. Remove this block from current parent's children
 
-    parent.change((parent) => {
-      const index = getChildIndex(parent, this.id)
-      deleteAt(parent.childIds, index)
-    })
+    this.undoRedoManager.transaction(() => {
+      parent._change((parent) => {
+        const index = getChildIndex(parent, this.id)
+        deleteAt(parent.childIds, index)
+      })
 
-    // 2. Add this block to grandparent's children after the parent
-    grandparent.change((grandparent) => {
-      const parentIndex = getChildIndex(grandparent, parent.id)
-      insertAt(grandparent.childIds, parentIndex + 1, this.id)
-    })
+      // 2. Add this block to grandparent's children after the parent
+      grandparent._change((grandparent) => {
+        const parentIndex = getChildIndex(grandparent, parent.id)
+        insertAt(grandparent.childIds, parentIndex + 1, this.id)
+      })
 
-    this.updateParentId(grandparent.id)
+      this._updateParentId(grandparent.id)
+    }, {description: 'Outdent block', scope: defaultChangeScope})
   }
 
   async indent() {
@@ -92,13 +104,15 @@ export class Block {
     const newParentId = parentDoc.childIds[currentIndex - 1]
     const newParent = this.repo.find(newParentId)
 
-    // 1. Remove from current parent's children
-    parent.change((parent) => deleteAt(parent.childIds, currentIndex))
+    this.undoRedoManager.transaction(() => {
+      // 1. Remove from current parent's children
+      parent._change((parent) => deleteAt(parent.childIds, currentIndex))
 
-    // 2. Add to new parent's children
-    newParent.change((newParent) => newParent.childIds.push(this.id))
+      // 2. Add to new parent's children
+      newParent._change((newParent) => newParent.childIds.push(this.id))
 
-    this.updateParentId(newParentId)
+      this._updateParentId(newParentId)
+    }, {description: 'Indent block', scope: defaultChangeScope})
   }
 
   async changeOrder(shift: number) {
@@ -145,7 +159,7 @@ export class Block {
       insertAt(parent.childIds, getChildIndex(parent, this.id) + offset, newBlock.id)
     })
 
-    return new Block(this.repo, newBlock.id)
+    return this.repo.find(newBlock.id)
   }
 
   async createSiblingBelow(data: Partial<BlockData> = {}) {
@@ -168,7 +182,7 @@ export class Block {
     const doc = await this.getDocOrThrow()
 
     for (const childId of doc.childIds) {
-      const child = new Block(this.repo, childId)
+      const child = this.repo.find(childId)
       const childData = await child.data()
 
       if (childData?.content === content) {
@@ -185,22 +199,27 @@ export class Block {
   }
 
   useProperty<T extends BlockPropertyValue>(name: string): [T | undefined, (value: T) => void];
-  useProperty<T extends BlockPropertyValue>(name: string, initialValue: T): [T, (value: T) => void];
-  useProperty<T extends BlockPropertyValue>(name: string, initialValue?: T) {
+  useProperty<T extends BlockPropertyValue>(name: string, initialValue: T, scope?: string): [T, (value: T) => void];
+  useProperty<T extends BlockPropertyValue>(name: string, initialValue?: T, scope?: string) {
     const doc = this.use()
     const value = (doc?.properties[name] ?? initialValue) as T | undefined
 
+    //todo un-hardcode this
+    // property should specify the scope
+    const propertyScope = scope ?? name.startsWith('system:') ? 'ui-state' : undefined
     const setValue = (newValue: T) => {
-      this.change((doc) => doc.properties[name] = newValue)
+      this.change((doc) => doc.properties[name] = newValue, {scope: propertyScope})
     }
 
     return [value, setValue]
   }
 
-   updateParentId = (newParentId: string) =>
-    this.change((doc) => {
+   _updateParentId = (newParentId: string) =>
+     this._change((doc) => {
       doc.parentId = newParentId
     })
+
+  updateParentId = (newParentId: string) => this._transaction(() => this._updateParentId(newParentId))
 
   private getDocOrThrow = async () => {
     const doc = await this.handle.doc()
@@ -264,7 +283,7 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
   
   // If block has children and is not collapsed, return first child
   if (doc.childIds.length > 0 && !doc.properties['system:collapsed']) {
-    return new Block(block.repo, doc.childIds[0])
+    return block.repo.find(doc.childIds[0])
   }
 
   // Look for next sibling or parent's next sibling
@@ -281,7 +300,7 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
 
     // If has next sibling, return it
     if (currentIndex < parentDoc.childIds.length - 1) {
-      return new Block(block.repo, parentDoc.childIds[currentIndex + 1])
+      return block.repo.find(parentDoc.childIds[currentIndex + 1])
     }
 
     // No next sibling, move up to parent and try again
@@ -299,7 +318,7 @@ const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
   
   if (doc.childIds.length === 0 || doc.properties['system:collapsed']) return block
   
-  const lastChild = new Block(block.repo, doc.childIds[doc.childIds.length - 1] as string)
+  const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1] as string)
   return getLastVisibleDescendant(lastChild)
 }
 
@@ -318,7 +337,7 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
 
   // If block has previous sibling
   if (currentIndex > 0) {
-    const previousSibling = new Block(block.repo, parentDoc.childIds[currentIndex - 1] as string)
+    const previousSibling = block.repo.find(parentDoc.childIds[currentIndex - 1])
     // Return the last visible descendant of the previous sibling
     return getLastVisibleDescendant(previousSibling)
   }

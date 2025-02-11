@@ -56,7 +56,7 @@ export function DefaultBlockRenderer(
       e.stopPropagation()
       setIsEditing(true)
     } else
-    if (e.key === 'z') {
+    if (e.key === 'z' && !e.metaKey) { //todo better way
       e.preventDefault()
       e.stopPropagation()
       setIsCollapsed(!isCollapsed)

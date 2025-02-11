@@ -5,7 +5,7 @@ import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
 import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
-import { getAllChildrenBlocks, getRootBlock, Block } from '@/data/block.ts'
+import { getAllChildrenBlocks, getRootBlock } from '@/data/block.ts'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
 import { Repo } from '@/data/repo.ts'
@@ -76,7 +76,7 @@ const loadRegistry = async (repo: Repo, blockId: string, safeMode: boolean): Pro
 const getRendererBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
   if (!isValidAutomergeUrl(blockId)) return []
 
-  const rootBlock = await getRootBlock(new Block(repo, blockId))
+  const rootBlock = await getRootBlock(repo.find(blockId))
   const allBlocks = await getAllChildrenBlocks(repo, rootBlock.id)
   return allBlocks.filter(block => block.properties.type === 'renderer')
 }

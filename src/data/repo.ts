@@ -3,6 +3,7 @@ import {BrowserWebSocketClientAdapter} from '@automerge/automerge-repo-network-w
 import {IndexedDBStorageAdapter} from '@automerge/automerge-repo-storage-indexeddb'
 import { Block } from '@/data/block.ts'
 import { BlockData } from '@/types.ts'
+import { UndoRedoManager } from '@onsetsoftware/automerge-repo-undo-redo'
 
 export const repo = new AutomergeRepo({
     network: [new BrowserWebSocketClientAdapter('wss://sync.automerge.org')],
@@ -10,16 +11,26 @@ export const repo = new AutomergeRepo({
 })
 
 export class Repo {
-    constructor(readonly automergeRepo: AutomergeRepo) {}
+    constructor(
+      readonly automergeRepo: AutomergeRepo,
+      readonly undoRedoManager: UndoRedoManager
+    ) {}
+
     find(id: string): Block {
         if (!isValidAutomergeUrl(id)) throw new Error('Invalid block id')
 
-        return new Block(this, this.automergeRepo.find(id))
+        const rawHandle = this.automergeRepo.find<BlockData>(id)
+        const existingUndoRedoHandle = this.undoRedoManager.getUndoRedoHandle<BlockData>(rawHandle.documentId)
+        const undoRedoHandle = existingUndoRedoHandle || this.undoRedoManager.addHandle(rawHandle)
+        return new Block(this, this.undoRedoManager, undoRedoHandle.handle)
     }
 
     create(data: Partial<BlockData>): Block {
-        const doc = createBlockDoc(this.automergeRepo, data)
-        return new Block(this, doc)
+        // todo it's not really possible to undo block creation atm
+
+        const rawHandle = createBlockDoc(this.automergeRepo, data)
+        const undoRedoHandle = this.undoRedoManager.addHandle(rawHandle)
+        return new Block(this, this.undoRedoManager, undoRedoHandle.handle)
     }
 }
 

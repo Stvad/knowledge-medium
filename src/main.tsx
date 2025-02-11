@@ -8,13 +8,32 @@ import { importState } from './utils/state.ts'
 import { repo as automergeRepo, Repo } from '@/data/repo'
 import { RepoProvider } from '@/context/repo.tsx'
 import { getExampleBlocks } from '@/initData.ts'
-import { Block } from '@/data/block.ts'
+import { Block, defaultChangeScope } from '@/data/block.ts'
+import { UndoRedoManager } from '@onsetsoftware/automerge-repo-undo-redo'
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
 window.ReactDOM = ReactDOM
 
-const repo = new Repo(automergeRepo)
+const undoRedoManager = new UndoRedoManager()
+
+// todo better keybinding system
+document.addEventListener('keydown', (e) => {
+  // Check for Ctrl/Cmd + Z for undo
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+    e.preventDefault()
+    // todo in textarea, plausibly just want to let the browser handle this/use default behavior
+    undoRedoManager.undo(defaultChangeScope)
+  }
+  // Check for Ctrl/Cmd + Shift + Z or Ctrl/Cmd + Y for redo
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
+    e.preventDefault()
+    undoRedoManager.redo(defaultChangeScope)
+  }
+})
+
+
+const repo = new Repo(automergeRepo, undoRedoManager)
 
 const rootDocUrl = `${document.location.hash.substring(1)}`
 let handle: Block
@@ -22,9 +41,7 @@ if (isValidAutomergeUrl(rootDocUrl)) {
     handle = repo.find(rootDocUrl)
 } else {
     const blockMap = await importState({blocks: getExampleBlocks()}, repo)
-    console.log('Created example blocks:', blockMap)
     handle = blockMap.values().next().value!
-    console.log('Created example blocks:', handle)
 }
 const docUrl = document.location.hash = handle.id
 const isSafeMode = new URLSearchParams(window.location.search).has('safeMode')

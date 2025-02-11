@@ -19,7 +19,8 @@ export function useUIStateProperty<T extends BlockPropertyValue>(name: string): 
 export function useUIStateProperty<T extends BlockPropertyValue>(name: string, initialValue: T): [T, (value: T) => void];
 export function useUIStateProperty<T extends BlockPropertyValue>(name: string, initialValue?: T) {
   const block = useUIStateBlock()
-  return block.useProperty(name, initialValue)
+  // todo properties should supply their own change scope
+  return block.useProperty(name, initialValue, 'ui-state')
 }
 
 
@@ -36,7 +37,7 @@ function useUIStateBlock(): Block {
  * Memoized for using with `use` react function
  */
 export const getUIStateBlock = memoize(async (repo: Repo, rootBlockId: string): Promise<Block> => {
-  const block = new Block(repo, rootBlockId)
+  const block = repo.find(rootBlockId)
   const systemBlock = await block.childByContent('system', true)
   return systemBlock.childByContent('ui-state', true)
 }, (_, rootBlockId) => rootBlockId)

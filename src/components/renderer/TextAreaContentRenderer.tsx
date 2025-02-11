@@ -40,11 +40,13 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    e.stopPropagation()
     if (e.key === 'Escape') {
+      e.stopPropagation()
       setIsEditing(false)
     }
     if (e.key === 'ArrowUp') {
+      e.stopPropagation()
+
       const textarea = textareaRef.current
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault()
@@ -56,6 +58,8 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }
     }
     if (e.key === 'ArrowDown') {
+      e.stopPropagation()
+
       const textarea = textareaRef.current
       if (textarea &&
           textarea.selectionStart === textarea.value.length &&
@@ -66,6 +70,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }
     }
     if (e.key === 'Enter' && !e.shiftKey) {
+      e.stopPropagation()
       e.preventDefault()
       const textarea = textareaRef.current
       if (!textarea) return
@@ -75,13 +80,14 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         // Split text at cursor position
         const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
         const afterCursor = textarea.value.slice(textarea.selectionStart)
-        
+
+        // todo better undo/redo for this
+        await block.createSiblingAbove({ content: beforeCursor })
+
         block.change(b => {
           b.content = afterCursor
         })
 
-        await block.createSiblingAbove({ content: beforeCursor })
-        
         // Reset selection to start
         textarea.selectionStart = 0
         textarea.selectionEnd = 0
@@ -94,10 +100,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }
       // Case 3: Cursor at end, no children
       else {
+        // todo focus logic breaks when we undo new block creation
         const newBlock = await block.createSiblingBelow()
         if (newBlock) setFocusedBlockId(newBlock.id)
       }
     } else if (e.key === 'Backspace' && blockData.content === '') {
+      e.stopPropagation()
       e.preventDefault()
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
       block.delete()
@@ -106,6 +114,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         setFocusedBlockId(prevVisible.id)
       }
     } else if (e.key === 'Tab') {
+      e.stopPropagation()
       e.preventDefault()
       if (e.shiftKey) {
         block.outdent()
@@ -113,9 +122,11 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         block.indent()
       }
     } else if (e.key === 'ArrowUp' && e.metaKey && e.shiftKey) {
+      e.stopPropagation()
       e.preventDefault()
       block.changeOrder(-1)
     } else if (e.key === 'ArrowDown' && e.metaKey && e.shiftKey) {
+      e.stopPropagation()
       e.preventDefault()
       block.changeOrder(1)
     }

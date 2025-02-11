@@ -3,7 +3,7 @@ import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
 import { Suspense, use, useEffect } from 'react'
 import { useUIStateProperty } from '@/data/globalState.ts'
-import { getRootBlock, Block } from '@/data/block.ts'
+import { getRootBlock } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 
 // a clutch, mb a better way exists? we need this so it runs within the block context
@@ -18,7 +18,7 @@ function UIStateInitializer({ docId }: { docId: string }) {
 const App = ({docId, safeMode}: { docId: AutomergeUrl, safeMode: boolean }) => {
 
   const repo = useRepo()
-  const rootBlock = use(getRootBlock(new Block(repo, docId)))
+  const rootBlock = use(getRootBlock(repo.find(docId)))
 
   return (
     <Suspense fallback={<div>Loading...</div>}>
