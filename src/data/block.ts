@@ -1,10 +1,11 @@
 import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
 import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
-import { insertAt, deleteAt } from '@automerge/automerge'
+import { insertAt, deleteAt } from '@automerge/automerge/next'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { memoize } from 'lodash'
 import { Repo } from '@/data/repo.ts'
 import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
+import { useCallback } from 'react'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -207,9 +208,9 @@ export class Block {
     //todo un-hardcode this
     // property should specify the scope
     const propertyScope = scope ?? name.startsWith('system:') ? 'ui-state' : undefined
-    const setValue = (newValue: T) => {
+    const setValue = useCallback((newValue: T) => {
       this.change((doc) => doc.properties[name] = newValue, {scope: propertyScope})
-    }
+    }, [this, name, scope])
 
     return [value, setValue]
   }

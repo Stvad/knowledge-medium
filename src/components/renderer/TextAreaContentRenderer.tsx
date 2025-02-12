@@ -1,11 +1,14 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
-import { KeyboardEvent, useRef, useEffect } from 'react'
+import { KeyboardEvent, useRef, useEffect, useState, useCallback } from 'react'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
+import { updateText } from '@automerge/automerge/next'
+import { debounce } from 'lodash'
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
+  const [localContent, setLocalContent] = useState(blockData?.content || '')
   const [, setIsEditing] = useIsEditing(block)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string | undefined>('focusedBlockId')
@@ -13,17 +16,17 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
 
   useEffect(() => {
-    /**
-     * Todo: we're currently updating selection all the time, causing rerender every time, which is not ideal
-     * think about this
-     */
     if (focusedBlockId === block.id && textareaRef.current) {
       textareaRef.current.focus()
+
+      // Restore selection
       if (selection?.blockId === block.id) {
         textareaRef.current.setSelectionRange(selection.start, selection.end || null)
       }
     }
-  }, [focusedBlockId, selection, block.id])
+    // We deliberately don't have selections as a dependency, as we only want to update it manually when we re-mount
+    // cases like indent/outdent or shift up/down
+  }, [focusedBlockId, block.id])
 
   const fitSizeToContent = () => {
     if (textareaRef.current) {
@@ -35,6 +38,40 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   useEffect(() => {
     fitSizeToContent()
   }, [])
+
+  // Update local content when block content changes
+  useEffect(() => {
+    if (blockData?.content !== undefined) {
+      setLocalContent(blockData.content)
+    }
+  }, [blockData?.content])
+
+  const debouncedSetSelection = useCallback(
+    debounce((selection: SelectionState) => {
+      setSelection(selection)
+    }, 150),
+    [setSelection]
+  )
+
+  const debouncedUpdateBlock = useCallback(
+    debounce((value: string) => {
+      console.log('updated block')
+      block.change(b => {
+        updateText(b, ['content'], value)
+      })
+    }, 300, { leading: true, trailing: true, maxWait: 600 }),
+    [block]
+  )
+
+  // Cleanup debounce on unmount
+  useEffect(() => {
+    console.log('mounting')
+    return () => {
+      console.log('unmounting')
+      debouncedUpdateBlock.flush()
+      debouncedSetSelection.flush()
+    }
+  }, [debouncedUpdateBlock, debouncedSetSelection])
 
   if (!blockData) return null
 
@@ -134,17 +171,17 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   return (
     <textarea
       ref={textareaRef}
-      value={blockData.content}
+      value={localContent}
       onChange={(e) => {
-        block.change(b => {
-          b.content = e.target.value
-        })
+        const newValue = e.target.value
+        setLocalContent(newValue)
         fitSizeToContent()
+        debouncedUpdateBlock(newValue)
       }}
       onSelect={() => {
         if (textareaRef.current) {
           const { selectionStart, selectionEnd } = textareaRef.current
-          setSelection?.({
+          debouncedSetSelection({
             blockId: block.id,
             start: selectionStart,
             end: selectionEnd
@@ -154,6 +191,8 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       onKeyDown={handleKeyDown}
       className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none`}
       onBlur={() => {
+        debouncedUpdateBlock.flush()
+        debouncedSetSelection.flush()
         setIsEditing(false)
       }}
     />

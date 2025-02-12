@@ -11,6 +11,9 @@ export const repo = new AutomergeRepo({
 })
 
 export class Repo {
+    // Caching is mainly for reference identity for react
+    private blockCache = new Map<string, Block>()
+
     constructor(
       readonly automergeRepo: AutomergeRepo,
       readonly undoRedoManager: UndoRedoManager
@@ -19,18 +22,29 @@ export class Repo {
     find(id: string): Block {
         if (!isValidAutomergeUrl(id)) throw new Error('Invalid block id')
 
+        const cachedBlock = this.blockCache.get(id)
+        if (cachedBlock) {
+            return cachedBlock
+        }
+
         const rawHandle = this.automergeRepo.find<BlockData>(id)
         const existingUndoRedoHandle = this.undoRedoManager.getUndoRedoHandle<BlockData>(rawHandle.documentId)
         const undoRedoHandle = existingUndoRedoHandle || this.undoRedoManager.addHandle(rawHandle)
-        return new Block(this, this.undoRedoManager, undoRedoHandle.handle)
+        
+        // Create new block and cache it
+        const block = new Block(this, this.undoRedoManager, undoRedoHandle.handle)
+        this.blockCache.set(id, block)
+        return block
     }
 
     create(data: Partial<BlockData>): Block {
         // todo it's not really possible to undo block creation atm
-
         const rawHandle = createBlockDoc(this.automergeRepo, data)
         const undoRedoHandle = this.undoRedoManager.addHandle(rawHandle)
-        return new Block(this, this.undoRedoManager, undoRedoHandle.handle)
+        
+        const block = new Block(this, this.undoRedoManager, undoRedoHandle.handle)
+        this.blockCache.set(block.id, block)
+        return block
     }
 }
 
