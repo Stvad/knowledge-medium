@@ -17,14 +17,23 @@ export const defaultRegistry: RendererRegistry = {
   missingData: MissingDataRenderer,
 }
 
+let cachedRegistry: Promise<RendererRegistry> | null = null
+
 export const useRenderer = ({block, context}: BlockRendererProps) => {
   const blockData = block?.use()
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
   const repo = useRepo()
-  // todo this should just have a cache of the renderers, initialized on first use
-  // plausibly writen to a value within a system
   useEffect(() => {
-    loadRegistry(repo, block.id, context?.safeMode ?? false).then(setRegistry)
+    // Load registry once and cache it
+    (async () => {
+      if (cachedRegistry && registry === await cachedRegistry) return
+
+      if (!cachedRegistry) {
+        cachedRegistry = loadRegistry(repo, block.id, context?.safeMode ?? false)
+      }
+
+      setRegistry(await cachedRegistry)
+    })()
   }, [])
 
   if (blockData?.properties?.renderer && registry[blockData.properties.renderer]) {
