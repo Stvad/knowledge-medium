@@ -23,7 +23,7 @@ export function DefaultBlockRenderer(
   }: DefaultBlockRendererProps,
 ) {
   const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
-  const [isEditing, setIsEditing] = useIsEditing(block)
+  const [isEditing, setIsEditing] = useIsEditing()
   const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
@@ -51,12 +51,28 @@ export function DefaultBlockRenderer(
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
       if (prevVisible) setFocusedBlockId?.(prevVisible.id)
     } else
-    if (e.key === 'i' || e.key === 'Enter') {
+    if (e.key === 'i') {
       e.preventDefault()
       e.stopPropagation()
       setIsEditing(true)
     } else
-    if (e.key === 'z' && !e.metaKey) { //todo better way
+    if (e.key === 'o') {
+      e.preventDefault()
+      e.stopPropagation()
+      const hasChildren = (blockData?.childIds.length ?? 0) > 0
+      const result = hasChildren ? await block.createChild({position: 'first'}) : await block.createSiblingBelow()
+      if (result) {
+        setFocusedBlockId(result.id)
+        setIsEditing(true)
+      }
+    }
+    else if (e.key === 't') {
+      // not a deeply though through key mapping
+      e.preventDefault()
+      e.stopPropagation()
+      setShowProperties(!showProperties)
+    }
+    else if (e.key === 'z' && !e.metaKey) { //todo better way
       e.preventDefault()
       e.stopPropagation()
       setIsCollapsed(!isCollapsed)
@@ -72,8 +88,9 @@ export function DefaultBlockRenderer(
     }
   }
 
+  const inFocus = focusedBlockId === block.id
   useEffect(() => {
-    if (focusedBlockId === block.id
+    if (inFocus
       /**
        * todo, doing this so the edit mode stuff handles focus, but I don't love it, see if there is a better way
        * that doesn't create a logical dependency between the two
@@ -82,12 +99,12 @@ export function DefaultBlockRenderer(
     ) {
       ref.current?.focus()
     }
-  }, [focusedBlockId, isEditing])
+  }, [inFocus, isEditing])
 
   const blockData = block.use()
   if (!blockData) return null
 
-  const ContentRenderer = isEditing ? EditContentRenderer : DefaultContentRenderer
+  const ContentRenderer = isEditing && inFocus ? EditContentRenderer : DefaultContentRenderer
   const hasChildren = blockData?.childIds?.length > 0
 
   return (
@@ -115,7 +132,7 @@ export function DefaultBlockRenderer(
           </div>
 
           <div className="flex-grow relative flex flex-col">
-            <div className={`flex flex-col rounded-sm ${focusedBlockId === block.id ? 'bg-muted/50' : ''}`}>
+            <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
               <ContentRenderer block={block}/>
 
               <div className="absolute right-0 top-0 opacity-0 transition-opacity group-hover:opacity-100 flex gap-1">

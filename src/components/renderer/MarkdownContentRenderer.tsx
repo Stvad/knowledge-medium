@@ -43,7 +43,7 @@ const getCursorLocation = (element: HTMLDivElement | null) => {
 
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
-  const [, setIsEditing] = useIsEditing(block)
+  const [, setIsEditing] = useIsEditing()
   const [, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [, setSelection] = useUIStateProperty<SelectionState>('selection')
   const ref = useRef<HTMLDivElement>(null)

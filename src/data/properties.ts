@@ -1,5 +1,5 @@
-import { Block } from '@/data/block.ts'
+import { useUIStateProperty } from '@/data/globalState.ts'
 
-export const useIsEditing = (block: Block) => {
-  return block.useProperty<boolean>('system:isEditing', false)
+export const useIsEditing = () => {
+  return useUIStateProperty<boolean>('isEditing', false)
 }

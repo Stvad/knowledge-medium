@@ -9,7 +9,7 @@ import { debounce } from 'lodash'
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
   const [localContent, setLocalContent] = useState(blockData?.content || '')
-  const [, setIsEditing] = useIsEditing(block)
+  const [, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string | undefined>('focusedBlockId')
   const [selection, setSelection] = useUIStateProperty<SelectionState>('selection')
