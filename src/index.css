@@ -139,3 +139,11 @@
 .custom-block {
   @apply border-l-2 border-primary pl-2.5;
 }
+
+code {
+  @apply bg-gray-100 dark:bg-gray-800 rounded px-1;
+}
+
+a {
+  @apply text-blue-500 underline;
+}
