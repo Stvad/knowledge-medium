@@ -14,6 +14,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string | undefined>('focusedBlockId')
   const [selection, setSelection] = useUIStateProperty<SelectionState>('selection')
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
+  const [isCollapsed] = block.useProperty<boolean>('system:collapsed', false)
 
   useEffect(() => {
     if (focusedBlockId === block.id && textareaRef.current) {
@@ -131,11 +132,11 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }
       // Case 2: Cursor is at end of text and block has children
       else if (textarea.selectionStart === textarea.value.length && 
-          blockData.childIds.length > 0) {
+          blockData.childIds.length > 0 && !isCollapsed) {
         const newBlock = await block.createChild({position: 'first'})
         if (newBlock) setFocusedBlockId(newBlock.id)
       }
-      // Case 3: Cursor at end, no children
+      // Case 3: Cursor at end, no children or they are collapsed
       else {
         // todo focus logic breaks when we undo new block creation
         const newBlock = await block.createSiblingBelow()
