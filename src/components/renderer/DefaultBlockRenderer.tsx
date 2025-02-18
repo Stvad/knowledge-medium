@@ -30,6 +30,8 @@ export function DefaultBlockRenderer(
   const ref = useRef<HTMLDivElement>(null)
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLDivElement>) => {
+    if (isEditing) return
+
     // todo shortcut customization/commands
     if (e.key === 'ArrowUp' && e.metaKey && e.shiftKey) {
       e.stopPropagation()
@@ -37,26 +39,22 @@ export function DefaultBlockRenderer(
     } else if (e.key === 'ArrowDown' && e.metaKey && e.shiftKey) {
       e.stopPropagation()
       block.changeOrder(1)
-    } else
-    if (e.key === 'ArrowDown' || e.key === 'k') {
+    } else if (e.key === 'ArrowDown' || e.key === 'k') {
       e.stopPropagation()
       e.preventDefault()
 
       const nextVisible = await nextVisibleBlock(block, topLevelBlockId!)
       if (nextVisible) setFocusedBlockId?.(nextVisible.id)
-    } else
-    if (e.key === 'ArrowUp' || e.key === 'h') {
+    } else if (e.key === 'ArrowUp' || e.key === 'h') {
       e.stopPropagation()
       e.preventDefault()
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
       if (prevVisible) setFocusedBlockId?.(prevVisible.id)
-    } else
-    if (e.key === 'i') {
+    } else if (e.key === 'i') {
       e.preventDefault()
       e.stopPropagation()
       setIsEditing(true)
-    } else
-    if (e.key === 'o') {
+    } else if (e.key === 'o') {
       e.preventDefault()
       e.stopPropagation()
       const hasChildren = (blockData?.childIds.length ?? 0) > 0
@@ -65,19 +63,16 @@ export function DefaultBlockRenderer(
         setFocusedBlockId(result.id)
         setIsEditing(true)
       }
-    }
-    else if (e.key === 't') {
+    } else if (e.key === 't') {
       // not a deeply though through key mapping
       e.preventDefault()
       e.stopPropagation()
       setShowProperties(!showProperties)
-    }
-    else if (e.key === 'z' && !e.metaKey) { //todo better way
+    } else if (e.key === 'z' && !e.metaKey) { //todo better way to handle cases like this
       e.preventDefault()
       e.stopPropagation()
       setIsCollapsed(!isCollapsed)
-    } else
-    if (e.key === 'Tab') {
+    } else if (e.key === 'Tab') {
       e.preventDefault()
       e.stopPropagation()
       if (e.shiftKey) {
@@ -85,6 +80,10 @@ export function DefaultBlockRenderer(
       } else {
         block.indent()
       }
+    } else if (e.key === 'Delete') {
+      e.preventDefault()
+      e.stopPropagation()
+      block.delete()
     }
   }
 
