@@ -54,6 +54,3 @@ createRoot(document.getElementById('root')!).render(
         </RepoProvider>
     </StrictMode>,
 )
-
-
-//  generally unclear how to handle this for (arbitrary field that contains id of another block)

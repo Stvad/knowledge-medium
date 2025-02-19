@@ -1,9 +1,9 @@
-import { Repo as AutomergeRepo, isValidAutomergeUrl, DocHandle } from '@automerge/automerge-repo'
+import { Repo as AutomergeRepo, isValidAutomergeUrl, DocHandle, DocHandleChangePayload } from '@automerge/automerge-repo'
 import {BrowserWebSocketClientAdapter} from '@automerge/automerge-repo-network-websocket'
 import {IndexedDBStorageAdapter} from '@automerge/automerge-repo-storage-indexeddb'
 import { Block } from '@/data/block.ts'
 import { BlockData } from '@/types.ts'
-import { UndoRedoManager } from '@onsetsoftware/automerge-repo-undo-redo'
+import { UndoRedoManager, AutomergeRepoUndoRedo } from '@onsetsoftware/automerge-repo-undo-redo'
 
 export const repo = new AutomergeRepo({
     network: [new BrowserWebSocketClientAdapter('wss://sync.automerge.org')],
@@ -29,9 +29,12 @@ export class Repo {
 
         const rawHandle = this.automergeRepo.find<BlockData>(id)
         const existingUndoRedoHandle = this.undoRedoManager.getUndoRedoHandle<BlockData>(rawHandle.documentId)
+        // todo
+        // @ts-expect-error Local package dependency version mismatch
         const undoRedoHandle = existingUndoRedoHandle || this.undoRedoManager.addHandle(rawHandle)
+        this.setupHooks(undoRedoHandle)
         
-        // Create new block and cache it
+        // @ts-expect-error Local package dependency version mismatch
         const block = new Block(this, this.undoRedoManager, undoRedoHandle.handle)
         this.blockCache.set(id, block)
         return block
@@ -40,11 +43,19 @@ export class Repo {
     create(data: Partial<BlockData>): Block {
         // todo it's not really possible to undo block creation atm
         const rawHandle = createBlockDoc(this.automergeRepo, data)
-        const undoRedoHandle = this.undoRedoManager.addHandle(rawHandle)
-        
+        // @ts-expect-error Local package dependency version mismatch
+        const undoRedoHandle = this.undoRedoManager.addHandle<BlockData>(rawHandle)
+        this.setupHooks(undoRedoHandle)
+
+        // @ts-expect-error Local package dependency version mismatch
         const block = new Block(this, this.undoRedoManager, undoRedoHandle.handle)
         this.blockCache.set(block.id, block)
         return block
+    }
+
+    private setupHooks(undoredoHandle: AutomergeRepoUndoRedo<BlockData>) {
+        // @ts-expect-error Local package dependency version mismatch
+        undoredoHandle.handle.on('change', updateChangeTime)
     }
 }
 
@@ -57,10 +68,24 @@ function createBlockDoc(repo: AutomergeRepo, props: Partial<BlockData>): DocHand
         doc.content = props.content || ''
         doc.properties = props.properties || {}
         doc.childIds = props.childIds || []
+
+        const createTime = Date.now()
+        doc.createTime = props.createTime || createTime
+        doc.updateTime = props.updateTime || createTime
+
         if (props.parentId) {
             doc.parentId = props.parentId
         }
     })
 
     return handle
+}
+
+const updateChangeTime = ({handle, patches}: DocHandleChangePayload<BlockData>) => {
+    if (!handle.isReady()) return
+    if (patches[0].path[0] === 'updateTime') {
+        // to prevent infinite loops
+        return
+    }
+    handle.change((doc: BlockData) => {doc.updateTime = Date.now()})
 }

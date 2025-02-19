@@ -30,6 +30,10 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
         <Label className="w-1/3">ID</Label>
         <Input value={blockData.id} disabled className="bg-muted/50" />
       </div>
+      <div className="flex gap-2 items-center">
+        <Label className="w-1/3">Changed Time</Label>
+        <Input value={new Date(blockData.updateTime).toUTCString()} disabled className="bg-muted/50" />
+      </div>
 
       {Object.entries(properties).map(([key, value]) => (
         <div key={key} className="flex gap-2 items-center">

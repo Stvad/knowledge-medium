@@ -7,21 +7,28 @@ export function getExampleBlocks(): BlockData[] {
   const child2Id = uuidv4()
   const child3Id = uuidv4()
 
+  const defaults = {
+    properties: {},
+    childIds: [],
+    createTime: Date.now(),
+    updateTime: Date.now(),
+  }
+
   return [
     {
+      ...defaults,
       id: rootId,
       content: 'Hello World\nThis is a multiline\ntext block',
-      properties: {},
       childIds: [child1Id, child2Id, child3Id],
     },
     {
+      ...defaults,
       id: child1Id,
       content: 'A normal text block\nwith multiple lines',
-      properties: {},
-      childIds: [],
       parentId: rootId,
     },
     {
+      ...defaults,
       id: child2Id,
       content: `import { DefaultBlockRenderer } from "@/components/DefaultBlockRenderer"; 
  
@@ -41,16 +48,16 @@ function ContentRenderer({ block, changeBlock }) {
 export default ({ block, changeBlock }) => <DefaultBlockRenderer block={block} changeBlock={changeBlock} ContentRenderer={ContentRenderer}/> 
 `,
       properties: {type: 'renderer'},
-      childIds: [],
       parentId: rootId,
     },
     {
+      ...defaults,
       id: child3Id,
       content: 'This block uses the custom renderer',
       // todo import wont' update this rn, so need to manually set the new renderer id
       //  generally unclear how to handle this for (arbitrary field that contains id of another block)
+      //  plausibly the type should define how to extract the references from property/provide function
       properties: {renderer: child2Id},
-      childIds: [],
       parentId: rootId,
     },
   ]
