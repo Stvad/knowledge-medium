@@ -194,7 +194,14 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       onBlur={() => {
         debouncedUpdateBlock.flush()
         debouncedSetSelection.flush()
-        setIsEditing(false)
+
+        if (document.hasFocus()) {
+          // true means we focused somewhere else in the app,
+          // false would mean we clicked outside the app, alt-tabbed, etc
+          // in which case we don't want to exit insert mode plausibly
+          // motivating example is emoji picker
+          setIsEditing(false)
+        }
       }}
     />
   )
