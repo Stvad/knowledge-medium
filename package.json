@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build --mode development",
     "lint": "eslint .",
+    "deploy": "netlify deploy --prod -s knowledge-medium-explorations.netlify.app -d dist",
     "preview": "vite preview"
   },
   "dependencies": {
