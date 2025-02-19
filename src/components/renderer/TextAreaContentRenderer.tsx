@@ -66,9 +66,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   // Cleanup debounce on unmount
   useEffect(() => {
-    console.log('mounting')
     return () => {
-      console.log('unmounting')
       debouncedUpdateBlock.flush()
       debouncedSetSelection.flush()
     }
@@ -78,6 +76,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    const textarea = e.target as HTMLTextAreaElement
     if (e.key === 'Escape') {
       e.stopPropagation()
       setIsEditing(false)
@@ -85,12 +84,10 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     if (e.key === 'ArrowUp') {
       e.stopPropagation()
 
-      const textarea = textareaRef.current
       if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
         e.preventDefault()
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
         if (prevVisible) {
-
           setFocusedBlockId(prevVisible.id)
         }
       }
@@ -98,7 +95,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     if (e.key === 'ArrowDown') {
       e.stopPropagation()
 
-      const textarea = textareaRef.current
       if (textarea &&
           textarea.selectionStart === textarea.value.length &&
           textarea.selectionEnd === textarea.value.length) {
@@ -110,8 +106,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.stopPropagation()
       e.preventDefault()
-      const textarea = textareaRef.current
-      if (!textarea) return
 
       // Case 1: Cursor is in middle of text
       if (textarea.selectionStart < textarea.value.length) {
