@@ -6,9 +6,11 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { useIsEditing } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
-import { useEffect, KeyboardEvent, useRef } from 'react'
+import { useEffect, KeyboardEvent, useRef, ClipboardEvent } from 'react'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
+import { useRepo } from '@/context/repo'
+import { pasteMultilineText } from '@/utils/paste.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -22,6 +24,7 @@ export function DefaultBlockRenderer(
     EditContentRenderer = TextAreaContentRenderer,
   }: DefaultBlockRendererProps,
 ) {
+  const repo = useRepo()
   const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
   const [isEditing, setIsEditing] = useIsEditing()
   const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
@@ -87,6 +90,19 @@ export function DefaultBlockRenderer(
     }
   }
 
+  const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
+    if (!inFocus) return;
+    // todo this plausibly should be a global handler and not on the block
+
+    e.preventDefault();
+    const pastedText = e.clipboardData.getData('text/plain');
+    
+    const pasted = await pasteMultilineText(pastedText, block, repo);
+    if (pasted[0]) {
+      setFocusedBlockId(pasted[0].id)
+    }
+  };
+
   const inFocus = focusedBlockId === block.id
   useEffect(() => {
     if (inFocus
@@ -112,6 +128,7 @@ export function DefaultBlockRenderer(
       data-block-id={block.id} 
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
       ref={ref}
     >
       <Collapsible open={!isCollapsed}>

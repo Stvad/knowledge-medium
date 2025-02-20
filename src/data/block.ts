@@ -63,10 +63,19 @@ export class Block {
       this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!.change(callback, options)
   }
 
+  async index() {
+    const parent = await this.parent()
+    if (!parent) return 0 // Can't get index of root level block
+
+    const doc = await parent.data()
+    if (!doc) throw new Error(`Parent block not found`)
+
+    return getChildIndex(doc, this.id)
+  }
+
   /**
    * todo we should outdent outside the view point, but that's not something this function can be aware of
    */
-
   async outdent() {
     const parent = await this.parent()
     if (!parent) return // We are root
@@ -145,6 +154,34 @@ export class Block {
       const index = getChildIndex(parent, this.id)
       deleteAt(parent.childIds, index)
     })
+  }
+
+  async insertChildren({
+    blocks,
+    position = 'last'
+  }: {
+    blocks: Block[],
+    position?: 'first' | 'last' | number
+  }) {
+    this._transaction(() => {
+      // Update parent references for all blocks
+      blocks.forEach(block => {
+        block._updateParentId(this.id)
+      });
+
+      // Insert block IDs at the specified position
+      this._change(doc => {
+        const blockIds = blocks.map(b => b.id);
+        if (position === 'first') {
+          doc.childIds.unshift(...blockIds);
+        } else if (typeof position === 'number') {
+          doc.childIds.splice(position, 0, ...blockIds);
+        } else {
+          // Default to 'last'
+          doc.childIds.push(...blockIds);
+        }
+      });
+    }, {description: 'Insert children blocks'});
   }
 
   private async createSibling(data: Partial<BlockData> = {}, offset: number = 1) {
@@ -345,8 +382,6 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
 
   return parent
 }
-
-
 
 export const getAllChildrenBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
   const blockDoc = repo.find(blockId)

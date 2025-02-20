@@ -1,12 +1,15 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
-import { KeyboardEvent, useRef, useEffect, useState, useCallback } from 'react'
+import { KeyboardEvent, ClipboardEvent, useRef, useEffect, useState, useCallback } from 'react'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { updateText } from '@automerge/automerge/next'
 import { debounce } from 'lodash'
+import { useRepo } from '@/context/repo'
+import { pasteMultilineText } from '@/utils/paste.ts'
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
+  const repo = useRepo()
   const blockData = block.use()
   const [localContent, setLocalContent] = useState(blockData?.content || '')
   const [, setIsEditing] = useIsEditing()
@@ -73,7 +76,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   }, [debouncedUpdateBlock, debouncedSetSelection])
 
   if (!blockData) return null
-
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
     const textarea = e.target as HTMLTextAreaElement
@@ -163,6 +165,21 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       block.changeOrder(1)
     }
   }
+
+  const handlePaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    e.stopPropagation()
+    const pastedText = e.clipboardData?.getData('text/plain');
+    // todo Shift modifier for pasting whole thing into the block
+
+    if (pastedText?.includes('\n')) {
+      e.preventDefault();
+      const pasted = await pasteMultilineText(pastedText, block, repo);
+      if (pasted[0]) {
+        setFocusedBlockId(pasted[0].id)
+      }
+    }
+  }
+
   return (
     <textarea
       ref={textareaRef}
@@ -184,7 +201,8 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         }
       }}
       onKeyDown={handleKeyDown}
-      className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none`}
+      onPaste={handlePaste}
+      className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none block-content`}
       onBlur={() => {
         debouncedUpdateBlock.flush()
         debouncedSetSelection.flush()
