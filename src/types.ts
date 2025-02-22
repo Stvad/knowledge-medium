@@ -18,6 +18,8 @@ export interface BlockData {
     parentId?: string;   // URL of parent block document
     createTime: number;
     updateTime: number;
+    createdByUserId: string;
+    updatedByUserId: string;
     // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
 }
 
@@ -58,4 +60,9 @@ export interface BlockContextType {
         id: string
         name: string
     }
+}
+
+export interface User {
+  id: string
+  name: string
 }

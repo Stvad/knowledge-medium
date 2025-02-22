@@ -5,17 +5,15 @@ import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
 import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
-import { LoginRenderer } from '@/components/renderer/LoginRenderer.tsx'
-import { getAllChildrenBlocks, getRootBlock } from '@/data/block.ts'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
 import { Repo } from '@/data/repo.ts'
+import { getAllChildrenBlocks, getRootBlock } from '@/data/block.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
   renderer: RendererBlockRenderer,
   layout: LayoutRenderer,
-  login: LoginRenderer,
   missingData: MissingDataRenderer,
 }
 

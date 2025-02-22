@@ -7,7 +7,7 @@ import { Label } from './ui/label'
 import { ThemeToggle } from './ui/theme-toggle'
 import { getAllChildrenBlocks } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { useUser } from '@/context/block.tsx'
+import { useUser } from '@/components/Login'
 
 interface DocumentControlsProps {
     docUrl: AutomergeUrl

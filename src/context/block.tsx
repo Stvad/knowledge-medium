@@ -32,5 +32,3 @@ export const useBlockContext = () => {
   }
   return context
 }
-
-export const useUser = () => useBlockContext().user

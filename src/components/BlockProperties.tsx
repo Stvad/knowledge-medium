@@ -31,8 +31,12 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
         <Input value={blockData.id} disabled className="bg-muted/50" />
       </div>
       <div className="flex gap-2 items-center">
-        <Label className="w-1/3">Changed Time</Label>
+        <Label className="w-1/3">Last Changed</Label>
         <Input value={new Date(blockData.updateTime).toLocaleString()} disabled className="bg-muted/50" />
+      </div>
+      <div className="flex gap-2 items-center">
+        <Label className="w-1/3">Changed by User</Label>
+        <Input value={blockData.updatedByUserId} disabled className="bg-muted/50" />
       </div>
 
       {Object.entries(properties).map(([key, value]) => (

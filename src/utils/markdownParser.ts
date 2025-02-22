@@ -6,7 +6,7 @@ interface ParsedBlock {
   level: number;
 }
 
-export function parseMarkdownToBlocks(text: string): BlockData[] {
+export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
   const lines = text.split('\n');
   const parsedBlocks: ParsedBlock[] = [];
   let previousLevel = 0;
@@ -37,23 +37,20 @@ export function parseMarkdownToBlocks(text: string): BlockData[] {
   }
   
   // Second pass: convert to BlockData[] with proper parent/child relationships
-  const blocks: BlockData[] = [];
+  const blocks: Partial<BlockData>[] = [];
   const defaults = {
     properties: {},
     childIds: [],
-    createTime: Date.now(),
-    updateTime: Date.now(),
   };
   
   // Stack to keep track of parent blocks at each level
-  const parentStack: BlockData[] = [];
+  const parentStack: Partial<BlockData>[] = [];
   
   for (const parsed of parsedBlocks) {
-    const blockData: BlockData = {
+    const blockData: Partial<BlockData> = {
       ...defaults,
       id: uuidv4(),
       content: parsed.content,
-      childIds: [],
     };
     
     // Pop stack until we find the parent at the right level
@@ -65,7 +62,7 @@ export function parseMarkdownToBlocks(text: string): BlockData[] {
     if (parentStack.length > 0) {
       const parent = parentStack[parentStack.length - 1];
       blockData.parentId = parent.id;
-      parent.childIds.push(blockData.id);
+      parent.childIds?.push(blockData.id!);
     }
     
     parentStack[parsed.level] = blockData;

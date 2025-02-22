@@ -3,18 +3,18 @@ import {isNotNullish} from './types.ts'
 import { Block } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
 
-export const importState = async (state: { blocks: BlockData[] }, repo: Repo) => {
+export const importState = async (state: { blocks: Partial<BlockData>[] }, repo: Repo) => {
     const blockMap = new Map<string, Block>()
     
     // First create all blocks
     await Promise.all(state.blocks.map(async block => {
         const newBlock = repo.create(block)
-        blockMap.set(block.id, newBlock)
+        blockMap.set(block.id!, newBlock)
     }))
 
     // Update ids and references
     for (const block of state.blocks) {
-        const blockInstance = blockMap.get(block.id)
+        const blockInstance = blockMap.get(block.id!)
         if (!blockInstance) continue
 
         blockInstance.change((doc: BlockData) => {

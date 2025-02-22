@@ -1,9 +1,9 @@
 import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
-import { BlockData as BlockData, BlockPropertyValue } from '@/types.ts'
+import { BlockData, BlockPropertyValue, User } from '@/types'
 import { insertAt, deleteAt } from '@automerge/automerge/next'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { memoize } from 'lodash'
-import { Repo } from '@/data/repo.ts'
+import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
 import { useCallback } from 'react'
 
@@ -25,6 +25,7 @@ export class Block {
     readonly repo: Repo,
     readonly undoRedoManager: UndoRedoManager,
     private readonly handle: DocHandle<BlockData>,
+    readonly currentUser: User,
   ) {
     this.id = handle.url
   }
@@ -48,12 +49,16 @@ export class Block {
     options: ChangeOptions<BlockData> = {},
   ) {
     this._transaction(() => {
-         this._change(callback)
-       }, options)
+      this._change(callback)
+    }, options)
   }
 
   _transaction(callback: () => void, options: ChangeOptions<BlockData> = {}) {
-    this.undoRedoManager.transaction(callback, {...options, scope: options.scope ?? defaultChangeScope, dependencies: [this.handle.documentId]})
+    this.undoRedoManager.transaction(callback, {
+      ...options,
+      scope: options.scope ?? defaultChangeScope,
+      dependencies: [this.handle.documentId],
+    })
   }
 
   _change(
@@ -62,7 +67,10 @@ export class Block {
   ) {
     const handle = this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!
     handle.change(callback, options)
-    handle.change(doc => {doc.updateTime = Date.now()}, options)
+    handle.change(doc => {
+      doc.updateTime = Date.now()
+      doc.updatedByUserId = this.currentUser.id
+    }, options)
   }
 
   async index() {
@@ -173,17 +181,17 @@ export class Block {
 
       // Insert block IDs at the specified position
       this._change(doc => {
-        const blockIds = blocks.map(b => b.id);
+        const blockIds = blocks.map(b => b.id)
         if (position === 'first') {
-          doc.childIds.unshift(...blockIds);
+          doc.childIds.unshift(...blockIds)
         } else if (typeof position === 'number') {
-          doc.childIds.splice(position, 0, ...blockIds);
+          doc.childIds.splice(position, 0, ...blockIds)
         } else {
           // Default to 'last'
-          doc.childIds.push(...blockIds);
+          doc.childIds.push(...blockIds)
         }
-      });
-    }, {description: 'Insert children blocks'});
+      })
+    }, {description: 'Insert children blocks'})
   }
 
   private async createSibling(data: Partial<BlockData> = {}, offset: number = 1) {
@@ -207,7 +215,7 @@ export class Block {
   }
 
   async createSiblingAbove(data: Partial<BlockData> = {}) {
-    return this.createSibling(data, 0) 
+    return this.createSibling(data, 0)
   }
 
   /**
@@ -254,8 +262,8 @@ export class Block {
     return [value, setValue]
   }
 
-   _updateParentId = (newParentId: string) =>
-     this._change((doc) => {
+  _updateParentId = (newParentId: string) =>
+    this._change((doc) => {
       doc.parentId = newParentId
     })
 
@@ -307,9 +315,9 @@ const getChildIndex = (parent: BlockData, childId: string) => {
  */
 export const getRootBlock = memoize(async (block: Block): Promise<Block> => {
   const parent = await block.parent()
-  
+
   if (!parent) return block
-  
+
   return getRootBlock(parent)
 }, (block) => block.id)
 
@@ -320,7 +328,7 @@ export const getRootBlock = memoize(async (block: Block): Promise<Block> => {
 export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
   const doc = await block.data()
   if (!doc) return null
-  
+
   // If block has children and is not collapsed, return first child
   if (doc.childIds.length > 0 && !doc.properties['system:collapsed']) {
     return block.repo.find(doc.childIds[0])
@@ -354,10 +362,10 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
  */
 const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
   const doc = await block.data()
-  if(!doc) throw new Error('Cant get block data')
-  
+  if (!doc) throw new Error('Cant get block data')
+
   if (doc.childIds.length === 0 || doc.properties['system:collapsed']) return block
-  
+
   const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1] as string)
   return getLastVisibleDescendant(lastChild)
 }

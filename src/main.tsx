@@ -3,12 +3,10 @@ import ReactDOM from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { isValidAutomergeUrl } from '@automerge/automerge-repo'
-import { importState } from './utils/state.ts'
 import { RepoProvider } from '@/context/repo.tsx'
-import { getExampleBlocks } from '@/initData.ts'
-import { Block, defaultChangeScope } from '@/data/block.ts'
-import { repo, undoRedoManager } from '@/data/repoInstance.ts'
+import { defaultChangeScope } from '@/data/block.ts'
+import { undoRedoManager } from '@/data/repoInstance.ts'
+import { Login } from '@/components/Login.tsx'
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
@@ -29,22 +27,12 @@ document.addEventListener('keydown', (e) => {
   }
 })
 
-const rootDocUrl = `${document.location.hash.substring(1)}`
-let handle: Block
-if (isValidAutomergeUrl(rootDocUrl)) {
-    handle = repo.find(rootDocUrl)
-} else {
-    const blockMap = await importState({blocks: getExampleBlocks()}, repo)
-    handle = blockMap.values().next().value!
-}
-const docUrl = document.location.hash = handle.id
-const isSafeMode = new URLSearchParams(window.location.search).has('safeMode')
-
-
 createRoot(document.getElementById('root')!).render(
-    <StrictMode>
-        <RepoProvider value={repo}>
-            <App docId={docUrl} safeMode={isSafeMode} />
-        </RepoProvider>
-    </StrictMode>,
+  <StrictMode>
+    <Login>
+      <RepoProvider>
+        <App/>
+      </RepoProvider>
+    </Login>
+  </StrictMode>,
 )

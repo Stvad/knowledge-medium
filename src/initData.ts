@@ -1,34 +1,24 @@
 import { BlockData } from '@/types.ts'
 import { v4 as uuidv4 } from 'uuid'
 
-export function getExampleBlocks(): BlockData[] {
+export function getExampleBlocks(): Partial<BlockData>[] {
   const rootId = uuidv4()
   const child1Id = uuidv4()
   const child2Id = uuidv4()
   const child3Id = uuidv4()
 
-  const defaults = {
-    properties: {},
-    childIds: [],
-    createTime: Date.now(),
-    updateTime: Date.now(),
-  }
-
   return [
     {
-      ...defaults,
       id: rootId,
       content: 'Hello World\nThis is a multiline\ntext block',
       childIds: [child1Id, child2Id, child3Id],
     },
     {
-      ...defaults,
       id: child1Id,
       content: 'A normal text block\nwith multiple lines',
       parentId: rootId,
     },
     {
-      ...defaults,
       id: child2Id,
       content: `import { DefaultBlockRenderer } from "@/components/DefaultBlockRenderer"; 
  
@@ -51,7 +41,6 @@ export default ({ block, changeBlock }) => <DefaultBlockRenderer block={block} c
       parentId: rootId,
     },
     {
-      ...defaults,
       id: child3Id,
       content: 'This block uses the custom renderer',
       // todo import wont' update this rn, so need to manually set the new renderer id
