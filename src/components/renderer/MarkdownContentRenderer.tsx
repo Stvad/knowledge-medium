@@ -53,10 +53,9 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   return (
     <div
       ref={ref}
-      className="min-h-[1.7em] whitespace-pre-wrap"
+      className="min-h-[1.7em] whitespace-pre-wrap block-content"
       onClick={() => {
         setFocusedBlockId(block.id)
-
       }}
       onMouseDownCapture={(e) => {
         if (e.detail !== 2) { // Double click, using this vs dblclick because want to prevent behavior of selecting text

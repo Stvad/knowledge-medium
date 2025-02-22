@@ -31,6 +31,22 @@ export function DefaultBlockRenderer(
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
   const ref = useRef<HTMLDivElement>(null)
+  const blockData = block.use()
+
+  const inFocus = focusedBlockId === block.id
+  useEffect(() => {
+    if (inFocus
+      /**
+       * todo, doing this so the edit mode stuff handles focus, but I don't love it, see if there is a better way
+       * that doesn't create a logical dependency between the two
+       */
+      && !isEditing
+    ) {
+      ref.current?.focus()
+    }
+  }, [inFocus, isEditing])
+
+  if (!blockData) return null
 
   const handleKeyDown = async (e: KeyboardEvent<HTMLDivElement>) => {
     if (isEditing) return
@@ -86,7 +102,9 @@ export function DefaultBlockRenderer(
     } else if (e.key === 'Delete') {
       e.preventDefault()
       e.stopPropagation()
-      block.delete()
+      const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
+      void block.delete()
+      if (prevVisible) setFocusedBlockId?.(prevVisible.id)
     }
   }
 
@@ -103,28 +121,12 @@ export function DefaultBlockRenderer(
     }
   };
 
-  const inFocus = focusedBlockId === block.id
-  useEffect(() => {
-    if (inFocus
-      /**
-       * todo, doing this so the edit mode stuff handles focus, but I don't love it, see if there is a better way
-       * that doesn't create a logical dependency between the two
-       */
-      && !isEditing
-    ) {
-      ref.current?.focus()
-    }
-  }, [inFocus, isEditing])
-
-  const blockData = block.use()
-  if (!blockData) return null
-
   const ContentRenderer = isEditing && inFocus ? EditContentRenderer : DefaultContentRenderer
   const hasChildren = blockData?.childIds?.length > 0
 
   return (
     <div 
-      className="group relative ml-4" 
+      className="tm-block group relative ml-4"
       data-block-id={block.id} 
       tabIndex={0}
       onKeyDown={handleKeyDown}
@@ -150,17 +152,6 @@ export function DefaultBlockRenderer(
           <div className="flex-grow relative flex flex-col">
             <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
               <ContentRenderer block={block}/>
-
-              <div className="absolute right-0 top-0 opacity-0 transition-opacity group-hover:opacity-100 flex gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-6"
-                  onClick={() => setShowProperties(!showProperties)}
-                >
-                  {showProperties ? '⚙️' : '⚙️'}
-                </Button>
-              </div>
 
               {showProperties && (
                 <BlockProperties block={block}/>

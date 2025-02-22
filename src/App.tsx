@@ -7,7 +7,7 @@ import { getRootBlock } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 
 // a clutch, mb a better way exists? we need this so it runs within the block context
-function UIStateInitializer({ docId }: { docId: string }) {
+export function UIStateInitializer({ docId }: { docId: string }) {
   const [, setTopLevelBlockId] = useUIStateProperty('topLevelBlockId')
   useEffect(() => {
     setTopLevelBlockId(docId)
