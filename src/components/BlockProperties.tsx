@@ -32,7 +32,7 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
       </div>
       <div className="flex gap-2 items-center">
         <Label className="w-1/3">Changed Time</Label>
-        <Input value={new Date(blockData.updateTime).toUTCString()} disabled className="bg-muted/50" />
+        <Input value={new Date(blockData.updateTime).toLocaleString()} disabled className="bg-muted/50" />
       </div>
 
       {Object.entries(properties).map(([key, value]) => (

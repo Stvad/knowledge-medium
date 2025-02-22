@@ -1,14 +1,7 @@
-import { Repo as AutomergeRepo, isValidAutomergeUrl, DocHandle, DocHandleChangePayload } from '@automerge/automerge-repo'
-import {BrowserWebSocketClientAdapter} from '@automerge/automerge-repo-network-websocket'
-import {IndexedDBStorageAdapter} from '@automerge/automerge-repo-storage-indexeddb'
+import { Repo as AutomergeRepo, isValidAutomergeUrl, DocHandle } from '@automerge/automerge-repo'
 import { Block } from '@/data/block.ts'
 import { BlockData } from '@/types.ts'
 import { UndoRedoManager, AutomergeRepoUndoRedo } from '@onsetsoftware/automerge-repo-undo-redo'
-
-export const repo = new AutomergeRepo({
-    network: [new BrowserWebSocketClientAdapter('wss://sync.automerge.org')],
-    storage: new IndexedDBStorageAdapter(),
-})
 
 export class Repo {
     // Caching is mainly for reference identity for react
@@ -53,9 +46,10 @@ export class Repo {
         return block
     }
 
-    private setupHooks(undoredoHandle: AutomergeRepoUndoRedo<BlockData>) {
-        // @ts-expect-error Local package dependency version mismatch
-        undoredoHandle.handle.on('change', updateChangeTime)
+    private setupHooks(_: AutomergeRepoUndoRedo<BlockData>) {
+        // Todo: https://github.com/onsetsoftware/automerge-repo-undo-redo/issues/5
+        //   actually making changes here even on fields that are unrelated to each other makes the undo/redo go haywire
+        //   So leaving this here as a reminder not to do this and handle things on Block class instead
     }
 }
 
@@ -79,13 +73,4 @@ function createBlockDoc(repo: AutomergeRepo, props: Partial<BlockData>): DocHand
     })
 
     return handle
-}
-
-const updateChangeTime = ({handle, patches}: DocHandleChangePayload<BlockData>) => {
-    if (!handle.isReady()) return
-    if (patches[0].path[0] === 'updateTime') {
-        // to prevent infinite loops
-        return
-    }
-    handle.change((doc: BlockData) => {doc.updateTime = Date.now()})
 }

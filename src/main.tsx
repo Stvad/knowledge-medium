@@ -1,21 +1,18 @@
-import React, {StrictMode} from 'react'
+import React, { StrictMode } from 'react'
 import ReactDOM from 'react-dom'
-import {createRoot} from 'react-dom/client'
+import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { importState } from './utils/state.ts'
-import { repo as automergeRepo, Repo } from '@/data/repo'
 import { RepoProvider } from '@/context/repo.tsx'
 import { getExampleBlocks } from '@/initData.ts'
 import { Block, defaultChangeScope } from '@/data/block.ts'
-import { UndoRedoManager } from '@onsetsoftware/automerge-repo-undo-redo'
+import { repo, undoRedoManager } from '@/data/repoInstance.ts'
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
 window.ReactDOM = ReactDOM
-
-const undoRedoManager = new UndoRedoManager()
 
 // todo better keybinding system
 document.addEventListener('keydown', (e) => {
@@ -31,9 +28,6 @@ document.addEventListener('keydown', (e) => {
     undoRedoManager.redo(defaultChangeScope)
   }
 })
-
-
-const repo = new Repo(automergeRepo, undoRedoManager)
 
 const rootDocUrl = `${document.location.hash.substring(1)}`
 let handle: Block

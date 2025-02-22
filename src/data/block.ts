@@ -60,7 +60,9 @@ export class Block {
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
   ) {
-      this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!.change(callback, options)
+    const handle = this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!
+    handle.change(callback, options)
+    handle.change(doc => {doc.updateTime = Date.now()}, options)
   }
 
   async index() {
