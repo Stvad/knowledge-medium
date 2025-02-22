@@ -54,4 +54,8 @@ export interface BlockContextType {
     topLevel?: boolean
     safeMode?: boolean
     rootBlockId?: string
+    user?: {
+        id: string
+        name: string
+    }
 }

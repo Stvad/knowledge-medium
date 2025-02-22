@@ -7,6 +7,7 @@ import { Label } from './ui/label'
 import { ThemeToggle } from './ui/theme-toggle'
 import { getAllChildrenBlocks } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import { useUser } from '@/context/block.tsx'
 
 interface DocumentControlsProps {
     docUrl: AutomergeUrl
@@ -14,6 +15,8 @@ interface DocumentControlsProps {
 
 export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
     const repo = useRepo()
+    const user = useUser()
+    
     const exportState = async () => {
         const blocks = await getAllChildrenBlocks(repo, docUrl)
         const exportData = { blocks }
@@ -54,25 +57,28 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
     return (
         <div className="flex items-center justify-between p-4 border-b border-border">
             <div className="flex items-center gap-4">
-            <Button 
-                variant="outline"
-                onClick={exportState}
-            >
-                Export Document
-            </Button>
+                <Button 
+                    variant="outline"
+                    onClick={exportState}
+                >
+                    Export Document
+                </Button>
             
-            <div className="flex items-center gap-2">
-                <Label htmlFor="import-file">Import Document</Label>
-                <Input
-                    id="import-file"
-                    type="file"
-                    accept=".json"
-                    onChange={importFromFile}
-                    className="w-auto"
-                />
+                <div className="flex items-center gap-2">
+                    <Label htmlFor="import-file">Import Document</Label>
+                    <Input
+                        id="import-file"
+                        type="file"
+                        accept=".json"
+                        onChange={importFromFile}
+                        className="w-auto"
+                    />
+                </div>
             </div>
+            <div className="flex items-center gap-4">
+                <ThemeToggle />
+                {user && <span className="text-sm text-muted-foreground">{user.name}</span>}
             </div>
-            <ThemeToggle />
         </div>
     )
-} 
+}
