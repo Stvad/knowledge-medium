@@ -5,7 +5,7 @@ import { useLocalStorage } from 'react-use'
 import { User } from '@/types.ts'
 
 interface UserContextType {
-  user?: User
+  user: User
   setUser: (user?: User) => void
 }
 

@@ -6,7 +6,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { useIsEditing } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
-import { useEffect, KeyboardEvent, useRef, ClipboardEvent } from 'react'
+import { useEffect, KeyboardEvent, useRef, ClipboardEvent, useState } from 'react'
 import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
@@ -30,10 +30,14 @@ export function DefaultBlockRenderer(
   const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
+  const [previousLoadTime] = useUIStateProperty<number>('previousLoadTime')
+  const [seen, setSeen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const blockData = block.use()
 
   const inFocus = focusedBlockId === block.id
+  if (inFocus && !seen) setSeen(true)
+
   useEffect(() => {
     if (inFocus
       /**
@@ -123,6 +127,8 @@ export function DefaultBlockRenderer(
 
   const ContentRenderer = isEditing && inFocus ? EditContentRenderer : DefaultContentRenderer
   const hasChildren = blockData?.childIds?.length > 0
+  const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
+  const shouldShowUpdateIndicator = updatedByOtherUser && !seen
 
   return (
     <div 
@@ -151,6 +157,10 @@ export function DefaultBlockRenderer(
 
           <div className="flex-grow relative flex flex-col">
             <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
+              {shouldShowUpdateIndicator && (
+                <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
+                     title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
+              )}
               <ContentRenderer block={block}/>
 
               {showProperties && (

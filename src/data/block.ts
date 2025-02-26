@@ -219,26 +219,48 @@ export class Block {
   }
 
   /**
-   * Find a child block by its content, optionally creating it if it doesn't exist
-   * @param content Content to match against
-   * @param createIfNotExists If true and no matching child is found, creates a new child with the given content
-   * @returns The found or created child block, or null if not found and creation not requested
+   * Find a block by following a content path, optionally creating blocks if they don't exist
+   * @param contentPath Either a single string to match against direct children, or an array of strings defining a path through the hierarchy
+   * @param createIfNotExists If true and no matching block is found, creates new blocks with the given content
+   * @returns The found or created block, or null if not found and creation not requested
    * Todo: rebuild with future data access layer for perf
    */
-  async childByContent(content: string, createIfNotExists: true): Promise<Block> ;
-  async childByContent(content: string, createIfNotExists: boolean = false): Promise<Block | null> {
-    const doc = await this.getDocOrThrow()
+  async childByContent(contentPath: string | string[], createIfNotExists: true): Promise<Block>;
+  async childByContent(contentPath: string | string[], createIfNotExists: boolean = false): Promise<Block | null> {
+    const path = Array.isArray(contentPath) ? contentPath : [contentPath];
+    return this.childByContentPath(path, createIfNotExists);
+  }
 
+  async childByContentPath(path: string[], createIfNotExists: boolean): Promise<Block | null> {
+    if (path.length === 0) return null;
+    
+    const [currentContent, ...remainingPath] = path;
+    const doc = await this.getDocOrThrow();
+
+    // Search immediate children for match
     for (const childId of doc.childIds) {
       const child = this.repo.find(childId)
       const childData = await child.data()
 
-      if (childData?.content === content) {
-        return child
+      if (childData?.content === currentContent) {
+        // If this is the last item in path, we found our target
+        if (remainingPath.length === 0) {
+          return child;
+        }
+        // Otherwise recurse deeper
+        return child.childByContentPath(remainingPath, createIfNotExists);
       }
     }
 
-    return createIfNotExists ? this.createChild({data: {content}}) : null
+    // No match found
+    if (!createIfNotExists) return null;
+
+    // Create new block and continue recursively if needed
+    const newBlock = await this.createChild({data: {content: currentContent}});
+    if (remainingPath.length === 0) {
+      return newBlock;
+    }
+    return newBlock.childByContentPath(remainingPath, createIfNotExists);
   }
 
   use() {

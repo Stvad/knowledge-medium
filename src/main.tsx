@@ -1,4 +1,4 @@
-import React, { StrictMode } from 'react'
+import React, { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import './index.css'
@@ -29,10 +29,12 @@ document.addEventListener('keydown', (e) => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Login>
-      <RepoProvider>
-        <App/>
-      </RepoProvider>
-    </Login>
+    <Suspense fallback={<div>Loading...</div>}>
+      <Login>
+        <RepoProvider>
+          <App/>
+        </RepoProvider>
+      </Login>
+    </Suspense>
   </StrictMode>,
 )

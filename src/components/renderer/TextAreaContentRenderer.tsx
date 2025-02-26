@@ -59,7 +59,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   const debouncedUpdateBlock = useCallback(
     debounce((value: string) => {
-      console.log('updated block')
       block.change(b => {
         updateText(b, ['content'], value)
       })

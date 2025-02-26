@@ -1,10 +1,11 @@
 import { useBlockContext } from '@/context/block.tsx'
 import { Block } from '@/data/block.ts'
 import { use } from 'react'
-import { BlockPropertyValue } from '@/types.ts'
+import { BlockPropertyValue, User } from '@/types.ts'
 import { memoize } from 'lodash'
 import { useRepo } from '@/context/repo.tsx'
 import { Repo } from '@/data/repo.ts'
+import { useUser } from '@/components/Login.tsx'
 
 /**
  * One of core principles of the system is to store all state within the system
@@ -30,14 +31,19 @@ export function useUIStateProperty<T extends BlockPropertyValue>(name: string, i
 function useUIStateBlock(): Block {
   const { rootBlockId } = useBlockContext()
   const repo = useRepo()
-  return use(getUIStateBlock(repo, rootBlockId!))
+  const user = useUser()
+  return use(getUIStateBlock(repo, rootBlockId!, user))
 }
 
 /**
  * Memoized for using with `use` react function
  */
-export const getUIStateBlock = memoize(async (repo: Repo, rootBlockId: string): Promise<Block> => {
-  const block = repo.find(rootBlockId)
-  const systemBlock = await block.childByContent('system', true)
-  return systemBlock.childByContent('ui-state', true)
+export const getUIStateBlock = memoize(async (repo: Repo, rootBlockId: string, user: User): Promise<Block> => {
+  const userBlock = await getUserBlock(repo, rootBlockId, user)
+  return userBlock.childByContent('ui-state', true)
 }, (_, rootBlockId) => rootBlockId)
+
+export const getUserBlock = memoize(async (repo: Repo, rootBlockId: string, user: User): Promise<Block> => {
+  const rootBlock = repo.find(rootBlockId)
+  return rootBlock.childByContent(['system', 'users', user.id], true)
+}, (_, rootBlockId, user) => rootBlockId + user.id)

@@ -1,8 +1,8 @@
 import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
-import { Suspense, use, useEffect } from 'react'
-import { useUIStateProperty } from '@/data/globalState.ts'
+import { use, useEffect } from 'react'
+import { getUIStateBlock } from '@/data/globalState.ts'
 import { getRootBlock, Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useLocation, useSearchParam } from 'react-use'
@@ -10,15 +10,7 @@ import { importState } from '@/utils/state.ts'
 import { getExampleBlocks } from '@/initData.ts'
 import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
-
-// a clutch, mb a better way exists? we need this so it runs within the block context
-export function UIStateInitializer({ docId }: { docId: string }) {
-  const [, setTopLevelBlockId] = useUIStateProperty('topLevelBlockId')
-  useEffect(() => {
-    setTopLevelBlockId(docId)
-  }, [docId])
-  return null
-}
+import { useUser } from '@/components/Login.tsx'
 
 const getInitialBlock = memoize(async (repo: Repo, rootDocUrl: string | undefined): Promise<Block> => {
   if (isValidAutomergeUrl(rootDocUrl)) {
@@ -28,6 +20,28 @@ const getInitialBlock = memoize(async (repo: Repo, rootDocUrl: string | undefine
     return blockMap.values().next().value!
   }
 }, (_, rootUrl) => rootUrl)
+
+const updateLoadTimes = memoize((uiStateBlock: Block) => {
+  uiStateBlock.change(doc => {
+    doc.properties.previousLoadTime = doc.properties.currentLoadTime ? doc.properties.currentLoadTime : 0
+    doc.properties.currentLoadTime = Date.now()
+  })
+}, () => true)
+
+const useInitUIState = (rootBlock: Block, topLevelBlockId: string) => {
+  const repo = useRepo()
+  const user = useUser()
+
+  const uiStateBlock = use(getUIStateBlock(repo, rootBlock.id, user))
+
+  useEffect(() => {
+    uiStateBlock.change(doc => {
+      doc.properties.topLevelBlockId = topLevelBlockId
+    })
+  }, [topLevelBlockId])
+
+  updateLoadTimes(uiStateBlock)
+}
 
 const App = () => {
   const repo = useRepo()
@@ -39,14 +53,12 @@ const App = () => {
   const docId = document.location.hash = handle.id
 
   const rootBlock = use(getRootBlock(repo.find(docId)))
+  useInitUIState(rootBlock, docId)
 
   return (
-    <Suspense fallback={<div>Loading...</div>}>
-      <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
-        <UIStateInitializer docId={docId}/>
-        <BlockComponent blockId={docId}/>
-      </BlockContextProvider>
-    </Suspense>
+    <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
+      <BlockComponent blockId={docId}/>
+    </BlockContextProvider>
   )
 }
 
