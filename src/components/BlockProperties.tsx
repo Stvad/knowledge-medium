@@ -1,4 +1,3 @@
-
 import { Block } from '../data/block'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -25,24 +24,24 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
   }
 
   return (
-    <div className="mt-4 space-y-3 border-l-2 border-muted pl-4 pb-2">
-      <div className="flex gap-2 items-center">
-        <Label className="w-1/3">ID</Label>
-        <Input value={blockData.id} disabled className="bg-muted/50" />
+    <div className="mt-3 md:mt-4 space-y-2 md:space-y-3 border-l-2 border-muted pl-2 md:pl-4 pb-2">
+      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
+        <Label className="w-full sm:w-1/3 text-xs md:text-sm">ID</Label>
+        <Input value={blockData.id} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
-      <div className="flex gap-2 items-center">
-        <Label className="w-1/3">Last Changed</Label>
-        <Input value={new Date(blockData.updateTime).toLocaleString()} disabled className="bg-muted/50" />
+      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
+        <Label className="w-full sm:w-1/3 text-xs md:text-sm">Last Changed</Label>
+        <Input value={new Date(blockData.updateTime).toLocaleString()} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
-      <div className="flex gap-2 items-center">
-        <Label className="w-1/3">Changed by User</Label>
-        <Input value={blockData.updatedByUserId} disabled className="bg-muted/50" />
+      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
+        <Label className="w-full sm:w-1/3 text-xs md:text-sm">Changed by User</Label>
+        <Input value={blockData.updatedByUserId} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
 
       {Object.entries(properties).map(([key, value]) => (
-        <div key={key} className="flex gap-2 items-center">
+        <div key={key} className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
           <Input
-            className="w-1/3"
+            className="w-full sm:w-1/3 text-xs md:text-sm"
             defaultValue={key}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -53,6 +52,7 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
             onBlur={(e) => updateKey(e.target.value, key, value)}
           />
           <Input
+            className="text-xs md:text-sm"
             value={value?.toString() ?? ''}
             onChange={(e) => {
               block.change(doc => {
@@ -66,6 +66,7 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
       <Button
         variant="outline"
         size="sm"
+        className="text-xs md:text-sm"
         onClick={() => {
           block.change(doc => {
             doc.properties[`property${Object.keys(doc.properties).length + 1}`] = ''

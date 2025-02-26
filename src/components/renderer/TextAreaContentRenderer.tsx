@@ -201,7 +201,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       }}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
-      className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none block-content`}
+      className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none block-content overflow-x-hidden overflow-wrap-break-word`}
       onBlur={() => {
         debouncedUpdateBlock.flush()
         debouncedSetSelection.flush()

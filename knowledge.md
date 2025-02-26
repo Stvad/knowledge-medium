@@ -41,6 +41,14 @@ A Workflowy-like editor with dynamic block rendering capabilities. Blocks can co
 - Prefer explicit state updates over automatic effects when dealing with complex state
 - Use manual refresh functions instead of useEffect for registry-like state that depends on complex objects
 
+### Responsive Design
+- Mobile-first approach with Tailwind CSS breakpoints
+- Key breakpoints: sm (640px), md (768px), lg (1024px)
+- Touch-friendly UI elements with minimum 36px tap targets on mobile
+- Stacked layouts on mobile, horizontal layouts on desktop
+- Reduced font sizes and spacing on mobile devices
+- Viewport meta tag prevents zooming for better mobile experience
+
 ### Adding New Features
 ## Features
 
@@ -48,4 +56,3 @@ A Workflowy-like editor with dynamic block rendering capabilities. Blocks can co
 - Add `?safeMode` to URL to disable dynamic renderer loading
 - Only default renderers will be used
 - Useful for debugging or when custom renderers are problematic
-
