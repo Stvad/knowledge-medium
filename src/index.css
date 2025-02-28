@@ -97,6 +97,10 @@
   h6 {
     @apply text-xs md:text-sm font-bold;
   }
+
+  div {
+    @apply overflow-visible;
+  }
 }
 
 .block {
@@ -112,10 +116,6 @@
   min-width: 0; /* Prevents flex items from overflowing */
   max-width: 100%;
   overflow-x: hidden;
-}
-
-.block-controls {
-  @apply flex items-start gap-1;
 }
 
 .block-bullet {
@@ -136,14 +136,6 @@
   box-sizing: border-box;
   max-width: 100vw;
   overflow-x: hidden;
-}
-
-.block:hover .block-actions {
-  @apply opacity-100;
-}
-
-.block-actions {
-  @apply absolute right-1 md:right-2 top-1 opacity-0 transition-opacity duration-200 flex gap-1 z-10;
 }
 
 .block-properties.hidden {
@@ -207,17 +199,7 @@ img {
 }
 
 @media (max-width: 640px) {
-  button, 
-  input, 
-  textarea, 
-  .block-bullet {
-    @apply min-h-[36px] min-w-[36px];
-  }
-  
-  .block-actions {
-    @apply opacity-70;
-  }
-  
+
   textarea.block-content {
     max-width: calc(100vw - 40px); /* Account for bullet and padding */
   }

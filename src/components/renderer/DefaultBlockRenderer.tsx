@@ -11,10 +11,12 @@ import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
+import { useIsMobile } from '@/utils/react.tsx'
+import { useHoverDirty } from 'react-use'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
-EditContentRenderer?: BlockRenderer;
+  EditContentRenderer?: BlockRenderer;
 }
 
 export function DefaultBlockRenderer(
@@ -33,7 +35,10 @@ export function DefaultBlockRenderer(
   const [previousLoadTime] = useUIStateProperty<number>('previousLoadTime')
   const [seen, setSeen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const isMobile = useIsMobile()
   const blockData = block.use()
+  // @ts-expect-error This seems like type bug
+  const isHovering = useHoverDirty(ref)
 
   const inFocus = focusedBlockId === block.id
   if (inFocus && !seen) setSeen(true)
@@ -113,54 +118,72 @@ export function DefaultBlockRenderer(
   }
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
-    if (!inFocus) return;
+    if (!inFocus) return
     // todo this plausibly should be a global handler and not on the block
 
-    e.preventDefault();
-    const pastedText = e.clipboardData.getData('text/plain');
-    
-    const pasted = await pasteMultilineText(pastedText, block, repo);
+    e.preventDefault()
+    const pastedText = e.clipboardData.getData('text/plain')
+
+    const pasted = await pasteMultilineText(pastedText, block, repo)
     if (pasted[0]) {
       setFocusedBlockId(pasted[0].id)
     }
-  };
+  }
 
   const ContentRenderer = isEditing && inFocus ? EditContentRenderer : DefaultContentRenderer
   const hasChildren = blockData?.childIds?.length > 0
   const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
   const shouldShowUpdateIndicator = updatedByOtherUser && !seen
 
+  const expandButton = () =>
+    <CollapsibleTrigger
+      asChild
+      onClick={(e) => {
+        e.stopPropagation()
+        setIsCollapsed(!isCollapsed)
+      }}>
+      <Button
+        variant="ghost"
+        size="sm"
+        className={`h-6 w-3 p-0 hover:bg-none transition-opacity ` + (hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0')}
+      >
+        <span className="text-lg text-muted-foreground">
+          {isCollapsed ? '▸' : '▾'}
+        </span>
+      </Button>
+    </CollapsibleTrigger>
+
   return (
-    <div 
-      className="tm-block group relative ml-4"
-      data-block-id={block.id} 
+    <div
+      className="tm-block group relative"
+      data-block-id={block.id}
       tabIndex={0}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       ref={ref}
     >
       <Collapsible open={!isCollapsed}>
-        <div className="flex items-start gap-2">
-          <div className="flex items-center h-6 w-6 -ml-6">
-            {hasChildren ? (
-              <CollapsibleTrigger asChild onClick={() => setIsCollapsed(!isCollapsed)}>
-                <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                  <span className="text-lg text-muted-foreground">{isCollapsed ? '▸' : '▾'}</span>
-                </Button>
-              </CollapsibleTrigger>
-            ) : (
-              <div className="flex items-center h-6 w-6 p-0">
-                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40 mx-auto"/>
-              </div>
-            )}
+        <div className="flex items-start gap-1">
+          <div className="block-controls flex items-center ">
+            {!isMobile && expandButton()}
+
+            <a
+              href={`#${block.id}`}
+              className="bullet-link flex items-center justify-center h-6 w-5"
+            >
+              <span
+                className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
+                  (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
+            </a>
           </div>
 
-          <div className="flex-grow relative flex flex-col">
+          <div className="block-body flex-grow relative flex flex-col">
             <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
               {shouldShowUpdateIndicator && (
                 <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
                      title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
               )}
+
               <ContentRenderer block={block}/>
 
               {showProperties && (
@@ -168,10 +191,18 @@ export function DefaultBlockRenderer(
               )}
             </div>
 
+
             <CollapsibleContent>
               <BlockChildren block={block}/>
             </CollapsibleContent>
           </div>
+
+          {hasChildren && isMobile && (
+            <div className="absolute right-1 top-0 ">
+              {expandButton()}
+            </div>
+          )}
+
         </div>
       </Collapsible>
     </div>
