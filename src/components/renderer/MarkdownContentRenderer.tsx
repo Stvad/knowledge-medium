@@ -63,6 +63,20 @@ const getCursorLocationFromPoint = (element: HTMLElement, x: number, y: number):
   return getOffsetRelativeToParent(element, node, offset);
 }
 
+type Touch = { x: number; y: number; time: number }
+
+// todo: migrate to a specialized lib for this
+const isSwipe = (touchEnd: Touch, touchStart: Touch) => {
+  // Calculate distance and time of the touch
+  const distX = Math.abs(touchEnd.x - touchStart.x)
+  const distY = Math.abs(touchEnd.y - touchStart.y)
+  const elapsedTime = touchEnd.time - touchStart.time
+
+  // If it's a tap (small movement, short duration) then go into edit mode
+  // Adjust these thresholds as needed
+  return distX > 10 || distY > 10 || elapsedTime > 300
+}
+
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = block.use()
   const [, setIsEditing] = useIsEditing()
@@ -86,15 +100,39 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
     }
   }
   
-  const handleTouch = (e: TouchEvent) => {
+  const touchStartRef = useRef<Touch | null>(null)
+  
+  const handleTouchStart = (e: TouchEvent) => {
+    if (e.touches.length > 0) {
+      const touch = e.touches[0]
+      touchStartRef.current = {
+        x: touch.clientX,
+        y: touch.clientY,
+        time: Date.now()
+      }
+    }
+  }
+  
+  const handleTouchEnd = (e: TouchEvent) => {
     e.preventDefault()
     e.stopPropagation()
 
-    if (ref.current && e.changedTouches.length > 0) {
-      const touch = e.changedTouches[0];
-      const cursorLocation = getCursorLocationFromPoint(ref.current, touch.clientX, touch.clientY);
-      activateEditing(cursorLocation);
+    if (!touchStartRef.current || !ref.current || e.changedTouches.length === 0) return
+    
+    const touch = e.changedTouches[0]
+    const touchEnd = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now()
     }
+
+    if (!isSwipe(touchEnd, touchStartRef.current)) {
+      const cursorLocation = getCursorLocationFromPoint(ref.current, touch.clientX, touch.clientY)
+      activateEditing(cursorLocation)
+    }
+    
+    // Reset the touch start reference
+    touchStartRef.current = null
   }
 
   if (!blockData) return null
@@ -112,7 +150,8 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
         }
         handleMouseDoubleClick(e)
       }}
-      onTouchEnd={handleTouch}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
     >
       <Markdown remarkPlugins={[remarkGfm]}>
         {blockData.content}
