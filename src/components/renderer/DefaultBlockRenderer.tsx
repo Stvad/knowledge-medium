@@ -88,7 +88,7 @@ export function DefaultBlockRenderer(
       e.preventDefault()
       e.stopPropagation()
       const hasUncollapsedChildren = ((blockData?.childIds.length ?? 0) > 0) && !isCollapsed
-      const result = hasUncollapsedChildren ? await block.createChild({position: 'first'}) : await block.createSiblingBelow()
+      const result = hasUncollapsedChildren || isTopLevel ? await block.createChild({position: 'first'}) : await block.createSiblingBelow()
       if (result) {
         setFocusedBlockId(result.id)
         setIsEditing(true)
