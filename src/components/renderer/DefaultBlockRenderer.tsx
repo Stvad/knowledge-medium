@@ -145,7 +145,10 @@ export function DefaultBlockRenderer(
       <Button
         variant="ghost"
         size="sm"
-        className={`h-6 w-3 p-0 hover:bg-none transition-opacity ` + (hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0')}
+        className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity 
+        ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
+        ${isMobile ? 'w-6' : 'w-3'}`
+      }
       >
         <span className="text-lg text-muted-foreground">
           {isCollapsed ? '▸' : '▾'}

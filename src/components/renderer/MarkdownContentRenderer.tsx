@@ -33,7 +33,15 @@ const getTextNodeAtPoint = (element: HTMLElement, x: number, y: number): { node:
       return { node: position.offsetNode, offset: position.offset };
     }
   }
-  
+
+  // Fallback to caretRangeFromPoint
+  if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(x, y);
+    if (range) {
+      return { node: range.startContainer, offset: range.startOffset };
+    }
+  }
+
   // If all else fails, return the first text node
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null);
   const firstNode = walker.nextNode();
