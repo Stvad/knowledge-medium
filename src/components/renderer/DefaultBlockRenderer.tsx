@@ -180,6 +180,7 @@ export function DefaultBlockRenderer(
 
   return (
     <>
+      {/*Todo it's not actually correct to use DefaultContentRenderer here, we need to call BlockComponent, but ask it to not render children? */}
       {isTopLevel && <div className="pt-2"><Breadcrumbs block={block} Renderer={DefaultContentRenderer}/></div>}
 
       <Collapsible

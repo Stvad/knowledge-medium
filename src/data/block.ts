@@ -361,8 +361,10 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
   const doc = await block.data()
   if (!doc) return null
 
+  const blockIsTopLevel = block.id === topLevelBlockId
+
   // If block has children and is not collapsed, return first child
-  if (doc.childIds.length > 0 && !doc.properties['system:collapsed']) {
+  if (doc.childIds.length > 0 && (!doc.properties['system:collapsed'] || blockIsTopLevel)) {
     return block.repo.find(doc.childIds[0])
   }
 
