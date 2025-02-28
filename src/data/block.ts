@@ -44,6 +44,16 @@ export class Block {
     return this.repo.find(doc.parentId)
   }
 
+  async parents() {
+    const parents = []
+    let parent = await this.parent()
+    while (parent) {
+      parents.push(parent)
+      parent = await parent.parent()
+    }
+    return parents.reverse()
+  }
+
   change(
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},

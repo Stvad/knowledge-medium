@@ -122,9 +122,6 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   }
   
   const handleTouchEnd = (e: TouchEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-
     if (!touchStartRef.current || !ref.current || e.changedTouches.length === 0) return
     
     const touch = e.changedTouches[0]

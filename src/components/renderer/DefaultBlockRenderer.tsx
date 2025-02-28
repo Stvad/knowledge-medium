@@ -13,6 +13,7 @@ import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useHoverDirty } from 'react-use'
+import { Breadcrumbs } from '@/components/Breadcrumbs.tsx'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -39,6 +40,7 @@ export function DefaultBlockRenderer(
   const blockData = block.use()
   // @ts-expect-error This seems like type bug
   const isHovering = useHoverDirty(ref)
+  const isTopLevel = block.id === topLevelBlockId
 
   const inFocus = focusedBlockId === block.id
   if (inFocus && !seen) setSeen(true)
@@ -146,9 +148,9 @@ export function DefaultBlockRenderer(
         variant="ghost"
         size="sm"
         className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity 
-        ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
-        ${isMobile ? 'w-6' : 'w-3'}`
-      }
+          ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
+          ${isMobile ? 'w-6' : 'w-3'}`
+        }
       >
         <span className="text-lg text-muted-foreground">
           {isCollapsed ? '▸' : '▾'}
@@ -156,58 +158,64 @@ export function DefaultBlockRenderer(
       </Button>
     </CollapsibleTrigger>
 
-  return (
-    <div
-      className="tm-block group relative"
-      data-block-id={block.id}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      onPaste={handlePaste}
-      ref={ref}
-    >
-      <Collapsible open={!isCollapsed}>
-        <div className="flex items-start gap-1">
-          <div className="block-controls flex items-center ">
-            {!isMobile && expandButton()}
+  const blockControls = () =>
+    <div className="block-controls flex items-center ">
+      {!isMobile && expandButton()}
 
-            <a
-              href={`#${block.id}`}
-              className="bullet-link flex items-center justify-center h-6 w-5"
-            >
-              <span
-                className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-                  (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
-            </a>
-          </div>
-
-          <div className="block-body flex-grow relative flex flex-col">
-            <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
-              {shouldShowUpdateIndicator && (
-                <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
-                     title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
-              )}
-
-              <ContentRenderer block={block}/>
-
-              {showProperties && (
-                <BlockProperties block={block}/>
-              )}
-            </div>
-
-
-            <CollapsibleContent>
-              <BlockChildren block={block}/>
-            </CollapsibleContent>
-          </div>
-
-          {hasChildren && isMobile && (
-            <div className="absolute right-1 top-0 ">
-              {expandButton()}
-            </div>
-          )}
-
-        </div>
-      </Collapsible>
+      <a
+        href={`#${block.id}`}
+        className="bullet-link flex items-center justify-center h-6 w-5"
+      >
+        <span
+          className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
+            (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
+      </a>
     </div>
+
+  const updateIndicator = () =>
+    shouldShowUpdateIndicator && (
+      <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
+           title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
+    )
+
+  return (
+    <>
+      {isTopLevel && <div className="pt-2"><Breadcrumbs block={block} Renderer={DefaultContentRenderer}/></div>}
+
+      <Collapsible
+        open={!isCollapsed || isTopLevel}
+        className={`tm-block flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''}`}
+        data-block-id={block.id}
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        ref={ref}
+      >
+        {!isTopLevel && blockControls()}
+
+        <div className="block-body flex-grow relative flex flex-col">
+          <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
+            {updateIndicator()}
+
+            <ContentRenderer block={block}/>
+
+            {showProperties && (
+              <BlockProperties block={block}/>
+            )}
+          </div>
+
+          <CollapsibleContent>
+            <BlockChildren block={block}/>
+          </CollapsibleContent>
+        </div>
+
+        {hasChildren && isMobile && !isTopLevel && (
+          <div className="absolute right-1 top-0 ">
+            {expandButton()}
+          </div>
+        )}
+
+      </Collapsible>
+    </>
   )
 }
