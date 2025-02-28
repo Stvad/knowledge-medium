@@ -185,7 +185,7 @@ export function DefaultBlockRenderer(
 
       <Collapsible
         open={!isCollapsed || isTopLevel}
-        className={`tm-block flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''}`}
+        className={`tm-block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''}`}
         data-block-id={block.id}
         tabIndex={0}
         onKeyDown={handleKeyDown}
