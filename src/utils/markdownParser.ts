@@ -38,17 +38,13 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
   
   // Second pass: convert to BlockData[] with proper parent/child relationships
   const blocks: Partial<BlockData>[] = [];
-  const defaults = {
-    properties: {},
-    childIds: [],
-  };
-  
+
   // Stack to keep track of parent blocks at each level
   const parentStack: Partial<BlockData>[] = [];
   
   for (const parsed of parsedBlocks) {
     const blockData: Partial<BlockData> = {
-      ...defaults,
+      childIds: [],
       id: uuidv4(),
       content: parsed.content,
     };

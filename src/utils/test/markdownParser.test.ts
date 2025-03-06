@@ -45,6 +45,8 @@ describe('markdownParser', () => {
       // Check parent-child relationships
       expect(result[1].parentId).toBe(undefined)
       expect(result[2].parentId).toBe(result[1].id)
+      expect(result[1].childIds).toContain(result[2].id)
+      expect(result[0].childIds).toHaveLength(0)
     })
 
     it('should handle empty lines', () => {
@@ -77,7 +79,9 @@ Root
     })
 
     it('should handle numbered lists', () => {
-      const markdown = '1. First item\n2. Second item\n   1. Nested item'
+      const markdown = `1. First item
+2. Second item
+   1. Nested item`
       const result = parseMarkdownToBlocks(markdown)
 
       expect(result).toHaveLength(3)
