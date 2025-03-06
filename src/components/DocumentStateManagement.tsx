@@ -18,7 +18,9 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
     const user = useUser()
     
     const exportState = async () => {
-        const blocks = await getAllChildrenBlocks(repo, docUrl)
+        const root = repo.find(docUrl)
+        const children = await getAllChildrenBlocks(root)
+        const blocks = await Promise.all([root, ...children].map(block => block.data()))
         const exportData = { blocks }
         const jsonString = JSON.stringify(exportData, null, 2)
         

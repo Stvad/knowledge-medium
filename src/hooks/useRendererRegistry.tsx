@@ -3,12 +3,12 @@ import { BlockData, RendererRegistry, BlockRendererProps } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
-import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
-import { Repo } from '@/data/repo.ts'
-import { getAllChildrenBlocks, getRootBlock } from '@/data/block.ts'
+import { getAllChildrenBlocks, Block } from '@/data/block.ts'
+import { useBlockContext } from '@/context/block.tsx'
+import { memoize } from 'lodash'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
@@ -17,11 +17,10 @@ export const defaultRegistry: RendererRegistry = {
   missingData: MissingDataRenderer,
 }
 
-let cachedRegistry: Promise<RendererRegistry> | null = null
-
 export const refreshRendererRegistry = async () => {
-  // Create and dispatch the custom event
-  const event = new CustomEvent('renderer-registry-update')
+  const event = new CustomEvent('renderer-registry-update', {
+    detail: new Date().toISOString(),
+  })
   window.dispatchEvent(event)
 }
 
@@ -29,36 +28,22 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
   const blockData = block?.use()
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
   const repo = useRepo()
-  
-  // Function to reload the registry
-  const reloadRegistry = async () => {
-    // todo this triggers on each block, which is unnecessary - improve caching
-    cachedRegistry = loadRegistry(repo, block.id, context?.safeMode ?? false)
-    setRegistry(await cachedRegistry)
-  }
-  
+  const {rootBlockId} = useBlockContext()
+  const [generation, setGeneration] = useState('initial-load')
+
   useEffect(() => {
-    // Load registry once and cache it
     (async () => {
-      if (cachedRegistry && registry === await cachedRegistry) return
-
-      if (!cachedRegistry) {
-        cachedRegistry = loadRegistry(repo, block.id, context?.safeMode ?? false)
-      }
-
-      setRegistry(await cachedRegistry)
+      setRegistry(await loadRegistry(repo.find(rootBlockId!), context?.safeMode ?? false, generation))
     })()
-    
-    // Listen for custom event to update registry when new renderers are created
-    const handleRegistryUpdate = () => {
-      reloadRegistry()
+  }, [generation, rootBlockId, context?.safeMode])
+
+  useEffect(() => {
+    const reloadRegistry = (e: CustomEvent<string>) => {
+      setGeneration(e.detail)
     }
-    
-    window.addEventListener('renderer-registry-update', handleRegistryUpdate)
-    
-    return () => {
-      window.removeEventListener('renderer-registry-update', handleRegistryUpdate)
-    }
+
+    window.addEventListener('renderer-registry-update', reloadRegistry as EventListener)
+    return () => window.removeEventListener('renderer-registry-update', reloadRegistry as EventListener)
   }, [])
 
   if (blockData?.properties?.renderer && registry[blockData.properties.renderer]) {
@@ -80,16 +65,16 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
   return firstPriority ?? registry.default
 }
 
-const loadRegistry = async (repo: Repo, blockId: string, safeMode: boolean): Promise<RendererRegistry> => {
+const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generation: string): Promise<RendererRegistry> => {
   if (safeMode) {
     console.log('Safe mode enabled - using default registry only')
     return defaultRegistry
   }
 
-  console.log('Manually refreshing renderer registry')
+  console.log(`Refreshing renderer registry`, {rootBlock, safeMode, generation})
   const newRegistry = {...defaultRegistry}
 
-  const rendererBlocks = await getRendererBlocks(repo, blockId)
+  const rendererBlocks = await getRendererBlocks(rootBlock)
   for (const block of rendererBlocks) {
     try {
       const DynamicComp = await wrappedComponentFromModule(block.content)
@@ -105,12 +90,11 @@ const loadRegistry = async (repo: Repo, blockId: string, safeMode: boolean): Pro
     }
   }
   return newRegistry
-}
+}, (rootBlock, safeMode, generation) => rootBlock.id + safeMode + generation)
 
-const getRendererBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
-  if (!isValidAutomergeUrl(blockId)) return []
+const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
+  const childrenBlocks = await getAllChildrenBlocks(rootBlock)
+  const blockData = await Promise.all(childrenBlocks.map(b => b.data() as Promise<BlockData>))
 
-  const rootBlock = await getRootBlock(repo.find(blockId))
-  const allBlocks = await getAllChildrenBlocks(repo, rootBlock.id)
-  return allBlocks.filter(block => block.properties.type === 'renderer')
+  return blockData.filter(block => block.properties.type === 'renderer')
 }

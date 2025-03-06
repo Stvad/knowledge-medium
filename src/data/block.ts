@@ -56,7 +56,7 @@ export class Block {
 
   async children(): Promise<Block[]> {
     const doc = await this.data()
-    if (!doc || !doc.childIds || doc.childIds.length === 0) return []
+    if (!doc?.childIds?.length) return []
     
     // Map each child ID to its Block instance
     return Promise.all(doc.childIds.map(childId => this.repo.find(childId)))
@@ -438,14 +438,9 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
   return parent
 }
 
-export const getAllChildrenBlocks = async (repo: Repo, blockId: string): Promise<BlockData[]> => {
-  const blockDoc = repo.find(blockId)
-  const exportBlock = await blockDoc?.data()
-  if (!exportBlock) return []
+export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
+  const directChildren = await block.children()
+  const childBlockChildren = await Promise.all(directChildren.map(b => getAllChildrenBlocks(b)))
 
-  const childBlocks = await Promise.all(
-    (exportBlock.childIds || []).map(id => getAllChildrenBlocks(repo, id)),
-  )
-
-  return [exportBlock, ...childBlocks.flat()]
+  return [...directChildren, ...childBlockChildren.flat()]
 }
