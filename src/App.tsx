@@ -11,6 +11,7 @@ import { getExampleBlocks } from '@/initData.ts'
 import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
 import { useUser } from '@/components/Login.tsx'
+import { CommandPalette } from '@/components/CommandPalette'
 
 const getInitialBlock = memoize(async (repo: Repo, rootDocUrl: string | undefined): Promise<Block> => {
   if (isValidAutomergeUrl(rootDocUrl)) {
@@ -29,10 +30,9 @@ const updateLoadTimes = memoize((uiStateBlock: Block) => {
 }, () => true)
 
 const useInitUIState = (rootBlock: Block, topLevelBlockId: string) => {
-  const repo = useRepo()
   const user = useUser()
 
-  const uiStateBlock = use(getUIStateBlock(repo, rootBlock.id, user))
+  const uiStateBlock = use(getUIStateBlock(rootBlock, user))
 
   useEffect(() => {
     uiStateBlock.change(doc => {
@@ -58,6 +58,7 @@ const App = () => {
   return (
     <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
       <BlockComponent blockId={docId}/>
+      <CommandPalette />
     </BlockContextProvider>
   )
 }

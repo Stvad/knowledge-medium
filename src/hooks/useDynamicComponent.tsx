@@ -1,12 +1,10 @@
-import {useState, useEffect} from 'react'
+import { useState, useEffect } from 'react'
 import * as Babel from '@babel/standalone'
-import {BlockRenderer, BlockRendererProps} from '../types'
+import { BlockRenderer, BlockRendererProps } from '../types'
 
-import { ErrorBoundary } from 'react-error-boundary';
-
-function FallbackComponent({ error }: { error: Error }) {
-    return <div>Something went wrong: {error.message}</div>;
-}
+import { ErrorBoundary } from 'react-error-boundary'
+import { FallbackComponent } from '@/components/util/error.tsx'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 
 export async function wrappedComponentFromModule(code: string): Promise<BlockRenderer> {
     const Component = await componentFromModule(code);
@@ -31,14 +29,18 @@ export async function componentFromModule(code: string): Promise<BlockRenderer> 
         const blob = new Blob([transpiledCode], { type: 'text/javascript' });
         const blobUrl = URL.createObjectURL(blob);
         const module = await import(/* @vite-ignore */ blobUrl);
-        
+
         return module.default;
     } catch (err) {
         console.error('Compilation error:', err);
-        return () => (
-            <div className="error">
+        return (props: BlockRendererProps) => (
+          <DefaultBlockRenderer
+            {...props}
+            ContentRenderer={
+              () => <div className="error">
                 Failed to compile component: {err instanceof Error ? err.message : 'Unknown error'}
-            </div>
+              </div>}
+          />
         );
     }
 }

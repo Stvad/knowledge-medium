@@ -19,10 +19,24 @@ export const defaultRegistry: RendererRegistry = {
 
 let cachedRegistry: Promise<RendererRegistry> | null = null
 
+export const refreshRendererRegistry = async () => {
+  // Create and dispatch the custom event
+  const event = new CustomEvent('renderer-registry-update')
+  window.dispatchEvent(event)
+}
+
 export const useRenderer = ({block, context}: BlockRendererProps) => {
   const blockData = block?.use()
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
   const repo = useRepo()
+  
+  // Function to reload the registry
+  const reloadRegistry = async () => {
+    // todo this triggers on each block, which is unnecessary - improve caching
+    cachedRegistry = loadRegistry(repo, block.id, context?.safeMode ?? false)
+    setRegistry(await cachedRegistry)
+  }
+  
   useEffect(() => {
     // Load registry once and cache it
     (async () => {
@@ -34,6 +48,17 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
 
       setRegistry(await cachedRegistry)
     })()
+    
+    // Listen for custom event to update registry when new renderers are created
+    const handleRegistryUpdate = () => {
+      reloadRegistry()
+    }
+    
+    window.addEventListener('renderer-registry-update', handleRegistryUpdate)
+    
+    return () => {
+      window.removeEventListener('renderer-registry-update', handleRegistryUpdate)
+    }
   }, [])
 
   if (blockData?.properties?.renderer && registry[blockData.properties.renderer]) {

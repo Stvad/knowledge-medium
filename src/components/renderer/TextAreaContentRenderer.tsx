@@ -8,6 +8,7 @@ import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 
+// todo better undo/redo for this
 const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
   const afterCursor = textarea.value.slice(textarea.selectionStart)
@@ -21,7 +22,6 @@ const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaElement, i
 
     return child
   } else {
-    // todo better undo/redo for this
     await block.createSiblingAbove({content: beforeCursor})
 
     block.change(b => {

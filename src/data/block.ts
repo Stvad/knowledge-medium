@@ -54,6 +54,14 @@ export class Block {
     return parents.reverse()
   }
 
+  async children(): Promise<Block[]> {
+    const doc = await this.data()
+    if (!doc || !doc.childIds || doc.childIds.length === 0) return []
+    
+    // Map each child ID to its Block instance
+    return Promise.all(doc.childIds.map(childId => this.repo.find(childId)))
+  }
+
   change(
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
@@ -273,6 +281,9 @@ export class Block {
     return newBlock.childByContentPath(remainingPath, createIfNotExists);
   }
 
+  /**
+   * React hook for accessing the block's data. For use only in React components.
+   */
   use() {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return useDocument<BlockData>(this.id)[0]

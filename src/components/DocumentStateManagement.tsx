@@ -76,6 +76,24 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
                 </div>
             </div>
             <div className="flex items-center gap-4">
+                <button 
+                    className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={() => {
+                        // Simulate Cmd+K or Ctrl+K keypress
+                        const event = new KeyboardEvent('keydown', {
+                            key: 'k',
+                            metaKey: true,
+                            ctrlKey: navigator.platform.toLowerCase().includes('win'),
+                            bubbles: true
+                        });
+                        document.dispatchEvent(event);
+                    }}
+                >
+                    <span>Command</span>
+                    <kbd className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                        {navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl+'}K
+                    </kbd>
+                </button>
                 <ThemeToggle />
                 {user && <span className="text-sm text-muted-foreground">{user.name}</span>}
             </div>

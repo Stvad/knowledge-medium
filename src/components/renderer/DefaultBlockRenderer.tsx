@@ -7,18 +7,108 @@ import { useIsEditing } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { useEffect, KeyboardEvent, useRef, ClipboardEvent, useState } from 'react'
-import { nextVisibleBlock, previousVisibleBlock } from '@/data/block.ts'
+import { nextVisibleBlock, previousVisibleBlock, Block } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useHoverDirty } from 'react-use'
 import { Breadcrumbs } from '@/components/Breadcrumbs.tsx'
+import { GenerateRendererDialog } from '@/components/GenerateRendererDialog'
+import { ErrorBoundary } from 'react-error-boundary'
+import { FallbackComponent } from '@/components/util/error.tsx'
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuPortal,
+  ContextMenuSeparator, ContextMenuItem, ContextMenuContent,
+} from '@/components/ui/context-menu.tsx'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
 }
+
+const copyBlockId = (block: Block) => {
+  navigator.clipboard.writeText(block.id)
+}
+
+const zoomIn = (block: Block) => {
+  if (typeof window !== 'undefined') {
+    window.location.hash = block.id
+  }
+}
+
+const BlockBullet = ({block}: { block: Block }) => {
+  const blockData = block.use()
+  const [isCollapsed] = block.useProperty<boolean>('system:collapsed', false)
+  const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  
+  if (!blockData) return null
+
+  const hasChildren = blockData.childIds.length > 0
+  
+  const openGenerateRendererDialog = () => {
+    setDialogOpen(true)
+  }
+
+  return (
+    <>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <a
+            href={`#${block.id}`}
+            className="bullet-link flex items-center justify-center h-6 w-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+              <span
+                className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
+                  (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
+          </a>
+        </ContextMenuTrigger>
+        <ContextMenuPortal>
+          <ContextMenuContent
+            className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
+          >
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => copyBlockId(block)}
+            >
+              Copy ID
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => zoomIn(block)}
+            >
+              Zoom In
+            </ContextMenuItem>
+            <ContextMenuSeparator className="h-px bg-border my-1" />
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={openGenerateRendererDialog}
+            >
+              Generate Custom Renderer
+            </ContextMenuItem>
+            <ContextMenuItem
+              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+              onSelect={() => setShowProperties(!showProperties)}
+            >
+              {showProperties ? 'Hide' : 'Show'} Properties
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenuPortal>
+      </ContextMenu>
+      
+      <GenerateRendererDialog 
+        block={block}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+      />
+    </>
+  )
+}
+
 
 export function DefaultBlockRenderer(
   {
@@ -161,15 +251,7 @@ export function DefaultBlockRenderer(
   const blockControls = () =>
     <div className="block-controls flex items-center ">
       {!isMobile && expandButton()}
-
-      <a
-        href={`#${block.id}`}
-        className="bullet-link flex items-center justify-center h-6 w-5"
-      >
-        <span
-          className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-            (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
-      </a>
+      <BlockBullet block={block}/>
     </div>
 
   const updateIndicator = () =>
@@ -198,7 +280,9 @@ export function DefaultBlockRenderer(
           <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
             {updateIndicator()}
 
-            <ContentRenderer block={block}/>
+            <ErrorBoundary FallbackComponent={FallbackComponent}>
+              <ContentRenderer block={block}/>
+            </ErrorBoundary>
 
             {showProperties && (
               <BlockProperties block={block}/>
