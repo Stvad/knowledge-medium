@@ -13,6 +13,8 @@ export type DependencyValidator<T extends ActionContextType> = (
 
 export interface ActionContextConfig<T extends ActionContextType = ActionContextType> {
   type: T;
+  /** User-friendly name for this context, shown in the command palette. */
+  displayName: string;
   defaultEventOptions?: EventOptions;
   /**
    * Optional filter function to determine if the context should handle the event.
@@ -57,7 +59,7 @@ export interface PropertyEditingDependencies extends BlockShortcutDependencies {
   input: HTMLInputElement;
 }
 
-export type CommandPaletteDependencies =  BlockShortcutDependencies
+export type CommandPaletteDependencies =  BaseShortcutDependencies
 
 export interface ShortcutDependenciesMap {
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
@@ -67,12 +69,18 @@ export interface ShortcutDependenciesMap {
   [ActionContextTypes.COMMAND_PALETTE]: CommandPaletteDependencies;
 }
 
+export interface ActiveContextInfo {
+  config: ActionContextConfig;
+  dependencies: BaseShortcutDependencies;
+}
+
 export interface Action<T extends ActionContextType = ActionContextType> {
   id: string;
   description: string;
   context: T;
   handler: (dependencies: ShortcutDependenciesMap[T]) => void | Promise<void>;
   defaultBinding?: Omit<ShortcutBinding, 'action'>; // Optional default binding
+  hideFromCommandPallet?: boolean;
 }
 
 export interface ShortcutBinding {

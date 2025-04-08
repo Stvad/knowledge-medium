@@ -9,6 +9,11 @@ A Workflowy-like editor with dynamic block rendering capabilities. Blocks can co
 
 ## Architecture
 
+### Components structure 
+In as much as possible we're pushing logic down to renderer components 
+and keeping basic setup as minimal as possible. 
+So anything that can be done in a renderer should be done there.
+See LayoutBlockRenderer for an example of general page setup, CommandPalette setup, etc
 ### Block System
 - Each block has unique ID, content, properties, and children
 - Blocks can be nested arbitrarily deep

@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { shortcutManager } from './ActionManager.ts';
+import { actionManager } from './ActionManager.ts';
 import { ActionContextType, BaseShortcutDependencies, ActionContextTypes } from './types'
 import { useUIStateBlock } from '@/data/globalState.ts'
 
@@ -29,11 +29,11 @@ export function useActionContext(
     
     if (!enabled) return;
     
-    shortcutManager.activateContext(context, depsWithUiState);
+    actionManager.activateContext(context, depsWithUiState);
     
     return () => {
       console.log(`[useShortcutContext] Cleanup running for context: ${context}`);
-      shortcutManager.deactivateContext(context);
+      actionManager.deactivateContext(context);
     };
   }, [context, depsWithUiState, enabled]);
 }

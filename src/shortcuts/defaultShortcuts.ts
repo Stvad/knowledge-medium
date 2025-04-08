@@ -1,8 +1,9 @@
-import { shortcutManager } from './ActionManager.ts'
+import { actionManager as defaultActionManager, ActionManager } from './ActionManager.ts'
 import { BlockShortcutDependencies, EditModeDependencies, Action, ActionContextTypes } from './types'
 import { previousVisibleBlock, nextVisibleBlock, defaultChangeScope, Block } from '@/data/block.ts'
 import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
+import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
 
 const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
   uiStateBlock.setProperty('focusedBlockId', id, 'ui-state')
@@ -12,9 +13,9 @@ const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
   uiStateBlock.setProperty('isEditing', editing, 'ui-state')
 }
 
-export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
+export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
   // Global shortcuts
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'command_palette',
     description: 'Open command palette',
     context: ActionContextTypes.GLOBAL,
@@ -24,9 +25,10 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     defaultBinding: {
       keys: ['cmd+k', 'ctrl+k'],
     },
+    hideFromCommandPallet: true,
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'undo',
     description: 'Undo last action',
     context: ActionContextTypes.GLOBAL,
@@ -38,7 +40,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'redo',
     description: 'Redo last action',
     context: ActionContextTypes.GLOBAL,
@@ -50,8 +52,33 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
+  // New Global Actions for Command Palette Items
+  actionManager.registerAction({
+    id: 'open_router_settings',
+    description: 'Open Router Settings',
+    context: ActionContextTypes.GLOBAL,
+    handler: () => {
+      // No-op: Logic is handled directly in CommandPalette's runCommand
+      console.log('[Action:open_settings] Triggered. Dialog opening handled by CommandPalette.');
+
+      // todo this is not good and we should move towards something like "popup managed by layout renderer"
+      // and we pass a block to render to it
+    },
+  });
+
+  actionManager.registerAction({
+    id: 'refresh_renderers',
+    description: 'Refresh Renderer Registry',
+    context: ActionContextTypes.GLOBAL,
+    handler: () => {
+      refreshRendererRegistry();
+      console.log("Renderer registry refreshed.");
+    },
+    // No default binding
+  });
+
   // Normal mode shortcuts
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'move_down',
     description: 'Move to next block',
     context: ActionContextTypes.NORMAL_MODE,
@@ -70,7 +97,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'move_up',
     description: 'Move to previous block',
     context: ActionContextTypes.NORMAL_MODE,
@@ -89,7 +116,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'enter_edit_mode',
     description: 'Enter edit mode',
     context: ActionContextTypes.NORMAL_MODE,
@@ -104,7 +131,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'toggle_collapse',
     description: 'Toggle block collapse',
     context: ActionContextTypes.NORMAL_MODE,
@@ -120,7 +147,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'toggle_properties',
     description: 'Toggle block properties',
     context: ActionContextTypes.NORMAL_MODE,
@@ -139,15 +166,15 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
   const indentBlock: Action<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'indent_block',
     description: 'Indent block',
-    context: ActionContextTypes.NORMAL_MODE, // Default context
+    context: ActionContextTypes.NORMAL_MODE,
     handler: (deps: BlockShortcutDependencies) => deps.block.indent(),
     defaultBinding: {
       keys: 'tab',
     },
   }
 
-  shortcutManager.registerAction(indentBlock)
-  shortcutManager.registerAction({
+  actionManager.registerAction(indentBlock)
+  actionManager.registerAction({
     ...indentBlock,
     id: 'edit.' + indentBlock.id,
     context: ActionContextTypes.EDIT_MODE,
@@ -163,14 +190,14 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   }
 
-  shortcutManager.registerAction(outdentBlock)
-  shortcutManager.registerAction({
+  actionManager.registerAction(outdentBlock)
+  actionManager.registerAction({
     ...outdentBlock,
     id: 'edit.' + outdentBlock.id,
     context: ActionContextTypes.EDIT_MODE,
-  }) // Cast needed
+  })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'delete_block',
     description: 'Delete block',
     context: ActionContextTypes.NORMAL_MODE,
@@ -190,7 +217,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'create_block_below_and_edit',
     description: 'Create block below (or as child) and enter edit mode',
     context: ActionContextTypes.NORMAL_MODE,
@@ -217,7 +244,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
   })
 
   // Edit mode shortcuts
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'exit_edit_mode',
     description: 'Exit edit mode',
     context: ActionContextTypes.EDIT_MODE,
@@ -228,7 +255,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
   })
 
   // Textarea-specific shortcuts
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'split_block',
     description: 'Split block at cursor',
     context: ActionContextTypes.EDIT_MODE,
@@ -266,7 +293,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'move_up_from_textarea_start',
     description: 'Move to previous block when cursor is at start of textarea',
     context: ActionContextTypes.EDIT_MODE,
@@ -290,7 +317,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'move_down_from_textarea_end',
     description: 'Move to next block when cursor is at end of textarea',
     context: ActionContextTypes.EDIT_MODE,
@@ -312,7 +339,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   })
 
-  shortcutManager.registerAction({
+  actionManager.registerAction({
     id: 'delete_empty_block',
     description: 'Delete empty block on backspace',
     context: ActionContextTypes.EDIT_MODE,
@@ -351,8 +378,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
       },
     },
   }
-  shortcutManager.registerAction(moveBlockUp)
-  shortcutManager.registerAction({
+  actionManager.registerAction(moveBlockUp)
+  actionManager.registerAction({
     ...moveBlockUp,
     id: 'normal.' + moveBlockUp.id,
     context: ActionContextTypes.NORMAL_MODE,
@@ -373,8 +400,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }) {
     },
   }
 
-  shortcutManager.registerAction(moveBlockDown)
-  shortcutManager.registerAction({
+  actionManager.registerAction(moveBlockDown)
+  actionManager.registerAction({
     ...moveBlockDown,
     id: 'normal.' + moveBlockDown.id,
     context: ActionContextTypes.NORMAL_MODE,
