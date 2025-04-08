@@ -1,15 +1,15 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
-import { KeyboardEvent, ClipboardEvent, useRef, useEffect, useState, useCallback } from 'react'
-import { nextVisibleBlock, previousVisibleBlock, Block } from '@/data/block.ts'
+import { ClipboardEvent, useRef, useEffect, useState, useCallback, useMemo } from 'react'
+import { Block } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { updateText } from '@automerge/automerge/next'
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
+import { useEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
 
-// todo better undo/redo for this
-const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
+export const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
   const afterCursor = textarea.value.slice(textarea.selectionStart)
 
@@ -43,9 +43,17 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string | undefined>('focusedBlockId')
   const [selection, setSelection] = useUIStateProperty<SelectionState>('selection')
-  const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
-  const [isCollapsed] = block.useProperty<boolean>('system:collapsed', false)
-  const isTopLevel = block.id === topLevelBlockId
+
+  // Create dependencies object for shortcuts
+  const shortcutDependencies = useMemo(() => ({
+    block,
+    textarea: textareaRef.current,
+  }), [
+    block,
+    textareaRef.current,
+  ])
+
+  useEditModeShortcuts(shortcutDependencies, !!textareaRef.current)
 
   useEffect(() => {
     if (focusedBlockId === block.id && textareaRef.current) {
@@ -104,83 +112,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   if (!blockData) return null
 
-  const handleKeyDown = async (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    const textarea = e.target as HTMLTextAreaElement
-    if (e.key === 'Escape') {
-      e.stopPropagation()
-      setIsEditing(false)
-    }
-    if (e.key === 'ArrowUp') {
-      e.stopPropagation()
-
-      if (textarea && textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
-        e.preventDefault()
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
-        if (prevVisible) {
-          setFocusedBlockId(prevVisible.id)
-        }
-      }
-    }
-    if (e.key === 'ArrowDown') {
-      e.stopPropagation()
-
-      if (textarea &&
-        textarea.selectionStart === textarea.value.length &&
-        textarea.selectionEnd === textarea.value.length) {
-        e.preventDefault()
-        const nextVisible = await nextVisibleBlock(block, topLevelBlockId!)
-        if (nextVisible) setFocusedBlockId(nextVisible.id)
-      }
-    }
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.stopPropagation()
-      e.preventDefault()
-
-      // Case 1: Cursor is in middle of text
-      if (textarea.selectionStart < textarea.value.length) {
-        const blockInFocus = await splitBlockAtCursor(block, textarea, isTopLevel)
-        setFocusedBlockId(blockInFocus.id)
-      }
-      // Case 2: Cursor is at end of text and block has children
-      else if (textarea.selectionStart === textarea.value.length &&
-        (blockData.childIds.length > 0 && !isCollapsed || isTopLevel)) {
-        const newBlock = await block.createChild({position: 'first'})
-        if (newBlock) setFocusedBlockId(newBlock.id)
-      }
-      // Case 3: Cursor at end, no children or they are collapsed
-      else {
-        // todo focus logic breaks when we undo new block creation
-        const newBlock = await block.createSiblingBelow()
-        if (newBlock) setFocusedBlockId(newBlock.id)
-      }
-    } else if (e.key === 'Backspace' && blockData.content === '') {
-      e.stopPropagation()
-      e.preventDefault()
-      const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
-      block.delete()
-
-      if (prevVisible) {
-        setFocusedBlockId(prevVisible.id)
-      }
-    } else if (e.key === 'Tab') {
-      e.stopPropagation()
-      e.preventDefault()
-      if (e.shiftKey) {
-        block.outdent()
-      } else {
-        block.indent()
-      }
-    } else if (e.key === 'ArrowUp' && e.metaKey && e.shiftKey) {
-      e.stopPropagation()
-      e.preventDefault()
-      block.changeOrder(-1)
-    } else if (e.key === 'ArrowDown' && e.metaKey && e.shiftKey) {
-      e.stopPropagation()
-      e.preventDefault()
-      block.changeOrder(1)
-    }
-  }
-
   const handlePaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
     e.stopPropagation()
     const pastedText = e.clipboardData?.getData('text/plain')
@@ -215,7 +146,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
           })
         }
       }}
-      onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none block-content overflow-x-hidden overflow-wrap-break-word`}
       onBlur={() => {

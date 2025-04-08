@@ -54,6 +54,11 @@ export class Block {
     return parents.reverse()
   }
 
+  async hasChildren() {
+    const doc = await this.data()
+    return !!doc?.childIds?.length
+  }
+
   async children(): Promise<Block[]> {
     const doc = await this.data()
     if (!doc?.childIds?.length) return []
@@ -303,6 +308,16 @@ export class Block {
     }, [this, name, scope])
 
     return [value, setValue]
+  }
+
+  async getProperty<T extends BlockPropertyValue>(name: string): Promise<T | undefined> {
+    const doc = await this.data()
+    if (!doc) return undefined
+    return doc.properties[name] as T | undefined
+  }
+
+  setProperty<T extends BlockPropertyValue>(name: string, value: T, scope?: string) {
+    this.change((doc) => doc.properties[name] = value, {scope: scope})
   }
 
   _updateParentId = (newParentId: string) =>

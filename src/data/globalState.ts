@@ -27,7 +27,7 @@ export function useUIStateProperty<T extends BlockPropertyValue>(name: string, i
 /**
  * Gets or creates the UI state block, which is located at root > "system" > "ui-state"
  */
-function useUIStateBlock(): Block {
+export function useUIStateBlock(): Block {
   const { rootBlockId } = useBlockContext()
   const repo = useRepo()
   const user = useUser()

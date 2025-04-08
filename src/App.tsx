@@ -11,7 +11,6 @@ import { getExampleBlocks } from '@/initData.ts'
 import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
 import { useUser } from '@/components/Login.tsx'
-import { CommandPalette } from '@/components/CommandPalette'
 
 const getInitialBlock = memoize(async (repo: Repo, rootDocUrl: string | undefined): Promise<Block> => {
   if (isValidAutomergeUrl(rootDocUrl)) {
@@ -52,13 +51,13 @@ const App = () => {
   const handle = use(getInitialBlock(repo, rootDocUrl))
   const docId = document.location.hash = handle.id
 
+  // todo this seems plausibly like I can move it to layout renderer? or mb not bc registry relies on knowing root block
   const rootBlock = use(getRootBlock(repo.find(docId)))
   useInitUIState(rootBlock, docId)
-
+  
   return (
     <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
       <BlockComponent blockId={docId}/>
-      <CommandPalette />
     </BlockContextProvider>
   )
 }

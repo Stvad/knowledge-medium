@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { 
   CommandDialog, 
   CommandInput, 
@@ -15,21 +15,24 @@ import {
 } from '@/components/ui/dialog';
 import { OpenRouterSettings } from '@/components/settings/OpenRouterSettings';
 import { refreshRendererRegistry } from '@/hooks/useRendererRegistry';
+import { useCommandPaletteShortcuts } from '@/shortcuts/useActionContext.ts';
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const [openSettingsDialog, setOpenSettingsDialog] = useState(false);
 
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.key === 'k' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        setOpen((open) => !open);
-      }
-    };
+  const shortcutDependencies = useMemo(() => ({
+  }), []);
 
-    document.addEventListener('keydown', down);
-    return () => document.removeEventListener('keydown', down);
+  useCommandPaletteShortcuts(shortcutDependencies, open);
+
+  useEffect(() => {
+    const handleToggle = () => {
+      setOpen((open) => !open);
+    };
+    
+    window.addEventListener('toggle-command-palette', handleToggle);
+    return () => window.removeEventListener('toggle-command-palette', handleToggle);
   }, []);
 
   const closeCommandPalette = () => {

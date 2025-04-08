@@ -23,10 +23,16 @@ A Workflowy-like editor with dynamic block rendering capabilities. Blocks can co
 ### Data Storage
 - Uses automerge-repo with React hooks for CRDT-based storage
 - Persistent storage in IndexedDB
-- Real-time collaboration via wss://sync.automerge.org
-- Document sharing through URL hash parameters
-- Automatic conflict resolution
-- Uses RepoContext for repo access throughout app
+
+
+### Keyboard Shortcut System
+- Context-aware shortcuts (normal mode, edit mode, global, etc.)
+- Uses hotkeys-js for keyboard event handling
+- React hooks for activating/deactivating shortcut contexts
+- User-configurable shortcuts stored in Automerge documents
+- Priority system to handle context conflicts
+- Actions and bindings are registered idempotently - duplicate registrations are ignored
+- Multiple different key bindings can be registered for the same action
 
 ## Key Patterns
 
@@ -35,24 +41,38 @@ A Workflowy-like editor with dynamic block rendering capabilities. Blocks can co
 - `renderer: '<block-id>'` - Use renderer defined in referenced block
 - Properties are editable through BlockProperties component
 
-## Development Guidelines
+## State Management Principles
 
-### State Management
-- Prefer explicit state updates over automatic effects when dealing with complex state
-- Use manual refresh functions instead of useEffect for registry-like state that depends on complex objects
+### Core Principle
+The core principle of the system is to store all state within the system itself, using Automerge documents. This includes:
+- UI state
+- User preferences
+- Keyboard shortcuts
+- Block properties and relationships
+- etc
+Prefer to use block properties and sub-blocks to "unpack state" instead of storing a JSON objects
+
+#### Exceptions
+Credentials and sensitive information should not be stored in the document state, as they may be shared. These include:
+- API keys (like OpenRouter API keys)
+- Authentication tokens
+
+### Configuration UI
+Configuration UIs should be implemented as custom renderers for configuration blocks. This pattern is used for:
+- OpenRouter settings
+- Keyboard shortcut configuration
+- Other user preferences
+
+See RendererBlockRenderer for an example of a renderer
+
+
+## Development Guidelines
 
 ### Responsive Design
 - Mobile-first approach with Tailwind CSS breakpoints
 - Key breakpoints: sm (640px), md (768px), lg (1024px)
-- Touch-friendly UI elements with minimum 36px tap targets on mobile
 - Stacked layouts on mobile, horizontal layouts on desktop
 - Reduced font sizes and spacing on mobile devices
-- Viewport meta tag prevents zooming for better mobile experience
 
 ### Adding New Features
 ## Features
-
-### Safe Mode
-- Add `?safeMode` to URL to disable dynamic renderer loading
-- Only default renderers will be used
-- Useful for debugging or when custom renderers are problematic

@@ -81,14 +81,7 @@ export function DocumentStateManagement({ docUrl}: DocumentControlsProps) {
                 <button 
                     className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => {
-                        // Simulate Cmd+K or Ctrl+K keypress
-                        const event = new KeyboardEvent('keydown', {
-                            key: 'k',
-                            metaKey: true,
-                            ctrlKey: navigator.platform.toLowerCase().includes('win'),
-                            bubbles: true
-                        });
-                        document.dispatchEvent(event);
+                        window.dispatchEvent(new CustomEvent('toggle-command-palette'));
                     }}
                 >
                     <span>Command</span>

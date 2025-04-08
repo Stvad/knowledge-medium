@@ -6,8 +6,8 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/colla
 import { useIsEditing } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
-import { useEffect, KeyboardEvent, useRef, ClipboardEvent, useState } from 'react'
-import { nextVisibleBlock, previousVisibleBlock, Block } from '@/data/block.ts'
+import { useRef, ClipboardEvent, useState, useMemo } from 'react'
+import { Block } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -21,13 +21,28 @@ import {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuPortal,
-  ContextMenuSeparator, ContextMenuItem, ContextMenuContent,
+  ContextMenuSeparator,
+  ContextMenuItem,
+  ContextMenuContent,
 } from '@/components/ui/context-menu.tsx'
+import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
 }
+
+/** Todo plausibly the following 2 things should be "actions" too
+ * and would be nice to have the mechanism to invoke arbitrary action?
+ *   e.g. have a custom event like 'trigger-action' with appropriate deps
+ *
+ * but like it's context independent? so when we fire an action like that, it shouldn't matter if it's "active"
+ * bc we're providing deps?
+ *
+ * alternative interpretation is that we can just fire them by name and context, and then assume the deps are already there
+ *  - nvm, here we're not changing selected block, so if we rely on pre-filled deps, we'll end pu with incorrect id
+ *
+ */
 
 const copyBlockId = (block: Block) => {
   navigator.clipboard.writeText(block.id)
@@ -44,11 +59,11 @@ const BlockBullet = ({block}: { block: Block }) => {
   const [isCollapsed] = block.useProperty<boolean>('system:collapsed', false)
   const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
   const [dialogOpen, setDialogOpen] = useState(false)
-  
+
   if (!blockData) return null
 
   const hasChildren = blockData.childIds.length > 0
-  
+
   const openGenerateRendererDialog = () => {
     setDialogOpen(true)
   }
@@ -83,7 +98,7 @@ const BlockBullet = ({block}: { block: Block }) => {
             >
               Zoom In
             </ContextMenuItem>
-            <ContextMenuSeparator className="h-px bg-border my-1" />
+            <ContextMenuSeparator className="h-px bg-border my-1"/>
             <ContextMenuItem
               className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
               onSelect={openGenerateRendererDialog}
@@ -99,8 +114,8 @@ const BlockBullet = ({block}: { block: Block }) => {
           </ContextMenuContent>
         </ContextMenuPortal>
       </ContextMenu>
-      
-      <GenerateRendererDialog 
+
+      <GenerateRendererDialog
         block={block}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
@@ -118,8 +133,8 @@ export function DefaultBlockRenderer(
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
-  const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
-  const [isEditing, setIsEditing] = useIsEditing()
+  const [showProperties] = block.useProperty<boolean>('system:showProperties', false)
+  const [isEditing] = useIsEditing()
   const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
@@ -135,79 +150,11 @@ export function DefaultBlockRenderer(
   const inFocus = focusedBlockId === block.id
   if (inFocus && !seen) setSeen(true)
 
-  useEffect(() => {
-    if (inFocus
-      /**
-       * todo, doing this so the edit mode stuff handles focus, but I don't love it, see if there is a better way
-       * that doesn't create a logical dependency between the two
-       */
-      && !isEditing
-    ) {
-      ref.current?.focus()
-    }
-  }, [inFocus, isEditing])
+  const shortcutDependencies = useMemo(() => ({block}), [block])
+
+  useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing)
 
   if (!blockData) return null
-
-  const handleKeyDown = async (e: KeyboardEvent<HTMLDivElement>) => {
-    if (isEditing) return
-
-    // todo shortcut customization/commands
-    if (e.key === 'ArrowUp' && e.metaKey && e.shiftKey) {
-      e.stopPropagation()
-      block.changeOrder(-1)
-    } else if (e.key === 'ArrowDown' && e.metaKey && e.shiftKey) {
-      e.stopPropagation()
-      block.changeOrder(1)
-    } else if (e.key === 'ArrowDown' || e.key === 'k') {
-      e.stopPropagation()
-      e.preventDefault()
-
-      const nextVisible = await nextVisibleBlock(block, topLevelBlockId!)
-      if (nextVisible) setFocusedBlockId?.(nextVisible.id)
-    } else if (e.key === 'ArrowUp' || e.key === 'h') {
-      e.stopPropagation()
-      e.preventDefault()
-      const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
-      if (prevVisible) setFocusedBlockId?.(prevVisible.id)
-    } else if (e.key === 'i') {
-      e.preventDefault()
-      e.stopPropagation()
-      setIsEditing(true)
-    } else if (e.key === 'o') {
-      e.preventDefault()
-      e.stopPropagation()
-      const hasUncollapsedChildren = ((blockData?.childIds.length ?? 0) > 0) && !isCollapsed
-      const result = hasUncollapsedChildren || isTopLevel ? await block.createChild({position: 'first'}) : await block.createSiblingBelow()
-      if (result) {
-        setFocusedBlockId(result.id)
-        setIsEditing(true)
-      }
-    } else if (e.key === 't') {
-      // not a deeply though through key mapping
-      e.preventDefault()
-      e.stopPropagation()
-      setShowProperties(!showProperties)
-    } else if (e.key === 'z' && !e.metaKey) { //todo better way to handle cases like this
-      e.preventDefault()
-      e.stopPropagation()
-      setIsCollapsed(!isCollapsed)
-    } else if (e.key === 'Tab') {
-      e.preventDefault()
-      e.stopPropagation()
-      if (e.shiftKey) {
-        block.outdent()
-      } else {
-        block.indent()
-      }
-    } else if (e.key === 'Delete') {
-      e.preventDefault()
-      e.stopPropagation()
-      const prevVisible = await previousVisibleBlock(block, topLevelBlockId!)
-      void block.delete()
-      if (prevVisible) setFocusedBlockId?.(prevVisible.id)
-    }
-  }
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     if (!inFocus) return
@@ -270,7 +217,6 @@ export function DefaultBlockRenderer(
         className={`tm-block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''}`}
         data-block-id={block.id}
         tabIndex={0}
-        onKeyDown={handleKeyDown}
         onPaste={handlePaste}
         ref={ref}
       >
