@@ -223,3 +223,7 @@ img {
 html {
   scrollbar-gutter: stable;
 }
+
+.panel {
+  min-width: 25em;
+}

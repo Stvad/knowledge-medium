@@ -3,17 +3,21 @@ import { BlockData, RendererRegistry, BlockRendererProps } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
-import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
+import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
 import { getAllChildrenBlocks, Block } from '@/data/block.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
+import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
+import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
   renderer: RendererBlockRenderer,
+  topLevel: TopLevelRenderer,
   layout: LayoutRenderer,
+  panel: PanelRenderer,
   missingData: MissingDataRenderer,
 }
 

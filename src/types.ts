@@ -60,6 +60,8 @@ export interface BlockContextType {
         id: string
         name: string
     }
+    panelId?: string
+    [key: string]: unknown
 }
 
 export interface User {
