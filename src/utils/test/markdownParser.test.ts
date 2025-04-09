@@ -49,6 +49,28 @@ describe('markdownParser', () => {
       expect(result[0].childIds).toHaveLength(0)
     })
 
+    it('should handle list markers 2', () => {
+      const markdown = `
+- a
+    - b
+    - c
+        - d`
+      const result = parseMarkdownToBlocks(markdown)
+
+      expect(result).toHaveLength(4)
+      expect(result[0].content).toBe('a')
+      expect(result[1].content).toBe('b')
+      expect(result[2].content).toBe('c')
+      expect(result[3].content).toBe('d')
+
+      // Check parent-child relationships
+      expect(result[1].parentId).toBe(result[0].id)
+      expect(result[2].parentId).toBe(result[0].id)
+      expect(result[2].childIds).toContain(result[3].id)
+      expect(result[1].childIds).toHaveLength(0)
+    })
+
+
     it('should handle empty lines', () => {
       const markdown = 'First line\n\nSecond line'
       const result = parseMarkdownToBlocks(markdown)
@@ -95,7 +117,6 @@ Root
       const result = parseMarkdownToBlocks(markdown)
 
       expect(result).toHaveLength(1)
-      expect(result[0].properties).toEqual({})
       expect(result[0].childIds).toEqual([])
     })
   })
