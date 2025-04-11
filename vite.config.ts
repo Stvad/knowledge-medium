@@ -11,7 +11,13 @@ export default defineConfig(({command}) => {
 
     return ({
         plugins: [
-            react(),
+            react({
+                babel: {
+                    plugins: [
+                        "babel-plugin-react-compiler",
+                    ],
+                },
+            }),
             wasm(),
             externalize({
                 externals: [

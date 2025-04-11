@@ -16,7 +16,9 @@ const getInitialBlock = memoize(
       return repo.find(rootDocUrl)
     } else {
       const blockMap = await importState({blocks: getExampleBlocks()}, repo)
-      return blockMap.values().next().value!
+      const block = blockMap.values().next().value!
+      document.location.hash = block.id
+      return block
     }
   },
   (_, rootUrl) => rootUrl,
@@ -29,13 +31,11 @@ const App = () => {
 
   const rootDocUrl = location.hash?.substring(1)
   const handle = use(getInitialBlock(repo, rootDocUrl))
-  const docId = document.location.hash = handle.id
-
-  const rootBlock = use(getRootBlock(repo.find(docId)))
+  const rootBlock = use(getRootBlock(repo.find(handle.id)))
 
   return (
     <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
-      <BlockComponent blockId={docId}/>
+      <BlockComponent blockId={handle.id}/>
     </BlockContextProvider>
   )
 }

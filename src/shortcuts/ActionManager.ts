@@ -172,7 +172,6 @@ export class ActionManager {
 
   private registerHotkey(binding: ShortcutBinding, action: Action): void {
     const keys = Array.isArray(binding.keys) ? binding.keys : [binding.keys]
-    console.log(`[ShortcutManager] Registering hotkey handler for action: ${action.id}, keys: ${keys}, context: ${action.context}`)
 
     keys.forEach(key => {
       hotkeys(key, (event) => {
@@ -227,7 +226,6 @@ export class ActionManager {
         const bindings = this.bindings.get(actionId) || []
         bindings.forEach(binding => {
           const keys = Array.isArray(binding.keys) ? binding.keys : [binding.keys]
-          console.log(`[ShortcutManager] Unbinding keys for action: ${action.id}, keys: ${keys}`)
           keys.forEach(key => hotkeys.unbind(key))
         })
       }

@@ -4,19 +4,20 @@ import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import type { editor } from 'monaco-editor'
 import { debounce } from 'lodash'
 import { useCallback } from 'react'
+import { useData } from '@/data/block.ts'
 
 type MonacoEditor = editor.IStandaloneCodeEditor
 
 const MonacoContentRenderer = ({ block }: BlockRendererProps) => {
-    const blockData = block.use()
-    if (!blockData) return null
-
+    const blockData = useData(block)
     const onChange = useCallback((value: string | undefined) => {
-        if (value !== undefined && value !== blockData.content) {
+        if (value !== undefined && value !== blockData?.content) {
             block.change(doc => doc.content = value)
         }
     }, [block, blockData])
-    const debouncedOnChange = debounce(onChange, 300)
+
+  if (!blockData) return null
+  const debouncedOnChange = debounce(onChange, 300)
 
     const handleEditorMount = (editor: MonacoEditor, monaco: any) => {
         monaco.languages.typescript.typescriptDefaults.setCompilerOptions({

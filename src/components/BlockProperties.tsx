@@ -1,15 +1,15 @@
-import { Block } from '../data/block'
+import { Block, useData } from '../data/block'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
-import {BlockPropertyValue} from '@/types.ts'
+import { BlockPropertyValue } from '@/types.ts'
 
 interface BlockPropertiesProps {
   block: Block;
 }
 
 export function BlockProperties({ block }: BlockPropertiesProps) {
-  const blockData = block.use()
+  const blockData = useData(block)
   if (!blockData) return null
   
   const properties = blockData.properties || {}

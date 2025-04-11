@@ -7,7 +7,7 @@ import { useIsEditing } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block, useData, useProperty } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -55,9 +55,9 @@ const zoomIn = (block: Block) => {
 }
 
 const BlockBullet = ({block}: { block: Block }) => {
-  const blockData = block.use()
-  const [isCollapsed] = block.useProperty<boolean>('system:collapsed', false)
-  const [showProperties, setShowProperties] = block.useProperty<boolean>('system:showProperties', false)
+  const blockData = useData(block)
+  const [isCollapsed] = useProperty<boolean>(block, 'system:collapsed', false)
+  const [showProperties, setShowProperties] = useProperty<boolean>(block, 'system:showProperties', false)
   const [dialogOpen, setDialogOpen] = useState(false)
 
   if (!blockData) return null
@@ -133,16 +133,16 @@ export function DefaultBlockRenderer(
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
-  const [showProperties] = block.useProperty<boolean>('system:showProperties', false)
+  const [showProperties] = useProperty<boolean>(block, 'system:showProperties', false)
   const [isEditing] = useIsEditing()
-  const [isCollapsed, setIsCollapsed] = block.useProperty<boolean>('system:collapsed', false)
+  const [isCollapsed, setIsCollapsed] = useProperty<boolean>(block, 'system:collapsed', false)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
   const [previousLoadTime] = useUIStateProperty<number>('previousLoadTime')
   const [seen, setSeen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const isMobile = useIsMobile()
-  const blockData = block.use()
+  const blockData = useData(block)
   // @ts-expect-error This seems like type bug
   const isHovering = useHoverDirty(ref)
   const isTopLevel = block.id === topLevelBlockId

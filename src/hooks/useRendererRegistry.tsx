@@ -6,7 +6,7 @@ import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRender
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
-import { getAllChildrenBlocks, Block } from '@/data/block.ts'
+import { getAllChildrenBlocks, Block, useData } from '@/data/block.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
@@ -29,7 +29,7 @@ export const refreshRendererRegistry = async () => {
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {
-  const blockData = block?.use()
+  const blockData = useData(block)
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
   const repo = useRepo()
   const {rootBlockId} = useBlockContext()

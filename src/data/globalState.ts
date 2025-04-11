@@ -1,10 +1,11 @@
 import { useBlockContext } from '@/context/block.tsx'
-import { Block } from '@/data/block.ts'
+import { Block, useProperty } from '@/data/block.ts'
 import { use } from 'react'
-import { BlockPropertyValue, User } from '@/types.ts'
+import { BlockPropertyValue, User, BlockContextType } from '@/types.ts'
 import { memoize } from 'lodash'
 import { useRepo } from '@/context/repo.tsx'
 import { useUser } from '@/components/Login.tsx'
+import { Repo } from '@/data/repo.ts'
 
 /**
  * One of core principles of the system is to store all state within the system
@@ -20,7 +21,7 @@ export function useUIStateProperty<T extends BlockPropertyValue>(name: string, i
 export function useUIStateProperty<T extends BlockPropertyValue>(name: string, initialValue?: T) {
   const block = useUIStateBlock()
   // todo properties should supply their own change scope
-  return block.useProperty(name, initialValue, 'ui-state')
+  return useProperty(block, name, initialValue, 'ui-state')
 }
 
 
@@ -28,34 +29,33 @@ export function useUIStateProperty<T extends BlockPropertyValue>(name: string, i
  * Gets or creates the UI state block, which is located at root > "system" > "ui-state"
  */
 export function useUIStateBlock(): Block {
-  const {rootBlockId, panelId} = useBlockContext()
+  const context = useBlockContext()
   const repo = useRepo()
   const user = useUser()
 
-  return use(getUIStateBlock(repo.find(rootBlockId!), user, panelId))
+  return use(getUIStateBlock(repo, repo.find(context.rootBlockId!), user, context))
 }
 
-const panelsPathPart = 'panels'
 /**
  * Memoized for using with `use` react function
  */
-export const getUIStateBlock = memoize(async (rootBlock: Block, user: User, panelId?: string): Promise<Block> => {
-  const userBlock = await getUserBlock(rootBlock, user)
-  const basePath = 'ui-state'
-  const contentPath = panelId ? [basePath, panelsPathPart, panelId] : basePath
-  return userBlock.childByContent(contentPath, true)
-}, (rootBlock, user, panelId) => rootBlock.id + user.id + panelId)
+export const getUIStateBlock = memoize(
+  async (repo: Repo, rootBlock: Block, user: User, context: BlockContextType): Promise<Block> => {
+    const userBlock = await getUserBlock(rootBlock, user)
+
+    if (context.panelId) {
+      return repo.find(context.panelId)
+    }
+
+    return userBlock.childByContent('ui-state', true)
+  }, (_, rootBlock, user, context) => rootBlock.id + user.id + context.panelId)
 
 export const getUserBlock = memoize(
   async (rootBlock: Block, user: User): Promise<Block> => rootBlock.childByContent(['system', 'users', user.id], true),
   (rootBlock, user) => rootBlock.id + user.id)
 
-export const getPanelBlocks = memoize(
-  async (uiStateBlock: Block, initMainPanel: {name: string, topLevelBlockId: string}): Promise<Block[]> => {
-    const panelsBlock = await uiStateBlock.childByContent([panelsPathPart], true)
-    const mainPanelBlock = await panelsBlock.childByContent([initMainPanel.name], true)
-    mainPanelBlock.setProperty('topLevelBlockId', initMainPanel.topLevelBlockId)
 
-    return panelsBlock.children()
-  },
-  (_, initMainPanel) => initMainPanel.topLevelBlockId)
+const panelsPathPart = 'panels'
+export const getPanelsBlock = memoize(
+  async (uiStateBlock: Block): Promise<Block> => uiStateBlock.childByContent([panelsPathPart], true),
+  (uiBlock) => uiBlock.id)

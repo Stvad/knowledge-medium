@@ -1,29 +1,41 @@
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useUIStateBlock, getPanelBlocks } from '@/data/globalState.ts'
-import { use } from 'react'
+import { useUIStateBlock, getPanelsBlock } from '@/data/globalState.ts'
+import { use, useEffect } from 'react'
+import { useChildren } from '@/data/block.ts'
 
 const mainPanelId = 'main'
 
 export function LayoutRenderer({block}: BlockRendererProps) {
   const uiBlock = useUIStateBlock()
-  // todo refreshing
-  const panels = use(
-    getPanelBlocks(uiBlock, {name: mainPanelId, topLevelBlockId: block.id}),
-  )
+  const panelBlock = use(getPanelsBlock(uiBlock))
+
+  useEffect(() => {
+    (async () => {
+      /** todo this is a clutch rn, the overall navigation story is under-baked
+       * it's plausible to me that each panel should have it's own navigation stack
+       *
+       * having an "open in main panel" action is useful though
+       *
+       * though for page URL to stay meaningful,
+       * we probably want some sort of story where changing it navigates "main" panel
+       */
+      const mainPanelBlock = await panelBlock.childByContent([mainPanelId], true)
+      mainPanelBlock.setProperty('topLevelBlockId', block.id)
+
+    })()
+  }, [block.id])
+
+  const panelBlocks = useChildren(panelBlock)
 
   return <div className={'layout flex flex-row flex-grow'}>
-    {panels.map((panel) => {
-      const blockData = panel.dataSync()! //todo
-      if (!blockData) return null
-      const panelId = blockData.content
-      const topLevelBlockId = blockData.properties.topLevelBlockId as string
+    {panelBlocks.map((panel) => {
 
       return <NestedBlockContextProvider
-        overrides={{topLevel: true, panelId: panelId}} key={panelId}
+        overrides={{topLevel: true, panelId: panel.id}} key={panel.id}
       >
-        <BlockComponent blockId={topLevelBlockId ?? block.id}/>
+        <BlockComponent blockId={panel.id}/>
       </NestedBlockContextProvider>
     })}
   </div>

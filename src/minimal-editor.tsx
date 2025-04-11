@@ -4,6 +4,7 @@ import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { RepoProvider, useRepo } from '@/context/repo.tsx'
 import { Login } from '@/components/Login.tsx'
 import { undoRedoManager } from '@/data/repoInstance.ts'
+import { useData } from '@/data/block.ts'
 
 const rootDocUrl = `${document.location.hash.substring(1)}`
 
@@ -15,7 +16,7 @@ function BasicEditor({url}: { url: string }) {
   const repo = useRepo()
   const block = repo.find(url)
 
-  const doc = block.use()
+  const doc = useData(block)
 
   return <textarea value={doc?.content} onChange={(e) => {
     block.change(doc => {

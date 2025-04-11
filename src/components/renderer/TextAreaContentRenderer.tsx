@@ -1,7 +1,7 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useCallback, useMemo } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block, useData } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { updateText } from '@automerge/automerge/next'
 import { debounce } from 'lodash'
@@ -37,7 +37,7 @@ export const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaEle
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
-  const blockData = block.use()
+  const blockData = useData(block)
   const [localContent, setLocalContent] = useState(blockData?.content || '')
   const [, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)

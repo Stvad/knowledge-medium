@@ -63,7 +63,6 @@ export class Block {
     const doc = await this.data()
     if (!doc?.childIds?.length) return []
     
-    // Map each child ID to its Block instance
     return Promise.all(doc.childIds.map(childId => this.repo.find(childId)))
   }
 
@@ -286,30 +285,6 @@ export class Block {
     return newBlock.childByContentPath(remainingPath, createIfNotExists);
   }
 
-  /**
-   * React hook for accessing the block's data. For use only in React components.
-   */
-  use() {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    return useDocument<BlockData>(this.id)[0]
-  }
-
-  useProperty<T extends BlockPropertyValue>(name: string): [T | undefined, (value: T) => void];
-  useProperty<T extends BlockPropertyValue>(name: string, initialValue: T, scope?: string): [T, (value: T) => void];
-  useProperty<T extends BlockPropertyValue>(name: string, initialValue?: T, scope?: string) {
-    const doc = this.use()
-    const value = (doc?.properties[name] ?? initialValue) as T | undefined
-
-    //todo un-hardcode this
-    // property should specify the scope
-    const propertyScope = scope ?? name.startsWith('system:') ? 'ui-state' : undefined
-    const setValue = useCallback((newValue: T) => {
-      this.change((doc) => doc.properties[name] = newValue, {scope: propertyScope})
-    }, [this, name, scope])
-
-    return [value, setValue]
-  }
-
   async getProperty<T extends BlockPropertyValue>(name: string): Promise<T | undefined> {
     const doc = await this.data()
     if (!doc) return undefined
@@ -459,3 +434,29 @@ export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
 
   return [...directChildren, ...childBlockChildren.flat()]
 }
+
+export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
+
+export function useProperty<T extends BlockPropertyValue>(block: Block, name: string): [T | undefined, (value: T) => void];
+export function useProperty<T extends BlockPropertyValue>(block: Block, name: string, initialValue: T, scope?: string): [T, (value: T) => void];
+export function useProperty <T extends BlockPropertyValue>(block: Block, name: string, initialValue?: T, scope?: string) {
+  const doc = useData(block)
+  const value = (doc?.properties[name] ?? initialValue) as T | undefined
+
+  //todo un-hardcode this
+  // property should specify the scope
+  const propertyScope = scope ?? name.startsWith('system:') ? 'ui-state' : undefined
+  const setValue = useCallback((newValue: T) => {
+    block.change((doc) => doc.properties[name] = newValue, {scope: propertyScope})
+  }, [block, name, scope])
+
+  return [value, setValue]
+}
+
+export function useChildren(block: Block): Block[] {
+  const doc = useData(block)
+  if (!doc?.childIds?.length) return []
+
+  return doc.childIds.map(childId => block.repo.find(childId))
+}
+

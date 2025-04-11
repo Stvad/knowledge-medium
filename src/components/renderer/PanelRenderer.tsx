@@ -1,7 +1,7 @@
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useUIStateProperty } from '@/data/globalState.ts'
+import { useProperty } from '@/data/block.ts'
 
 /**
  * This is like this to avoid re-rending on context changing bc of new object creation
@@ -10,15 +10,14 @@ import { useUIStateProperty } from '@/data/globalState.ts'
 const CONTEXT_OVERRIDE = {topLevel: false}
 
 export function PanelRenderer({block}: BlockRendererProps) {
-  const [topLevelBlockId,] = useUIStateProperty<string>('topLevelBlockId')
-
+  const [topLevelBlockId] = useProperty<string>(block, 'topLevelBlockId')
 
   return (
-    <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
-      <div className="panel max-w-full flex-grow">
-        <BlockComponent blockId={topLevelBlockId ?? block.id}/>
-      </div>
-    </NestedBlockContextProvider>
+    <div className="panel max-w-full flex-grow">
+      <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
+        <BlockComponent blockId={topLevelBlockId || block.id}/>
+      </NestedBlockContextProvider>
+    </div>
   )
 }
 

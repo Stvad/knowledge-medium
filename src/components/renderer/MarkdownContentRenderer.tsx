@@ -4,6 +4,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRef, MouseEvent, TouchEvent } from 'react'
+import { useData } from '@/data/block.ts'
 
 function getOffsetRelativeToParent(parent: HTMLElement, targetNode: Node, offset: number): number {
   let totalOffset = 0
@@ -86,7 +87,7 @@ const isSwipe = (touchEnd: Touch, touchStart: Touch) => {
 }
 
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
-  const blockData = block.use()
+  const blockData = useData(block)
   const [, setIsEditing] = useIsEditing()
   const [, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
   const [, setSelection] = useUIStateProperty<SelectionState>('selection')
