@@ -5,10 +5,6 @@ import { useProperty, useData } from '@/data/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { X } from 'lucide-react'
 
-/**
- * This is like this to avoid re-rending on context changing bc of new object creation
- * Plausibly over-optimizing, but wanted to keep an example/reminder on this.
- */
 const CONTEXT_OVERRIDE = {topLevel: false}
 
 export function PanelRenderer({block}: BlockRendererProps) {
@@ -32,14 +28,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
         <Button
           variant="ghost"
           size="icon"
-          className="absolute top-1 right-1 h-6 w-6 z-10 text-muted-foreground hover:text-foreground"
+          className="absolute top-1 right-0.5 h-6 w-6 z-10 text-muted-foreground hover:text-foreground"
           onClick={handleClose}
           aria-label="Close panel"
         >
           <X className="h-4 w-4" />
         </Button>
       )}
-      <div className="flex-grow overflow-y-auto">
+      <div className="flex-grow overflow-y-auto scrollbar-none">
         <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
           <BlockComponent blockId={topLevelBlockId}/>
         </NestedBlockContextProvider>

@@ -58,8 +58,8 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
   return (
     <>
       <CommandPalette/>
-      <div className="min-h-screen bg-background text-foreground">
-        <div className="container mx-0 py-4 max-w-full">
+      <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
+        <div className="container mx-0 py-4 max-w-full flex flex-col flex-grow overflow-hidden">
           <DocumentStateManagement docUrl={block.id}/>
           <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
             <BlockComponent blockId={block.id}/>
