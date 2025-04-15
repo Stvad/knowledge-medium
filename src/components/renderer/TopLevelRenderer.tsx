@@ -1,4 +1,4 @@
-import { DocumentStateManagement } from '@/components/DocumentStateManagement.tsx'
+import { Header } from '@/components/Header.tsx'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
@@ -59,8 +59,8 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
     <>
       <CommandPalette/>
       <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
-        <div className="container mx-0 py-4 max-w-full flex flex-col flex-grow overflow-hidden">
-          <DocumentStateManagement docUrl={block.id}/>
+        <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-2">
+          <Header/>
           <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
             <BlockComponent blockId={block.id}/>
           </NestedBlockContextProvider>

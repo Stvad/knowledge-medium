@@ -1,9 +1,10 @@
 import { actionManager as defaultActionManager, ActionManager } from './ActionManager.ts'
-import { BlockShortcutDependencies, EditModeDependencies, Action, ActionContextTypes } from './types'
-import { previousVisibleBlock, nextVisibleBlock, defaultChangeScope, Block } from '@/data/block.ts'
+import { BlockShortcutDependencies, EditModeDependencies, Action, ActionContextTypes, BaseShortcutDependencies } from './types'
+import { previousVisibleBlock, nextVisibleBlock, defaultChangeScope, Block, getAllChildrenBlocks, getRootBlock } from '@/data/block.ts'
 import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
 import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
+import { importState } from '@/utils/state.ts'
 
 const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
   uiStateBlock.setProperty('focusedBlockId', id, 'ui-state')
@@ -406,4 +407,59 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'normal.' + moveBlockDown.id,
     context: ActionContextTypes.NORMAL_MODE,
   } as Action<typeof ActionContextTypes.NORMAL_MODE>)
+
+  actionManager.registerAction({
+    id: 'export_document',
+    description: 'Export current document',
+    context: ActionContextTypes.GLOBAL,
+    handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+
+      const root = await getRootBlock(repo.find(uiStateBlock.id))
+      
+      const children = await getAllChildrenBlocks(root)
+      const blocks = await Promise.all([root, ...children].map(block => block.data()))
+      const data = JSON.stringify({blocks}, null, 2)
+
+      const downloadLink = document.createElement('a')
+      downloadLink.download = `document-state-${new Date().toUTCString()}.json`
+      downloadLink.href = `data:application/json;charset=utf-8,${encodeURIComponent(data)}`
+      downloadLink.click()
+    },
+  })
+
+  actionManager.registerAction({
+    id: 'import_document',
+    description: 'Import document',
+    context: ActionContextTypes.GLOBAL,
+    handler: () => {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = '.json'
+      
+      input.onchange = async (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0]
+        if (!file) return
+
+        const reader = new FileReader()
+        reader.onload = async (e) => {
+          const content = e.target?.result
+          if (typeof content !== 'string') return
+          
+          try {
+            const data = JSON.parse(content)
+            const blockMap = await importState(data, repo)
+            const block = blockMap.values().next().value
+            if (block) {
+              document.location.hash = block.id
+            }
+          } catch (err) {
+            console.error('Failed to import document:', err)
+          }
+        }
+        reader.readAsText(file)
+      }
+
+      input.click()
+    },
+  })
 }
