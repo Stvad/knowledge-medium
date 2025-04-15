@@ -26,6 +26,7 @@ import {
   ContextMenuContent,
 } from '@/components/ui/context-menu.tsx'
 import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
+import { useBlockContext } from '@/context/block.tsx'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -59,6 +60,7 @@ const BlockBullet = ({block}: { block: Block }) => {
   const [isCollapsed] = useProperty<boolean>(block, 'system:collapsed', false)
   const [showProperties, setShowProperties] = useProperty<boolean>(block, 'system:showProperties', false)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const {panelId} = useBlockContext()
 
   if (!blockData) return null
 
@@ -75,7 +77,14 @@ const BlockBullet = ({block}: { block: Block }) => {
           <a
             href={`#${block.id}`}
             className="bullet-link flex items-center justify-center h-6 w-5"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation()
+              // todo this should work for any link, so it again calls for a more general navigation handler
+              if (e.shiftKey) {
+                e.preventDefault()
+                window.dispatchEvent(new CustomEvent('open-panel', { detail: { blockId: block.id, sourcePanelId: panelId} }))
+              }
+            }}
           >
               <span
                 className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
@@ -208,9 +217,9 @@ export function DefaultBlockRenderer(
     )
 
   return (
-    <>
+    <div>
       {/*Todo it's not actually correct to use DefaultContentRenderer here, we need to call BlockComponent, but ask it to not render children? */}
-      {isTopLevel && <div className="pt-2"><Breadcrumbs block={block} Renderer={DefaultContentRenderer}/></div>}
+      {isTopLevel && <Breadcrumbs block={block} Renderer={DefaultContentRenderer}/>}
 
       <Collapsible
         open={!isCollapsed || isTopLevel}
@@ -247,6 +256,6 @@ export function DefaultBlockRenderer(
         )}
 
       </Collapsible>
-    </>
+    </div>
   )
 }

@@ -34,6 +34,9 @@ export class Block {
     return this.handle.doc()
   }
 
+  /**
+   * @deprecated bc automerge-repo is removing it use data() instead
+   */
   dataSync() {
     return this.handle.docSync()
   }
