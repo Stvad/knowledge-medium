@@ -66,7 +66,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // todo actual mobile support/separate renderer
   const panelsToRender = isMobile ? [mainPanelBlock] : panelBlocks
 
-  return <div className={'layout flex flex-row flex-grow overflow-x-auto'}>
+  return <div className={'layout flex flex-row flex-grow overflow-x-auto justify-center'}>
     {panelsToRender.map((panel) => {
 
       return <NestedBlockContextProvider
