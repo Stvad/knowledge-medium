@@ -72,7 +72,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
       return <NestedBlockContextProvider
         overrides={{topLevel: true, panelId: panel.id}} key={panel.id}
       >
-        <div className="panel-container border-l border-border flex-shrink-0 max-w-full px-2 first:border-l-0 first:pl-0">
+        <div className="panel-container border-l border-border flex-grow basis-0 min-w-md max-w-3xl px-2 first:border-l-0 first:pl-0">
           <BlockComponent blockId={panel.id}/>
         </div>
       </NestedBlockContextProvider>
