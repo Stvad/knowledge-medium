@@ -6,6 +6,10 @@ export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | b
 export interface BlockProperties {
     type?: string;
     renderer?: string;  // Reference to another block's document URL for renderer
+    previousLoadTime?: number
+    currentLoadTime?: number
+    'system:collapsed'?: boolean,
+    'system:showProperties'?: boolean,
     [key: string]: BlockPropertyValue;
 }
 
