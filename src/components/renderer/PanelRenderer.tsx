@@ -1,14 +1,15 @@
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useProperty, useData } from '@/data/block.ts'
+import { useData, usePropertyValue } from '@/data/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { X } from 'lucide-react'
+import { topLevelBlockIdProp } from '@/data/properties.ts'
 
 const CONTEXT_OVERRIDE = {topLevel: false}
 
 export function PanelRenderer({block}: BlockRendererProps) {
-  const [topLevelBlockId] = useProperty<string>(block, 'topLevelBlockId')
+  const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
 
   const handleClose = () => {
     block.delete()

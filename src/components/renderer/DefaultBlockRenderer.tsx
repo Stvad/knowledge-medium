@@ -3,11 +3,11 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible.tsx'
-import { useIsEditing } from '@/data/properties.ts'
+import { useIsEditing, showPropertiesProp, isCollapsedProp, sp, np, focusedBlockIdProp } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo } from 'react'
-import { Block, useData, useProperty } from '@/data/block.ts'
+import { Block, useData, usePropertyValue } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -57,8 +57,9 @@ const zoomIn = (block: Block) => {
 
 const BlockBullet = ({block}: { block: Block }) => {
   const blockData = useData(block)
-  const [isCollapsed] = useProperty<boolean>(block, 'system:collapsed', false)
-  const [showProperties, setShowProperties] = useProperty<boolean>(block, 'system:showProperties', false)
+  const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
+  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+
   const [dialogOpen, setDialogOpen] = useState(false)
   const {panelId} = useBlockContext()
 
@@ -142,12 +143,13 @@ export function DefaultBlockRenderer(
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
-  const [showProperties] = useProperty<boolean>(block, 'system:showProperties', false)
   const [isEditing] = useIsEditing()
-  const [isCollapsed, setIsCollapsed] = useProperty<boolean>(block, 'system:collapsed', false)
-  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
-  const [topLevelBlockId] = useUIStateProperty<string>('topLevelBlockId')
-  const [previousLoadTime] = useUIStateProperty<number>('previousLoadTime')
+  const [showProperties] = usePropertyValue(block, showPropertiesProp)
+  const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
+
+  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
+  const [topLevelBlockId] = useUIStateProperty(sp`topLevelBlockId`)
+  const [previousLoadTime] = useUIStateProperty(np`previousLoadTime`)
   const [seen, setSeen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const isMobile = useIsMobile()

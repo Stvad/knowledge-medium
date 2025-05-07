@@ -1,5 +1,5 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
-import { useIsEditing } from '@/data/properties.ts'
+import { useIsEditing, selectionProp, focusedBlockIdProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { Block, useData } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
@@ -41,8 +41,8 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const [localContent, setLocalContent] = useState(blockData?.content || '')
   const [, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty<string | undefined>('focusedBlockId')
-  const [selection, setSelection] = useUIStateProperty<SelectionState>('selection')
+  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
+  const [selection, setSelection] = useUIStateProperty(selectionProp)
 
   // Create dependencies object for shortcuts
   const shortcutDependencies = useMemo(() => ({

@@ -1,5 +1,5 @@
-import { BlockRendererProps, SelectionState } from '@/types.ts'
-import { useIsEditing } from '@/data/properties.ts'
+import { BlockRendererProps } from '@/types.ts'
+import { useIsEditing, focusedBlockIdProp, selectionProp } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useUIStateProperty } from '@/data/globalState'
@@ -89,8 +89,8 @@ const isSwipe = (touchEnd: Touch, touchStart: Touch) => {
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = useData(block)
   const [, setIsEditing] = useIsEditing()
-  const [, setFocusedBlockId] = useUIStateProperty<string>('focusedBlockId')
-  const [, setSelection] = useUIStateProperty<SelectionState>('selection')
+  const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
+  const [, setSelection] = useUIStateProperty(selectionProp)
   const ref = useRef<HTMLDivElement>(null)
 
   const activateEditing = (cursorLocation: number) => {

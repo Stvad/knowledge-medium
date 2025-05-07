@@ -1,16 +1,49 @@
 import { FunctionComponent } from 'react'
 import { Block } from '@/data/block.ts'
 
-export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined | object
+export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined | object | null
+
+export interface BlockProperty {
+    name: string
+    type: string
+    value: BlockPropertyValue
+    changeScope?: string
+}
+
+export interface StringBlockProperty extends BlockProperty {
+    type: 'string'
+    value: string | undefined
+}
+
+export interface NumberBlockProperty extends BlockProperty {
+    type: 'number'
+    value: number | undefined
+}
+
+export interface BooleanBlockProperty extends BlockProperty {
+    type: 'boolean'
+    value: boolean | undefined
+}
+
+export interface ArrayBlockProperty extends BlockProperty {
+    type: 'array'
+    value: Array<BlockPropertyValue> | undefined
+}
+
+export interface ObjectBlockProperty<V extends object> extends BlockProperty {
+    type: 'object'
+    value: V | undefined
+}
 
 export interface BlockProperties {
-    type?: string;
-    renderer?: string;  // Reference to another block's document URL for renderer
-    previousLoadTime?: number
-    currentLoadTime?: number
-    'system:collapsed'?: boolean,
-    'system:showProperties'?: boolean,
-    [key: string]: BlockPropertyValue;
+    type?: StringBlockProperty;
+    // renderer?: string;  // Reference to another block's document URL for renderer
+    previousLoadTime?: NumberBlockProperty
+    // currentLoadTime?: number
+    // 'system:collapsed'?: boolean,
+    // 'system:showProperties'?: boolean,
+
+    [key: string]: BlockProperty | undefined;
 }
 
 // Each block is its own Automerge document
@@ -39,7 +72,6 @@ export interface BlockRenderer extends FunctionComponent<BlockRendererProps> {
     canRender?: (props: BlockRendererProps) => boolean;
     priority?: (props: BlockRendererProps) => number;
 }
-
 
 export interface RendererRegistry {
     [key: string]: BlockRenderer;

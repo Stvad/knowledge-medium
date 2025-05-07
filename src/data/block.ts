@@ -1,16 +1,18 @@
 import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
-import { BlockData, BlockPropertyValue, User } from '@/types'
+import { BlockData, User, BlockProperty } from '@/types'
 import { insertAt, deleteAt } from '@automerge/automerge/next'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { memoize } from 'lodash'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
 import { useCallback } from 'react'
+import { migratePropertyValue, isBlockProperty } from './properties'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
 
 export const defaultChangeScope = 'block-default'
+export const uiChangeScope = 'ui-state'
 
 /**
  * I want to abstract away the details of the storage lay away from the component, so i can plug in jazz.tools or similar later
@@ -65,7 +67,7 @@ export class Block {
   async children(): Promise<Block[]> {
     const doc = await this.data()
     if (!doc?.childIds?.length) return []
-    
+
     return Promise.all(doc.childIds.map(childId => this.repo.find(childId)))
   }
 
@@ -192,9 +194,9 @@ export class Block {
   }
 
   async insertChildren({
-    blocks,
-    position = 'last'
-  }: {
+                         blocks,
+                         position = 'last',
+                       }: {
     blocks: Block[],
     position?: 'first' | 'last' | number
   }) {
@@ -202,7 +204,7 @@ export class Block {
       // Update parent references for all blocks
       blocks.forEach(block => {
         block._updateParentId(this.id)
-      });
+      })
 
       // Insert block IDs at the specified position
       this._change(doc => {
@@ -252,15 +254,15 @@ export class Block {
    */
   async childByContent(contentPath: string | string[], createIfNotExists: true): Promise<Block>;
   async childByContent(contentPath: string | string[], createIfNotExists: boolean = false): Promise<Block | null> {
-    const path = Array.isArray(contentPath) ? contentPath : [contentPath];
-    return this.childByContentPath(path, createIfNotExists);
+    const path = Array.isArray(contentPath) ? contentPath : [contentPath]
+    return this.childByContentPath(path, createIfNotExists)
   }
 
   async childByContentPath(path: string[], createIfNotExists: boolean): Promise<Block | null> {
-    if (path.length === 0) return null;
-    
-    const [currentContent, ...remainingPath] = path;
-    const doc = await this.getDocOrThrow();
+    if (path.length === 0) return null
+
+    const [currentContent, ...remainingPath] = path
+    const doc = await this.getDocOrThrow()
 
     // Search immediate children for match
     for (const childId of doc.childIds) {
@@ -270,32 +272,46 @@ export class Block {
       if (childData?.content === currentContent) {
         // If this is the last item in path, we found our target
         if (remainingPath.length === 0) {
-          return child;
+          return child
         }
         // Otherwise recurse deeper
-        return child.childByContentPath(remainingPath, createIfNotExists);
+        return child.childByContentPath(remainingPath, createIfNotExists)
       }
     }
 
     // No match found
-    if (!createIfNotExists) return null;
+    if (!createIfNotExists) return null
 
     // Create new block and continue recursively if needed
-    const newBlock = await this.createChild({data: {content: currentContent}});
+    const newBlock = await this.createChild({data: {content: currentContent}})
     if (remainingPath.length === 0) {
-      return newBlock;
+      return newBlock
     }
-    return newBlock.childByContentPath(remainingPath, createIfNotExists);
+    return newBlock.childByContentPath(remainingPath, createIfNotExists)
   }
 
-  async getProperty<T extends BlockPropertyValue>(name: string): Promise<T | undefined> {
+  async getProperty<T extends BlockProperty>(name: string): Promise<T | undefined> {
     const doc = await this.data()
     if (!doc) return undefined
-    return doc.properties[name] as T | undefined
+
+    const prop = doc.properties[name]
+    if (!prop) return undefined
+
+    // Migrate on read if needed
+    if (!isBlockProperty(prop)) {
+      return migratePropertyValue(name, prop) as T
+    }
+
+    return prop as T
   }
 
-  setProperty<T extends BlockPropertyValue>(name: string, value: T, scope?: string) {
-    this.change((doc) => doc.properties[name] = value, {scope: scope})
+  setProperty<T extends BlockProperty>(name: string, property: T) {
+    if (!property.name) {
+      property.name = name
+    }
+    this.change((doc) => {
+      doc.properties[name] = property
+    }, {scope: property.changeScope})
   }
 
   _updateParentId = (newParentId: string) =>
@@ -312,9 +328,9 @@ export class Block {
   }
 
   async createChild({
-    data = {},
-    position = 'last'
-  }: {
+                      data = {},
+                      position = 'last',
+                    }: {
     data?: Partial<BlockData>,
     position?: 'first' | 'last' | number
   } = {}) {
@@ -440,20 +456,35 @@ export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
 
 export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
 
-export function useProperty<T extends BlockPropertyValue>(block: Block, name: string): [T | undefined, (value: T) => void];
-export function useProperty<T extends BlockPropertyValue>(block: Block, name: string, initialValue: T, scope?: string): [T, (value: T) => void];
-export function useProperty <T extends BlockPropertyValue>(block: Block, name: string, initialValue?: T, scope?: string) {
+export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
+  const name = config.name
   const doc = useData(block)
-  const value = (doc?.properties[name] ?? initialValue) as T | undefined
+  const rawProperty = doc?.properties[name]
 
-  //todo un-hardcode this
-  // property should specify the scope
-  const propertyScope = scope ?? name.startsWith('system:') ? 'ui-state' : undefined
-  const setValue = useCallback((newValue: T) => {
-    block.change((doc) => doc.properties[name] = newValue, {scope: propertyScope})
-  }, [block, name, scope])
+  // Get the property, migrating if needed
+  const property = rawProperty ?
+    (isBlockProperty(rawProperty) ? rawProperty : migratePropertyValue(name, rawProperty))
+    : config
 
-  return [value, setValue]
+
+  const setProperty = useCallback((newProperty: T) => {
+    block.setProperty(name, newProperty)
+  }, [block, name])
+
+  return [property as T, setProperty]
+}
+
+export function usePropertyValue<T extends BlockProperty>(block: Block, config: T): [T['value'], (value: T['value']) => void] {
+  const [property, setProperty] = useProperty(block, config)
+
+  const setValue = useCallback((newValue: T['value']) => {
+    setProperty({
+      ...property,
+      value: newValue,
+    })
+  }, [property, setProperty])
+
+  return [property.value, setValue]
 }
 
 export function useChildren(block: Block): Block[] {
@@ -462,4 +493,3 @@ export function useChildren(block: Block): Block[] {
 
   return doc.childIds.map(childId => block.repo.find(childId))
 }
-
