@@ -1,13 +1,21 @@
-import { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Block } from '@/data/block';
-import { generateRendererBlock } from '@/services/openrouter';
-import { Loader2 } from 'lucide-react';
+import { useState } from 'react'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Block } from '@/data/block'
+import { generateRendererBlock } from '@/services/openrouter'
+import { Loader2 } from 'lucide-react'
+import { rendererProp } from '@/data/properties.ts'
 
 interface GenerateRendererDialogProps {
   block: Block;
@@ -37,10 +45,8 @@ export function GenerateRendererDialog({ block, open, onOpenChange }: GenerateRe
         customPrompt: customPrompt || undefined
       });
 
-      block.change(b => {
-        b.properties.renderer = rendererBlock.id;
-      })
-      
+      block.setProperty({...rendererProp, value: rendererBlock.id});
+
       setGeneratedBlockId(rendererBlock.id);
       
       // Close dialog after a short delay to show success state

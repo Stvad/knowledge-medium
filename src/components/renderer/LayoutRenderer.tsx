@@ -7,6 +7,7 @@ import { useChildren, Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
+import { topLevelBlockIdProp, typeProp, fromList } from '@/data/properties.ts'
 
 const mainPanelName = 'main'
 
@@ -31,8 +32,8 @@ export function LayoutRenderer({block}: BlockRendererProps) {
      * though for page URL to stay meaningful,
      * we probably want some sort of story where changing it navigates "main" panel
      */
-    mainPanelBlock.setProperty('type', 'panel')
-    mainPanelBlock.setProperty('topLevelBlockId', block.id)
+    mainPanelBlock.setProperty({...typeProp, value: 'panel'})
+    mainPanelBlock.setProperty({...topLevelBlockIdProp, value: block.id})
       // todo a more ergonomic way to do the init?
   }, [block.id, mainPanelBlock])
 
@@ -46,10 +47,10 @@ export function LayoutRenderer({block}: BlockRendererProps) {
       await panelBlock.createChild({
         data: {
           content: blockToOpenId,
-          properties: {
-            type: 'panel',
-            topLevelBlockId: blockToOpenId,
-          },
+          properties: fromList(
+            {...typeProp, value: 'panel'},
+            {...topLevelBlockIdProp, value: blockToOpenId},
+          )
         },
         position: afterPanelIdx === -1 ? 'last' : afterPanelIdx + 1,
       })

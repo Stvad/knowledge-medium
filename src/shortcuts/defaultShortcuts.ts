@@ -1,17 +1,37 @@
 import { actionManager as defaultActionManager, ActionManager } from './ActionManager.ts'
-import { BlockShortcutDependencies, EditModeDependencies, Action, ActionContextTypes, BaseShortcutDependencies } from './types'
-import { previousVisibleBlock, nextVisibleBlock, defaultChangeScope, Block, getAllChildrenBlocks, getRootBlock } from '@/data/block.ts'
+import {
+  BlockShortcutDependencies,
+  EditModeDependencies,
+  Action,
+  ActionContextTypes,
+  BaseShortcutDependencies,
+} from './types'
+import {
+  previousVisibleBlock,
+  nextVisibleBlock,
+  defaultChangeScope,
+  Block,
+  getAllChildrenBlocks,
+  getRootBlock,
+} from '@/data/block.ts'
 import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
 import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
 import { importState } from '@/utils/state.ts'
+import {
+  focusedBlockIdProp,
+  isEditingProp,
+  isCollapsedProp,
+  showPropertiesProp,
+  topLevelBlockIdProp,
+} from '@/data/properties.ts'
 
 const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
-  uiStateBlock.setProperty('focusedBlockId', id, 'ui-state')
+  uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
 }
 
 const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
-  uiStateBlock.setProperty('isEditing', editing, 'ui-state')
+  uiStateBlock.setProperty({...isEditingProp, value: editing})
 }
 
 export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
@@ -60,23 +80,23 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     context: ActionContextTypes.GLOBAL,
     handler: () => {
       // No-op: Logic is handled directly in CommandPalette's runCommand
-      console.log('[Action:open_settings] Triggered. Dialog opening handled by CommandPalette.');
+      console.log('[Action:open_settings] Triggered. Dialog opening handled by CommandPalette.')
 
       // todo this is not good and we should move towards something like "popup managed by layout renderer"
       // and we pass a block to render to it
     },
-  });
+  })
 
   actionManager.registerAction({
     id: 'refresh_renderers',
     description: 'Refresh Renderer Registry',
     context: ActionContextTypes.GLOBAL,
     handler: () => {
-      refreshRendererRegistry();
-      console.log("Renderer registry refreshed.");
+      refreshRendererRegistry()
+      console.log('Renderer registry refreshed.')
     },
     // No default binding
-  });
+  })
 
   // Normal mode shortcuts
   actionManager.registerAction({
@@ -87,7 +107,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
       const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
@@ -106,7 +126,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
@@ -140,8 +160,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block} = deps
       if (!block) return
 
-      const isCollapsed = await block.getProperty<boolean>('system:collapsed')
-      block.setProperty('system:collapsed', !isCollapsed)
+      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+      block.setProperty({...isCollapsedProp, value: !isCollapsed})
     },
     defaultBinding: {
       keys: 'z',
@@ -156,8 +176,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block} = deps
       if (!block) return
 
-      const showProperties = await block.getProperty<boolean>('system:showProperties')
-      block.setProperty('system:showProperties', !showProperties)
+      const showProperties = (await block.getProperty(showPropertiesProp))?.value
+      block.setProperty({...showPropertiesProp, value: !showProperties})
     },
     defaultBinding: {
       keys: 't',
@@ -206,7 +226,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
@@ -226,9 +246,9 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
-      const isCollapsed = await block.getProperty<boolean>('system:collapsed')
+      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
       const hasChildren = await block.hasChildren()
       const isTopLevel = block.id === topLevelBlockId
 
@@ -264,9 +284,9 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, textarea, uiStateBlock} = deps
       if (!block || !textarea || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
-      const isCollapsed = await block.getProperty<boolean>('system:collapsed')
+      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
       const isTopLevel = block.id === topLevelBlockId
 
       // Case 1: Cursor is in middle of text
@@ -302,7 +322,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, textarea, uiStateBlock} = deps
       if (!block || !textarea || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
       if (textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
@@ -326,7 +346,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, textarea, uiStateBlock} = deps
       if (!block || !textarea || !uiStateBlock) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
       if (textarea.selectionStart === textarea.value.length &&
@@ -350,7 +370,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const blockData = await block.data()
       if (!(blockData?.content === '')) return
 
-      const topLevelBlockId = await uiStateBlock.getProperty<string>('topLevelBlockId')
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
@@ -415,7 +435,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
 
       const root = await getRootBlock(repo.find(uiStateBlock.id))
-      
+
       const children = await getAllChildrenBlocks(root)
       const blocks = await Promise.all([root, ...children].map(block => block.data()))
       const data = JSON.stringify({blocks}, null, 2)
@@ -435,7 +455,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const input = document.createElement('input')
       input.type = 'file'
       input.accept = '.json'
-      
+
       input.onchange = async (e) => {
         const file = (e.target as HTMLInputElement).files?.[0]
         if (!file) return
@@ -444,7 +464,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         reader.onload = async (e) => {
           const content = e.target?.result
           if (typeof content !== 'string') return
-          
+
           try {
             const data = JSON.parse(content)
             const blockMap = await importState(data, repo)

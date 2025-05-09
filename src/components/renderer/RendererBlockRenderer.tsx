@@ -54,5 +54,5 @@ const MonacoContentRenderer = ({ block }: BlockRendererProps) => {
 export const RendererBlockRenderer: BlockRenderer = (props: BlockRendererProps) =>
     <DefaultBlockRenderer {...props} ContentRenderer={MonacoContentRenderer} />
 
-RendererBlockRenderer.canRender = ({block}: BlockRendererProps) => block.dataSync()?.properties.type === 'renderer'
+RendererBlockRenderer.canRender = ({block}: BlockRendererProps) => block.dataSync()?.properties.type?.value === 'renderer'
 RendererBlockRenderer.priority = () => 5

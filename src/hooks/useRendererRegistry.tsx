@@ -1,16 +1,17 @@
 import { useState, useEffect } from 'react'
-import { BlockData, RendererRegistry, BlockRendererProps } from '../types'
+import { BlockData, RendererRegistry, BlockRendererProps, StringBlockProperty } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
-import { getAllChildrenBlocks, Block, useData } from '@/data/block.ts'
+import { getAllChildrenBlocks, Block, usePropertyValue } from '@/data/block.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
+import { rendererProp } from '@/data/properties.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
@@ -29,7 +30,7 @@ export const refreshRendererRegistry = async () => {
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {
-  const blockData = useData(block)
+  const [rendererKey,] = usePropertyValue(block, rendererProp)
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
   const repo = useRepo()
   const {rootBlockId} = useBlockContext()
@@ -50,8 +51,8 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
     return () => window.removeEventListener('renderer-registry-update', reloadRegistry as EventListener)
   }, [])
 
-  if (blockData?.properties?.renderer && registry[blockData.properties.renderer]) {
-    return registry[blockData.properties.renderer]
+  if (rendererKey && registry[rendererKey]) {
+    return registry[rendererKey]
   }
 
   /**
@@ -84,9 +85,9 @@ const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generat
       const DynamicComp = await wrappedComponentFromModule(block.content)
       if (DynamicComp) {
         newRegistry[block.id] = DynamicComp
-        if (block.properties.rendererName) {
-          //todo
-          newRegistry[block.properties.rendererName as string] = DynamicComp
+        const rendererNameProp = block.properties.rendererName as StringBlockProperty | undefined
+        if (rendererNameProp?.value) {
+          newRegistry[rendererNameProp.value] = DynamicComp
         }
       }
     } catch (error) {
@@ -100,5 +101,5 @@ const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
   const childrenBlocks = await getAllChildrenBlocks(rootBlock)
   const blockData = await Promise.all(childrenBlocks.map(b => b.data() as Promise<BlockData>))
 
-  return blockData.filter(block => block.properties.type === 'renderer')
+  return blockData.filter(block => block.properties.type?.value === 'renderer')
 }

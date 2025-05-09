@@ -11,6 +11,7 @@ import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
 import { Block } from '@/data/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
+import { numberProperty } from '@/data/properties.ts'
 
 // todo this is kind of a random place for this, I think a more principled way to do this is to have
 // on-load hook and fire this there
@@ -18,11 +19,11 @@ import { useUIStateBlock } from '@/data/globalState.ts'
 // how do they override the behavior in case of event based approach?
 const updateLoadTimes = memoize((uiStateBlock: Block) => {
   uiStateBlock.change(doc => {
-    doc.properties.previousLoadTime = doc.properties.currentLoadTime ? doc.properties.currentLoadTime : 0
-    doc.properties.currentLoadTime = Date.now()
+    const currentLoadTime = doc.properties.currentLoadTime?.value as number?? 0
+    doc.properties.previousLoadTime = numberProperty('previousLoadTime', currentLoadTime)
+    doc.properties.currentLoadTime = numberProperty('currentLoadTime', Date.now())
   })
 }, () => true)
-
 
 /**
  * This is like this to avoid re-rending on context changing bc of new object creation

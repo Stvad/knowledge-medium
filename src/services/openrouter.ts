@@ -1,8 +1,16 @@
 import { Block, getRootBlock } from '@/data/block'
 import { getUserBlock } from '@/data/globalState'
-import { User } from '@/types'
+import { User, StringBlockProperty } from '@/types'
 import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
 import { clientLocalSettings } from '@/utils/ClientLocalSettings'
+import {
+  baseUrlProp,
+  modelProp,
+  typeProp,
+  rendererNameProp,
+  sourceBlockIdProp,
+  createdAtProp, fromList,
+} from '@/data/properties'
 
 interface OpenRouterConfig {
   apiKey: string;
@@ -53,8 +61,8 @@ export const getOpenRouterConfig = async (rootBlock: Block, user: User): Promise
   const blockData = await configBlock.data()
 
   return {
-    baseUrl: blockData?.properties['baseUrl'] as string || 'https://openrouter.ai/api/v1',
-    model: blockData?.properties['model'] as string || 'anthropic/claude-3.7-sonnet:beta',
+    baseUrl: (blockData?.properties['baseUrl'] as StringBlockProperty)?.value ?? 'https://openrouter.ai/api/v1',
+    model: (blockData?.properties['model'] as StringBlockProperty)?.value ?? 'anthropic/claude-3.7-sonnet:beta',
     apiKey: clientLocalSettings.getString(LOCALSTORAGE_API_KEY, ''),
   }
 }
@@ -77,11 +85,8 @@ export const saveOpenRouterConfig = async (
   saveOpenRouterApiKey(config.apiKey)
   const configBlock = await getOpenRouterConfigBlock(rootBlock, user)
 
-  // Update property directly using change method
-  configBlock.change(doc => {
-    doc.properties['baseUrl'] = config.baseUrl
-    doc.properties['model'] = config.model
-  }, {scope: 'plugin-settings'})
+  configBlock.setProperty({...baseUrlProp, value: config.baseUrl})
+  configBlock.setProperty({...modelProp, value: config.model})
 }
 
 /**
@@ -108,12 +113,12 @@ export const generateRendererBlock = async (
   const rendererBlock = await renderersBlock.createChild({
     data: {
       content: rendererCode,
-      properties: {
-        type: 'renderer',
-        rendererName: options.rendererName || `custom-${Date.now()}`,
-        sourceBlockId: block.id,
-        createdAt: Date.now(),
-      },
+      properties: fromList(
+        {...typeProp, value: 'renderer'},
+        {...rendererNameProp, value: options.rendererName || `custom-${Date.now()}`},
+        {...sourceBlockIdProp, value: block.id},
+        {...createdAtProp, value: Date.now()},
+      ),
     },
   })
 

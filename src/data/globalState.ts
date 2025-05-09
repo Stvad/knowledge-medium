@@ -6,7 +6,8 @@ import { memoize } from 'lodash'
 import { useRepo } from '@/context/repo.tsx'
 import { useUser } from '@/components/Login.tsx'
 import { Repo } from '@/data/repo.ts'
-import { uiChangeScope } from '@/data/block.ts'
+
+import { uiChangeScope } from '@/data/properties.ts'
 
 /**
  * One of core principles of the system is to store all state within the system

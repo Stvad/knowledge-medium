@@ -12,7 +12,6 @@ export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
 
 export const defaultChangeScope = 'block-default'
-export const uiChangeScope = 'ui-state'
 
 /**
  * I want to abstract away the details of the storage lay away from the component, so i can plug in jazz.tools or similar later
@@ -290,27 +289,25 @@ export class Block {
     return newBlock.childByContentPath(remainingPath, createIfNotExists)
   }
 
-  async getProperty<T extends BlockProperty>(name: string): Promise<T | undefined> {
+  async getProperty<T extends BlockProperty>(key: string | T): Promise<T | undefined> {
+    const propName = typeof key === 'string' ? key : key.name
     const doc = await this.data()
     if (!doc) return undefined
 
-    const prop = doc.properties[name]
+    const prop = doc.properties[propName]
     if (!prop) return undefined
 
     // Migrate on read if needed
     if (!isBlockProperty(prop)) {
-      return migratePropertyValue(name, prop) as T
+      return migratePropertyValue(propName, prop) as T
     }
 
     return prop as T
   }
 
-  setProperty<T extends BlockProperty>(name: string, property: T) {
-    if (!property.name) {
-      property.name = name
-    }
+  setProperty<T extends BlockProperty>(property: T) {
     this.change((doc) => {
-      doc.properties[name] = property
+      doc.properties[property.name] = property
     }, {scope: property.changeScope})
   }
 
@@ -468,8 +465,8 @@ export function useProperty<T extends BlockProperty>(block: Block, config: T): [
 
 
   const setProperty = useCallback((newProperty: T) => {
-    block.setProperty(name, newProperty)
-  }, [block, name])
+    block.setProperty(newProperty)
+  }, [block])
 
   return [property as T, setProperty]
 }

@@ -23,4 +23,4 @@ export const reassembleTag = (
 export const reassembleTagProducer = <T>(consumer: (value: string) => T) => (
   strings: TemplateStringsArray,
   ...values: unknown[]
-) => consumer(reassembleTag(strings, values))
+) => consumer(reassembleTag(strings, ...values))

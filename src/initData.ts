@@ -1,5 +1,6 @@
 import { BlockData } from '@/types.ts'
 import { v4 as uuidv4 } from 'uuid'
+import { typeProp, rendererProp } from '@/data/properties'
 
 export function getExampleBlocks(): Partial<BlockData>[] {
   const rootId = uuidv4()
@@ -37,7 +38,7 @@ function ContentRenderer({ block, changeBlock }) {
 // Here is an example of doing that
 export default ({ block, changeBlock }) => <DefaultBlockRenderer block={block} changeBlock={changeBlock} ContentRenderer={ContentRenderer}/> 
 `,
-      properties: {type: 'renderer'},
+      properties: {type: {...typeProp, value: 'renderer'}},
       parentId: rootId,
     },
     {
@@ -46,7 +47,7 @@ export default ({ block, changeBlock }) => <DefaultBlockRenderer block={block} c
       // todo import wont' update this rn, so need to manually set the new renderer id
       //  generally unclear how to handle this for (arbitrary field that contains id of another block)
       //  plausibly the type should define how to extract the references from property/provide function
-      properties: {renderer: child2Id},
+      properties: {renderer: {...rendererProp, value: child2Id}},
       parentId: rootId,
     },
   ]
