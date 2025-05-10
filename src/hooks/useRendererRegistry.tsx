@@ -11,7 +11,7 @@ import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
-import { rendererProp } from '@/data/properties.ts'
+import { rendererProp, migrateAllProperties } from '@/data/properties.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
@@ -98,7 +98,9 @@ const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generat
 }, (rootBlock, safeMode, generation) => rootBlock.id + safeMode + generation)
 
 const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
-  const childrenBlocks = await getAllChildrenBlocks(rootBlock)
+  const childrenBlocks = await getAllChildrenBlocks(rootBlock);
+  [rootBlock, ...childrenBlocks].forEach(migrateAllProperties)
+
   const blockData = await Promise.all(childrenBlocks.map(b => b.data() as Promise<BlockData>))
 
   return blockData.filter(block => block.properties.type?.value === 'renderer')

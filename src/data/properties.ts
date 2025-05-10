@@ -10,6 +10,7 @@ import {
 } from '@/types'
 import { reassembleTagProducer } from '@/utils/templateLiterals.ts'
 import { removeUndefined } from '@/utils/object.ts'
+import { Block } from '@/data/block.ts'
 
 export const createProperty = <T extends BlockPropertyValue>(
   name: string,
@@ -45,12 +46,29 @@ export const fromList = (...values: BlockProperty[]) =>
   Object.fromEntries(values.map(v => [v.name, v]))
 
 
-export const migratePropertyValue = (name: string, value: BlockPropertyValue): BlockProperty => {
-  if (value === undefined) return createProperty(name, 'undefined', undefined)
-  if (value === null) return createProperty(name, 'null', null)
+export const migratePropertyValue = (name: string, value: BlockPropertyValue): BlockProperty | undefined => {
+  if (value === null || value === undefined) return undefined
 
   const type = Array.isArray(value) ? 'array' : typeof value
-  return createProperty(name, type, value)
+  return createProperty(name, type, typeof value === 'object' ? {...value}: value)
+}
+
+export const migrateAllProperties = async (block: Block) => {
+  const doc = await block.data()
+  if (!doc || !doc.properties) return
+
+  // Iterate through all properties
+  for (const [propName, propValue] of Object.entries(doc.properties)) {
+    // Skip if already a BlockProperty
+    if (isBlockProperty(propValue)) continue
+
+    // Migrate the property
+    const migratedProperty = migratePropertyValue(propName, propValue)
+    if (migratedProperty) {
+      // Update the block with the migrated property
+      block.setProperty(migratedProperty)
+    }
+  }
 }
 
 // Helper to determine if a value is already a BlockProperty
@@ -92,4 +110,3 @@ export const createdAtProp = numberProperty('createdAt')
 
 // Block reference properties
 export const sourceBlockIdProp = stringProperty('sourceBlockId')
-
