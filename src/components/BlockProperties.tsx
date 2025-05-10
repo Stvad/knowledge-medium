@@ -3,7 +3,7 @@ import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
 import { BlockProperty } from '@/types'
-import { stringProperty, isBlockProperty, migratePropertyValue } from '@/data/properties'
+import { stringProperty } from '@/data/properties'
 
 interface BlockPropertiesProps {
   block: Block;
@@ -39,10 +39,8 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
         <Input value={blockData.updatedByUserId} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
 
-      {Object.entries(properties).map(([key, property]) => {
-        const prop = isBlockProperty(property) ? property : migratePropertyValue(key, property)
-
-        return (
+      {Object.entries(properties).map(([key, property]) =>
+        (
           <div key={key} className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
             <Input
               className="w-full sm:w-1/3 text-xs md:text-sm"
@@ -50,21 +48,20 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault()
-                  updateKey(e.currentTarget.value, key, prop)
+                  updateKey(e.currentTarget.value, key, property!)
                 }
               }}
-              onBlur={(e) => updateKey(e.target.value, key, prop)}
+              onBlur={(e) => updateKey(e.target.value, key, property!)}
             />
             <Input
               className="text-xs md:text-sm"
-              value={prop.value?.toString() ?? ''}
+              value={property?.value?.toString() ?? ''}
               onChange={(e) => {
                 block.setProperty(stringProperty(key, e.target.value))
               }}
             />
           </div>
-        )
-      })}
+        ))}
 
       <Button
         variant="outline"

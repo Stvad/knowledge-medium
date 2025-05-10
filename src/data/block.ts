@@ -6,7 +6,6 @@ import { memoize } from 'lodash'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
 import { useCallback } from 'react'
-import { migratePropertyValue, isBlockProperty } from './properties'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -292,17 +291,7 @@ export class Block {
   async getProperty<T extends BlockProperty>(key: string | T): Promise<T | undefined> {
     const propName = typeof key === 'string' ? key : key.name
     const doc = await this.data()
-    if (!doc) return undefined
-
-    const prop = doc.properties[propName]
-    if (!prop) return undefined
-
-    // Migrate on read if needed
-    if (!isBlockProperty(prop)) {
-      return migratePropertyValue(propName, prop) as T
-    }
-
-    return prop as T
+    return doc?.properties[propName] as T | undefined
   }
 
   setProperty<T extends BlockProperty>(property: T) {
@@ -456,13 +445,7 @@ export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
 export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
   const name = config.name
   const doc = useData(block)
-  const rawProperty = doc?.properties[name]
-
-  // Get the property, migrating if needed
-  const property = rawProperty ?
-    (isBlockProperty(rawProperty) ? rawProperty : migratePropertyValue(name, rawProperty))
-    : config
-
+  const property = doc?.properties[name] ?? config
 
   const setProperty = useCallback((newProperty: T) => {
     block.setProperty(newProperty)

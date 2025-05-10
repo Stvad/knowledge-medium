@@ -1,7 +1,6 @@
 import { useUIStateProperty } from '@/data/globalState.ts'
 import {
   BlockProperty,
-  BlockPropertyValue,
   StringBlockProperty,
   NumberBlockProperty,
   BooleanBlockProperty,
@@ -10,14 +9,6 @@ import {
 } from '@/types'
 import { reassembleTagProducer } from '@/utils/templateLiterals.ts'
 import { removeUndefined } from '@/utils/object.ts'
-import { Block } from '@/data/block.ts'
-
-export const createProperty = <T extends BlockPropertyValue>(
-  name: string,
-  type: string,
-  value: T,
-  changeScope?: string,
-): BlockProperty => defineCreatorFunction(type)(name, value, changeScope)
 
 const defineCreatorFunction = <T extends BlockProperty>(type: string) =>
   (name: string, value?: T['value'], changeScope?: string): T => removeUndefined({
@@ -44,38 +35,6 @@ export const bp = reassembleTagProducer(booleanProperty)
 
 export const fromList = (...values: BlockProperty[]) =>
   Object.fromEntries(values.map(v => [v.name, v]))
-
-
-export const migratePropertyValue = (name: string, value: BlockPropertyValue): BlockProperty | undefined => {
-  if (value === null || value === undefined) return undefined
-
-  const type = Array.isArray(value) ? 'array' : typeof value
-  return createProperty(name, type, typeof value === 'object' ? {...value}: value)
-}
-
-export const migrateAllProperties = async (block: Block) => {
-  const doc = await block.data()
-  if (!doc || !doc.properties) return
-
-  // Iterate through all properties
-  for (const [propName, propValue] of Object.entries(doc.properties)) {
-    // Skip if already a BlockProperty
-    if (isBlockProperty(propValue)) continue
-
-    // Migrate the property
-    const migratedProperty = migratePropertyValue(propName, propValue)
-    if (migratedProperty) {
-      // Update the block with the migrated property
-      block.setProperty(migratedProperty)
-    }
-  }
-}
-
-// Helper to determine if a value is already a BlockProperty
-export const isBlockProperty = (value: unknown): value is BlockProperty => {
-  if (!value || typeof value !== 'object') return false
-  return 'type' in value && 'name' in value
-}
 
 export const useIsEditing = () => {
   return useUIStateProperty(booleanProperty('isEditing', false))
