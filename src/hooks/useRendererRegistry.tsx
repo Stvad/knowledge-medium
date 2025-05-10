@@ -11,6 +11,7 @@ import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
+import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx';
 import { rendererProp } from '@/data/properties.ts'
 
 export const defaultRegistry: RendererRegistry = {
@@ -19,6 +20,7 @@ export const defaultRegistry: RendererRegistry = {
   topLevel: TopLevelRenderer,
   layout: LayoutRenderer,
   panel: PanelRenderer,
+  videoPlayer: VideoPlayerRenderer,
   missingData: MissingDataRenderer,
 }
 
