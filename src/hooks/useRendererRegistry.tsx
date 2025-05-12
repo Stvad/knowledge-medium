@@ -13,6 +13,7 @@ import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
 import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx';
 import { rendererProp } from '@/data/properties.ts'
+import { BreadcrumbRenderer } from '@/components/renderer/BreadcrumbRenderer.tsx'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
@@ -22,6 +23,7 @@ export const defaultRegistry: RendererRegistry = {
   panel: PanelRenderer,
   videoPlayer: VideoPlayerRenderer,
   missingData: MissingDataRenderer,
+  breadcrumb: BreadcrumbRenderer,
 }
 
 export const refreshRendererRegistry = async () => {

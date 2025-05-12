@@ -1,8 +1,9 @@
 import { Block } from '@/data/block.ts'
 import { use, useMemo } from 'react'
-import { BlockRenderer } from '@/types.ts'
+import { BlockComponent } from '@/components/BlockComponent.tsx'
+import { NestedBlockContextProvider } from '@/context/block.tsx'
 
-export const Breadcrumbs = ({block, Renderer}: { block: Block, Renderer: BlockRenderer }) => {
+export const Breadcrumbs = ({block}: { block: Block }) => {
   const parents = use(useMemo(() => block.parents(), [block.id]))
 
   if (parents.length === 0) {
@@ -20,7 +21,9 @@ export const Breadcrumbs = ({block, Renderer}: { block: Block, Renderer: BlockRe
             <div className="inline [&>*]:inline [&>p]:m-0 [&>*]:whitespace-nowrap
             [&>*]:overflow-hidden [&>*]:text-ellipsis [&>*]:font-normal [&>*]:text-inherit
             text-muted-foreground">
-              <Renderer block={parent}/>
+              <NestedBlockContextProvider overrides={{isBreadcrumb: true}}>
+                <BlockComponent blockId={parent.id}/>
+              </NestedBlockContextProvider>
             </div>
           </a>
           <span className="mx-1 text-muted-foreground/50">›</span>
