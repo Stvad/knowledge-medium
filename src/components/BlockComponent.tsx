@@ -24,6 +24,17 @@ export function BlockComponent({blockId}: BlockComponentProps) {
   </ErrorBoundary>
 }
 
+/**
+ * An interesting idea here is to keep building the context as we go deeper,
+ * so push all the properties from the parent to the context - overrides would automatically happen in the hierarchy
+ * we can also add things like "youtube parent" and such
+ *
+ * two concerns:
+ * - memory usage
+ * - this diverges the behavior in ui vs pure block operation, given the block in isolation, we won't have the context
+ *
+ * youtube context seems more immediately meaningful/actionable
+ */
 export const BlockChildren = ({block}: { block: Block }) => {
   return <>
     {useData(block)?.childIds.map((childId) => (

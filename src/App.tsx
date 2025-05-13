@@ -29,8 +29,8 @@ const App = () => {
   const location = useLocation()
   const safeMode = Boolean(useSearchParam('safeMode'))
 
-  const rootDocUrl = location.hash?.substring(1)
-  const handle = use(getInitialBlock(repo, rootDocUrl))
+  const initialDocId = location.hash?.substring(1)
+  const handle = use(getInitialBlock(repo, initialDocId))
   const rootBlock = use(getRootBlock(repo.find(handle.id)))
 
   return (
