@@ -162,6 +162,7 @@ export class ActionManager {
       event.stopPropagation()
     }
     if (options.preventDefault) {
+      console.log(`[ShortcutManager] Preventing default for action: ${action.id}, context: ${action.context}`)
       event.preventDefault()
     }
 

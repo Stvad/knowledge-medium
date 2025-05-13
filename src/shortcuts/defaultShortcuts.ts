@@ -191,6 +191,9 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     handler: (deps: BlockShortcutDependencies) => deps.block.indent(),
     defaultBinding: {
       keys: 'tab',
+      eventOptions: {
+        preventDefault: true,
+      },
     },
   }
 
@@ -208,6 +211,9 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     handler: (deps: BlockShortcutDependencies) => deps.block.outdent(),
     defaultBinding: {
       keys: 'shift+tab',
+      eventOptions: {
+        preventDefault: true,
+      },
     },
   }
 
