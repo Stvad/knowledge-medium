@@ -72,4 +72,4 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
 }
 
 TopLevelRenderer.canRender = ({context}: BlockRendererProps) => !!(context && context.topLevel && !context.panelId)
-TopLevelRenderer.priority = () => 5
+TopLevelRenderer.priority = () => 20

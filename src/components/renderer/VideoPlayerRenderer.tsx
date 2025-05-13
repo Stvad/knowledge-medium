@@ -79,4 +79,4 @@ VideoPlayerRenderer.canRender = ({block}: BlockRendererProps) =>
   return !!(blockData && ReactPlayer.canPlay(blockData.content))
 }
 
-VideoPlayerRenderer.priority = () => 10
+VideoPlayerRenderer.priority = () => 5

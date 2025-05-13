@@ -82,4 +82,4 @@ export function LayoutRenderer({block}: BlockRendererProps) {
 
 LayoutRenderer.canRender = ({context}: BlockRendererProps) =>
   !!(context && !context.topLevel && !context.panelId)
-LayoutRenderer.priority = () => 5
+LayoutRenderer.priority = () => 20
