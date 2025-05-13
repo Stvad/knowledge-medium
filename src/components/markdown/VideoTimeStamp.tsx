@@ -1,5 +1,6 @@
 import { hmsToSeconds } from '@/utils/time.ts'
 import { seekTo } from '@/components/renderer/VideoPlayerRenderer.tsx'
+import { SyntheticEvent } from 'react'
 
 export interface TimeStampProps {
   hms: string;
@@ -8,14 +9,18 @@ export interface TimeStampProps {
 
 const VideoTimeStamp = ({hms, videoBlockId}: TimeStampProps) => {
   const secs = hmsToSeconds(hms)
+
+  const interactionHandler = (e: SyntheticEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+
+    seekTo(secs, videoBlockId)
+  }
+
   return (
     <a
-      onClick={(e) => {
-        e.stopPropagation()
-        e.preventDefault()
-
-        seekTo(secs, videoBlockId)
-      }}
+      onClick={interactionHandler}
+      onTouchStart={interactionHandler}
       data-seconds={secs}
       className={'cursor-pointer'}
     >
