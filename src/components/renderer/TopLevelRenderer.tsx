@@ -10,18 +10,18 @@ import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
 import { Block } from '@/data/block.ts'
-import { useUIStateBlock } from '@/data/globalState.ts'
-import { numberProperty } from '@/data/properties.ts'
+import { useUserBlock } from '@/data/globalState.ts'
+import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
 
 // todo this is kind of a random place for this, I think a more principled way to do this is to have
 // on-load hook and fire this there
 // on the other hand it makes things harder to override? e.g. user can redefine top-level renderer
 // how do they override the behavior in case of event based approach?
-const updateLoadTimes = memoize((uiStateBlock: Block) => {
-  uiStateBlock.change(doc => {
+const updateLoadTimes = memoize((block: Block) => {
+  block.change(doc => {
     const currentLoadTime = doc.properties.currentLoadTime?.value as number?? 0
-    doc.properties.previousLoadTime = numberProperty('previousLoadTime', currentLoadTime)
-    doc.properties.currentLoadTime = numberProperty('currentLoadTime', Date.now())
+    doc.properties.previousLoadTime = {...previousLoadTimeProp, value: currentLoadTime}
+    doc.properties.currentLoadTime = {...currentLoadTimeProp, value: Date.now()}
   })
 }, () => true)
 
@@ -32,8 +32,8 @@ const updateLoadTimes = memoize((uiStateBlock: Block) => {
 const CONTEXT_OVERRIDE = {topLevel: false}
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
-  const uiBlock = useUIStateBlock()
-  updateLoadTimes(uiBlock)
+  const userBlock = useUserBlock()
+  updateLoadTimes(userBlock)
   /**
    * todo think about composition
    * I actually want the below thing to pick the renderer itself, but if my logic is

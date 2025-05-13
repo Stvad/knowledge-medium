@@ -3,12 +3,19 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible.tsx'
-import { useIsEditing, showPropertiesProp, isCollapsedProp, sp, np, focusedBlockIdProp } from '@/data/properties.ts'
+import {
+  useIsEditing,
+  showPropertiesProp,
+  isCollapsedProp,
+  focusedBlockIdProp,
+  topLevelBlockIdProp,
+  previousLoadTimeProp,
+} from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo } from 'react'
 import { Block, useData, usePropertyValue } from '@/data/block.ts'
-import { useUIStateProperty } from '@/data/globalState'
+import { useUIStateProperty, useUserProperty } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
@@ -148,8 +155,8 @@ export function DefaultBlockRenderer(
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const [topLevelBlockId] = useUIStateProperty(sp`topLevelBlockId`)
-  const [previousLoadTime] = useUIStateProperty(np`previousLoadTime`)
+  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+  const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
   const [seen, setSeen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const isMobile = useIsMobile()

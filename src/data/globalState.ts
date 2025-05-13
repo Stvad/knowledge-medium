@@ -27,9 +27,6 @@ export function useUIStateProperty<T extends BlockProperty>(
   return usePropertyValue(block, uiConfig)
 }
 
-/**
- * Gets or creates the UI state block, which is located at root > "system" > "ui-state"
- */
 export function useUIStateBlock(): Block {
   const context = useBlockContext()
   const repo = useRepo()
@@ -37,6 +34,19 @@ export function useUIStateBlock(): Block {
 
   return use(getUIStateBlock(repo, repo.find(context.rootBlockId!), user, context))
 }
+
+export function useUserBlock(): Block {
+  const context = useBlockContext()
+  const repo = useRepo()
+  const user = useUser()
+
+  return use(getUserBlock(repo.find(context.rootBlockId!), user))
+}
+
+export const useUserProperty = <T extends BlockProperty>(
+  config: T,
+): [T['value'], (value: T['value']) => void] =>
+  usePropertyValue(useUserBlock(), config)
 
 /**
  * Memoized for using with \`use\` react function
