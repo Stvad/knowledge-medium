@@ -1,4 +1,5 @@
 import { Block } from '@/data/block';
+import { Optional } from '@/utils/types.ts'
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
 
@@ -34,6 +35,7 @@ export type ActionContextType =
   | 'edit-mode'
   | 'property-editing'
   | 'command-palette'
+  | 'multi-select-mode'
 
 export const ActionContextTypes = {
   GLOBAL: 'global',
@@ -41,6 +43,7 @@ export const ActionContextTypes = {
   EDIT_MODE: 'edit-mode',
   PROPERTY_EDITING: 'property-editing',
   COMMAND_PALETTE: 'command-palette',
+  MULTI_SELECT_MODE: 'multi-select-mode',
 } as const;
 
 export interface BaseShortcutDependencies {
@@ -61,12 +64,18 @@ export interface PropertyEditingDependencies extends BlockShortcutDependencies {
 
 export type CommandPaletteDependencies =  BaseShortcutDependencies
 
+export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
+  selectedBlocks: Block[];
+  anchorBlock: Block | null; // The block that started a shift-selection range
+}
+
 export interface ShortcutDependenciesMap {
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
   [ActionContextTypes.NORMAL_MODE]: BlockShortcutDependencies;
   [ActionContextTypes.EDIT_MODE]: EditModeDependencies;
   [ActionContextTypes.PROPERTY_EDITING]: PropertyEditingDependencies;
   [ActionContextTypes.COMMAND_PALETTE]: CommandPaletteDependencies;
+  [ActionContextTypes.MULTI_SELECT_MODE]: MultiSelectModeDependencies;
 }
 
 export interface ActiveContextInfo {
@@ -82,6 +91,12 @@ export interface Action<T extends ActionContextType = ActionContextType> {
   defaultBinding?: Omit<ShortcutBinding, 'action'>; // Optional default binding
   hideFromCommandPallet?: boolean;
 }
+
+export type ActionConfig<T extends ActionContextType = ActionContextType> = Optional<
+  Action<T>,
+  'hideFromCommandPallet'
+>;
+
 
 export interface ShortcutBinding {
   action: string;

@@ -1,13 +1,13 @@
 import { useBlockContext } from '@/context/block.tsx'
 import { Block, usePropertyValue } from '@/data/block.ts'
-import { use } from 'react'
+import { use, useCallback } from 'react'
 import { BlockProperty, User, BlockContextType } from '@/types.ts'
 import { memoize } from 'lodash'
 import { useRepo } from '@/context/repo.tsx'
 import { useUser } from '@/components/Login.tsx'
 import { Repo } from '@/data/repo.ts'
 
-import { uiChangeScope } from '@/data/properties.ts'
+import { uiChangeScope, selectionStateProp, BlockSelectionState } from '@/data/properties.ts'
 
 /**
  * One of core principles of the system is to store all state within the system
@@ -71,3 +71,26 @@ const panelsPathPart = 'panels'
 export const getPanelsBlock = memoize(
   async (uiStateBlock: Block): Promise<Block> => uiStateBlock.childByContent([panelsPathPart], true),
   (uiBlock) => uiBlock.id)
+
+export function useSelectionState(): [
+  BlockSelectionState,
+  (newState: Partial<BlockSelectionState>) => void
+] {
+  const uiStateBlock = useUIStateBlock();
+  // Ensure selectionStateProp has its default value correctly typed if usePropertyValue expects it.
+  // The defaultValue is part of selectionStateProp definition.
+  const [currentSelectionState, setRawSelectionState] = usePropertyValue(uiStateBlock, selectionStateProp);
+
+  const setSelectionState = useCallback((newState: Partial<BlockSelectionState>) => {
+    setRawSelectionState({
+      // It's important that currentSelectionState is not undefined here.
+      // usePropertyValue should handle initializing with defaultValue if the property doesn't exist yet.
+      ...(currentSelectionState || selectionStateProp.value!), // Fallback to defaultValue from prop if current is somehow null/undefined initially
+      ...newState,
+    });
+  }, [currentSelectionState, setRawSelectionState]);
+
+  // Ensure the returned currentSelectionState is never undefined, falling back to default if necessary.
+  // This aligns with the hook's return type [SelectionStateValue, ...]
+  return [currentSelectionState || selectionStateProp.value!, setSelectionState];
+}

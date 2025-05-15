@@ -1,5 +1,10 @@
 # Omniliner Project Knowledge
 
+## Codebuff core instructions:
+- Never start editing code without explicitly confirming with the user
+- If there is any uncertainty or confusion - stop execution and prompt user for input/elaboration
+- When executing multi-step plan - stop and check in after each step
+
 ## Project Overview
 A Workflowy-like editor with dynamic block rendering capabilities. Blocks can contain custom renderers that are compiled and executed at runtime.
 

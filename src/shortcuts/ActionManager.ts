@@ -11,9 +11,11 @@ import {
   EditModeDependencies,
   PropertyEditingDependencies,
   CommandPaletteDependencies,
+  MultiSelectModeDependencies,
   ActiveContextInfo,
+  ActionConfig,
 } from './types'
-import { isSingleKeyPress, hasEditableTarget } from '@/shortcuts/utils.ts'
+import { isSingleKeyPress, hasEditableTarget, createAction } from '@/shortcuts/utils.ts'
 import { Block } from '@/data/block'
 
 const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependencies =>
@@ -30,6 +32,13 @@ const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDe
 
 const isCommandPaletteDependencies = (deps: unknown): deps is CommandPaletteDependencies =>
   isBaseShortcutDependencies(deps)
+
+const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDependencies =>
+  isBaseShortcutDependencies(deps) &&
+  typeof deps === 'object' && deps !== null &&
+  'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
+  'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block) &&
+  'lastFocusedBlockInSelection' in deps && (deps.lastFocusedBlockInSelection === null || deps.lastFocusedBlockInSelection instanceof Block);
 
 const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
   [ActionContextTypes.GLOBAL, {
@@ -60,6 +69,11 @@ const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
     type: ActionContextTypes.COMMAND_PALETTE,
     displayName: 'Command Palette',
     validateDependencies: isCommandPaletteDependencies,
+  }],
+  [ActionContextTypes.MULTI_SELECT_MODE, {
+    type: ActionContextTypes.MULTI_SELECT_MODE,
+    displayName: 'Multi-Select Mode',
+    validateDependencies: isMultiSelectModeDependencies,
   }],
 ])
 
@@ -92,7 +106,8 @@ export class ActionManager {
     console.log(`[ShortcutManager] Registered context: ${config.type}`)
   }
 
-  registerAction<T extends ActionContextType>(action: Action<T>): void {
+  registerAction<T extends ActionContextType>(config: ActionConfig<T>): void {
+    const action = createAction(config)
     console.log(`[ShortcutManager] Registering action: ${action.id} for context: ${action.context}`)
 
     if (this.actions.has(action.id)) {

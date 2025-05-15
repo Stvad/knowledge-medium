@@ -1,3 +1,5 @@
+import { ActionConfig, Action, ActionContextType } from '@/shortcuts/types.ts'
+
 export const hasEditableTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement;
   if (!target) return false;
@@ -75,3 +77,7 @@ export function isSingleKeyPress(event: KeyboardEvent): boolean {
 // Press 'Control' + 'Shift' -> isSingleKeyPress returns false (activeModifierCount = 2)
 // Press 'Control'+'Alt'+'Delete' -> isSingleKeyPress returns false (activeModifierCount = 2, key === 'Delete')
 */
+
+export const createAction = <T extends ActionContextType>(config: ActionConfig<T>): Action<T> => ({
+  ...config,
+})

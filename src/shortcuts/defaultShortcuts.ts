@@ -4,7 +4,7 @@ import {
   EditModeDependencies,
   Action,
   ActionContextTypes,
-  BaseShortcutDependencies,
+  BaseShortcutDependencies, ActionConfig,
 } from './types'
 import {
   previousVisibleBlock,
@@ -184,7 +184,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     },
   })
 
-  const indentBlock: Action<typeof ActionContextTypes.NORMAL_MODE> = {
+  const indentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'indent_block',
     description: 'Indent block',
     context: ActionContextTypes.NORMAL_MODE,
@@ -204,7 +204,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     context: ActionContextTypes.EDIT_MODE,
   })
 
-  const outdentBlock: Action<typeof ActionContextTypes.NORMAL_MODE> = {
+  const outdentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'outdent_block',
     description: 'Outdent block',
     context: ActionContextTypes.NORMAL_MODE,
@@ -388,7 +388,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     },
   })
 
-  const moveBlockUp: Action<typeof ActionContextTypes.EDIT_MODE> = {
+  const moveBlockUp: ActionConfig<typeof ActionContextTypes.EDIT_MODE> = {
     id: 'move_block_up',
     description: 'Move block up',
     context: ActionContextTypes.EDIT_MODE,
@@ -412,7 +412,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     context: ActionContextTypes.NORMAL_MODE,
   } as Action<typeof ActionContextTypes.NORMAL_MODE>)
 
-  const moveBlockDown: Action<typeof ActionContextTypes.EDIT_MODE> = {
+  const moveBlockDown: ActionConfig<typeof ActionContextTypes.EDIT_MODE> = {
     id: 'move_block_down',
     description: 'Move block down',
     context: ActionContextTypes.EDIT_MODE,
