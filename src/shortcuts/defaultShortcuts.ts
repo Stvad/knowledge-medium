@@ -154,9 +154,9 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         ...selectionStateProp,
         value: {
           selectedBlockIds: [],
-          anchorBlockId: null
-        }
-      });
+          anchorBlockId: null,
+        },
+      })
 
       setIsEditing(uiStateBlock, true)
     },
@@ -216,7 +216,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'edit.' + indentBlock.id,
     context: ActionContextTypes.EDIT_MODE,
   })
-  actionManager.registerAction(makeMultiSelect(indentBlock));
+  actionManager.registerAction(makeMultiSelect(indentBlock))
 
   const outdentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'outdent_block',
@@ -238,7 +238,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     context: ActionContextTypes.EDIT_MODE,
   })
 
-  actionManager.registerAction(makeMultiSelect(outdentBlock));
+  actionManager.registerAction(makeMultiSelect(outdentBlock))
 
   // Delete block action
   // const deleteBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
@@ -410,14 +410,14 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         ...selectionStateProp,
         value: {
           selectedBlockIds: [block.id],
-          anchorBlockId: block.id
-        }
-      });
+          anchorBlockId: block.id,
+        },
+      })
     },
     defaultBinding: {
       keys: 'space',
     },
-  });
+  })
 
   actionManager.registerAction({
     id: 'add_focused_to_selection',
@@ -427,23 +427,23 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const currentState = await uiStateBlock.getProperty(selectionStateProp);
-      if (!currentState?.value) return;
+      const currentState = await uiStateBlock.getProperty(selectionStateProp)
+      if (!currentState?.value) return
 
       // Check if block is descendant of any currently selected block
       for (const selectedId of currentState.value.selectedBlockIds) {
-        const selectedBlock = repo.find(selectedId);
+        const selectedBlock = repo.find(selectedId)
         if (await block.isDescendantOf(selectedBlock)) {
-          return; // Skip if block is descendant
+          return // Skip if block is descendant
         }
       }
 
       // Remove any currently selected blocks that are descendants of this block
-      const newSelectedIds = [];
+      const newSelectedIds = []
       for (const id of currentState.value.selectedBlockIds) {
-        const selectedBlock = repo.find(id);
+        const selectedBlock = repo.find(id)
         if (!(await selectedBlock.isDescendantOf(block))) {
-          newSelectedIds.push(id);
+          newSelectedIds.push(id)
         }
       }
 
@@ -451,14 +451,14 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         ...selectionStateProp,
         value: {
           selectedBlockIds: [...newSelectedIds, block.id],
-          anchorBlockId: currentState.value.anchorBlockId || block.id
-        }
-      });
+          anchorBlockId: currentState.value.anchorBlockId || block.id,
+        },
+      })
     },
     defaultBinding: {
       keys: 'ctrl+space',
     },
-  });
+  })
 
   actionManager.registerAction({
     id: 'clear_selection',
@@ -468,7 +468,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     defaultBinding: {
       keys: 'escape',
     },
-  });
+  })
 
   actionManager.registerAction({
     id: 'extend_selection_up',
@@ -478,30 +478,30 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const currentState = await uiStateBlock.getProperty(selectionStateProp);
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value;
-      if (!topLevelBlockId || !currentState?.value) return;
+      const currentState = await uiStateBlock.getProperty(selectionStateProp)
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      if (!topLevelBlockId || !currentState?.value) return
 
-      const prevBlock = await previousVisibleBlock(block, topLevelBlockId);
-      if (!prevBlock) return;
+      const prevBlock = await previousVisibleBlock(block, topLevelBlockId)
+      if (!prevBlock) return
 
-      const currentAnchor = currentState.value.anchorBlockId || block.id;
-      const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId));
-      const rangeIds = await getBlocksInRange(currentAnchor, prevBlock.id, orderedIds, repo);
+      const currentAnchor = currentState.value.anchorBlockId || block.id
+      const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId))
+      const rangeIds = await getBlocksInRange(currentAnchor, prevBlock.id, orderedIds, repo)
 
-      setFocusedBlockId(uiStateBlock, prevBlock.id);
+      setFocusedBlockId(uiStateBlock, prevBlock.id)
       uiStateBlock.setProperty({
         ...selectionStateProp,
         value: {
           selectedBlockIds: rangeIds,
-          anchorBlockId: currentAnchor
-        }
-      });
+          anchorBlockId: currentAnchor,
+        },
+      })
     },
     defaultBinding: {
       keys: 'shift+up',
     },
-  });
+  })
 
   actionManager.registerAction({
     id: 'extend_selection_down',
@@ -511,30 +511,30 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const currentState = await uiStateBlock.getProperty(selectionStateProp);
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value;
-      if (!topLevelBlockId || !currentState?.value) return;
+      const currentState = await uiStateBlock.getProperty(selectionStateProp)
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      if (!topLevelBlockId || !currentState?.value) return
 
-      const nextBlock = await nextVisibleBlock(block, topLevelBlockId);
-      if (!nextBlock) return;
+      const nextBlock = await nextVisibleBlock(block, topLevelBlockId)
+      if (!nextBlock) return
 
-      const currentAnchor = currentState.value.anchorBlockId || block.id;
-      const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId));
-      const rangeIds = await getBlocksInRange(currentAnchor, nextBlock.id, orderedIds, repo);
+      const currentAnchor = currentState.value.anchorBlockId || block.id
+      const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId))
+      const rangeIds = await getBlocksInRange(currentAnchor, nextBlock.id, orderedIds, repo)
 
-      setFocusedBlockId(uiStateBlock, nextBlock.id);
+      setFocusedBlockId(uiStateBlock, nextBlock.id)
       uiStateBlock.setProperty({
         ...selectionStateProp,
         value: {
           selectedBlockIds: rangeIds,
-          anchorBlockId: currentAnchor
-        }
-      });
+          anchorBlockId: currentAnchor,
+        },
+      })
     },
     defaultBinding: {
       keys: 'shift+down',
     },
-  });
+  })
 
   actionManager.registerAction({
     id: 'select_all_visible',
@@ -544,42 +544,42 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const {uiStateBlock} = deps
       if (!uiStateBlock) return
 
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value;
-      if (!topLevelBlockId) return;
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      if (!topLevelBlockId) return
 
-      const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId));
-      if (orderedIds.length === 0) return;
+      const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId))
+      if (orderedIds.length === 0) return
 
       // Only select top-level blocks within the current view/panel
-      const validatedIds = [];
+      const validatedIds = []
       for (const id of orderedIds) {
-        const currentBlock = repo.find(id);
+        const currentBlock = repo.find(id)
         for (const otherId of orderedIds) {
-          if (otherId === id) continue;
-          const otherBlock = repo.find(otherId);
+          if (otherId === id) continue
+          const otherBlock = repo.find(otherId)
           if (await currentBlock.isDescendantOf(otherBlock)) {
-            continue;
+            continue
           }
         }
-        validatedIds.push(id);
+        validatedIds.push(id)
       }
 
-      const topLevelIds = validatedIds.filter(Boolean) as string[];
-      if (topLevelIds.length === 0) return;
+      const topLevelIds = validatedIds.filter(Boolean) as string[]
+      if (topLevelIds.length === 0) return
 
-      setFocusedBlockId(uiStateBlock, topLevelIds[0]);
+      setFocusedBlockId(uiStateBlock, topLevelIds[0])
       uiStateBlock.setProperty({
         ...selectionStateProp,
         value: {
           selectedBlockIds: topLevelIds,
-          anchorBlockId: topLevelIds[0]
-        }
-      });
+          anchorBlockId: topLevelIds[0],
+        },
+      })
     },
     defaultBinding: {
       keys: ['cmd+a', 'ctrl+a'],
     },
-  });
+  })
 
   // Edit mode shortcuts
   actionManager.registerAction({
