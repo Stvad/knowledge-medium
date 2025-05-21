@@ -1,4 +1,11 @@
-import { ActionConfig, Action, ActionContextType } from '@/shortcuts/types.ts'
+import {
+  ActionConfig,
+  Action,
+  ActionContextType,
+  ActionContextTypes,
+  MultiSelectModeDependencies,
+  ShortcutDependenciesMap,
+} from './types'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
   const target = event.target as HTMLElement;
@@ -81,3 +88,44 @@ export function isSingleKeyPress(event: KeyboardEvent): boolean {
 export const createAction = <T extends ActionContextType>(config: ActionConfig<T>): Action<T> => ({
   ...config,
 })
+
+
+export function makeMultiSelect<T extends ActionContextType>(
+  actionConfig: ActionConfig<T>
+): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> {
+  // Default behavior: apply the original action to each selected block
+  const defaultHandler = async (multiSelectDeps: MultiSelectModeDependencies) => {
+    const { selectedBlocks, uiStateBlock } = multiSelectDeps;
+    console.log(`[makeMultiSelect] Running action for ${selectedBlocks.length} blocks`)
+
+    // Create a transaction for all operations to be atomic
+    // uiStateBlock.repo.undoRedoManager.transaction(() => {
+      // Process blocks sequentially, awaiting each one before proceeding
+      for (const block of selectedBlocks) {
+        // Convert dependencies to match the original action's context
+        const originalDeps = {
+          block,
+          uiStateBlock,
+        } as unknown as ShortcutDependenciesMap[T];
+
+        // Await each promise before proceeding to the next block
+        await actionConfig.handler(originalDeps);
+      }
+    // }, { description: `Multi-select: ${actionConfig.description}` });
+  };
+
+  return {
+    id: `multi_select.${actionConfig.id}`,
+    description: `${actionConfig.description} (Multiple Blocks)`,
+    context: ActionContextTypes.MULTI_SELECT_MODE,
+    handler: defaultHandler,
+    defaultBinding: actionConfig.defaultBinding,
+    // Inherit the original binding but add Shift modifier
+    // defaultBinding: actionConfig.defaultBinding ? {
+    //   ...actionConfig.defaultBinding,
+    //   keys: typeof actionConfig.defaultBinding.keys === 'string'
+    //     ? `shift+${actionConfig.defaultBinding.keys}`
+    //     : actionConfig.defaultBinding.keys.map(k => `shift+${k}`)
+    // } : undefined,
+  };
+}

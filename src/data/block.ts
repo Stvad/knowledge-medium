@@ -338,6 +338,17 @@ export class Block {
 
     return newBlock
   }
+
+  async isDescendantOf(potentialAncestor: Block): Promise<boolean> {
+    let current = await this.parent();
+    while (current) {
+      if (current.id === potentialAncestor.id) {
+        return true;
+      }
+      current = await current.parent();
+    }
+    return false;
+  }
 }
 
 const getChildIndex = (parent: BlockData, childId: string) => {

@@ -37,8 +37,7 @@ const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDe
   isBaseShortcutDependencies(deps) &&
   typeof deps === 'object' && deps !== null &&
   'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
-  'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block) &&
-  'lastFocusedBlockInSelection' in deps && (deps.lastFocusedBlockInSelection === null || deps.lastFocusedBlockInSelection instanceof Block);
+  'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block);
 
 const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
   [ActionContextTypes.GLOBAL, {
@@ -103,12 +102,12 @@ export class ActionManager {
       console.warn(`[ShortcutManager] Context ${config.type} already registered. Overwriting.`)
     }
     this.contexts.set(config.type, config)
-    console.log(`[ShortcutManager] Registered context: ${config.type}`)
+    console.debug(`[ShortcutManager] Registered context: ${config.type}`)
   }
 
   registerAction<T extends ActionContextType>(config: ActionConfig<T>): void {
     const action = createAction(config)
-    console.log(`[ShortcutManager] Registering action: ${action.id} for context: ${action.context}`)
+    console.debug(`[ShortcutManager] Registering action: ${action.id} for context: ${action.context}`)
 
     if (this.actions.has(action.id)) {
       console.warn(`[ShortcutManager] Action ${action.id} already registered`)
@@ -128,7 +127,7 @@ export class ActionManager {
   }
 
   registerBinding(binding: ShortcutBinding): void {
-    console.log(`[ShortcutManager] Registering binding for action: ${binding.action}, keys: ${binding.keys}`)
+    console.debug(`[ShortcutManager] Registering binding for action: ${binding.action}, keys: ${binding.keys}`)
     const action = this.actions.get(binding.action)
     if (!action) {
       throw new Error(`Action ${binding.action} not registered`)
@@ -143,7 +142,7 @@ export class ActionManager {
     })
 
     if (bindingExists) {
-      console.log(`[ShortcutManager] Binding for action ${binding.action} with keys ${binding.keys} already exists, skipping`)
+      console.debug(`[ShortcutManager] Binding for action ${binding.action} with keys ${binding.keys} already exists, skipping`)
       return
     }
 
@@ -177,7 +176,7 @@ export class ActionManager {
       event.stopPropagation()
     }
     if (options.preventDefault) {
-      console.log(`[ShortcutManager] Preventing default for action: ${action.id}, context: ${action.context}`)
+      console.debug(`[ShortcutManager] Preventing default for action: ${action.id}, context: ${action.context}`)
       event.preventDefault()
     }
 
@@ -191,7 +190,7 @@ export class ActionManager {
 
     keys.forEach(key => {
       hotkeys(key, (event) => {
-        console.log(`[ShortcutManager] Handling event for key: ${key}, action: ${action.id}, context: ${action.context}`)
+        console.debug(`[ShortcutManager] Handling event for key: ${key}, action: ${action.id}, context: ${action.context}`)
         return this.handleEvent(event, binding, action)
       })
     })
@@ -210,14 +209,15 @@ export class ActionManager {
       }}`)
     }
 
-    console.log(`[ShortcutManager] Activating context: ${context}`, {
+    // Ensure context is removed before re-adding to potentially update order if map maintains insertion order
+    this.deactivateContext(context)
+
+    console.debug(`[ShortcutManager] Activating context: ${context}`, {
       existingContexts: Array.from(this.activeContexts.keys()),
       dependencies,
       bindings: this.bindings,
     })
 
-    // Ensure context is removed before re-adding to potentially update order if map maintains insertion order
-    this.deactivateContext(context)
     this.activeContexts.set(context, dependencies)
 
     this.actions.forEach((action, actionId) => {
@@ -229,9 +229,9 @@ export class ActionManager {
   }
 
   deactivateContext(context: ActionContextType): void {
-    console.log(`[ShortcutManager] Deactivating context: ${context}`)
+    console.debug(`[ShortcutManager] Deactivating context: ${context}`)
     if (!this.activeContexts.has(context)) {
-      console.log(`[ShortcutManager] Context ${context} was not active`)
+      console.debug(`[ShortcutManager] Context ${context} was not active`)
       return
     }
 
@@ -299,7 +299,7 @@ export class ActionManager {
 
     const dependencies = this.activeContexts.get(action.context)!
 
-    console.log(`[ShortcutManager] Running action "${actionId}" from command palette.`)
+    console.debug(`[ShortcutManager] Running action "${actionId}" from command palette.`)
     return action.handler(dependencies)
   }
 }

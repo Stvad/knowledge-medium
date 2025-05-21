@@ -34,6 +34,8 @@ import {
 } from '@/components/ui/context-menu.tsx'
 import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
+import { useSelectionState } from '@/data/globalState'
+import { getAllVisibleBlockIdsInOrder, getBlocksInRange, validateSelectionHierarchy } from '@/utils/selection'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -165,12 +167,15 @@ export function DefaultBlockRenderer(
   const isHovering = useHoverDirty(ref)
   const isTopLevel = block.id === topLevelBlockId
 
+  const [selectionState, setSelectionState] = useSelectionState();
+  const isSelected = selectionState.selectedBlockIds.includes(block.id);
+
   const inFocus = focusedBlockId === block.id
   if (inFocus && !seen) setSeen(true)
 
   const shortcutDependencies = useMemo(() => ({block}), [block])
 
-  useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing)
+  useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing && !isSelected)
 
   if (!blockData) return null
 
@@ -231,16 +236,57 @@ export function DefaultBlockRenderer(
 
       <Collapsible
         open={!isCollapsed || isTopLevel}
-        className={`tm-block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''}`}
+        className={`tm-block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
         data-block-id={block.id}
         tabIndex={0}
         onPaste={handlePaste}
         ref={ref}
+        onSelect={() => console.log('select ' + block.id)}
+        onClick={async (e) => {
+          // Handle selection clicks
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            const newSelectedIds = isSelected 
+              ? selectionState.selectedBlockIds.filter(id => id !== block.id)
+              : [...selectionState.selectedBlockIds, block.id];
+            
+            const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo);
+            
+            setFocusedBlockId(block.id);
+            setSelectionState({
+              selectedBlockIds: validatedIds,
+              anchorBlockId: validatedIds.length > 0 
+                ? (selectionState.anchorBlockId || block.id) 
+                : null
+            });
+          } else if (e.shiftKey) {
+            e.preventDefault();
+            e.stopPropagation();
+            const currentAnchor = selectionState.anchorBlockId || focusedBlockId;
+            if (!currentAnchor) return;
+
+            const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId!));
+            const rangeIds = await getBlocksInRange(currentAnchor, block.id, orderedIds, repo);
+            
+            setFocusedBlockId(block.id);
+            setSelectionState({
+              selectedBlockIds: rangeIds,
+              anchorBlockId: currentAnchor
+            });
+          } else if (selectionState.selectedBlockIds.length > 0) {
+            // Clear selection on regular click if there was a selection
+            setSelectionState({
+              selectedBlockIds: [],
+              anchorBlockId: null
+            });
+          }
+        }}
       >
         {!isTopLevel && blockControls()}
 
         <div className="block-body flex-grow relative flex flex-col">
-          <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/50' : ''}`}>
+          <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
             {updateIndicator()}
 
             <ErrorBoundary FallbackComponent={FallbackComponent}>

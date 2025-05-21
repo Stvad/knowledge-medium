@@ -5,11 +5,36 @@ import { useData, usePropertyValue } from '@/data/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { X } from 'lucide-react'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
+import { useSelectionState } from '@/data/globalState'
+import { useRepo } from '@/context/repo'
+import { useActionContext } from '@/shortcuts/useActionContext'
+import { ActionContextTypes } from '@/shortcuts/types'
+import { useMemo } from 'react'
 
 const CONTEXT_OVERRIDE = {topLevel: false}
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
+  const [selectionState] = useSelectionState();
+  const repo = useRepo();
+
+  // Memoize dependencies for MULTI_SELECT_MODE
+  const multiSelectDeps = useMemo(() => {
+    if (!selectionState.selectedBlockIds.length) return null;
+
+    return {
+      selectedBlocks: selectionState.selectedBlockIds.map(id => repo.find(id)),
+      anchorBlock: selectionState.anchorBlockId ? repo.find(selectionState.anchorBlockId) : null,
+      uiStateBlock: block,
+    };
+  }, [selectionState, block, repo]);
+
+  // Activate MULTI_SELECT_MODE context when there are selected blocks and we're not editing
+  useActionContext(
+    ActionContextTypes.MULTI_SELECT_MODE,
+    multiSelectDeps,
+    !!multiSelectDeps
+  );
 
   const handleClose = () => {
     block.delete()
