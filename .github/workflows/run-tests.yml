@@ -20,7 +20,7 @@ jobs:
           node-version: '20.x'
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: yarn install
 
       - name: Run tests
-        run: npm test
+        run: yarn run test
