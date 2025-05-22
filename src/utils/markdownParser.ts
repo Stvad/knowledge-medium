@@ -9,25 +9,58 @@ interface ParsedBlock {
 export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
   const lines = text.split('\n');
   const parsedBlocks: ParsedBlock[] = [];
-  let baseIndent = -1;  // Will be set by first non-empty line
+  let baseIndent = -1; // Will be set by first non-empty line
+  let currentHeaderLevel = -1;
+  let isInsideHeader = false;
 
   // First pass: parse lines into blocks with levels
   for (const line of lines) {
-    if (!line.trim()) continue;
+    const originalLineContent = line; // Keep for potential use as content for children of headers
+    const trimmedLine = line.trim(); // Used for checks and for header content base
 
-    const rawLevel = getIndentationLevel(line);
-
-    // Set base indentation from first line
-    if (baseIndent === -1) {
-      baseIndent = rawLevel;
+    if (!trimmedLine) {
+      // Empty line resets header context
+      isInsideHeader = false;
+      currentHeaderLevel = -1;
+      // baseIndent should not reset here.
+      continue;
     }
 
-    // Adjust level relative to base indentation
-    const adjustedLevel = Math.max(0, rawLevel - baseIndent);
+    const rawLevel = getIndentationLevel(line); // Indentation of the current line
+    let contentToStore: string;
+    let calculatedLevel: number;
+
+    const isHeaderLine = trimmedLine.startsWith('#');
+
+    if (isHeaderLine) {
+      isInsideHeader = true;
+      contentToStore = trimmedLine.replace(/^#+\s*/, ''); // Cleaned header content
+      if (baseIndent === -1) {
+        baseIndent = rawLevel; // Set base indent if this is the first content line
+      }
+      // Header's level is based on its own indentation relative to baseIndent
+      currentHeaderLevel = Math.max(0, rawLevel - baseIndent);
+      calculatedLevel = currentHeaderLevel;
+    } else if (isInsideHeader) {
+      // Child of a header
+      // Content is the raw line itself to preserve all original spacing and list markers.
+      contentToStore = originalLineContent;
+      calculatedLevel = currentHeaderLevel + 1; // Level is one deeper than the current header
+    } else {
+      // Regular line, not a header and not under a header
+      // isInsideHeader should be false here. (It would have been reset by an empty line or never set true)
+      if (baseIndent === -1) {
+        baseIndent = rawLevel; // Set base indent if this is the first content line
+      }
+      calculatedLevel = Math.max(0, rawLevel - baseIndent);
+      // For regular lines, clean them by removing list markers from the trimmed line.
+      // (If it's not a list item, this replacement does nothing)
+      contentToStore = trimmedLine.replace(/^([-*+]|\d+\.)\s+/, '');
+    }
 
     parsedBlocks.push({
-      content: cleanLine(line),
-      level: adjustedLevel,
+      content: contentToStore,
+      level: calculatedLevel,
     });
   }
 
@@ -78,6 +111,6 @@ function getIndentationLevel(line: string): number {
 }
 
 function cleanLine(line: string): string {
-  // Remove list markers while preserving content
-  return line.replace(/^(\s*[-*+]|\s*\d+\.)\s+/, '').trim();
+  // Only trim the line initially. Specific cleaning will be done in the parsing logic.
+  return line.trim();
 }
