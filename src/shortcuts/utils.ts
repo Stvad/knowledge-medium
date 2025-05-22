@@ -8,14 +8,15 @@ import {
 } from './types'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
-  const target = event.target as HTMLElement;
-  if (!target) return false;
+  const target = event.target as HTMLElement
+  if (!target) return false
 
   return target.isContentEditable ||
-  target.tagName === 'INPUT' ||
-  target.tagName === 'SELECT' ||
-  target.tagName === 'TEXTAREA'
+    target.tagName === 'INPUT' ||
+    target.tagName === 'SELECT' ||
+    target.tagName === 'TEXTAREA'
 }
+
 /**
  * Checks if a KeyboardEvent represents a single key press.
  * This means either:
@@ -30,24 +31,24 @@ export const hasEditableTarget = (event: KeyboardEvent) => {
 export function isSingleKeyPress(event: KeyboardEvent): boolean {
   // Basic validation
   if (!event || typeof event.key === 'undefined' || typeof event.ctrlKey === 'undefined') {
-    console.error("Invalid input: Function expects a KeyboardEvent object.");
-    return false;
+    console.error('Invalid input: Function expects a KeyboardEvent object.')
+    return false
   }
 
-  const key = event.key;
-  const ctrl = event.ctrlKey;
-  const shift = event.shiftKey;
-  const alt = event.altKey;
-  const meta = event.metaKey;
+  const key = event.key
+  const ctrl = event.ctrlKey
+  const shift = event.shiftKey
+  const alt = event.altKey
+  const meta = event.metaKey
 
   // Calculate how many distinct modifier keys are active *right now* according to the event state.
   // Note: If the key pressed *is* a modifier (e.g., 'Shift'), its corresponding flag (shiftKey) will be true.
-  const activeModifierCount = (ctrl ? 1 : 0) + (shift ? 1 : 0) + (alt ? 1 : 0) + (meta ? 1 : 0);
+  const activeModifierCount = (ctrl ? 1 : 0) + (shift ? 1 : 0) + (alt ? 1 : 0) + (meta ? 1 : 0)
 
   if (activeModifierCount === 0) {
     // Case 1: No modifiers are active. This means a non-modifier key was pressed alone.
     // (e.g., 'a', 'Enter', 'F5', 'Tab'). This is a single key press.
-    return true;
+    return true
   } else if (activeModifierCount === 1) {
     // Case 2: Exactly one modifier flag is active.
     // This could be a single modifier press (e.g., just 'Shift') OR a combo (e.g., 'Shift' + 'A').
@@ -57,11 +58,11 @@ export function isSingleKeyPress(event: KeyboardEvent): boolean {
       (shift && key === 'Shift') ||
       (alt && key === 'Alt') ||
       (meta && key === 'Meta')
-    );
+    )
   } else {
     // Case 3: More than one modifier flag is active (e.g., Ctrl+Shift are both true).
     // This cannot be a single key press, regardless of what event.key is.
-    return false;
+    return false
   }
 }
 
@@ -89,43 +90,63 @@ export const createAction = <T extends ActionContextType>(config: ActionConfig<T
   ...config,
 })
 
-
-export function makeMultiSelect<T extends ActionContextType>(
-  actionConfig: ActionConfig<T>
-): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> {
+/**
+ * Creates a multi-select version of an action that applies the original action to each selected block.
+ * Uses makeModeAction under the hood with a specialized handler override.
+ */
+export const makeMultiSelect = <T extends ActionContextType>(
+  actionConfig: ActionConfig<T>,
+  {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
+): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block
-  const defaultHandler = async (multiSelectDeps: MultiSelectModeDependencies) => {
-    const { selectedBlocks, uiStateBlock } = multiSelectDeps;
-    console.log(`[makeMultiSelect] Running action for ${selectedBlocks.length} blocks`)
+  const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies) => {
+    const {selectedBlocks, uiStateBlock} = multiSelectDeps
+    const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
+    console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
-    // Create a transaction for all operations to be atomic
+    // todo Create a transaction for all operations to be atomic
     // uiStateBlock.repo.undoRedoManager.transaction(() => {
-      // Process blocks sequentially, awaiting each one before proceeding
-      for (const block of selectedBlocks) {
-        // Convert dependencies to match the original action's context
-        const originalDeps = {
-          block,
-          uiStateBlock,
-        } as unknown as ShortcutDependenciesMap[T];
 
-        // Await each promise before proceeding to the next block
-        await actionConfig.handler(originalDeps);
-      }
-    // }, { description: `Multi-select: ${actionConfig.description}` });
-  };
+    // Process blocks sequentially, awaiting each one before proceeding
+    for (const block of blocks) {
+      // Convert dependencies to match the original action's context
+      const originalDeps = {
+        block,
+        uiStateBlock,
+      } as ShortcutDependenciesMap[T]
 
-  return {
-    id: `multi_select.${actionConfig.id}`,
+      await actionConfig.handler(originalDeps)
+    }
+  }
+
+  return makeMultiSelectInternal({
+    ...actionConfig,
     description: `${actionConfig.description} (Multiple Blocks)`,
-    context: ActionContextTypes.MULTI_SELECT_MODE,
-    handler: defaultHandler,
-    defaultBinding: actionConfig.defaultBinding,
-    // Inherit the original binding but add Shift modifier
-    // defaultBinding: actionConfig.defaultBinding ? {
-    //   ...actionConfig.defaultBinding,
-    //   keys: typeof actionConfig.defaultBinding.keys === 'string'
-    //     ? `shift+${actionConfig.defaultBinding.keys}`
-    //     : actionConfig.defaultBinding.keys.map(k => `shift+${k}`)
-    // } : undefined,
-  };
+    handler: multiSelectHandler as ActionConfig['handler'],
+  })
 }
+
+/**
+ * Creates a higher-order function that transforms an action config for a specific mode.
+ * This allows creating mode-specific action transformers like makeNormalMode, makeVisualMode, etc.
+ *
+ * @param mode The mode context type to transform the action into
+ * @param idPrefix The prefix to add to the action ID (e.g. 'normal', 'visual', etc)
+ * @returns A function that transforms an action config for the specified mode
+ */
+export const makeModeAction = <TargetMode extends ActionContextType>(
+  mode: TargetMode,
+  idPrefix: string,
+) => {
+  return <T extends ActionContextType>(
+    actionConfig: ActionConfig<T>,
+  ): ActionConfig<TargetMode> => ({
+    ...actionConfig,
+    id: `${idPrefix}.${actionConfig.id}`,
+    context: mode,
+  } as ActionConfig<TargetMode>)
+}
+
+export const makeNormalMode = makeModeAction(ActionContextTypes.NORMAL_MODE, 'normal')
+export const makeEditMode = makeModeAction(ActionContextTypes.EDIT_MODE, 'edit')
+const makeMultiSelectInternal = makeModeAction(ActionContextTypes.MULTI_SELECT_MODE, 'multi_select')
