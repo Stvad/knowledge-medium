@@ -1,6 +1,6 @@
 import { Block } from '@/data/block';
 import { Repo } from '@/data/repo';
-import { isCollapsedProp } from '@/data/properties';
+import { isCollapsedProp, selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp } from '@/data/properties';
 
 /**
  * Retrieves all visible block IDs in their document order for a given panel.
@@ -110,4 +110,57 @@ export async function validateSelectionHierarchy(
   }
 
   return Array.from(validatedIds);
+}
+
+/**
+ * Extends selection to include blocks in range between current anchor and target block.
+ * Handles the full selection state management including:
+ * 1. Gets the current selection state and focused block ID from uiStateBlock
+ * 2. Determines the anchor block (either from current state or focused block)
+ * 3. Gets the ordered block IDs and computes the range
+ * 4. Updates the selection state with the new range
+ * 
+ * @param targetBlockId The ID of the target block (end of selection)
+ * @param uiStateBlock The UI state block that holds selection state
+ * @param repo Repository instance to find blocks
+ * @returns Promise that resolves to the selected block IDs
+ */
+export async function extendSelection(
+  targetBlockId: string,
+  uiStateBlock: Block,
+  repo: Repo,
+): Promise<string[]> {
+  // Get current selection state, focused block ID and top level block ID
+  const [currentState, focusedBlockId, topLevelBlockId] = await Promise.all([
+    uiStateBlock.getProperty(selectionStateProp),
+    uiStateBlock.getProperty(focusedBlockIdProp),
+    uiStateBlock.getProperty(topLevelBlockIdProp),
+  ]);
+
+  if (!topLevelBlockId?.value || !currentState?.value) return [];
+
+  // Determine anchor block - either from current state or use the focused block
+  const currentAnchor = currentState.value.anchorBlockId || focusedBlockId?.value;
+  if (!currentAnchor) return [];
+
+  // Get ordered IDs and compute range
+  const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId.value));
+  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, orderedIds, repo);
+
+  // Update selection state
+  uiStateBlock.setProperty({
+    ...selectionStateProp,
+    value: {
+      selectedBlockIds: rangeIds,
+      anchorBlockId: currentAnchor,
+    },
+  });
+
+  // Update focused block to target
+  uiStateBlock.setProperty({
+    ...focusedBlockIdProp,
+    value: targetBlockId,
+  });
+
+  return rangeIds;
 }

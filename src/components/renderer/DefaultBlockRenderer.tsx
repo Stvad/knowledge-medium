@@ -15,7 +15,7 @@ import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRe
 import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo } from 'react'
 import { Block, useData, usePropertyValue } from '@/data/block.ts'
-import { useUIStateProperty, useUserProperty } from '@/data/globalState'
+import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
@@ -34,8 +34,7 @@ import {
 } from '@/components/ui/context-menu.tsx'
 import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
-import { useSelectionState } from '@/data/globalState'
-import { getAllVisibleBlockIdsInOrder, getBlocksInRange, validateSelectionHierarchy } from '@/utils/selection'
+import { validateSelectionHierarchy, extendSelection } from '@/utils/selection'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -152,6 +151,7 @@ export function DefaultBlockRenderer(
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
+  const uiStateBlock = useUIStateBlock()
   const [isEditing] = useIsEditing()
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
@@ -241,7 +241,6 @@ export function DefaultBlockRenderer(
         tabIndex={0}
         onPaste={handlePaste}
         ref={ref}
-        onSelect={() => console.log('select ' + block.id)}
         onClick={async (e) => {
           // Handle selection clicks
           if (e.ctrlKey || e.metaKey) {
@@ -263,17 +262,7 @@ export function DefaultBlockRenderer(
           } else if (e.shiftKey) {
             e.preventDefault();
             e.stopPropagation();
-            const currentAnchor = selectionState.anchorBlockId || focusedBlockId;
-            if (!currentAnchor) return;
-
-            const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId!));
-            const rangeIds = await getBlocksInRange(currentAnchor, block.id, orderedIds, repo);
-            
-            setFocusedBlockId(block.id);
-            setSelectionState({
-              selectedBlockIds: rangeIds,
-              anchorBlockId: currentAnchor
-            });
+            await extendSelection(block.id, uiStateBlock, repo);
           } else if (selectionState.selectedBlockIds.length > 0) {
             // Clear selection on regular click if there was a selection
             setSelectionState({

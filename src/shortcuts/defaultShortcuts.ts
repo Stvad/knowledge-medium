@@ -4,7 +4,8 @@ import {
   EditModeDependencies,
   ActionContextTypes,
   BaseShortcutDependencies,
-  ActionConfig, MultiSelectModeDependencies,
+  ActionConfig,
+  MultiSelectModeDependencies,
 } from './types'
 import {
   previousVisibleBlock,
@@ -26,8 +27,8 @@ import {
   topLevelBlockIdProp,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
-import { getAllVisibleBlockIdsInOrder, getBlocksInRange } from '@/utils/selection'
-import { makeMultiSelect, makeNormalMode, makeEditMode } from './utils'
+import { extendSelection } from '@/utils/selection'
+import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect } from './utils'
 
 const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
   uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
@@ -256,6 +257,52 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       keys: 'z',
     },
   }
+  const extendSelectionUp = {
+    id: 'extend_selection_up',
+    description: 'Extend selection up',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {uiStateBlock} = deps
+
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      if (!topLevelBlockId) return
+
+      const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
+      if (!focusedBlockId) return
+
+      const prevBlock = await previousVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
+      if (!prevBlock) return
+
+      console.log('extend selection up', prevBlock.id, focusedBlockId)
+
+      await extendSelection(prevBlock.id, uiStateBlock, repo)
+    },
+    defaultBinding: {
+      keys: 'shift+up',
+    },
+  }
+  const extendSelectionDown = {
+    id: 'extend_selection_down',
+    description: 'Extend selection down',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {uiStateBlock} = deps
+
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      if (!topLevelBlockId) return
+
+      const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
+      if (!focusedBlockId) return
+
+      const nextBlock = await nextVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
+      if (!nextBlock) return
+
+      await extendSelection(nextBlock.id, uiStateBlock, repo)
+    },
+    defaultBinding: {
+      keys: 'shift+down',
+    },
+  }
   const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     indentBlock,
     outdentBlock,
@@ -362,157 +409,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         })
       },
       defaultBinding: {
-        keys: 'space',
+        keys: ['space', 'v'],
       },
     },
-    {
-      id: 'add_focused_to_selection',
-      description: 'Add focused block to selection',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        const currentState = await uiStateBlock.getProperty(selectionStateProp)
-        if (!currentState?.value) return
-
-        // Check if block is descendant of any currently selected block
-        for (const selectedId of currentState.value.selectedBlockIds) {
-          const selectedBlock = repo.find(selectedId)
-          if (await block.isDescendantOf(selectedBlock)) {
-            return // Skip if block is descendant
-          }
-        }
-
-        // Remove any currently selected blocks that are descendants of this block
-        const newSelectedIds = []
-        for (const id of currentState.value.selectedBlockIds) {
-          const selectedBlock = repo.find(id)
-          if (!(await selectedBlock.isDescendantOf(block))) {
-            newSelectedIds.push(id)
-          }
-        }
-
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: [...newSelectedIds, block.id],
-            anchorBlockId: currentState.value.anchorBlockId || block.id,
-          },
-        })
-      },
-      defaultBinding: {
-        keys: 'ctrl+space',
-      },
-    },
-    {
-      id: 'extend_selection_up',
-      description: 'Extend selection up',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        const currentState = await uiStateBlock.getProperty(selectionStateProp)
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId || !currentState?.value) return
-
-        const prevBlock = await previousVisibleBlock(block, topLevelBlockId)
-        if (!prevBlock) return
-
-        const currentAnchor = currentState.value.anchorBlockId || block.id
-        const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId))
-        const rangeIds = await getBlocksInRange(currentAnchor, prevBlock.id, orderedIds, repo)
-
-        setFocusedBlockId(uiStateBlock, prevBlock.id)
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: rangeIds,
-            anchorBlockId: currentAnchor,
-          },
-        })
-      },
-      defaultBinding: {
-        keys: 'shift+up',
-      },
-    },
-    {
-      id: 'extend_selection_down',
-      description: 'Extend selection down',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        const currentState = await uiStateBlock.getProperty(selectionStateProp)
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId || !currentState?.value) return
-
-        const nextBlock = await nextVisibleBlock(block, topLevelBlockId)
-        if (!nextBlock) return
-
-        const currentAnchor = currentState.value.anchorBlockId || block.id
-        const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId))
-        const rangeIds = await getBlocksInRange(currentAnchor, nextBlock.id, orderedIds, repo)
-
-        setFocusedBlockId(uiStateBlock, nextBlock.id)
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: rangeIds,
-            anchorBlockId: currentAnchor,
-          },
-        })
-      },
-      defaultBinding: {
-        keys: 'shift+down',
-      },
-    },
-    {
-      id: 'select_all_visible',
-      description: 'Select all visible blocks',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {uiStateBlock} = deps
-        if (!uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId))
-        if (orderedIds.length === 0) return
-
-        // Only select top-level blocks within the current view/panel
-        const validatedIds = []
-        for (const id of orderedIds) {
-          const currentBlock = repo.find(id)
-          for (const otherId of orderedIds) {
-            if (otherId === id) continue
-            const otherBlock = repo.find(otherId)
-            if (await currentBlock.isDescendantOf(otherBlock)) {
-              continue
-            }
-          }
-          validatedIds.push(id)
-        }
-
-        const topLevelIds = validatedIds.filter(Boolean) as string[]
-        if (topLevelIds.length === 0) return
-
-        setFocusedBlockId(uiStateBlock, topLevelIds[0])
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: topLevelIds,
-            anchorBlockId: topLevelIds[0],
-          },
-        })
-      },
-      defaultBinding: {
-        keys: ['cmd+a', 'ctrl+a'],
-      },
-    },
+    extendSelectionUp,
+    extendSelectionDown,
     makeNormalMode(moveBlockUp),
     makeNormalMode(moveBlockDown),
   ]
@@ -638,13 +539,15 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
 
   // Multi-select mode actions
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
-    makeMultiSelect(toggleBlockCollapse),
-    makeMultiSelect(togglePropertiesDisplay),
-    makeMultiSelect(indentBlock),
-    makeMultiSelect(outdentBlock, {applyInReverseOrder: true}),
-    makeMultiSelect(deleteBlock),
-    makeMultiSelect(moveBlockUp),
-    makeMultiSelect(moveBlockDown, {applyInReverseOrder: true}),
+    makeMultiSelect(extendSelectionUp),
+    makeMultiSelect(extendSelectionDown),
+    applyToAllBlocksInSelection(toggleBlockCollapse),
+    applyToAllBlocksInSelection(togglePropertiesDisplay),
+    applyToAllBlocksInSelection(indentBlock),
+    applyToAllBlocksInSelection(outdentBlock, {applyInReverseOrder: true}),
+    applyToAllBlocksInSelection(deleteBlock),
+    applyToAllBlocksInSelection(moveBlockUp),
+    applyToAllBlocksInSelection(moveBlockDown, {applyInReverseOrder: true}),
     {
       id: 'clear_selection',
       description: 'Clear selection',

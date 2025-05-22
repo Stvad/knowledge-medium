@@ -94,7 +94,7 @@ export const createAction = <T extends ActionContextType>(config: ActionConfig<T
  * Creates a multi-select version of an action that applies the original action to each selected block.
  * Uses makeModeAction under the hood with a specialized handler override.
  */
-export const makeMultiSelect = <T extends ActionContextType>(
+export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   actionConfig: ActionConfig<T>,
   {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
@@ -119,7 +119,7 @@ export const makeMultiSelect = <T extends ActionContextType>(
     }
   }
 
-  return makeMultiSelectInternal({
+  return makeMultiSelect({
     ...actionConfig,
     description: `${actionConfig.description} (Multiple Blocks)`,
     handler: multiSelectHandler as ActionConfig['handler'],
@@ -149,4 +149,4 @@ export const makeModeAction = <TargetMode extends ActionContextType>(
 
 export const makeNormalMode = makeModeAction(ActionContextTypes.NORMAL_MODE, 'normal')
 export const makeEditMode = makeModeAction(ActionContextTypes.EDIT_MODE, 'edit')
-const makeMultiSelectInternal = makeModeAction(ActionContextTypes.MULTI_SELECT_MODE, 'multi_select')
+export const makeMultiSelect = makeModeAction(ActionContextTypes.MULTI_SELECT_MODE, 'multi_select')
