@@ -226,6 +226,36 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
   }
 
   // Normal mode actions
+  const togglePropertiesDisplay = {
+    id: 'toggle_properties',
+    description: 'Toggle block properties',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {block} = deps
+      if (!block) return
+
+      const showProperties = (await block.getProperty(showPropertiesProp))?.value
+      block.setProperty({...showPropertiesProp, value: !showProperties})
+    },
+    defaultBinding: {
+      keys: 't',
+    },
+  }
+  const toggleBlockCollapse = {
+    id: 'toggle_collapse',
+    description: 'Toggle block collapse',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async (deps: BlockShortcutDependencies) => {
+      const {block} = deps
+      if (!block) return
+
+      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+      block.setProperty({...isCollapsedProp, value: !isCollapsed})
+    },
+    defaultBinding: {
+      keys: 'z',
+    },
+  }
   const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     indentBlock,
     outdentBlock,
@@ -287,36 +317,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         keys: 'i',
       },
     },
-    {
-      id: 'toggle_collapse',
-      description: 'Toggle block collapse',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block} = deps
-        if (!block) return
-
-        const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-        block.setProperty({...isCollapsedProp, value: !isCollapsed})
-      },
-      defaultBinding: {
-        keys: 'z',
-      },
-    },
-    {
-      id: 'toggle_properties',
-      description: 'Toggle block properties',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block} = deps
-        if (!block) return
-
-        const showProperties = (await block.getProperty(showPropertiesProp))?.value
-        block.setProperty({...showPropertiesProp, value: !showProperties})
-      },
-      defaultBinding: {
-        keys: 't',
-      },
-    },
+    toggleBlockCollapse,
+    togglePropertiesDisplay,
     deleteBlock,
     {
       id: 'create_block_below_and_edit',
@@ -636,6 +638,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
 
   // Multi-select mode actions
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
+    makeMultiSelect(toggleBlockCollapse),
+    makeMultiSelect(togglePropertiesDisplay),
     makeMultiSelect(indentBlock),
     makeMultiSelect(outdentBlock, {applyInReverseOrder: true}),
     makeMultiSelect(deleteBlock),
