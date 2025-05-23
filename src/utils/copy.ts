@@ -1,23 +1,53 @@
 import { Block } from '../data/block';
-import { BlockData } from '../data/block'; // Corrected: BlockData is also from ../data/block
+import { BlockData } from '../data/block';
 import { ClipboardData } from '../types';
+import { Repo } from '../data/repo'; // Added import for Repo
 
-export async function serializeBlockForClipboard(block: Block): Promise<ClipboardData> {
-  const blockData = await block.data();
+// Internal recursive helper function
+async function fetchAllDescendantDataRecursively(
+  block: Block,
+  repo: Repo, // repo is passed for consistency, though block.children() might already use block.repo
+): Promise<{ allBlocks: BlockData[]; allMarkdown: string[] }> {
+  const currentBlockData = await block.data();
+  if (!currentBlockData) {
+    return { allBlocks: [], allMarkdown: [] };
+  }
+
+  let allBlocks: BlockData[] = [currentBlockData];
+  let allMarkdown: string[] = [currentBlockData.content];
+
+  // The block.children() method uses the repo instance stored within the block object itself.
+  const children = await block.children(); 
+
+  for (const childBlock of children) {
+    const result = await fetchAllDescendantDataRecursively(childBlock, repo);
+    allBlocks = allBlocks.concat(result.allBlocks);
+    allMarkdown = allMarkdown.concat(result.allMarkdown);
+  }
+
+  return { allBlocks, allMarkdown };
+}
+
+export async function serializeBlockForClipboard(block: Block, repo: Repo): Promise<ClipboardData> {
+  const blockData = await block.data(); // Initial check for the root block being copied
 
   if (!blockData) {
-    // This case should ideally be handled based on how the application expects to manage errors.
-    // For now, throwing an error as per initial thoughts, though returning a specific
-    // ClipboardData structure indicating an error or empty state might be preferable
-    // depending on broader error handling strategies.
     throw new Error(`Failed to retrieve data for block with id ${block.id}`);
   }
 
-  // The task specifies to use blockData.content for markdown and [blockData] for blocks.
-  // This implies a single block is being serialized here.
-  // If child blocks or a more complex structure were needed, this would be more involved.
+  const { allBlocks, allMarkdown } = await fetchAllDescendantDataRecursively(block, repo);
+
+  if (allBlocks.length === 0) {
+    // This case should ideally not be reached if the initial block.data() succeeded
+    // and fetchAllDescendantDataRecursively always includes the starting block.
+    // However, as a safeguard:
+    throw new Error(`No block data could be serialized for block with id ${block.id}, even after recursive fetch.`);
+  }
+  
+  const combinedMarkdown = allMarkdown.join('\n\n');
+
   return {
-    markdown: blockData.content,
-    blocks: [blockData],
+    markdown: combinedMarkdown,
+    blocks: allBlocks,
   };
 }

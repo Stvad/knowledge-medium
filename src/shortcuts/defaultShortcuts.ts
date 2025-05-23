@@ -42,11 +42,11 @@ const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
 
 // Exportable handler logic for copy_block
 export async function handleCopyBlock(deps: BlockShortcutDependencies) {
-  const { block } = deps;
-  if (!block) return;
+  const { block, repo } = deps; // Added repo from deps
+  if (!block || !repo) return; // Added repo check
 
   try {
-    const clipboardData: ClipboardData = await serializeBlockForClipboard(block);
+    const clipboardData: ClipboardData = await serializeBlockForClipboard(block, repo); // Pass repo
     const jsonString = JSON.stringify(clipboardData);
 
     await navigator.clipboard.writeText(jsonString);
@@ -85,11 +85,20 @@ export async function handleCopySelectedBlocks(deps: MultiSelectModeDependencies
     if (block) {
       try {
         // Assuming serializeBlockForClipboard is correctly imported and used
-        const clipboardBlockData = await serializeBlockForClipboard(block);
+        const clipboardBlockData = await serializeBlockForClipboard(block, repo); // Pass repo
         if (clipboardBlockData.blocks && clipboardBlockData.blocks.length > 0) {
-          allBlockData.push(clipboardBlockData.blocks[0]);
+          // If serializeBlockForClipboard now returns all descendants,
+          // and we want to keep the flat structure for 'blocks' in ClipboardData
+          // for copy_selected_blocks, we might need to adjust this logic.
+          // For now, assuming it returns the primary block and its descendants,
+          // and we're collecting all such primary blocks (and their descendants) here.
+          // This part might need revisiting based on how ClipboardData for multi-select should be structured.
+          // Based on current serializeBlockForClipboard, clipboardBlockData.blocks IS allBlockData (root + descendants)
+          // So, we should spread it.
+          allBlockData.push(...clipboardBlockData.blocks);
         }
-        markdownParts.push(clipboardBlockData.markdown);
+        // The markdown from serializeBlockForClipboard is already combined for the block and its descendants.
+        markdownParts.push(clipboardBlockData.markdown); 
       } catch (error) {
         console.error(`Failed to serialize block ${blockId} for clipboard:`, error);
       }
