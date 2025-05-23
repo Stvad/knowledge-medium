@@ -47,18 +47,23 @@ export async function handleCopyBlock(deps: BlockShortcutDependencies) {
 
   try {
     const clipboardData: ClipboardData = await serializeBlockForClipboard(block, repo); // Pass repo
-    const jsonString = JSON.stringify(clipboardData);
+    // const jsonString = JSON.stringify(clipboardData); // No longer needed for a separate writeText
 
-    await navigator.clipboard.writeText(jsonString);
+    // await navigator.clipboard.writeText(jsonString); // Removed
     if (navigator.clipboard.write) {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': new Blob([clipboardData.markdown], { type: 'text/plain' }),
-        }),
-      ]);
+      const fullJsonString = JSON.stringify(clipboardData);
+      const clipboardItem = new ClipboardItem({
+        'text/plain': new Blob([clipboardData.markdown], { type: 'text/plain' }),
+        'application/json': new Blob([fullJsonString], { type: 'application/json' })
+      });
+      await navigator.clipboard.write([clipboardItem]);
       console.log('Block content copied to clipboard (markdown and JSON).');
     } else {
-      console.log('Block content (JSON) copied to clipboard. Markdown copy skipped (navigator.clipboard.write not available).');
+      // Fallback if navigator.clipboard.write is not available (very unlikely if writeText was, but for safety)
+      // In this scenario, we can only write text. We'll write the JSON as text.
+      const fullJsonString = JSON.stringify(clipboardData);
+      await navigator.clipboard.writeText(fullJsonString);
+      console.log('Block content (JSON) copied to clipboard as text. Rich copy skipped (navigator.clipboard.write not available).');
     }
   } catch (error) {
     console.error('Failed to copy block to clipboard:', error);
@@ -117,18 +122,22 @@ export async function handleCopySelectedBlocks(deps: MultiSelectModeDependencies
   };
 
   try {
-    const jsonString = JSON.stringify(clipboardData);
-    await navigator.clipboard.writeText(jsonString);
+    // const jsonString = JSON.stringify(clipboardData); // No longer needed for a separate writeText
+    // await navigator.clipboard.writeText(jsonString); // Removed
 
     if (navigator.clipboard.write) {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'text/plain': new Blob([combinedMarkdown], { type: 'text/plain' }),
-        }),
-      ]);
+      const fullJsonString = JSON.stringify(clipboardData); // clipboardData is the finalClipboardData
+      const clipboardItem = new ClipboardItem({
+        'text/plain': new Blob([clipboardData.markdown], { type: 'text/plain' }), // Use combinedMarkdown from clipboardData
+        'application/json': new Blob([fullJsonString], { type: 'application/json' })
+      });
+      await navigator.clipboard.write([clipboardItem]);
       console.log('Selected blocks copied to clipboard (markdown and JSON).');
     } else {
-      console.log('Selected blocks (JSON) copied to clipboard. Markdown copy skipped (navigator.clipboard.write not available).');
+      // Fallback
+      const fullJsonString = JSON.stringify(clipboardData);
+      await navigator.clipboard.writeText(fullJsonString);
+      console.log('Selected blocks (JSON) copied to clipboard as text. Rich copy skipped (navigator.clipboard.write not available).');
     }
   } catch (error) {
     console.error('Failed to copy selected blocks to clipboard:', error);
