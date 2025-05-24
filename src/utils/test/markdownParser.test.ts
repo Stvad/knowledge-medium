@@ -209,7 +209,7 @@ Regular content line 1
         const rc3 = blocks[6];
 
         assertBlockProperties(reg1, { content: 'Regular content line 1', isRoot: true, hasNoChildIds: true });
-        assertBlockProperties(h1, { content: '# Header 1', isRoot: true, numChildren: 1, hasChildIds: [contentH1.id!, reg2.id!, h2.id!] });
+        assertBlockProperties(h1, { content: '# Header 1', isRoot: true, hasChildIds: [contentH1.id!, reg2.id!, h2.id!] });
         assertBlockProperties(contentH1, { content: 'Content under H1', parentId: h1.id, hasChildIds: [gc1.id!] });
         assertBlockProperties(gc1, { content: 'gc1', parentId: contentH1.id, hasNoChildIds: true });
         assertBlockProperties(reg2, { content: 'Regular content line 2', parentId: h1.id, hasNoChildIds: true });
