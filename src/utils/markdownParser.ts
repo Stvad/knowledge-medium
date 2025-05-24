@@ -9,53 +9,95 @@ interface ParsedBlock {
 export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
   const lines = text.split('\n');
   const parsedBlocks: ParsedBlock[] = [];
-  let baseIndent = -1; // Will be set by first non-empty line
-  let currentHeaderLevel = -1;
-  let isInsideHeader = false;
+  let baseIndent = -1;
+
+  // Context variables for the current header scope
+  let contextHeaderCalculatedLevel = -1;
+  let contextHeaderHashCount = 0;
+  let contextHeaderRawIndent = -1;
 
   // First pass: parse lines into blocks with levels
   for (const line of lines) {
-    const originalLineContent = line; // Keep for potential use as content for children of headers
-    const trimmedLine = line.trim(); // Used for checks and for header content base
+    const originalLineContent = line;
+    const trimmedLine = line.trim();
 
     if (!trimmedLine) {
-      // Empty line resets header context
-      isInsideHeader = false;
-      currentHeaderLevel = -1;
-      // baseIndent should not reset here.
+      // Empty line resets any active header context for subsequent lines
+      contextHeaderCalculatedLevel = -1;
+      contextHeaderHashCount = 0;
+      contextHeaderRawIndent = -1;
       continue;
     }
 
-    const rawLevel = getIndentationLevel(line); // Indentation of the current line
+    const rawLevel = getIndentationLevel(line);
     let contentToStore: string;
     let calculatedLevel: number;
 
-    const isHeaderLine = trimmedLine.startsWith('#');
+    const isCurrentLineHeader = trimmedLine.startsWith('#');
 
-    if (isHeaderLine) {
-      isInsideHeader = true;
-      contentToStore = trimmedLine.replace(/^#+\s*/, ''); // Cleaned header content
+    if (isCurrentLineHeader) {
+      contentToStore = trimmedLine; // Preserve # characters
+      const newHeaderHashCount = trimmedLine.match(/^#+/)[0].length;
+
       if (baseIndent === -1) {
-        baseIndent = rawLevel; // Set base indent if this is the first content line
+        baseIndent = rawLevel;
       }
-      // Header's level is based on its own indentation relative to baseIndent
-      currentHeaderLevel = Math.max(0, rawLevel - baseIndent);
-      calculatedLevel = currentHeaderLevel;
-    } else if (isInsideHeader) {
-      // Child of a header
-      // Content is the raw line itself to preserve all original spacing and list markers.
-      contentToStore = originalLineContent;
-      calculatedLevel = currentHeaderLevel + 1; // Level is one deeper than the current header
-    } else {
-      // Regular line, not a header and not under a header
-      // isInsideHeader should be false here. (It would have been reset by an empty line or never set true)
-      if (baseIndent === -1) {
-        baseIndent = rawLevel; // Set base indent if this is the first content line
+
+      // Determine calculatedLevel for THIS header block
+      if (contextHeaderCalculatedLevel !== -1 && // Is there an active header context?
+          newHeaderHashCount > contextHeaderHashCount &&
+          rawLevel >= contextHeaderRawIndent) { // Standard sub-header (e.g., # H1 then ## H2 at same/greater indent)
+        calculatedLevel = contextHeaderCalculatedLevel + 1;
+      } else {
+        // Default: No prior context qualifying this as a direct sub-header,
+        // or it's a peer/outdented header relative to the active context.
+        // Calculate level based on its own indentation.
+        // (This covers cases like ##H2 then #H1, or #H1 then another #H1, or first header)
+        calculatedLevel = Math.max(0, rawLevel - baseIndent);
       }
-      calculatedLevel = Math.max(0, rawLevel - baseIndent);
-      // For regular lines, clean them by removing list markers from the trimmed line.
-      // (If it's not a list item, this replacement does nothing)
-      contentToStore = trimmedLine.replace(/^([-*+]|\d+\.)\s+/, '');
+      
+      // This header now establishes the new context for subsequent lines
+      contextHeaderCalculatedLevel = calculatedLevel;
+      contextHeaderHashCount = newHeaderHashCount;
+      contextHeaderRawIndent = rawLevel;
+
+    } else { // Current line is NOT a header
+      // It might be a child of an existing header context, or a regular line.
+      const isActiveContextAHeader = contextHeaderHashCount > 0; // Check if current context is from a true header
+
+      // Apply specific content cleaning for non-header lines
+      if (/^\d+\.\s+/.test(trimmedLine)) { // Check for numbered list
+        contentToStore = trimmedLine; // Preserve numbered list marker
+      } else if (/^([-*+])\s+/.test(trimmedLine)) { // Check for unordered list
+        contentToStore = trimmedLine.replace(/^([-*+])\s+/, ''); // Strip unordered list marker
+      } else {
+        contentToStore = trimmedLine; // Default for regular text lines
+      }
+
+      // Path A: Check for direct children of an active header (includes unindented children)
+      if (isActiveContextAHeader && rawLevel >= contextHeaderRawIndent) {
+        calculatedLevel = contextHeaderCalculatedLevel + 1;
+        // contentToStore is already set by the logic above
+        // If the line is not further indented than the header (e.g., an unindented list item under a header),
+        // neutralize header context for subsequent sibling lines at the same level.
+        // The header context itself remains for potential children of this current line.
+        // For now, keeping contextHeaderHashCount = 0 simplifies, aligning with current goals.
+        // This might be refined if items like lists under headers need to maintain the header context for their own children differently.
+        contextHeaderHashCount = 0; 
+      } else {
+        // Path B: Not a direct child of an active header
+        // Reset the header context fully
+        contextHeaderCalculatedLevel = -1;
+        contextHeaderHashCount = 0;
+        contextHeaderRawIndent = -1;
+
+        // Calculate level based on base indent
+        if (baseIndent === -1) {
+          baseIndent = rawLevel;
+        }
+        calculatedLevel = Math.max(0, rawLevel - baseIndent);
+        // contentToStore is already set by the logic above
+      }
     }
 
     parsedBlocks.push({
@@ -83,6 +125,8 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
     }
 
     // Set parent relationship
+    // This logic correctly assigns parents based on the calculated levels.
+    // If levels are accurate, parentId should be accurate.
     if (parentStack.length > 0) {
       // Find the correct parent in the stack, skipping empty slots
       let parentIndex = parsed.level - 1;
