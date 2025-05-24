@@ -63,19 +63,35 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
 
     } else { // Current line is NOT a header
       // It might be a child of an existing header context, or a regular line.
-      if (contextHeaderCalculatedLevel !== -1 && // Check if a header context actually exists
-          rawLevel > contextHeaderRawIndent) { // Must be more indented than the context header line
-        // This non-header line is a child of the active header context
-        contentToStore = originalLineContent; // Preserve original spacing, list markers, etc.
+      const isActiveContextAHeader = contextHeaderHashCount > 0; // Check if current context is from a true header
+
+      if (isActiveContextAHeader && rawLevel > contextHeaderRawIndent) { 
+        // PATH A: Current line is an indented child of an ACTIVE HEADER context (H).
+        // Example: H -> NH1 (this line)
+        contentToStore = originalLineContent; 
         calculatedLevel = contextHeaderCalculatedLevel + 1;
+        // NH1 (this line), being a non-header, neutralizes H's context for subsequent lines.
+        // This ensures that children of NH1, or siblings of NH1 that are also children of H (like NH2),
+        // will perceive the context as non-header, leading to cleaned content for them if they are non-headers.
+        contextHeaderHashCount = 0; // Neutralize header context.
       } else {
-        // Not a header, and not an indented child of an active header context.
-        // It's a regular line.
-        // This line effectively BREAKS the previous header's context for subsequent lines.
-        if (contextHeaderCalculatedLevel !== -1) { // If there was an active context
-          contextHeaderCalculatedLevel = -1; // Reset context
-          contextHeaderHashCount = 0;
-          contextHeaderRawIndent = -1;
+        // PATH B: Current line (e.g., NH2 or GCA) is:
+        // 1. Not a header AND has no active context (e.g. context fully reset by prior NH2).
+        // 2. Not a header AND has an active context, but it's now non-header (isActiveContextAHeader was false, e.g. NH1 set hashCount to 0).
+        // 3. Not a header AND has/had an active HEADER context, but this line is NOT an indented child of it.
+        
+        // If there was an active context (contextHeaderCalculatedLevel !== -1)
+        // AND this line is NOT taking Path A (already checked by being in this else block),
+        // then this line breaks any previous context chain. Reset context fully.
+        // This handles cases like:
+        // H -> NH1 (Path A, neutralizes hashCount)
+        // H -> NH2 (sibling, Path B because hashCount is 0. isActiveContextAHeader is false. This condition then resets full context)
+        if (contextHeaderCalculatedLevel !== -1) { // If any context level was active
+             // No need to check !(isActiveContextAHeader && rawLevel > contextHeaderRawIndent) again,
+             // as that's the condition for the 'else' branch.
+            contextHeaderCalculatedLevel = -1; 
+            contextHeaderHashCount = 0; // Ensure hashCount is 0 after full reset.
+            contextHeaderRawIndent = -1;
         }
         
         if (baseIndent === -1) {
@@ -112,6 +128,8 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
     }
 
     // Set parent relationship
+    // This logic correctly assigns parents based on the calculated levels.
+    // If levels are accurate, parentId should be accurate.
     if (parentStack.length > 0) {
       // Find the correct parent in the stack, skipping empty slots
       let parentIndex = parsed.level - 1;
