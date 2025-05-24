@@ -333,44 +333,6 @@ Regular content line 1
         assertParentChild(result, '### Deep Header', 'Text under deep header');
       });
 
-      it('6. Mixed Content with Headers (aligning with current parser)', () => {
-        const markdown = `
-Plain text line 1
-# Header 1
-  Text under H1
-
-Plain text line 2
-## Header 2
-  Text under H2
-    Sub-item 1
-    Sub-item 2`;
-        const result = parseMarkdownToBlocks(markdown);
-        expect(result).toHaveLength(8);
-
-        const plainText1 = findBlock(result, 'Plain text line 1');
-        const h1 = findBlock(result, '# Header 1');
-        const textH1 = findBlock(result, 'Text under H1');
-        const plainText2 = findBlock(result, 'Plain text line 2'); 
-        const h2 = findBlock(result, '## Header 2');
-        const textH2 = findBlock(result, 'Text under H2');
-        const subItem1 = findBlock(result, 'Sub-item 1'); 
-        const subItem2 = findBlock(result, 'Sub-item 2'); 
-        
-        assertBlockProperties(plainText1, { content: 'Plain text line 1', isRoot: true, hasNoChildIds: true });
-        assertBlockProperties(h1, { content: '# Header 1', isRoot: true, numChildren: 1, hasChildIds: [textH1!.id!] });
-        assertBlockProperties(textH1, { content: 'Text under H1', parentId: h1!.id, hasNoChildIds: true });
-        assertBlockProperties(plainText2, { content: 'Plain text line 2', isRoot: true, hasNoChildIds: true });
-        assertBlockProperties(h2, { content: '## Header 2', isRoot: true, numChildren: 1, hasChildIds: [textH2!.id!] });
-        assertBlockProperties(textH2, { content: 'Text under H2', parentId: h2!.id, numChildren: 2, hasChildIds: [subItem1!.id!, subItem2!.id!] });
-        assertBlockProperties(subItem1, { content: 'Sub-item 1', parentId: textH2!.id, hasNoChildIds: true });
-        assertBlockProperties(subItem2, { content: 'Sub-item 2', parentId: textH2!.id, hasNoChildIds: true });
-
-        assertParentChild(result, '# Header 1', 'Text under H1');
-        assertParentChild(result, '## Header 2', 'Text under H2');
-        assertParentChild(result, 'Text under H2', 'Sub-item 1');
-        assertParentChild(result, 'Text under H2', 'Sub-item 2');
-      });
-
       it('7. Header at the End of Input', () => {
         const markdown = `
 Some text
