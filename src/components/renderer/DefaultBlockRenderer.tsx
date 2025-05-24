@@ -91,7 +91,12 @@ const BlockBullet = ({block}: { block: Block }) => {
               // todo this should work for any link, so it again calls for a more general navigation handler
               if (e.shiftKey) {
                 e.preventDefault()
-                window.dispatchEvent(new CustomEvent('open-panel', { detail: { blockId: block.id, sourcePanelId: panelId} }))
+                window.dispatchEvent(new CustomEvent('open-panel', {
+                  detail: {
+                    blockId: block.id,
+                    sourcePanelId: panelId,
+                  },
+                }))
               }
             }}
           >
@@ -167,8 +172,8 @@ export function DefaultBlockRenderer(
   const isHovering = useHoverDirty(ref)
   const isTopLevel = block.id === topLevelBlockId
 
-  const [selectionState, setSelectionState] = useSelectionState();
-  const isSelected = selectionState.selectedBlockIds.includes(block.id);
+  const [selectionState, setSelectionState] = useSelectionState()
+  const isSelected = selectionState.selectedBlockIds.includes(block.id)
 
   const inFocus = focusedBlockId === block.id
   if (inFocus && !seen) setSeen(true)
@@ -242,34 +247,33 @@ export function DefaultBlockRenderer(
         onPaste={handlePaste}
         ref={ref}
         onClick={async (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+
           // Handle selection clicks
           if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            e.stopPropagation();
-            const newSelectedIds = isSelected 
+            const newSelectedIds = isSelected
               ? selectionState.selectedBlockIds.filter(id => id !== block.id)
-              : [...selectionState.selectedBlockIds, block.id];
-            
-            const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo);
-            
-            setFocusedBlockId(block.id);
+              : [...selectionState.selectedBlockIds, block.id]
+
+            const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
+
             setSelectionState({
               selectedBlockIds: validatedIds,
-              anchorBlockId: validatedIds.length > 0 
-                ? (selectionState.anchorBlockId || block.id) 
-                : null
-            });
+              anchorBlockId: validatedIds.length > 0
+                ? (selectionState.anchorBlockId || block.id)
+                : null,
+            })
           } else if (e.shiftKey) {
-            e.preventDefault();
-            e.stopPropagation();
-            await extendSelection(block.id, uiStateBlock, repo);
+            await extendSelection(block.id, uiStateBlock, repo)
           } else if (selectionState.selectedBlockIds.length > 0) {
             // Clear selection on regular click if there was a selection
             setSelectionState({
               selectedBlockIds: [],
-              anchorBlockId: null
-            });
+              anchorBlockId: null,
+            })
           }
+          setFocusedBlockId(block.id)
         }}
       >
         {!isTopLevel && blockControls()}
