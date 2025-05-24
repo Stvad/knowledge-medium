@@ -131,7 +131,7 @@ Root
       assertBlockProperties(item2, { content: '2. Second item', isRoot: true, numChildren: 1, hasChildIds: [nestedItem.id!] });
       assertBlockProperties(nestedItem, { content: '1. Nested item', parentId: item2.id, numChildren: 0 });
       
-      assertParentChild(result, { content: 'Second item' }, { content: 'Nested item' });
+      assertParentChild(result, { content: '2. Second item' }, { content: '1. Nested item' });
     })
 
     it('should set default properties', () => {

@@ -65,41 +65,38 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
       // It might be a child of an existing header context, or a regular line.
       const isActiveContextAHeader = contextHeaderHashCount > 0; // Check if current context is from a true header
 
-      if (isActiveContextAHeader && rawLevel > contextHeaderRawIndent) { 
-        // PATH A: Current line is an indented child of an ACTIVE HEADER context (H).
-        // Example: H -> NH1 (this line)
-        contentToStore = originalLineContent; 
-        calculatedLevel = contextHeaderCalculatedLevel + 1;
-        // NH1 (this line), being a non-header, neutralizes H's context for subsequent lines.
-        // This ensures that children of NH1, or siblings of NH1 that are also children of H (like NH2),
-        // will perceive the context as non-header, leading to cleaned content for them if they are non-headers.
-        contextHeaderHashCount = 0; // Neutralize header context.
+      // Apply specific content cleaning for non-header lines
+      if (/^\d+\.\s+/.test(trimmedLine)) { // Check for numbered list
+        contentToStore = trimmedLine; // Preserve numbered list marker
+      } else if (/^([-*+])\s+/.test(trimmedLine)) { // Check for unordered list
+        contentToStore = trimmedLine.replace(/^([-*+])\s+/, ''); // Strip unordered list marker
       } else {
-        // PATH B: Current line (e.g., NH2 or GCA) is:
-        // 1. Not a header AND has no active context (e.g. context fully reset by prior NH2).
-        // 2. Not a header AND has an active context, but it's now non-header (isActiveContextAHeader was false, e.g. NH1 set hashCount to 0).
-        // 3. Not a header AND has/had an active HEADER context, but this line is NOT an indented child of it.
-        
-        // If there was an active context (contextHeaderCalculatedLevel !== -1)
-        // AND this line is NOT taking Path A (already checked by being in this else block),
-        // then this line breaks any previous context chain. Reset context fully.
-        // This handles cases like:
-        // H -> NH1 (Path A, neutralizes hashCount)
-        // H -> NH2 (sibling, Path B because hashCount is 0. isActiveContextAHeader is false. This condition then resets full context)
-        if (contextHeaderCalculatedLevel !== -1) { // If any context level was active
-             // No need to check !(isActiveContextAHeader && rawLevel > contextHeaderRawIndent) again,
-             // as that's the condition for the 'else' branch.
-            contextHeaderCalculatedLevel = -1; 
-            contextHeaderHashCount = 0; // Ensure hashCount is 0 after full reset.
-            contextHeaderRawIndent = -1;
-        }
-        
+        contentToStore = trimmedLine; // Default for regular text lines
+      }
+
+      // Path A: Check for direct children of an active header (includes unindented children)
+      if (isActiveContextAHeader && rawLevel >= contextHeaderRawIndent) {
+        calculatedLevel = contextHeaderCalculatedLevel + 1;
+        // contentToStore is already set by the logic above
+        // If the line is not further indented than the header (e.g., an unindented list item under a header),
+        // neutralize header context for subsequent sibling lines at the same level.
+        // The header context itself remains for potential children of this current line.
+        // For now, keeping contextHeaderHashCount = 0 simplifies, aligning with current goals.
+        // This might be refined if items like lists under headers need to maintain the header context for their own children differently.
+        contextHeaderHashCount = 0; 
+      } else {
+        // Path B: Not a direct child of an active header
+        // Reset the header context fully
+        contextHeaderCalculatedLevel = -1;
+        contextHeaderHashCount = 0;
+        contextHeaderRawIndent = -1;
+
+        // Calculate level based on base indent
         if (baseIndent === -1) {
           baseIndent = rawLevel;
         }
         calculatedLevel = Math.max(0, rawLevel - baseIndent);
-        // For regular lines, clean them by removing list markers from the trimmed line.
-        contentToStore = trimmedLine.replace(/^([-*+]|\d+\.)\s+/, '');
+        // contentToStore is already set by the logic above
       }
     }
 
