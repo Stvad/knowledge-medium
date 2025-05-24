@@ -7,7 +7,9 @@ describe('markdownParser', () => {
 
   describe('parseMarkdownToBlocks', () => {
     it('should parse a simple markdown string into blocks', () => {
-      const markdown = 'First line\nSecond line'
+      const markdown = `
+First line
+Second line`
       const result = parseMarkdownToBlocks(markdown)
 
       expect(result).toHaveLength(2)
@@ -16,7 +18,10 @@ describe('markdownParser', () => {
     })
 
     it('should handle indentation to create parent-child relationships', () => {
-      const markdown = 'Parent\n  Child\n    Grandchild'
+      const markdown = `
+Parent
+  Child
+    Grandchild`
       const result = parseMarkdownToBlocks(markdown)
 
       expect(result).toHaveLength(3)
@@ -76,7 +81,10 @@ describe('markdownParser', () => {
     })
 
     it('should handle empty lines', () => {
-      const markdown = 'First line\n\nSecond line'
+      const markdown = `
+First line
+
+Second line`
       const result = parseMarkdownToBlocks(markdown)
       expect(result).toHaveLength(2)
       assertBlockProperties(result[0], { content: 'First line', isRoot: true, hasNoChildIds: true });
@@ -107,8 +115,9 @@ Root
       assertParentChild(result, { content: 'Root' }, { content: 'Second item' });
     })
 
-    it('should handle numbered lists', () => {
-      const markdown = `1. First item
+    it('should handle numbered lists, keep the number indicators', () => {
+      const markdown = `
+1. First item
 2. Second item
    1. Nested item`
       const result = parseMarkdownToBlocks(markdown)
@@ -118,9 +127,9 @@ Root
       const item2 = result[1];
       const nestedItem = result[2];
 
-      assertBlockProperties(item1, { content: 'First item', isRoot: true, numChildren: 0 });
-      assertBlockProperties(item2, { content: 'Second item', isRoot: true, numChildren: 1, hasChildIds: [nestedItem.id!] });
-      assertBlockProperties(nestedItem, { content: 'Nested item', parentId: item2.id, numChildren: 0 });
+      assertBlockProperties(item1, { content: '1. First item', isRoot: true, numChildren: 0 });
+      assertBlockProperties(item2, { content: '2. Second item', isRoot: true, numChildren: 1, hasChildIds: [nestedItem.id!] });
+      assertBlockProperties(nestedItem, { content: '1. Nested item', parentId: item2.id, numChildren: 0 });
       
       assertParentChild(result, { content: 'Second item' }, { content: 'Nested item' });
     })
@@ -141,7 +150,9 @@ Root
     });
 
     it('should parse multiple headers with different levels, preserving # characters', () => {
-        const markdown = '# Header 1\n## Header 2';
+        const markdown = `
+# Header 1
+## Header 2`;
         const blocks = parseMarkdownToBlocks(markdown);
         expect(blocks.length).toBe(2);
         
@@ -153,8 +164,12 @@ Root
         assertParentChild(blocks, { content: '# Header 1' }, { content: '## Header 2' });
     });
 
-    it('should parse headers with content underneath, preserving # and indentation', () => {
-        const markdown = '# Header 1\n  Content under header 1\n## Header 2\n  Content under header 2';
+    it('should parse headers with content underneath, preserving #', () => {
+        const markdown = `
+# Header 1
+  Content under header 1
+## Header 2
+  Content under header 2`;
         const blocks = parseMarkdownToBlocks(markdown);
         expect(blocks.length).toBe(4);
 
@@ -164,25 +179,22 @@ Root
         const contentH2 = blocks[3];
 
         assertBlockProperties(h1, { content: '# Header 1', isRoot: true, numChildren: 2, hasChildIds: [contentH1.id!, h2.id!] });
-        assertBlockProperties(contentH1, { content: '  Content under header 1', parentId: h1.id, hasNoChildIds: true });
+        assertBlockProperties(contentH1, { content: 'Content under header 1', parentId: h1.id, hasNoChildIds: true });
         assertBlockProperties(h2, { content: '## Header 2', parentId: h1.id, numChildren: 1, hasChildIds: [contentH2.id!] });
-        assertBlockProperties(contentH2, { content: '  Content under header 2', parentId: h2.id, hasNoChildIds: true });
+        assertBlockProperties(contentH2, { content: 'Content under header 2', parentId: h2.id, hasNoChildIds: true });
 
-        assertParentChild(blocks, { content: '# Header 1' }, { content: '  Content under header 1' });
+        assertParentChild(blocks, { content: '# Header 1' }, { content: 'Content under header 1' });
         assertParentChild(blocks, { content: '# Header 1' }, { content: '## Header 2' });
-        assertParentChild(blocks, { content: '## Header 2' }, { content: '  Content under header 2' });
-    });
-
-    it('should parse content with no headers', () => {
-        const markdown = 'Just a line of text.\nAnother line of text.';
-        const blocks = parseMarkdownToBlocks(markdown);
-        expect(blocks.length).toBe(2);
-        assertBlockProperties(blocks[0], { content: 'Just a line of text.', isRoot: true, hasNoChildIds: true });
-        assertBlockProperties(blocks[1], { content: 'Another line of text.', isRoot: true, hasNoChildIds: true });
+        assertParentChild(blocks, { content: '## Header 2' }, { content: 'Content under header 2' });
     });
 
     it('should parse a mix of headers and regular content', () => {
-        const markdown = 'Regular content line 1\n# Header 1\n  Content under H1\nRegular content line 2\n## Header 2';
+        const markdown = `
+Regular content line 1
+# Header 1
+  Content under H1
+Regular content line 2
+## Header 2`;
         const blocks = parseMarkdownToBlocks(markdown);
         expect(blocks.length).toBe(5);
 
@@ -194,30 +206,30 @@ Root
 
         assertBlockProperties(reg1, { content: 'Regular content line 1', isRoot: true, hasNoChildIds: true });
         assertBlockProperties(h1, { content: '# Header 1', isRoot: true, numChildren: 1, hasChildIds: [contentH1.id!] });
-        assertBlockProperties(contentH1, { content: '  Content under H1', parentId: h1.id, hasNoChildIds: true });
+        assertBlockProperties(contentH1, { content: 'Content under H1', parentId: h1.id, hasNoChildIds: true });
         assertBlockProperties(reg2, { content: 'Regular content line 2', isRoot: true, hasNoChildIds: true });
         assertBlockProperties(h2, { content: '## Header 2', isRoot: true, hasNoChildIds: true });
         
-        assertParentChild(blocks, { content: '# Header 1' }, { content: '  Content under H1' });
+        assertParentChild(blocks, { content: '# Header 1' }, { content: 'Content under H1' });
         // Verify H2 is NOT a child of H1 by checking its parentId explicitly via assertBlockProperties (already done)
         // or by ensuring it's not in H1's children list.
         expect(h1.childIds).not.toContain(h2.id!);
     });
     
-    // Removed local findBlockByContent helper
-
-    describe('Markdown Header Parsing', () => { 
+    describe('Markdown Header Parsing', () => {
       it('1. Basic Header and Child', () => {
-        const markdownAdjusted = `# Header 1\n  Text under header`;
+        const markdownAdjusted = `
+# Header 1
+  Text under header`;
         const result = parseMarkdownToBlocks(markdownAdjusted);
         expect(result).toHaveLength(2);
 
         const header = findBlock(result, '# Header 1'); // findBlock throws if not found (default)
-        const text = findBlock(result, '  Text under header');
+        const text = findBlock(result, 'Text under header');
         
         assertBlockProperties(header, { content: '# Header 1', isRoot: true, numChildren: 1, hasChildIds: [text!.id!] });
-        assertBlockProperties(text, { content: '  Text under header', parentId: header!.id, hasNoChildIds: true });
-        assertParentChild(result, '# Header 1', '  Text under header');
+        assertBlockProperties(text, { content: 'Text under header', parentId: header!.id, hasNoChildIds: true });
+        assertParentChild(result, '# Header 1', 'Text under header');
       });
 
       it('2. Multiple Headers', () => {
@@ -226,100 +238,136 @@ Root
         expect(result).toHaveLength(4);
 
         const h1 = findBlock(result, '# Header 1');
-        const textH1 = findBlock(result, '  Text under H1');
+        const textH1 = findBlock(result, 'Text under H1');
         const h2 = findBlock(result, '## Header 2');
-        const textH2 = findBlock(result, '  Text under H2');
+        const textH2 = findBlock(result, 'Text under H2');
 
         assertBlockProperties(h1, { content: '# Header 1', isRoot: true, numChildren: 2, hasChildIds: [textH1!.id!, h2!.id!] });
-        assertBlockProperties(textH1, { content: '  Text under H1', parentId: h1!.id, hasNoChildIds: true });
+        assertBlockProperties(textH1, { content: 'Text under H1', parentId: h1!.id, hasNoChildIds: true });
         assertBlockProperties(h2, { content: '## Header 2', parentId: h1!.id, numChildren: 1, hasChildIds: [textH2!.id!] });
-        assertBlockProperties(textH2, { content: '  Text under H2', parentId: h2!.id, hasNoChildIds: true });
+        assertBlockProperties(textH2, { content: 'Text under H2', parentId: h2!.id, hasNoChildIds: true });
 
-        assertParentChild(result, '# Header 1', '  Text under H1');
+        assertParentChild(result, '# Header 1', 'Text under H1');
         assertParentChild(result, '# Header 1', '## Header 2');
-        assertParentChild(result, '## Header 2', '  Text under H2');
+        assertParentChild(result, '## Header 2', 'Text under H2');
       });
 
-      it('3. Header with Indented List Item', () => {
-        const markdown = `# Header\n  - List item`; 
+      it('3. Header with non-Indented List Item', () => {
+        const markdown = `
+# Header
+- List item`;
         const result = parseMarkdownToBlocks(markdown);
         expect(result).toHaveLength(2);
 
         const header = findBlock(result, '# Header');
-        const listItem = findBlock(result, '  - List item'); 
+        const listItem = findBlock(result, 'List item');
 
         assertBlockProperties(header, { content: '# Header', isRoot: true, numChildren: 1, hasChildIds: [listItem!.id!] });
-        assertBlockProperties(listItem, { content: '  - List item', parentId: header!.id, hasNoChildIds: true });
-        assertParentChild(result, '# Header', '  - List item');
+        assertBlockProperties(listItem, { content: 'List item', parentId: header!.id, hasNoChildIds: true });
+        assertParentChild(result, '# Header', 'List item');
       });
 
+      it('3.1 Header with Indented List Item', () => {
+        const markdown = `
+# Header
+  - List item`;
+        const result = parseMarkdownToBlocks(markdown);
+        expect(result).toHaveLength(2);
+
+        const header = findBlock(result, '# Header');
+        const listItem = findBlock(result, 'List item');
+
+        assertBlockProperties(header, { content: '# Header', isRoot: true, numChildren: 1, hasChildIds: [listItem!.id!] });
+        assertBlockProperties(listItem, { content: 'List item', parentId: header!.id, hasNoChildIds: true });
+        assertParentChild(result, '# Header', 'List item');
+      });
+
+
       it('4. Header with Multiple Children (Indented)', () => {
-        const markdown = `# Header\n  Line 1\n  Line 2\n    - List item\n  Another line`;
+        const markdown = `
+# Header
+  Line 1
+  Line 2
+    - List item
+  Another line`;
         const result = parseMarkdownToBlocks(markdown);
         expect(result).toHaveLength(5);
 
         const header = findBlock(result, '# Header');
-        const line1 = findBlock(result, '  Line 1'); 
+        const line1 = findBlock(result, 'Line 1');
         const line2 = findBlock(result, 'Line 2'); 
         const listItem = findBlock(result, 'List item');  
         const anotherLine = findBlock(result, 'Another line'); 
 
         assertBlockProperties(header, { content: '# Header', isRoot: true, numChildren: 3, hasChildIds: [line1!.id!, line2!.id!, anotherLine!.id!] });
-        assertBlockProperties(line1, { content: '  Line 1', parentId: header!.id, hasNoChildIds: true });
+        assertBlockProperties(line1, { content: 'Line 1', parentId: header!.id, hasNoChildIds: true });
         assertBlockProperties(line2, { content: 'Line 2', parentId: header!.id, numChildren: 1, hasChildIds: [listItem!.id!] });
         assertBlockProperties(listItem, { content: 'List item', parentId: line2!.id, hasNoChildIds: true });
         assertBlockProperties(anotherLine, { content: 'Another line', parentId: header!.id, hasNoChildIds: true });
 
-        assertParentChild(result, '# Header', '  Line 1');
+        assertParentChild(result, '# Header', 'Line 1');
         assertParentChild(result, '# Header', 'Line 2');
         assertParentChild(result, 'Line 2', 'List item');
         assertParentChild(result, '# Header', 'Another line');
       });
 
       it('5. Deeper Level Header (e.g., ###) and Child (Indented)', () => {
-        const markdown = `### Deep Header\n  Text under deep header`; 
+        const markdown = `
+### Deep Header
+  Text under deep header`;
         const result = parseMarkdownToBlocks(markdown);
         expect(result).toHaveLength(2);
         
         const deepHeader = findBlock(result, '### Deep Header');
-        const text = findBlock(result, '  Text under deep header');
+        const text = findBlock(result, 'Text under deep header');
 
         assertBlockProperties(deepHeader, { content: '### Deep Header', isRoot: true, numChildren: 1, hasChildIds: [text!.id!] });
-        assertBlockProperties(text, { content: '  Text under deep header', parentId: deepHeader!.id, hasNoChildIds: true });
-        assertParentChild(result, '### Deep Header', '  Text under deep header');
+        assertBlockProperties(text, { content: 'Text under deep header', parentId: deepHeader!.id, hasNoChildIds: true });
+        assertParentChild(result, '### Deep Header', 'Text under deep header');
       });
 
       it('6. Mixed Content with Headers (aligning with current parser)', () => {
-        const markdown = `Plain text line 1\n# Header 1\n  Text under H1\n\nPlain text line 2\n## Header 2\n  Text under H2\n    Sub-item 1\n    Sub-item 2`;
+        const markdown = `
+Plain text line 1
+# Header 1
+  Text under H1
+
+Plain text line 2
+## Header 2
+  Text under H2
+    Sub-item 1
+    Sub-item 2`;
         const result = parseMarkdownToBlocks(markdown);
         expect(result).toHaveLength(8);
 
         const plainText1 = findBlock(result, 'Plain text line 1');
         const h1 = findBlock(result, '# Header 1');
-        const textH1 = findBlock(result, '  Text under H1');
+        const textH1 = findBlock(result, 'Text under H1');
         const plainText2 = findBlock(result, 'Plain text line 2'); 
         const h2 = findBlock(result, '## Header 2');
-        const textH2 = findBlock(result, '  Text under H2');
+        const textH2 = findBlock(result, 'Text under H2');
         const subItem1 = findBlock(result, 'Sub-item 1'); 
         const subItem2 = findBlock(result, 'Sub-item 2'); 
         
         assertBlockProperties(plainText1, { content: 'Plain text line 1', isRoot: true, hasNoChildIds: true });
         assertBlockProperties(h1, { content: '# Header 1', isRoot: true, numChildren: 1, hasChildIds: [textH1!.id!] });
-        assertBlockProperties(textH1, { content: '  Text under H1', parentId: h1!.id, hasNoChildIds: true });
+        assertBlockProperties(textH1, { content: 'Text under H1', parentId: h1!.id, hasNoChildIds: true });
         assertBlockProperties(plainText2, { content: 'Plain text line 2', isRoot: true, hasNoChildIds: true });
         assertBlockProperties(h2, { content: '## Header 2', isRoot: true, numChildren: 1, hasChildIds: [textH2!.id!] });
-        assertBlockProperties(textH2, { content: '  Text under H2', parentId: h2!.id, numChildren: 2, hasChildIds: [subItem1!.id!, subItem2!.id!] });
+        assertBlockProperties(textH2, { content: 'Text under H2', parentId: h2!.id, numChildren: 2, hasChildIds: [subItem1!.id!, subItem2!.id!] });
         assertBlockProperties(subItem1, { content: 'Sub-item 1', parentId: textH2!.id, hasNoChildIds: true });
         assertBlockProperties(subItem2, { content: 'Sub-item 2', parentId: textH2!.id, hasNoChildIds: true });
 
-        assertParentChild(result, '# Header 1', '  Text under H1');
-        assertParentChild(result, '## Header 2', '  Text under H2');
-        assertParentChild(result, '  Text under H2', 'Sub-item 1');
-        assertParentChild(result, '  Text under H2', 'Sub-item 2');
+        assertParentChild(result, '# Header 1', 'Text under H1');
+        assertParentChild(result, '## Header 2', 'Text under H2');
+        assertParentChild(result, 'Text under H2', 'Sub-item 1');
+        assertParentChild(result, 'Text under H2', 'Sub-item 2');
       });
 
       it('7. Header at the End of Input', () => {
-        const markdown = `Some text\n# Final Header`;
+        const markdown = `
+Some text
+# Final Header`;
         const result = parseMarkdownToBlocks(markdown);
         expect(result).toHaveLength(2);
         
@@ -331,7 +379,10 @@ Root
       });
 
       it('8. Input with Only Headers (aligning with new hierarchical parsing)', () => {
-        const markdown = `# Header 1\n## Header 2\n### Header 3`;
+        const markdown = `
+# Header 1
+## Header 2
+### Header 3`;
         const result = parseMarkdownToBlocks(markdown);
         expect(result).toHaveLength(3);
 
