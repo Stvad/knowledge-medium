@@ -4,20 +4,20 @@ import { RepoContext as AutomergeRepoContext } from '@automerge/automerge-repo-r
 import { ReactNode } from 'react'
 import { useUser } from '@/components/Login'
 import { automergeRepo, undoRedoManager } from '@/data/repoInstance'
+import { User } from '@/types.ts'
+import { memoize } from 'lodash'
 
-export let repo: Repo | undefined
+const initRepo = memoize((user: User) => new Repo(automergeRepo, undoRedoManager, user), (user) => user.id)
+
 const RepoContext = createContext<Repo | undefined>(undefined)
 
-export function RepoProvider({ children }: { children: ReactNode }) {
+export function RepoProvider({children}: { children: ReactNode }) {
   const user = useUser()
   if (!user) {
     throw new Error('User must be set before creating Repo')
   }
 
-  const repoInstance = useMemo(() => {
-    repo = new Repo(automergeRepo, undoRedoManager, user)
-    return repo
-  }, [user])
+  const repoInstance = useMemo(() => initRepo(user), [user])
 
   return (
     <RepoContext value={repoInstance}>

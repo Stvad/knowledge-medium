@@ -1,6 +1,6 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
 import { useIsEditing, selectionProp, focusedBlockIdProp } from '@/data/properties.ts'
-import { ClipboardEvent, useRef, useEffect, useState, useCallback, useMemo } from 'react'
+import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
 import { Block, useData } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { updateText } from '@automerge/automerge/next'
@@ -43,17 +43,24 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
   const [selection, setSelection] = useUIStateProperty(selectionProp)
+  const [textarea, setTextarea] = useState<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    if (textareaRef.current && textarea !== textareaRef.current) {
+      setTextarea(textareaRef.current)
+    }
+  }, [textarea, textareaRef])
 
   // Create dependencies object for shortcuts
   const shortcutDependencies = useMemo(() => ({
     block,
-    textarea: textareaRef.current,
+    textarea: textarea!,
   }), [
     block,
-    textareaRef.current,
+    textarea,
   ])
 
-  useEditModeShortcuts(shortcutDependencies, !!textareaRef.current)
+  useEditModeShortcuts(shortcutDependencies, !!textarea)
 
   useEffect(() => {
     if (focusedBlockId === block.id && textareaRef.current) {
@@ -86,15 +93,15 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     }
   }, [blockData?.content])
 
-  const debouncedSetSelection = useCallback(
-    debounce((selection: SelectionState) => {
+  const debouncedSetSelection = useMemo(
+    () => debounce((selection: SelectionState) => {
       setSelection(selection)
     }, 150),
     [setSelection],
   )
 
-  const debouncedUpdateBlock = useCallback(
-    debounce((value: string) => {
+  const debouncedUpdateBlock = useMemo(
+    () => debounce((value: string) => {
       block.change(b => {
         updateText(b, ['content'], value)
       })

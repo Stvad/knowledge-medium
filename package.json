@@ -5,13 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build --mode development",
+    "compile": "tsc -b",
+    "build": "yarn run compile && vite build --mode development",
     "lint": "eslint .",
     "deploy": "netlify deploy --prod -s knowledge-medium-explorations.netlify.app -d dist",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "check": "yarn run compile && yarn run lint && yarn run test"
   },
   "dependencies": {
     "@automerge/automerge": "^2.2.8",

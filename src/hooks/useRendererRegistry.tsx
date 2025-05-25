@@ -44,7 +44,7 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
     (async () => {
       setRegistry(await loadRegistry(repo.find(rootBlockId!), context?.safeMode ?? false, generation))
     })()
-  }, [generation, rootBlockId, context?.safeMode])
+  }, [generation, rootBlockId, context?.safeMode, repo])
 
   useEffect(() => {
     const reloadRegistry = (e: CustomEvent<string>) => {

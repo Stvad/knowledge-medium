@@ -1,11 +1,6 @@
 import { BlockData } from '@/types'
 import { v4 as uuidv4 } from 'uuid'
 
-interface ParsedBlock {
-  content: string;
-  level: number;
-}
-
 export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
   const lines = text.split('\n');
   const parsedBlocks: { content: string; level: number; id: string }[] = [];
@@ -86,7 +81,7 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
     
     // Level Calculation
     const activeParentContext = contextStack[contextStack.length - 1];
-    let calculatedLevel = activeParentContext.level + 1;
+    const calculatedLevel = activeParentContext.level + 1;
 
     // Content is already processed by determineLineTypeAndContent
 
@@ -106,7 +101,7 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
   const blocks: Partial<BlockData>[] = [];
 
   // Stack to keep track of parent blocks at each level
-  const parentStack: Partial<BlockData>[] = [];
+  const parentStack: Array<Partial<BlockData> | undefined> = [];
 
   for (const parsed of parsedBlocks) {
     const blockData: Partial<BlockData> = {
@@ -145,7 +140,7 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
     // Add current block to the stack at its level.
     // If parentStack is shorter than parsed.level, fill with undefined/null up to parsed.level -1
     while (parentStack.length < parsed.level) {
-        parentStack.push(undefined as any); // Should ideally be null or a specific placeholder
+        parentStack.push(undefined); // Should ideally be null or a specific placeholder
     }
     parentStack[parsed.level] = blockData;
     blocks.push(blockData);
