@@ -5,7 +5,10 @@ import {
   BaseShortcutDependencies,
   ActionContextTypes,
   EditModeDependencies,
-  PropertyEditingDependencies, CommandPaletteDependencies, BlockShortcutDependencies,
+  PropertyEditingDependencies,
+  CommandPaletteDependencies,
+  BlockShortcutDependencies,
+  CodeMirrorEditModeDependencies,
 } from './types'
 import { useUIStateBlock } from '@/data/globalState.ts'
 
@@ -56,6 +59,18 @@ export function useNormalModeShortcuts(dependencies: Omit<BlockShortcutDependenc
  * This will automatically deactivate normal mode shortcuts due to priority
  */
 export function useEditModeShortcuts(dependencies: Omit<EditModeDependencies, 'uiStateBlock'>, enabled: boolean = true): void {
+  useActionContext(ActionContextTypes.EDIT_MODE, dependencies, enabled)
+}
+
+/**
+ * Hook for CodeMirror edit mode shortcuts
+ */
+export function useCodeMirrorEditModeShortcuts<T extends boolean>(
+  dependencies: T extends true
+    ? Omit<CodeMirrorEditModeDependencies, 'uiStateBlock'>
+    : Partial<CodeMirrorEditModeDependencies>,
+  enabled: T
+): void {
   useActionContext(ActionContextTypes.EDIT_MODE, dependencies, enabled)
 }
 

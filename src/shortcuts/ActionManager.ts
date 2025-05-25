@@ -14,9 +14,11 @@ import {
   MultiSelectModeDependencies,
   ActiveContextInfo,
   ActionConfig,
+  CodeMirrorEditModeDependencies,
 } from './types'
 import { isSingleKeyPress, hasEditableTarget, createAction } from '@/shortcuts/utils.ts'
 import { Block } from '@/data/block'
+import { EditorView } from '@codemirror/view'
 
 const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependencies =>
   typeof deps === 'object' && deps !== null && 'uiStateBlock' in deps && deps.uiStateBlock instanceof Block
@@ -26,6 +28,9 @@ const isBlockShortcutDependencies = (deps: unknown): deps is BlockShortcutDepend
 
 const isEditModeDependencies = (deps: unknown): deps is EditModeDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'textarea' in deps && deps.textarea instanceof HTMLTextAreaElement
+
+const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEditModeDependencies =>
+  isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block && 'editorView' in deps && deps.editorView instanceof EditorView
 
 const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && deps.input instanceof HTMLInputElement
@@ -56,8 +61,11 @@ const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
     defaultEventOptions: {
       preventDefault: false,
     },
-    eventFilter: (event: KeyboardEvent) => (event.target as HTMLElement)?.tagName === 'TEXTAREA',
-    validateDependencies: isEditModeDependencies,
+    eventFilter: (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      return target?.tagName === 'TEXTAREA' || target?.closest('.cm-editor') !== null
+    },
+    validateDependencies: (deps: unknown) => isEditModeDependencies(deps) || isCodeMirrorEditModeDependencies(deps),
   }],
   [ActionContextTypes.PROPERTY_EDITING, {
     type: ActionContextTypes.PROPERTY_EDITING,

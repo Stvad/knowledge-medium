@@ -1,5 +1,6 @@
 import { Block } from '@/data/block';
 import { Optional } from '@/utils/types.ts'
+import { EditorView } from '@codemirror/view'
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
 
@@ -56,6 +57,11 @@ export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
 
 export interface EditModeDependencies extends BlockShortcutDependencies {
   textarea: HTMLTextAreaElement;
+}
+
+export interface CodeMirrorEditModeDependencies extends BaseShortcutDependencies {
+  block: Block;
+  editorView: EditorView;
 }
 
 export interface PropertyEditingDependencies extends BlockShortcutDependencies {

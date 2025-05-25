@@ -1,6 +1,7 @@
 import { BlockRendererProps } from '@/types.ts'
 import { useIsEditing, focusedBlockIdProp, selectionProp } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
+import { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRef, MouseEvent, TouchEvent } from 'react'
@@ -174,10 +175,18 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
             'time-stamp': ({node}) =>
               <VideoTimeStamp hms={node.properties.hms} videoBlockId={blockContext.videoPlayerBlockId as string}/>,
           } : {}),
-        }}
+        } as ExtendedComponents}
       >
         {blockData.content}
       </Markdown>
     </div>
   )
 }
+
+// Define extended components type
+type ExtendedComponents = Components & {
+  'time-stamp'?: React.ComponentType<{
+    node: any;
+    [key: string]: any;
+  }>;
+};

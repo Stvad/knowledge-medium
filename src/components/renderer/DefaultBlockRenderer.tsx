@@ -12,7 +12,7 @@ import {
   previousLoadTimeProp,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
-import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
+import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo } from 'react'
 import { Block, useData, usePropertyValue } from '@/data/block.ts'
 import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState } from '@/data/globalState'
@@ -152,7 +152,7 @@ export function DefaultBlockRenderer(
   {
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
-    EditContentRenderer = TextAreaContentRenderer,
+    EditContentRenderer = CodeMirrorContentRenderer,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()

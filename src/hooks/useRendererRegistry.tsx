@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { BlockData, RendererRegistry, BlockRendererProps, StringBlockProperty } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
-import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
+import { CodeMirrorRendererBlockRenderer } from '@/components/renderer/CodeMirrorRendererBlockRenderer.tsx'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
@@ -17,7 +17,7 @@ import { BreadcrumbRenderer } from '@/components/renderer/BreadcrumbRenderer.tsx
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
-  renderer: RendererBlockRenderer,
+  renderer: CodeMirrorRendererBlockRenderer,
   topLevel: TopLevelRenderer,
   layout: LayoutRenderer,
   panel: PanelRenderer,
