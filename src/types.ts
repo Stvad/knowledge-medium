@@ -84,9 +84,11 @@ export interface RootDoc {
 
 export interface SelectionState {
     blockId: string
-    start: number
-    end: number
+    start?: number
+    end?: number
     line?: 'first' | 'last'
+    x?: number
+    y?: number
 }
 
 export interface BlockContextType {

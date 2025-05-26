@@ -8,7 +8,7 @@ import { updateText, getHeads, Heads } from '@automerge/automerge/next'
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
-import { createMinimalMarkdownConfig } from '@/utils/codemirror.ts'
+import { createMinimalMarkdownConfig, placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { useCodeMirrorEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
@@ -98,32 +98,17 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     const view = cm.current.view
     view.focus()
 
-    if (selection?.blockId !== block.id || selection.start === undefined) return
+    if (selection?.blockId !== block.id) return
 
     const end = selection.end ?? selection.start
+    if (selection.x && selection.y) {
+      placeCursorAtCoords(view, {x: selection.x, y: selection.y})
+    } else if (selection.x) {
+      placeCursorAtX(view, selection.x, selection.line === 'last')
+    } else if (selection.start) {
+      view.dispatch({selection: {anchor: selection.start, head: end}})
+    }
 
-    view.dispatch({selection: {anchor: selection.start, head: end}})
-
-    // 1. Identify last logical line
-    const docLength   = view.state.doc.length
-    const lastLine    = view.state.doc.lineAt(docLength)
-
-// 2. Compute visual segment boundaries
-    const visStartRange = view.visualLineSide(lastLine, false)
-    const visEndRange   = view.visualLineSide(lastLine, true)
-    const visualStart   = visStartRange.head
-    const visualEnd     = visEndRange.head
-
-// 3. Calculate and clamp target offset
-    const desiredColumn = selection.start // for example
-    let targetOffset    = visualStart + desiredColumn
-    if (targetOffset > visualEnd) targetOffset = visualEnd
-
-// 4. Dispatch selection and scroll
-    if (selection.line === "last") view.dispatch({
-      selection: {anchor: targetOffset, head: targetOffset},
-      scrollIntoView: true
-    })
   }, [focusedBlockId, block.id, cm.current?.view])
 
 

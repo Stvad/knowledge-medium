@@ -33,7 +33,7 @@ import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
 import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect } from './utils'
 import { EditorView } from '@codemirror/view'
-import { getVisualColumn, isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror.ts'
+import { isOnFirstVisualLine, isOnLastVisualLine, getCaretRect } from '@/utils/codemirror.ts'
 
 const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
   uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
@@ -673,14 +673,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
          * I don't like that we have to do this, somewhat breaks encapsulation
          */
         trigger.preventDefault()
-
-        const visualColumn = getVisualColumn(editorView)
         uiStateBlock.setProperty({
           ...editorSelection, value: {
             blockId: prevVisible.id,
-            start: visualColumn,
-            end: visualColumn,
             line: 'last',
+            x: getCaretRect(editorView)?.left,
           },
         })
 
@@ -713,12 +710,10 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
          */
         trigger.preventDefault()
 
-        const visualColumn = getVisualColumn(editorView)
         uiStateBlock.setProperty({
           ...editorSelection, value: {
             blockId: nextVisible.id,
-            start: visualColumn,
-            end: visualColumn,
+            x: getCaretRect(editorView)?.left,
           },
         })
 

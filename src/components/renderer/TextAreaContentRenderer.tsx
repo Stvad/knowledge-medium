@@ -67,7 +67,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       textareaRef.current.focus()
 
       // Restore selection
-      if (selection?.blockId === block.id) {
+      if (selection?.blockId === block.id && selection.start) {
         textareaRef.current.setSelectionRange(selection.start, selection.end || null)
       }
     }

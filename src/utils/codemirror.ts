@@ -72,3 +72,24 @@ export function getVisualColumn(view: EditorView): number {
   const visualStart = view.moveToLineBoundary(selection, false, true).head
   return selection.head - visualStart                          // code-units from wrap start
 }
+
+export const placeCursorAtCoords = (view: EditorView, coords: {x: number, y: number}) => {
+  const pos = view.posAtCoords(coords)      // number | null
+  if (pos != null) {
+    view.dispatch({selection: {anchor: pos}})
+  }
+}
+
+export function placeCursorAtX(view: EditorView, x: number, takeBottomLine = false) {
+  // Find a y just inside the editor
+  const rect = view.dom.getBoundingClientRect()
+  const y = takeBottomLine ? rect.bottom - 2 : rect.top + 2
+
+  // Translate coords → doc position
+  placeCursorAtCoords(view, {x, y})
+}
+
+export const getCaretRect = (editorView: EditorView) => {
+  const {head} = editorView.state.selection.main
+  return editorView.coordsAtPos(head)
+}
