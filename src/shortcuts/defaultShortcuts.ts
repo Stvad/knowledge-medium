@@ -6,6 +6,8 @@ import {
   BaseShortcutDependencies,
   ActionConfig,
   MultiSelectModeDependencies,
+  CodeMirrorEditModeDependencies,
+  ActionTrigger,
 } from './types'
 import {
   previousVisibleBlock,
@@ -25,10 +27,13 @@ import {
   isCollapsedProp,
   showPropertiesProp,
   topLevelBlockIdProp,
+  editorSelection,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
 import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect } from './utils'
+import { EditorView } from '@codemirror/view'
+import { getVisualColumn, isOnFirstVisualLine, isOnLastVisualLine } from '@/utils/codemirror.ts'
 
 const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
   uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
@@ -36,6 +41,34 @@ const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
 
 const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
   uiStateBlock.setProperty({...isEditingProp, value: editing})
+}
+
+// Helper function to split block at cursor for CodeMirror
+const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
+  const selection = editorView.state.selection.main
+  const doc = editorView.state.doc
+  const cursorPos = selection.from
+
+  const beforeCursor = doc.sliceString(0, cursorPos)
+  const afterCursor = doc.sliceString(cursorPos)
+
+  // Update current block with content before cursor
+  block.change(b => {
+    b.content = beforeCursor
+  })
+
+  // Create new block with content after cursor
+  const newBlock = isTopLevel
+    ? await block.createChild({position: 'first'})
+    : await block.createSiblingBelow()
+
+  if (newBlock && afterCursor) {
+    newBlock.change(b => {
+      b.content = afterCursor
+    })
+  }
+
+  return newBlock || block
 }
 
 export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
@@ -88,6 +121,38 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     description: 'Move block down',
     context: ActionContextTypes.EDIT_MODE,
     handler: (deps: EditModeDependencies) => {
+      const {block} = deps
+      if (!block) return
+      block.changeOrder(1)
+    },
+    defaultBinding: {
+      keys: 'cmd+shift+down',
+    },
+  }
+
+  // CodeMirror versions of move actions
+  const moveBlockUpCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+    id: 'move_block_up_cm',
+    description: 'Move block up (CodeMirror)',
+    context: ActionContextTypes.EDIT_MODE_CM,
+    handler: (deps: CodeMirrorEditModeDependencies) => {
+      const {block} = deps
+      if (!block) return
+      block.changeOrder(-1)
+    },
+    defaultBinding: {
+      keys: 'cmd+shift+up',
+      eventOptions: {
+        preventDefault: true,
+      },
+    },
+  }
+
+  const moveBlockDownCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+    id: 'move_block_down_cm',
+    description: 'Move block down (CodeMirror)',
+    context: ActionContextTypes.EDIT_MODE_CM,
+    handler: (deps: CodeMirrorEditModeDependencies) => {
       const {block} = deps
       if (!block) return
       block.changeOrder(1)
@@ -418,7 +483,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     makeNormalMode(moveBlockDown),
   ]
 
-  // Edit mode actions
+  // Textarea-specific edit mode actions
   const editModeActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE>[] = [
     {
       id: 'exit_edit_mode',
@@ -430,8 +495,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       },
     },
     {
-      id: 'split_block',
-      description: 'Split block at cursor',
+      id: 'split_block_textarea',
+      description: 'Split block at cursor (Textarea)',
       context: ActionContextTypes.EDIT_MODE,
       handler: async (deps: EditModeDependencies) => {
         const {block, textarea, uiStateBlock} = deps
@@ -511,8 +576,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       },
     },
     {
-      id: 'delete_empty_block',
-      description: 'Delete empty block on backspace',
+      id: 'delete_empty_block_textarea',
+      description: 'Delete empty block on backspace (Textarea)',
       context: ActionContextTypes.EDIT_MODE,
       handler: async (deps: EditModeDependencies) => {
         const {block, uiStateBlock} = deps
@@ -535,6 +600,182 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     makeEditMode(outdentBlock),
     moveBlockUp,
     moveBlockDown,
+  ]
+
+  // CodeMirror-specific edit mode actions
+  const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
+    {
+      id: 'exit_edit_mode_cm',
+      description: 'Exit edit mode (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
+      defaultBinding: {
+        keys: 'escape',
+      },
+    },
+    {
+      id: 'split_block_cm',
+      description: 'Split block at cursor (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies) => {
+        const {block, editorView, uiStateBlock} = deps
+        if (!block || !editorView || !uiStateBlock) return
+
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId) return
+        const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+        const isTopLevel = block.id === topLevelBlockId
+
+        const selection = editorView.state.selection.main
+        const doc = editorView.state.doc
+        const cursorPos = selection.from
+
+        // Case 1: Cursor is in middle of text
+        if (cursorPos < doc.length) {
+          const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView, isTopLevel)
+          setFocusedBlockId(uiStateBlock, blockInFocus.id)
+        }
+        // Case 2: Cursor is at end of text and block has children
+        else if (cursorPos === doc.length &&
+          (await block.hasChildren() && !isCollapsed || isTopLevel)) {
+          const newBlock = await block.createChild({position: 'first'})
+          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
+        }
+        // Case 3: Cursor at end, no children or they are collapsed
+        else {
+          const newBlock = await block.createSiblingBelow()
+          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
+        }
+      },
+      defaultBinding: {
+        keys: 'enter',
+        eventOptions: {
+          preventDefault: true,
+        },
+      },
+    },
+    {
+      id: 'move_up_from_cm_start',
+      description: 'Move to previous block when cursor is at start of CodeMirror',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock} = deps
+        if (!block || !editorView || !uiStateBlock) return
+
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId || !isOnFirstVisualLine(editorView)) return
+
+        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+        if (!prevVisible) return
+
+        /**
+         * Otherwise the new CodeMirror instance still gets an "up" event and bad things happen =\
+         * I don't like that we have to do this, somewhat breaks encapsulation
+         */
+        trigger.preventDefault()
+
+        const visualColumn = getVisualColumn(editorView)
+        uiStateBlock.setProperty({
+          ...editorSelection, value: {
+            blockId: prevVisible.id,
+            start: visualColumn,
+            end: visualColumn,
+            line: 'last',
+          },
+        })
+
+        setFocusedBlockId(uiStateBlock, prevVisible.id)
+      },
+      defaultBinding: {
+        keys: 'up',
+        eventOptions: {
+          preventDefault: false,
+        },
+      },
+    },
+    {
+      id: 'move_down_from_cm_end',
+      description: 'Move to next block when cursor is at end of CodeMirror',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock} = deps
+        if (!block || !editorView || !uiStateBlock) return
+
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId || !isOnLastVisualLine(editorView)) return
+
+        const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
+        if (!nextVisible) return
+
+        /**
+         * Otherwise the new CodeMirror instance still gets an "up" event and bad things happen =\
+         * I don't like that we have to do this, somewhat breaks encapsulation
+         */
+        trigger.preventDefault()
+
+        const visualColumn = getVisualColumn(editorView)
+        uiStateBlock.setProperty({
+          ...editorSelection, value: {
+            blockId: nextVisible.id,
+            start: visualColumn,
+            end: visualColumn,
+          },
+        })
+
+        setFocusedBlockId(uiStateBlock, nextVisible.id)
+      },
+      defaultBinding: {
+        keys: 'down',
+      },
+    },
+    {
+      id: 'delete_empty_block_cm',
+      description: 'Delete empty block on backspace (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies) => {
+        const {block, uiStateBlock} = deps
+        if (!block || !uiStateBlock) return
+        const blockData = await block.data()
+        if (!(blockData?.content === '')) return
+
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId) return
+
+        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+        block.delete()
+        if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
+      },
+      defaultBinding: {
+        keys: 'backspace',
+      },
+    },
+    // CodeMirror versions of indent/outdent actions
+    {
+      id: 'indent_block_cm',
+      description: 'Indent block (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: (deps: CodeMirrorEditModeDependencies) => deps.block.indent(),
+      defaultBinding: {
+        keys: 'tab',
+        eventOptions: {
+          preventDefault: true,
+        },
+      },
+    },
+    {
+      id: 'outdent_block_cm',
+      description: 'Outdent block (CodeMirror)',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: (deps: CodeMirrorEditModeDependencies) => deps.block.outdent(),
+      defaultBinding: {
+        keys: 'shift+tab',
+        eventOptions: {
+          preventDefault: true,
+        },
+      },
+    },
+    moveBlockUpCM,
+    moveBlockDownCM,
   ]
 
   // Multi-select mode actions
@@ -562,5 +803,6 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
   [...globalActions,
     ...normalModeActions,
     ...editModeActions,
+    ...editModeCMActions,
     ...multiSelectModeActions].forEach(action => actionManager.registerAction(action as ActionConfig))
 }

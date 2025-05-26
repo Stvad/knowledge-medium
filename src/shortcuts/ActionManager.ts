@@ -14,7 +14,7 @@ import {
   MultiSelectModeDependencies,
   ActiveContextInfo,
   ActionConfig,
-  CodeMirrorEditModeDependencies,
+  CodeMirrorEditModeDependencies, ActionTrigger,
 } from './types'
 import { isSingleKeyPress, hasEditableTarget, createAction } from '@/shortcuts/utils.ts'
 import { Block } from '@/data/block'
@@ -57,15 +57,27 @@ const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
   }],
   [ActionContextTypes.EDIT_MODE, {
     type: ActionContextTypes.EDIT_MODE,
-    displayName: 'Edit Mode',
+    displayName: 'Edit Mode (Textarea)',
     defaultEventOptions: {
       preventDefault: false,
     },
     eventFilter: (event: KeyboardEvent) => {
       const target = event.target as HTMLElement
-      return target?.tagName === 'TEXTAREA' || target?.closest('.cm-editor') !== null
+      return target?.tagName === 'TEXTAREA'
     },
-    validateDependencies: (deps: unknown) => isEditModeDependencies(deps) || isCodeMirrorEditModeDependencies(deps),
+    validateDependencies: isEditModeDependencies,
+  }],
+  [ActionContextTypes.EDIT_MODE_CM, {
+    type: ActionContextTypes.EDIT_MODE_CM,
+    displayName: 'Edit Mode (CodeMirror)',
+    defaultEventOptions: {
+      preventDefault: false,
+    },
+    eventFilter: (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      return target?.closest('.cm-editor') !== null
+    },
+    validateDependencies: isCodeMirrorEditModeDependencies,
   }],
   [ActionContextTypes.PROPERTY_EDITING, {
     type: ActionContextTypes.PROPERTY_EDITING,
@@ -188,7 +200,7 @@ export class ActionManager {
       event.preventDefault()
     }
 
-    this.runActionById(action.id)
+    this.runActionById(action.id, event)
 
     return !options.preventDefault
   }
@@ -295,7 +307,7 @@ export class ActionManager {
    * @param actionId The ID of the action to run.
    * @returns True if the action was found, its context was active, dependencies validated, and handler executed. False otherwise.
    */
-  runActionById(actionId: string): void | Promise<void> {
+  runActionById(actionId: string, trigger: ActionTrigger): void | Promise<void> {
     const action = this.actions.get(actionId)
     if (!action) {
       throw new Error(`[ShortcutManager] Action with ID "${actionId}" not found.`)
@@ -308,7 +320,7 @@ export class ActionManager {
     const dependencies = this.activeContexts.get(action.context)!
 
     console.debug(`[ShortcutManager] Running action "${actionId}" from command palette.`)
-    return action.handler(dependencies)
+    return action.handler(dependencies, trigger)
   }
 }
 

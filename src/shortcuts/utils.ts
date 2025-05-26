@@ -4,7 +4,7 @@ import {
   ActionContextType,
   ActionContextTypes,
   MultiSelectModeDependencies,
-  ShortcutDependenciesMap,
+  ShortcutDependenciesMap, ActionTrigger,
 } from './types'
 
 export const hasEditableTarget = (event: KeyboardEvent) => {
@@ -99,7 +99,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
   {applyInReverseOrder}: {applyInReverseOrder?: boolean} = { applyInReverseOrder: false},
 ): ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE> => {
   // Default behavior: apply the original action to each selected block
-  const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies) => {
+  const multiSelectHandler = async (multiSelectDeps: MultiSelectModeDependencies, trigger: ActionTrigger) => {
     const {selectedBlocks, uiStateBlock} = multiSelectDeps
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
@@ -115,7 +115,7 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
         uiStateBlock,
       } as ShortcutDependenciesMap[T]
 
-      await actionConfig.handler(originalDeps)
+      await actionConfig.handler(originalDeps, trigger)
     }
   }
 

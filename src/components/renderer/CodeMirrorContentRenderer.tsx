@@ -1,6 +1,6 @@
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { BlockRendererProps, SelectionState } from '@/types.ts'
-import { useIsEditing, selectionProp, focusedBlockIdProp } from '@/data/properties.ts'
+import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useMemo, useCallback } from 'react'
 import { useData } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
@@ -24,7 +24,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
   const initContent = useMemo(() => blockData?.content ?? '', []); // once
 
-  const [selection, setSelection] = useUIStateProperty(selectionProp)
+  const [selection, setSelection] = useUIStateProperty(editorSelection)
 
   const shortcutDependencies = useMemo(() => ({
     block,
@@ -40,10 +40,12 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   /** ---------- Debouncers ---------- */
   const pushChange = useRef(
     debounce((value: string) => {
+      console.log('before push')
       block.change(b => {
         updateText(b, ['content'], value)
       })
       lastHeads.current = getHeads(block.dataSync()!)
+      console.log('push', {lastHeads})
     }, 300),
   ).current
 
@@ -59,6 +61,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   /** ---------- Cleanup ---------- */
   useEffect(() => flushDebouncers, [flushDebouncers])
 
+  useEffect(() => {
+    if (blockData && !lastHeads.current) {
+      lastHeads.current = getHeads(blockData)
+    }
+  }, [blockData?.id])
 
   /** ---------- Imperatively patch truly-remote edits ---------- */
   useEffect(() => {
@@ -86,13 +93,37 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   /** ---------- Focus & selection restoration ---------- */
   useEffect(() => {
-    if (focusedBlockId === block.id && cm.current?.view) {
-      cm.current.view.focus()
-      if (selection?.blockId === block.id && selection.start !== undefined) {
-        const end = selection.end ?? selection.start
-        cm.current.view.dispatch({selection: {anchor: selection.start, head: end}})
-      }
-    }
+    if (!(focusedBlockId === block.id && cm.current?.view)) return
+
+    const view = cm.current.view
+    view.focus()
+
+    if (selection?.blockId !== block.id || selection.start === undefined) return
+
+    const end = selection.end ?? selection.start
+
+    view.dispatch({selection: {anchor: selection.start, head: end}})
+
+    // 1. Identify last logical line
+    const docLength   = view.state.doc.length
+    const lastLine    = view.state.doc.lineAt(docLength)
+
+// 2. Compute visual segment boundaries
+    const visStartRange = view.visualLineSide(lastLine, false)
+    const visEndRange   = view.visualLineSide(lastLine, true)
+    const visualStart   = visStartRange.head
+    const visualEnd     = visEndRange.head
+
+// 3. Calculate and clamp target offset
+    const desiredColumn = selection.start // for example
+    let targetOffset    = visualStart + desiredColumn
+    if (targetOffset > visualEnd) targetOffset = visualEnd
+
+// 4. Dispatch selection and scroll
+    if (selection.line === "last") view.dispatch({
+      selection: {anchor: targetOffset, head: targetOffset},
+      scrollIntoView: true
+    })
   }, [focusedBlockId, block.id, cm.current?.view])
 
 
@@ -120,6 +151,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         onUpdate={(vu) => {
           if (vu.selectionSet) {
             const sel = vu.state.selection.main
+            console.debug('updating selection', sel)
             pushSelection({blockId: block.id, start: sel.from, end: sel.to})
           }
         }}
@@ -143,6 +175,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
         }}
         indentWithTab={false}
+
         onBlur={() => {
           flushDebouncers()
           if (document.hasFocus()) setIsEditing(false)

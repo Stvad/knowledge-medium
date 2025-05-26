@@ -1,5 +1,5 @@
 import { BlockRendererProps, SelectionState } from '@/types.ts'
-import { useIsEditing, selectionProp, focusedBlockIdProp } from '@/data/properties.ts'
+import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
 import { Block, useData } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
@@ -42,7 +42,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const [, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const [selection, setSelection] = useUIStateProperty(selectionProp)
+  const [selection, setSelection] = useUIStateProperty(editorSelection)
   const [textarea, setTextarea] = useState<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {

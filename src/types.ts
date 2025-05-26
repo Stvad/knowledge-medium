@@ -86,6 +86,7 @@ export interface SelectionState {
     blockId: string
     start: number
     end: number
+    line?: 'first' | 'last'
 }
 
 export interface BlockContextType {

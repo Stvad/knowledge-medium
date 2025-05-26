@@ -71,7 +71,7 @@ export function useCodeMirrorEditModeShortcuts<T extends boolean>(
     : Partial<CodeMirrorEditModeDependencies>,
   enabled: T
 ): void {
-  useActionContext(ActionContextTypes.EDIT_MODE, dependencies, enabled)
+  useActionContext(ActionContextTypes.EDIT_MODE_CM, dependencies, enabled)
 }
 
 /**

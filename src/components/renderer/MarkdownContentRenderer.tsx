@@ -1,5 +1,5 @@
 import { BlockRendererProps } from '@/types.ts'
-import { useIsEditing, focusedBlockIdProp, selectionProp } from '@/data/properties.ts'
+import { useIsEditing, focusedBlockIdProp, editorSelection } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
 import { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm'
@@ -94,7 +94,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = useData(block)
   const [, setIsEditing] = useIsEditing()
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const [, setSelection] = useUIStateProperty(selectionProp)
+  const [, setSelection] = useUIStateProperty(editorSelection)
   const blockContext = useBlockContext()
   const ref = useRef<HTMLDivElement>(null)
 
