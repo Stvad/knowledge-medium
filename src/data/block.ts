@@ -453,10 +453,12 @@ export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
 }
 
 export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
+export const useDataWithSelector =
+  <T>(block: Block, selector: (doc: BlockData | undefined) => T) => useDocumentWithSelector<BlockData, T>(block.id, selector)[0]
 
 export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
   const name = config.name
-  const [property] = useDocumentWithSelector<BlockData, BlockProperty | undefined>(block.id, doc => doc?.properties[name])
+  const property = useDataWithSelector(block, doc => doc?.properties[name])
 
   const setProperty = useCallback((newProperty: T) => {
     block.setProperty(newProperty)

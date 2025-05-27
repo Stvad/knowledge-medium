@@ -1,5 +1,5 @@
 import { useBlockContext } from '@/context/block.tsx'
-import { Block, usePropertyValue } from '@/data/block.ts'
+import { Block, usePropertyValue, useDataWithSelector } from '@/data/block.ts'
 import { use, useCallback } from 'react'
 import { BlockProperty, User, BlockContextType } from '@/types.ts'
 import { memoize } from 'lodash'
@@ -7,7 +7,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useUser } from '@/components/Login.tsx'
 import { Repo } from '@/data/repo.ts'
 
-import { uiChangeScope, selectionStateProp, BlockSelectionState } from '@/data/properties.ts'
+import { uiChangeScope, selectionStateProp, BlockSelectionState, focusedBlockIdProp } from '@/data/properties.ts'
 
 /**
  * One of core principles of the system is to store all state within the system
@@ -94,3 +94,7 @@ export function useSelectionState(): [
   // This aligns with the hook's return type [SelectionStateValue, ...]
   return [currentSelectionState || selectionStateProp.value!, setSelectionState];
 }
+
+export const useInFocus = (blockId: string) =>
+  useDataWithSelector(useUIStateBlock(),
+    doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)

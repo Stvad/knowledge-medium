@@ -7,15 +7,15 @@ import {
   useIsEditing,
   showPropertiesProp,
   isCollapsedProp,
-  focusedBlockIdProp,
   topLevelBlockIdProp,
   previousLoadTimeProp,
+  setFocusedBlockId,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo } from 'react'
 import { Block, useData, usePropertyValue } from '@/data/block.ts'
-import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState } from '@/data/globalState'
+import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState, useInFocus } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
@@ -161,7 +161,6 @@ export function DefaultBlockRenderer(
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
 
-  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
   const [seen, setSeen] = useState(false)
@@ -175,7 +174,7 @@ export function DefaultBlockRenderer(
   const [selectionState, setSelectionState] = useSelectionState()
   const isSelected = selectionState.selectedBlockIds.includes(block.id)
 
-  const inFocus = focusedBlockId === block.id
+  const inFocus = useInFocus(block.id)
   if (inFocus && !seen) setSeen(true)
 
   const shortcutDependencies = useMemo(() => ({block}), [block])
@@ -193,7 +192,7 @@ export function DefaultBlockRenderer(
 
     const pasted = await pasteMultilineText(pastedText, block, repo)
     if (pasted[0]) {
-      setFocusedBlockId(pasted[0].id)
+      setFocusedBlockId(uiStateBlock, pasted[0].id)
     }
   }
 
@@ -273,7 +272,7 @@ export function DefaultBlockRenderer(
               anchorBlockId: null,
             })
           }
-          setFocusedBlockId(block.id)
+          setFocusedBlockId(uiStateBlock, block.id)
         }}
       >
         {!isTopLevel && blockControls()}
