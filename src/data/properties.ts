@@ -43,6 +43,9 @@ export const bp = reassembleTagProducer(booleanProperty)
 export const fromList = (...values: BlockProperty[]) =>
   Object.fromEntries(values.map(v => [v.name, v]))
 
+export const aliasProp = (aliases: string[] = []) =>
+  listProperty<string>('alias', aliases)
+
 export const useIsEditing = () => {
   return useUIStateProperty(booleanProperty('isEditing', false))
 }

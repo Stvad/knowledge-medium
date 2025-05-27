@@ -57,6 +57,7 @@ export interface BlockData {
     updateTime: number;
     createdByUserId: string;
     updatedByUserId: string;
+    references: {id: string, alias: string}[];  // Required, outgoing references to other blocks
     // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
 }
 

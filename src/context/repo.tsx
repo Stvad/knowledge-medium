@@ -7,7 +7,7 @@ import { automergeRepo, undoRedoManager } from '@/data/repoInstance'
 import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 
-const initRepo = memoize((user: User) => new Repo(automergeRepo, undoRedoManager, user), (user) => user.id)
+export const initRepo = memoize((user: User) => new Repo(automergeRepo, undoRedoManager, user), (user) => user.id)
 
 const RepoContext = createContext<Repo | undefined>(undefined)
 

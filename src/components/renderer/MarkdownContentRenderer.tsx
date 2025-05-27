@@ -4,7 +4,7 @@ import Markdown from 'react-markdown'
 import { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useUIStateProperty } from '@/data/globalState'
-import { useRef, MouseEvent, TouchEvent } from 'react'
+import { useRef, MouseEvent, TouchEvent, ComponentType } from 'react'
 import { useData } from '@/data/block.ts'
 import { remarkTimestamps } from '@/markdown/remark-timestamps.ts'
 import VideoTimeStamp from '@/components/markdown/VideoTimeStamp.tsx'
@@ -119,8 +119,8 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
 
 // Define extended components type
 type ExtendedComponents = Components & {
-  'time-stamp'?: React.ComponentType<{
-    node: any;
-    [key: string]: any;
+  'time-stamp'?: ComponentType<{
+    node: {properties: {hms: string}}
+    [key: string]: unknown;
   }>;
 };

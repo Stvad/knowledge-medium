@@ -8,12 +8,29 @@ import { pasteMultilineText } from '@/utils/paste.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useCodeMirrorEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { EditorView } from '@codemirror/view'
+import { getAliases } from '@/data/aliasUtils'
+import { useBlockContext } from '@/context/block.tsx'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
-  const extensions = useMemo(() => createMinimalMarkdownConfig(), [])
+  const repo = useRepo()
+  const blockContext = useBlockContext()
+  
+  // Create getAliases function for autocomplete
+  const getAliasesForAutocomplete = useMemo(() => {
+    return async (filter: string): Promise<string[]> => {
+      if (!blockContext.rootBlockId) {
+        console.warn('No root block ID available for alias search')
+        return []
+      }
+      return getAliases(repo, blockContext.rootBlockId, filter)
+    }
+  }, [repo, blockContext.rootBlockId])
+
+  const extensions = useMemo(() => createMinimalMarkdownConfig({
+    getAliases: getAliasesForAutocomplete
+  }), [getAliasesForAutocomplete])
 
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const repo = useRepo()
   const [editorView, setEditorView] = useState<EditorView| undefined>(undefined)
 
   const shortcutDependencies = useMemo(() => ({

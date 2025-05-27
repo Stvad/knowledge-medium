@@ -2,33 +2,45 @@ import { Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
+import { createBacklinkAutocomplete } from './backlinkAutocomplete'
 
-export const createMinimalMarkdownConfig = (): Extension[] => [
-  markdown({addKeymap: false}),
-  EditorView.theme({
-    '&': {
-      fontSize: 'inherit',
-      fontFamily: 'inherit',
-      color: 'inherit',
-      lineHeight: 'inherit',
-    },
-    ".cm-scroller": {
-      fontFamily: "inherit",
-      fontSize: "inherit",
-      color: "inherit",
-      lineHeight: "inherit",
-    },
-    '.cm-editor': {outline: 'none'},
-    '.cm-focused': {outline: 'none'},
-    '.cm-content': {padding: '0'},
-    '.cm-line': {padding: '0'},
-    /* Caret fix: remove the half-pixel shift */
-    ".cm-cursor": {
-      marginLeft: "0px",
-    },
-  }),
-  EditorView.lineWrapping,
-]
+export const createMinimalMarkdownConfig = (backlinkOptions?: {
+  getAliases: (filter: string) => Promise<string[]>
+}): Extension[] => {
+  const extensions = [
+    markdown({addKeymap: false}),
+    EditorView.theme({
+      '&': {
+        fontSize: 'inherit',
+        fontFamily: 'inherit',
+        color: 'inherit',
+        lineHeight: 'inherit',
+      },
+      ".cm-scroller": {
+        fontFamily: "inherit",
+        fontSize: "inherit",
+        color: "inherit",
+        lineHeight: "inherit",
+      },
+      '.cm-editor': {outline: 'none'},
+      '.cm-focused': {outline: 'none'},
+      '.cm-content': {padding: '0'},
+      '.cm-line': {padding: '0'},
+      /* Caret fix: remove the half-pixel shift */
+      ".cm-cursor": {
+        marginLeft: "0px",
+      },
+    }),
+    EditorView.lineWrapping,
+  ]
+
+  // Add backlink autocomplete if options provided
+  if (backlinkOptions) {
+    extensions.push(createBacklinkAutocomplete(backlinkOptions))
+  }
+
+  return extensions
+}
 
 export const createTypeScriptConfig = (): Extension[] => [
   javascript({jsx: true, typescript: true}),

@@ -70,6 +70,7 @@ export class Repo {
 
       doc.createdByUserId = props.createdByUserId || this.currentUser.id
       doc.updatedByUserId = props.updatedByUserId || this.currentUser.id
+      doc.references = props.references || []
 
       if (props.parentId) {
         doc.parentId = props.parentId
