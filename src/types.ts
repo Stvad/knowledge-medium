@@ -25,9 +25,9 @@ export interface BooleanBlockProperty extends BlockProperty {
     value: boolean | undefined
 }
 
-export interface ArrayBlockProperty extends BlockProperty {
-    type: 'array'
-    value: Array<BlockPropertyValue> | undefined
+export interface ListBlockProperty<V extends BlockPropertyValue> extends BlockProperty {
+    type: 'list'
+    value: Array<V> | undefined
 }
 
 export interface ObjectBlockProperty<V extends object> extends BlockProperty {

@@ -5,7 +5,8 @@ import {
   NumberBlockProperty,
   BooleanBlockProperty,
   ObjectBlockProperty,
-  SelectionState,
+  ListBlockProperty,
+  SelectionState, BlockPropertyValue,
 } from '@/types'
 import { reassembleTagProducer } from '@/utils/templateLiterals.ts'
 import { removeUndefined } from '@/utils/object.ts'
@@ -29,6 +30,11 @@ export const objectProperty = <V extends object>(
   changeScope?: string,
 ): ObjectBlockProperty<V> => defineCreatorFunction<ObjectBlockProperty<V>>('object')(name, value, changeScope)
 
+export const listProperty = <T extends BlockPropertyValue>(
+  name: string,
+  value?: T[],
+  changeScope?: string,
+): ListBlockProperty<T> => defineCreatorFunction<ListBlockProperty<T>>('list')(name, value, changeScope)
 
 export const sp = reassembleTagProducer(stringProperty)
 export const np = reassembleTagProducer(numberProperty)
