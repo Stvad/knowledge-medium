@@ -1,6 +1,5 @@
-import { Extension, EditorState } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { Extension } from '@codemirror/state'
+import { EditorView } from '@codemirror/view'
 import { markdown } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 
@@ -33,22 +32,11 @@ export const createMinimalMarkdownConfig = (): Extension[] => [
 
 export const createTypeScriptConfig = (): Extension[] => [
   javascript({jsx: true, typescript: true}),
-  history(),
-  keymap.of([...defaultKeymap, ...historyKeymap]),
   EditorView.theme({
     '.cm-editor': {border: '1px solid #ccc', borderRadius: '4px'},
     '.cm-content': {padding: '8px'},
   }),
 ]
-
-export const getCurrentLine = (state: EditorState) => {
-  const {head} = state.selection.main
-  return state.doc.lineAt(head)
-}
-
-export const isOnFirstLine = (state: EditorState) => getCurrentLine(state).number === 1
-export const isOnLastLine = (state: EditorState) => getCurrentLine(state).number === state.doc.lines
-
 
 /**
  * These are only a little bit cursed rn, other options for doing this seem more cursed.

@@ -6,6 +6,7 @@ import { memoize } from 'lodash'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
 import { useCallback } from 'react'
+import { useDocumentWithSelector } from '@/data/automerge.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -455,14 +456,13 @@ export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
 
 export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
   const name = config.name
-  const doc = useData(block)
-  const property = doc?.properties[name] ?? config
+  const [property] = useDocumentWithSelector<BlockData, BlockProperty | undefined>(block.id, doc => doc?.properties[name])
 
   const setProperty = useCallback((newProperty: T) => {
     block.setProperty(newProperty)
   }, [block])
 
-  return [property as T, setProperty]
+  return [(property ?? config) as T, setProperty]
 }
 
 export function usePropertyValue<T extends BlockProperty>(block: Block, config: T): [T['value'], (value: T['value']) => void] {

@@ -23,25 +23,18 @@ import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
 import { importState } from '@/utils/state.ts'
 import {
   focusedBlockIdProp,
-  isEditingProp,
   isCollapsedProp,
   showPropertiesProp,
   topLevelBlockIdProp,
   editorSelection,
+  setIsEditing,
+  setFocusedBlockId,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
 import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect } from './utils'
 import { EditorView } from '@codemirror/view'
 import { isOnFirstVisualLine, isOnLastVisualLine, getCaretRect } from '@/utils/codemirror.ts'
-
-const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
-  uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
-}
-
-const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
-  uiStateBlock.setProperty({...isEditingProp, value: editing})
-}
 
 // Helper function to split block at cursor for CodeMirror
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {

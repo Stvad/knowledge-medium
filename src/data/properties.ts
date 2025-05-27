@@ -4,10 +4,12 @@ import {
   StringBlockProperty,
   NumberBlockProperty,
   BooleanBlockProperty,
-  ObjectBlockProperty, SelectionState,
+  ObjectBlockProperty,
+  SelectionState,
 } from '@/types'
 import { reassembleTagProducer } from '@/utils/templateLiterals.ts'
 import { removeUndefined } from '@/utils/object.ts'
+import { Block } from '@/data/block.ts'
 
 const defineCreatorFunction = <T extends BlockProperty>(type: string) =>
   (name: string, value?: T['value'], changeScope?: string): T => removeUndefined({
@@ -82,3 +84,11 @@ export const createdAtProp = numberProperty('createdAt')
 
 // Block reference properties
 export const sourceBlockIdProp = stringProperty('sourceBlockId')
+
+
+export const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
+  uiStateBlock.setProperty({...isEditingProp, value: editing})
+}
+export const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
+  uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
+}

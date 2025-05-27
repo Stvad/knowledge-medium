@@ -1,41 +1,31 @@
-import CodeMirror from '@uiw/react-codemirror'
 import { BlockRendererProps, BlockRenderer } from '../../types.ts'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
-import { useCallback, useMemo } from 'react'
-import { debounce } from 'lodash'
-import { useData } from '@/data/block.ts'
+import { useMemo } from 'react'
 import { createTypeScriptConfig } from '@/utils/codemirror.ts'
-import { updateText } from '@automerge/automerge/next'
+import { BlockEditor } from '@/components/BlockEditor.tsx'
 
-const CodeMirrorMonacoReplacement = ({ block }: BlockRendererProps) => {
-  const blockData = useData(block)
+const TypescriptBlockEditor = ({ block }: BlockRendererProps) => {
   const extensions = useMemo(() => createTypeScriptConfig(), [])
-  
-  const onChange = useCallback((value: string) => {
-    if (value !== blockData?.content) {
-      block.change(b => updateText(b, ['content'], value))
-    }
-  }, [block, blockData])
-
-  const debouncedOnChange = useMemo(() => debounce(onChange, 300), [onChange])
-
-  if (!blockData) return null
 
   return (
     <div className="border rounded-md overflow-hidden">
-      <CodeMirror
-        value={blockData.content || ''}
-        onChange={debouncedOnChange}
+      <BlockEditor
+        block={block}
         extensions={extensions}
-        height="400px"
         theme="dark"
+        className="w-full"
+        basicSetup={{
+          history: false,
+        }}
+        indentWithTab={true}
+        autoFocus={false}
       />
     </div>
   )
 }
 
 export const CodeMirrorRendererBlockRenderer: BlockRenderer = (props: BlockRendererProps) =>
-  <DefaultBlockRenderer {...props} ContentRenderer={CodeMirrorMonacoReplacement} />
+  <DefaultBlockRenderer {...props} EditContentRenderer={TypescriptBlockEditor} />
 
 CodeMirrorRendererBlockRenderer.canRender = ({block}: BlockRendererProps) => 
   block.dataSync()?.properties.type?.value === 'renderer'

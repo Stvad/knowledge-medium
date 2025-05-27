@@ -4,7 +4,7 @@ import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 
 export const Breadcrumbs = ({block}: { block: Block }) => {
-  const parents = use(useMemo(() => block.parents(), [block]))
+  const parents = use(useMemo(() => block.parents(), [block.id]))
 
   if (parents.length === 0) {
     return null
