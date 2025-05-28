@@ -486,3 +486,6 @@ export function useChildren(block: Block): Block[] {
 
   return doc.childIds.map(childId => block.repo.find(childId))
 }
+
+export const useHasChildren = (block: Block) =>
+  useDataWithSelector(block, (data?: BlockData) => data ? data.childIds.length > 0 : false)

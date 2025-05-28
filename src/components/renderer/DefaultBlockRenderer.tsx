@@ -1,4 +1,4 @@
-import { BlockRendererProps, BlockRenderer, BlockData } from '@/types.ts'
+import { BlockRendererProps, BlockRenderer } from '@/types.ts'
 import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
@@ -14,7 +14,7 @@ import {
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo, Ref } from 'react'
-import { Block, useData, usePropertyValue } from '@/data/block.ts'
+import { Block, useData, usePropertyValue, useHasChildren } from '@/data/block.ts'
 import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState, useInFocus } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -64,16 +64,12 @@ const zoomIn = (block: Block) => {
 }
 
 const BlockBullet = ({block}: { block: Block }) => {
-  const blockData = useData(block)
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const {panelId} = useBlockContext()
-
-  if (!blockData) return null
-
-  const hasChildren = blockData.childIds.length > 0
+  const hasChildren = useHasChildren(block)
 
   const openGenerateRendererDialog = () => {
     setDialogOpen(true)
@@ -147,17 +143,13 @@ const BlockBullet = ({block}: { block: Block }) => {
   )
 }
 
-const hasChildren = (blockData: BlockData) => blockData?.childIds?.length > 0
-
 const ExpandButton = ({block, collapsibleRef}: { block: Block, collapsibleRef: Ref<HTMLDivElement | null> }) => {
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
   const isMobile = useIsMobile()
-  const blockData = useData(block)
+  const hasChildren = useHasChildren(block)
 
   // @ts-expect-error Seems like a library type error
   const isHovering = useHoverDirty(collapsibleRef)
-
-  if (!blockData) return null
 
   return <CollapsibleTrigger
     asChild
@@ -169,7 +161,7 @@ const ExpandButton = ({block, collapsibleRef}: { block: Block, collapsibleRef: R
       variant="ghost"
       size="sm"
       className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity 
-          ${hasChildren(blockData) && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
+          ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
           ${isMobile ? 'w-6' : 'w-3'}`
       }
     >
@@ -217,19 +209,19 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const ref = useRef<HTMLDivElement | null>(null)
   const isMobile = useIsMobile()
-  const blockData = useData(block)
   const isTopLevel = block.id === topLevelBlockId
 
   const [selectionState, setSelectionState] = useSelectionState()
   const isSelected = selectionState.selectedBlockIds.includes(block.id)
 
   const inFocus = useInFocus(block.id)
+  const hasChildren = useHasChildren(block)
 
   const shortcutDependencies = useMemo(() => ({block}), [block])
 
   useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing && !isSelected)
 
-  if (!blockData) return null
+  console.log('rendering block', block.dataSync())
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     if (!inFocus) return
@@ -313,7 +305,7 @@ export function DefaultBlockRenderer(
           </CollapsibleContent>
         </div>
 
-        {hasChildren(blockData) && isMobile && !isTopLevel && (
+        {hasChildren && isMobile && !isTopLevel && (
           <div className="absolute right-1 top-0 ">
             {<ExpandButton block={block} collapsibleRef={ref}/>}
           </div>
