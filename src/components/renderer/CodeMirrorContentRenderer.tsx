@@ -61,7 +61,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       }}
       block={block}
       extensions={extensions}
-      autoFocus
       className="min-h-[1.7em]"
       basicSetup={{
         closeBrackets: true,
