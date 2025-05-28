@@ -3,7 +3,7 @@
  * Triggers on [[ input and shows available aliases
  */
 
-import { Extension } from '@codemirror/state'
+import { Extension, EditorSelection } from '@codemirror/state'
 import { autocompletion, CompletionContext, CompletionResult, completionKeymap } from '@codemirror/autocomplete'
 import { keymap } from '@codemirror/view'
 
@@ -69,10 +69,14 @@ function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
       to: pos,
       options: aliases.map(alias => ({
         label: alias,
-        // Only add closing brackets if they don't already exist
-        apply: hasClosingBrackets ? alias : `${alias}]]`,
-        type: 'text',
-        info: `Link to: ${alias}`
+        apply: (view, _, from, to) => {
+          view.dispatch({
+            changes: { from, to, insert: hasClosingBrackets ? alias : `${alias}]]` },
+            // Place cursor two characters past the insertion start (after ']]')
+            selection: EditorSelection.cursor(from + alias.length + 2)
+          });
+        },
+        type: 'class',
       }))
     }
   }
