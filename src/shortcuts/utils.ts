@@ -149,4 +149,5 @@ export const makeModeAction = <TargetMode extends ActionContextType>(
 
 export const makeNormalMode = makeModeAction(ActionContextTypes.NORMAL_MODE, 'normal')
 export const makeEditMode = makeModeAction(ActionContextTypes.EDIT_MODE, 'edit')
+export const makeCMMode = makeModeAction(ActionContextTypes.EDIT_MODE_CM, 'edit.cm')
 export const makeMultiSelect = makeModeAction(ActionContextTypes.MULTI_SELECT_MODE, 'multi_select')

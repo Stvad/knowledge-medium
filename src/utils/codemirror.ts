@@ -93,3 +93,9 @@ export const getCaretRect = (editorView: EditorView) => {
   const {head} = editorView.state.selection.main
   return editorView.coordsAtPos(head)
 }
+
+export const cursorIsAtEnd = (editorView: EditorView) =>
+  editorView.state.selection.main.head === editorView.state.doc.length
+
+export const cursorIsAtStart = (editorView: EditorView) =>
+  editorView.state.selection.main.head === 0

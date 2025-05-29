@@ -32,9 +32,15 @@ import {
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
-import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect } from './utils'
+import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect, makeCMMode } from './utils'
 import { EditorView } from '@codemirror/view'
-import { isOnFirstVisualLine, isOnLastVisualLine, getCaretRect } from '@/utils/codemirror.ts'
+import {
+  isOnFirstVisualLine,
+  isOnLastVisualLine,
+  getCaretRect,
+  cursorIsAtEnd,
+  cursorIsAtStart,
+} from '@/utils/codemirror.ts'
 
 // Helper function to split block at cursor for CodeMirror
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
@@ -62,6 +68,32 @@ const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView
   }
 
   return newBlock || block
+}
+
+const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
+  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+  if (!topLevelBlockId) return
+
+  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
+  if (!focusedBlockId) return
+
+  const nextBlock = await nextVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
+  if (!nextBlock) return
+
+  await extendSelection(nextBlock.id, uiStateBlock, repo)
+}
+
+const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
+  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+  if (!topLevelBlockId) return
+
+  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
+  if (!focusedBlockId) return
+
+  const prevBlock = await previousVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
+  if (!prevBlock) return
+
+  await extendSelection(prevBlock.id, uiStateBlock, repo)
 }
 
 export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
@@ -315,51 +347,43 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       keys: 'z',
     },
   }
-  const extendSelectionUp = {
+  const extendSelectionUpNormal = {
     id: 'extend_selection_up',
     description: 'Extend selection up',
     context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {uiStateBlock} = deps
-
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-      if (!topLevelBlockId) return
-
-      const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
-      if (!focusedBlockId) return
-
-      const prevBlock = await previousVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
-      if (!prevBlock) return
-
-      console.log('extend selection up', prevBlock.id, focusedBlockId)
-
-      await extendSelection(prevBlock.id, uiStateBlock, repo)
-    },
+    handler: async (deps: BlockShortcutDependencies) =>
+      await extendSelectionUp(deps.uiStateBlock, repo),
     defaultBinding: {
       keys: 'shift+up',
     },
   }
-  const extendSelectionDown = {
+  const extendSelectionUpEdit = {
+    ...makeCMMode(extendSelectionUpNormal),
+    handler: async (deps: CodeMirrorEditModeDependencies) => {
+      if (cursorIsAtStart(deps.editorView)) {
+        setIsEditing(deps.uiStateBlock, false)
+        await extendSelectionUp(deps.uiStateBlock, repo)
+      }
+    }
+  }
+  const extendSelectionDownNormal = {
     id: 'extend_selection_down',
     description: 'Extend selection down',
     context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {uiStateBlock} = deps
-
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-      if (!topLevelBlockId) return
-
-      const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
-      if (!focusedBlockId) return
-
-      const nextBlock = await nextVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
-      if (!nextBlock) return
-
-      await extendSelection(nextBlock.id, uiStateBlock, repo)
-    },
+    handler: async (deps: BlockShortcutDependencies) =>
+      await extendSelectionDown(deps.uiStateBlock, repo),
     defaultBinding: {
       keys: 'shift+down',
     },
+  }
+  const extendSelectionDownEdit = {
+    ...makeCMMode(extendSelectionDownNormal),
+    handler: async (deps: CodeMirrorEditModeDependencies) => {
+      if (cursorIsAtEnd(deps.editorView)) {
+        setIsEditing(deps.uiStateBlock, false)
+        await extendSelectionDown(deps.uiStateBlock, repo)
+      }
+    }
   }
   const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     indentBlock,
@@ -470,8 +494,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         keys: ['space', 'v'],
       },
     },
-    extendSelectionUp,
-    extendSelectionDown,
+    extendSelectionUpNormal,
+    extendSelectionDownNormal,
     makeNormalMode(moveBlockUp),
     makeNormalMode(moveBlockDown),
   ]
@@ -737,39 +761,18 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         keys: 'backspace',
       },
     },
-    // CodeMirror versions of indent/outdent actions
-    {
-      id: 'indent_block_cm',
-      description: 'Indent block (CodeMirror)',
-      context: ActionContextTypes.EDIT_MODE_CM,
-      handler: (deps: CodeMirrorEditModeDependencies) => deps.block.indent(),
-      defaultBinding: {
-        keys: 'tab',
-        eventOptions: {
-          preventDefault: true,
-        },
-      },
-    },
-    {
-      id: 'outdent_block_cm',
-      description: 'Outdent block (CodeMirror)',
-      context: ActionContextTypes.EDIT_MODE_CM,
-      handler: (deps: CodeMirrorEditModeDependencies) => deps.block.outdent(),
-      defaultBinding: {
-        keys: 'shift+tab',
-        eventOptions: {
-          preventDefault: true,
-        },
-      },
-    },
+    makeCMMode(indentBlock),
+    makeCMMode(outdentBlock),
     moveBlockUpCM,
     moveBlockDownCM,
+    extendSelectionDownEdit,
+    extendSelectionUpEdit,
   ]
 
   // Multi-select mode actions
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
-    makeMultiSelect(extendSelectionUp),
-    makeMultiSelect(extendSelectionDown),
+    makeMultiSelect(extendSelectionUpNormal),
+    makeMultiSelect(extendSelectionDownNormal),
     applyToAllBlocksInSelection(toggleBlockCollapse),
     applyToAllBlocksInSelection(togglePropertiesDisplay),
     applyToAllBlocksInSelection(indentBlock),
