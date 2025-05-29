@@ -4,4 +4,4 @@ import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRe
 export const BreadcrumbRenderer = (props: BlockRendererProps) => <MarkdownContentRenderer {...props}/>
 
 BreadcrumbRenderer.canRender = ({context} : BlockRendererProps) => !!context?.isBreadcrumb
-BreadcrumbRenderer.priority = () => 5
+BreadcrumbRenderer.priority = () => 10
