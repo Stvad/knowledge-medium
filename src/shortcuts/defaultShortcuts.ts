@@ -117,7 +117,9 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'indent_block',
     description: 'Indent block',
     context: ActionContextTypes.NORMAL_MODE,
-    handler: (deps: BlockShortcutDependencies) => deps.block.indent(),
+    handler: (deps: BlockShortcutDependencies) => {
+      deps.block.indent()
+    },
     defaultBinding: {
       keys: 'tab',
       eventOptions: {
@@ -130,7 +132,12 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'outdent_block',
     description: 'Outdent block',
     context: ActionContextTypes.NORMAL_MODE,
-    handler: (deps: BlockShortcutDependencies) => deps.block.outdent(),
+    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      if (!topLevelBlockId) return
+
+      block.outdent(topLevelBlockId)
+    },
     defaultBinding: {
       keys: 'shift+tab',
       eventOptions: {
@@ -379,7 +386,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         setIsEditing(deps.uiStateBlock, false)
         await extendSelectionUp(deps.uiStateBlock, repo)
       }
-    }
+    },
   }
   const extendSelectionDownNormal = {
     id: 'extend_selection_down',
@@ -398,7 +405,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         setIsEditing(deps.uiStateBlock, false)
         await extendSelectionDown(deps.uiStateBlock, repo)
       }
-    }
+    },
   }
   const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     indentBlock,
@@ -636,7 +643,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
   const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
     {
       id: 'exit_edit_mode_cm',
-      description: 'Exit edit mode (CodeMirror)',
+      description: 'Exit edit mode',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
       defaultBinding: {
@@ -645,7 +652,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     },
     {
       id: 'split_block_cm',
-      description: 'Split block at cursor (CodeMirror)',
+      description: 'Split block at cursor',
       context: ActionContextTypes.EDIT_MODE_CM,
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         const {block, editorView, uiStateBlock} = deps
@@ -660,6 +667,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
         const doc = editorView.state.doc
         const cursorPos = selection.from
 
+        const createSiblingBelow = async () => {
+          const newBlock = await block.createSiblingBelow()
+          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
+        }
+
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
           const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView, isTopLevel)
@@ -671,10 +683,17 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
           const newBlock = await block.createChild({position: 'first'})
           if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
         }
-        // Case 3: Cursor at end, no children or they are collapsed
+        // Repeated empty blocks creation - outdents the new block
+        else if (editorView.state.doc.length === 0) {
+          const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+
+          if (topLevelBlockId && !await block.outdent(topLevelBlockId)) {
+            await createSiblingBelow()
+          }
+        }
+        // Cursor at end, no children or they are collapsed
         else {
-          const newBlock = await block.createSiblingBelow()
-          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
+          await createSiblingBelow()
         }
       },
       defaultBinding: {

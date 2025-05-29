@@ -112,12 +112,14 @@ export class Block {
   /**
    * todo we should outdent outside the view point, but that's not something this function can be aware of
    */
-  async outdent() {
+  async outdent(topLevelBlockId: string) {
+    if (this.id === topLevelBlockId) return false
+
     const parent = await this.parent()
-    if (!parent) return // We are root
+    if (!parent || parent.id == topLevelBlockId) return false // We are root or just under top level block
 
     const grandparent = await parent.parent()
-    if (!grandparent) return // Parent is root
+    if (!grandparent) return false // Parent is root
     // 1. Remove this block from current parent's children
 
     this.undoRedoManager.transaction(() => {
@@ -134,6 +136,7 @@ export class Block {
 
       this._updateParentId(grandparent.id)
     }, {description: 'Outdent block', scope: defaultChangeScope})
+    return true
   }
 
   async indent() {
@@ -159,6 +162,7 @@ export class Block {
 
       this._updateParentId(newParentId)
     }, {description: 'Indent block', scope: defaultChangeScope})
+    return true
   }
 
   async changeOrder(shift: number) {
