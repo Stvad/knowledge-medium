@@ -1,14 +1,22 @@
 import { Extension } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { markdown } from '@codemirror/lang-markdown'
+import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 import { createBacklinkAutocomplete } from './backlinkAutocomplete'
+
+const mdNoQuoteClose = markdownLanguage.data.of({
+  closeBrackets: {
+    brackets: ["(", "[", "{", "`", "<"],   // drop "'" and '"'
+  //   plausibly want do do "before anything?"
+  }
+});
 
 export const createMinimalMarkdownConfig = (backlinkOptions?: {
   getAliases: (filter: string) => Promise<string[]>
 }): Extension[] => {
   const extensions = [
-    markdown({addKeymap: false}),
+    markdown({addKeymap: false, base: markdownLanguage}),
+    mdNoQuoteClose,
     EditorView.theme({
       '&': {
         fontSize: 'inherit',
