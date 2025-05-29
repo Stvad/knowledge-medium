@@ -1,4 +1,4 @@
-import { BlockRendererProps, SelectionState } from '@/types.ts'
+import { BlockRendererProps, EditorSelectionState } from '@/types.ts'
 import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
 import { Block, useData } from '@/data/block.ts'
@@ -94,7 +94,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   }, [blockData?.content])
 
   const debouncedSetSelection = useMemo(
-    () => debounce((selection: SelectionState) => {
+    () => debounce((selection: EditorSelectionState) => {
       setSelection(selection)
     }, 150),
     [setSelection],

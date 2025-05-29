@@ -41,6 +41,7 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.ts'
+import { EditorSelectionState } from '@/types.ts'
 
 // Helper function to split block at cursor for CodeMirror
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
@@ -94,6 +95,20 @@ const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
   if (!prevBlock) return
 
   await extendSelection(prevBlock.id, uiStateBlock, repo)
+}
+
+const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) => {
+  uiStateBlock.setProperty({
+    ...selectionStateProp,
+    value: {
+      selectedBlockIds: [],
+      anchorBlockId: null,
+    },
+  })
+
+  setIsEditing(uiStateBlock, true)
+
+  if (selection) uiStateBlock.setProperty({...editorSelection, value: selection})
 }
 
 export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
@@ -428,22 +443,20 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       id: 'enter_edit_mode',
       description: 'Enter edit mode',
       context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: [],
-            anchorBlockId: null,
-          },
-        })
-
-        setIsEditing(uiStateBlock, true)
-      },
+      handler: async (deps: BlockShortcutDependencies) => enterEditMode(deps.uiStateBlock),
       defaultBinding: {
         keys: 'i',
+      },
+    },
+    {
+      id: 'enter_edit_mode_at_end',
+      description: 'Enter edit mode at end',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        enterEditMode(uiStateBlock, {blockId: block.id, start: block.dataSync()?.content.length})
+      },
+      defaultBinding: {
+        keys: 'a',
       },
     },
     toggleBlockCollapse,

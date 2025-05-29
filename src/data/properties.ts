@@ -6,7 +6,7 @@ import {
   BooleanBlockProperty,
   ObjectBlockProperty,
   ListBlockProperty,
-  SelectionState, BlockPropertyValue,
+  EditorSelectionState, BlockPropertyValue,
 } from '@/types'
 import { reassembleTagProducer } from '@/utils/templateLiterals.ts'
 import { removeUndefined } from '@/utils/object.ts'
@@ -61,7 +61,7 @@ export const isCollapsedProp = boolProp('system:collapsed', false, uiChangeScope
 export const isEditingProp = boolProp('isEditing', undefined, uiChangeScope)
 export const topLevelBlockIdProp = stringProperty('topLevelBlockId', undefined, uiChangeScope)
 export const focusedBlockIdProp = stringProperty('focusedBlockId', undefined, uiChangeScope)
-export const editorSelection = objectProperty<SelectionState>('editorSelection') // Commenting out or removing old/conflicting 'selection' if it was for text selection
+export const editorSelection = objectProperty<EditorSelectionState>('editorSelection') // Commenting out or removing old/conflicting 'selection' if it was for text selection
 
 export interface BlockSelectionState {
   selectedBlockIds: string[];

@@ -1,5 +1,5 @@
 import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react-codemirror'
-import { SelectionState } from '@/types.ts'
+import { EditorSelectionState } from '@/types.ts'
 import { Block, useData } from '@/data/block.ts'
 import { useIsEditing, editorSelection } from '@/data/properties.ts'
 import { useRef, useEffect, useMemo, useCallback, forwardRef } from 'react'
@@ -64,7 +64,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   ).current
 
   const pushSelection = useRef(
-    debounce((sel: SelectionState) =>
+    debounce((sel: EditorSelectionState) =>
         uiStateBlock.setProperty({...editorSelection, value: sel})
       , 150),
   ).current

@@ -83,7 +83,7 @@ export interface RootDoc {
     rootBlockIds: string[];  // URLs of root-level blocks
 }
 
-export interface SelectionState {
+export interface EditorSelectionState {
     blockId: string
     start?: number
     end?: number
