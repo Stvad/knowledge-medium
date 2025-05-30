@@ -129,7 +129,7 @@ export async function extendSelection(
   targetBlockId: string,
   uiStateBlock: Block,
   repo: Repo,
-): Promise<string[]> {
+)  {
   // Get current selection state, focused block ID and top level block ID
   const [currentState, focusedBlockId, topLevelBlockId] = await Promise.all([
     uiStateBlock.getProperty(selectionStateProp),
@@ -137,11 +137,11 @@ export async function extendSelection(
     uiStateBlock.getProperty(topLevelBlockIdProp),
   ]);
 
-  if (!topLevelBlockId?.value || !currentState?.value) return [];
+  if (!topLevelBlockId?.value) return
 
   // Determine anchor block - either from current state or use the focused block
-  const currentAnchor = currentState.value.anchorBlockId || focusedBlockId?.value;
-  if (!currentAnchor) return [];
+  const currentAnchor = currentState?.value?.anchorBlockId || focusedBlockId?.value;
+  if (!currentAnchor) return
 
   // Get ordered IDs and compute range
   const orderedIds = await getAllVisibleBlockIdsInOrder(repo.find(topLevelBlockId.value));
@@ -161,6 +161,4 @@ export async function extendSelection(
     ...focusedBlockIdProp,
     value: targetBlockId,
   });
-
-  return rangeIds;
 }

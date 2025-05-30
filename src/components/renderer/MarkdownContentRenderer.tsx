@@ -1,79 +1,14 @@
 import { BlockRendererProps } from '@/types.ts'
-import { useIsEditing, focusedBlockIdProp, selectionProp } from '@/data/properties.ts'
+import { useIsEditing, focusedBlockIdProp, editorSelection } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
+import { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useUIStateProperty } from '@/data/globalState'
-import { useRef, MouseEvent, TouchEvent } from 'react'
-import { useData } from '@/data/block.ts'
+import { useRef, MouseEvent, TouchEvent, ComponentType } from 'react'
 import { remarkTimestamps } from '@/markdown/remark-timestamps.ts'
 import VideoTimeStamp from '@/components/markdown/VideoTimeStamp.tsx'
 import { useBlockContext } from '@/context/block.tsx'
-
-function getOffsetRelativeToParent(parent: HTMLElement, targetNode: Node, offset: number): number {
-  let totalOffset = 0
-  const walker = document.createTreeWalker(
-    parent,
-    NodeFilter.SHOW_TEXT,
-    null,
-  )
-
-  let node: Node | null = walker.nextNode()
-  while (node) {
-    if (node === targetNode) {
-      return totalOffset + offset
-    }
-    totalOffset += node.textContent?.length || 0
-    node = walker.nextNode()
-  }
-  return totalOffset
-}
-
-// Find the text node and offset at a specific point
-const getTextNodeAtPoint = (element: HTMLElement, x: number, y: number): { node: Node | null, offset: number } => {
-  // Try to use caretPositionFromPoint if available (more accurate)
-  if (document.caretPositionFromPoint) {
-    const position = document.caretPositionFromPoint(x, y)
-    if (position) {
-      return {node: position.offsetNode, offset: position.offset}
-    }
-  }
-
-  // Fallback to caretRangeFromPoint
-  if (document.caretRangeFromPoint) {
-    const range = document.caretRangeFromPoint(x, y)
-    if (range) {
-      return {node: range.startContainer, offset: range.startOffset}
-    }
-  }
-
-  // If all else fails, return the first text node
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null)
-  const firstNode = walker.nextNode()
-  return {node: firstNode, offset: 0}
-}
-
-// Get cursor location from a point in the element
-const getCursorLocationFromPoint = (element: HTMLElement, x: number, y: number): number => {
-  if (!element) return 0
-
-  const {node, offset} = getTextNodeAtPoint(element, x, y)
-  if (!node) return 0
-
-  // Create a temporary selection to get the cursor location
-  const selection = window.getSelection()
-  if (!selection) return 0
-
-  // Create our temporary selection
-  selection.removeAllRanges()
-  const range = document.createRange()
-  range.setStart(node, offset)
-  range.setEnd(node, offset)
-  selection.addRange(range)
-
-  // Original implementation saved and restored the selection, but I don't think we need to do that
-
-  return getOffsetRelativeToParent(element, node, offset)
-}
+import { useData } from '@/hooks/block.ts'
 
 type Touch = { x: number; y: number; time: number }
 
@@ -93,24 +28,23 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = useData(block)
   const [, setIsEditing] = useIsEditing()
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const [, setSelection] = useUIStateProperty(selectionProp)
+  const [, setSelection] = useUIStateProperty(editorSelection)
   const blockContext = useBlockContext()
-  const ref = useRef<HTMLDivElement>(null)
 
-  const activateEditing = (cursorLocation: number) => {
+  const activateEditing = (coords: { x: number, y: number }) => {
     setIsEditing(true)
     setFocusedBlockId(block.id)
-    setSelection({blockId: block.id, start: cursorLocation, end: cursorLocation})
+    setSelection({blockId: block.id, ...coords})
   }
 
   const handleMouseDoubleClick = (e: MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
 
-    if (ref.current) {
-      const cursorLocation = getCursorLocationFromPoint(ref.current, e.clientX, e.clientY)
-      activateEditing(cursorLocation)
-    }
+    activateEditing({
+      x: e.clientX,
+      y: e.clientY,
+    })
   }
 
   const touchStartRef = useRef<Touch | null>(null)
@@ -127,7 +61,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   }
 
   const handleTouchEnd = (e: TouchEvent) => {
-    if (!touchStartRef.current || !ref.current || e.changedTouches.length === 0) return
+    if (!touchStartRef.current || e.changedTouches.length === 0) return
 
     const touch = e.changedTouches[0]
     const touchEnd = {
@@ -137,8 +71,10 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
     }
 
     if (!isSwipe(touchEnd, touchStartRef.current)) {
-      const cursorLocation = getCursorLocationFromPoint(ref.current, touch.clientX, touch.clientY)
-      activateEditing(cursorLocation)
+      activateEditing({
+        x: touch.clientX,
+        y: touch.clientY,
+      })
     }
 
     // Reset the touch start reference
@@ -156,11 +92,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
    */
   return (
     <div
-      ref={ref}
-      className="min-h-[1.7em] whitespace-pre-wrap block-content overflow-x-hidden max-w-full"
-      onClick={() => {
-        setFocusedBlockId(block.id)
-      }}
+      className="min-h-[1.7em] whitespace-pre-wrap overflow-x-hidden max-w-full"
       onMouseDownCapture={(e) => {
         if (e.detail !== 2) { // Double click, using this vs dblclick because want to prevent behavior of selecting text
           return
@@ -177,10 +109,18 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
             'time-stamp': ({node}) =>
               <VideoTimeStamp hms={node.properties.hms} videoBlockId={blockContext.videoPlayerBlockId as string}/>,
           } : {}),
-        }}
+        } as ExtendedComponents}
       >
         {blockData.content}
       </Markdown>
     </div>
   )
 }
+
+// Define extended components type
+type ExtendedComponents = Components & {
+  'time-stamp'?: ComponentType<{
+    node: {properties: {hms: string}}
+    [key: string]: unknown;
+  }>;
+};

@@ -59,7 +59,7 @@ export function CommandPalette() {
     }
 
     try {
-      actionManager.runActionById(actionId)
+      actionManager.runActionById(actionId, new CustomEvent('command-pallet-trigger'))
     } catch (error) {
       console.error(`[CommandPalette] Failed to execute action: ${actionId}`, error)
     } finally {

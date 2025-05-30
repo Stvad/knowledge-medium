@@ -25,9 +25,9 @@ export interface BooleanBlockProperty extends BlockProperty {
     value: boolean | undefined
 }
 
-export interface ArrayBlockProperty extends BlockProperty {
-    type: 'array'
-    value: Array<BlockPropertyValue> | undefined
+export interface ListBlockProperty<V extends BlockPropertyValue> extends BlockProperty {
+    type: 'list'
+    value: Array<V> | undefined
 }
 
 export interface ObjectBlockProperty<V extends object> extends BlockProperty {
@@ -57,6 +57,7 @@ export interface BlockData {
     updateTime: number;
     createdByUserId: string;
     updatedByUserId: string;
+    references: {id: string, alias: string}[];  // Required, outgoing references to other blocks
     // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
 }
 
@@ -82,10 +83,13 @@ export interface RootDoc {
     rootBlockIds: string[];  // URLs of root-level blocks
 }
 
-export interface SelectionState {
+export interface EditorSelectionState {
     blockId: string
-    start: number
-    end: number
+    start?: number
+    end?: number
+    line?: 'first' | 'last'
+    x?: number
+    y?: number
 }
 
 export interface BlockContextType {

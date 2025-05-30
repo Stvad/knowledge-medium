@@ -1,11 +1,14 @@
 import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
 import { BlockData, User, BlockProperty } from '@/types'
 import { insertAt, deleteAt } from '@automerge/automerge/next'
-import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { memoize } from 'lodash'
 import { Repo } from '@/data/repo'
-import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
-import { useCallback } from 'react'
+import { AutomergeRepoUndoRedo, UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
+import { parseReferences } from '@/utils/referenceParser'
+import { findBlockByAlias } from '@/data/aliasUtils.ts'
+import { fromList, aliasProp, isCollapsedProp } from '@/data/properties.ts'
+import { delay } from '@/utils/async.ts'
+import { reconcileList } from '@/utils/array.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -76,6 +79,8 @@ export class Block {
     this._transaction(() => {
       this._change(callback)
     }, options)
+
+    void parseAndUpdateReferences(this, this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!)
   }
 
   _transaction(callback: () => void, options: ChangeOptions<BlockData> = {}) {
@@ -111,12 +116,14 @@ export class Block {
   /**
    * todo we should outdent outside the view point, but that's not something this function can be aware of
    */
-  async outdent() {
+  async outdent(topLevelBlockId: string) {
+    if (this.id === topLevelBlockId) return false
+
     const parent = await this.parent()
-    if (!parent) return // We are root
+    if (!parent || parent.id == topLevelBlockId) return false // We are root or just under top level block
 
     const grandparent = await parent.parent()
-    if (!grandparent) return // Parent is root
+    if (!grandparent) return false // Parent is root
     // 1. Remove this block from current parent's children
 
     this.undoRedoManager.transaction(() => {
@@ -133,6 +140,7 @@ export class Block {
 
       this._updateParentId(grandparent.id)
     }, {description: 'Outdent block', scope: defaultChangeScope})
+    return true
   }
 
   async indent() {
@@ -158,6 +166,7 @@ export class Block {
 
       this._updateParentId(newParentId)
     }, {description: 'Indent block', scope: defaultChangeScope})
+    return true
   }
 
   async changeOrder(shift: number) {
@@ -340,14 +349,14 @@ export class Block {
   }
 
   async isDescendantOf(potentialAncestor: Block): Promise<boolean> {
-    let current = await this.parent();
+    let current = await this.parent()
     while (current) {
       if (current.id === potentialAncestor.id) {
-        return true;
+        return true
       }
-      current = await current.parent();
+      current = await current.parent()
     }
-    return false;
+    return false
   }
 }
 
@@ -381,7 +390,8 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
   const blockIsTopLevel = block.id === topLevelBlockId
 
   // If block has children and is not collapsed, return first child
-  if (doc.childIds.length > 0 && (!doc.properties['system:collapsed'] || blockIsTopLevel)) {
+  const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+  if (doc.childIds.length > 0 && (!isCollapsed || blockIsTopLevel)) {
     return block.repo.find(doc.childIds[0])
   }
 
@@ -411,13 +421,14 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
  * Helper function to get the last visible descendant of a block
  * If block is collapsed or has no children, returns the block itself
  */
-const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
+export const getLastVisibleDescendant = async (block: Block, ignoreTopLevelCollapsed?: boolean): Promise<Block> => {
   const doc = await block.data()
   if (!doc) throw new Error('Cant get block data')
 
-  if (doc.childIds.length === 0 || doc.properties['system:collapsed']) return block
+  const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+  if (doc.childIds.length === 0 || isCollapsed && !(ignoreTopLevelCollapsed === true)) return block
 
-  const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1] as string)
+  const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1])
   return getLastVisibleDescendant(lastChild)
 }
 
@@ -451,36 +462,50 @@ export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
   return [...directChildren, ...childBlockChildren.flat()]
 }
 
-export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
+const parseAndUpdateReferences = async (block: Block, urHandle: AutomergeRepoUndoRedo<BlockData>) => {
+  const blockData = block.dataSync()
+  if (!blockData) return
 
-export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
-  const name = config.name
-  const doc = useData(block)
-  const property = doc?.properties[name] ?? config
+  const getOrCreateBlockForAlias = async (alias: string) => {
+    const rootBlock = await getRootBlock(block)
+    const existingBlock = await findBlockByAlias(block.repo, rootBlock.id, alias)
 
-  const setProperty = useCallback((newProperty: T) => {
-    block.setProperty(newProperty)
-  }, [block])
+    const referenceWasRemoved = (b: Block) =>
+      block.dataSync()!.references.findIndex(ref => ref.id === b.id) === -1
 
-  return [property as T, setProperty]
+    return existingBlock || await createSelfDestructingBlockForAlias(rootBlock, alias, referenceWasRemoved)
+  }
+
+  const aliases = parseReferences(blockData.content).map(ref => ref.alias)
+  const newReferenceSet = await Promise.all(aliases.map(async alias => ({
+    id: (await getOrCreateBlockForAlias(alias)).id,
+    alias,
+  })))
+
+  /**
+   * Todo, directly updating on the handle vs using _change bc we don't want to change the updated at time 🤔
+   * I don't love this tho
+   */
+  urHandle.change((doc: BlockData) => reconcileList(doc.references, newReferenceSet, (r) => r.id))
 }
 
-export function usePropertyValue<T extends BlockProperty>(block: Block, config: T): [T['value'], (value: T['value']) => void] {
-  const [property, setProperty] = useProperty(block, config)
-
-  const setValue = useCallback((newValue: T['value']) => {
-    setProperty({
-      ...property,
-      value: newValue,
-    })
-  }, [property, setProperty])
-
-  return [property.value, setValue]
+const createNewBlockForAlias = async (rootBlock: Block, alias: string) => {
+  const library = await rootBlock.childByContent('library', true)
+  return await library.createChild({data: {content: alias, properties: fromList(aliasProp([alias]))}})
 }
 
-export function useChildren(block: Block): Block[] {
-  const doc = useData(block)
-  if (!doc?.childIds?.length) return []
+/**
+ * Primitive garbage collection
+ * Todo on the proper one
+ */
+const createSelfDestructingBlockForAlias = async (rootBlock: Block, alias: string, condition: (newBlock: Block) => boolean) => {
+  const newBlock = await createNewBlockForAlias(rootBlock, alias)
+  void selfDestructIf(newBlock, 4000, condition)
 
-  return doc.childIds.map(childId => block.repo.find(childId))
+  return newBlock
+}
+
+const selfDestructIf = async (block: Block, ms: number, condition: (block: Block) => boolean) => {
+  await delay(ms)
+  if (condition(block)) return block.delete()
 }

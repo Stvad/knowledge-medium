@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react'
 import { BlockData, RendererRegistry, BlockRendererProps, StringBlockProperty } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
-import { RendererBlockRenderer } from '@/components/renderer/RendererBlockRenderer.tsx'
+import { CodeMirrorRendererBlockRenderer } from '@/components/renderer/CodeMirrorRendererBlockRenderer.tsx'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
-import { getAllChildrenBlocks, Block, usePropertyValue } from '@/data/block.ts'
+import { getAllChildrenBlocks, Block } from '@/data/block.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
@@ -14,10 +14,11 @@ import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
 import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx';
 import { rendererProp } from '@/data/properties.ts'
 import { BreadcrumbRenderer } from '@/components/renderer/BreadcrumbRenderer.tsx'
+import { usePropertyValue } from '@/hooks/block.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
-  renderer: RendererBlockRenderer,
+  renderer: CodeMirrorRendererBlockRenderer,
   topLevel: TopLevelRenderer,
   layout: LayoutRenderer,
   panel: PanelRenderer,
@@ -44,7 +45,7 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
     (async () => {
       setRegistry(await loadRegistry(repo.find(rootBlockId!), context?.safeMode ?? false, generation))
     })()
-  }, [generation, rootBlockId, context?.safeMode])
+  }, [generation, rootBlockId, context?.safeMode, repo])
 
   useEffect(() => {
     const reloadRegistry = (e: CustomEvent<string>) => {

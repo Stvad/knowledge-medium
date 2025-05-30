@@ -1,10 +1,10 @@
 import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.ts'
-import { useData } from '@/data/block.ts'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ActionContextType as OriginalActionContextType } from '@/shortcuts/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { useData } from '@/hooks/block.ts'
 
 // Define the event type for seeking
 interface SeekToEventDetail {
@@ -28,6 +28,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const blockData = useData(block)
   const player = useRef<ReactPlayer>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const [isPlaying, setIsPlaying] = useState(false)
 
   useEffect(() => {
     const handleSeekTo = (event: CustomEvent<SeekToEventDetail>) => {
@@ -35,6 +36,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
         player.current.seekTo(event.detail.seconds)
 
         focusPlayer()
+        setIsPlaying(true)
       }
     }
 
@@ -57,6 +59,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
       <ReactPlayer
         ref={player}
         url={blockData.content}
+        playing={isPlaying}
         controls
         width="100%"
         height="100%"

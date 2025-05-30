@@ -4,7 +4,8 @@ import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { RepoProvider, useRepo } from '@/context/repo.tsx'
 import { Login } from '@/components/Login.tsx'
 import { undoRedoManager } from '@/data/repoInstance.ts'
-import { useData } from '@/data/block.ts'
+
+import { useData } from '@/hooks/block.ts'
 
 const rootDocUrl = `${document.location.hash.substring(1)}`
 

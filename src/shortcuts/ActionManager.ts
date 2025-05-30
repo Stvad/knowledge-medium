@@ -14,9 +14,11 @@ import {
   MultiSelectModeDependencies,
   ActiveContextInfo,
   ActionConfig,
+  CodeMirrorEditModeDependencies, ActionTrigger,
 } from './types'
 import { isSingleKeyPress, hasEditableTarget, createAction } from '@/shortcuts/utils.ts'
 import { Block } from '@/data/block'
+import { EditorView } from '@codemirror/view'
 
 const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependencies =>
   typeof deps === 'object' && deps !== null && 'uiStateBlock' in deps && deps.uiStateBlock instanceof Block
@@ -26,6 +28,9 @@ const isBlockShortcutDependencies = (deps: unknown): deps is BlockShortcutDepend
 
 const isEditModeDependencies = (deps: unknown): deps is EditModeDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'textarea' in deps && deps.textarea instanceof HTMLTextAreaElement
+
+const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEditModeDependencies =>
+  isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block && 'editorView' in deps && deps.editorView instanceof EditorView
 
 const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && deps.input instanceof HTMLInputElement
@@ -52,12 +57,27 @@ const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
   }],
   [ActionContextTypes.EDIT_MODE, {
     type: ActionContextTypes.EDIT_MODE,
-    displayName: 'Edit Mode',
+    displayName: 'Edit Mode (Textarea)',
     defaultEventOptions: {
       preventDefault: false,
     },
-    eventFilter: (event: KeyboardEvent) => (event.target as HTMLElement)?.tagName === 'TEXTAREA',
+    eventFilter: (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      return target?.tagName === 'TEXTAREA'
+    },
     validateDependencies: isEditModeDependencies,
+  }],
+  [ActionContextTypes.EDIT_MODE_CM, {
+    type: ActionContextTypes.EDIT_MODE_CM,
+    displayName: 'Edit Mode (CodeMirror)',
+    defaultEventOptions: {
+      preventDefault: false,
+    },
+    eventFilter: (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      return target?.closest('.cm-editor') !== null
+    },
+    validateDependencies: isCodeMirrorEditModeDependencies,
   }],
   [ActionContextTypes.PROPERTY_EDITING, {
     type: ActionContextTypes.PROPERTY_EDITING,
@@ -180,7 +200,7 @@ export class ActionManager {
       event.preventDefault()
     }
 
-    this.runActionById(action.id)
+    this.runActionById(action.id, event)
 
     return !options.preventDefault
   }
@@ -287,7 +307,7 @@ export class ActionManager {
    * @param actionId The ID of the action to run.
    * @returns True if the action was found, its context was active, dependencies validated, and handler executed. False otherwise.
    */
-  runActionById(actionId: string): void | Promise<void> {
+  runActionById(actionId: string, trigger: ActionTrigger): void | Promise<void> {
     const action = this.actions.get(actionId)
     if (!action) {
       throw new Error(`[ShortcutManager] Action with ID "${actionId}" not found.`)
@@ -300,7 +320,7 @@ export class ActionManager {
     const dependencies = this.activeContexts.get(action.context)!
 
     console.debug(`[ShortcutManager] Running action "${actionId}" from command palette.`)
-    return action.handler(dependencies)
+    return action.handler(dependencies, trigger)
   }
 }
 

@@ -1,7 +1,6 @@
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useData, usePropertyValue } from '@/data/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { X } from 'lucide-react'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
@@ -10,6 +9,7 @@ import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useMemo } from 'react'
+import { usePropertyValue, useData } from '@/hooks/block.ts'
 
 const CONTEXT_OVERRIDE = {topLevel: false}
 

@@ -1,10 +1,11 @@
-import { Editor } from '@monaco-editor/react'
+import { Editor, OnMount } from '@monaco-editor/react'
 import { BlockRendererProps, BlockRenderer } from '../../types.ts'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import type { editor } from 'monaco-editor'
 import { debounce } from 'lodash'
 import { useCallback } from 'react'
-import { useData } from '@/data/block.ts'
+
+import { useData } from '@/hooks/block.ts'
 
 type MonacoEditor = editor.IStandaloneCodeEditor
 
@@ -19,7 +20,7 @@ const MonacoContentRenderer = ({ block }: BlockRendererProps) => {
   if (!blockData) return null
   const debouncedOnChange = debounce(onChange, 300)
 
-    const handleEditorMount = (editor: MonacoEditor, monaco: any) => {
+    const handleEditorMount: OnMount = (editor: MonacoEditor, monaco) => {
         monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
             jsx: monaco.languages.typescript.JsxEmit.Preserve,
         });

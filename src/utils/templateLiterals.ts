@@ -11,7 +11,7 @@ export const reassembleTag = (
   // We then iterate through the *values*, adding the corresponding string part
   // that *follows* the value, and the value itself.
   return values.reduce<string>(
-    (result: string, currentValue: any, index: number): string => {
+    (result: string, currentValue: unknown, index: number): string => {
       // Append the current value, then the *next* string part.
       // strings[index + 1] is the string part immediately following values[index]
       return result + String(currentValue) + strings[index + 1]

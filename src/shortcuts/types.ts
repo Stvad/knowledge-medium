@@ -1,5 +1,6 @@
 import { Block } from '@/data/block';
 import { Optional } from '@/utils/types.ts'
+import { EditorView } from '@codemirror/view'
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
 
@@ -33,6 +34,7 @@ export type ActionContextType =
   | 'global'
   | 'normal-mode'
   | 'edit-mode'
+  | 'edit-mode-cm'
   | 'property-editing'
   | 'command-palette'
   | 'multi-select-mode'
@@ -41,6 +43,7 @@ export const ActionContextTypes = {
   GLOBAL: 'global',
   NORMAL_MODE: 'normal-mode',
   EDIT_MODE: 'edit-mode',
+  EDIT_MODE_CM: 'edit-mode-cm',
   PROPERTY_EDITING: 'property-editing',
   COMMAND_PALETTE: 'command-palette',
   MULTI_SELECT_MODE: 'multi-select-mode',
@@ -58,6 +61,11 @@ export interface EditModeDependencies extends BlockShortcutDependencies {
   textarea: HTMLTextAreaElement;
 }
 
+export interface CodeMirrorEditModeDependencies extends BaseShortcutDependencies {
+  block: Block;
+  editorView: EditorView;
+}
+
 export interface PropertyEditingDependencies extends BlockShortcutDependencies {
   input: HTMLInputElement;
 }
@@ -73,6 +81,7 @@ export interface ShortcutDependenciesMap {
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
   [ActionContextTypes.NORMAL_MODE]: BlockShortcutDependencies;
   [ActionContextTypes.EDIT_MODE]: EditModeDependencies;
+  [ActionContextTypes.EDIT_MODE_CM]: CodeMirrorEditModeDependencies;
   [ActionContextTypes.PROPERTY_EDITING]: PropertyEditingDependencies;
   [ActionContextTypes.COMMAND_PALETTE]: CommandPaletteDependencies;
   [ActionContextTypes.MULTI_SELECT_MODE]: MultiSelectModeDependencies;
@@ -83,11 +92,13 @@ export interface ActiveContextInfo {
   dependencies: BaseShortcutDependencies;
 }
 
+export type ActionTrigger = KeyboardEvent | CustomEvent
+
 export interface Action<T extends ActionContextType = ActionContextType> {
   id: string;
   description: string;
   context: T;
-  handler: (dependencies: ShortcutDependenciesMap[T]) => void | Promise<void>;
+  handler: (dependencies: ShortcutDependenciesMap[T], trigger: ActionTrigger) => void | Promise<void>;
   defaultBinding?: Omit<ShortcutBinding, 'action'>; // Optional default binding
   hideFromCommandPallet?: boolean;
 }

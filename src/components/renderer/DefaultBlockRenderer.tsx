@@ -7,15 +7,15 @@ import {
   useIsEditing,
   showPropertiesProp,
   isCollapsedProp,
-  focusedBlockIdProp,
   topLevelBlockIdProp,
   previousLoadTimeProp,
+  setFocusedBlockId,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
-import { TextAreaContentRenderer } from '@/components/renderer/TextAreaContentRenderer.tsx'
-import { useRef, ClipboardEvent, useState, useMemo } from 'react'
-import { Block, useData, usePropertyValue } from '@/data/block.ts'
-import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState } from '@/data/globalState'
+import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
+import { useRef, ClipboardEvent, useState, useMemo, Ref, useEffect } from 'react'
+import { Block } from '@/data/block.ts'
+import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState, useInFocus } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
@@ -35,6 +35,8 @@ import {
 import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { validateSelectionHierarchy, extendSelection } from '@/utils/selection'
+import { isElementProperlyVisible } from '@/utils/dom.ts'
+import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -64,16 +66,12 @@ const zoomIn = (block: Block) => {
 }
 
 const BlockBullet = ({block}: { block: Block }) => {
-  const blockData = useData(block)
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const {panelId} = useBlockContext()
-
-  if (!blockData) return null
-
-  const hasChildren = blockData.childIds.length > 0
+  const hasChildren = useHasChildren(block)
 
   const openGenerateRendererDialog = () => {
     setDialogOpen(true)
@@ -91,7 +89,12 @@ const BlockBullet = ({block}: { block: Block }) => {
               // todo this should work for any link, so it again calls for a more general navigation handler
               if (e.shiftKey) {
                 e.preventDefault()
-                window.dispatchEvent(new CustomEvent('open-panel', { detail: { blockId: block.id, sourcePanelId: panelId} }))
+                window.dispatchEvent(new CustomEvent('open-panel', {
+                  detail: {
+                    blockId: block.id,
+                    sourcePanelId: panelId,
+                  },
+                }))
               }
             }}
           >
@@ -142,42 +145,89 @@ const BlockBullet = ({block}: { block: Block }) => {
   )
 }
 
+const ExpandButton = ({block, collapsibleRef}: { block: Block, collapsibleRef: Ref<HTMLDivElement | null> }) => {
+  const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const isMobile = useIsMobile()
+  const hasChildren = useHasChildren(block)
+
+  // @ts-expect-error Seems like a library type error
+  const isHovering = useHoverDirty(collapsibleRef)
+
+  return <CollapsibleTrigger
+    asChild
+    onClick={(e) => {
+      e.stopPropagation()
+      setIsCollapsed(!isCollapsed)
+    }}>
+    <Button
+      variant="ghost"
+      size="sm"
+      className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity 
+          ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
+          ${isMobile ? 'w-6' : 'w-3'}`
+      }
+    >
+        <span className="text-lg text-muted-foreground">
+          {isCollapsed ? '▸' : '▾'}
+        </span>
+    </Button>
+  </CollapsibleTrigger>
+}
+
+
+const UpdateIndicator = ({block}: { block: Block }) => {
+  const [seen, setSeen] = useState(false)
+  const inFocus = useInFocus(block.id)
+  const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
+  const blockData = useData(block)
+
+  if (!blockData) return null
+
+  if (inFocus && !seen) setSeen(true)
+
+  const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
+  const shouldShowUpdateIndicator = updatedByOtherUser && !seen
+
+  return shouldShowUpdateIndicator && (
+    <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
+         title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
+  )
+}
+
 
 export function DefaultBlockRenderer(
   {
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
-    EditContentRenderer = TextAreaContentRenderer,
+    EditContentRenderer = CodeMirrorContentRenderer,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
   const uiStateBlock = useUIStateBlock()
   const [isEditing] = useIsEditing()
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
-  const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
-  const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
-  const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
-  const [seen, setSeen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
+  const collapsibleRef = useRef<HTMLDivElement | null>(null)
+  const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isMobile = useIsMobile()
-  const blockData = useData(block)
-  // @ts-expect-error This seems like type bug
-  const isHovering = useHoverDirty(ref)
   const isTopLevel = block.id === topLevelBlockId
 
-  const [selectionState, setSelectionState] = useSelectionState();
-  const isSelected = selectionState.selectedBlockIds.includes(block.id);
+  const [selectionState, setSelectionState] = useSelectionState()
+  const isSelected = selectionState.selectedBlockIds.includes(block.id)
 
-  const inFocus = focusedBlockId === block.id
-  if (inFocus && !seen) setSeen(true)
+  const inFocus = useInFocus(block.id)
+  const hasChildren = useHasChildren(block)
 
   const shortcutDependencies = useMemo(() => ({block}), [block])
 
   useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing && !isSelected)
 
-  if (!blockData) return null
+  useEffect(() => {
+    const element = contentContainerRef.current
+    if (element && !isElementProperlyVisible(element)) element.scrollIntoView({behavior: 'instant', block: 'nearest'})
+  }, [inFocus])
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     if (!inFocus) return
@@ -188,47 +238,17 @@ export function DefaultBlockRenderer(
 
     const pasted = await pasteMultilineText(pastedText, block, repo)
     if (pasted[0]) {
-      setFocusedBlockId(pasted[0].id)
+      setFocusedBlockId(uiStateBlock, pasted[0].id)
     }
   }
 
   const ContentRenderer = isEditing && inFocus ? EditContentRenderer : DefaultContentRenderer
-  const hasChildren = blockData?.childIds?.length > 0
-  const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
-  const shouldShowUpdateIndicator = updatedByOtherUser && !seen
-
-  const expandButton = () =>
-    <CollapsibleTrigger
-      asChild
-      onClick={(e) => {
-        e.stopPropagation()
-        setIsCollapsed(!isCollapsed)
-      }}>
-      <Button
-        variant="ghost"
-        size="sm"
-        className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity 
-          ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
-          ${isMobile ? 'w-6' : 'w-3'}`
-        }
-      >
-        <span className="text-lg text-muted-foreground">
-          {isCollapsed ? '▸' : '▾'}
-        </span>
-      </Button>
-    </CollapsibleTrigger>
 
   const blockControls = () =>
     <div className="block-controls flex items-center ">
-      {!isMobile && expandButton()}
+      {!isMobile && <ExpandButton block={block} collapsibleRef={collapsibleRef}/>}
       <BlockBullet block={block}/>
     </div>
-
-  const updateIndicator = () =>
-    shouldShowUpdateIndicator && (
-      <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
-           title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
-    )
 
   return (
     <div>
@@ -240,47 +260,48 @@ export function DefaultBlockRenderer(
         data-block-id={block.id}
         tabIndex={0}
         onPaste={handlePaste}
-        ref={ref}
+        ref={collapsibleRef}
         onClick={async (e) => {
+          e.preventDefault()
+          e.stopPropagation()
+
           // Handle selection clicks
           if (e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            e.stopPropagation();
-            const newSelectedIds = isSelected 
+            const newSelectedIds = isSelected
               ? selectionState.selectedBlockIds.filter(id => id !== block.id)
-              : [...selectionState.selectedBlockIds, block.id];
-            
-            const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo);
-            
-            setFocusedBlockId(block.id);
+              : [...selectionState.selectedBlockIds, block.id]
+
+            const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
+
             setSelectionState({
               selectedBlockIds: validatedIds,
-              anchorBlockId: validatedIds.length > 0 
-                ? (selectionState.anchorBlockId || block.id) 
-                : null
-            });
+              anchorBlockId: validatedIds.length > 0
+                ? (selectionState.anchorBlockId || block.id)
+                : null,
+            })
           } else if (e.shiftKey) {
-            e.preventDefault();
-            e.stopPropagation();
-            await extendSelection(block.id, uiStateBlock, repo);
+            await extendSelection(block.id, uiStateBlock, repo)
           } else if (selectionState.selectedBlockIds.length > 0) {
             // Clear selection on regular click if there was a selection
             setSelectionState({
               selectedBlockIds: [],
-              anchorBlockId: null
-            });
+              anchorBlockId: null,
+            })
           }
+          setFocusedBlockId(uiStateBlock, block.id)
         }}
       >
         {!isTopLevel && blockControls()}
 
         <div className="block-body flex-grow relative flex flex-col">
           <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
-            {updateIndicator()}
+            <UpdateIndicator block={block}/>
 
-            <ErrorBoundary FallbackComponent={FallbackComponent}>
-              <ContentRenderer block={block}/>
-            </ErrorBoundary>
+            <div className={'block-content'} ref={contentContainerRef}>
+              <ErrorBoundary FallbackComponent={FallbackComponent}>
+                <ContentRenderer block={block}/>
+              </ErrorBoundary>
+            </div>
 
             {showProperties && (
               <BlockProperties block={block}/>
@@ -294,7 +315,7 @@ export function DefaultBlockRenderer(
 
         {hasChildren && isMobile && !isTopLevel && (
           <div className="absolute right-1 top-0 ">
-            {expandButton()}
+            {<ExpandButton block={block} collapsibleRef={collapsibleRef}/>}
           </div>
         )}
 
