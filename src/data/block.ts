@@ -6,6 +6,7 @@ import { memoize } from 'lodash'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@onsetsoftware/automerge-repo-undo-redo'
 import { useCallback } from 'react'
+import { isCollapsedProp } from '@/data/properties.ts'
 import { useDocumentWithSelector } from '@/data/automerge.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
@@ -345,14 +346,14 @@ export class Block {
   }
 
   async isDescendantOf(potentialAncestor: Block): Promise<boolean> {
-    let current = await this.parent();
+    let current = await this.parent()
     while (current) {
       if (current.id === potentialAncestor.id) {
-        return true;
+        return true
       }
-      current = await current.parent();
+      current = await current.parent()
     }
-    return false;
+    return false
   }
 }
 
@@ -386,7 +387,8 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
   const blockIsTopLevel = block.id === topLevelBlockId
 
   // If block has children and is not collapsed, return first child
-  if (doc.childIds.length > 0 && (!doc.properties['system:collapsed'] || blockIsTopLevel)) {
+  const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+  if (doc.childIds.length > 0 && (!isCollapsed || blockIsTopLevel)) {
     return block.repo.find(doc.childIds[0])
   }
 
@@ -420,7 +422,8 @@ const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
   const doc = await block.data()
   if (!doc) throw new Error('Cant get block data')
 
-  if (doc.childIds.length === 0 || doc.properties['system:collapsed']) return block
+  const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+  if (doc.childIds.length === 0 || isCollapsed) return block
 
   const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1] as string)
   return getLastVisibleDescendant(lastChild)
