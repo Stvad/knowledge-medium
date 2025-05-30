@@ -100,13 +100,7 @@ const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
 }
 
 const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) => {
-  uiStateBlock.setProperty({
-    ...selectionStateProp,
-    value: {
-      selectedBlockIds: [],
-      anchorBlockId: null,
-    },
-  })
+  resetBlockSelection(uiStateBlock)
 
   setIsEditing(uiStateBlock, true)
 

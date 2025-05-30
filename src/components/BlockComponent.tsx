@@ -6,7 +6,7 @@ import { Suspense } from 'react'
 import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
-import { useData } from '@/hooks/block.ts'
+import { useChildIds } from '@/hooks/block.ts'
 
 interface BlockComponentProps {
   blockId: string;
@@ -38,7 +38,7 @@ export function BlockComponent({blockId}: BlockComponentProps) {
  */
 export const BlockChildren = ({block}: { block: Block }) => {
   return <>
-    {useData(block)?.childIds.map((childId) => (
+    {useChildIds(block).map((childId) => (
       <BlockComponent
         key={childId}
         blockId={childId}

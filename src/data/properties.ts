@@ -46,9 +46,7 @@ export const fromList = (...values: BlockProperty[]) =>
 export const aliasProp = (aliases: string[] = []) =>
   listProperty<string>('alias', aliases)
 
-export const useIsEditing = () => {
-  return useUIStateProperty(booleanProperty('isEditing', false))
-}
+export const useIsEditing = () => useUIStateProperty(isEditingProp)
 
 export const uiChangeScope = 'ui-state'
 /**
@@ -58,7 +56,7 @@ export const uiChangeScope = 'ui-state'
 // System properties
 export const showPropertiesProp = boolProp('system:showProperties', false, uiChangeScope)
 export const isCollapsedProp = boolProp('system:collapsed', false, uiChangeScope)
-export const isEditingProp = boolProp('isEditing', undefined, uiChangeScope)
+export const isEditingProp = boolProp('isEditing', false, uiChangeScope)
 export const topLevelBlockIdProp = stringProperty('topLevelBlockId', undefined, uiChangeScope)
 export const focusedBlockIdProp = stringProperty('focusedBlockId', undefined, uiChangeScope)
 export const editorSelection = objectProperty<EditorSelectionState>('editorSelection') // Commenting out or removing old/conflicting 'selection' if it was for text selection

@@ -32,12 +32,13 @@ export function usePropertyValue<T extends BlockProperty>(block: Block, config: 
   return [property.value, setValue]
 }
 
-export function useChildren(block: Block): Block[] {
-  const doc = useData(block)
-  if (!doc?.childIds?.length) return []
+export const useContent = (block: Block) => useDataWithSelector(block, doc => doc?.content || '')
 
-  return doc.childIds.map(childId => block.repo.find(childId))
-}
+export const useChildIds = (block: Block) =>
+  useDataWithSelector(block, doc => doc?.childIds || [])
+
+export const useChildren = (block: Block): Block[] =>
+  useChildIds(block).map(childId => block.repo.find(childId))
 
 export const useHasChildren = (block: Block) =>
   useDataWithSelector(block, (data?: BlockData) => data ? data.childIds.length > 0 : false)

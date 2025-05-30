@@ -7,7 +7,13 @@ import { useRepo } from '@/context/repo.tsx'
 import { useUser } from '@/components/Login.tsx'
 import { Repo } from '@/data/repo.ts'
 
-import { uiChangeScope, selectionStateProp, BlockSelectionState, focusedBlockIdProp } from '@/data/properties.ts'
+import {
+  uiChangeScope,
+  selectionStateProp,
+  BlockSelectionState,
+  focusedBlockIdProp,
+  isEditingProp,
+} from '@/data/properties.ts'
 import { usePropertyValue, useDataWithSelector } from '@/hooks/block.ts'
 
 /**
@@ -96,6 +102,27 @@ export function useSelectionState(): [
   return [currentSelectionState || selectionStateProp.value!, setSelectionState];
 }
 
+export const resetBlockSelection = async (block: Block) => {
+  const currentState = await block.getProperty(selectionStateProp)
+  if (!currentState?.value?.selectedBlockIds.length && !currentState?.value?.anchorBlockId) return
+
+  block.setProperty({
+    ...selectionStateProp,
+    value: {
+      selectedBlockIds: [],
+      anchorBlockId: null,
+    },
+  })
+}
+
 export const useInFocus = (blockId: string) =>
   useDataWithSelector(useUIStateBlock(),
     doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
+
+export const useInEditMode = (blockId: string) => {
+  const uiStateBlock = useUIStateBlock()
+  const isSelected = useDataWithSelector(uiStateBlock,
+    doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
+  return useDataWithSelector(uiStateBlock,
+    doc => isSelected && doc?.properties[isEditingProp.name]?.value)
+}

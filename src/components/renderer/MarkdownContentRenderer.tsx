@@ -1,9 +1,8 @@
 import { BlockRendererProps } from '@/types.ts'
-import { useIsEditing, focusedBlockIdProp, editorSelection } from '@/data/properties.ts'
-import Markdown from 'react-markdown'
-import { Components } from 'react-markdown'
+import { focusedBlockIdProp, editorSelection, isEditingProp } from '@/data/properties.ts'
+import Markdown, { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useUIStateProperty } from '@/data/globalState'
+import { useUIStateBlock } from '@/data/globalState'
 import { useRef, MouseEvent, TouchEvent, ComponentType } from 'react'
 import { remarkTimestamps } from '@/markdown/remark-timestamps.ts'
 import VideoTimeStamp from '@/components/markdown/VideoTimeStamp.tsx'
@@ -26,15 +25,22 @@ const isSwipe = (touchEnd: Touch, touchStart: Touch) => {
 
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = useData(block)
-  const [, setIsEditing] = useIsEditing()
-  const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const [, setSelection] = useUIStateProperty(editorSelection)
+  const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
 
   const activateEditing = (coords: { x: number, y: number }) => {
-    setIsEditing(true)
-    setFocusedBlockId(block.id)
-    setSelection({blockId: block.id, ...coords})
+    uiStateBlock.setProperty({
+      ...isEditingProp,
+      value: true,
+    })
+    uiStateBlock.setProperty({
+      ...focusedBlockIdProp,
+      value: block.id,
+    })
+    uiStateBlock.setProperty({
+      ...editorSelection,
+      value: {blockId: block.id, ...coords},
+    })
   }
 
   const handleMouseDoubleClick = (e: MouseEvent) => {
@@ -120,7 +126,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
 // Define extended components type
 type ExtendedComponents = Components & {
   'time-stamp'?: ComponentType<{
-    node: {properties: {hms: string}}
+    node: { properties: { hms: string } }
     [key: string]: unknown;
   }>;
 };

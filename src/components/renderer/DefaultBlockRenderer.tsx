@@ -4,7 +4,6 @@ import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible.tsx'
 import {
-  useIsEditing,
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -15,7 +14,14 @@ import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRe
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo, Ref, useEffect } from 'react'
 import { Block } from '@/data/block.ts'
-import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState, useInFocus } from '@/data/globalState'
+import {
+  useUIStateProperty,
+  useUserProperty,
+  useUIStateBlock,
+  useSelectionState,
+  useInFocus,
+  useInEditMode, resetBlockSelection,
+} from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
@@ -204,7 +210,7 @@ export function DefaultBlockRenderer(
 ) {
   const repo = useRepo()
   const uiStateBlock = useUIStateBlock()
-  const [isEditing] = useIsEditing()
+  const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
@@ -222,7 +228,7 @@ export function DefaultBlockRenderer(
 
   const shortcutDependencies = useMemo(() => ({block}), [block])
 
-  useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing && !isSelected)
+  useNormalModeShortcuts(shortcutDependencies, inFocus && !inEditMode && !isSelected)
 
   useEffect(() => {
     const element = contentContainerRef.current
@@ -242,7 +248,7 @@ export function DefaultBlockRenderer(
     }
   }
 
-  const ContentRenderer = isEditing && inFocus ? EditContentRenderer : DefaultContentRenderer
+  const ContentRenderer = inEditMode ? EditContentRenderer : DefaultContentRenderer
 
   const blockControls = () =>
     <div className="block-controls flex items-center ">
@@ -281,12 +287,8 @@ export function DefaultBlockRenderer(
             })
           } else if (e.shiftKey) {
             await extendSelection(block.id, uiStateBlock, repo)
-          } else if (selectionState.selectedBlockIds.length > 0) {
-            // Clear selection on regular click if there was a selection
-            setSelectionState({
-              selectedBlockIds: [],
-              anchorBlockId: null,
-            })
+          } else {
+            await resetBlockSelection(uiStateBlock)
           }
           setFocusedBlockId(uiStateBlock, block.id)
         }}

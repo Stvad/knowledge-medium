@@ -11,8 +11,6 @@ import { ActionContextTypes } from '@/shortcuts/types'
 import { useMemo } from 'react'
 import { usePropertyValue, useData } from '@/hooks/block.ts'
 
-const CONTEXT_OVERRIDE = {topLevel: false}
-
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [selectionState] = useSelectionState();
@@ -62,7 +60,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         </Button>
       )}
       <div className="flex-grow overflow-y-auto scrollbar-none">
-        <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
+        <NestedBlockContextProvider overrides={{topLevel: false}}>
           <BlockComponent blockId={topLevelBlockId}/>
         </NestedBlockContextProvider>
       </div>

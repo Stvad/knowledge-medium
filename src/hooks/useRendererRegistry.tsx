@@ -11,10 +11,10 @@ import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
-import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx';
+import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx'
 import { rendererProp } from '@/data/properties.ts'
 import { BreadcrumbRenderer } from '@/components/renderer/BreadcrumbRenderer.tsx'
-import { usePropertyValue } from '@/hooks/block.ts'
+import { usePropertyValue, useData } from '@/hooks/block.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
@@ -35,7 +35,15 @@ export const refreshRendererRegistry = async () => {
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {
-  const [rendererKey,] = usePropertyValue(block, rendererProp)
+  /* eslint-disable-next-line react-compiler/react-compiler */
+  'use no memo'
+  useData(block)
+  /**
+   * The above is a cludge to make this re-render on useData changes, compiler would over-memoize this otherwise
+   * Ideally we make the dependency clear and structural tho
+   */
+
+  const [rendererKey] = usePropertyValue(block, rendererProp)
   const [registry, setRegistry] = useState<RendererRegistry>(defaultRegistry)
   const repo = useRepo()
   const {rootBlockId} = useBlockContext()
@@ -103,7 +111,7 @@ const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generat
 }, (rootBlock, safeMode, generation) => rootBlock.id + safeMode + generation)
 
 const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
-  const childrenBlocks = await getAllChildrenBlocks(rootBlock);
+  const childrenBlocks = await getAllChildrenBlocks(rootBlock)
   const blockData = await Promise.all(childrenBlocks.map(b => b.data() as Promise<BlockData>))
 
   return blockData.filter(block => block.properties.type?.value === 'renderer')
