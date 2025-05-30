@@ -117,8 +117,8 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'indent_block',
     description: 'Indent block',
     context: ActionContextTypes.NORMAL_MODE,
-    handler: (deps: BlockShortcutDependencies) => {
-      deps.block.indent()
+    handler: async (deps: BlockShortcutDependencies) => {
+      await deps.block.indent()
     },
     defaultBinding: {
       keys: 'tab',
@@ -136,7 +136,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
 
-      block.outdent(topLevelBlockId)
+      await block.outdent(topLevelBlockId)
     },
     defaultBinding: {
       keys: 'shift+tab',
