@@ -13,7 +13,7 @@ import {
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
-import { useRef, ClipboardEvent, useState, useMemo, Ref } from 'react'
+import { useRef, ClipboardEvent, useState, useMemo, Ref, useEffect } from 'react'
 import { Block, useData, usePropertyValue, useHasChildren } from '@/data/block.ts'
 import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState, useInFocus } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
@@ -35,6 +35,7 @@ import {
 import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { validateSelectionHierarchy, extendSelection } from '@/utils/selection'
+import { isElementProperlyVisible } from '@/utils/dom.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -173,7 +174,7 @@ const ExpandButton = ({block, collapsibleRef}: { block: Block, collapsibleRef: R
 }
 
 
-const UpdateIndicator = ({block}: {block: Block}) => {
+const UpdateIndicator = ({block}: { block: Block }) => {
   const [seen, setSeen] = useState(false)
   const inFocus = useInFocus(block.id)
   const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
@@ -207,7 +208,8 @@ export function DefaultBlockRenderer(
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
-  const ref = useRef<HTMLDivElement | null>(null)
+  const collapsibleRef = useRef<HTMLDivElement | null>(null)
+  const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isMobile = useIsMobile()
   const isTopLevel = block.id === topLevelBlockId
 
@@ -221,7 +223,10 @@ export function DefaultBlockRenderer(
 
   useNormalModeShortcuts(shortcutDependencies, inFocus && !isEditing && !isSelected)
 
-  console.log('rendering block', block.dataSync())
+  useEffect(() => {
+    const element = contentContainerRef.current
+    if (element && !isElementProperlyVisible(element)) element.scrollIntoView({behavior: 'instant', block: 'nearest'})
+  }, [inFocus])
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     if (!inFocus) return
@@ -240,7 +245,7 @@ export function DefaultBlockRenderer(
 
   const blockControls = () =>
     <div className="block-controls flex items-center ">
-      {!isMobile && <ExpandButton block={block} collapsibleRef={ref}/>}
+      {!isMobile && <ExpandButton block={block} collapsibleRef={collapsibleRef}/>}
       <BlockBullet block={block}/>
     </div>
 
@@ -254,7 +259,7 @@ export function DefaultBlockRenderer(
         data-block-id={block.id}
         tabIndex={0}
         onPaste={handlePaste}
-        ref={ref}
+        ref={collapsibleRef}
         onClick={async (e) => {
           e.preventDefault()
           e.stopPropagation()
@@ -291,9 +296,11 @@ export function DefaultBlockRenderer(
           <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
             <UpdateIndicator block={block}/>
 
-            <ErrorBoundary FallbackComponent={FallbackComponent}>
-              <ContentRenderer block={block}/>
-            </ErrorBoundary>
+            <div className={'block-content'} ref={contentContainerRef}>
+              <ErrorBoundary FallbackComponent={FallbackComponent}>
+                <ContentRenderer block={block}/>
+              </ErrorBoundary>
+            </div>
 
             {showProperties && (
               <BlockProperties block={block}/>
@@ -307,7 +314,7 @@ export function DefaultBlockRenderer(
 
         {hasChildren && isMobile && !isTopLevel && (
           <div className="absolute right-1 top-0 ">
-            {<ExpandButton block={block} collapsibleRef={ref}/>}
+            {<ExpandButton block={block} collapsibleRef={collapsibleRef}/>}
           </div>
         )}
 
