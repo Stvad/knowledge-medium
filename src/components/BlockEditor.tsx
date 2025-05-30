@@ -14,8 +14,6 @@ import { useData } from '@/hooks/block.ts'
  * Once per CodeMirror view
  */
 const restoreFocus = memoize(async (block: Block, view: EditorView, uiStateBlock: Block) => {
-  console.log('restore focus')
-
   view.focus()
 
   const selection = (await uiStateBlock.getProperty(editorSelection))?.value
@@ -43,6 +41,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
                                                                              }, ref,
 ) => {
   const blockData = useData(block)
+  const pendingLocalEdits = useRef(false)
 
   /** ---------- CodeMirror & heads tracking ---------- */
   const cm = useRef<ReactCodeMirrorRef>(null)
@@ -61,6 +60,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
         updateText(b, ['content'], value)
       })
       lastHeads.current = getHeads(block.dataSync()!)
+      pendingLocalEdits.current = false
     }, 300),
   ).current
 
@@ -73,6 +73,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   const flushDebouncers = useCallback(() => {
     pushChange.flush()
     pushSelection.flush()
+    pendingLocalEdits.current = false
   }, [pushChange, pushSelection])
 
   /** ---------- Cleanup ---------- */
@@ -87,6 +88,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   /** ---------- Imperatively patch truly-remote edits ---------- */
   useEffect(() => {
     if (!blockData || !cm.current?.view) return
+    if (pendingLocalEdits.current) return
 
     const incomingHeads = getHeads(blockData)
     // Are these heads already included in what we flushed?
@@ -103,9 +105,10 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
     if (live !== blockData.content) {
       view.dispatch({
         changes: {from: 0, to: live.length, insert: blockData.content},
+        selection: view.state.selection,
       })
     }
-    lastHeads.current = incomingHeads // advance frontier
+    lastHeads.current = incomingHeads
   }, [blockData])
 
   if (!blockData) return null
@@ -128,7 +131,10 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
         forwardRefValue(val)
       }}
       value={initContent}
-      onChange={pushChange}
+      onChange={(value) => {
+        pendingLocalEdits.current = true
+        pushChange(value)
+      }}
       onUpdate={(vu) => {
         if (vu.selectionSet) {
           const sel = vu.state.selection.main
