@@ -418,14 +418,14 @@ export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): P
  * Helper function to get the last visible descendant of a block
  * If block is collapsed or has no children, returns the block itself
  */
-const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
+export const getLastVisibleDescendant = async (block: Block, ignoreTopLevelCollapsed?: boolean): Promise<Block> => {
   const doc = await block.data()
   if (!doc) throw new Error('Cant get block data')
 
   const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-  if (doc.childIds.length === 0 || isCollapsed) return block
+  if (doc.childIds.length === 0 || isCollapsed && !(ignoreTopLevelCollapsed === true)) return block
 
-  const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1] as string)
+  const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1])
   return getLastVisibleDescendant(lastChild)
 }
 

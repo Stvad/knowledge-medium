@@ -15,7 +15,7 @@ import {
   defaultChangeScope,
   Block,
   getAllChildrenBlocks,
-  getRootBlock,
+  getRootBlock, getLastVisibleDescendant,
 } from '@/data/block.ts'
 import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
@@ -518,6 +518,37 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     extendSelectionDownNormal,
     makeNormalMode(moveBlockUp),
     makeNormalMode(moveBlockDown),
+    {
+      id: 'jump_to_first_visible_block',
+      description: 'Jump to first visible block',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId) return
+
+        setFocusedBlockId(uiStateBlock, topLevelBlockId)
+      },
+      defaultBinding: {
+        keys: 'g g',
+      },
+    },
+    {
+      id: 'jump_to_last_visible_block',
+      description: 'Jump to last visible block',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId) return
+
+        const lastBlock = await getLastVisibleDescendant(repo.find(topLevelBlockId), true)
+        if (!lastBlock) return
+
+        setFocusedBlockId(uiStateBlock, lastBlock.id)
+      },
+      defaultBinding: {
+        keys: 'shift+g',
+      },
+    },
   ]
 
   // Textarea-specific edit mode actions
