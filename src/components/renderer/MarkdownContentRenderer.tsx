@@ -5,10 +5,10 @@ import { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useUIStateProperty } from '@/data/globalState'
 import { useRef, MouseEvent, TouchEvent, ComponentType } from 'react'
-import { useData } from '@/data/block.ts'
 import { remarkTimestamps } from '@/markdown/remark-timestamps.ts'
 import VideoTimeStamp from '@/components/markdown/VideoTimeStamp.tsx'
 import { useBlockContext } from '@/context/block.tsx'
+import { useData } from '@/hooks/block.ts'
 
 type Touch = { x: number; y: number; time: number }
 

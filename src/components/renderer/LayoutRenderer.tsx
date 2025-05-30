@@ -3,11 +3,12 @@ import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useUIStateBlock, getPanelsBlock } from '@/data/globalState.ts'
 import { use, useEffect } from 'react'
-import { useChildren, Block } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
 import { topLevelBlockIdProp, typeProp, fromList } from '@/data/properties.ts'
+import { useChildren } from '@/hooks/block.ts'
 
 const mainPanelName = 'main'
 

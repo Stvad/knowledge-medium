@@ -1,4 +1,4 @@
-import { Block, useData } from '../data/block'
+import { Block } from '../data/block'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -6,6 +6,7 @@ import { BlockProperty, ListBlockProperty } from '@/types'
 import { stringProperty, numberProperty, booleanProperty, listProperty } from '@/data/properties'
 import { useState } from 'react'
 import { X, Plus, Trash2 } from 'lucide-react'
+import { useData } from '@/hooks/block.ts'
 
 interface BlockPropertiesProps {
   block: Block;

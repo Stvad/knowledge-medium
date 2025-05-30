@@ -4,7 +4,8 @@ import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import type { editor } from 'monaco-editor'
 import { debounce } from 'lodash'
 import { useCallback } from 'react'
-import { useData } from '@/data/block.ts'
+
+import { useData } from '@/hooks/block.ts'
 
 type MonacoEditor = editor.IStandaloneCodeEditor
 

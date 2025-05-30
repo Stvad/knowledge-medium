@@ -14,7 +14,7 @@ import {
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo, Ref, useEffect } from 'react'
-import { Block, useData, usePropertyValue, useHasChildren } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { useUIStateProperty, useUserProperty, useUIStateBlock, useSelectionState, useInFocus } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -36,6 +36,7 @@ import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { validateSelectionHierarchy, extendSelection } from '@/utils/selection'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
+import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;

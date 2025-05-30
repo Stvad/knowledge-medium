@@ -1,5 +1,5 @@
 import { useBlockContext } from '@/context/block.tsx'
-import { Block, usePropertyValue, useDataWithSelector } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { use, useCallback } from 'react'
 import { BlockProperty, User, BlockContextType } from '@/types.ts'
 import { memoize } from 'lodash'
@@ -8,6 +8,7 @@ import { useUser } from '@/components/Login.tsx'
 import { Repo } from '@/data/repo.ts'
 
 import { uiChangeScope, selectionStateProp, BlockSelectionState, focusedBlockIdProp } from '@/data/properties.ts'
+import { usePropertyValue, useDataWithSelector } from '@/hooks/block.ts'
 
 /**
  * One of core principles of the system is to store all state within the system

@@ -1,10 +1,10 @@
 import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.ts'
-import { useData } from '@/data/block.ts'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { ActionContextType as OriginalActionContextType } from '@/shortcuts/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { useData } from '@/hooks/block.ts'
 
 // Define the event type for seeking
 interface SeekToEventDetail {

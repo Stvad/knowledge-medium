@@ -1,6 +1,6 @@
 import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react-codemirror'
 import { EditorSelectionState } from '@/types.ts'
-import { Block, useData } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { useIsEditing, editorSelection } from '@/data/properties.ts'
 import { useRef, useEffect, useMemo, useCallback, forwardRef } from 'react'
 import { useUIStateBlock } from '@/data/globalState'
@@ -8,6 +8,7 @@ import { updateText, getHeads, Heads } from '@automerge/automerge/next'
 import { debounce, memoize } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { EditorView } from '@codemirror/view'
+import { useData } from '@/hooks/block.ts'
 
 /**
  * Once per CodeMirror view

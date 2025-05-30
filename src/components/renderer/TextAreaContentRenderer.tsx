@@ -1,13 +1,14 @@
 import { BlockRendererProps, EditorSelectionState } from '@/types.ts'
 import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
-import { Block, useData } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
 import { updateText } from '@automerge/automerge/next'
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
+import { useData } from '@/hooks/block.ts'
 
 export const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
