@@ -12,10 +12,11 @@ export async function pasteMultilineText(
   if (!parent) return []
 
   const blocks = parseMarkdownToBlocks(pastedText)
+    .map(block => ({parentId: parent.id, ...block}))
   const blockMap = await importState({blocks}, repo)
 
   const rootBlocks = Array.from(blockMap.values())
-    .filter(block => !block.dataSync()?.parentId)
+    .filter(block => block.dataSync()?.parentId === parent.id)
 
   await parent.insertChildren({
     blocks: rootBlocks,
