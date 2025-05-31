@@ -65,7 +65,7 @@ export const copyBlockToClipboard = async (block: Block): Promise<void> =>
 const getSelectionState = async (uiStateBlock: Block) =>
   (await uiStateBlock.getProperty(selectionStateProp))?.value
 
-const processSelectedBlocks = async (
+export const serializeSelectedBlocks = async (
   blockIds: string[],
   repo: Repo,
 ): Promise<ClipboardData> => {
@@ -84,7 +84,7 @@ const processSelectedBlocks = async (
   )
 
   const validResults = blockResults.filter((result): result is ClipboardData => result !== null)
-
+  
   if (validResults.length === 0) {
     throw new Error('No block data could be serialized for copying')
   }
@@ -107,6 +107,6 @@ export const copySelectedBlocksToClipboard = async (
     return
   }
 
-  const clipboardData = await processSelectedBlocks(selectionState.selectedBlockIds, repo)
+  const clipboardData = await serializeSelectedBlocks(selectionState.selectedBlockIds, repo)
   await writeToClipboard(clipboardData)
 }
