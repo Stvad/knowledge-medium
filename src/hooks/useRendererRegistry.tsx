@@ -112,7 +112,9 @@ const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generat
 
 const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
   const childrenBlocks = await getAllChildrenBlocks(rootBlock)
-  const blockData = await Promise.all(childrenBlocks.map(b => b.data() as Promise<BlockData>))
+  const blockData = await Promise.all(childrenBlocks.map(b => b.data()))
 
-  return blockData.filter(block => block.properties.type?.value === 'renderer')
+  return blockData.filter(
+    (block): block is BlockData =>
+      block?.properties.type?.value === 'renderer')
 }
