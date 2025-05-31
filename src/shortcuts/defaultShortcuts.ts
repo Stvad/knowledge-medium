@@ -36,6 +36,7 @@ import { selectionStateProp, SelectionStateProperty } from '@/data/properties' /
 import { extendSelection } from '@/utils/selection'
 import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect, makeCMMode } from './utils'
 import { EditorView } from '@codemirror/view'
+import { EditorSelection } from '@codemirror/state'
 import {
   isOnFirstVisualLine,
   isOnLastVisualLine,
@@ -45,32 +46,29 @@ import {
 } from '@/utils/codemirror.ts'
 import { EditorSelectionState } from '@/types.ts'
 
-// Helper function to split block at cursor for CodeMirror
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
-  const selection = editorView.state.selection.main
   const doc = editorView.state.doc
-  const cursorPos = selection.from
+  const cursorPos = editorView.state.selection.main.head
 
   const beforeCursor = doc.sliceString(0, cursorPos)
   const afterCursor = doc.sliceString(cursorPos)
 
-  // Update current block with content before cursor
-  block.change(b => {
-    b.content = beforeCursor
-  })
+  if (isTopLevel) {
+    const child = await block.createChild({data: {content: afterCursor}, position: 'first'})
+    block.change(b => b.content = beforeCursor)
 
-  // Create new block with content after cursor
-  const newBlock = isTopLevel
-    ? await block.createChild({position: 'first'})
-    : await block.createSiblingBelow()
+    return child
+  } else {
+    await block.createSiblingAbove({content: beforeCursor})
 
-  if (newBlock && afterCursor) {
-    newBlock.change(b => {
-      b.content = afterCursor
+    block.change(b => b.content = afterCursor)
+
+    editorView.dispatch({
+      selection: EditorSelection.cursor(0)
     })
-  }
 
-  return newBlock || block
+    return block
+  }
 }
 
 const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
