@@ -15,10 +15,9 @@ import {
   defaultChangeScope,
   Block,
   getAllChildrenBlocks,
-  getRootBlock, getLastVisibleDescendant,
+  getRootBlock,
+  getLastVisibleDescendant,
 } from '@/data/block.ts'
-import { serializeBlockForClipboard } from '../../utils/copy'; // Added import
-import { ClipboardData } from '../../types'; // Added import
 import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
 import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
@@ -32,7 +31,7 @@ import {
   setIsEditing,
   setFocusedBlockId,
 } from '@/data/properties.ts'
-import { selectionStateProp, SelectionStateProperty } from '@/data/properties' // Added SelectionStateProperty
+import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
 import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect, makeCMMode } from './utils'
 import { EditorView } from '@codemirror/view'
@@ -45,6 +44,8 @@ import {
   cursorIsAtStart,
 } from '@/utils/codemirror.ts'
 import { EditorSelectionState } from '@/types.ts'
+import { copySelectedBlocksToClipboard, copyBlockToClipboard } from '@/utils/copy.ts'
+import { resetBlockSelection } from '@/data/globalState.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -103,110 +104,6 @@ const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) =>
   setIsEditing(uiStateBlock, true)
 
   if (selection) uiStateBlock.setProperty({...editorSelection, value: selection})
-}
-
-// Exportable handler logic for copy_block
-export async function handleCopyBlock(deps: BlockShortcutDependencies) {
-  const { block, repo } = deps; // Added repo from deps
-  if (!block || !repo) return; // Added repo check
-
-  try {
-    const clipboardData: ClipboardData = await serializeBlockForClipboard(block, repo); // Pass repo
-    // const jsonString = JSON.stringify(clipboardData); // No longer needed for a separate writeText
-
-    // await navigator.clipboard.writeText(jsonString); // Removed
-    if (navigator.clipboard.write) {
-      const fullJsonString = JSON.stringify(clipboardData);
-      const clipboardItem = new ClipboardItem({
-        'text/plain': new Blob([clipboardData.markdown], { type: 'text/plain' }),
-        'application/json': new Blob([fullJsonString], { type: 'application/json' })
-      });
-      await navigator.clipboard.write([clipboardItem]);
-      console.log('Block content copied to clipboard (markdown and JSON).');
-    } else {
-      // Fallback if navigator.clipboard.write is not available (very unlikely if writeText was, but for safety)
-      // In this scenario, we can only write text. We'll write the JSON as text.
-      const fullJsonString = JSON.stringify(clipboardData);
-      await navigator.clipboard.writeText(fullJsonString);
-      console.log('Block content (JSON) copied to clipboard as text. Rich copy skipped (navigator.clipboard.write not available).');
-    }
-  } catch (error) {
-    console.error('Failed to copy block to clipboard:', error);
-  }
-}
-
-// Exportable handler logic for copy_selected_blocks
-export async function handleCopySelectedBlocks(deps: MultiSelectModeDependencies) {
-  const { uiStateBlock, repo } = deps;
-  if (!uiStateBlock || !repo) return;
-
-  const selectionState = (await uiStateBlock.getProperty(selectionStateProp))?.value;
-  if (!selectionState || !selectionState.selectedBlockIds || selectionState.selectedBlockIds.length === 0) {
-    console.log('No blocks selected to copy.');
-    return;
-  }
-
-  const selectedBlockIds = selectionState.selectedBlockIds;
-  const allBlockData: import('../../data/block').BlockData[] = [];
-  const markdownParts: string[] = [];
-
-  for (const blockId of selectedBlockIds) {
-    const block = repo.find(blockId);
-    if (block) {
-      try {
-        // Assuming serializeBlockForClipboard is correctly imported and used
-        const clipboardBlockData = await serializeBlockForClipboard(block, repo); // Pass repo
-        if (clipboardBlockData.blocks && clipboardBlockData.blocks.length > 0) {
-          // If serializeBlockForClipboard now returns all descendants,
-          // and we want to keep the flat structure for 'blocks' in ClipboardData
-          // for copy_selected_blocks, we might need to adjust this logic.
-          // For now, assuming it returns the primary block and its descendants,
-          // and we're collecting all such primary blocks (and their descendants) here.
-          // This part might need revisiting based on how ClipboardData for multi-select should be structured.
-          // Based on current serializeBlockForClipboard, clipboardBlockData.blocks IS allBlockData (root + descendants)
-          // So, we should spread it.
-          allBlockData.push(...clipboardBlockData.blocks);
-        }
-        // The markdown from serializeBlockForClipboard is already combined for the block and its descendants.
-        markdownParts.push(clipboardBlockData.markdown);
-      } catch (error) {
-        console.error(`Failed to serialize block ${blockId} for clipboard:`, error);
-      }
-    }
-  }
-
-  if (allBlockData.length === 0) {
-    console.log('No block data could be serialized for copying.');
-    return;
-  }
-
-  const combinedMarkdown = markdownParts.join('\n\n');
-  const clipboardData: ClipboardData = {
-    markdown: combinedMarkdown,
-    blocks: allBlockData,
-  };
-
-  try {
-    // const jsonString = JSON.stringify(clipboardData); // No longer needed for a separate writeText
-    // await navigator.clipboard.writeText(jsonString); // Removed
-
-    if (navigator.clipboard.write) {
-      const fullJsonString = JSON.stringify(clipboardData); // clipboardData is the finalClipboardData
-      const clipboardItem = new ClipboardItem({
-        'text/plain': new Blob([clipboardData.markdown], { type: 'text/plain' }), // Use combinedMarkdown from clipboardData
-        'application/json': new Blob([fullJsonString], { type: 'application/json' })
-      });
-      await navigator.clipboard.write([clipboardItem]);
-      console.log('Selected blocks copied to clipboard (markdown and JSON).');
-    } else {
-      // Fallback
-      const fullJsonString = JSON.stringify(clipboardData);
-      await navigator.clipboard.writeText(fullJsonString);
-      console.log('Selected blocks (JSON) copied to clipboard as text. Rich copy skipped (navigator.clipboard.write not available).');
-    }
-  } catch (error) {
-    console.error('Failed to copy selected blocks to clipboard:', error);
-  }
 }
 
 export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
@@ -651,7 +548,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       id: 'copy_block',
       description: 'Copy block to clipboard',
       context: ActionContextTypes.NORMAL_MODE,
-      handler: handleCopyBlock, // Use extracted handler
+      handler: ({block}) => copyBlockToClipboard(block),
       defaultBinding: {
         keys: ['cmd+c', 'ctrl+c'],
         eventOptions: {
@@ -806,7 +703,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
 
         const selection = editorView.state.selection.main
         const doc = editorView.state.doc
-        const cursorPos = selection.from
+        const cursorPos = selection.head
 
         const createSiblingBelow = async () => {
           const newBlock = await block.createSiblingBelow()
@@ -966,7 +863,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       id: 'copy_selected_blocks',
       description: 'Copy selected blocks to clipboard',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: handleCopySelectedBlocks, // Use extracted handler
+      handler: ({uiStateBlock}) => copySelectedBlocksToClipboard(uiStateBlock, repo),
       defaultBinding: {
         keys: ['cmd+c', 'ctrl+c'],
         eventOptions: {
