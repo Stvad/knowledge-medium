@@ -63,6 +63,36 @@ describe('referenceParser', () => {
       expect(result[0].alias).toBe('AI/ML Research')
       expect(result[1].alias).toBe('Node.js')
     })
+
+    it('should handle nested references correctly', () => {
+      const content = 'Outer [[outer with [[inner]] nested]] reference'
+      const result = parseReferences(content)
+      
+      expect(result).toHaveLength(2)
+      expect(result[0].alias).toBe('outer with [[inner]] nested')
+      expect(result[1].alias).toBe('inner')
+    })
+
+    it('should handle multiple levels of nesting', () => {
+      const content = '[[level1 [[level2 [[level3]] nested]] here]]'
+      const result = parseReferences(content)
+      
+      expect(result).toHaveLength(3)
+      expect(result[0].alias).toBe('level1 [[level2 [[level3]] nested]] here')
+      expect(result[1].alias).toBe('level2 [[level3]] nested')
+      expect(result[2].alias).toBe('level3')
+    })
+
+    it('should handle adjacent nested references', () => {
+      const content = '[[first [[nested1]]]][[second [[nested2]]]]'
+      const result = parseReferences(content)
+      
+      expect(result).toHaveLength(4)
+      expect(result[0].alias).toBe('first [[nested1]]')
+      expect(result[1].alias).toBe('nested1')
+      expect(result[2].alias).toBe('second [[nested2]]')
+      expect(result[3].alias).toBe('nested2')
+    })
   })
 
   describe('parseReferencesMarkdownAware', () => {
