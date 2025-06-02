@@ -9,11 +9,14 @@ import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useMemo } from 'react'
-import { usePropertyValue, useData } from '@/hooks/block.ts'
+import { usePropertyValue, useContent } from '@/hooks/block.ts'
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [selectionState] = useSelectionState();
+  const blockContent = useContent(block)
+  const isMainPanel = blockContent === 'main'
+
   const repo = useRepo();
 
   // Memoize dependencies for MULTI_SELECT_MODE
@@ -37,9 +40,6 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const handleClose = () => {
     block.delete()
   }
-
-  const blockData = useData(block)
-  const isMainPanel = blockData?.content === 'main'
 
   if (!topLevelBlockId) {
      console.warn(`Panel ${block.id} has no topLevelBlockId, skipping render.`)
