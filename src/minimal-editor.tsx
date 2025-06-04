@@ -18,8 +18,9 @@ function BasicEditor({url}: { url: string }) {
   const block = repo.find(url)
 
   const doc = useData(block)
+  if (!doc) return <div>Loading...</div>
 
-  return <textarea value={doc?.content} onChange={(e) => {
+  return <textarea value={doc.content} onChange={(e) => {
     block.change(doc => {
       doc.content = e.target.value
     }, {scope})
