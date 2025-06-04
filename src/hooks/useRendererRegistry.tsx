@@ -51,7 +51,12 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
 
   useEffect(() => {
     (async () => {
-      setRegistry(await loadRegistry(repo.find(rootBlockId!), context?.safeMode ?? false, generation))
+      /**
+       * Todo we're disabling registry load on first load for now, need to figure out performance situation =\
+       * You can manually refresh the registry to access the custom renderer/etc
+       */
+      const safeMode = (context?.safeMode ?? false) || generation === 'initial-load'
+      setRegistry(await loadRegistry(repo.find(rootBlockId!), safeMode, generation))
     })()
   }, [generation, rootBlockId, context?.safeMode, repo])
 
