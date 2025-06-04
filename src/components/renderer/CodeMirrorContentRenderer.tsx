@@ -22,7 +22,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         console.warn('No root block ID available for alias search')
         return []
       }
-      return getAliases(repo, blockContext.rootBlockId, filter)
+      return getAliases(repo.find(blockContext.rootBlockId), filter)
     }
   }, [repo, blockContext.rootBlockId])
 

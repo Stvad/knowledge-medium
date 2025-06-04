@@ -468,7 +468,7 @@ const parseAndUpdateReferences = async (block: Block, urHandle: AutomergeRepoUnd
 
   const getOrCreateBlockForAlias = async (alias: string) => {
     const rootBlock = await getRootBlock(block)
-    const existingBlock = await findBlockByAlias(block.repo, rootBlock.id, alias)
+    const existingBlock = await findBlockByAlias(rootBlock, alias)
 
     const referenceWasRemoved = (b: Block) =>
       block.dataSync()!.references.findIndex(ref => ref.id === b.id) === -1

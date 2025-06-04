@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getAliases, findBlockByAlias, aliasExists } from '../aliasUtils'
-import { Repo } from '../repo'
 import { Block } from '../block'
 
 // Mock the dependencies
@@ -8,7 +7,6 @@ vi.mock('../repo')
 vi.mock('../block')
 
 describe('aliasUtils', () => {
-  let mockRepo: Repo
   let mockRootBlock: Block
   let mockChildBlock: Block
   const rootBlockId = 'root-block-id'
@@ -25,21 +23,15 @@ describe('aliasUtils', () => {
       getProperty: vi.fn(),
       children: vi.fn().mockResolvedValue([mockChildBlock])
     } as unknown as Block
-
-    mockRepo = {
-      find: vi.fn().mockReturnValue(mockRootBlock)
-    } as unknown as Repo
   })
 
   describe('getAliases', () => {
     it('should return empty array when no aliases exist', async () => {
       mockRootBlock.getProperty = vi.fn().mockResolvedValue(null)
-      mockChildBlock.getProperty = vi.fn().mockResolvedValue(null)
-      
-      const result = await getAliases(mockRepo, rootBlockId)
+
+      const result = await getAliases(mockRootBlock)
       
       expect(result).toEqual([])
-      expect(mockRepo.find).toHaveBeenCalledWith(rootBlockId)
     })
 
     it('should collect aliases from root and child blocks', async () => {
@@ -50,7 +42,7 @@ describe('aliasUtils', () => {
         value: ['child-alias']
       })
       
-      const result = await getAliases(mockRepo, rootBlockId)
+      const result = await getAliases(mockRootBlock)
       
       expect(result).toEqual(['root-alias', 'child-alias'])
     })
@@ -63,7 +55,7 @@ describe('aliasUtils', () => {
         value: ['Python', 'TypeScript']
       })
       
-      const result = await getAliases(mockRepo, rootBlockId, 'java')
+      const result = await getAliases(mockRootBlock, 'java')
       
       expect(result).toEqual(['JavaScript', 'Java'])
     })
@@ -76,7 +68,7 @@ describe('aliasUtils', () => {
         value: ['UPPERCASE']
       })
       
-      const result = await getAliases(mockRepo, rootBlockId, 'CASE')
+      const result = await getAliases(mockRootBlock, 'CASE')
       
       expect(result).toEqual(['CamelCase', 'lowercase', 'UPPERCASE'])
     })
@@ -89,7 +81,7 @@ describe('aliasUtils', () => {
         value: ['test', 'another']
       })
       
-      const result = await getAliases(mockRepo, rootBlockId)
+      const result = await getAliases(mockRootBlock)
       
       expect(result).toEqual(['test', 'other', 'another'])
     })
@@ -97,7 +89,7 @@ describe('aliasUtils', () => {
     it('should handle errors gracefully', async () => {
       mockRootBlock.getProperty = vi.fn().mockRejectedValue(new Error('Block read error'))
       
-      const result = await getAliases(mockRepo, rootBlockId)
+      const result = await getAliases(mockRootBlock)
       
       expect(result).toEqual([])
     })
@@ -112,7 +104,7 @@ describe('aliasUtils', () => {
         value: ['target-alias']
       })
       
-      const result = await findBlockByAlias(mockRepo, rootBlockId, 'target-alias')
+      const result = await findBlockByAlias(mockRootBlock, 'target-alias')
       
       expect(result).toBe(mockChildBlock)
     })
@@ -125,7 +117,7 @@ describe('aliasUtils', () => {
         value: ['child-alias']
       })
       
-      const result = await findBlockByAlias(mockRepo, rootBlockId, 'nonexistent-alias')
+      const result = await findBlockByAlias(mockRootBlock, 'nonexistent-alias')
       
       expect(result).toBeNull()
     })
@@ -137,7 +129,7 @@ describe('aliasUtils', () => {
         value: ['existing-alias']
       })
       
-      const result = await aliasExists(mockRepo, rootBlockId, 'existing-alias')
+      const result = await aliasExists(mockRootBlock, 'existing-alias')
       
       expect(result).toBe(true)
     })
@@ -147,7 +139,7 @@ describe('aliasUtils', () => {
         value: ['other-alias']
       })
       
-      const result = await aliasExists(mockRepo, rootBlockId, 'nonexistent-alias')
+      const result = await aliasExists(mockRootBlock, 'nonexistent-alias')
       
       expect(result).toBe(false)
     })

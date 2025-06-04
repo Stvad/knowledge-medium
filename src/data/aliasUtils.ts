@@ -2,20 +2,17 @@
  * Utilities for working with block aliases in the backlink system
  */
 
-import { Repo } from '@/data/repo'
 import { aliasProp } from '@/data/properties'
 import { Block } from '@/data/block'
 
 /**
  * Generic block visitor that traverses a block tree and calls a visitor function on each block
- * @param repo The repository instance
- * @param rootBlockId The root block ID to start traversal from
+ * @param rootBlock The root block to start traversal from
  * @param visitor Function called for each block, can return a value to stop traversal early
  * @returns Promise resolving to the early return value if any, or undefined
  */
 async function visitBlocks<T>(
-  repo: Repo,
-  rootBlockId: string,
+  rootBlock: Block,
   visitor: (block: Block) => Promise<T | undefined>
 ): Promise<T | undefined> {
   const visitedBlocks = new Set<string>()
@@ -44,8 +41,7 @@ async function visitBlocks<T>(
   }
   
   try {
-    const rootBlock = repo.find(rootBlockId)
-    return await traverse(rootBlock)
+    return traverse(rootBlock)
   } catch (error) {
     console.warn('Error in block traversal:', error)
     return undefined
@@ -54,15 +50,14 @@ async function visitBlocks<T>(
 
 /**
  * Get all aliases from blocks, optionally filtered by a search term
- * @param repo The repository instance
- * @param rootBlockId The root block ID to start traversal from
+ * @param rootBlock The root block to start traversal from
  * @param filter Optional filter string to match against aliases (case-insensitive)
  * @returns Promise resolving to array of matching aliases
  */
-export async function getAliases(repo: Repo, rootBlockId: string, filter: string = ''): Promise<string[]> {
+export async function getAliases(rootBlock: Block, filter: string = ''): Promise<string[]> {
   const allAliases: string[] = []
   
-  await visitBlocks(repo, rootBlockId, async (block) => {
+  await visitBlocks(rootBlock, async (block) => {
     const aliasProperty = await block.getProperty(aliasProp())
     if (aliasProperty?.value && Array.isArray(aliasProperty.value)) {
       allAliases.push(...aliasProperty.value)
@@ -83,13 +78,12 @@ export async function getAliases(repo: Repo, rootBlockId: string, filter: string
 
 /**
  * Find a block by its alias
- * @param repo The repository instance
- * @param rootBlockId The root block ID to start traversal from
+ * @param rootBlock The root block to start traversal from
  * @param alias The alias to search for
  * @returns Promise resolving to the block with the given alias, or null if not found
  */
-export async function findBlockByAlias(repo: Repo, rootBlockId: string, alias: string): Promise<Block | null> {
-  const foundBlock = await visitBlocks(repo, rootBlockId, async (block) => {
+export async function findBlockByAlias(rootBlock: Block, alias: string): Promise<Block | null> {
+  const foundBlock = await visitBlocks(rootBlock, async (block) => {
     const aliasProperty = await block.getProperty(aliasProp())
     if (aliasProperty?.value && Array.isArray(aliasProperty.value)) {
       if (aliasProperty.value.includes(alias)) {
@@ -104,12 +98,11 @@ export async function findBlockByAlias(repo: Repo, rootBlockId: string, alias: s
 
 /**
  * Check if an alias already exists in the system
- * @param repo The repository instance
- * @param rootBlockId The root block ID to start traversal from
+ * @param rootBlock The root block to start traversal from
  * @param alias The alias to check
  * @returns Promise resolving to true if alias exists, false otherwise
  */
-export async function aliasExists(repo: Repo, rootBlockId: string, alias: string): Promise<boolean> {
-  const block = await findBlockByAlias(repo, rootBlockId, alias)
+export async function aliasExists(rootBlock: Block, alias: string): Promise<boolean> {
+  const block = await findBlockByAlias(rootBlock, alias)
   return block !== null
 }
