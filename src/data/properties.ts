@@ -59,7 +59,7 @@ export const isCollapsedProp = boolProp('system:collapsed', false, uiChangeScope
 export const isEditingProp = boolProp('isEditing', false, uiChangeScope)
 export const topLevelBlockIdProp = stringProperty('topLevelBlockId', undefined, uiChangeScope)
 export const focusedBlockIdProp = stringProperty('focusedBlockId', undefined, uiChangeScope)
-export const editorSelection = objectProperty<EditorSelectionState>('editorSelection') // Commenting out or removing old/conflicting 'selection' if it was for text selection
+export const editorSelection = objectProperty<EditorSelectionState>('editorSelection', undefined, uiChangeScope)
 
 export interface BlockSelectionState {
   selectedBlockIds: string[];
