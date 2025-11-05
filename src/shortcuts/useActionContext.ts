@@ -31,7 +31,7 @@ export function useActionContext(
   }), [dependencies, uiStateBlock])
 
   useEffect(() => {
-    console.log(`[useShortcutContext] Effect running for context: ${context}`, {
+    console.debug(`[useActionContext] Effect running for context: ${context}`, {
       enabled,
       dependencies: depsWithUiState,
     })
@@ -41,7 +41,7 @@ export function useActionContext(
     actionManager.activateContext(context, depsWithUiState)
 
     return () => {
-      console.log(`[useShortcutContext] Cleanup running for context: ${context}`)
+      console.debug(`[useActionContext] Cleanup running for context: ${context}`)
       actionManager.deactivateContext(context)
     }
   }, [context, depsWithUiState, enabled])
