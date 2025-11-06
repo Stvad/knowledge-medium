@@ -483,6 +483,21 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
     )
   }
 
+  async transaction<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+    await this.open()
+    await this.ensureWorkspace(workspaceId)
+    const conn = await this.ensureConnection()
+    await conn.execute('BEGIN')
+    try {
+      const result = await fn()
+      await conn.execute('COMMIT')
+      return result
+    } catch (error) {
+      await conn.execute('ROLLBACK')
+      throw error
+    }
+  }
+
   private async ensureConnection(): Promise<AsyncDatabaseConnection> {
     if (!this.connection) {
       throw new Error('SQLite connection not opened')
