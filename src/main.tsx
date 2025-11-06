@@ -7,6 +7,8 @@ import { RepoProvider } from '@/context/repo.tsx'
 import { Login } from '@/components/Login.tsx'
 import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { StorageProvider } from '@/context/storage.tsx'
+import { SqliteRepoProvider } from '@/context/sqliteRepo.tsx'
+import { FEATURE_SQLITE_BACKEND } from '@/config/featureFlags'
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
@@ -17,11 +19,21 @@ createRoot(document.getElementById('root')!).render(
     <Suspense fallback={<SuspenseFallback/>}>
       <Login>
         <StorageProvider>
-          <RepoProvider>
-            <Suspense fallback={<SuspenseFallback/>}>
-              <App/>
-            </Suspense>
-          </RepoProvider>
+          {FEATURE_SQLITE_BACKEND ? (
+            <SqliteRepoProvider>
+              <RepoProvider>
+                <Suspense fallback={<SuspenseFallback/>}>
+                  <App/>
+                </Suspense>
+              </RepoProvider>
+            </SqliteRepoProvider>
+          ) : (
+            <RepoProvider>
+              <Suspense fallback={<SuspenseFallback/>}>
+                <App/>
+              </Suspense>
+            </RepoProvider>
+          )}
         </StorageProvider>
       </Login>
     </Suspense>
