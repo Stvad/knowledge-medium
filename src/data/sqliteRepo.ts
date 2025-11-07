@@ -126,6 +126,17 @@ export class SqliteRepo {
     return this.find(snapshot.blockId)
   }
 
+  async listRootBlocks(): Promise<SqliteBlock[]> {
+    const snapshots = await this.storage.blocks.listChildren({ workspaceId: this.workspaceId, parentId: null })
+    return snapshots.map((snapshot) => this.find(snapshot.blockId))
+  }
+
+  async ensureSeedData(): Promise<void> {
+    const roots = await this.storage.blocks.listChildren({ workspaceId: this.workspaceId, parentId: null })
+    if (roots.length > 0) return
+    await this.create({ content: 'Welcome to the SQLite backend POC!' })
+  }
+
   async loadBlockData(id: string): Promise<BlockData | undefined> {
     const snapshot = await this.storage.blocks.getBlock({
       workspaceId: this.workspaceId,

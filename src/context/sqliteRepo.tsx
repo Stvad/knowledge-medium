@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
 import { SqliteRepo } from '@/data/sqliteRepo'
 import { useStorageEngine } from '@/context/storage'
 import { useUser } from '@/components/Login'
@@ -22,6 +22,10 @@ export function SqliteRepoProvider({ children }: { children: ReactNode }) {
   }
 
   const repo = useMemo(() => new SqliteRepo(engine, user), [engine, user.id])
+
+  useEffect(() => {
+    void repo.ensureSeedData()
+  }, [repo])
 
   return <SqliteRepoContext.Provider value={repo}>{children}</SqliteRepoContext.Provider>
 }
