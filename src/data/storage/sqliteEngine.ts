@@ -1,10 +1,8 @@
-import {
-  WASQLiteOpenFactory,
-  type AsyncDatabaseConnection,
-  type ProxiedQueryResult,
-  type BatchedUpdateNotification,
-  type UpdateNotification,
-} from '@powersync/web'
+import { PowerSyncDatabase, WASQLiteOpenFactory } from '@powersync/web'
+import { Schema } from '@powersync/common'
+import type { DBAdapter, QueryResult as SqlExecResult } from '@powersync/common'
+import type { QueryParam } from '@powersync/common'
+import type { StandardWatchedQuery } from '@powersync/common'
 import { runMigrations } from './migrations'
 import type {
   BlockStore,
@@ -22,13 +20,16 @@ import type {
 import type { BlockData } from '@/types'
 
 type SqlParams = unknown[]
-type TableChange = BatchedUpdateNotification | UpdateNotification
+
+function createPowerSyncSchema(): Schema {
+  return new Schema({})
+}
 
 const ORDER_PAD = 16
 const ORDER_START = 1n
 
 interface SqliteExecutor {
-  run(sql: string, params?: SqlParams): Promise<ProxiedQueryResult>
+  run(sql: string, params?: SqlParams): Promise<SqlExecResult>
   query<T>(sql: string, params: SqlParams, mapper: (row: any) => T): Promise<QueryResult<T>>
   ensureWorkspace(workspaceId: string): Promise<void>
 }
@@ -356,13 +357,29 @@ class SqliteChangeSession implements ChangeSession {
 class SqliteLiveQueryHandle<T> implements LiveQueryHandle<T> {
   private listeners = new Set<() => void>()
   private lastResult: QueryResult<T> = { rows: [] }
+  private unsubscribeWatch: (() => void) | null = null
 
   constructor(
     private readonly engine: SqliteStorageEngine,
-    readonly sql: string,
-    readonly params: SqlParams,
-    readonly mapper: (row: any) => T
-  ) {}
+    private readonly watchedQuery: StandardWatchedQuery<ReadonlyArray<Readonly<T>>>
+  ) {
+    this.unsubscribeWatch = this.watchedQuery.registerListener({
+      onData: (rows) => {
+        this.lastResult = {
+          rows: rows.map((row) => row as T),
+          updatedAt: Date.now(),
+        }
+        this.notify()
+      },
+      onError: (error) => {
+        console.error('SQLite liveQuery watch error', error)
+      },
+    })
+  }
+
+  setInitialResult(result: QueryResult<T>): void {
+    this.lastResult = result
+  }
 
   current(): QueryResult<T> {
     return this.lastResult
@@ -375,14 +392,12 @@ class SqliteLiveQueryHandle<T> implements LiveQueryHandle<T> {
 
   dispose(): void {
     this.listeners.clear()
+    this.unsubscribeWatch?.()
+    void this.watchedQuery.close()
     this.engine.unregisterLiveQuery(this)
   }
 
-  async refresh(): Promise<void> {
-    this.lastResult = await this.engine.query<T>(this.sql, this.params, this.mapper)
-  }
-
-  notify(): void {
+  private notify(): void {
     for (const listener of this.listeners) {
       listener()
     }
@@ -395,8 +410,8 @@ export interface SqliteStorageOptions {
 }
 
 export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
-  private connection: AsyncDatabaseConnection | null = null
-  private closeSubscription: (() => void) | null = null
+  private powerSync: PowerSyncDatabase | null = null
+  private adapter: DBAdapter | null = null
   private liveQueries = new Set<SqliteLiveQueryHandle<any>>()
   private openPromise: Promise<void> | null = null
 
@@ -411,31 +426,36 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
   }
 
   async open(): Promise<void> {
-    if (this.connection) return
+    if (this.adapter) return
     if (this.openPromise) {
       await this.openPromise
       return
     }
 
     this.openPromise = (async () => {
-      const openFactory = new WASQLiteOpenFactory({
-        dbFilename: this.options.filename,
-        dbLocation: this.options.location,
+      const schema = createPowerSyncSchema()
+      const db = new PowerSyncDatabase({
+        schema,
+        database: new WASQLiteOpenFactory({
+          dbFilename: this.options.filename,
+          dbLocation: this.options.location,
+          flags: {
+            useWebWorker: false,
+            enableMultiTabs: false,
+          },
+        }),
         flags: {
           useWebWorker: false,
           enableMultiTabs: false,
         },
       })
-      const connection = await openFactory.openConnection()
-      await connection.init()
-      await runMigrations(connection)
 
-      const unsubscribe = await connection.registerOnTableChange((update) => {
-        this.handleTableChange(update)
-      })
+      await db.waitForReady()
+      const adapter = db.database
+      await runMigrations(adapter)
 
-      this.connection = connection
-      this.closeSubscription = unsubscribe
+      this.powerSync = db
+      this.adapter = adapter
     })()
 
     try {
@@ -446,16 +466,20 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
   }
 
   async close(): Promise<void> {
-    if (!this.connection) return
+    if (!this.powerSync) return
 
-    if (this.closeSubscription) {
-      await this.closeSubscription()
-      this.closeSubscription = null
+    for (const handle of Array.from(this.liveQueries)) {
+      handle.dispose()
     }
-    await this.connection.close()
-    this.connection = null
-    this.openPromise = null
     this.liveQueries.clear()
+
+    await this.powerSync.close({ disconnect: false }).catch((error) => {
+      console.warn('SqliteStorageEngine.close: error while closing PowerSync', error)
+    })
+
+    this.powerSync = null
+    this.adapter = null
+    this.openPromise = null
   }
 
   async withSession(workspaceId: string, fn: (session: ChangeSession) => Promise<void>): Promise<void> {
@@ -466,10 +490,19 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
   }
 
   async liveQuery<T>(sql: string, params: SqlParams, mapper: (row: any) => T): Promise<LiveQueryHandle<T>> {
-    await this.open()
-    const handle = new SqliteLiveQueryHandle<T>(this, sql, params, mapper)
+    const db = await this.ensurePowerSync()
+    const watchedQuery = db
+      .query<T>({
+        sql,
+        parameters: params as ReadonlyArray<Readonly<QueryParam>>,
+        mapper: mapper as (row: Record<string, unknown>) => T,
+      })
+      .watch({ placeholderData: [] })
+
+    const handle = new SqliteLiveQueryHandle<T>(this, watchedQuery)
     this.liveQueries.add(handle)
-    await handle.refresh()
+    const initial = await this.query<T>(sql, params, mapper)
+    handle.setInitialResult(initial)
     return handle
   }
 
@@ -477,14 +510,14 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
     this.liveQueries.delete(handle)
   }
 
-  async run(sql: string, params: SqlParams = []): Promise<ProxiedQueryResult> {
-    const conn = await this.ensureConnection()
-    return await conn.execute(sql, params)
+  async run(sql: string, params: SqlParams = []): Promise<SqlExecResult> {
+    const adapter = await this.ensureAdapter()
+    return await adapter.execute(sql, params)
   }
 
   async query<T>(sql: string, params: SqlParams, mapper: (row: any) => T): Promise<QueryResult<T>> {
-    const conn = await this.ensureConnection()
-    const result = await conn.execute(sql, params)
+    const adapter = await this.ensureAdapter()
+    const result = await adapter.execute(sql, params)
     const rows = (result.rows?._array ?? []).map(mapper)
     return {
       rows,
@@ -504,43 +537,31 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
   async transaction<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
     await this.open()
     await this.ensureWorkspace(workspaceId)
-    const conn = await this.ensureConnection()
-    await conn.execute('BEGIN')
+    const adapter = await this.ensureAdapter()
+    await adapter.execute('BEGIN')
     try {
       const result = await fn()
-      await conn.execute('COMMIT')
+      await adapter.execute('COMMIT')
       return result
     } catch (error) {
-      await conn.execute('ROLLBACK')
+      await adapter.execute('ROLLBACK')
       throw error
     }
   }
 
-  private async ensureConnection(): Promise<AsyncDatabaseConnection> {
-    if (!this.connection) {
+  private async ensurePowerSync(): Promise<PowerSyncDatabase> {
+    if (!this.powerSync) {
       await this.open()
     }
-    if (!this.connection) throw new Error('SQLite connection not opened')
-    return this.connection
+    if (!this.powerSync) throw new Error('PowerSync database not initialized')
+    return this.powerSync
   }
 
-  private handleTableChange(update: TableChange): void {
-    const tables = this.extractTables(update)
-    if (!tables.length) return
-    for (const handle of this.liveQueries) {
-      void handle.refresh().then(() => {
-        handle.notify()
-      })
+  private async ensureAdapter(): Promise<DBAdapter> {
+    if (!this.adapter) {
+      await this.open()
     }
-  }
-
-  private extractTables(update: TableChange): string[] {
-    if ('tables' in update) {
-      return update.tables
-    }
-    if ('table' in update) {
-      return [update.table]
-    }
-    return []
+    if (!this.adapter) throw new Error('SQLite adapter not initialized')
+    return this.adapter
   }
 }

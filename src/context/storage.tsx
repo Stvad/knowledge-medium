@@ -15,7 +15,7 @@ const StorageContext = createContext<StorageContextValue>({
 })
 
 const SQLITE_DEFAULT_OPTIONS: SqliteStorageOptions = {
-  filename: 'omniliner-local6.db',
+  filename: 'omniliner-local7.db',
 }
 
 export function StorageProvider({ children }: { children: ReactNode }) {

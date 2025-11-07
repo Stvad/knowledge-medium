@@ -1,5 +1,3 @@
-import type { AsyncDatabaseConnection } from '@powersync/web'
-
 interface Migration {
   version: number
   sql: string
@@ -18,7 +16,7 @@ const migrations: Migration[] = Object.entries(
   }
 }).sort((a, b) => a.version - b.version)
 
-async function ensureSchemaVersionTable(connection: AsyncDatabaseConnection): Promise<void> {
+async function ensureSchemaVersionTable(connection: MigrationConnection): Promise<void> {
   const createStatement = `
     CREATE TABLE IF NOT EXISTS schema_version (
       version INTEGER PRIMARY KEY,
@@ -28,7 +26,7 @@ async function ensureSchemaVersionTable(connection: AsyncDatabaseConnection): Pr
   await connection.execute(createStatement)
 }
 
-async function getCurrentVersion(connection: AsyncDatabaseConnection): Promise<number> {
+async function getCurrentVersion(connection: MigrationConnection): Promise<number> {
   const result = await connection.execute(
     'SELECT version FROM schema_version ORDER BY version DESC LIMIT 1'
   )
@@ -38,7 +36,12 @@ async function getCurrentVersion(connection: AsyncDatabaseConnection): Promise<n
   return row?.version ?? 0
 }
 
-export async function runMigrations(connection: AsyncDatabaseConnection): Promise<void> {
+type MigrationConnection = {
+  execute: (sql: string, params?: unknown[]) => Promise<any>
+  executeBatch: (sql: string, batches: unknown[][]) => Promise<any>
+}
+
+export async function runMigrations(connection: MigrationConnection): Promise<void> {
   await ensureSchemaVersionTable(connection)
 
   let currentVersion = await getCurrentVersion(connection)
