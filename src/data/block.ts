@@ -9,6 +9,7 @@ import { findBlockByAlias } from '@/data/aliasUtils.ts'
 import { fromList, aliasProp, isCollapsedProp } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
 import { reconcileList } from '@/utils/array.ts'
+import { powerSyncDb } from './powerSyncInstance.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -356,6 +357,20 @@ export class Block {
       current = await current.parent()
     }
     return false
+  }
+
+  /**
+   * Update block content - writes to PowerSync when USE_POWERSYNC is true
+   */
+  async updateContent(newContent: string) {
+    await powerSyncDb.execute(
+      `UPDATE blocks
+       SET content            = ?,
+           update_time        = ?,
+           updated_by_user_id = ?
+       WHERE id = ?`,
+      [newContent, Date.now(), this.currentUser.id, this.id],
+    )
   }
 }
 

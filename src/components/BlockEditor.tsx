@@ -9,6 +9,7 @@ import { debounce, memoize } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { EditorView } from '@codemirror/view'
 import { useData } from '@/hooks/block.ts'
+import { USE_POWERSYNC } from '@/data/dataSource.ts'
 
 /**
  * Once per CodeMirror view
@@ -56,10 +57,16 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   /** ---------- Debouncers ---------- */
   const pushChange = useRef(
     debounce((value: string) => {
-      block.change(b => {
-        updateText(b, ['content'], value)
-      })
-      lastHeads.current = getHeads(block.dataSync()!)
+      if (USE_POWERSYNC) {
+        // Use PowerSync write path
+        block.updateContent(value)
+      } else {
+        // Use Automerge write path
+        block.change(b => {
+          updateText(b, ['content'], value)
+        })
+        lastHeads.current = getHeads(block.dataSync()!)
+      }
       pendingLocalEdits.current = false
     }, 300),
   ).current
@@ -80,7 +87,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   useEffect(() => flushDebouncers, [flushDebouncers])
 
   useEffect(() => {
-    if (blockData && !lastHeads.current) {
+    if (!USE_POWERSYNC && blockData && !lastHeads.current) {
       lastHeads.current = getHeads(blockData)
     }
   }, [blockData?.id])
@@ -90,25 +97,38 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
     if (!blockData || !cm.current?.view) return
     if (pendingLocalEdits.current) return
 
-    const incomingHeads = getHeads(blockData)
-    // Are these heads already included in what we flushed?
-    const isNew =
-      !lastHeads.current ||
-      incomingHeads.some(h => !lastHeads.current!.includes(h))
+    if (USE_POWERSYNC) {
+      // For PowerSync, just update the view when content changes
+      const view = cm.current.view
+      const live = view.state.doc.toString()
+      if (live !== blockData.content) {
+        view.dispatch({
+          changes: {from: 0, to: live.length, insert: blockData.content},
+          selection: view.state.selection,
+        })
+      }
+    } else {
+      // Automerge path with heads tracking
+      const incomingHeads = getHeads(blockData)
+      // Are these heads already included in what we flushed?
+      const isNew =
+        !lastHeads.current ||
+        incomingHeads.some(h => !lastHeads.current!.includes(h))
 
-    if (!isNew) return // self-echo; ignore
-    console.debug('new remote change', incomingHeads)
+      if (!isNew) return // self-echo; ignore
+      console.debug('new remote change', incomingHeads)
 
-    // Remote change → patch doc without rebuilding the view
-    const view = cm.current.view
-    const live = view.state.doc.toString()
-    if (live !== blockData.content) {
-      view.dispatch({
-        changes: {from: 0, to: live.length, insert: blockData.content},
-        selection: view.state.selection,
-      })
+      // Remote change → patch doc without rebuilding the view
+      const view = cm.current.view
+      const live = view.state.doc.toString()
+      if (live !== blockData.content) {
+        view.dispatch({
+          changes: {from: 0, to: live.length, insert: blockData.content},
+          selection: view.state.selection,
+        })
+      }
+      lastHeads.current = incomingHeads
     }
-    lastHeads.current = incomingHeads
   }, [blockData])
 
   if (!blockData) return null

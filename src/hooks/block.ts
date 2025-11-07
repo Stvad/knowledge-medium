@@ -18,6 +18,7 @@ export const useData = (block: Block) => {
   
   return result
 }
+
 export const useDataWithSelector =
   <T>(block: Block, selector: (doc: BlockData | undefined) => T) => useDocumentWithSelector<BlockData, T>(block.id, selector)[0]
 
