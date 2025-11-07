@@ -41,21 +41,37 @@ async function getCurrentVersion(connection: AsyncDatabaseConnection): Promise<n
 export async function runMigrations(connection: AsyncDatabaseConnection): Promise<void> {
   await ensureSchemaVersionTable(connection)
 
-  const currentVersion = await getCurrentVersion(connection)
+  let currentVersion = await getCurrentVersion(connection)
+  const existingTablesResult = await connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+  const existingTables = new Set((existingTablesResult.rows?._array ?? []).map((row: any) => row.name as string))
+
+  if (currentVersion > 0 && !existingTables.has('blocks')) {
+    console.warn(
+      'runMigrations: schema_version indicates version',
+      currentVersion,
+      'but blocks table missing; resetting schema_version'
+    )
+    currentVersion = 0
+    await connection.execute('DELETE FROM schema_version')
+  }
+
+  console.info('runMigrations: current version', currentVersion, 'pending', migrations.map((m) => m.version))
   for (const migration of migrations) {
     if (migration.version <= currentVersion) continue
 
-    await connection.execute('BEGIN')
     try {
-      await connection.executeBatch(migration.sql)
+      console.info('runMigrations: applying migration', migration.version)
+      await connection.executeBatch(migration.sql, [[]])
       await connection.execute(
         'INSERT INTO schema_version (version, applied_at) VALUES (?, ?)',
         [migration.version, Math.floor(Date.now() / 1000)]
       )
-      await connection.execute('COMMIT')
     } catch (error) {
-      await connection.execute('ROLLBACK')
+      console.error('runMigrations: migration failed', migration.version, error)
       throw error
     }
   }
+
+  const tablesResult = await connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
+  console.info('runMigrations: tables', tablesResult.rows?._array)
 }

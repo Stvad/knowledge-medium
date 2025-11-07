@@ -127,13 +127,18 @@ export class SqliteRepo {
   }
 
   async listRootBlocks(): Promise<SqliteBlock[]> {
+    console.info('SqliteRepo.listRootBlocks: querying roots')
     const snapshots = await this.storage.blocks.listChildren({ workspaceId: this.workspaceId, parentId: null })
+    console.info('SqliteRepo.listRootBlocks: found', snapshots.length)
     return snapshots.map((snapshot) => this.find(snapshot.blockId))
   }
 
   async ensureSeedData(): Promise<void> {
+    console.info('SqliteRepo.ensureSeedData: checking roots')
     const roots = await this.storage.blocks.listChildren({ workspaceId: this.workspaceId, parentId: null })
+    console.info('SqliteRepo.ensureSeedData: existing roots', roots.length)
     if (roots.length > 0) return
+    console.info('SqliteRepo.ensureSeedData: seeding default block')
     await this.create({ content: 'Welcome to the SQLite backend POC!' })
   }
 

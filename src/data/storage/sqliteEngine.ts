@@ -398,6 +398,7 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
   private connection: AsyncDatabaseConnection | null = null
   private closeSubscription: (() => void) | null = null
   private liveQueries = new Set<SqliteLiveQueryHandle<any>>()
+  private openPromise: Promise<void> | null = null
 
   readonly blocks: BlockStore
   readonly properties: PropertyStore
@@ -411,21 +412,37 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
 
   async open(): Promise<void> {
     if (this.connection) return
+    if (this.openPromise) {
+      await this.openPromise
+      return
+    }
 
-    const openFactory = new WASQLiteOpenFactory({
-      dbFilename: this.options.filename,
-      dbLocation: this.options.location,
-    })
-    const connection = await openFactory.openConnection()
-    await connection.init()
-    await runMigrations(connection)
+    this.openPromise = (async () => {
+      const openFactory = new WASQLiteOpenFactory({
+        dbFilename: this.options.filename,
+        dbLocation: this.options.location,
+        flags: {
+          useWebWorker: false,
+          enableMultiTabs: false,
+        },
+      })
+      const connection = await openFactory.openConnection()
+      await connection.init()
+      await runMigrations(connection)
 
-    const unsubscribe = await connection.registerOnTableChange((update) => {
-      this.handleTableChange(update)
-    })
+      const unsubscribe = await connection.registerOnTableChange((update) => {
+        this.handleTableChange(update)
+      })
 
-    this.connection = connection
-    this.closeSubscription = unsubscribe
+      this.connection = connection
+      this.closeSubscription = unsubscribe
+    })()
+
+    try {
+      await this.openPromise
+    } finally {
+      this.openPromise = null
+    }
   }
 
   async close(): Promise<void> {
@@ -437,6 +454,7 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
     }
     await this.connection.close()
     this.connection = null
+    this.openPromise = null
     this.liveQueries.clear()
   }
 
@@ -500,8 +518,9 @@ export class SqliteStorageEngine implements StorageEngine, SqliteExecutor {
 
   private async ensureConnection(): Promise<AsyncDatabaseConnection> {
     if (!this.connection) {
-      throw new Error('SQLite connection not opened')
+      await this.open()
     }
+    if (!this.connection) throw new Error('SQLite connection not opened')
     return this.connection
   }
 

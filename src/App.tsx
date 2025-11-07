@@ -45,14 +45,27 @@ const SqliteBlockTree = ({ blockId, depth = 0 }: { blockId: string; depth?: numb
 const SqliteApp = () => {
   const repo = useSqliteRepo()
   const [rootIds, setRootIds] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     let cancelled = false
     const load = async () => {
-      await repo.ensureSeedData()
-      const roots = await repo.listRootBlocks()
-      if (!cancelled) {
-        setRootIds(roots.map((block) => block.id))
+      try {
+        await repo.ensureSeedData()
+        const roots = await repo.listRootBlocks()
+        console.info('SQLite roots loaded', roots.map((block) => block.id))
+        if (!cancelled) {
+          setRootIds(roots.map((block) => block.id))
+          setLoading(false)
+          setError(null)
+        }
+      } catch (error) {
+        console.error('Failed to load SQLite roots', error)
+        if (!cancelled) {
+          setError(error instanceof Error ? error.message : String(error))
+          setLoading(false)
+        }
       }
     }
     void load()
@@ -61,8 +74,16 @@ const SqliteApp = () => {
     }
   }, [repo])
 
-  if (rootIds.length === 0) {
+  if (loading) {
     return <div className="p-4 text-slate-400">Loading SQLite blocks…</div>
+  }
+
+  if (error) {
+    return <div className="p-4 text-red-400">Failed to load SQLite blocks: {error}</div>
+  }
+
+  if (rootIds.length === 0) {
+    return <div className="p-4 text-slate-400">No blocks found.</div>
   }
 
   return (

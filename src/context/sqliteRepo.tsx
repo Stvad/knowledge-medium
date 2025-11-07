@@ -14,7 +14,8 @@ export function SqliteRepoProvider({ children }: { children: ReactNode }) {
   }
 
   if (!engine) {
-    throw new Error('SQLite storage engine not initialized')
+    console.warn('SQLite backend enabled but engine missing')
+    return <>{children}</>
   }
 
   if (!user) {
@@ -25,6 +26,15 @@ export function SqliteRepoProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void repo.ensureSeedData()
+  }, [repo])
+
+  useEffect(() => {
+    ;(window as any).__sqliteRepo = repo
+    return () => {
+      if ((window as any).__sqliteRepo === repo) {
+        delete (window as any).__sqliteRepo
+      }
+    }
   }, [repo])
 
   return <SqliteRepoContext.Provider value={repo}>{children}</SqliteRepoContext.Provider>
