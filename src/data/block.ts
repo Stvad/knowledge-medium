@@ -9,6 +9,7 @@ import { findBlockByAlias } from '@/data/aliasUtils.ts'
 import { fromList, aliasProp, isCollapsedProp } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
 import { reconcileList } from '@/utils/array.ts'
+import { USE_POWERSYNC } from './dataSource.ts'
 import { powerSyncDb } from './powerSyncInstance.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
@@ -299,14 +300,46 @@ export class Block {
 
   async getProperty<T extends BlockProperty>(key: string | T): Promise<T | undefined> {
     const propName = typeof key === 'string' ? key : key.name
-    const doc = await this.data()
-    return doc?.properties[propName] as T | undefined
+    
+    if (USE_POWERSYNC) {
+      const row = await powerSyncDb.getOptional<any>(
+        'SELECT * FROM block_properties WHERE block_id = ? AND name = ?',
+        [this.id, propName]
+      )
+      
+      if (!row) return undefined
+      
+      return {
+        name: row.name,
+        type: row.type,
+        value: JSON.parse(row.value_json),
+        changeScope: row.change_scope
+      } as T
+    } else {
+      const doc = await this.data()
+      return doc?.properties[propName] as T | undefined
+    }
   }
 
   setProperty<T extends BlockProperty>(property: T) {
-    this.change((doc) => {
-      doc.properties[property.name] = property
-    }, {scope: property.changeScope})
+    if (USE_POWERSYNC) {
+      powerSyncDb.execute(
+        `INSERT OR REPLACE INTO block_properties 
+         (block_id, name, type, value_json, change_scope)
+         VALUES (?, ?, ?, ?, ?)`,
+        [
+          this.id,
+          property.name,
+          property.type,
+          JSON.stringify(property.value),
+          property.changeScope || null
+        ]
+      )
+    } else {
+      this.change((doc) => {
+        doc.properties[property.name] = property
+      }, {scope: property.changeScope})
+    }
   }
 
   _updateParentId = (newParentId: string) =>

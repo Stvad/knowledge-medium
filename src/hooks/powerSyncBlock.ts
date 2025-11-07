@@ -9,13 +9,25 @@ export function usePowerSyncBlockData(blockId: string): BlockData | null {
   // Query main block
   const { data: blockRows } = useQuery(
     'SELECT * FROM blocks WHERE id = ? AND is_deleted = 0',
-    [blockId]
+    [blockId],
+    {
+      rowComparator: {
+        keyBy: (item: any) => item.id,
+        compareBy: (item: any) => `${item.content}-${item.update_time}`
+      }
+    }
   )
   
   // Query properties
   const { data: propRows } = useQuery(
     'SELECT * FROM block_properties WHERE block_id = ?',
-    [blockId]
+    [blockId],
+    {
+      rowComparator: {
+        keyBy: (item: any) => `${item.block_id}-${item.name}`,
+        compareBy: (item: any) => item.value_json
+      }
+    }
   )
   
   // Query children (ordered by order_key)
@@ -23,13 +35,25 @@ export function usePowerSyncBlockData(blockId: string): BlockData | null {
     `SELECT id FROM blocks 
      WHERE parent_id = ? AND is_deleted = 0
      ORDER BY order_key`,
-    [blockId]
+    [blockId],
+    {
+      rowComparator: {
+        keyBy: (item: any) => item.id,
+        compareBy: (item: any) => item.order_key
+      }
+    }
   )
   
   // Query text references
   const { data: refRows } = useQuery(
     "SELECT * FROM block_refs WHERE block_id = ? AND origin = 'text'",
-    [blockId]
+    [blockId],
+    {
+      rowComparator: {
+        keyBy: (item: any) => `${item.block_id}-${item.target_id}`,
+        compareBy: (item: any) => item.alias
+      }
+    }
   )
   
   return useMemo(() => {
@@ -75,7 +99,13 @@ export function usePowerSyncChildren(parentId: string): string[] {
     `SELECT id FROM blocks 
      WHERE parent_id = ? AND is_deleted = 0
      ORDER BY order_key`,
-    [parentId]
+    [parentId],
+    {
+      rowComparator: {
+        keyBy: (item: any) => item.id,
+        compareBy: (item: any) => item.order_key
+      }
+    }
   )
   
   return useMemo(() => data?.map((row: any) => row.id) ?? [], [data])
@@ -87,7 +117,13 @@ export function usePowerSyncChildren(parentId: string): string[] {
 export function usePowerSyncContent(blockId: string): string {
   const { data } = useQuery(
     'SELECT content FROM blocks WHERE id = ? AND is_deleted = 0',
-    [blockId]
+    [blockId],
+    {
+      rowComparator: {
+        keyBy: (item: any) => item.id || blockId,
+        compareBy: (item: any) => item.content
+      }
+    }
   )
   
   return useMemo(() => data?.[0]?.content ?? '', [data])
@@ -103,12 +139,18 @@ export function usePowerSyncProperty<T extends BlockProperty>(
 ): T {
   const { data } = useQuery(
     'SELECT * FROM block_properties WHERE block_id = ? AND name = ?',
-    [blockId, propertyName]
+    [blockId, propertyName],
+    {
+      rowComparator: {
+        keyBy: (item: any) => `${item.block_id}-${item.name}`,
+        compareBy: (item: any) => `${item.type}-${item.value_json}-${item.change_scope}`
+      }
+    }
   )
-  
+
   return useMemo(() => {
     if (!data || data.length === 0) return defaultValue
-    
+
     const prop = data[0] as any
     return {
       name: prop.name,

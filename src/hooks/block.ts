@@ -4,7 +4,7 @@ import { useCallback } from 'react'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { Block } from '@/data/block.ts'
 import { USE_POWERSYNC } from '@/data/dataSource.ts'
-import { usePowerSyncBlockData, usePowerSyncContent, usePowerSyncChildren } from './powerSyncBlock.ts'
+import { usePowerSyncBlockData, usePowerSyncContent, usePowerSyncChildren, usePowerSyncProperty } from './powerSyncBlock.ts'
 
 export const useData = (block: Block) => {
   const automergeData = useDocument<BlockData>(block.id)[0]
@@ -24,13 +24,18 @@ export const useDataWithSelector =
 
 export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
   const name = config.name
-  const property = useDataWithSelector(block, doc => doc?.properties[name])
-
+  const automergeProperty = useDataWithSelector(block, doc => doc?.properties[name]) ?? config
+  const powerSyncProperty = usePowerSyncProperty(block.id, name, config)
+  console.log({powerSyncProperty, automergeProperty, equal: JSON.stringify(powerSyncProperty) === JSON.stringify(automergeProperty)})
+  
+  const property = USE_POWERSYNC ? powerSyncProperty : automergeProperty
+  // const property = powerSyncProperty
+  //
   const setProperty = useCallback((newProperty: T) => {
     block.setProperty(newProperty)
   }, [block])
 
-  return [(property ?? config) as T, setProperty]
+  return [property as T, setProperty]
 }
 
 export function usePropertyValue<T extends BlockProperty>(block: Block, config: T): [T['value'], (value: T['value']) => void] {
