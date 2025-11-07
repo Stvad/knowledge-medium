@@ -6,16 +6,15 @@ import { useUser } from '@/components/Login'
 const SqliteRepoContext = createContext<SqliteRepo | null>(null)
 
 export function SqliteRepoProvider({ children }: { children: ReactNode }) {
-  const { engine, isSqliteBackend } = useStorageEngine()
+  const { engine, isSqliteBackend, ready } = useStorageEngine()
   const user = useUser()
 
   if (!isSqliteBackend) {
     return <>{children}</>
   }
 
-  if (!engine) {
-    console.warn('SQLite backend enabled but engine missing')
-    return <>{children}</>
+  if (!engine || !ready) {
+    return <div className="p-4 text-slate-400 text-center">Initializing SQLite storage…</div>
   }
 
   if (!user) {

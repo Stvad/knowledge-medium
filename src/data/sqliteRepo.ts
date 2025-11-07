@@ -77,6 +77,8 @@ function toBlockProperties(records: PropertyRecord[]): BlockProperties {
 export class SqliteRepo {
   private blockCache = new Map<string, SqliteBlock>()
   readonly undoRedoManager = new NullUndoRedoManager()
+  private seedPromise: Promise<void> | null = null
+  private seeded = false
 
   constructor(
     readonly storage: SqliteStorageEngine,
@@ -132,9 +134,19 @@ export class SqliteRepo {
   }
 
   async ensureSeedData(): Promise<void> {
-    const roots = await this.storage.blocks.listChildren({ workspaceId: this.workspaceId, parentId: null })
-    if (roots.length > 0) return
-    await this.create({ content: 'Welcome to the SQLite backend POC!' })
+    if (this.seeded) return
+    if (!this.seedPromise) {
+      this.seedPromise = (async () => {
+        const roots = await this.storage.blocks.listChildren({ workspaceId: this.workspaceId, parentId: null })
+        if (roots.length === 0) {
+          await this.create({ content: 'Welcome to the SQLite backend POC!' })
+        }
+        this.seeded = true
+      })().finally(() => {
+        this.seedPromise = null
+      })
+    }
+    await this.seedPromise
   }
 
   async loadBlockData(id: string): Promise<BlockData | undefined> {
