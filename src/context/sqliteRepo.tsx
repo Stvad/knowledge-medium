@@ -13,19 +13,19 @@ export function SqliteRepoProvider({ children }: { children: ReactNode }) {
     return <>{children}</>
   }
 
-  if (!engine || !ready) {
-    return <div className="p-4 text-slate-400 text-center">Initializing SQLite storage…</div>
-  }
-
-  if (!user) {
-    throw new Error('User must be authenticated before initializing SQLite repo')
-  }
-
-  const repo = useMemo(() => new SqliteRepo(engine, user), [engine, user.id])
+  const repo = useMemo(() => {
+    if (!engine || !ready || !user) return null
+    return new SqliteRepo(engine, user)
+  }, [engine, ready, user?.id])
 
   useEffect(() => {
+    if (!repo) return
     void repo.ensureSeedData()
   }, [repo])
+
+  if (!repo) {
+    return <div className="p-4 text-slate-400 text-center">Initializing SQLite storage…</div>
+  }
 
   return <SqliteRepoContext.Provider value={repo}>{children}</SqliteRepoContext.Provider>
 }
