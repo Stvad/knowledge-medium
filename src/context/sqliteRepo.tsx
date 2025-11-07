@@ -28,15 +28,6 @@ export function SqliteRepoProvider({ children }: { children: ReactNode }) {
     void repo.ensureSeedData()
   }, [repo])
 
-  useEffect(() => {
-    ;(window as any).__sqliteRepo = repo
-    return () => {
-      if ((window as any).__sqliteRepo === repo) {
-        delete (window as any).__sqliteRepo
-      }
-    }
-  }, [repo])
-
   return <SqliteRepoContext.Provider value={repo}>{children}</SqliteRepoContext.Provider>
 }
 

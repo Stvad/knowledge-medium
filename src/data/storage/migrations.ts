@@ -61,6 +61,7 @@ export async function runMigrations(connection: AsyncDatabaseConnection): Promis
 
     try {
       console.info('runMigrations: applying migration', migration.version)
+      //[[]] is needed for, bc otherwise executeBatch doesn't run?
       await connection.executeBatch(migration.sql, [[]])
       await connection.execute(
         'INSERT INTO schema_version (version, applied_at) VALUES (?, ?)',
@@ -73,5 +74,11 @@ export async function runMigrations(connection: AsyncDatabaseConnection): Promis
   }
 
   const tablesResult = await connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
-  console.info('runMigrations: tables', tablesResult.rows?._array)
+  const finalTables = new Set((tablesResult.rows?._array ?? []).map((row: any) => row.name as string))
+  const requiredTables = ['blocks', 'block_properties', 'block_refs']
+  for (const table of requiredTables) {
+    if (!finalTables.has(table)) {
+      throw new Error(`Migration expected table "${table}" but it is missing`)
+    }
+  }
 }

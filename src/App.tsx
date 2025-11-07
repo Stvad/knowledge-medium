@@ -54,14 +54,12 @@ const SqliteApp = () => {
       try {
         await repo.ensureSeedData()
         const roots = await repo.listRootBlocks()
-        console.info('SQLite roots loaded', roots.map((block) => block.id))
         if (!cancelled) {
           setRootIds(roots.map((block) => block.id))
           setLoading(false)
           setError(null)
         }
       } catch (error) {
-        console.error('Failed to load SQLite roots', error)
         if (!cancelled) {
           setError(error instanceof Error ? error.message : String(error))
           setLoading(false)
