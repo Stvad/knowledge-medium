@@ -68,6 +68,9 @@ export default defineConfig(({command}) => {
                 '@': path.resolve(__dirname, './src'),
             },
         },
+        optimizeDeps: {
+            exclude: ['@powersync/web', '@journeyapps/wa-sqlite'],
+        },
         build: {
             rollupOptions: {
                 //     // Mark react and react-dom as external to rely on the import map

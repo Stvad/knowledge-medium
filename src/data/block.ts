@@ -87,8 +87,7 @@ export class Block {
     this.undoRedoManager.transaction(callback, {
       ...options,
       scope: options.scope ?? defaultChangeScope,
-      dependencies: [this.handle.documentId],
-    })
+    } as UndoRedoOptions<unknown>)
   }
 
   _change(
