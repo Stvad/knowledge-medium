@@ -1,0 +1,2 @@
+- never write code when I just ask you a question
+- 

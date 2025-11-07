@@ -3,8 +3,21 @@ import { useDocumentWithSelector } from '@/data/automerge.ts'
 import { useCallback } from 'react'
 import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { Block } from '@/data/block.ts'
+import { USE_POWERSYNC } from '@/data/dataSource.ts'
+import { usePowerSyncBlockData, usePowerSyncContent, usePowerSyncChildren } from './powerSyncBlock.ts'
 
-export const useData = (block: Block) => useDocument<BlockData>(block.id)[0]
+export const useData = (block: Block) => {
+  const automergeData = useDocument<BlockData>(block.id)[0]
+  const powerSyncData = usePowerSyncBlockData(block.id)
+  
+  const result = USE_POWERSYNC ? powerSyncData : automergeData
+  
+  if (USE_POWERSYNC) {
+    console.log('[useData PowerSync]', block.id, result)
+  }
+  
+  return result
+}
 export const useDataWithSelector =
   <T>(block: Block, selector: (doc: BlockData | undefined) => T) => useDocumentWithSelector<BlockData, T>(block.id, selector)[0]
 
@@ -32,10 +45,31 @@ export function usePropertyValue<T extends BlockProperty>(block: Block, config: 
   return [property.value, setValue]
 }
 
-export const useContent = (block: Block) => useDataWithSelector(block, doc => doc?.content || '')
+export const useContent = (block: Block) => {
+  const automergeContent = useDataWithSelector(block, doc => doc?.content || '')
+  const powerSyncContent = usePowerSyncContent(block.id)
+  
+  const result = USE_POWERSYNC ? powerSyncContent : automergeContent
+  
+  if (USE_POWERSYNC) {
+    console.log('[useContent PowerSync]', block.id, result)
+  }
+  
+  return result
+}
 
-export const useChildIds = (block: Block) =>
-  useDataWithSelector(block, doc => doc?.childIds || [])
+export const useChildIds = (block: Block) => {
+  const automergeChildIds = useDataWithSelector(block, doc => doc?.childIds || [])
+  const powerSyncChildIds = usePowerSyncChildren(block.id)
+  
+  const result = USE_POWERSYNC ? powerSyncChildIds : automergeChildIds
+  
+  if (USE_POWERSYNC) {
+    console.log('[useChildIds PowerSync]', block.id, result)
+  }
+  
+  return result
+}
 
 export const useChildren = (block: Block): Block[] =>
   useChildIds(block).map(childId => block.repo.find(childId))

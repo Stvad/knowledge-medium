@@ -9,6 +9,8 @@ import { importState } from '@/utils/state.ts'
 import { getExampleBlocks } from '@/initData.ts'
 import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
+import { PowerSyncContext } from '@powersync/react'
+import { powerSyncDb } from '@/data/powerSyncInstance.ts'
 
 const getInitialBlock = memoize(
   async (repo: Repo, rootDocUrl: string | undefined): Promise<Block> => {
@@ -34,9 +36,11 @@ const App = () => {
   const rootBlock = use(getRootBlock(repo.find(handle.id)))
 
   return (
-    <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
-      <BlockComponent blockId={handle.id}/>
-    </BlockContextProvider>
+    <PowerSyncContext.Provider value={powerSyncDb}>
+      <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
+        <BlockComponent blockId={handle.id}/>
+      </BlockContextProvider>
+    </PowerSyncContext.Provider>
   )
 }
 

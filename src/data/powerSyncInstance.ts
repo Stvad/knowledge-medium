@@ -1,15 +1,15 @@
-import { PowerSyncDatabase } from '@powersync/web'
+import { PowerSyncDatabase, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { AppSchema } from './powerSyncSchema'
 import { runMigrations } from './migrations'
 
 export const powerSyncDb = new PowerSyncDatabase({
-  database: {
-    dbFilename: 'omniliner1.db'
-  },
   schema: AppSchema,
-  flags: {
-    enableMultiTabs: false  // Start simple, enable later if needed
-  }
+  database: new WASQLiteOpenFactory({
+    dbFilename: 'omniliner2.db',
+    vfs: WASQLiteVFS.OPFSCoopSyncVFS, // <- use OPFS
+    flags: {enableMultiTabs: typeof SharedWorker !== 'undefined'},
+  }),
+  flags: {enableMultiTabs: typeof SharedWorker !== 'undefined'},
 })
 
 export async function initPowerSync() {

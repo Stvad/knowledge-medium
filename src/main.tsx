@@ -9,6 +9,7 @@ import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { initPowerSync } from '@/data/powerSyncInstance.ts'
 import '@/data/powerSyncDebug.ts' // Exposes debug functions to window
 import '@/data/automergeToSqliteMigration.ts' // Exposes migration functions to window
+import '@/data/dataSource.ts' // Exposes USE_POWERSYNC flag to window
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
