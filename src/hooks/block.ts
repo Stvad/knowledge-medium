@@ -29,8 +29,7 @@ export function useProperty<T extends BlockProperty>(block: Block, config: T): [
   console.log({powerSyncProperty, automergeProperty, equal: JSON.stringify(powerSyncProperty) === JSON.stringify(automergeProperty)})
   
   const property = USE_POWERSYNC ? powerSyncProperty : automergeProperty
-  // const property = powerSyncProperty
-  //
+
   const setProperty = useCallback((newProperty: T) => {
     block.setProperty(newProperty)
   }, [block])
