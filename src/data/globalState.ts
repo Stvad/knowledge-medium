@@ -14,7 +14,7 @@ import {
   focusedBlockIdProp,
   isEditingProp,
 } from '@/data/properties.ts'
-import { usePropertyValue, useDataWithSelector } from '@/hooks/block.ts'
+import { usePropertyValue } from '@/hooks/block.ts'
 
 /**
  * One of core principles of the system is to store all state within the system
@@ -115,14 +115,20 @@ export const resetBlockSelection = async (block: Block) => {
   })
 }
 
-export const useInFocus = (blockId: string) =>
-  useDataWithSelector(useUIStateBlock(),
-    doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
+export const useInFocus = (blockId: string) => {
+  // todo we need the useSyncExternal stor situation for here too
+  // useDataWithSelector(useUIStateBlock(),
+  //   doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
+  const [focusedBlockId] = useUIStateProperty(focusedBlockIdProp)
+  return focusedBlockId === blockId
+}
 
 export const useInEditMode = (blockId: string) => {
-  const uiStateBlock = useUIStateBlock()
-  const isSelected = useDataWithSelector(uiStateBlock,
-    doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
-  return useDataWithSelector(uiStateBlock,
-    doc => isSelected && doc?.properties[isEditingProp.name]?.value)
+  const isSelected = useInFocus(blockId)
+  const [isEditing] = useUIStateProperty(isEditingProp)
+  // const isSelected = useDataWithSelector(uiStateBlock,
+  //   doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
+  // return useDataWithSelector(uiStateBlock,
+  //   doc => isSelected && doc?.properties[isEditingProp.name]?.value)
+  return isSelected && isEditing
 }

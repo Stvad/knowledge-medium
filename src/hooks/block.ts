@@ -26,8 +26,7 @@ export function useProperty<T extends BlockProperty>(block: Block, config: T): [
   const name = config.name
   const automergeProperty = useDataWithSelector(block, doc => doc?.properties[name]) ?? config
   const powerSyncProperty = usePowerSyncProperty(block.id, name, config)
-  console.log({powerSyncProperty, automergeProperty, equal: JSON.stringify(powerSyncProperty) === JSON.stringify(automergeProperty)})
-  
+
   const property = USE_POWERSYNC ? powerSyncProperty : automergeProperty
 
   const setProperty = useCallback((newProperty: T) => {
