@@ -2,28 +2,25 @@ import { useState, useEffect } from 'react'
 import { BlockData, RendererRegistry, BlockRendererProps, StringBlockProperty } from '../types'
 import { wrappedComponentFromModule } from './useDynamicComponent'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
-import { CodeMirrorRendererBlockRenderer } from '@/components/renderer/CodeMirrorRendererBlockRenderer.tsx'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
-import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
 import { getAllChildrenBlocks, Block } from '@/data/block.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
-import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx'
 import { rendererProp } from '@/data/properties.ts'
 import { BreadcrumbRenderer } from '@/components/renderer/BreadcrumbRenderer.tsx'
 import { usePropertyValue, useData } from '@/hooks/block.ts'
 
 export const defaultRegistry: RendererRegistry = {
   default: DefaultBlockRenderer,
-  renderer: CodeMirrorRendererBlockRenderer,
+  // renderer: CodeMirrorRendererBlockRenderer,
   topLevel: TopLevelRenderer,
   layout: LayoutRenderer,
   panel: PanelRenderer,
-  videoPlayer: VideoPlayerRenderer,
-  missingData: MissingDataRenderer,
+  // videoPlayer: VideoPlayerRenderer,
+  // missingData: MissingDataRenderer,
   breadcrumb: BreadcrumbRenderer,
 }
 
