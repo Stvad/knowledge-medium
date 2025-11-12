@@ -3,7 +3,7 @@ import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/proper
 import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
 import { Block } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
-import { updateText } from '@automerge/automerge/next'
+
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -17,17 +17,13 @@ export const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaEle
   if (isTopLevel) {
     const child = await block.createChild({data: {content: afterCursor}, position: 'first'})
 
-    block.change(b => {
-      b.content = beforeCursor
-    })
+    await block.updateContent(beforeCursor)
 
     return child
   } else {
     await block.createSiblingAbove({content: beforeCursor})
 
-    block.change(b => {
-      b.content = afterCursor
-    })
+    await block.updateContent(afterCursor)
 
     // Reset selection to start
     textarea.selectionStart = 0
@@ -103,9 +99,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   const debouncedUpdateBlock = useMemo(
     () => debounce((value: string) => {
-      block.change(b => {
-        updateText(b, ['content'], value)
-      })
+      block.updateContent(value)
     }, 300, {leading: true, trailing: true, maxWait: 600}),
     [block],
   )

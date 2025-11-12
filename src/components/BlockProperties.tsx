@@ -234,21 +234,14 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
 
   const updateKey = (newKey: string, key: string, property: BlockProperty) => {
     if (newKey && newKey !== key) {
-      block.change(doc => {
-        doc.properties[newKey] = {...property, name: newKey}
-        delete doc.properties[key]
-      })
+      // Delete old property and set new one
+      block.deleteProperty(key)
+      block.setProperty({...property, name: newKey})
     }
   }
 
   const updateProperty = (property: BlockProperty) => {
     block.setProperty(property)
-  }
-
-  const deleteProperty = (key: string) => {
-    block.change(doc => {
-      delete doc.properties[key]
-    })
   }
 
   const addProperty = (property: BlockProperty) => {
@@ -301,7 +294,7 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => deleteProperty(key)}
+                onClick={() => block.deleteProperty(key)}
                 className="h-9 w-9 p-0 text-destructive hover:text-destructive"
               >
                 <Trash2 className="h-4 w-4" />

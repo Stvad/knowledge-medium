@@ -56,13 +56,13 @@ const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView
 
   if (isTopLevel) {
     const child = await block.createChild({data: {content: afterCursor}, position: 'first'})
-    block.change(b => b.content = beforeCursor)
+    await block.updateContent(beforeCursor)
 
     return child
   } else {
     await block.createSiblingAbove({content: beforeCursor})
 
-    block.change(b => b.content = afterCursor)
+    await block.updateContent(afterCursor)
 
     editorView.dispatch({
       selection: EditorSelection.cursor(0)

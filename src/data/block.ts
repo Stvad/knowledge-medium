@@ -513,6 +513,13 @@ export class Block {
     }
   }
 
+  deleteProperty(propertyName: string) {
+    return powerSyncDb.execute(
+      'DELETE FROM block_properties WHERE block_id = ? AND name = ?',
+      [this.id, propertyName],
+    )
+  }
+
   _updateParentId = (newParentId: string) =>
     this._change((doc) => {
       doc.parentId = newParentId

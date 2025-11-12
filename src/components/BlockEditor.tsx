@@ -4,7 +4,7 @@ import { Block } from '@/data/block.ts'
 import { useIsEditing, editorSelection } from '@/data/properties.ts'
 import { useRef, useEffect, useMemo, useCallback, forwardRef } from 'react'
 import { useUIStateBlock } from '@/data/globalState'
-import { updateText, getHeads, Heads } from '@automerge/automerge/next'
+import { getHeads, Heads } from '@automerge/automerge/next'
 import { debounce, memoize } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { EditorView } from '@codemirror/view'
@@ -57,14 +57,8 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   /** ---------- Debouncers ---------- */
   const pushChange = useRef(
     debounce((value: string) => {
-      if (USE_POWERSYNC) {
-        // Use PowerSync write path
-        block.updateContent(value)
-      } else {
-        // Use Automerge write path
-        block.change(b => {
-          updateText(b, ['content'], value)
-        })
+      block.updateContent(value)
+      if (!USE_POWERSYNC) {
         lastHeads.current = getHeads(block.dataSync()!)
       }
       pendingLocalEdits.current = false

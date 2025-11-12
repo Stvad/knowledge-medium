@@ -13,7 +13,7 @@ const MonacoContentRenderer = ({ block }: BlockRendererProps) => {
     const blockData = useData(block)
     const onChange = useCallback((value: string | undefined) => {
         if (value !== undefined && value !== blockData?.content) {
-            block.change(doc => doc.content = value)
+            block.updateContent(value)
         }
     }, [block, blockData])
 
