@@ -17,12 +17,10 @@ import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
 // on-load hook and fire this there
 // on the other hand it makes things harder to override? e.g. user can redefine top-level renderer
 // how do they override the behavior in case of event based approach?
-const updateLoadTimes = memoize((block: Block) => {
-  block.change(doc => {
-    const currentLoadTime = doc.properties.currentLoadTime?.value as number?? 0
-    doc.properties.previousLoadTime = {...previousLoadTimeProp, value: currentLoadTime}
-    doc.properties.currentLoadTime = {...currentLoadTimeProp, value: Date.now()}
-  })
+const updateLoadTimes = memoize(async (block: Block) => {
+  const currentLoadTime = await block.getProperty(currentLoadTimeProp)
+  block.setProperty({...previousLoadTimeProp, value: currentLoadTime?.value as number?? 0})
+  block.setProperty({...currentLoadTimeProp, value: Date.now()})
 }, () => true)
 
 /**
