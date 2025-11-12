@@ -4,6 +4,7 @@ import type { QueryParam } from '@powersync/common'
 import { BlockData, BlockProperty } from '@/types'
 import { useMemo } from 'react'
 import { DEFAULT_ROW_COMPARATOR } from '@powersync/web'
+import { QUERIES } from '@/data/powerSyncQueries'
 
 type SharedQueryOptions<RowType> = DifferentialHookOptions<RowType>
 
@@ -14,17 +15,7 @@ interface QueryDescriptor<RowType> {
 }
 
 
-const BLOCK_QUERY = 'SELECT * FROM blocks WHERE id = ? AND is_deleted = 0'
-const BLOCK_PROPS_QUERY = 'SELECT * FROM block_properties WHERE block_id = ?'
-const CHILDREN_QUERY = `SELECT id FROM blocks 
-     WHERE parent_id = ? AND is_deleted = 0
-     ORDER BY order_key`
-const HAS_CHILDREN_QUERY = `SELECT CAST(EXISTS(
-  SELECT 1 FROM blocks WHERE parent_id = ? AND is_deleted = 0
-) AS INTEGER) AS hasChildren;`
-const TEXT_REFS_QUERY = "SELECT * FROM block_refs WHERE block_id = ? AND origin = 'text'"
-const CONTENT_QUERY = 'SELECT id, content FROM blocks WHERE id = ? AND is_deleted = 0'
-const PROPERTY_QUERY = 'SELECT * FROM block_properties WHERE block_id = ? AND name = ?'
+
 
 const BLOCK_ROW_OPTIONS: SharedQueryOptions<any> = {
   rowComparator: {
@@ -78,28 +69,28 @@ function useCachedSuspenseQuery<RowType>(descriptor: QueryDescriptor<RowType>) {
 export function usePowerSyncBlockData(blockId: string): BlockData | null {
   // Query main block
   const { data: blockRows } = useCachedSuspenseQuery({
-    sql: BLOCK_QUERY,
+    sql: QUERIES.BLOCK,
     parameters: [blockId],
     options: BLOCK_ROW_OPTIONS
   })
 
   // Query properties
   const { data: propRows } = useCachedSuspenseQuery({
-    sql: BLOCK_PROPS_QUERY,
+    sql: QUERIES.BLOCK_PROPERTIES,
     parameters: [blockId],
     options: BLOCK_PROPS_OPTIONS
   })
 
   // Query children (ordered by order_key)
   const { data: childRows } = useCachedSuspenseQuery({
-    sql: CHILDREN_QUERY,
+    sql: QUERIES.CHILDREN_IDS,
     parameters: [blockId],
     options: CHILD_ROWS_OPTIONS
   })
 
   // Query text references
   const { data: refRows } = useCachedSuspenseQuery({
-    sql: TEXT_REFS_QUERY,
+    sql: QUERIES.TEXT_REFS,
     parameters: [blockId],
     options: TEXT_REFS_OPTIONS
   })
@@ -144,7 +135,7 @@ export function usePowerSyncBlockData(blockId: string): BlockData | null {
  */
 export function usePowerSyncChildren(parentId: string): string[] {
   const { data } = useCachedSuspenseQuery({
-    sql: CHILDREN_QUERY,
+    sql: QUERIES.CHILDREN_IDS,
     parameters: [parentId],
     options: CHILD_ROWS_OPTIONS
   })
@@ -157,7 +148,7 @@ export function usePowerSyncChildren(parentId: string): string[] {
  */
 export function usePowerSyncContent(blockId: string): string {
   const { data } = useCachedSuspenseQuery({
-    sql: CONTENT_QUERY,
+    sql: QUERIES.CONTENT,
     parameters: [blockId],
     options: CONTENT_OPTIONS
   })
@@ -174,7 +165,7 @@ export function usePowerSyncProperty<T extends BlockProperty>(
   defaultValue: T
 ): T {
   const { data } = useCachedSuspenseQuery({
-    sql: PROPERTY_QUERY,
+    sql: QUERIES.PROPERTY,
     parameters: [blockId, propertyName],
     options: PROPERTY_OPTIONS
   })
@@ -194,7 +185,7 @@ export function usePowerSyncProperty<T extends BlockProperty>(
 
 export function usePowerSyncHasChildren(blockId: string): boolean {
   const { data } = useCachedSuspenseQuery({
-    sql: HAS_CHILDREN_QUERY,
+    sql: QUERIES.HAS_CHILDREN,
     parameters: [blockId],
     options: {
       rowComparator: DEFAULT_ROW_COMPARATOR

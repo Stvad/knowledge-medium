@@ -1,4 +1,4 @@
-import { DocHandle, AutomergeUrl } from '@automerge/automerge-repo'
+import { DocHandle } from '@automerge/automerge-repo'
 import { BlockData, User, BlockProperty } from '@/types'
 import { insertAt, deleteAt } from '@automerge/automerge/next'
 import { memoize } from 'lodash'
@@ -11,6 +11,16 @@ import { delay } from '@/utils/async.ts'
 import { reconcileList } from '@/utils/array.ts'
 import { USE_POWERSYNC } from './dataSource.ts'
 import { powerSyncDb } from './powerSyncInstance.ts'
+import { generateBetweenOrderKey, generateNextOrderKey } from '@/utils/orderKey.ts'
+import {
+  fetchBlockData,
+  fetchChildren,
+  calculateOrderKey,
+  updateBlockParentAndOrder,
+  updateBlockOrder,
+  markBlockDeleted,
+  updateBlockContent as updateBlockContentQuery,
+} from './powerSyncQueries.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -24,25 +34,41 @@ export const defaultChangeScope = 'block-default'
  * https://github.com/onsetsoftware/automerge-repo-undo-redo/ seems to do it in a good way for Automerge
  */
 export class Block {
-  id: AutomergeUrl
+  id: string
+  private readonly handle?: DocHandle<BlockData>
 
   constructor(
     readonly repo: Repo,
     readonly undoRedoManager: UndoRedoManager,
-    private readonly handle: DocHandle<BlockData>,
+    handleOrId: DocHandle<BlockData> | string,
     readonly currentUser: User,
   ) {
-    this.id = handle.url
+    if (typeof handleOrId === 'string') {
+      this.id = handleOrId
+      this.handle = undefined
+    } else {
+      this.id = handleOrId.url
+      this.handle = handleOrId
+    }
   }
 
-  async data() {
-    return this.handle.doc()
+  async data(): Promise<BlockData | undefined> {
+    if (USE_POWERSYNC) {
+      return fetchBlockData(this.id)
+    } else {
+      if (!this.handle) throw new Error('Block has no handle in Automerge mode')
+      return this.handle.doc()
+    }
   }
 
   /**
    * @deprecated bc automerge-repo is removing it use data() instead
    */
   dataSync() {
+    if (USE_POWERSYNC) {
+      throw new Error('dataSync() is not supported in PowerSync mode - use data() instead')
+    }
+    if (!this.handle) throw new Error('Block has no handle')
     return this.handle.docSync()
   }
 
@@ -78,10 +104,15 @@ export class Block {
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
   ) {
+    if (USE_POWERSYNC) {
+      throw new Error('change() with callback is not supported in PowerSync mode - use specific update methods instead')
+    }
+    
     this._transaction(() => {
       this._change(callback)
     }, options)
 
+    if (!this.handle) throw new Error('Block has no handle')
     void parseAndUpdateReferences(this, this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!)
   }
 
@@ -96,6 +127,10 @@ export class Block {
     callback: ChangeFn<BlockData>,
     options: ChangeOptions<BlockData> = {},
   ) {
+    if (USE_POWERSYNC || !this.handle) {
+      throw new Error('_change() is not supported in PowerSync mode')
+    }
+    
     const handle = this.undoRedoManager.getUndoRedoHandle<BlockData>(this.handle.documentId)!
     handle.change(callback, options)
     handle.change(doc => {
@@ -125,80 +160,141 @@ export class Block {
 
     const grandparent = await parent.parent()
     if (!grandparent) return false // Parent is root
-    // 1. Remove this block from current parent's children
 
-    this.undoRedoManager.transaction(() => {
-      parent._change((parent) => {
-        const index = getChildIndex(parent, this.id)
-        deleteAt(parent.childIds, index)
-      })
+    if (USE_POWERSYNC) {
+      // Get grandparent's children to determine new order_key
+      const grandparentChildren = await fetchChildren(grandparent.id)
 
-      // 2. Add this block to grandparent's children after the parent
-      grandparent._change((grandparent) => {
-        const parentIndex = getChildIndex(grandparent, parent.id)
-        insertAt(grandparent.childIds, parentIndex + 1, this.id)
-      })
+      const parentIndex = grandparentChildren.findIndex(c => c.id === parent.id)
+      
+      // Insert after parent
+      const prevOrderKey = grandparentChildren[parentIndex]?.order_key || null
+      const nextOrderKey = grandparentChildren[parentIndex + 1]?.order_key || null
+      const newOrderKey = generateBetweenOrderKey(prevOrderKey, nextOrderKey)
 
-      this._updateParentId(grandparent.id)
-    }, {description: 'Outdent block', scope: defaultChangeScope})
-    return true
+      await updateBlockParentAndOrder(this.id, grandparent.id, newOrderKey, this.currentUser.id)
+      return true
+    } else {
+      // 1. Remove this block from current parent's children
+      this.undoRedoManager.transaction(() => {
+        parent._change((parent) => {
+          const index = getChildIndex(parent, this.id)
+          deleteAt(parent.childIds, index)
+        })
+
+        // 2. Add this block to grandparent's children after the parent
+        grandparent._change((grandparent) => {
+          const parentIndex = getChildIndex(grandparent, parent.id)
+          insertAt(grandparent.childIds, parentIndex + 1, this.id)
+        })
+
+        this._updateParentId(grandparent.id)
+      }, {description: 'Outdent block', scope: defaultChangeScope})
+      return true
+    }
   }
 
   async indent() {
     const parent = await this.parent()
     if (!parent) return // Can't indent root level block
 
-    const parentDoc = await parent.data()
-    if (!parentDoc) throw new Error(`Parent block not found`)
+    if (USE_POWERSYNC) {
+      // Get siblings
+      const siblings = await fetchChildren(parent.id)
 
-    // Find previous sibling to become new parent
-    const currentIndex = getChildIndex(parentDoc, this.id)
-    if (currentIndex <= 0) return // No previous sibling, can't indent
+      const currentIndex = siblings.findIndex(s => s.id === this.id)
+      if (currentIndex <= 0) return // No previous sibling, can't indent
 
-    const newParentId = parentDoc.childIds[currentIndex - 1]
-    const newParent = this.repo.find(newParentId)
+      const newParentId = siblings[currentIndex - 1].id
+      
+      // Calculate order_key for appending to end of new parent's children
+      const newOrderKey = await calculateOrderKey(newParentId, 'last')
 
-    this.undoRedoManager.transaction(() => {
-      // 1. Remove from current parent's children
-      parent._change((parent) => deleteAt(parent.childIds, currentIndex))
+      await updateBlockParentAndOrder(this.id, newParentId, newOrderKey, this.currentUser.id)
+      return true
+    } else {
+      const parentDoc = await parent.data()
+      if (!parentDoc) throw new Error(`Parent block not found`)
 
-      // 2. Add to new parent's children
-      newParent._change((newParent) => newParent.childIds.push(this.id))
+      // Find previous sibling to become new parent
+      const currentIndex = getChildIndex(parentDoc, this.id)
+      if (currentIndex <= 0) return // No previous sibling, can't indent
 
-      this._updateParentId(newParentId)
-    }, {description: 'Indent block', scope: defaultChangeScope})
-    return true
+      const newParentId = parentDoc.childIds[currentIndex - 1]
+      const newParent = this.repo.find(newParentId)
+
+      this.undoRedoManager.transaction(() => {
+        // 1. Remove from current parent's children
+        parent._change((parent) => deleteAt(parent.childIds, currentIndex))
+
+        // 2. Add to new parent's children
+        newParent._change((newParent) => newParent.childIds.push(this.id))
+
+        this._updateParentId(newParentId)
+      }, {description: 'Indent block', scope: defaultChangeScope})
+      return true
+    }
   }
 
   async changeOrder(shift: number) {
     const parent = await this.parent()
     if (!parent) return // Can't change order of root level block
 
-    const parentDoc = await parent.data()
-    if (!parentDoc) throw new Error(`Parent block not found`)
+    if (USE_POWERSYNC) {
+      // Get siblings
+      const siblings = await fetchChildren(parent.id)
 
-    const currentIndex = getChildIndex(parentDoc, this.id)
-    const newIndex = currentIndex + shift
+      const currentIndex = siblings.findIndex(s => s.id === this.id)
+      const newIndex = currentIndex + shift
 
-    if (newIndex < 0 || newIndex >= parentDoc.childIds.length) return
+      if (newIndex < 0 || newIndex >= siblings.length) return
 
-    parent.change((parent) => {
-      deleteAt(parent.childIds, currentIndex)
-      insertAt(parent.childIds, newIndex, this.id)
-    })
+      // Calculate new order_key
+      let newOrderKey: string
+      if (shift > 0) {
+        // Moving down - insert after newIndex
+        const prevOrderKey = siblings[newIndex]?.order_key || null
+        const nextOrderKey = siblings[newIndex + 1]?.order_key || null
+        newOrderKey = generateBetweenOrderKey(prevOrderKey, nextOrderKey)
+      } else {
+        // Moving up - insert before newIndex
+        const prevOrderKey = newIndex > 0 ? siblings[newIndex - 1]?.order_key || null : null
+        const nextOrderKey = siblings[newIndex]?.order_key || null
+        newOrderKey = generateBetweenOrderKey(prevOrderKey, nextOrderKey)
+      }
+
+      await updateBlockOrder(this.id, newOrderKey, this.currentUser.id)
+    } else {
+      const parentDoc = await parent.data()
+      if (!parentDoc) throw new Error(`Parent block not found`)
+
+      const currentIndex = getChildIndex(parentDoc, this.id)
+      const newIndex = currentIndex + shift
+
+      if (newIndex < 0 || newIndex >= parentDoc.childIds.length) return
+
+      parent.change((parent) => {
+        deleteAt(parent.childIds, currentIndex)
+        insertAt(parent.childIds, newIndex, this.id)
+      })
+    }
   }
 
   /**
    * Doesn't actually delete the doc for now, just removes it from the parent
    */
   async delete() {
-    const parent = await this.parent()
-    if (!parent) return // Can't delete root level block
+    if (USE_POWERSYNC) {
+      await markBlockDeleted(this.id, this.currentUser.id)
+    } else {
+      const parent = await this.parent()
+      if (!parent) return // Can't delete root level block
 
-    parent.change((parent) => {
-      const index = getChildIndex(parent, this.id)
-      deleteAt(parent.childIds, index)
-    })
+      parent.change((parent) => {
+        const index = getChildIndex(parent, this.id)
+        deleteAt(parent.childIds, index)
+      })
+    }
   }
 
   async insertChildren({
@@ -208,41 +304,116 @@ export class Block {
     blocks: Block[],
     position?: 'first' | 'last' | number
   }) {
-    this._transaction(() => {
-      // Update parent references for all blocks
-      blocks.forEach(block => {
-        block._updateParentId(this.id)
-      })
+    if (USE_POWERSYNC) {
+      await powerSyncDb.writeTransaction(async (tx) => {
+        // Get current children to determine order_key positions
+        const currentChildren = await tx.getAll<{id: string, order_key: string}>(
+          'SELECT id, order_key FROM blocks WHERE parent_id = ? AND is_deleted = 0 ORDER BY order_key',
+          [this.id]
+        )
 
-      // Insert block IDs at the specified position
-      this._change(doc => {
-        const blockIds = blocks.map(b => b.id)
-        if (position === 'first') {
-          doc.childIds.unshift(...blockIds)
-        } else if (typeof position === 'number') {
-          doc.childIds.splice(position, 0, ...blockIds)
-        } else {
-          // Default to 'last'
-          doc.childIds.push(...blockIds)
+        for (let i = 0; i < blocks.length; i++) {
+          const block = blocks[i]
+          let orderKey: string
+
+          if (position === 'first') {
+            // Insert at the beginning
+            if (i === 0) {
+              orderKey = await calculateOrderKey(this.id, 'first', currentChildren)
+            } else {
+              // Generate between previous inserted block and first current child
+              const prevInsertedOrderKey = await tx.getOptional<{order_key: string}>(
+                'SELECT order_key FROM blocks WHERE id = ?',
+                [blocks[i - 1].id]
+              )
+              orderKey = generateBetweenOrderKey(
+                prevInsertedOrderKey?.order_key || null,
+                currentChildren[0]?.order_key || null
+              )
+            }
+          } else if (typeof position === 'number') {
+            // Insert at specific position
+            const prevOrderKey = position > 0 ? currentChildren[position - 1]?.order_key || null : null
+            const nextOrderKey = currentChildren[position + i]?.order_key || null
+            orderKey = generateBetweenOrderKey(prevOrderKey, nextOrderKey)
+          } else {
+            // Insert at the end
+            if (i === 0) {
+              orderKey = await calculateOrderKey(this.id, 'last', currentChildren)
+            } else {
+              const prevInsertedOrderKey = await tx.getOptional<{order_key: string}>(
+                'SELECT order_key FROM blocks WHERE id = ?',
+                [blocks[i - 1].id]
+              )
+              orderKey = generateNextOrderKey(prevInsertedOrderKey?.order_key ?? null)
+            }
+          }
+
+          // Update parent_id and order_key for this block
+          await tx.execute(
+            'UPDATE blocks SET parent_id = ?, order_key = ?, update_time = ?, updated_by_user_id = ? WHERE id = ?',
+            [this.id, orderKey, Date.now(), this.currentUser.id, block.id]
+          )
         }
       })
-    }, {description: 'Insert children blocks'})
+    } else {
+      this._transaction(() => {
+        // Update parent references for all blocks
+        blocks.forEach(block => {
+          block._updateParentId(this.id)
+        })
+
+        // Insert block IDs at the specified position
+        this._change(doc => {
+          const blockIds = blocks.map(b => b.id)
+          if (position === 'first') {
+            doc.childIds.unshift(...blockIds)
+          } else if (typeof position === 'number') {
+            doc.childIds.splice(position, 0, ...blockIds)
+          } else {
+            // Default to 'last'
+            doc.childIds.push(...blockIds)
+          }
+        })
+      }, {description: 'Insert children blocks'})
+    }
   }
 
   private async createSibling(data: Partial<BlockData> = {}, offset: number = 1) {
     const parent = await this.parent()
     if (!parent) return
 
-    const newBlock = this.repo.create({
-      ...data,
-      parentId: parent.id,
-    })
+    if (USE_POWERSYNC) {
+      // Get current position and siblings
+      const siblings = await fetchChildren(parent.id)
+      
+      const currentIndex = siblings.findIndex(s => s.id === this.id)
+      const insertIndex = currentIndex + offset
+      
+      // Determine order_key for new block
+      const prevOrderKey = insertIndex > 0 ? siblings[insertIndex - 1]?.order_key || null : null
+      const nextOrderKey = siblings[insertIndex]?.order_key || null
+      const orderKey = generateBetweenOrderKey(prevOrderKey, nextOrderKey)
 
-    parent.change((parent) => {
-      insertAt(parent.childIds, getChildIndex(parent, this.id) + offset, newBlock.id)
-    })
+      const newBlock = await this.repo.create({
+        ...data,
+        parentId: parent.id,
+        orderKey,
+      })
 
-    return this.repo.find(newBlock.id)
+      return this.repo.find(newBlock.id)
+    } else {
+      const newBlock = this.repo.create({
+        ...data,
+        parentId: parent.id,
+      })
+
+      parent.change((parent) => {
+        insertAt(parent.childIds, getChildIndex(parent, this.id) + offset, newBlock.id)
+      })
+
+      return this.repo.find(newBlock.id)
+    }
   }
 
   async createSiblingBelow(data: Partial<BlockData> = {}) {
@@ -350,7 +521,7 @@ export class Block {
   updateParentId = (newParentId: string) => this._transaction(() => this._updateParentId(newParentId))
 
   private getDocOrThrow = async () => {
-    const doc = await this.handle.doc()
+    const doc = await this.data()
     if (!doc) throw new Error(`Block not found: ${this.id}`)
     return doc
   }
@@ -362,23 +533,36 @@ export class Block {
     data?: Partial<BlockData>,
     position?: 'first' | 'last' | number
   } = {}) {
-    const newBlock = this.repo.create({
-      ...data,
-      parentId: this.id,
-    })
+    if (USE_POWERSYNC) {
+      // Calculate order_key for the new child
+      const orderKey = await calculateOrderKey(this.id, position)
 
-    this.change((doc) => {
-      if (position === 'first') {
-        doc.childIds.unshift(newBlock.id)
-      } else if (typeof position === 'number') {
-        doc.childIds.splice(position, 0, newBlock.id)
-      } else {
-        // Default to 'last'
-        doc.childIds.push(newBlock.id)
-      }
-    })
+      const newBlock = await this.repo.create({
+        ...data,
+        parentId: this.id,
+        orderKey,
+      })
 
-    return newBlock
+      return newBlock
+    } else {
+      const newBlock = this.repo.create({
+        ...data,
+        parentId: this.id,
+      })
+
+      this.change((doc) => {
+        if (position === 'first') {
+          doc.childIds.unshift(newBlock.id)
+        } else if (typeof position === 'number') {
+          doc.childIds.splice(position, 0, newBlock.id)
+        } else {
+          // Default to 'last'
+          doc.childIds.push(newBlock.id)
+        }
+      })
+
+      return newBlock
+    }
   }
 
   async isDescendantOf(potentialAncestor: Block): Promise<boolean> {
@@ -396,14 +580,18 @@ export class Block {
    * Update block content - writes to PowerSync when USE_POWERSYNC is true
    */
   async updateContent(newContent: string) {
-    await powerSyncDb.execute(
-      `UPDATE blocks
-       SET content            = ?,
-           update_time        = ?,
-           updated_by_user_id = ?
-       WHERE id = ?`,
-      [newContent, Date.now(), this.currentUser.id, this.id],
-    )
+    if (USE_POWERSYNC) {
+      await updateBlockContentQuery(this.id, newContent, this.currentUser.id)
+      
+      // Update references based on new content
+      void parseAndUpdateReferences(this)
+    } else {
+      if (!this.handle) throw new Error('Block has no handle')
+      
+      this.change((doc) => {
+        doc.content = newContent
+      })
+    }
   }
 }
 
@@ -509,31 +697,75 @@ export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
   return [...directChildren, ...childBlockChildren.flat()]
 }
 
-const parseAndUpdateReferences = async (block: Block, urHandle: AutomergeRepoUndoRedo<BlockData>) => {
-  const blockData = block.dataSync()
-  if (!blockData) return
+const parseAndUpdateReferences = async (block: Block, urHandle?: AutomergeRepoUndoRedo<BlockData>) => {
+  if (USE_POWERSYNC) {
+    // In PowerSync mode, we update references directly in the database
+    const blockData = await block.data()
+    if (!blockData) return
 
-  const getOrCreateBlockForAlias = async (alias: string) => {
-    const rootBlock = await getRootBlock(block)
-    const existingBlock = await findBlockByAlias(rootBlock, alias)
+    const getOrCreateBlockForAlias = async (alias: string) => {
+      const rootBlock = await getRootBlock(block)
+      const existingBlock = await findBlockByAlias(rootBlock, alias)
 
-    const referenceWasRemoved = (b: Block) =>
-      block.dataSync()!.references.findIndex(ref => ref.id === b.id) === -1
+      const referenceWasRemoved = async (b: Block) => {
+        const currentData = await block.data()
+        return !currentData || currentData.references.findIndex(ref => ref.id === b.id) === -1
+      }
 
-    return existingBlock || await createSelfDestructingBlockForAlias(rootBlock, alias, referenceWasRemoved)
+      return existingBlock || await createSelfDestructingBlockForAlias(rootBlock, alias, referenceWasRemoved)
+    }
+
+    const aliases = parseReferences(blockData.content).map(ref => ref.alias)
+    const newReferenceSet = await Promise.all(aliases.map(async alias => ({
+      id: (await getOrCreateBlockForAlias(alias)).id,
+      alias,
+    })))
+
+    // Update block_refs table
+    await powerSyncDb.writeTransaction(async (tx) => {
+      // Delete old text references
+      await tx.execute(
+        "DELETE FROM block_refs WHERE block_id = ? AND origin = 'text'",
+        [block.id]
+      )
+
+      // Insert new text references
+      for (const ref of newReferenceSet) {
+        await tx.execute(
+          `INSERT INTO block_refs 
+           (block_id, target_id, ref_type, origin, alias, source_property_path, created_at, updated_at)
+           VALUES (?, ?, 'text-reference', 'text', ?, '', ?, ?)`,
+          [block.id, ref.id, ref.alias, Date.now(), Date.now()]
+        )
+      }
+    })
+  } else {
+    // Automerge mode
+    const blockData = block.dataSync()
+    if (!blockData || !urHandle) return
+
+    const getOrCreateBlockForAlias = async (alias: string) => {
+      const rootBlock = await getRootBlock(block)
+      const existingBlock = await findBlockByAlias(rootBlock, alias)
+
+      const referenceWasRemoved = (b: Block) =>
+        block.dataSync()!.references.findIndex(ref => ref.id === b.id) === -1
+
+      return existingBlock || await createSelfDestructingBlockForAlias(rootBlock, alias, referenceWasRemoved)
+    }
+
+    const aliases = parseReferences(blockData.content).map(ref => ref.alias)
+    const newReferenceSet = await Promise.all(aliases.map(async alias => ({
+      id: (await getOrCreateBlockForAlias(alias)).id,
+      alias,
+    })))
+
+    /**
+     * Todo, directly updating on the handle vs using _change bc we don't want to change the updated at time 🤔
+     * I don't love this tho
+     */
+    urHandle.change((doc: BlockData) => reconcileList(doc.references, newReferenceSet, (r) => r.id))
   }
-
-  const aliases = parseReferences(blockData.content).map(ref => ref.alias)
-  const newReferenceSet = await Promise.all(aliases.map(async alias => ({
-    id: (await getOrCreateBlockForAlias(alias)).id,
-    alias,
-  })))
-
-  /**
-   * Todo, directly updating on the handle vs using _change bc we don't want to change the updated at time 🤔
-   * I don't love this tho
-   */
-  urHandle.change((doc: BlockData) => reconcileList(doc.references, newReferenceSet, (r) => r.id))
 }
 
 const createNewBlockForAlias = async (rootBlock: Block, alias: string) => {
@@ -545,14 +777,14 @@ const createNewBlockForAlias = async (rootBlock: Block, alias: string) => {
  * Primitive garbage collection
  * Todo on the proper one
  */
-const createSelfDestructingBlockForAlias = async (rootBlock: Block, alias: string, condition: (newBlock: Block) => boolean) => {
+const createSelfDestructingBlockForAlias = async (rootBlock: Block, alias: string, condition: (newBlock: Block) => boolean | Promise<boolean>) => {
   const newBlock = await createNewBlockForAlias(rootBlock, alias)
   void selfDestructIf(newBlock, 4000, condition)
 
   return newBlock
 }
 
-const selfDestructIf = async (block: Block, ms: number, condition: (block: Block) => boolean) => {
+const selfDestructIf = async (block: Block, ms: number, condition: (block: Block) => boolean | Promise<boolean>) => {
   await delay(ms)
-  if (condition(block)) return block.delete()
+  if (await condition(block)) return block.delete()
 }

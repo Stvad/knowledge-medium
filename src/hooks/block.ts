@@ -1,9 +1,6 @@
-import { BlockData, BlockProperty } from '@/types.ts'
-import { useDocumentWithSelector } from '@/data/automerge.ts'
+import { BlockProperty } from '@/types.ts'
 import { useCallback } from 'react'
-import { useDocument } from '@automerge/automerge-repo-react-hooks'
 import { Block } from '@/data/block.ts'
-import { USE_POWERSYNC } from '@/data/dataSource.ts'
 import {
   usePowerSyncBlockData,
   usePowerSyncContent,
@@ -13,27 +10,12 @@ import {
 } from './powerSyncBlock.ts'
 
 export const useData = (block: Block) => {
-  const automergeData = useDocument<BlockData>(block.id)[0]
-  const powerSyncData = usePowerSyncBlockData(block.id)
-
-  const result = USE_POWERSYNC ? powerSyncData : automergeData
-
-  if (USE_POWERSYNC) {
-    console.log('[useData PowerSync]', block.id, result)
-  }
-
-  return result
+  return usePowerSyncBlockData(block.id)
 }
-
-export const useDataWithSelector =
-  <T>(block: Block, selector: (doc: BlockData | undefined) => T) => useDocumentWithSelector<BlockData, T>(block.id, selector)[0]
 
 export function useProperty<T extends BlockProperty>(block: Block, config: T): [T, (value: T) => void] {
   const name = config.name
-  const automergeProperty = useDataWithSelector(block, doc => doc?.properties[name]) ?? config
-  const powerSyncProperty = usePowerSyncProperty(block.id, name, config)
-
-  const property = USE_POWERSYNC ? powerSyncProperty : automergeProperty
+  const property = usePowerSyncProperty(block.id, name, config)
 
   const setProperty = useCallback((newProperty: T) => {
     block.setProperty(newProperty)
@@ -56,29 +38,11 @@ export function usePropertyValue<T extends BlockProperty>(block: Block, config: 
 }
 
 export const useContent = (block: Block) => {
-  const automergeContent = useDataWithSelector(block, doc => doc?.content || '')
-  const powerSyncContent = usePowerSyncContent(block.id)
-
-  const result = USE_POWERSYNC ? powerSyncContent : automergeContent
-
-  if (USE_POWERSYNC) {
-    console.log('[useContent PowerSync]', block.id, result)
-  }
-
-  return result
+  return usePowerSyncContent(block.id)
 }
 
 export const useChildIds = (block: Block) => {
-  const automergeChildIds = useDataWithSelector(block, doc => doc?.childIds || [])
-  const powerSyncChildIds = usePowerSyncChildren(block.id)
-
-  const result = USE_POWERSYNC ? powerSyncChildIds : automergeChildIds
-
-  if (USE_POWERSYNC) {
-    console.log('[useChildIds PowerSync]', block.id, result)
-  }
-
-  return result
+  return usePowerSyncChildren(block.id)
 }
 
 export const useChildren = (block: Block): Block[] =>
