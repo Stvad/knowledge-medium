@@ -1,8 +1,9 @@
 import { useSuspenseQuery } from '@powersync/react'
-import type { DifferentialHookOptions } from '@powersync/react/lib/hooks/watched/watch-types.js'
+import type { DifferentialHookOptions, } from '@powersync/react/lib/hooks/watched/watch-types.js'
 import type { QueryParam } from '@powersync/common'
 import { BlockData, BlockProperty } from '@/types'
 import { useMemo } from 'react'
+import { DEFAULT_ROW_COMPARATOR } from '@powersync/web'
 
 type SharedQueryOptions<RowType> = DifferentialHookOptions<RowType>
 
@@ -18,6 +19,9 @@ const BLOCK_PROPS_QUERY = 'SELECT * FROM block_properties WHERE block_id = ?'
 const CHILDREN_QUERY = `SELECT id FROM blocks 
      WHERE parent_id = ? AND is_deleted = 0
      ORDER BY order_key`
+const HAS_CHILDREN_QUERY = `SELECT CAST(EXISTS(
+  SELECT 1 FROM blocks WHERE parent_id = ? AND is_deleted = 0
+) AS INTEGER) AS hasChildren;`
 const TEXT_REFS_QUERY = "SELECT * FROM block_refs WHERE block_id = ? AND origin = 'text'"
 const CONTENT_QUERY = 'SELECT id, content FROM blocks WHERE id = ? AND is_deleted = 0'
 const PROPERTY_QUERY = 'SELECT * FROM block_properties WHERE block_id = ? AND name = ?'
@@ -186,4 +190,16 @@ export function usePowerSyncProperty<T extends BlockProperty>(
       changeScope: prop.change_scope
     } as T
   }, [data, defaultValue])
+}
+
+export function usePowerSyncHasChildren(blockId: string): boolean {
+  const { data } = useCachedSuspenseQuery({
+    sql: HAS_CHILDREN_QUERY,
+    parameters: [blockId],
+    options: {
+      rowComparator: DEFAULT_ROW_COMPARATOR
+    }
+  })
+
+  return useMemo(() => (!!data[0].hasChildren), [data])
 }
