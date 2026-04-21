@@ -1,27 +1,27 @@
-import { isValidAutomergeUrl } from '@automerge/automerge-repo'
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
 import { use } from 'react'
 import { getRootBlock, Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useLocation, useSearchParam } from 'react-use'
-import { importState } from '@/utils/state.ts'
 import { getExampleBlocks } from '@/initData.ts'
 import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
+import { importState } from '@/utils/state.ts'
 
 const getInitialBlock = memoize(
-  async (repo: Repo, rootDocUrl: string | undefined): Promise<Block> => {
-    if (isValidAutomergeUrl(rootDocUrl)) {
-      return repo.find(rootDocUrl)
-    } else {
-      const blockMap = await importState({blocks: getExampleBlocks()}, repo)
-      const block = blockMap.values().next().value!
-      document.location.hash = block.id
-      return block
+  async (repo: Repo, rootDocId: string | undefined): Promise<Block> => {
+    if (rootDocId && await repo.exists(rootDocId)) {
+      return repo.find(rootDocId)
     }
+
+    const blockMap = await importState({blocks: getExampleBlocks()}, repo)
+    await repo.flush()
+    const block = blockMap.values().next().value!
+    document.location.hash = block.id
+    return block
   },
-  (_, rootUrl) => rootUrl,
+  (_, rootDocId) => rootDocId ?? '__default__',
 )
 
 const App = () => {

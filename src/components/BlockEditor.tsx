@@ -2,17 +2,13 @@ import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react
 import { EditorSelectionState } from '@/types.ts'
 import { Block } from '@/data/block.ts'
 import { useIsEditing, editorSelection } from '@/data/properties.ts'
-import { useRef, useEffect, useMemo, useCallback, forwardRef } from 'react'
+import { useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useUIStateBlock } from '@/data/globalState'
-import { updateText, getHeads, Heads } from '@automerge/automerge/next'
 import { debounce, memoize } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { EditorView } from '@codemirror/view'
 import { useData } from '@/hooks/block.ts'
 
-/**
- * Once per CodeMirror view
- */
 const restoreFocus = memoize(async (block: Block, view: EditorView, uiStateBlock: Block) => {
   view.focus()
 
@@ -30,115 +26,95 @@ const restoreFocus = memoize(async (block: Block, view: EditorView, uiStateBlock
   }
 }, (_, view) => view)
 
-
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur'> {
   block: Block
 }
 
 export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
-                                                                               block,
-                                                                               ...codeMirrorProps
-                                                                             }, ref,
-) => {
+  block,
+  ...codeMirrorProps
+}, ref) => {
   const blockData = useData(block)
   const pendingLocalEdits = useRef(false)
+  const pendingCommittedContent = useRef<string | null>(null)
 
-  /** ---------- CodeMirror & heads tracking ---------- */
   const cm = useRef<ReactCodeMirrorRef>(null)
-  const lastHeads = useRef<Heads | null>(null)
 
-  /** ---------- UI state (selection, focus) ---------- */
   const [, setIsEditing] = useIsEditing()
-  const initContent = useMemo(() => blockData?.content ?? '', [])
-
+  const initialContent = useRef(blockData?.content ?? '')
   const uiStateBlock = useUIStateBlock()
 
-  /** ---------- Debouncers ---------- */
   const pushChange = useRef(
     debounce((value: string) => {
+      pendingCommittedContent.current = value
       block.change(b => {
-        updateText(b, ['content'], value)
+        b.content = value
       })
-      lastHeads.current = getHeads(block.dataSync()!)
-      pendingLocalEdits.current = false
     }, 300),
   ).current
 
   const pushSelection = useRef(
-    debounce((sel: EditorSelectionState) =>
-        uiStateBlock.setProperty({...editorSelection, value: sel})
-      , 150),
+    debounce((selection: EditorSelectionState) =>
+      uiStateBlock.setProperty({...editorSelection, value: selection}), 150),
   ).current
 
   const flushDebouncers = useCallback(() => {
     pushChange.flush()
     pushSelection.flush()
-    pendingLocalEdits.current = false
   }, [pushChange, pushSelection])
 
-  /** ---------- Cleanup ---------- */
   useEffect(() => flushDebouncers, [flushDebouncers])
 
   useEffect(() => {
-    if (blockData && !lastHeads.current) {
-      lastHeads.current = getHeads(blockData)
-    }
-  }, [blockData?.id])
-
-  /** ---------- Imperatively patch truly-remote edits ---------- */
-  useEffect(() => {
     if (!blockData || !cm.current?.view) return
-    if (pendingLocalEdits.current) return
 
-    const incomingHeads = getHeads(blockData)
-    // Are these heads already included in what we flushed?
-    const isNew =
-      !lastHeads.current ||
-      incomingHeads.some(h => !lastHeads.current!.includes(h))
-
-    if (!isNew) return // self-echo; ignore
-    console.debug('new remote change', incomingHeads)
-
-    // Remote change → patch doc without rebuilding the view
     const view = cm.current.view
     const live = view.state.doc.toString()
-    if (live !== blockData.content) {
+    const incoming = blockData.content
+
+    if (pendingCommittedContent.current !== null && incoming === pendingCommittedContent.current) {
+      pendingCommittedContent.current = null
+      pendingLocalEdits.current = false
+    }
+
+    if (pendingLocalEdits.current) return
+
+    if (live !== incoming) {
       view.dispatch({
-        changes: {from: 0, to: live.length, insert: blockData.content},
+        changes: {from: 0, to: live.length, insert: incoming},
         selection: view.state.selection,
       })
     }
-    lastHeads.current = incomingHeads
   }, [blockData])
 
   if (!blockData) return null
 
-  const forwardRefValue = (val: ReactCodeMirrorRef | null) => {
-    if (ref) {
-      if (typeof ref === 'function') {
-        ref(val)
-      } else {
-        ref.current = val
-      }
+  const forwardRefValue = (value: ReactCodeMirrorRef | null) => {
+    if (!ref) return
+
+    if (typeof ref === 'function') {
+      ref(value)
+    } else {
+      ref.current = value
     }
   }
 
   return (
     <CodeMirror
-      ref={(val) => {
-        if (val?.view) restoreFocus(block, val?.view, uiStateBlock)
-        cm.current = val
-        forwardRefValue(val)
+      ref={(value) => {
+        if (value?.view) restoreFocus(block, value.view, uiStateBlock)
+        cm.current = value
+        forwardRefValue(value)
       }}
-      value={initContent}
+      value={initialContent.current}
       onChange={(value) => {
         pendingLocalEdits.current = true
         pushChange(value)
       }}
-      onUpdate={(vu) => {
-        if (vu.selectionSet) {
-          const sel = vu.state.selection.main
-          pushSelection({blockId: block.id, start: sel.from, end: sel.to})
+      onUpdate={(viewUpdate) => {
+        if (viewUpdate.selectionSet) {
+          const selection = viewUpdate.state.selection.main
+          pushSelection({blockId: block.id, start: selection.from, end: selection.to})
         }
       }}
       onBlur={() => {

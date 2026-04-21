@@ -40,5 +40,6 @@ export const importState = async (state: { blocks: Partial<BlockData>[] }, repo:
             })
         }
     }
+    await repo.flush()
     return blockMap
 }

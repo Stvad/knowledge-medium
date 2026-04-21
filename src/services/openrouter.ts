@@ -169,7 +169,7 @@ Your task is to create a custom renderer that will display the content of blocks
 The renderer should:
 1. Be a functional React component that accepts a 'block' prop of type Block
 2. Use TypeScript and follow modern React best practices
-3. Access block data via block.use() which returns BlockData
+3. Access block data via useData(block) from "@/hooks/block.js"
 4. Organize and display the content in a way that makes sense for the provided data
 5. Include basic styling using Tailwind CSS classes
 6. Be error-resistant and handle missing or malformed data gracefully
@@ -181,14 +181,14 @@ Here is documentation for Block class:
 export declare class Block {
     readonly repo: Repo;
     readonly undoRedoManager: UndoRedoManager;
-    private readonly handle;
     readonly currentUser: User;
-    id: AutomergeUrl;
-    constructor(repo: Repo, undoRedoManager: UndoRedoManager, handle: DocHandle<BlockData>, currentUser: User);
-    data(): Promise<import("@automerge/automerge").Doc<BlockData> | undefined>;
-    dataSync(): import("@automerge/automerge").Doc<BlockData> | undefined;
+    id: string;
+    constructor(repo: Repo, undoRedoManager: UndoRedoManager, id: string, currentUser: User);
+    data(): Promise<BlockData | undefined>;
+    dataSync(): BlockData | undefined;
     parent(): Promise<Block | null>;
     parents(): Promise<Block[]>;
+    hasChildren(): Promise<boolean>;
     children(): Promise<Block[]>;
     change(callback: ChangeFn<BlockData>, options?: ChangeOptions<BlockData>): void;
     _transaction(callback: () => void, options?: ChangeOptions<BlockData>): void;
@@ -220,12 +220,8 @@ export declare class Block {
      */
     childByContent(contentPath: string | string[], createIfNotExists: true): Promise<Block>;
     childByContentPath(path: string[], createIfNotExists: boolean): Promise<Block | null>;
-    /**
-     * React hook for accessing the block's data. For use only in React components.
-     */
-    use(): import("@automerge/automerge").Doc<BlockData> | undefined;
-    useProperty<T extends BlockPropertyValue>(name: string): [T | undefined, (value: T) => void];
-    useProperty<T extends BlockPropertyValue>(name: string, initialValue: T, scope?: string): [T, (value: T) => void];
+    getProperty<T extends BlockProperty>(key: string | T): Promise<T | undefined>;
+    setProperty<T extends BlockProperty>(property: T): void;
     _updateParentId: (newParentId: string) => void;
     updateParentId: (newParentId: string) => void;
     private getDocOrThrow;
@@ -250,7 +246,7 @@ export declare const nextVisibleBlock: (block: Block, topLevelBlockId: string) =
  * Order: previous sibling's last visible descendant, previous sibling, parent
  */
 export declare const previousVisibleBlock: (block: Block, topLevelBlockId: string) => Promise<Block | null>;
-export declare const getAllChildrenBlocks: (repo: Repo, blockId: string) => Promise<BlockData[]>;
+export declare const getAllChildrenBlocks: (block: Block) => Promise<Block[]>;
 
 
 The component will be transpiled and executed in the browser. It should export a default React component.
@@ -258,9 +254,10 @@ Here's the basic structure your code should follow:
 
 \`\`\`tsx
 import { DefaultBlockRenderer } from "@/components/renderer/DefaultBlockRenderer.js";
+import { useData } from "@/hooks/block.js";
 
 const CustomContentRenderer = ({ block }: BlockRendererProps) => {
-  const blockData = block.use();
+  const blockData = useData(block);
   if (!blockData) return null;
   
   // Your renderer implementation here
@@ -277,7 +274,7 @@ const CustomRenderer = () => (props) => <DefaultBlockRenderer {...props} Content
 // Optionally define when this renderer should be used
 CustomRenderer.canRender = ({ block }: BlockRendererProps) => {
   const data = block.dataSync();
-  return data?.properties.type === '${options.rendererName || 'custom'}';
+  return data?.properties.type?.value === '${options.rendererName || 'custom'}';
 };
 
 // Higher priority means this renderer will be chosen over others

@@ -46,7 +46,7 @@ export interface BlockProperties {
     [key: string]: BlockProperty | undefined;
 }
 
-// Each block is its own Automerge document
+// Each block is stored as a local PowerSync-backed SQLite record
 export interface BlockData {
     id: string;
     content: string;

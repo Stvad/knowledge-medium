@@ -189,7 +189,11 @@ const UpdateIndicator = ({block}: { block: Block }) => {
 
   if (!blockData) return null
 
-  if (inFocus && !seen) setSeen(true)
+  useEffect(() => {
+    if (inFocus && !seen) {
+      setSeen(true)
+    }
+  }, [inFocus, seen])
 
   const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
   const shouldShowUpdateIndicator = updatedByOtherUser && !seen

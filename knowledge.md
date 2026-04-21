@@ -31,7 +31,7 @@ See LayoutBlockRenderer for an example of general page setup, CommandPalette set
 - Custom renderers can access and modify their block's content
 
 ### Data Storage
-- Uses automerge-repo with React hooks for CRDT-based storage
+- Uses PowerSync with reactive SQLite queries for local-first storage
 - Persistent storage in IndexedDB
 
 
@@ -39,7 +39,7 @@ See LayoutBlockRenderer for an example of general page setup, CommandPalette set
 - Context-aware shortcuts (normal mode, edit mode, global, etc.)
 - Uses hotkeys-js for keyboard event handling
 - React hooks for activating/deactivating shortcut contexts
-- User-configurable shortcuts stored in Automerge documents
+- User-configurable shortcuts stored in PowerSync-backed block records
 - Priority system to handle context conflicts
 - Actions and bindings are registered idempotently - duplicate registrations are ignored
 - Multiple different key bindings can be registered for the same action
@@ -54,7 +54,7 @@ See LayoutBlockRenderer for an example of general page setup, CommandPalette set
 ## State Management Principles
 
 ### Core Principle
-The core principle of the system is to store all state within the system itself, using Automerge documents. This includes:
+The core principle of the system is to store all state within the system itself, using PowerSync-backed SQLite block records. This includes:
 - UI state
 - User preferences
 - Keyboard shortcuts

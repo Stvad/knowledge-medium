@@ -1,16 +1,14 @@
 import { BlockRendererProps, EditorSelectionState } from '@/types.ts'
 import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
-import { Block } from '@/data/block.ts'
 import { useUIStateProperty } from '@/data/globalState'
-import { updateText } from '@automerge/automerge/next'
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useData } from '@/hooks/block.ts'
 
-export const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
+export const splitBlockAtCursor = async (block: BlockRendererProps['block'], textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
   const afterCursor = textarea.value.slice(textarea.selectionStart)
 
@@ -22,18 +20,17 @@ export const splitBlockAtCursor = async (block: Block, textarea: HTMLTextAreaEle
     })
 
     return child
-  } else {
-    await block.createSiblingAbove({content: beforeCursor})
-
-    block.change(b => {
-      b.content = afterCursor
-    })
-
-    // Reset selection to start
-    textarea.selectionStart = 0
-    textarea.selectionEnd = 0
-    return block
   }
+
+  await block.createSiblingAbove({content: beforeCursor})
+
+  block.change(b => {
+    b.content = afterCursor
+  })
+
+  textarea.selectionStart = 0
+  textarea.selectionEnd = 0
+  return block
 }
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
@@ -52,14 +49,10 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     }
   }, [textarea, textareaRef])
 
-  // Create dependencies object for shortcuts
   const shortcutDependencies = useMemo(() => ({
     block,
     textarea: textarea!,
-  }), [
-    block,
-    textarea,
-  ])
+  }), [block, textarea])
 
   useEditModeShortcuts(shortcutDependencies, !!textarea)
 
@@ -67,14 +60,11 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     if (focusedBlockId === block.id && textareaRef.current) {
       textareaRef.current.focus()
 
-      // Restore selection
-      if (selection?.blockId === block.id && selection.start) {
+      if (selection?.blockId === block.id && selection.start !== undefined) {
         textareaRef.current.setSelectionRange(selection.start, selection.end || null)
       }
     }
-    // We deliberately don't have selections as a dependency, as we only want to update it manually when we re-mount
-    // cases like indent/outdent or shift up/down
-  }, [focusedBlockId, block.id])
+  }, [focusedBlockId, block.id, selection?.blockId, selection?.start, selection?.end])
 
   const fitSizeToContent = () => {
     if (textareaRef.current) {
@@ -87,7 +77,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     fitSizeToContent()
   }, [])
 
-  // Update local content when block content changes
   useEffect(() => {
     if (blockData?.content !== undefined) {
       setLocalContent(blockData.content)
@@ -95,8 +84,8 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   }, [blockData?.content])
 
   const debouncedSetSelection = useMemo(
-    () => debounce((selection: EditorSelectionState) => {
-      setSelection(selection)
+    () => debounce((nextSelection: EditorSelectionState) => {
+      setSelection(nextSelection)
     }, 150),
     [setSelection],
   )
@@ -104,13 +93,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const debouncedUpdateBlock = useMemo(
     () => debounce((value: string) => {
       block.change(b => {
-        updateText(b, ['content'], value)
+        b.content = value
       })
     }, 300, {leading: true, trailing: true, maxWait: 600}),
     [block],
   )
 
-  // Cleanup debounce on unmount
   useEffect(() => {
     return () => {
       debouncedUpdateBlock.flush()
@@ -123,7 +111,6 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const handlePaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
     e.stopPropagation()
     const pastedText = e.clipboardData?.getData('text/plain')
-    // todo Shift modifier for pasting whole thing into the block
 
     if (pastedText?.includes('\n')) {
       e.preventDefault()
@@ -155,16 +142,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         }
       }}
       onPaste={handlePaste}
-      className={`w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none block-content overflow-x-hidden overflow-wrap-break-word`}
+      className="w-full resize-none min-h-[1.7em] bg-transparent dark:bg-neutral-800 border-none p-0 font-inherit focus-visible:outline-none block-content overflow-x-hidden overflow-wrap-break-word"
       onBlur={() => {
         debouncedUpdateBlock.flush()
         debouncedSetSelection.flush()
 
         if (document.hasFocus()) {
-          // true means we focused somewhere else in the app,
-          // false would mean we clicked outside the app, alt-tabbed, etc
-          // in which case we don't want to exit insert mode plausibly
-          // motivating example is emoji picker
           setIsEditing(false)
         }
       }}

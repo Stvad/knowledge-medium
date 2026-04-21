@@ -1,13 +1,15 @@
-import { createContext, useContext, useMemo } from 'react'
+import { createContext, ReactNode, use, useContext } from 'react'
+import { PowerSyncContext } from '@powersync/react'
 import { Repo } from '@/data/repo'
-import { RepoContext as AutomergeRepoContext } from '@automerge/automerge-repo-react-hooks'
-import { ReactNode } from 'react'
 import { useUser } from '@/components/Login'
-import { automergeRepo, undoRedoManager } from '@/data/repoInstance'
+import { ensurePowerSyncReady, powerSyncDb, undoRedoManager } from '@/data/repoInstance'
 import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 
-export const initRepo = memoize((user: User) => new Repo(automergeRepo, undoRedoManager, user), (user) => user.id)
+const initRepo = memoize(async (user: User) => {
+  await ensurePowerSyncReady()
+  return new Repo(powerSyncDb, undoRedoManager, user)
+}, (user) => user.id)
 
 const RepoContext = createContext<Repo | undefined>(undefined)
 
@@ -17,13 +19,13 @@ export function RepoProvider({children}: { children: ReactNode }) {
     throw new Error('User must be set before creating Repo')
   }
 
-  const repoInstance = useMemo(() => initRepo(user), [user])
+  const repoInstance = use(initRepo(user))
 
   return (
     <RepoContext value={repoInstance}>
-      <AutomergeRepoContext value={repoInstance.automergeRepo}>
+      <PowerSyncContext value={repoInstance.db}>
         {children}
-      </AutomergeRepoContext>
+      </PowerSyncContext>
     </RepoContext>
   )
 }
