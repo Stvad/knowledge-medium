@@ -37,11 +37,19 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const blockData = useData(block)
   const [localContent, setLocalContent] = useState(blockData?.content || '')
+  const pendingLocalEdits = useRef(false)
+  const pendingCommittedContent = useRef<string | null>(null)
   const [, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
   const [selection, setSelection] = useUIStateProperty(editorSelection)
+  const selectionRef = useRef(selection)
+  const previousFocusedBlockId = useRef<string | undefined>(undefined)
   const [textarea, setTextarea] = useState<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    selectionRef.current = selection
+  }, [selection])
 
   useEffect(() => {
     if (textareaRef.current && textarea !== textareaRef.current) {
@@ -57,14 +65,18 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   useEditModeShortcuts(shortcutDependencies, !!textarea)
 
   useEffect(() => {
-    if (focusedBlockId === block.id && textareaRef.current) {
-      textareaRef.current.focus()
+    const gainedFocus = focusedBlockId === block.id && previousFocusedBlockId.current !== block.id
+    previousFocusedBlockId.current = focusedBlockId
 
-      if (selection?.blockId === block.id && selection.start !== undefined) {
-        textareaRef.current.setSelectionRange(selection.start, selection.end || null)
-      }
+    if (!gainedFocus || !textareaRef.current) return
+
+    textareaRef.current.focus()
+    const nextSelection = selectionRef.current
+    if (nextSelection?.blockId === block.id && nextSelection.start !== undefined) {
+      const end = nextSelection.end ?? nextSelection.start
+      textareaRef.current.setSelectionRange(nextSelection.start, end)
     }
-  }, [focusedBlockId, block.id, selection?.blockId, selection?.start, selection?.end])
+  }, [focusedBlockId, block.id])
 
   const fitSizeToContent = () => {
     if (textareaRef.current) {
@@ -75,12 +87,23 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   useEffect(() => {
     fitSizeToContent()
-  }, [])
+  }, [localContent])
 
   useEffect(() => {
-    if (blockData?.content !== undefined) {
-      setLocalContent(blockData.content)
+    if (blockData?.content === undefined) return
+
+    const incomingContent = blockData.content
+
+    if (pendingCommittedContent.current !== null && incomingContent === pendingCommittedContent.current) {
+      pendingCommittedContent.current = null
+      pendingLocalEdits.current = false
     }
+
+    if (pendingLocalEdits.current) return
+
+    setLocalContent(currentContent =>
+      currentContent === incomingContent ? currentContent : incomingContent,
+    )
   }, [blockData?.content])
 
   const debouncedSetSelection = useMemo(
@@ -92,6 +115,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   const debouncedUpdateBlock = useMemo(
     () => debounce((value: string) => {
+      pendingCommittedContent.current = value
       block.change(b => {
         b.content = value
       })
@@ -127,8 +151,8 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
       value={localContent}
       onChange={(e) => {
         const newValue = e.target.value
+        pendingLocalEdits.current = true
         setLocalContent(newValue)
-        fitSizeToContent()
         debouncedUpdateBlock(newValue)
       }}
       onSelect={() => {

@@ -17,18 +17,22 @@ export interface BlockRow {
   references_json: string
 }
 
+const SELECT_BLOCK_COLUMNS = `
+  id,
+  content,
+  properties_json,
+  child_ids_json,
+  parent_id,
+  create_time,
+  update_time,
+  created_by_user_id,
+  updated_by_user_id,
+  references_json
+`
+
 const SELECT_BLOCK_SQL = `
   SELECT
-    id,
-    content,
-    properties_json,
-    child_ids_json,
-    parent_id,
-    create_time,
-    update_time,
-    created_by_user_id,
-    updated_by_user_id,
-    references_json
+    ${SELECT_BLOCK_COLUMNS}
   FROM blocks
   WHERE id = ?
 `
@@ -100,12 +104,20 @@ const blockToRowParams = (blockData: BlockData) => [
   JSON.stringify(blockData.references ?? []),
 ]
 
+const buildSelectBlocksByIdsSql = (count: number) => `
+  SELECT
+    ${SELECT_BLOCK_COLUMNS}
+  FROM blocks
+  WHERE id IN (${Array.from({length: count}, () => '?').join(', ')})
+`
+
 export class Repo {
   private readonly blockCache = new Map<string, Block>()
   private readonly snapshotCache = new Map<string, BlockData>()
   private readonly snapshotRevisions = new Map<string, number>()
   private readonly snapshotListeners = new Map<string, Set<() => void>>()
   private readonly dirtyBlockIds = new Set<string>()
+  private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   private writeQueue = Promise.resolve()
 
   constructor(
@@ -116,6 +128,8 @@ export class Repo {
     this.undoRedoManager.setApplier((changes) => {
       this.applySnapshots(changes)
     })
+
+    void this.startReactiveBlockTracking()
   }
 
   find(id: string): Block {
@@ -167,12 +181,23 @@ export class Repo {
     const cached = this.snapshotCache.get(id)
     if (cached) return cached
 
-    const row = await this.db.getOptional<BlockRow>(SELECT_BLOCK_SQL, [id])
-    if (!row) return undefined
+    const pendingLoad = this.pendingLoads.get(id)
+    if (pendingLoad) return pendingLoad
 
-    const snapshot = parseBlockRow(row)
-    this.hydrateBlockData(snapshot)
-    return this.snapshotCache.get(id)
+    const loadPromise = this.db.getOptional<BlockRow>(SELECT_BLOCK_SQL, [id])
+      .then((row) => {
+        if (!row) return undefined
+
+        const snapshot = parseBlockRow(row)
+        this.hydrateBlockData(snapshot)
+        return this.snapshotCache.get(id)
+      })
+      .finally(() => {
+        this.pendingLoads.delete(id)
+      })
+
+    this.pendingLoads.set(id, loadPromise)
+    return loadPromise
   }
 
   getCachedBlockData(id: string) {
@@ -308,5 +333,41 @@ export class Repo {
       .catch((error) => {
         console.error(`Failed to delete block ${id}`, error)
       })
+  }
+
+  private startReactiveBlockTracking() {
+    try {
+      this.db.onChange({
+        onChange: async () => {
+          const dirtyIds = Array.from(this.dirtyBlockIds)
+          if (!dirtyIds.length) return
+
+          const rows = await this.db.getAll<BlockRow>(
+            buildSelectBlocksByIdsSql(dirtyIds.length),
+            dirtyIds,
+          )
+          const rowsById = new Map(rows.map(row => [row.id, row]))
+
+          for (const id of dirtyIds) {
+            const row = rowsById.get(id)
+
+            if (row) {
+              this.hydrateBlockData(parseBlockRow(row))
+            } else {
+              this.dirtyBlockIds.delete(id)
+              this.deleteCachedBlockData(id)
+            }
+          }
+        },
+        onError: (error) => {
+          console.error('Failed to process reactive block change', error)
+        },
+      }, {
+        tables: ['blocks'],
+        throttleMs: 16,
+      })
+    } catch (error) {
+      console.error('Failed to start reactive block tracking', error)
+    }
   }
 }

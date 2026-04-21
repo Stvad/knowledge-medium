@@ -16,12 +16,12 @@ const restoreFocus = memoize(async (block: Block, view: EditorView, uiStateBlock
 
   if (selection?.blockId !== block.id) return
 
-  if (selection?.x && selection?.y) {
+  if (selection.x !== undefined && selection.y !== undefined) {
     placeCursorAtCoords(view, {x: selection.x, y: selection.y})
-  } else if (selection?.x) {
+  } else if (selection.x !== undefined) {
     placeCursorAtX(view, selection.x, selection.line === 'last')
-  } else if (selection?.start) {
-    const end = selection?.end ?? selection?.start
+  } else if (selection.start !== undefined) {
+    const end = selection.end ?? selection.start
     view.dispatch({selection: {anchor: selection.start, head: end}})
   }
 }, (_, view) => view)

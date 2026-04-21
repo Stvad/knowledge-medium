@@ -83,24 +83,22 @@ export function useSelectionState(): [
   BlockSelectionState,
   (newState: Partial<BlockSelectionState>) => void
 ] {
-  const uiStateBlock = useUIStateBlock();
-  // Ensure selectionStateProp has its default value correctly typed if usePropertyValue expects it.
-  // The defaultValue is part of selectionStateProp definition.
-  const [currentSelectionState, setRawSelectionState] = usePropertyValue(uiStateBlock, selectionStateProp);
+  const uiStateBlock = useUIStateBlock()
+  const [currentSelectionState, setRawSelectionState] = usePropertyValue(uiStateBlock, selectionStateProp)
 
   const setSelectionState = useCallback((newState: Partial<BlockSelectionState>) => {
     setRawSelectionState({
-      // It's important that currentSelectionState is not undefined here.
-      // usePropertyValue should handle initializing with defaultValue if the property doesn't exist yet.
-      ...(currentSelectionState || selectionStateProp.value!), // Fallback to defaultValue from prop if current is somehow null/undefined initially
+      ...(currentSelectionState || selectionStateProp.value!),
       ...newState,
-    });
-  }, [currentSelectionState, setRawSelectionState]);
+    })
+  }, [currentSelectionState, setRawSelectionState])
 
-  // Ensure the returned currentSelectionState is never undefined, falling back to default if necessary.
-  // This aligns with the hook's return type [SelectionStateValue, ...]
-  return [currentSelectionState || selectionStateProp.value!, setSelectionState];
+  return [currentSelectionState || selectionStateProp.value!, setSelectionState]
 }
+
+export const getSelectionStateSnapshot = (uiStateBlock: Block): BlockSelectionState =>
+  (uiStateBlock.dataSync()?.properties[selectionStateProp.name]?.value as BlockSelectionState | undefined)
+  ?? selectionStateProp.value!
 
 export const resetBlockSelection = async (block: Block) => {
   const currentState = await block.getProperty(selectionStateProp)
@@ -119,10 +117,17 @@ export const useInFocus = (blockId: string) =>
   useDataWithSelector(useUIStateBlock(),
     doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
 
+export const useIsSelected = (blockId: string) =>
+  useDataWithSelector(useUIStateBlock(), (doc) => {
+    const selectionState = doc?.properties[selectionStateProp.name]?.value as BlockSelectionState | undefined
+    return selectionState?.selectedBlockIds.includes(blockId) ?? false
+  })
+
 export const useInEditMode = (blockId: string) => {
   const uiStateBlock = useUIStateBlock()
-  const isSelected = useDataWithSelector(uiStateBlock,
-    doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
-  return useDataWithSelector(uiStateBlock,
-    doc => isSelected && doc?.properties[isEditingProp.name]?.value)
+  const focusedBlockId = useDataWithSelector(uiStateBlock,
+    doc => doc?.properties[focusedBlockIdProp.name]?.value)
+  const isEditing = useDataWithSelector(uiStateBlock,
+    doc => Boolean(doc?.properties[isEditingProp.name]?.value))
+  return focusedBlockId === blockId && isEditing
 }

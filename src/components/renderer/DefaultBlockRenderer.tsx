@@ -8,6 +8,7 @@ import {
   isCollapsedProp,
   topLevelBlockIdProp,
   previousLoadTimeProp,
+  selectionStateProp,
   setFocusedBlockId,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
@@ -18,9 +19,11 @@ import {
   useUIStateProperty,
   useUserProperty,
   useUIStateBlock,
-  useSelectionState,
+  useIsSelected,
   useInFocus,
-  useInEditMode, resetBlockSelection,
+  useInEditMode,
+  getSelectionStateSnapshot,
+  resetBlockSelection,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -224,9 +227,7 @@ export function DefaultBlockRenderer(
   const isMobile = useIsMobile()
   const isTopLevel = block.id === topLevelBlockId
 
-  const [selectionState, setSelectionState] = useSelectionState()
-  const isSelected = selectionState.selectedBlockIds.includes(block.id)
-
+  const isSelected = useIsSelected(block.id)
   const inFocus = useInFocus(block.id)
   const hasChildren = useHasChildren(block)
 
@@ -277,17 +278,21 @@ export function DefaultBlockRenderer(
 
           // Handle selection clicks
           if (e.ctrlKey || e.metaKey) {
+            const selectionState = getSelectionStateSnapshot(uiStateBlock)
             const newSelectedIds = isSelected
               ? selectionState.selectedBlockIds.filter(id => id !== block.id)
               : [...selectionState.selectedBlockIds, block.id]
 
             const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
 
-            setSelectionState({
-              selectedBlockIds: validatedIds,
-              anchorBlockId: validatedIds.length > 0
-                ? (selectionState.anchorBlockId || block.id)
-                : null,
+            uiStateBlock.setProperty({
+              ...selectionStateProp,
+              value: {
+                selectedBlockIds: validatedIds,
+                anchorBlockId: validatedIds.length > 0
+                  ? (selectionState.anchorBlockId || block.id)
+                  : null,
+              },
             })
           } else if (e.shiftKey) {
             await extendSelection(block.id, uiStateBlock, repo)
