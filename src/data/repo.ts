@@ -530,22 +530,25 @@ export class Repo {
     try {
       this.db.onChange({
         onChange: async () => {
-          const dirtyIds = Array.from(this.dirtyBlockIds)
-          if (!dirtyIds.length) return
+          const trackedIds = Array.from(new Set([
+            ...this.snapshotListeners.keys(),
+            ...this.dirtyBlockIds,
+          ]))
+          if (!trackedIds.length) return
 
           const rows = await this.db.getAll<BlockRow>(
-            buildSelectBlocksByIdsSql(dirtyIds.length),
-            dirtyIds,
+            buildSelectBlocksByIdsSql(trackedIds.length),
+            trackedIds,
           )
           const rowsById = new Map(rows.map(row => [row.id, row]))
 
-          for (const id of dirtyIds) {
+          for (const id of trackedIds) {
             const row = rowsById.get(id)
 
             if (row) {
               this.hydrateBlockData(parseBlockRow(row))
             } else {
-              if (this.snapshotCache.has(id)) {
+              if (this.dirtyBlockIds.has(id) && this.snapshotCache.has(id)) {
                 continue
               }
 
