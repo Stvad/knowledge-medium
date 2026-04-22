@@ -29,6 +29,8 @@ import {
   editorSelection,
   setIsEditing,
   setFocusedBlockId,
+  requestEditorFocus,
+  isEditingProp,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
@@ -103,6 +105,13 @@ const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) =>
   setIsEditing(uiStateBlock, true)
 
   if (selection) uiStateBlock.setProperty({...editorSelection, value: selection})
+  requestEditorFocus(uiStateBlock)
+}
+
+const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
+  if (uiStateBlock.dataSync()?.properties[isEditingProp.name]?.value) {
+    requestEditorFocus(uiStateBlock)
+  }
 }
 
 export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
@@ -113,6 +122,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       await deps.block.indent()
+      requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
       keys: 'tab',
@@ -131,6 +141,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       if (!topLevelBlockId) return
 
       await block.outdent(topLevelBlockId)
+      requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
       keys: 'shift+tab',
@@ -144,10 +155,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'move_block_up',
     description: 'Move block up',
     context: ActionContextTypes.EDIT_MODE,
-    handler: (deps: EditModeDependencies) => {
-      const {block} = deps
+    handler: async (deps: EditModeDependencies) => {
+      const {block, uiStateBlock} = deps
       if (!block) return
-      block.changeOrder(-1)
+      await block.changeOrder(-1)
+      requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
       keys: 'cmd+shift+up',
@@ -161,10 +173,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'move_block_down',
     description: 'Move block down',
     context: ActionContextTypes.EDIT_MODE,
-    handler: (deps: EditModeDependencies) => {
-      const {block} = deps
+    handler: async (deps: EditModeDependencies) => {
+      const {block, uiStateBlock} = deps
       if (!block) return
-      block.changeOrder(1)
+      await block.changeOrder(1)
+      requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
       keys: 'cmd+shift+down',
@@ -176,10 +189,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'move_block_up_cm',
     description: 'Move block up (CodeMirror)',
     context: ActionContextTypes.EDIT_MODE_CM,
-    handler: (deps: CodeMirrorEditModeDependencies) => {
-      const {block} = deps
+    handler: async (deps: CodeMirrorEditModeDependencies) => {
+      const {block, uiStateBlock} = deps
       if (!block) return
-      block.changeOrder(-1)
+      await block.changeOrder(-1)
+      requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
       keys: 'cmd+shift+up',
@@ -193,10 +207,11 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     id: 'move_block_down_cm',
     description: 'Move block down (CodeMirror)',
     context: ActionContextTypes.EDIT_MODE_CM,
-    handler: (deps: CodeMirrorEditModeDependencies) => {
-      const {block} = deps
+    handler: async (deps: CodeMirrorEditModeDependencies) => {
+      const {block, uiStateBlock} = deps
       if (!block) return
-      block.changeOrder(1)
+      await block.changeOrder(1)
+      requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
       keys: 'cmd+shift+down',

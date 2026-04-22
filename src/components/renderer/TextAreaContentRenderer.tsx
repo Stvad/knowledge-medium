@@ -1,5 +1,5 @@
 import { BlockRendererProps, EditorSelectionState } from '@/types.ts'
-import { useIsEditing, editorSelection, focusedBlockIdProp } from '@/data/properties.ts'
+import { useIsEditing, editorSelection, focusedBlockIdProp, editorFocusRequestProp } from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
 import { useUIStateProperty } from '@/data/globalState'
 import { debounce } from 'lodash'
@@ -7,6 +7,7 @@ import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useData } from '@/hooks/block.ts'
+import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 
 export const splitBlockAtCursor = async (block: BlockRendererProps['block'], textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
@@ -39,12 +40,12 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const [localContent, setLocalContent] = useState(blockData?.content || '')
   const pendingLocalEdits = useRef(false)
   const pendingCommittedContent = useRef<string | null>(null)
-  const [, setIsEditing] = useIsEditing()
+  const [isEditing, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
+  const [focusRequestId] = useUIStateProperty(editorFocusRequestProp)
   const [selection, setSelection] = useUIStateProperty(editorSelection)
   const selectionRef = useRef(selection)
-  const previousFocusedBlockId = useRef<string | undefined>(undefined)
   const [textarea, setTextarea] = useState<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
@@ -65,18 +66,21 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   useEditModeShortcuts(shortcutDependencies, !!textarea)
 
   useEffect(() => {
-    const gainedFocus = focusedBlockId === block.id && previousFocusedBlockId.current !== block.id
-    previousFocusedBlockId.current = focusedBlockId
+    if (!isEditing || focusedBlockId !== block.id || !textareaRef.current) return
 
-    if (!gainedFocus || !textareaRef.current) return
+    const frameId = requestAnimationFrame(() => {
+      if (!textareaRef.current) return
 
-    textareaRef.current.focus()
-    const nextSelection = selectionRef.current
-    if (nextSelection?.blockId === block.id && nextSelection.start !== undefined) {
-      const end = nextSelection.end ?? nextSelection.start
-      textareaRef.current.setSelectionRange(nextSelection.start, end)
-    }
-  }, [focusedBlockId, block.id])
+      textareaRef.current.focus()
+      const nextSelection = selectionRef.current
+      if (nextSelection?.blockId === block.id && nextSelection.start !== undefined) {
+        const end = nextSelection.end ?? nextSelection.start
+        textareaRef.current.setSelectionRange(nextSelection.start, end)
+      }
+    })
+
+    return () => cancelAnimationFrame(frameId)
+  }, [focusedBlockId, block.id, isEditing, focusRequestId])
 
   const fitSizeToContent = () => {
     if (textareaRef.current) {
@@ -171,9 +175,11 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
         debouncedUpdateBlock.flush()
         debouncedSetSelection.flush()
 
-        if (document.hasFocus()) {
-          setIsEditing(false)
-        }
+        requestAnimationFrame(() => {
+          if (document.hasFocus() && shouldExitEditModeAfterBlur(document.activeElement)) {
+            setIsEditing(false)
+          }
+        })
       }}
     />
   )

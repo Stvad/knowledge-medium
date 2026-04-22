@@ -33,3 +33,12 @@ export const isElementProperlyVisible = (element: HTMLElement): boolean => {
   // 3. At least a line height is visible (prevents tiny slivers)
   return heightRatio >= 0.6 || elementVisibilityRatio >= 0.2 || visibleHeight >= minVisibleHeight
 }
+
+export const isEditorElement = (element: Element | null): boolean => {
+  if (!element) return false
+
+  return element instanceof HTMLTextAreaElement || Boolean(element.closest('.cm-editor'))
+}
+
+export const shouldExitEditModeAfterBlur = (activeElement: Element | null): boolean =>
+  !isEditorElement(activeElement)

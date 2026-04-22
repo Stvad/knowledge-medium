@@ -1,5 +1,5 @@
 import { BlockRendererProps } from '@/types.ts'
-import { focusedBlockIdProp, editorSelection, isEditingProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, editorSelection, isEditingProp, requestEditorFocus } from '@/data/properties.ts'
 import Markdown, { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useUIStateBlock } from '@/data/globalState'
@@ -41,6 +41,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
       ...editorSelection,
       value: {blockId: block.id, ...coords},
     })
+    requestEditorFocus(uiStateBlock)
   }
 
   const handleMouseDoubleClick = (e: MouseEvent) => {

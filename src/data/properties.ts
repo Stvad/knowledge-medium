@@ -60,6 +60,7 @@ export const isEditingProp = boolProp('isEditing', false, uiChangeScope)
 export const topLevelBlockIdProp = stringProperty('topLevelBlockId', undefined, uiChangeScope)
 export const focusedBlockIdProp = stringProperty('focusedBlockId', undefined, uiChangeScope)
 export const editorSelection = objectProperty<EditorSelectionState>('editorSelection', undefined, uiChangeScope)
+export const editorFocusRequestProp = numberProperty('editorFocusRequest', 0, uiChangeScope)
 
 export interface BlockSelectionState {
   selectedBlockIds: string[];
@@ -98,4 +99,14 @@ export const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
 }
 export const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
   uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
+}
+
+export const requestEditorFocus = (uiStateBlock: Block) => {
+  const currentRequestId =
+    (uiStateBlock.dataSync()?.properties[editorFocusRequestProp.name]?.value as number | undefined) ?? 0
+
+  uiStateBlock.setProperty({
+    ...editorFocusRequestProp,
+    value: currentRequestId + 1,
+  })
 }

@@ -1,30 +1,19 @@
 import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react-codemirror'
 import { EditorSelectionState } from '@/types.ts'
 import { Block } from '@/data/block.ts'
-import { useIsEditing, editorSelection } from '@/data/properties.ts'
+import {
+  useIsEditing,
+  editorSelection,
+  focusedBlockIdProp,
+  isEditingProp,
+  editorFocusRequestProp,
+} from '@/data/properties.ts'
 import { useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useUIStateBlock } from '@/data/globalState'
-import { debounce, memoize } from 'lodash'
+import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
-import { EditorView } from '@codemirror/view'
-import { useData } from '@/hooks/block.ts'
-
-const restoreFocus = memoize(async (block: Block, view: EditorView, uiStateBlock: Block) => {
-  view.focus()
-
-  const selection = (await uiStateBlock.getProperty(editorSelection))?.value
-
-  if (selection?.blockId !== block.id) return
-
-  if (selection.x !== undefined && selection.y !== undefined) {
-    placeCursorAtCoords(view, {x: selection.x, y: selection.y})
-  } else if (selection.x !== undefined) {
-    placeCursorAtX(view, selection.x, selection.line === 'last')
-  } else if (selection.start !== undefined) {
-    const end = selection.end ?? selection.start
-    view.dispatch({selection: {anchor: selection.start, head: end}})
-  }
-}, (block, view, uiStateBlock) => `${block.repo.instanceId}:${uiStateBlock.repo.instanceId}:${view}`)
+import { useData, useDataWithSelector } from '@/hooks/block.ts'
+import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur'> {
   block: Block
@@ -43,6 +32,18 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   const [, setIsEditing] = useIsEditing()
   const initialContent = useRef(blockData?.content ?? '')
   const uiStateBlock = useUIStateBlock()
+  const focusedBlockId = useDataWithSelector(
+    uiStateBlock,
+    doc => doc?.properties[focusedBlockIdProp.name]?.value as string | undefined,
+  )
+  const isEditing = useDataWithSelector(
+    uiStateBlock,
+    doc => Boolean(doc?.properties[isEditingProp.name]?.value),
+  )
+  const focusRequestId = useDataWithSelector(
+    uiStateBlock,
+    doc => (doc?.properties[editorFocusRequestProp.name]?.value as number | undefined) ?? 0,
+  )
 
   const pushChange = useRef(
     debounce((value: string) => {
@@ -87,6 +88,37 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
     }
   }, [blockData])
 
+  useEffect(() => {
+    if (!isEditing || focusedBlockId !== block.id || !cm.current?.view) return
+
+    let cancelled = false
+    const frameId = requestAnimationFrame(() => {
+      const view = cm.current?.view
+      if (!view || cancelled) return
+
+      void (async () => {
+        view.focus()
+
+        const selection = (await uiStateBlock.getProperty(editorSelection))?.value
+        if (cancelled || selection?.blockId !== block.id) return
+
+        if (selection.x !== undefined && selection.y !== undefined) {
+          placeCursorAtCoords(view, {x: selection.x, y: selection.y})
+        } else if (selection.x !== undefined) {
+          placeCursorAtX(view, selection.x, selection.line === 'last')
+        } else if (selection.start !== undefined) {
+          const end = selection.end ?? selection.start
+          view.dispatch({selection: {anchor: selection.start, head: end}})
+        }
+      })()
+    })
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(frameId)
+    }
+  }, [block.id, focusedBlockId, focusRequestId, isEditing, uiStateBlock])
+
   if (!blockData) return null
 
   const forwardRefValue = (value: ReactCodeMirrorRef | null) => {
@@ -102,7 +134,6 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   return (
     <CodeMirror
       ref={(value) => {
-        if (value?.view) restoreFocus(block, value.view, uiStateBlock)
         cm.current = value
         forwardRefValue(value)
       }}
@@ -119,7 +150,11 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
       }}
       onBlur={() => {
         flushDebouncers()
-        if (document.hasFocus()) setIsEditing(false)
+        requestAnimationFrame(() => {
+          if (document.hasFocus() && shouldExitEditModeAfterBlur(document.activeElement)) {
+            setIsEditing(false)
+          }
+        })
       }}
       {...codeMirrorProps}
     />
