@@ -5,6 +5,17 @@
 import { aliasProp } from '@/data/properties'
 import { Block } from '@/data/block'
 
+const hasQueryBackedAliasLookup = (
+  block: Block,
+): block is Block & {
+  repo: {
+    getAliasesInSubtree: (rootId: string, filter?: string) => Promise<string[]>
+    findBlockByAliasInSubtree: (rootId: string, alias: string) => Promise<Block | null>
+  }
+} =>
+  typeof block.repo?.getAliasesInSubtree === 'function' &&
+  typeof block.repo?.findBlockByAliasInSubtree === 'function'
+
 /**
  * Generic block visitor that traverses a block tree and calls a visitor function on each block
  * @param rootBlock The root block to start traversal from
@@ -55,6 +66,14 @@ async function visitBlocks<T>(
  * @returns Promise resolving to array of matching aliases
  */
 export async function getAliases(rootBlock: Block, filter: string = ''): Promise<string[]> {
+  if (hasQueryBackedAliasLookup(rootBlock)) {
+    try {
+      return await rootBlock.repo.getAliasesInSubtree(rootBlock.id, filter)
+    } catch (error) {
+      console.warn('Failed to query aliases from db, falling back to traversal', error)
+    }
+  }
+
   const allAliases: string[] = []
   
   await visitBlocks(rootBlock, async (block) => {
@@ -83,6 +102,14 @@ export async function getAliases(rootBlock: Block, filter: string = ''): Promise
  * @returns Promise resolving to the block with the given alias, or null if not found
  */
 export async function findBlockByAlias(rootBlock: Block, alias: string): Promise<Block | null> {
+  if (hasQueryBackedAliasLookup(rootBlock)) {
+    try {
+      return await rootBlock.repo.findBlockByAliasInSubtree(rootBlock.id, alias)
+    } catch (error) {
+      console.warn('Failed to query alias from db, falling back to traversal', error)
+    }
+  }
+
   const foundBlock = await visitBlocks(rootBlock, async (block) => {
     const aliasProperty = await block.getProperty(aliasProp())
     if (aliasProperty?.value && Array.isArray(aliasProperty.value)) {

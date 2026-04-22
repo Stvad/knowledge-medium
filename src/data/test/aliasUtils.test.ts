@@ -2,10 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getAliases, findBlockByAlias, aliasExists } from '../aliasUtils'
 import { Block } from '../block'
 
-// Mock the dependencies
-vi.mock('../repo')
-vi.mock('../block')
-
 describe('aliasUtils', () => {
   let mockRootBlock: Block
   let mockChildBlock: Block
@@ -26,6 +22,22 @@ describe('aliasUtils', () => {
   })
 
   describe('getAliases', () => {
+    it('should use repo subtree queries when available', async () => {
+      const getAliasesInSubtree = vi.fn().mockResolvedValue(['repo-alias'])
+      mockRootBlock = {
+        ...mockRootBlock,
+        repo: {
+          getAliasesInSubtree,
+          findBlockByAliasInSubtree: vi.fn(),
+        },
+      } as unknown as Block
+
+      const result = await getAliases(mockRootBlock)
+
+      expect(result).toEqual(['repo-alias'])
+      expect(getAliasesInSubtree).toHaveBeenCalledWith(rootBlockId, '')
+    })
+
     it('should return empty array when no aliases exist', async () => {
       mockRootBlock.getProperty = vi.fn().mockResolvedValue(null)
 
@@ -96,6 +108,22 @@ describe('aliasUtils', () => {
   })
 
   describe('findBlockByAlias', () => {
+    it('should use repo subtree queries when available', async () => {
+      const findBlockByAliasInSubtree = vi.fn().mockResolvedValue(mockChildBlock)
+      mockRootBlock = {
+        ...mockRootBlock,
+        repo: {
+          getAliasesInSubtree: vi.fn(),
+          findBlockByAliasInSubtree,
+        },
+      } as unknown as Block
+
+      const result = await findBlockByAlias(mockRootBlock, 'target-alias')
+
+      expect(result).toBe(mockChildBlock)
+      expect(findBlockByAliasInSubtree).toHaveBeenCalledWith(rootBlockId, 'target-alias')
+    })
+
     it('should find block with matching alias', async () => {
       mockRootBlock.getProperty = vi.fn().mockResolvedValue({
         value: ['root-alias']

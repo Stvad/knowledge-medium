@@ -37,6 +37,19 @@ const SELECT_BLOCK_SQL = `
   WHERE id = ?
 `
 
+const buildQualifiedBlockColumnsSql = (tableName: string) => `
+  ${tableName}.id AS id,
+  ${tableName}.content AS content,
+  ${tableName}.properties_json AS properties_json,
+  ${tableName}.child_ids_json AS child_ids_json,
+  ${tableName}.parent_id AS parent_id,
+  ${tableName}.create_time AS create_time,
+  ${tableName}.update_time AS update_time,
+  ${tableName}.created_by_user_id AS created_by_user_id,
+  ${tableName}.updated_by_user_id AS updated_by_user_id,
+  ${tableName}.references_json AS references_json
+`
+
 const UPSERT_BLOCK_SQL = `
   INSERT INTO blocks (
     id,
@@ -109,6 +122,87 @@ const buildSelectBlocksByIdsSql = (count: number) => `
     ${SELECT_BLOCK_COLUMNS}
   FROM blocks
   WHERE id IN (${Array.from({length: count}, () => '?').join(', ')})
+`
+
+const SUBTREE_CTE_SQL = `
+  WITH RECURSIVE subtree(id, sort_key, visited_path) AS (
+    SELECT
+      id,
+      '' AS sort_key,
+      ',' || id || ',' AS visited_path
+    FROM blocks
+    WHERE id = ?
+
+    UNION ALL
+
+    SELECT
+      child.id,
+      subtree.sort_key || printf('%08d.', CAST(child_order.key AS INTEGER)) AS sort_key,
+      subtree.visited_path || child.id || ','
+    FROM subtree
+    JOIN blocks AS parent ON parent.id = subtree.id
+    JOIN json_each(parent.child_ids_json) AS child_order
+    JOIN blocks AS child ON child.id = child_order.value
+    WHERE instr(subtree.visited_path, ',' || child.id || ',') = 0
+  )
+`
+
+const buildSelectSubtreeBlocksSql = (includeRoot: boolean) => `
+  ${SUBTREE_CTE_SQL}
+  SELECT
+    ${SELECT_BLOCK_COLUMNS}
+  FROM blocks
+  JOIN subtree ON subtree.id = blocks.id
+  ${includeRoot ? '' : 'WHERE blocks.id != ?'}
+  ORDER BY subtree.sort_key
+`
+
+const SELECT_ALIASES_IN_SUBTREE_SQL = `
+  ${SUBTREE_CTE_SQL}
+  SELECT
+    alias.value AS alias,
+    MIN(subtree.sort_key) AS first_sort_key
+  FROM blocks
+  JOIN subtree ON subtree.id = blocks.id
+  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
+  WHERE (? = '' OR LOWER(alias.value) LIKE '%' || LOWER(?) || '%')
+  GROUP BY alias.value
+  ORDER BY first_sort_key, alias.value
+`
+
+const SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL = `
+  ${SUBTREE_CTE_SQL}
+  SELECT
+    ${SELECT_BLOCK_COLUMNS}
+  FROM blocks
+  JOIN subtree ON subtree.id = blocks.id
+  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
+  WHERE alias.value = ?
+  ORDER BY subtree.sort_key
+  LIMIT 1
+`
+
+const SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL = `
+  ${SUBTREE_CTE_SQL}
+  SELECT
+    ${SELECT_BLOCK_COLUMNS}
+  FROM blocks
+  JOIN subtree ON subtree.id = blocks.id
+  WHERE blocks.id != ?
+    AND json_extract(blocks.properties_json, '$.type.value') = ?
+  ORDER BY subtree.sort_key
+`
+
+const SELECT_FIRST_CHILD_BY_CONTENT_SQL = `
+  SELECT
+    ${buildQualifiedBlockColumnsSql('child')}
+  FROM blocks AS parent
+  JOIN json_each(parent.child_ids_json) AS child_order
+  JOIN blocks AS child ON child.id = child_order.value
+  WHERE parent.id = ?
+    AND child.content = ?
+  ORDER BY CAST(child_order.key AS INTEGER)
+  LIMIT 1
 `
 
 export class Repo {
@@ -198,6 +292,76 @@ export class Repo {
 
     this.pendingLoads.set(id, loadPromise)
     return loadPromise
+  }
+
+  async getSubtreeBlockData(
+    rootId: string,
+    options: {includeRoot?: boolean} = {},
+  ) {
+    const includeRoot = options.includeRoot ?? false
+    await this.flush()
+
+    const rows = await this.db.getAll<BlockRow>(
+      buildSelectSubtreeBlocksSql(includeRoot),
+      includeRoot ? [rootId] : [rootId, rootId],
+    )
+    return this.hydrateRows(rows)
+  }
+
+  async getSubtreeBlocks(
+    rootId: string,
+    options: {includeRoot?: boolean} = {},
+  ) {
+    const snapshots = await this.getSubtreeBlockData(rootId, options)
+    return snapshots.map(snapshot => this.find(snapshot.id))
+  }
+
+  async findBlocksByTypeInSubtree(rootId: string, type: string) {
+    await this.flush()
+
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
+      [rootId, rootId, type],
+    )
+    return this.hydrateRows(rows)
+  }
+
+  async getAliasesInSubtree(rootId: string, filter: string = '') {
+    await this.flush()
+
+    const rows = await this.db.getAll<{alias: string}>(
+      SELECT_ALIASES_IN_SUBTREE_SQL,
+      [rootId, filter, filter],
+    )
+    return rows.map(row => row.alias)
+  }
+
+  async findBlockByAliasInSubtree(rootId: string, alias: string) {
+    if (!alias) return null
+
+    await this.flush()
+
+    const row = await this.db.getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
+      [rootId, alias],
+    )
+    if (!row) return null
+
+    this.hydrateRow(row)
+    return this.find(row.id)
+  }
+
+  async findFirstChildByContent(parentId: string, content: string) {
+    await this.flush()
+
+    const row = await this.db.getOptional<BlockRow>(
+      SELECT_FIRST_CHILD_BY_CONTENT_SQL,
+      [parentId, content],
+    )
+    if (!row) return null
+
+    this.hydrateRow(row)
+    return this.find(row.id)
   }
 
   getCachedBlockData(id: string) {
@@ -312,6 +476,16 @@ export class Repo {
 
   private markBlockDirty(id: string) {
     this.dirtyBlockIds.add(id)
+  }
+
+  private hydrateRows(rows: BlockRow[]) {
+    return rows.map(row => this.hydrateRow(row))
+  }
+
+  private hydrateRow(row: BlockRow) {
+    const snapshot = parseBlockRow(row)
+    this.hydrateBlockData(snapshot)
+    return this.requireCachedBlockData(row.id)
   }
 
   private queueUpsert(snapshot: BlockData) {
