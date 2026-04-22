@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid'
 import { BlockData } from '@/types.ts'
 
 export interface UndoRedoOptions<T = unknown> {
@@ -24,6 +25,7 @@ interface HistoryEntry {
 }
 
 interface ActiveTransaction {
+  txId: string
   scope: string
   description?: string
   depth: number
@@ -46,6 +48,10 @@ export class UndoRedoManager {
     this.applier = applier
   }
 
+  getCurrentTransactionId() {
+    return this.activeTransaction?.txId
+  }
+
   transaction(callback: () => void, options: UndoRedoOptions = {}) {
     const scope = options.scope ?? 'default'
 
@@ -60,6 +66,7 @@ export class UndoRedoManager {
     }
 
     this.activeTransaction = {
+      txId: uuidv4(),
       scope,
       description: options.description,
       depth: 1,
@@ -91,6 +98,7 @@ export class UndoRedoManager {
     }
 
     const transaction: ActiveTransaction = {
+      txId: uuidv4(),
       scope,
       description: options.description,
       depth: 0,

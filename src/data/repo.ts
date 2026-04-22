@@ -17,6 +17,21 @@ export interface BlockRow {
   references_json: string
 }
 
+interface BlockEventChangeRow {
+  seq: number
+  blockId: string
+}
+
+interface BlockEventStateRow {
+  afterJson: string | null
+}
+
+interface WriteEventContext {
+  actorUserId?: string
+  source: 'local' | 'system'
+  txId: string
+}
+
 const SELECT_BLOCK_COLUMNS = `
   id,
   content,
@@ -35,6 +50,47 @@ const SELECT_BLOCK_SQL = `
     ${SELECT_BLOCK_COLUMNS}
   FROM blocks
   WHERE id = ?
+`
+
+const SELECT_BLOCK_EVENTS_AFTER_SQL = `
+  SELECT
+    seq,
+    block_id AS blockId
+  FROM block_events
+  WHERE seq > ?
+  ORDER BY seq ASC
+`
+
+const SELECT_MAX_BLOCK_EVENT_SEQ_SQL = `
+  SELECT
+    COALESCE(MAX(seq), 0) AS seq
+  FROM block_events
+`
+
+const SELECT_BLOCK_STATE_AT_SQL = `
+  SELECT
+    after_json AS afterJson
+  FROM block_events
+  WHERE block_id = ?
+    AND event_time <= ?
+  ORDER BY seq DESC
+  LIMIT 1
+`
+
+const SELECT_ALL_BLOCK_STATES_AT_SQL = `
+  WITH latest AS (
+    SELECT
+      block_id,
+      MAX(seq) AS seq
+    FROM block_events
+    WHERE event_time <= ?
+    GROUP BY block_id
+  )
+  SELECT
+    block_events.after_json AS afterJson
+  FROM latest
+  JOIN block_events ON block_events.seq = latest.seq
+  WHERE block_events.after_json IS NOT NULL
 `
 
 const buildQualifiedBlockColumnsSql = (tableName: string) => `
@@ -85,6 +141,9 @@ const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
     return fallback
   }
 }
+
+const parseBlockSnapshotJson = (value: string | null | undefined) =>
+  value ? safeJsonParse<BlockData | null>(value, null) ?? undefined : undefined
 
 const cloneBlockData = (blockData: BlockData) => structuredClone(blockData)
 
@@ -214,6 +273,7 @@ export class Repo {
   private readonly snapshotListeners = new Map<string, Set<() => void>>()
   private readonly dirtyBlockIds = new Set<string>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
+  private lastProcessedBlockEventSeq = 0
   private writeQueue = Promise.resolve()
   readonly instanceId = Repo.nextInstanceId++
 
@@ -282,9 +342,15 @@ export class Repo {
       ...(data.parentId ? {parentId: data.parentId} : {}),
     }
 
+    const eventContext: WriteEventContext = {
+      actorUserId: snapshot.updatedByUserId,
+      source: 'local',
+      txId: this.undoRedoManager.getCurrentTransactionId() ?? uuidv4(),
+    }
+
     this.markBlockDirty(id)
     this.setCachedBlockData(snapshot)
-    this.queueUpsert(snapshot)
+    this.queueUpsert(snapshot, eventContext)
     return this.find(id)
   }
 
@@ -331,6 +397,52 @@ export class Repo {
   ) {
     const snapshots = await this.getSubtreeBlockData(rootId, options)
     return snapshots.map(snapshot => this.find(snapshot.id))
+  }
+
+  async getBlockDataAt(id: string, timestamp: number) {
+    const row = await this.db.getOptional<BlockEventStateRow>(
+      SELECT_BLOCK_STATE_AT_SQL,
+      [id, timestamp],
+    )
+    return parseBlockSnapshotJson(row?.afterJson)
+  }
+
+  async getSubtreeBlockDataAt(
+    rootId: string,
+    timestamp: number,
+    options: {includeRoot?: boolean} = {},
+  ) {
+    const includeRoot = options.includeRoot ?? false
+    const rows = await this.db.getAll<BlockEventStateRow>(
+      SELECT_ALL_BLOCK_STATES_AT_SQL,
+      [timestamp],
+    )
+
+    const snapshots = rows
+      .map(row => parseBlockSnapshotJson(row.afterJson))
+      .filter((snapshot): snapshot is BlockData => Boolean(snapshot))
+    const snapshotsById = new Map(snapshots.map(snapshot => [snapshot.id, snapshot]))
+    const rootSnapshot = snapshotsById.get(rootId)
+
+    if (!rootSnapshot) return []
+
+    const pendingIds = includeRoot ? [rootId] : [...rootSnapshot.childIds]
+    const result: BlockData[] = []
+    const visited = new Set<string>()
+
+    while (pendingIds.length) {
+      const currentId = pendingIds.shift()!
+      if (visited.has(currentId)) continue
+      visited.add(currentId)
+
+      const snapshot = snapshotsById.get(currentId)
+      if (!snapshot) continue
+
+      result.push(cloneBlockData(snapshot))
+      pendingIds.unshift(...snapshot.childIds)
+    }
+
+    return result
   }
 
   async findBlocksByTypeInSubtree(rootId: string, type: string) {
@@ -446,21 +558,35 @@ export class Repo {
       next.updatedByUserId = this.currentUser.id
     }
 
+    const eventContext: WriteEventContext = {
+      actorUserId: next.updatedByUserId,
+      source: 'local',
+      txId: this.undoRedoManager.getCurrentTransactionId() ?? uuidv4(),
+    }
+
     this.undoRedoManager.recordChange(id, current, next, options)
     this.markBlockDirty(id)
     this.setCachedBlockData(next)
-    this.queueUpsert(next)
+    this.queueUpsert(next, eventContext)
   }
 
   applySnapshots(changes: Array<{id: string, snapshot: BlockData | null}>) {
+    const txId = uuidv4()
+
     for (const change of changes) {
+      const eventContext: WriteEventContext = {
+        actorUserId: change.snapshot?.updatedByUserId ?? this.currentUser.id,
+        source: 'local',
+        txId,
+      }
+
       this.markBlockDirty(change.id)
       if (change.snapshot) {
         this.setCachedBlockData(change.snapshot)
-        this.queueUpsert(change.snapshot)
+        this.queueUpsert(change.snapshot, eventContext)
       } else {
         this.deleteCachedBlockData(change.id)
-        this.queueDelete(change.id)
+        this.queueDelete(change.id, eventContext)
       }
     }
   }
@@ -505,65 +631,119 @@ export class Repo {
     return this.requireCachedBlockData(row.id)
   }
 
-  private queueUpsert(snapshot: BlockData) {
+  private queueUpsert(snapshot: BlockData, eventContext: WriteEventContext) {
     const next = cloneBlockData(snapshot)
     this.writeQueue = this.writeQueue
       .then(async () => {
-        await this.db.execute(UPSERT_BLOCK_SQL, blockToRowParams(next))
+        await this.executeWithEventContext(eventContext, (tx) =>
+          tx.execute(UPSERT_BLOCK_SQL, blockToRowParams(next)),
+        )
       })
       .catch((error) => {
         console.error(`Failed to persist block ${next.id}`, error)
       })
   }
 
-  private queueDelete(id: string) {
+  private queueDelete(id: string, eventContext: WriteEventContext) {
     this.writeQueue = this.writeQueue
       .then(async () => {
-        await this.db.execute('DELETE FROM blocks WHERE id = ?', [id])
+        await this.executeWithEventContext(eventContext, (tx) =>
+          tx.execute('DELETE FROM blocks WHERE id = ?', [id]),
+        )
       })
       .catch((error) => {
         console.error(`Failed to delete block ${id}`, error)
       })
   }
 
-  private startReactiveBlockTracking() {
+  private async executeWithEventContext(
+    eventContext: WriteEventContext,
+    callback: (tx: {execute: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<unknown>,
+  ) {
+    await this.db.writeLock(async (tx) => {
+      await tx.execute('DELETE FROM block_event_context WHERE id = 1')
+      await tx.execute(
+        `
+          INSERT INTO block_event_context (id, tx_id, source, actor_user_id)
+          VALUES (1, ?, ?, ?)
+        `,
+        [eventContext.txId, eventContext.source, eventContext.actorUserId ?? null],
+      )
+
+      try {
+        await callback(tx)
+      } finally {
+        await tx.execute('DELETE FROM block_event_context WHERE id = 1')
+      }
+    })
+  }
+
+  private async getLatestBlockEventSeq() {
+    const row = await this.db.get<{seq: number}>(SELECT_MAX_BLOCK_EVENT_SEQ_SQL)
+    return row.seq
+  }
+
+  private async refreshTrackedBlocksFromEventLog() {
+    const events = await this.db.getAll<BlockEventChangeRow>(
+      SELECT_BLOCK_EVENTS_AFTER_SQL,
+      [this.lastProcessedBlockEventSeq],
+    )
+    if (!events.length) return
+
+    this.lastProcessedBlockEventSeq = events[events.length - 1].seq
+
+    const trackedIds = new Set([
+      ...this.snapshotListeners.keys(),
+      ...this.dirtyBlockIds,
+    ])
+    if (!trackedIds.size) return
+
+    const changedIds = Array.from(new Set(
+      events
+        .map(event => event.blockId)
+        .filter(blockId => trackedIds.has(blockId)),
+    ))
+    if (!changedIds.length) return
+
+    const rows = await this.db.getAll<BlockRow>(
+      buildSelectBlocksByIdsSql(changedIds.length),
+      changedIds,
+    )
+    const rowsById = new Map(rows.map(row => [row.id, row]))
+
+    for (const id of changedIds) {
+      const row = rowsById.get(id)
+
+      if (row) {
+        this.hydrateBlockData(parseBlockRow(row))
+      } else {
+        if (this.dirtyBlockIds.has(id) && this.snapshotCache.has(id)) {
+          continue
+        }
+
+        this.dirtyBlockIds.delete(id)
+        this.deleteCachedBlockData(id)
+      }
+    }
+  }
+
+  private async startReactiveBlockTracking() {
     try {
+      this.lastProcessedBlockEventSeq = await this.getLatestBlockEventSeq()
+
       this.db.onChange({
         onChange: async () => {
-          const trackedIds = Array.from(new Set([
-            ...this.snapshotListeners.keys(),
-            ...this.dirtyBlockIds,
-          ]))
-          if (!trackedIds.length) return
-
-          const rows = await this.db.getAll<BlockRow>(
-            buildSelectBlocksByIdsSql(trackedIds.length),
-            trackedIds,
-          )
-          const rowsById = new Map(rows.map(row => [row.id, row]))
-
-          for (const id of trackedIds) {
-            const row = rowsById.get(id)
-
-            if (row) {
-              this.hydrateBlockData(parseBlockRow(row))
-            } else {
-              if (this.dirtyBlockIds.has(id) && this.snapshotCache.has(id)) {
-                continue
-              }
-
-              this.dirtyBlockIds.delete(id)
-              this.deleteCachedBlockData(id)
-            }
-          }
+          await this.refreshTrackedBlocksFromEventLog()
         },
         onError: (error) => {
           console.error('Failed to process reactive block change', error)
         },
       }, {
-        tables: ['blocks'],
+        tables: ['block_events'],
         throttleMs: 16,
       })
+
+      await this.refreshTrackedBlocksFromEventLog()
     } catch (error) {
       console.error('Failed to start reactive block tracking', error)
     }
