@@ -268,6 +268,7 @@ export function DefaultBlockRenderer(
       <Collapsible
         open={!isCollapsed || isTopLevel}
         className={`tm-block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
+        data-editing={inEditMode ? 'true' : 'false'}
         data-block-id={block.id}
         tabIndex={0}
         onPaste={handlePaste}

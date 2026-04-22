@@ -214,6 +214,15 @@ img {
   word-break: break-word;
 }
 
+.tm-block[data-editing='true'] {
+  z-index: 20;
+}
+
+.tm-block[data-editing='true'] .block-body,
+.tm-block[data-editing='true'] .block-content {
+  overflow: visible;
+}
+
 @media (max-width: 640px) {
 
   textarea.block-content {
