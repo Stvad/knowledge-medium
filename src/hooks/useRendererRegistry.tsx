@@ -113,7 +113,8 @@ const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generat
     }
   }
   return newRegistry
-}, (rootBlock, safeMode, generation) => rootBlock.id + safeMode + generation)
+}, (rootBlock, safeMode, generation) =>
+  `${rootBlock.repo.instanceId}:${rootBlock.id}:${safeMode}:${generation}`)
 
 const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
   const childrenBlocks = await getAllChildrenBlocks(rootBlock)

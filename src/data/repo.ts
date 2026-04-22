@@ -112,6 +112,8 @@ const buildSelectBlocksByIdsSql = (count: number) => `
 `
 
 export class Repo {
+  static nextInstanceId = 1
+
   private readonly blockCache = new Map<string, Block>()
   private readonly snapshotCache = new Map<string, BlockData>()
   private readonly snapshotRevisions = new Map<string, number>()
@@ -119,6 +121,7 @@ export class Repo {
   private readonly dirtyBlockIds = new Set<string>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   private writeQueue = Promise.resolve()
+  readonly instanceId = Repo.nextInstanceId++
 
   constructor(
     readonly db: PowerSyncDatabase,
@@ -153,6 +156,20 @@ export class Repo {
       [id],
     )
     return Boolean(row)
+  }
+
+  async findFirstRootBlockId() {
+    const row = await this.db.getOptional<{id: string}>(
+      `
+        SELECT id
+        FROM blocks
+        WHERE parent_id IS NULL
+        ORDER BY create_time ASC, id ASC
+        LIMIT 1
+      `,
+    )
+
+    return row?.id
   }
 
   create(data: Partial<BlockData>): Block {
@@ -354,6 +371,10 @@ export class Repo {
             if (row) {
               this.hydrateBlockData(parseBlockRow(row))
             } else {
+              if (this.snapshotCache.has(id)) {
+                continue
+              }
+
               this.dirtyBlockIds.delete(id)
               this.deleteCachedBlockData(id)
             }

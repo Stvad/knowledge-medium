@@ -329,7 +329,7 @@ export const getRootBlock = memoize(async (block: Block): Promise<Block> => {
   if (!parent) return block
 
   return getRootBlock(parent)
-}, (block) => block.id)
+}, (block) => `${block.repo.instanceId}:${block.id}`)
 
 export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
   const doc = await block.data()

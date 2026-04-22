@@ -14,7 +14,7 @@ const mainPanelName = 'main'
 
 const getMainPanelBlock = memoize(
   (panelsBlock: Block) => panelsBlock.childByContent(mainPanelName, true),
-  (panelsBlock) => panelsBlock.id
+  (panelsBlock) => `${panelsBlock.repo.instanceId}:${panelsBlock.id}`
 )
 
 export function LayoutRenderer({block}: BlockRendererProps) {

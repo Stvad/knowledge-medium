@@ -7,7 +7,7 @@ import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 
 const initRepo = memoize(async (user: User) => {
-  await ensurePowerSyncReady()
+  await ensurePowerSyncReady(user.id)
   return new Repo(powerSyncDb, undoRedoManager, user)
 }, (user) => user.id)
 

@@ -67,17 +67,18 @@ export const getUIStateBlock = memoize(
     }
 
     return userBlock.childByContent('ui-state', true)
-  }, (_, rootBlock, user, context) => rootBlock.id + user.id + context.panelId)
+  }, (repo, rootBlock, user, context) =>
+    `${repo.instanceId}:${rootBlock.id}:${user.id}:${context.panelId ?? '__root__'}`)
 
 export const getUserBlock = memoize(
   async (rootBlock: Block, user: User): Promise<Block> => rootBlock.childByContent(['system', 'users', user.id], true),
-  (rootBlock, user) => rootBlock.id + user.id)
+  (rootBlock, user) => `${rootBlock.repo.instanceId}:${rootBlock.id}:${user.id}`)
 
 
 const panelsPathPart = 'panels'
 export const getPanelsBlock = memoize(
   async (uiStateBlock: Block): Promise<Block> => uiStateBlock.childByContent([panelsPathPart], true),
-  (uiBlock) => uiBlock.id)
+  (uiBlock) => `${uiBlock.repo.instanceId}:${uiBlock.id}`)
 
 export function useSelectionState(): [
   BlockSelectionState,

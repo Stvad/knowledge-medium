@@ -1,0 +1,13 @@
+_type: cloud
+
+name: knowledge-medium
+region: us
+
+replication:
+  connections:
+    - type: postgresql
+      uri: !env PS_DATABASE_URI
+      sslmode: verify-full
+
+client_auth:
+  supabase: true

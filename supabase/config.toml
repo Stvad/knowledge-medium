@@ -1,0 +1,12 @@
+project_id = "knowledge-medium"
+
+[auth]
+site_url = "http://127.0.0.1:5173"
+additional_redirect_urls = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+]
+enable_signup = true
+enable_anonymous_sign_ins = true

@@ -1,0 +1,19 @@
+config:
+  edition: 3
+
+streams:
+  blocks:
+    auto_subscribe: true
+    query: |
+      SELECT
+        id,
+        content,
+        properties_json,
+        child_ids_json,
+        parent_id,
+        create_time,
+        update_time,
+        created_by_user_id,
+        updated_by_user_id,
+        references_json
+      FROM public.blocks

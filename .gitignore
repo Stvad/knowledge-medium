@@ -11,6 +11,12 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+powersync/cli.yaml
+supabase/.temp
+supabase/.branches
 
 # Editor directories and files
 .vscode/*

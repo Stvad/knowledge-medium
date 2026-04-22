@@ -24,7 +24,7 @@ const restoreFocus = memoize(async (block: Block, view: EditorView, uiStateBlock
     const end = selection.end ?? selection.start
     view.dispatch({selection: {anchor: selection.start, head: end}})
   }
-}, (_, view) => view)
+}, (block, view, uiStateBlock) => `${block.repo.instanceId}:${uiStateBlock.repo.instanceId}:${view}`)
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur'> {
   block: Block
