@@ -1,6 +1,6 @@
 import { BlockRendererProps, EditorSelectionState } from '@/types.ts'
 import { useIsEditing, editorSelection, focusedBlockIdProp, editorFocusRequestProp } from '@/data/properties.ts'
-import { ClipboardEvent, useRef, useEffect, useState, useMemo } from 'react'
+import { ClipboardEvent, useRef, useEffect, useState, useMemo, useCallback } from 'react'
 import { useUIStateProperty } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
@@ -52,11 +52,10 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     selectionRef.current = selection
   }, [selection])
 
-  useEffect(() => {
-    if (textareaRef.current && textarea !== textareaRef.current) {
-      setTextarea(textareaRef.current)
-    }
-  }, [textarea, textareaRef])
+  const bindTextareaRef = useCallback((node: HTMLTextAreaElement | null) => {
+    textareaRef.current = node
+    setTextarea(node)
+  }, [])
 
   const shortcutDependencies = useMemo(() => ({
     block,
@@ -66,21 +65,21 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
   useEditModeShortcuts(shortcutDependencies, !!textarea)
 
   useEffect(() => {
-    if (!isEditing || focusedBlockId !== block.id || !textareaRef.current) return
+    if (!isEditing || focusedBlockId !== block.id || !textarea) return
 
     const frameId = requestAnimationFrame(() => {
-      if (!textareaRef.current) return
+      if (!textarea) return
 
-      textareaRef.current.focus()
+      textarea.focus()
       const nextSelection = selectionRef.current
       if (nextSelection?.blockId === block.id && nextSelection.start !== undefined) {
         const end = nextSelection.end ?? nextSelection.start
-        textareaRef.current.setSelectionRange(nextSelection.start, end)
+        textarea.setSelectionRange(nextSelection.start, end)
       }
     })
 
     return () => cancelAnimationFrame(frameId)
-  }, [focusedBlockId, block.id, isEditing, focusRequestId])
+  }, [focusedBlockId, block.id, isEditing, focusRequestId, textarea])
 
   const fitSizeToContent = () => {
     if (textareaRef.current) {
@@ -151,7 +150,7 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
 
   return (
     <textarea
-      ref={textareaRef}
+      ref={bindTextareaRef}
       value={localContent}
       onChange={(e) => {
         const newValue = e.target.value
