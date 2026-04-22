@@ -8,8 +8,10 @@ import wasm from "vite-plugin-wasm"
 // https://vite.dev/config/
 export default defineConfig(({command}) => {
     const isDev = command === 'serve';
+    const base = process.env.APP_BASE_PATH?.trim() || '/';
 
     return ({
+        base,
         plugins: [
             react({
                 babel: {
@@ -31,14 +33,14 @@ export default defineConfig(({command}) => {
                  * Reason for this is that when we have preserveModules, Vite will for some reason will inject
                  * script tags for all the modules in the project.
                  * Which is probably not an issue generally, but if we externalize react and react-dom, this results in
-                 * Tags that point at /react and don't resolve via import maps
+                 * tags that point at /react and don't resolve via import maps.
+                 *
+                 * Keep the actual entry script regardless of whether the app is deployed at / or under a subpath.
                  */
                 transformIndexHtml(html: string) {
-                    // Remove any script tag whose src is not '/src/main.js'
-                    return html.replace(
-                      /<script\s+type="module" crossorigin .*?src="(?!\/src\/main\.js)[^"]*".*?><\/script>\s*/g,
-                      '',
-                    )
+                    return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
+                        return /(^|\/)src\/main\.js(?:$|[?#])/.test(src) ? match : '';
+                    })
                 },
             },
             isDev && {
