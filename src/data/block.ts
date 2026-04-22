@@ -235,18 +235,14 @@ export class Block {
     if (path.length === 0) return null
 
     const [currentContent, ...remainingPath] = path
-    const doc = await this.getDocOrThrow()
+    await this.getDocOrThrow()
 
-    for (const childId of doc.childIds) {
-      const child = this.repo.find(childId)
-      const childData = await child.data()
-
-      if (childData?.content === currentContent) {
-        if (remainingPath.length === 0) {
-          return child
-        }
-        return child.childByContentPath(remainingPath, createIfNotExists)
+    const existingChild = await this.repo.findFirstChildByContent(this.id, currentContent)
+    if (existingChild) {
+      if (remainingPath.length === 0) {
+        return existingChild
       }
+      return existingChild.childByContentPath(remainingPath, createIfNotExists)
     }
 
     if (!createIfNotExists) return null
@@ -388,10 +384,7 @@ export const previousVisibleBlock = async (block: Block, topLevelBlockId: string
 }
 
 export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
-  const directChildren = await block.children()
-  const childBlockChildren = await Promise.all(directChildren.map(child => getAllChildrenBlocks(child)))
-
-  return [...directChildren, ...childBlockChildren.flat()]
+  return block.repo.getSubtreeBlocks(block.id)
 }
 
 const parseAndUpdateReferences = async (block: Block) => {

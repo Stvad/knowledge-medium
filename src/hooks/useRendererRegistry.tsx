@@ -6,7 +6,7 @@ import { CodeMirrorRendererBlockRenderer } from '@/components/renderer/CodeMirro
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer'
 import { useRepo } from '@/context/repo.tsx'
-import { getAllChildrenBlocks, Block } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { memoize } from 'lodash'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
@@ -51,11 +51,7 @@ export const useRenderer = ({block, context}: BlockRendererProps) => {
 
   useEffect(() => {
     (async () => {
-      /**
-       * Todo we're disabling registry load on first load for now, need to figure out performance situation =\
-       * You can manually refresh the registry to access the custom renderer/etc
-       */
-      const safeMode = (context?.safeMode ?? false) || generation === 'initial-load'
+      const safeMode = context?.safeMode ?? false
       setRegistry(await loadRegistry(repo.find(rootBlockId!), safeMode, generation))
     })()
   }, [generation, rootBlockId, context?.safeMode, repo])
@@ -117,10 +113,5 @@ const loadRegistry = memoize(async (rootBlock: Block, safeMode: boolean, generat
   `${rootBlock.repo.instanceId}:${rootBlock.id}:${safeMode}:${generation}`)
 
 const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
-  const childrenBlocks = await getAllChildrenBlocks(rootBlock)
-  const blockData = await Promise.all(childrenBlocks.map(b => b.data()))
-
-  return blockData.filter(
-    (block): block is BlockData =>
-      block?.properties.type?.value === 'renderer')
+  return rootBlock.repo.findBlocksByTypeInSubtree(rootBlock.id, 'renderer')
 }

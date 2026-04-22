@@ -14,7 +14,6 @@ import {
   nextVisibleBlock,
   defaultChangeScope,
   Block,
-  getAllChildrenBlocks,
   getRootBlock,
   getLastVisibleDescendant,
 } from '@/data/block.ts'
@@ -266,8 +265,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       context: ActionContextTypes.GLOBAL,
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         const root = await getRootBlock(repo.find(uiStateBlock.id))
-        const children = await getAllChildrenBlocks(root)
-        const blocks = await Promise.all([root, ...children].map(block => block.data()))
+        const blocks = await repo.getSubtreeBlockData(root.id, {includeRoot: true})
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')
