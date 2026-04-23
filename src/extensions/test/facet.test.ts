@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 
 describe('facet runtime', () => {
@@ -30,5 +30,34 @@ describe('facet runtime', () => {
     const runtime = await resolveFacetRuntime([])
 
     expect(runtime.read(countFacet)).toBe(0)
+  })
+
+  it('ignores invalid contributions for validated facets', async () => {
+    const numbersFacet = defineFacet<number, number>({
+      id: 'test.validated-numbers',
+      combine: values => values.reduce((sum, value) => sum + value, 0),
+      empty: () => 0,
+      validate: (value): value is number => typeof value === 'number',
+    })
+
+    const invalidContribution = {
+      type: 'facet-contribution' as const,
+      facet: {id: numbersFacet.id},
+      value: 'not a number',
+    }
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const runtime = await resolveFacetRuntime([
+      numbersFacet.of(2),
+      invalidContribution,
+      numbersFacet.of(3),
+    ])
+
+    try {
+      expect(runtime.read(numbersFacet)).toBe(5)
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

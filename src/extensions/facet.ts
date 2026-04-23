@@ -6,6 +6,7 @@ export interface Facet<Input, Output = readonly Input[]> {
   id: string
   combine: (values: readonly Input[], context: FacetResolveContext) => Output
   empty: (context: FacetResolveContext) => Output
+  validate?: (value: unknown) => value is Input
   of: (value: Input, options?: FacetContributionOptions) => FacetContribution<Input>
 }
 
@@ -32,15 +33,18 @@ export function defineFacet<Input, Output = readonly Input[]>({
   id,
   combine,
   empty,
+  validate,
 }: {
   id: string
   combine?: (values: readonly Input[], context: FacetResolveContext) => Output
   empty?: (context: FacetResolveContext) => Output
+  validate?: (value: unknown) => value is Input
 }): Facet<Input, Output> {
   const facet: Facet<Input, Output> = {
     id,
     combine: combine ?? ((values) => values as unknown as Output),
     empty: empty ?? (() => [] as unknown as Output),
+    validate,
     of: (value, options = {}) => ({
       type: 'facet-contribution',
       facet: facet as unknown as Facet<Input, unknown>,
@@ -81,7 +85,17 @@ export class FacetRuntime {
 
     const values = contributions
       .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
-      .map(contribution => contribution.value as Input)
+      .flatMap((contribution) => {
+        if (facet.validate && !facet.validate(contribution.value)) {
+          console.warn(`Ignoring invalid contribution for facet "${facet.id}"`, {
+            source: contribution.source,
+            value: contribution.value,
+          })
+          return []
+        }
+
+        return [contribution.value as Input]
+      })
 
     const value = facet.combine(values, this.context)
     this.cache.set(facet.id, value)
@@ -117,7 +131,11 @@ async function collectContributions(
   }
 
   if (typeof extension === 'function') {
-    await collectContributions(await extension(context), context, output)
+    try {
+      await collectContributions(await extension(context), context, output)
+    } catch (error) {
+      console.error('Failed to resolve app extension', error)
+    }
     return
   }
 

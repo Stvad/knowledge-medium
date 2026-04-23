@@ -209,7 +209,7 @@ const SUBTREE_CTE_SQL = `
 const buildSelectSubtreeBlocksSql = (includeRoot: boolean) => `
   ${SUBTREE_CTE_SQL}
   SELECT
-    ${SELECT_BLOCK_COLUMNS}
+    ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks
   JOIN subtree ON subtree.id = blocks.id
   ${includeRoot ? '' : 'WHERE blocks.id != ?'}
@@ -232,7 +232,7 @@ const SELECT_ALIASES_IN_SUBTREE_SQL = `
 const SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL = `
   ${SUBTREE_CTE_SQL}
   SELECT
-    ${SELECT_BLOCK_COLUMNS}
+    ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks
   JOIN subtree ON subtree.id = blocks.id
   JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
@@ -244,7 +244,7 @@ const SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL = `
 const SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL = `
   ${SUBTREE_CTE_SQL}
   SELECT
-    ${SELECT_BLOCK_COLUMNS}
+    ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks
   JOIN subtree ON subtree.id = blocks.id
   WHERE blocks.id != ?

@@ -16,7 +16,14 @@ export const dynamicRenderersExtension = ({
     return []
   }
 
-  const rendererBlocks = await getRendererBlocks(rootBlock)
+  let rendererBlocks: BlockData[]
+  try {
+    rendererBlocks = await getRendererBlocks(rootBlock)
+  } catch (error) {
+    console.error('Failed to load dynamic renderer blocks', error)
+    return []
+  }
+
   const contributions: AppExtension[] = []
 
   for (const block of rendererBlocks) {
@@ -25,10 +32,11 @@ export const dynamicRenderersExtension = ({
       if (!DynamicComp) continue
 
       const rendererNameProp = block.properties.rendererName as StringBlockProperty | undefined
+      const rendererName = typeof rendererNameProp?.value === 'string' ? rendererNameProp.value : undefined
       const rendererContribution: RendererContribution = {
         id: block.id,
         renderer: DynamicComp,
-        aliases: rendererNameProp?.value ? [rendererNameProp.value] : undefined,
+        aliases: rendererName ? [rendererName] : undefined,
       }
 
       contributions.push(blockRenderersFacet.of(rendererContribution, {
