@@ -9,6 +9,7 @@ import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
 import { importState } from '@/utils/state.ts'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 
 const waitForInitialRemoteSync = async (repo: Repo, timeoutMs: number) => {
   const controller = new AbortController()
@@ -68,7 +69,9 @@ const App = () => {
 
   return (
     <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
-      <BlockComponent blockId={handle.id}/>
+      <AppRuntimeProvider rootBlock={rootBlock} safeMode={safeMode}>
+        <BlockComponent blockId={handle.id}/>
+      </AppRuntimeProvider>
     </BlockContextProvider>
   )
 }

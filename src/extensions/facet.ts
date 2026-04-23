@@ -1,0 +1,131 @@
+export interface FacetResolveContext {
+  [key: string]: unknown
+}
+
+export interface Facet<Input, Output = readonly Input[]> {
+  id: string
+  combine: (values: readonly Input[], context: FacetResolveContext) => Output
+  empty: (context: FacetResolveContext) => Output
+  of: (value: Input, options?: FacetContributionOptions) => FacetContribution<Input>
+}
+
+export interface FacetContributionOptions {
+  precedence?: number
+  source?: string
+}
+
+export interface FacetContribution<Input> extends FacetContributionOptions {
+  type: 'facet-contribution'
+  facet: Pick<Facet<Input, unknown>, 'id'>
+  value: Input
+}
+
+export type AppExtension =
+  | FacetContribution<unknown>
+  | readonly AppExtension[]
+  | ((context: FacetResolveContext) => AppExtension | Promise<AppExtension>)
+  | null
+  | undefined
+  | false
+
+export function defineFacet<Input, Output = readonly Input[]>({
+  id,
+  combine,
+  empty,
+}: {
+  id: string
+  combine?: (values: readonly Input[], context: FacetResolveContext) => Output
+  empty?: (context: FacetResolveContext) => Output
+}): Facet<Input, Output> {
+  const facet: Facet<Input, Output> = {
+    id,
+    combine: combine ?? ((values) => values as unknown as Output),
+    empty: empty ?? (() => [] as unknown as Output),
+    of: (value, options = {}) => ({
+      type: 'facet-contribution',
+      facet: facet as unknown as Facet<Input, unknown>,
+      value,
+      ...options,
+    }),
+  }
+
+  return facet
+}
+
+export class FacetRuntime {
+  private readonly contributionsByFacet = new Map<string, FacetContribution<unknown>[]>()
+  private readonly cache = new Map<string, unknown>()
+
+  constructor(
+    public readonly context: FacetResolveContext,
+    contributions: readonly FacetContribution<unknown>[],
+  ) {
+    for (const contribution of contributions) {
+      const bucket = this.contributionsByFacet.get(contribution.facet.id) ?? []
+      bucket.push(contribution)
+      this.contributionsByFacet.set(contribution.facet.id, bucket)
+    }
+  }
+
+  read<Input, Output>(facet: Facet<Input, Output>): Output {
+    if (this.cache.has(facet.id)) {
+      return this.cache.get(facet.id) as Output
+    }
+
+    const contributions = this.contributionsByFacet.get(facet.id) ?? []
+    if (!contributions.length) {
+      const emptyValue = facet.empty(this.context)
+      this.cache.set(facet.id, emptyValue)
+      return emptyValue
+    }
+
+    const values = contributions
+      .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
+      .map(contribution => contribution.value as Input)
+
+    const value = facet.combine(values, this.context)
+    this.cache.set(facet.id, value)
+    return value
+  }
+
+  contributions<Input>(facet: Facet<Input, unknown>): FacetContribution<Input>[] {
+    return (this.contributionsByFacet.get(facet.id) ?? []) as FacetContribution<Input>[]
+  }
+}
+
+export async function resolveFacetRuntime(
+  extensions: AppExtension | readonly AppExtension[],
+  context: FacetResolveContext = {},
+): Promise<FacetRuntime> {
+  const contributions: FacetContribution<unknown>[] = []
+  await collectContributions(extensions, context, contributions)
+  return new FacetRuntime(context, contributions)
+}
+
+async function collectContributions(
+  extension: AppExtension | readonly AppExtension[],
+  context: FacetResolveContext,
+  output: FacetContribution<unknown>[],
+): Promise<void> {
+  if (!extension) return
+
+  if (isExtensionArray(extension)) {
+    for (const child of extension) {
+      await collectContributions(child, context, output)
+    }
+    return
+  }
+
+  if (typeof extension === 'function') {
+    await collectContributions(await extension(context), context, output)
+    return
+  }
+
+  if (extension.type === 'facet-contribution') {
+    output.push(extension)
+  }
+}
+
+const isExtensionArray = (
+  extension: AppExtension | readonly AppExtension[],
+): extension is readonly AppExtension[] => Array.isArray(extension)

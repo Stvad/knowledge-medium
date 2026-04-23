@@ -19,7 +19,6 @@ import {
 } from '@/data/block.ts'
 import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
-import { refreshRendererRegistry } from '@/hooks/useRendererRegistry.tsx'
 import { importState } from '@/utils/state.ts'
 import {
   focusedBlockIdProp,
@@ -47,6 +46,9 @@ import {
 import { EditorSelectionState } from '@/types.ts'
 import { copySelectedBlocksToClipboard, copyBlockToClipboard } from '@/utils/copy.ts'
 import { resetBlockSelection } from '@/data/globalState.ts'
+import { actionsFacet } from '@/extensions/core.ts'
+import { AppExtension } from '@/extensions/facet.ts'
+import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -114,7 +116,7 @@ const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   }
 }
 
-export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager: ActionManager = defaultActionManager) {
+export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   // Define base actions that have transformations
   const indentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'indent_block',
@@ -270,7 +272,7 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
       description: 'Refresh Renderer Registry',
       context: ActionContextTypes.GLOBAL,
       handler: () => {
-        refreshRendererRegistry()
+        refreshAppRuntime()
         console.log('Renderer registry refreshed.')
       },
     },
@@ -886,9 +888,20 @@ export function registerDefaultShortcuts({repo}: { repo: Repo, }, actionManager:
     },
   ];
 
-  [...globalActions,
+  return [...globalActions,
     ...normalModeActions,
     ...editModeActions,
     ...editModeCMActions,
-    ...multiSelectModeActions].forEach(action => actionManager.registerAction(action as ActionConfig))
+    ...multiSelectModeActions] as ActionConfig[]
+}
+
+export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
+  return getDefaultActions({repo}).map(action => actionsFacet.of(action))
+}
+
+export function registerDefaultShortcuts(
+  {repo}: { repo: Repo },
+  actionManager: ActionManager = defaultActionManager,
+) {
+  actionManager.registerActions(getDefaultActions({repo}))
 }

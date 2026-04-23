@@ -3,15 +3,13 @@ import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { CommandPalette } from '@/components/CommandPalette.tsx'
-import { useEffect } from 'react'
-import { registerDefaultShortcuts } from '@/shortcuts/defaultShortcuts.ts'
-import { useRepo } from '@/context/repo.tsx'
 import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
 import { Block } from '@/data/block.ts'
 import { useUserBlock } from '@/data/globalState.ts'
 import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
+import { useRuntimeActions } from '@/extensions/useRuntimeActions.ts'
 
 // todo this is kind of a random place for this, I think a more principled way to do this is to have
 // on-load hook and fire this there
@@ -48,12 +46,7 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
    *
    */
 
-  const repo = useRepo()
-
-  useEffect(() => {
-    registerDefaultShortcuts({repo})
-  }, [repo])
-
+  useRuntimeActions()
   useActionContext(ActionContextTypes.GLOBAL)
 
   return (

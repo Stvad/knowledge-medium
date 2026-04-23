@@ -190,13 +190,13 @@ const UpdateIndicator = ({block}: { block: Block }) => {
   const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
   const blockData = useData(block)
 
-  if (!blockData) return null
-
   useEffect(() => {
     if (inFocus && !seen) {
       setSeen(true)
     }
   }, [inFocus, seen])
+
+  if (!blockData) return null
 
   const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
   const shouldShowUpdateIndicator = updatedByOtherUser && !seen

@@ -146,6 +146,10 @@ export class ActionManager {
     }
   }
 
+  registerActions(actions: readonly ActionConfig[]): void {
+    actions.forEach(action => this.registerAction(action))
+  }
+
   registerBinding(binding: ShortcutBinding): void {
     console.debug(`[ShortcutManager] Registering binding for action: ${binding.action}, keys: ${binding.keys}`)
     const action = this.actions.get(binding.action)
