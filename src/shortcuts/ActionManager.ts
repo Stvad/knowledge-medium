@@ -130,7 +130,8 @@ export class ActionManager {
     console.debug(`[ShortcutManager] Registering action: ${action.id} for context: ${action.context}`)
 
     if (this.actions.has(action.id)) {
-      console.warn(`[ShortcutManager] Action ${action.id} already registered`)
+      console.debug(`[ShortcutManager] Action ${action.id} already registered, skipping`)
+      return
     }
 
     // Cast the specifically typed Action<T> to the map's expected Action type.

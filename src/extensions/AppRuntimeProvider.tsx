@@ -1,9 +1,9 @@
-import { ReactNode, use, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { dynamicRenderersExtension } from '@/extensions/dynamicRenderers.ts'
-import { AppExtension, resolveFacetRuntime } from '@/extensions/facet.ts'
+import { AppExtension, FacetResolveContext, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
@@ -20,6 +20,24 @@ export function AppRuntimeProvider({
   const repo = useRepo()
   const [generation, setGeneration] = useState('initial-load')
 
+  const runtimeContext: FacetResolveContext = useMemo(() => ({
+    repo,
+    rootBlock,
+    safeMode,
+    generation,
+  }), [generation, repo, rootBlock, safeMode])
+
+  const baseExtensions: AppExtension[] = useMemo(() => [
+    defaultRenderersExtension,
+    defaultActionsExtension({repo}),
+  ], [repo])
+
+  const baseRuntime = useMemo(() =>
+    resolveFacetRuntimeSync(baseExtensions, runtimeContext),
+  [baseExtensions, runtimeContext])
+
+  const [runtime, setRuntime] = useState(baseRuntime)
+
   useEffect(() => {
     const reloadRuntime = (event: CustomEvent<string>) => {
       setGeneration(event.detail)
@@ -29,22 +47,32 @@ export function AppRuntimeProvider({
     return () => window.removeEventListener(appRuntimeUpdateEvent, reloadRuntime as EventListener)
   }, [])
 
-  const extensions: AppExtension[] = useMemo(() => [
-    defaultRenderersExtension,
-    defaultActionsExtension({repo}),
-    dynamicRenderersExtension({rootBlock, safeMode}),
-  ], [repo, rootBlock, safeMode])
+  useEffect(() => {
+    setRuntime(baseRuntime)
+  }, [baseRuntime])
 
-  const runtimePromise = useMemo(() =>
-    resolveFacetRuntime(extensions, {
-      repo,
-      rootBlock,
-      safeMode,
-      generation,
-    }),
-  [extensions, generation, repo, rootBlock, safeMode])
+  useEffect(() => {
+    let cancelled = false
 
-  const runtime = use(runtimePromise)
+    void (async () => {
+      try {
+        const nextRuntime = await resolveFacetRuntime([
+          baseExtensions,
+          dynamicRenderersExtension({rootBlock, safeMode}),
+        ], runtimeContext)
+
+        if (!cancelled) {
+          setRuntime(nextRuntime)
+        }
+      } catch (error) {
+        console.error('Failed to resolve app runtime', error)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [baseExtensions, rootBlock, runtimeContext, safeMode])
 
   return (
     <AppRuntimeContextProvider value={runtime}>

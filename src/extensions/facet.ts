@@ -116,6 +116,15 @@ export async function resolveFacetRuntime(
   return new FacetRuntime(context, contributions)
 }
 
+export function resolveFacetRuntimeSync(
+  extensions: AppExtension | readonly AppExtension[],
+  context: FacetResolveContext = {},
+): FacetRuntime {
+  const contributions: FacetContribution<unknown>[] = []
+  collectContributionsSync(extensions, contributions)
+  return new FacetRuntime(context, contributions)
+}
+
 async function collectContributions(
   extension: AppExtension | readonly AppExtension[],
   context: FacetResolveContext,
@@ -137,6 +146,28 @@ async function collectContributions(
       console.error('Failed to resolve app extension', error)
     }
     return
+  }
+
+  if (extension.type === 'facet-contribution') {
+    output.push(extension)
+  }
+}
+
+function collectContributionsSync(
+  extension: AppExtension | readonly AppExtension[],
+  output: FacetContribution<unknown>[],
+): void {
+  if (!extension) return
+
+  if (isExtensionArray(extension)) {
+    for (const child of extension) {
+      collectContributionsSync(child, output)
+    }
+    return
+  }
+
+  if (typeof extension === 'function') {
+    throw new Error('Cannot resolve function app extensions synchronously')
   }
 
   if (extension.type === 'facet-contribution') {

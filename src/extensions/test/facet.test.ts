@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
+import { defineFacet, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 
 describe('facet runtime', () => {
   it('combines nested and async contributions in precedence order', async () => {
@@ -30,6 +30,21 @@ describe('facet runtime', () => {
     const runtime = await resolveFacetRuntime([])
 
     expect(runtime.read(countFacet)).toBe(0)
+  })
+
+  it('can resolve synchronous extensions without suspending', () => {
+    const labelsFacet = defineFacet<string, string>({
+      id: 'test.sync-labels',
+      combine: values => values.join(','),
+      empty: () => '',
+    })
+
+    const runtime = resolveFacetRuntimeSync([
+      labelsFacet.of('a'),
+      [labelsFacet.of('b')],
+    ])
+
+    expect(runtime.read(labelsFacet)).toBe('a,b')
   })
 
   it('ignores invalid contributions for validated facets', async () => {
