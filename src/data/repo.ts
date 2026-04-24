@@ -5,25 +5,19 @@ import type { BlockData, User } from '@/types'
 import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
 import { BlockStorage } from '@/data/blockStorage'
 import type { WriteEventContext } from '@/data/blockStorage'
+import { BlockCache } from '@/data/blockCache'
 
 export type { BlockRow } from '@/data/blockSchema'
 export { parseBlockRow } from '@/data/blockSchema'
 
 const cloneBlockData = (blockData: BlockData) => structuredClone(blockData)
 
-const blockFingerprint = (blockData: BlockData | undefined) =>
-  blockData ? JSON.stringify(blockData) : ''
-
 export class Repo {
   static nextInstanceId = 1
 
   private readonly storage: BlockStorage
+  private readonly cache = new BlockCache()
   private readonly blockCache = new Map<string, Block>()
-  private readonly snapshotCache = new Map<string, BlockData>()
-  private readonly snapshotRevisions = new Map<string, number>()
-  private readonly snapshotListeners = new Map<string, Set<() => void>>()
-  private readonly dirtyBlockIds = new Set<string>()
-  private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   private lastProcessedBlockEventSeq = 0
   readonly instanceId = Repo.nextInstanceId++
 
@@ -55,7 +49,7 @@ export class Repo {
   }
 
   async exists(id: string) {
-    if (this.snapshotCache.has(id)) return true
+    if (this.cache.hasSnapshot(id)) return true
     return this.storage.existsBlock(id)
   }
 
@@ -85,32 +79,22 @@ export class Repo {
       txId: this.undoRedoManager.getCurrentTransactionId() ?? uuidv4(),
     }
 
-    this.markBlockDirty(id)
-    this.setCachedBlockData(snapshot)
+    this.cache.markDirty(id)
+    this.cache.setSnapshot(snapshot)
     this.storage.enqueueUpsert(snapshot, eventContext)
     return this.find(id)
   }
 
   async loadBlockData(id: string) {
-    const cached = this.snapshotCache.get(id)
+    const cached = this.cache.getSnapshot(id)
     if (cached) return cached
 
-    const pendingLoad = this.pendingLoads.get(id)
-    if (pendingLoad) return pendingLoad
-
-    const loadPromise = this.storage.loadBlock(id)
-      .then((snapshot) => {
-        if (!snapshot) return undefined
-
-        this.hydrateBlockData(snapshot)
-        return this.snapshotCache.get(id)
-      })
-      .finally(() => {
-        this.pendingLoads.delete(id)
-      })
-
-    this.pendingLoads.set(id, loadPromise)
-    return loadPromise
+    return this.cache.dedupLoad(id, async () => {
+      const snapshot = await this.storage.loadBlock(id)
+      if (!snapshot) return undefined
+      this.cache.hydrate(snapshot)
+      return this.cache.getSnapshot(id)
+    })
   }
 
   async getSubtreeBlockData(
@@ -188,7 +172,7 @@ export class Repo {
     const snapshot = await this.storage.findBlockByAliasInSubtree(rootId, alias)
     if (!snapshot) return null
 
-    this.hydrateBlockData(snapshot)
+    this.cache.hydrate(snapshot)
     return this.find(snapshot.id)
   }
 
@@ -198,57 +182,32 @@ export class Repo {
     const snapshot = await this.storage.findFirstChildByContent(parentId, content)
     if (!snapshot) return null
 
-    this.hydrateBlockData(snapshot)
+    this.cache.hydrate(snapshot)
     return this.find(snapshot.id)
   }
 
   getCachedBlockData(id: string) {
-    return this.snapshotCache.get(id)
+    return this.cache.getSnapshot(id)
   }
 
   requireCachedBlockData(id: string) {
-    const snapshot = this.snapshotCache.get(id)
-    if (!snapshot) {
-      throw new Error(`Block is not loaded yet: ${id}`)
-    }
-    return snapshot
+    return this.cache.requireSnapshot(id)
   }
 
   subscribeToBlock(id: string, listener: () => void) {
-    let listeners = this.snapshotListeners.get(id)
-    if (!listeners) {
-      listeners = new Set()
-      this.snapshotListeners.set(id, listeners)
-    }
-    listeners.add(listener)
-
-    return () => {
-      listeners?.delete(listener)
-      if (listeners?.size === 0) {
-        this.snapshotListeners.delete(id)
-      }
-    }
+    return this.cache.subscribe(id, listener)
   }
 
   getBlockRevision(id: string) {
-    return this.snapshotRevisions.get(id) ?? 0
+    return this.cache.getRevision(id)
   }
 
   isBlockDirty(id: string) {
-    return this.dirtyBlockIds.has(id)
+    return this.cache.isDirty(id)
   }
 
   hydrateBlockData(snapshot: BlockData) {
-    const existing = this.snapshotCache.get(snapshot.id)
-
-    if (this.dirtyBlockIds.has(snapshot.id)) {
-      if (existing && blockFingerprint(existing) !== blockFingerprint(snapshot)) {
-        return
-      }
-      this.dirtyBlockIds.delete(snapshot.id)
-    }
-
-    this.setCachedBlockData(snapshot)
+    this.cache.hydrate(snapshot)
   }
 
   applyBlockChange(
@@ -256,7 +215,7 @@ export class Repo {
     callback: (doc: BlockData) => void,
     options: UndoRedoOptions<BlockData> = {},
   ) {
-    const current = cloneBlockData(this.requireCachedBlockData(id))
+    const current = cloneBlockData(this.cache.requireSnapshot(id))
     const next = cloneBlockData(current)
 
     callback(next)
@@ -274,8 +233,8 @@ export class Repo {
     }
 
     this.undoRedoManager.recordChange(id, current, next, options)
-    this.markBlockDirty(id)
-    this.setCachedBlockData(next)
+    this.cache.markDirty(id)
+    this.cache.setSnapshot(next)
     this.storage.enqueueUpsert(next, eventContext)
   }
 
@@ -289,12 +248,12 @@ export class Repo {
         txId,
       }
 
-      this.markBlockDirty(change.id)
+      this.cache.markDirty(change.id)
       if (change.snapshot) {
-        this.setCachedBlockData(change.snapshot)
+        this.cache.setSnapshot(change.snapshot)
         this.storage.enqueueUpsert(change.snapshot, eventContext)
       } else {
-        this.deleteCachedBlockData(change.id)
+        this.cache.deleteSnapshot(change.id)
         this.storage.enqueueDelete(change.id, eventContext)
       }
     }
@@ -304,36 +263,10 @@ export class Repo {
     await this.storage.flush()
   }
 
-  private setCachedBlockData(snapshot: BlockData) {
-    const next = cloneBlockData(snapshot)
-    const existing = this.snapshotCache.get(snapshot.id)
-
-    if (existing && blockFingerprint(existing) === blockFingerprint(next)) {
-      return
-    }
-
-    this.snapshotCache.set(snapshot.id, next)
-    this.snapshotRevisions.set(snapshot.id, this.getBlockRevision(snapshot.id) + 1)
-    this.blockCache.set(snapshot.id, this.blockCache.get(snapshot.id) ?? new Block(this, this.undoRedoManager, snapshot.id, this.currentUser))
-    this.snapshotListeners.get(snapshot.id)?.forEach(listener => listener())
-  }
-
-  private deleteCachedBlockData(id: string) {
-    const hadSnapshot = this.snapshotCache.delete(id)
-    if (!hadSnapshot) return
-
-    this.snapshotRevisions.set(id, this.getBlockRevision(id) + 1)
-    this.snapshotListeners.get(id)?.forEach(listener => listener())
-  }
-
-  private markBlockDirty(id: string) {
-    this.dirtyBlockIds.add(id)
-  }
-
   private hydrateSnapshots(snapshots: BlockData[]) {
     return snapshots.map(snapshot => {
-      this.hydrateBlockData(snapshot)
-      return this.requireCachedBlockData(snapshot.id)
+      this.cache.hydrate(snapshot)
+      return this.cache.requireSnapshot(snapshot.id)
     })
   }
 
@@ -343,10 +276,7 @@ export class Repo {
 
     this.lastProcessedBlockEventSeq = events[events.length - 1].seq
 
-    const trackedIds = new Set([
-      ...this.snapshotListeners.keys(),
-      ...this.dirtyBlockIds,
-    ])
+    const trackedIds = this.cache.trackedIds()
     if (!trackedIds.size) return
 
     const changedIds = Array.from(new Set(
@@ -362,14 +292,14 @@ export class Repo {
       const snapshot = snapshotsById.get(id)
 
       if (snapshot) {
-        this.hydrateBlockData(snapshot)
+        this.cache.hydrate(snapshot)
       } else {
-        if (this.dirtyBlockIds.has(id) && this.snapshotCache.has(id)) {
+        if (this.cache.isDirty(id) && this.cache.hasSnapshot(id)) {
           continue
         }
 
-        this.dirtyBlockIds.delete(id)
-        this.deleteCachedBlockData(id)
+        this.cache.clearDirty(id)
+        this.cache.deleteSnapshot(id)
       }
     }
   }
