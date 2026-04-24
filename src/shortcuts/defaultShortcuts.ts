@@ -54,10 +54,9 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { vimNormalModeActionsFacet, VimNormalModeAction } from '@/shortcuts/vimNormalMode.ts'
-import { blockInteractionPolicyFacet } from '@/extensions/blockInteraction.ts'
 import {
-  plainOutlinerBlockInteractionPolicy,
-  vimBlockInteractionPolicy,
+  plainOutlinerInteractionExtension,
+  vimNormalModeInteractionExtension,
 } from '@/shortcuts/blockInteractionPolicies.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
@@ -943,15 +942,10 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
 
   return [
     defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
-    blockInteractionPolicyFacet.of(plainOutlinerBlockInteractionPolicy, {
-      source: 'plain-outliner',
-    }),
+    plainOutlinerInteractionExtension,
     defaultActions.map(action => actionsFacet.of(action)),
     [
-      blockInteractionPolicyFacet.of(vimBlockInteractionPolicy, {
-        precedence: 100,
-        source: 'vim-normal-mode',
-      }),
+      vimNormalModeInteractionExtension,
       vimNormalModeActions.map(action => vimNormalModeActionsFacet.of(action)),
     ],
   ]

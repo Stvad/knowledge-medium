@@ -2,13 +2,13 @@ import { BlockRendererProps } from '@/types.ts'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
 import { useInEditMode, useInFocus, useIsSelected, useUIStateBlock, useUIStateProperty } from '@/data/globalState'
-import { useRef, MouseEvent, TouchEvent } from 'react'
+import { useMemo, useRef, MouseEvent, TouchEvent } from 'react'
 import { useBlockContext } from '@/context/block.tsx'
 import { useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { blockInteractionPolicyFacet } from '@/extensions/blockInteraction.ts'
+import { blockContentGestureHandlersFacet } from '@/extensions/blockInteraction.ts'
 
 type Touch = { x: number; y: number; time: number }
 
@@ -34,9 +34,29 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const inFocus = useInFocus(block.id)
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
+  const blockInteractionContext = useMemo(() => ({
+    block,
+    repo,
+    uiStateBlock,
+    topLevelBlockId,
+    inFocus,
+    inEditMode,
+    isSelected,
+    isTopLevel: block.id === topLevelBlockId,
+  }), [
+    block,
+    repo,
+    uiStateBlock,
+    topLevelBlockId,
+    inFocus,
+    inEditMode,
+    isSelected,
+  ])
+  const resolveContentGestureHandlers = runtime.read(blockContentGestureHandlersFacet)
+  const contentGestureHandlers = resolveContentGestureHandlers(blockInteractionContext)
 
   const handleMouseDoubleClick = (e: MouseEvent) => {
-    void blockInteractionPolicy.handleContentDoubleClick?.(e)
+    void contentGestureHandlers.onDoubleClick?.(e)
   }
 
   const touchStartRef = useRef<Touch | null>(null)
@@ -63,7 +83,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
     }
 
     if (!isSwipe(touchEnd, touchStartRef.current)) {
-      void blockInteractionPolicy.handleContentTap?.(e)
+      void contentGestureHandlers.onTap?.(e)
     }
 
     // Reset the touch start reference
@@ -73,17 +93,6 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   if (!blockData) return null
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   const markdownConfig = resolveMarkdownConfig({block, blockContext})
-  const resolveBlockInteractionPolicy = runtime.read(blockInteractionPolicyFacet)
-  const blockInteractionPolicy = resolveBlockInteractionPolicy({
-    block,
-    repo,
-    uiStateBlock,
-    topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
-    isTopLevel: block.id === topLevelBlockId,
-  })
 
   return (
     <div

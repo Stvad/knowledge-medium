@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { actionManager } from './ActionManager.ts'
 import {
   ActionContextType,
+  ActionContextActivation,
   BaseShortcutDependencies,
   ActionContextTypes,
   EditModeDependencies,
@@ -11,6 +12,40 @@ import {
   CodeMirrorEditModeDependencies,
 } from './types'
 import { useUIStateBlock } from '@/data/globalState.ts'
+
+/**
+ * Hook to activate any number of shortcut contexts described by facet contributions.
+ */
+export function useActionContextActivations(
+  activations: readonly ActionContextActivation[],
+): void {
+  const uiStateBlock = useUIStateBlock()
+
+  const activeActivations = useMemo(() => activations
+    .filter(activation => activation.enabled !== false)
+    .map(activation => ({
+      context: activation.context,
+      dependencies: {
+        ...(activation.dependencies ?? {}),
+        uiStateBlock,
+      } as BaseShortcutDependencies,
+    })),
+  [activations, uiStateBlock])
+
+  useEffect(() => {
+    if (!activeActivations.length) return
+
+    for (const activation of activeActivations) {
+      actionManager.activateContext(activation.context, activation.dependencies)
+    }
+
+    return () => {
+      for (const activation of activeActivations) {
+        actionManager.deactivateContext(activation.context)
+      }
+    }
+  }, [activeActivations])
+}
 
 /**
  * Hook to activate a shortcut context
@@ -23,28 +58,13 @@ export function useActionContext(
   dependencies: Omit<BaseShortcutDependencies, 'uiStateBlock'> | null = null,
   enabled: boolean = true,
 ): void {
-  const uiStateBlock = useUIStateBlock()
+  const activations = useMemo<readonly ActionContextActivation[]>(() => [{
+    context,
+    dependencies: dependencies as Record<string, unknown> | null,
+    enabled,
+  }], [context, dependencies, enabled])
 
-  const depsWithUiState = useMemo(() => ({
-    ...(dependencies ?? {}),
-    uiStateBlock,
-  }), [dependencies, uiStateBlock])
-
-  useEffect(() => {
-    console.log(`[useShortcutContext] Effect running for context: ${context}`, {
-      enabled,
-      dependencies: depsWithUiState,
-    })
-
-    if (!enabled) return
-
-    actionManager.activateContext(context, depsWithUiState)
-
-    return () => {
-      console.log(`[useShortcutContext] Cleanup running for context: ${context}`)
-      actionManager.deactivateContext(context)
-    }
-  }, [context, depsWithUiState, enabled])
+  useActionContextActivations(activations)
 }
 
 /**

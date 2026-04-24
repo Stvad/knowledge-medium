@@ -1,13 +1,27 @@
 import { BlockRendererProps, EditorSelectionState } from '@/types.ts'
-import { useIsEditing, editorSelection, focusedBlockIdProp, editorFocusRequestProp } from '@/data/properties.ts'
+import {
+  useIsEditing,
+  editorSelection,
+  focusedBlockIdProp,
+  editorFocusRequestProp,
+  topLevelBlockIdProp,
+} from '@/data/properties.ts'
 import { ClipboardEvent, useRef, useEffect, useState, useMemo, useCallback } from 'react'
-import { useUIStateProperty } from '@/data/globalState'
+import {
+  useInEditMode,
+  useInFocus,
+  useIsSelected,
+  useUIStateBlock,
+  useUIStateProperty,
+} from '@/data/globalState'
 import { debounce } from 'lodash'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
-import { useEditModeShortcuts } from '@/shortcuts/useActionContext.ts'
+import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
 import { useData } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.ts'
 
 export const splitBlockAtCursor = async (block: BlockRendererProps['block'], textarea: HTMLTextAreaElement, isTopLevel: boolean) => {
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart)
@@ -36,17 +50,23 @@ export const splitBlockAtCursor = async (block: BlockRendererProps['block'], tex
 
 export function TextAreaContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
+  const runtime = useAppRuntime()
   const blockData = useData(block)
+  const uiStateBlock = useUIStateBlock()
   const [localContent, setLocalContent] = useState(blockData?.content || '')
   const pendingLocalEdits = useRef(false)
   const pendingCommittedContent = useRef<string | null>(null)
   const [isEditing, setIsEditing] = useIsEditing()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [focusedBlockId, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
+  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [focusRequestId] = useUIStateProperty(editorFocusRequestProp)
   const [selection, setSelection] = useUIStateProperty(editorSelection)
   const selectionRef = useRef(selection)
   const [textarea, setTextarea] = useState<HTMLTextAreaElement | null>(null)
+  const inFocus = useInFocus(block.id)
+  const inEditMode = useInEditMode(block.id)
+  const isSelected = useIsSelected(block.id)
 
   useEffect(() => {
     selectionRef.current = selection
@@ -57,12 +77,31 @@ export function TextAreaContentRenderer({block}: BlockRendererProps) {
     setTextarea(node)
   }, [])
 
-  const shortcutDependencies = useMemo(() => ({
+  const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
+  const shortcutActivations = useMemo(() => resolveShortcutActivations({
     block,
-    textarea: textarea!,
-  }), [block, textarea])
+    repo,
+    uiStateBlock,
+    topLevelBlockId,
+    inFocus,
+    inEditMode,
+    isSelected,
+    isTopLevel: block.id === topLevelBlockId,
+    surface: 'textarea',
+    textarea: textarea ?? undefined,
+  }), [
+    resolveShortcutActivations,
+    block,
+    repo,
+    uiStateBlock,
+    topLevelBlockId,
+    inFocus,
+    inEditMode,
+    isSelected,
+    textarea,
+  ])
 
-  useEditModeShortcuts(shortcutDependencies, !!textarea)
+  useActionContextActivations(shortcutActivations)
 
   useEffect(() => {
     if (!isEditing || focusedBlockId !== block.id || !textarea) return

@@ -30,7 +30,7 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
   validateDependencies: DependencyValidator<T>;
 }
 
-export type ActionContextType =
+export type BuiltInActionContextType =
   | 'global'
   | 'normal-mode'
   | 'edit-mode'
@@ -38,6 +38,8 @@ export type ActionContextType =
   | 'property-editing'
   | 'command-palette'
   | 'multi-select-mode'
+
+export type ActionContextType = BuiltInActionContextType | (string & {})
 
 export const ActionContextTypes = {
   GLOBAL: 'global',
@@ -78,6 +80,7 @@ export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
 }
 
 export interface ShortcutDependenciesMap {
+  [context: string]: BaseShortcutDependencies;
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
   [ActionContextTypes.NORMAL_MODE]: BlockShortcutDependencies;
   [ActionContextTypes.EDIT_MODE]: EditModeDependencies;
@@ -90,6 +93,12 @@ export interface ShortcutDependenciesMap {
 export interface ActiveContextInfo {
   config: ActionContextConfig;
   dependencies: BaseShortcutDependencies;
+}
+
+export interface ActionContextActivation {
+  context: ActionContextType;
+  dependencies?: Record<string, unknown> | null;
+  enabled?: boolean;
 }
 
 export type ActionTrigger = KeyboardEvent | CustomEvent

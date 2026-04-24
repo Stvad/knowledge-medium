@@ -1,5 +1,5 @@
 import { defineFacet } from '@/extensions/facet.ts'
-import { ActionConfig, ActionContextConfig, ActionContextType, ActionContextTypes } from '@/shortcuts/types.ts'
+import { ActionConfig, ActionContextConfig, ActionContextType } from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
 
 export interface RendererContribution {
@@ -20,10 +20,8 @@ export const isRendererContribution = (value: unknown): value is RendererContrib
   typeof value.renderer === 'function' &&
   (value.aliases === undefined || isStringArray(value.aliases))
 
-const actionContextValues = Object.values(ActionContextTypes) as ActionContextType[]
-
 const isActionContextType = (value: unknown): value is ActionContextType =>
-  typeof value === 'string' && actionContextValues.includes(value as ActionContextType)
+  typeof value === 'string' && value.length > 0
 
 const isShortcutKeys = (value: unknown): value is string | string[] =>
   typeof value === 'string' || isStringArray(value)

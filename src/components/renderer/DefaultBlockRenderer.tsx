@@ -38,12 +38,16 @@ import {
   ContextMenuItem,
   ContextMenuContent,
 } from '@/components/ui/context-menu.tsx'
-import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
+import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
 import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { blockInteractionPolicyFacet } from '@/extensions/blockInteraction.ts'
+import {
+  blockClickHandlersFacet,
+  blockContentRendererFacet,
+  shortcutSurfaceActivationsFacet,
+} from '@/extensions/blockInteraction.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -229,8 +233,8 @@ export function DefaultBlockRenderer(
   const isSelected = useIsSelected(block.id)
   const inFocus = useInFocus(block.id)
   const hasChildren = useHasChildren(block)
-  const resolveBlockInteractionPolicy = runtime.read(blockInteractionPolicyFacet)
-  const blockInteractionPolicy = resolveBlockInteractionPolicy({
+
+  const blockInteractionContext = useMemo(() => ({
     block,
     repo,
     uiStateBlock,
@@ -239,11 +243,43 @@ export function DefaultBlockRenderer(
     inEditMode,
     isSelected,
     isTopLevel,
-  })
+    contentRenderers: [
+      {
+        id: 'primary',
+        renderer: DefaultContentRenderer,
+      },
+      {
+        id: 'secondary',
+        renderer: EditContentRenderer,
+      },
+    ],
+  }), [
+    block,
+    repo,
+    uiStateBlock,
+    topLevelBlockId,
+    inFocus,
+    inEditMode,
+    isSelected,
+    isTopLevel,
+    DefaultContentRenderer,
+    EditContentRenderer,
+  ])
 
-  const shortcutDependencies = useMemo(() => ({block}), [block])
+  const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
+  const ContentRenderer = resolveBlockContentRenderer(blockInteractionContext) ?? DefaultContentRenderer
+  const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
+  const handleBlockClick = resolveBlockClickHandler(blockInteractionContext)
+  const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
+  const shortcutActivations = useMemo(
+    () => resolveShortcutActivations({
+      ...blockInteractionContext,
+      surface: 'block',
+    }),
+    [blockInteractionContext, resolveShortcutActivations],
+  )
 
-  useNormalModeShortcuts(shortcutDependencies, blockInteractionPolicy.activateNormalMode)
+  useActionContextActivations(shortcutActivations)
 
   useEffect(() => {
     const element = contentContainerRef.current
@@ -262,10 +298,6 @@ export function DefaultBlockRenderer(
       setFocusedBlockId(uiStateBlock, pasted[0].id)
     }
   }
-
-  const ContentRenderer = blockInteractionPolicy.contentMode === 'editor'
-    ? EditContentRenderer
-    : DefaultContentRenderer
 
   const blockControls = () =>
     <div className="block-controls flex items-center ">
@@ -286,7 +318,7 @@ export function DefaultBlockRenderer(
         onPaste={handlePaste}
         ref={collapsibleRef}
         onClick={(event) => {
-          void blockInteractionPolicy.handleBlockClick?.(event)
+          void handleBlockClick?.(event)
         }}
       >
         {!isTopLevel && blockControls()}
