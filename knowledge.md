@@ -73,7 +73,7 @@ Configuration UIs should be implemented as custom renderers for configuration bl
 - Keyboard shortcut configuration
 - Other user preferences
 
-See RendererBlockRenderer for an example of a renderer
+See CodeMirrorRendererBlockRenderer for an example of a renderer block editor
 
 
 ## Development Guidelines
