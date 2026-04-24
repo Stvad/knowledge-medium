@@ -8,7 +8,6 @@ import {
   isCollapsedProp,
   topLevelBlockIdProp,
   previousLoadTimeProp,
-  selectionStateProp,
   setFocusedBlockId,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
@@ -22,8 +21,6 @@ import {
   useIsSelected,
   useInFocus,
   useInEditMode,
-  getSelectionStateSnapshot,
-  resetBlockSelection,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { pasteMultilineText } from '@/utils/paste.ts'
@@ -43,9 +40,10 @@ import {
 } from '@/components/ui/context-menu.tsx'
 import { useNormalModeShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
-import { validateSelectionHierarchy, extendSelection } from '@/utils/selection'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
 import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { blockInteractionPolicyFacet } from '@/extensions/blockInteraction.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -216,6 +214,7 @@ export function DefaultBlockRenderer(
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
+  const runtime = useAppRuntime()
   const uiStateBlock = useUIStateBlock()
   const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
@@ -230,10 +229,21 @@ export function DefaultBlockRenderer(
   const isSelected = useIsSelected(block.id)
   const inFocus = useInFocus(block.id)
   const hasChildren = useHasChildren(block)
+  const resolveBlockInteractionPolicy = runtime.read(blockInteractionPolicyFacet)
+  const blockInteractionPolicy = resolveBlockInteractionPolicy({
+    block,
+    repo,
+    uiStateBlock,
+    topLevelBlockId,
+    inFocus,
+    inEditMode,
+    isSelected,
+    isTopLevel,
+  })
 
   const shortcutDependencies = useMemo(() => ({block}), [block])
 
-  useNormalModeShortcuts(shortcutDependencies, inFocus && !inEditMode && !isSelected)
+  useNormalModeShortcuts(shortcutDependencies, blockInteractionPolicy.activateNormalMode)
 
   useEffect(() => {
     const element = contentContainerRef.current
@@ -253,7 +263,9 @@ export function DefaultBlockRenderer(
     }
   }
 
-  const ContentRenderer = inEditMode ? EditContentRenderer : DefaultContentRenderer
+  const ContentRenderer = blockInteractionPolicy.contentMode === 'editor'
+    ? EditContentRenderer
+    : DefaultContentRenderer
 
   const blockControls = () =>
     <div className="block-controls flex items-center ">
@@ -273,34 +285,8 @@ export function DefaultBlockRenderer(
         tabIndex={0}
         onPaste={handlePaste}
         ref={collapsibleRef}
-        onClick={async (e) => {
-          e.preventDefault()
-          e.stopPropagation()
-
-          // Handle selection clicks
-          if (e.ctrlKey || e.metaKey) {
-            const selectionState = getSelectionStateSnapshot(uiStateBlock)
-            const newSelectedIds = isSelected
-              ? selectionState.selectedBlockIds.filter(id => id !== block.id)
-              : [...selectionState.selectedBlockIds, block.id]
-
-            const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
-
-            uiStateBlock.setProperty({
-              ...selectionStateProp,
-              value: {
-                selectedBlockIds: validatedIds,
-                anchorBlockId: validatedIds.length > 0
-                  ? (selectionState.anchorBlockId || block.id)
-                  : null,
-              },
-            })
-          } else if (e.shiftKey) {
-            await extendSelection(block.id, uiStateBlock, repo)
-          } else {
-            await resetBlockSelection(uiStateBlock)
-          }
-          setFocusedBlockId(uiStateBlock, block.id)
+        onClick={(event) => {
+          void blockInteractionPolicy.handleBlockClick?.(event)
         }}
       >
         {!isTopLevel && blockControls()}
