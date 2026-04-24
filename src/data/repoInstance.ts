@@ -1,44 +1,18 @@
 import { PowerSyncDatabase, Schema } from '@powersync/web'
 import { UndoRedoManager } from '@/data/undoRedo.ts'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
+import {
+  BLOCKS_RAW_TABLE,
+  CREATE_BLOCKS_PARENT_ID_INDEX_SQL,
+  CREATE_BLOCKS_TABLE_SQL,
+  buildBlockCrudJsonSql,
+  buildBlockSnapshotJsonSql,
+} from '@/data/blockStorage'
 
 const appSchema = new Schema({})
 
 appSchema.withRawTables({
-  blocks: {
-    put: {
-      sql: `
-        INSERT OR REPLACE INTO blocks (
-          id,
-          content,
-          properties_json,
-          child_ids_json,
-          parent_id,
-          create_time,
-          update_time,
-          created_by_user_id,
-          updated_by_user_id,
-          references_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      params: [
-        'Id',
-        {Column: 'content'},
-        {Column: 'properties_json'},
-        {Column: 'child_ids_json'},
-        {Column: 'parent_id'},
-        {Column: 'create_time'},
-        {Column: 'update_time'},
-        {Column: 'created_by_user_id'},
-        {Column: 'updated_by_user_id'},
-        {Column: 'references_json'},
-      ],
-    },
-    delete: {
-      sql: 'DELETE FROM blocks WHERE id = ?',
-      params: ['Id'],
-    },
-  },
+  blocks: BLOCKS_RAW_TABLE,
 })
 
 export const powerSyncDb = new PowerSyncDatabase({
@@ -84,43 +58,12 @@ export const ensurePowerSyncReady = async (connectionKey?: string) => {
   activeConnectionKey = connectionKey
 }
 
-const buildBlockSnapshotJsonSql = (rowRef: string) => `
-  json_object(
-    'id', ${rowRef}.id,
-    'content', ${rowRef}.content,
-    'properties', json(${rowRef}.properties_json),
-    'childIds', json(${rowRef}.child_ids_json),
-    'parentId', ${rowRef}.parent_id,
-    'createTime', ${rowRef}.create_time,
-    'updateTime', ${rowRef}.update_time,
-    'createdByUserId', ${rowRef}.created_by_user_id,
-    'updatedByUserId', ${rowRef}.updated_by_user_id,
-    'references', json(${rowRef}.references_json)
-  )
-`
-
 const initializePowerSync = async () => {
   await powerSyncDb.init()
 
-  await powerSyncDb.execute(`
-    CREATE TABLE IF NOT EXISTS blocks (
-      id TEXT PRIMARY KEY NOT NULL,
-      content TEXT NOT NULL DEFAULT '',
-      properties_json TEXT NOT NULL DEFAULT '{}',
-      child_ids_json TEXT NOT NULL DEFAULT '[]',
-      parent_id TEXT,
-      create_time INTEGER NOT NULL,
-      update_time INTEGER NOT NULL,
-      created_by_user_id TEXT NOT NULL,
-      updated_by_user_id TEXT NOT NULL,
-      references_json TEXT NOT NULL DEFAULT '[]'
-    )
-  `)
+  await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
 
-  await powerSyncDb.execute(`
-    CREATE INDEX IF NOT EXISTS idx_blocks_parent_id
-    ON blocks (parent_id)
-  `)
+  await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ID_INDEX_SQL)
 
   await powerSyncDb.execute(`
     CREATE TABLE IF NOT EXISTS block_event_context (
@@ -178,17 +121,7 @@ const initializePowerSync = async () => {
         'PUT',
         NEW.id,
         'blocks',
-        json_object(
-          'content', NEW.content,
-          'properties_json', NEW.properties_json,
-          'child_ids_json', NEW.child_ids_json,
-          'parent_id', NEW.parent_id,
-          'create_time', NEW.create_time,
-          'update_time', NEW.update_time,
-          'created_by_user_id', NEW.created_by_user_id,
-          'updated_by_user_id', NEW.updated_by_user_id,
-          'references_json', NEW.references_json
-        )
+        ${buildBlockCrudJsonSql('NEW')}
       );
     END
   `)
@@ -208,17 +141,7 @@ const initializePowerSync = async () => {
         'PATCH',
         NEW.id,
         'blocks',
-        json_object(
-          'content', NEW.content,
-          'properties_json', NEW.properties_json,
-          'child_ids_json', NEW.child_ids_json,
-          'parent_id', NEW.parent_id,
-          'create_time', NEW.create_time,
-          'update_time', NEW.update_time,
-          'created_by_user_id', NEW.created_by_user_id,
-          'updated_by_user_id', NEW.updated_by_user_id,
-          'references_json', NEW.references_json
-        )
+        ${buildBlockCrudJsonSql('NEW')}
       );
     END
   `)

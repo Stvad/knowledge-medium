@@ -1,21 +1,20 @@
 import { v4 as uuidv4 } from 'uuid'
 import { PowerSyncDatabase } from '@powersync/web'
 import { Block } from '@/data/block'
-import { BlockData, BlockProperties, User } from '@/types'
+import type { BlockData, User } from '@/types'
 import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
+import {
+  SELECT_BLOCK_COLUMNS_SQL,
+  UPSERT_BLOCK_SQL,
+  blockToRowParams,
+  buildQualifiedBlockColumnsSql,
+  parseBlockRow,
+  parseBlockSnapshotJson,
+} from '@/data/blockStorage'
+import type { BlockRow } from '@/data/blockStorage'
 
-export interface BlockRow {
-  id: string
-  content: string
-  properties_json: string
-  child_ids_json: string
-  parent_id: string | null
-  create_time: number
-  update_time: number
-  created_by_user_id: string
-  updated_by_user_id: string
-  references_json: string
-}
+export type { BlockRow } from '@/data/blockStorage'
+export { parseBlockRow } from '@/data/blockStorage'
 
 interface BlockEventChangeRow {
   seq: number
@@ -32,22 +31,9 @@ interface WriteEventContext {
   txId: string
 }
 
-const SELECT_BLOCK_COLUMNS = `
-  id,
-  content,
-  properties_json,
-  child_ids_json,
-  parent_id,
-  create_time,
-  update_time,
-  created_by_user_id,
-  updated_by_user_id,
-  references_json
-`
-
 const SELECT_BLOCK_SQL = `
   SELECT
-    ${SELECT_BLOCK_COLUMNS}
+    ${SELECT_BLOCK_COLUMNS_SQL}
   FROM blocks
   WHERE id = ?
 `
@@ -93,92 +79,14 @@ const SELECT_ALL_BLOCK_STATES_AT_SQL = `
   WHERE block_events.after_json IS NOT NULL
 `
 
-const buildQualifiedBlockColumnsSql = (tableName: string) => `
-  ${tableName}.id AS id,
-  ${tableName}.content AS content,
-  ${tableName}.properties_json AS properties_json,
-  ${tableName}.child_ids_json AS child_ids_json,
-  ${tableName}.parent_id AS parent_id,
-  ${tableName}.create_time AS create_time,
-  ${tableName}.update_time AS update_time,
-  ${tableName}.created_by_user_id AS created_by_user_id,
-  ${tableName}.updated_by_user_id AS updated_by_user_id,
-  ${tableName}.references_json AS references_json
-`
-
-const UPSERT_BLOCK_SQL = `
-  INSERT INTO blocks (
-    id,
-    content,
-    properties_json,
-    child_ids_json,
-    parent_id,
-    create_time,
-    update_time,
-    created_by_user_id,
-    updated_by_user_id,
-    references_json
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  ON CONFLICT(id) DO UPDATE SET
-    content = excluded.content,
-    properties_json = excluded.properties_json,
-    child_ids_json = excluded.child_ids_json,
-    parent_id = excluded.parent_id,
-    create_time = excluded.create_time,
-    update_time = excluded.update_time,
-    created_by_user_id = excluded.created_by_user_id,
-    updated_by_user_id = excluded.updated_by_user_id,
-    references_json = excluded.references_json
-`
-
-const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
-  if (!value) return fallback
-
-  try {
-    return JSON.parse(value) as T
-  } catch (error) {
-    console.warn('Failed to parse stored block JSON', error)
-    return fallback
-  }
-}
-
-const parseBlockSnapshotJson = (value: string | null | undefined) =>
-  value ? safeJsonParse<BlockData | null>(value, null) ?? undefined : undefined
-
 const cloneBlockData = (blockData: BlockData) => structuredClone(blockData)
 
 const blockFingerprint = (blockData: BlockData | undefined) =>
   blockData ? JSON.stringify(blockData) : ''
 
-export const parseBlockRow = (row: BlockRow): BlockData => ({
-  id: row.id,
-  content: row.content,
-  properties: safeJsonParse<BlockProperties>(row.properties_json, {}),
-  childIds: safeJsonParse<string[]>(row.child_ids_json, []),
-  parentId: row.parent_id ?? undefined,
-  createTime: row.create_time,
-  updateTime: row.update_time,
-  createdByUserId: row.created_by_user_id,
-  updatedByUserId: row.updated_by_user_id,
-  references: safeJsonParse<Array<{id: string, alias: string}>>(row.references_json, []),
-})
-
-const blockToRowParams = (blockData: BlockData) => [
-  blockData.id,
-  blockData.content,
-  JSON.stringify(blockData.properties ?? {}),
-  JSON.stringify(blockData.childIds ?? []),
-  blockData.parentId ?? null,
-  blockData.createTime,
-  blockData.updateTime,
-  blockData.createdByUserId,
-  blockData.updatedByUserId,
-  JSON.stringify(blockData.references ?? []),
-]
-
 const buildSelectBlocksByIdsSql = (count: number) => `
   SELECT
-    ${SELECT_BLOCK_COLUMNS}
+    ${SELECT_BLOCK_COLUMNS_SQL}
   FROM blocks
   WHERE id IN (${Array.from({length: count}, () => '?').join(', ')})
 `
