@@ -7,6 +7,7 @@ describe('facet runtime', () => {
       id: 'test.labels',
       combine: values => values.join(','),
       empty: () => '',
+      validate: (value): value is string => typeof value === 'string',
     })
 
     const runtime = await resolveFacetRuntime([
@@ -25,6 +26,7 @@ describe('facet runtime', () => {
       id: 'test.count',
       combine: values => values.reduce((sum, value) => sum + value, 0),
       empty: () => 0,
+      validate: (value): value is number => typeof value === 'number',
     })
 
     const runtime = await resolveFacetRuntime([])
@@ -37,6 +39,7 @@ describe('facet runtime', () => {
       id: 'test.sync-labels',
       combine: values => values.join(','),
       empty: () => '',
+      validate: (value): value is string => typeof value === 'string',
     })
 
     const runtime = resolveFacetRuntimeSync([
@@ -47,7 +50,7 @@ describe('facet runtime', () => {
     expect(runtime.read(labelsFacet)).toBe('a,b')
   })
 
-  it('ignores invalid contributions for validated facets', async () => {
+  it('drops invalid contributions at registration time', async () => {
     const numbersFacet = defineFacet<number, number>({
       id: 'test.validated-numbers',
       combine: values => values.reduce((sum, value) => sum + value, 0),
@@ -57,22 +60,23 @@ describe('facet runtime', () => {
 
     const invalidContribution = {
       type: 'facet-contribution' as const,
-      facet: {id: numbersFacet.id},
-      value: 'not a number',
+      facet: {id: numbersFacet.id, validate: numbersFacet.validate},
+      value: 'not a number' as unknown as number,
     }
 
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const runtime = await resolveFacetRuntime([
-      numbersFacet.of(2),
-      invalidContribution,
-      numbersFacet.of(3),
-    ])
-
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
+      const runtime = await resolveFacetRuntime([
+        numbersFacet.of(2),
+        invalidContribution,
+        numbersFacet.of(3),
+      ])
+
+      expect(error).toHaveBeenCalledTimes(1)
+      expect(error.mock.calls[0]?.[0]).toContain('test.validated-numbers')
       expect(runtime.read(numbersFacet)).toBe(5)
-      expect(warn).toHaveBeenCalledTimes(1)
     } finally {
-      warn.mockRestore()
+      error.mockRestore()
     }
   })
 })

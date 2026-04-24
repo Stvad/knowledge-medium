@@ -6,7 +6,7 @@ export interface Facet<Input, Output = readonly Input[]> {
   id: string
   combine: (values: readonly Input[], context: FacetResolveContext) => Output
   empty: (context: FacetResolveContext) => Output
-  validate?: (value: unknown) => value is Input
+  validate: (value: unknown) => value is Input
   of: (value: Input, options?: FacetContributionOptions) => FacetContribution<Input>
 }
 
@@ -17,7 +17,7 @@ export interface FacetContributionOptions {
 
 export interface FacetContribution<Input> extends FacetContributionOptions {
   type: 'facet-contribution'
-  facet: Pick<Facet<Input, unknown>, 'id'>
+  facet: Pick<Facet<Input, unknown>, 'id' | 'validate'>
   value: Input
 }
 
@@ -67,7 +67,7 @@ export function defineFacet<Input, Output = readonly Input[]>({
   id: string
   combine?: (values: readonly Input[], context: FacetResolveContext) => Output
   empty?: (context: FacetResolveContext) => Output
-  validate?: (value: unknown) => value is Input
+  validate: (value: unknown) => value is Input
 }): Facet<Input, Output> {
   const facet: Facet<Input, Output> = {
     id,
@@ -114,17 +114,7 @@ export class FacetRuntime {
 
     const values = contributions
       .toSorted((a, b) => (a.precedence ?? 0) - (b.precedence ?? 0))
-      .flatMap((contribution) => {
-        if (facet.validate && !facet.validate(contribution.value)) {
-          console.warn(`Ignoring invalid contribution for facet "${facet.id}"`, {
-            source: contribution.source,
-            value: contribution.value,
-          })
-          return []
-        }
-
-        return [contribution.value as Input]
-      })
+      .map((contribution) => contribution.value as Input)
 
     const value = facet.combine(values, this.context)
     this.cache.set(facet.id, value)
@@ -154,6 +144,31 @@ export function resolveFacetRuntimeSync(
   return new FacetRuntime(context, contributions)
 }
 
+const pushValidatedContribution = (
+  contribution: FacetContribution<unknown>,
+  output: FacetContribution<unknown>[],
+): void => {
+  const validate = contribution.facet.validate
+  if (!validate) {
+    console.error(
+      `Dropping contribution for facet "${contribution.facet.id}": facet is missing a validator. ` +
+        `Every facet must declare a \`validate\` predicate.`,
+      {source: contribution.source, value: contribution.value},
+    )
+    return
+  }
+
+  if (!validate(contribution.value)) {
+    console.error(
+      `Dropping invalid contribution for facet "${contribution.facet.id}"`,
+      {source: contribution.source, value: contribution.value},
+    )
+    return
+  }
+
+  output.push(contribution)
+}
+
 async function collectContributions(
   extension: AppExtension | readonly AppExtension[],
   context: FacetResolveContext,
@@ -178,7 +193,7 @@ async function collectContributions(
   }
 
   if (extension.type === 'facet-contribution') {
-    output.push(extension)
+    pushValidatedContribution(extension, output)
   }
 }
 
@@ -200,7 +215,7 @@ function collectContributionsSync(
   }
 
   if (extension.type === 'facet-contribution') {
-    output.push(extension)
+    pushValidatedContribution(extension, output)
   }
 }
 
