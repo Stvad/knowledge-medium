@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import React from 'react'
 import ReactDOM from 'react-dom'
 import { Block } from '@/data/block.ts'
@@ -451,44 +451,76 @@ export function useAgentRuntimeBridge({
   safeMode,
 }: UseAgentRuntimeBridgeOptions) {
   const clientId = useMemo(() => crypto.randomUUID(), [])
+  const latestContext = useRef<UseAgentRuntimeBridgeOptions>({
+    repo,
+    rootBlock,
+    runtime,
+    safeMode,
+  })
+
+  useEffect(() => {
+    latestContext.current = {
+      repo,
+      rootBlock,
+      runtime,
+      safeMode,
+    }
+  }, [repo, rootBlock, runtime, safeMode])
 
   useEffect(() => {
     const abortController = new AbortController()
     const baseUrl = bridgeUrl()
     let retryMs = retryBaseMs
 
-    const context = (): AgentRuntimeContext => ({
-      repo,
-      db: repo.db,
-      rootBlock,
-      runtime,
-      safeMode,
-      sql: (sql, params, mode) => runSql(repo, sql, params, mode),
-      block: id => repo.find(id),
-      getBlock: async id => {
-        const block = repo.find(id)
-        return block.data()
-      },
-      getSubtree: (rootId, includeRoot) =>
-        repo.getSubtreeBlockData(rootId ?? rootBlock.id, {includeRoot}),
-      createBlock: input => createRuntimeBlock(repo, input),
-      updateBlock: input => updateRuntimeBlock(repo, input),
-      actions: runtime.read(actionsFacet),
-      renderers: runtime.read(blockRenderersFacet),
-      refreshAppRuntime,
-      React,
-      ReactDOM,
-      window,
-      document,
-    })
+    const context = (): AgentRuntimeContext => {
+      const {
+        repo: currentRepo,
+        rootBlock: currentRootBlock,
+        runtime: currentRuntime,
+        safeMode: currentSafeMode,
+      } = latestContext.current
 
-    const register = () => postJson(`${baseUrl}/runtime/clients/${clientId}`, {
-      rootBlockId: rootBlock.id,
-      currentUser: repo.currentUser,
-      safeMode,
-      href: window.location.href,
-      userAgent: window.navigator.userAgent,
-    }, abortController.signal)
+      return {
+        repo: currentRepo,
+        db: currentRepo.db,
+        rootBlock: currentRootBlock,
+        runtime: currentRuntime,
+        safeMode: currentSafeMode,
+        sql: (sql, params, mode) => runSql(currentRepo, sql, params, mode),
+        block: id => currentRepo.find(id),
+        getBlock: async id => {
+          const block = currentRepo.find(id)
+          return block.data()
+        },
+        getSubtree: (rootId, includeRoot) =>
+          currentRepo.getSubtreeBlockData(rootId ?? currentRootBlock.id, {includeRoot}),
+        createBlock: input => createRuntimeBlock(currentRepo, input),
+        updateBlock: input => updateRuntimeBlock(currentRepo, input),
+        actions: currentRuntime.read(actionsFacet),
+        renderers: currentRuntime.read(blockRenderersFacet),
+        refreshAppRuntime,
+        React,
+        ReactDOM,
+        window,
+        document,
+      }
+    }
+
+    const register = () => {
+      const {
+        repo: currentRepo,
+        rootBlock: currentRootBlock,
+        safeMode: currentSafeMode,
+      } = latestContext.current
+
+      return postJson(`${baseUrl}/runtime/clients/${clientId}`, {
+        rootBlockId: currentRootBlock.id,
+        currentUser: currentRepo.currentUser,
+        safeMode: currentSafeMode,
+        href: window.location.href,
+        userAgent: window.navigator.userAgent,
+      }, abortController.signal)
+    }
 
     const reportResult = async (commandId: string, payload: unknown) => {
       await postJson(
@@ -521,7 +553,7 @@ export function useAgentRuntimeBridge({
 
           try {
             const value = await executeCommand(command, context())
-            await repo.flush()
+            await latestContext.current.repo.flush()
             await reportResult(command.commandId, {
               ok: true,
               value: serializeValue(value),
@@ -548,5 +580,5 @@ export function useAgentRuntimeBridge({
     return () => {
       abortController.abort()
     }
-  }, [clientId, repo, rootBlock, runtime, safeMode])
+  }, [clientId])
 }
