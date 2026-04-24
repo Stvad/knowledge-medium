@@ -3,39 +3,11 @@ import { PowerSyncDatabase } from '@powersync/web'
 import { Block } from '@/data/block'
 import type { BlockData, User } from '@/types'
 import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
-import {
-  UPSERT_BLOCK_SQL,
-  blockToRowParams,
-  parseBlockRow,
-  parseBlockSnapshotJson,
-} from '@/data/blockStorage'
-import type { BlockRow } from '@/data/blockStorage'
-import {
-  SELECT_ALIASES_IN_SUBTREE_SQL,
-  SELECT_ALL_BLOCK_STATES_AT_SQL,
-  SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
-  SELECT_BLOCK_EVENTS_AFTER_SQL,
-  SELECT_BLOCK_SQL,
-  SELECT_BLOCK_STATE_AT_SQL,
-  SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
-  SELECT_FIRST_CHILD_BY_CONTENT_SQL,
-  SELECT_MAX_BLOCK_EVENT_SEQ_SQL,
-  buildSelectBlocksByIdsSql,
-  buildSelectSubtreeBlocksSql,
-} from '@/data/blockQueries'
-import type {
-  BlockEventChangeRow,
-  BlockEventStateRow,
-} from '@/data/blockQueries'
+import { BlockStorage } from '@/data/blockStorage'
+import type { WriteEventContext } from '@/data/blockStorage'
 
-export type { BlockRow } from '@/data/blockStorage'
-export { parseBlockRow } from '@/data/blockStorage'
-
-interface WriteEventContext {
-  actorUserId?: string
-  source: 'local' | 'system'
-  txId: string
-}
+export type { BlockRow } from '@/data/blockSchema'
+export { parseBlockRow } from '@/data/blockSchema'
 
 const cloneBlockData = (blockData: BlockData) => structuredClone(blockData)
 
@@ -45,6 +17,7 @@ const blockFingerprint = (blockData: BlockData | undefined) =>
 export class Repo {
   static nextInstanceId = 1
 
+  private readonly storage: BlockStorage
   private readonly blockCache = new Map<string, Block>()
   private readonly snapshotCache = new Map<string, BlockData>()
   private readonly snapshotRevisions = new Map<string, number>()
@@ -52,7 +25,6 @@ export class Repo {
   private readonly dirtyBlockIds = new Set<string>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   private lastProcessedBlockEventSeq = 0
-  private writeQueue = Promise.resolve()
   readonly instanceId = Repo.nextInstanceId++
 
   constructor(
@@ -60,6 +32,8 @@ export class Repo {
     readonly undoRedoManager: UndoRedoManager,
     readonly currentUser: User,
   ) {
+    this.storage = new BlockStorage(db)
+
     this.undoRedoManager.setApplier((changes) => {
       this.applySnapshots(changes)
     })
@@ -82,26 +56,11 @@ export class Repo {
 
   async exists(id: string) {
     if (this.snapshotCache.has(id)) return true
-
-    const row = await this.db.getOptional<{id: string}>(
-      'SELECT id FROM blocks WHERE id = ? LIMIT 1',
-      [id],
-    )
-    return Boolean(row)
+    return this.storage.existsBlock(id)
   }
 
   async findFirstRootBlockId() {
-    const row = await this.db.getOptional<{id: string}>(
-      `
-        SELECT id
-        FROM blocks
-        WHERE parent_id IS NULL
-        ORDER BY create_time ASC, id ASC
-        LIMIT 1
-      `,
-    )
-
-    return row?.id
+    return this.storage.findFirstRootId()
   }
 
   create(data: Partial<BlockData>): Block {
@@ -128,7 +87,7 @@ export class Repo {
 
     this.markBlockDirty(id)
     this.setCachedBlockData(snapshot)
-    this.queueUpsert(snapshot, eventContext)
+    this.storage.enqueueUpsert(snapshot, eventContext)
     return this.find(id)
   }
 
@@ -139,11 +98,10 @@ export class Repo {
     const pendingLoad = this.pendingLoads.get(id)
     if (pendingLoad) return pendingLoad
 
-    const loadPromise = this.db.getOptional<BlockRow>(SELECT_BLOCK_SQL, [id])
-      .then((row) => {
-        if (!row) return undefined
+    const loadPromise = this.storage.loadBlock(id)
+      .then((snapshot) => {
+        if (!snapshot) return undefined
 
-        const snapshot = parseBlockRow(row)
         this.hydrateBlockData(snapshot)
         return this.snapshotCache.get(id)
       })
@@ -162,11 +120,8 @@ export class Repo {
     const includeRoot = options.includeRoot ?? false
     await this.flush()
 
-    const rows = await this.db.getAll<BlockRow>(
-      buildSelectSubtreeBlocksSql(includeRoot),
-      includeRoot ? [rootId] : [rootId, rootId],
-    )
-    return this.hydrateRows(rows)
+    const snapshots = await this.storage.loadSubtree(rootId, includeRoot)
+    return this.hydrateSnapshots(snapshots)
   }
 
   async getSubtreeBlocks(
@@ -178,11 +133,7 @@ export class Repo {
   }
 
   async getBlockDataAt(id: string, timestamp: number) {
-    const row = await this.db.getOptional<BlockEventStateRow>(
-      SELECT_BLOCK_STATE_AT_SQL,
-      [id, timestamp],
-    )
-    return parseBlockSnapshotJson(row?.afterJson)
+    return this.storage.getBlockStateAt(id, timestamp)
   }
 
   async getSubtreeBlockDataAt(
@@ -191,14 +142,8 @@ export class Repo {
     options: {includeRoot?: boolean} = {},
   ) {
     const includeRoot = options.includeRoot ?? false
-    const rows = await this.db.getAll<BlockEventStateRow>(
-      SELECT_ALL_BLOCK_STATES_AT_SQL,
-      [timestamp],
-    )
+    const snapshots = await this.storage.getAllBlockStatesAt(timestamp)
 
-    const snapshots = rows
-      .map(row => parseBlockSnapshotJson(row.afterJson))
-      .filter((snapshot): snapshot is BlockData => Boolean(snapshot))
     const snapshotsById = new Map(snapshots.map(snapshot => [snapshot.id, snapshot]))
     const rootSnapshot = snapshotsById.get(rootId)
 
@@ -226,21 +171,13 @@ export class Repo {
   async findBlocksByTypeInSubtree(rootId: string, type: string) {
     await this.flush()
 
-    const rows = await this.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
-      [rootId, rootId, type],
-    )
-    return this.hydrateRows(rows)
+    const snapshots = await this.storage.findBlocksByTypeInSubtree(rootId, type)
+    return this.hydrateSnapshots(snapshots)
   }
 
   async getAliasesInSubtree(rootId: string, filter: string = '') {
     await this.flush()
-
-    const rows = await this.db.getAll<{alias: string}>(
-      SELECT_ALIASES_IN_SUBTREE_SQL,
-      [rootId, filter, filter],
-    )
-    return rows.map(row => row.alias)
+    return this.storage.getAliasesInSubtree(rootId, filter)
   }
 
   async findBlockByAliasInSubtree(rootId: string, alias: string) {
@@ -248,27 +185,21 @@ export class Repo {
 
     await this.flush()
 
-    const row = await this.db.getOptional<BlockRow>(
-      SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
-      [rootId, alias],
-    )
-    if (!row) return null
+    const snapshot = await this.storage.findBlockByAliasInSubtree(rootId, alias)
+    if (!snapshot) return null
 
-    this.hydrateRow(row)
-    return this.find(row.id)
+    this.hydrateBlockData(snapshot)
+    return this.find(snapshot.id)
   }
 
   async findFirstChildByContent(parentId: string, content: string) {
     await this.flush()
 
-    const row = await this.db.getOptional<BlockRow>(
-      SELECT_FIRST_CHILD_BY_CONTENT_SQL,
-      [parentId, content],
-    )
-    if (!row) return null
+    const snapshot = await this.storage.findFirstChildByContent(parentId, content)
+    if (!snapshot) return null
 
-    this.hydrateRow(row)
-    return this.find(row.id)
+    this.hydrateBlockData(snapshot)
+    return this.find(snapshot.id)
   }
 
   getCachedBlockData(id: string) {
@@ -345,7 +276,7 @@ export class Repo {
     this.undoRedoManager.recordChange(id, current, next, options)
     this.markBlockDirty(id)
     this.setCachedBlockData(next)
-    this.queueUpsert(next, eventContext)
+    this.storage.enqueueUpsert(next, eventContext)
   }
 
   applySnapshots(changes: Array<{id: string, snapshot: BlockData | null}>) {
@@ -361,16 +292,16 @@ export class Repo {
       this.markBlockDirty(change.id)
       if (change.snapshot) {
         this.setCachedBlockData(change.snapshot)
-        this.queueUpsert(change.snapshot, eventContext)
+        this.storage.enqueueUpsert(change.snapshot, eventContext)
       } else {
         this.deleteCachedBlockData(change.id)
-        this.queueDelete(change.id, eventContext)
+        this.storage.enqueueDelete(change.id, eventContext)
       }
     }
   }
 
   async flush() {
-    await this.writeQueue
+    await this.storage.flush()
   }
 
   private setCachedBlockData(snapshot: BlockData) {
@@ -399,73 +330,15 @@ export class Repo {
     this.dirtyBlockIds.add(id)
   }
 
-  private hydrateRows(rows: BlockRow[]) {
-    return rows.map(row => this.hydrateRow(row))
-  }
-
-  private hydrateRow(row: BlockRow) {
-    const snapshot = parseBlockRow(row)
-    this.hydrateBlockData(snapshot)
-    return this.requireCachedBlockData(row.id)
-  }
-
-  private queueUpsert(snapshot: BlockData, eventContext: WriteEventContext) {
-    const next = cloneBlockData(snapshot)
-    this.writeQueue = this.writeQueue
-      .then(async () => {
-        await this.executeWithEventContext(eventContext, (tx) =>
-          tx.execute(UPSERT_BLOCK_SQL, blockToRowParams(next)),
-        )
-      })
-      .catch((error) => {
-        console.error(`Failed to persist block ${next.id}`, error)
-      })
-  }
-
-  private queueDelete(id: string, eventContext: WriteEventContext) {
-    this.writeQueue = this.writeQueue
-      .then(async () => {
-        await this.executeWithEventContext(eventContext, (tx) =>
-          tx.execute('DELETE FROM blocks WHERE id = ?', [id]),
-        )
-      })
-      .catch((error) => {
-        console.error(`Failed to delete block ${id}`, error)
-      })
-  }
-
-  private async executeWithEventContext(
-    eventContext: WriteEventContext,
-    callback: (tx: {execute: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<unknown>,
-  ) {
-    await this.db.writeLock(async (tx) => {
-      await tx.execute('DELETE FROM block_event_context WHERE id = 1')
-      await tx.execute(
-        `
-          INSERT INTO block_event_context (id, tx_id, source, actor_user_id)
-          VALUES (1, ?, ?, ?)
-        `,
-        [eventContext.txId, eventContext.source, eventContext.actorUserId ?? null],
-      )
-
-      try {
-        await callback(tx)
-      } finally {
-        await tx.execute('DELETE FROM block_event_context WHERE id = 1')
-      }
+  private hydrateSnapshots(snapshots: BlockData[]) {
+    return snapshots.map(snapshot => {
+      this.hydrateBlockData(snapshot)
+      return this.requireCachedBlockData(snapshot.id)
     })
   }
 
-  private async getLatestBlockEventSeq() {
-    const row = await this.db.get<{seq: number}>(SELECT_MAX_BLOCK_EVENT_SEQ_SQL)
-    return row.seq
-  }
-
   private async refreshTrackedBlocksFromEventLog() {
-    const events = await this.db.getAll<BlockEventChangeRow>(
-      SELECT_BLOCK_EVENTS_AFTER_SQL,
-      [this.lastProcessedBlockEventSeq],
-    )
+    const events = await this.storage.getEventsAfter(this.lastProcessedBlockEventSeq)
     if (!events.length) return
 
     this.lastProcessedBlockEventSeq = events[events.length - 1].seq
@@ -483,17 +356,13 @@ export class Repo {
     ))
     if (!changedIds.length) return
 
-    const rows = await this.db.getAll<BlockRow>(
-      buildSelectBlocksByIdsSql(changedIds.length),
-      changedIds,
-    )
-    const rowsById = new Map(rows.map(row => [row.id, row]))
+    const snapshotsById = await this.storage.loadBlocksByIds(changedIds)
 
     for (const id of changedIds) {
-      const row = rowsById.get(id)
+      const snapshot = snapshotsById.get(id)
 
-      if (row) {
-        this.hydrateBlockData(parseBlockRow(row))
+      if (snapshot) {
+        this.hydrateBlockData(snapshot)
       } else {
         if (this.dirtyBlockIds.has(id) && this.snapshotCache.has(id)) {
           continue
@@ -507,18 +376,15 @@ export class Repo {
 
   private async startReactiveBlockTracking() {
     try {
-      this.lastProcessedBlockEventSeq = await this.getLatestBlockEventSeq()
+      this.lastProcessedBlockEventSeq = await this.storage.getMaxEventSeq()
 
-      this.db.onChange({
+      this.storage.trackBlockEvents({
         onChange: async () => {
           await this.refreshTrackedBlocksFromEventLog()
         },
         onError: (error) => {
           console.error('Failed to process reactive block change', error)
         },
-      }, {
-        tables: ['block_events'],
-        throttleMs: 16,
       })
 
       await this.refreshTrackedBlocksFromEventLog()

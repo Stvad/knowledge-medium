@@ -7,7 +7,7 @@ import {
   CREATE_BLOCKS_TABLE_SQL,
   buildBlockCrudJsonSql,
   buildBlockSnapshotJsonSql,
-} from '@/data/blockStorage'
+} from '@/data/blockSchema'
 
 const appSchema = new Schema({})
 

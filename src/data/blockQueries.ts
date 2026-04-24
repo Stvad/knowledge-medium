@@ -1,7 +1,7 @@
 import {
   SELECT_BLOCK_COLUMNS_SQL,
   buildQualifiedBlockColumnsSql,
-} from '@/data/blockStorage'
+} from '@/data/blockSchema'
 
 export interface BlockEventChangeRow {
   seq: number

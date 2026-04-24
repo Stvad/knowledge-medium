@@ -1,173 +1,212 @@
-import type { PendingStatementParameter, RawTableType } from '@powersync/web'
-import type { BlockData, BlockProperties } from '@/types'
+import type { PowerSyncDatabase } from '@powersync/web'
+import type { BlockData } from '@/types'
+import {
+  UPSERT_BLOCK_SQL,
+  blockToRowParams,
+  parseBlockRow,
+  parseBlockSnapshotJson,
+} from '@/data/blockSchema'
+import type { BlockRow } from '@/data/blockSchema'
+import {
+  SELECT_ALIASES_IN_SUBTREE_SQL,
+  SELECT_ALL_BLOCK_STATES_AT_SQL,
+  SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
+  SELECT_BLOCK_EVENTS_AFTER_SQL,
+  SELECT_BLOCK_SQL,
+  SELECT_BLOCK_STATE_AT_SQL,
+  SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
+  SELECT_FIRST_CHILD_BY_CONTENT_SQL,
+  SELECT_MAX_BLOCK_EVENT_SEQ_SQL,
+  buildSelectBlocksByIdsSql,
+  buildSelectSubtreeBlocksSql,
+} from '@/data/blockQueries'
+import type { BlockEventChangeRow } from '@/data/blockQueries'
 
-export interface BlockRow {
-  id: string
-  content: string
-  properties_json: string
-  child_ids_json: string
-  parent_id: string | null
-  create_time: number
-  update_time: number
-  created_by_user_id: string
-  updated_by_user_id: string
-  references_json: string
+export interface WriteEventContext {
+  actorUserId?: string
+  source: 'local' | 'system'
+  txId: string
 }
 
-type BlockColumnName = keyof BlockRow
+const SELECT_BLOCK_EXISTS_SQL = `
+  SELECT id FROM blocks WHERE id = ? LIMIT 1
+`
 
-type BlockStorageColumn = {
-  readonly name: BlockColumnName
-  readonly definition: string
+const SELECT_FIRST_ROOT_BLOCK_ID_SQL = `
+  SELECT id
+  FROM blocks
+  WHERE parent_id IS NULL
+  ORDER BY create_time ASC, id ASC
+  LIMIT 1
+`
+
+const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
+
+const INSERT_EVENT_CONTEXT_SQL = `
+  INSERT INTO block_event_context (id, tx_id, source, actor_user_id)
+  VALUES (1, ?, ?, ?)
+`
+
+const CLEAR_EVENT_CONTEXT_SQL = 'DELETE FROM block_event_context WHERE id = 1'
+
+interface BlockEventTracker {
+  onChange: () => void | Promise<void>
+  onError?: (error: unknown) => void
 }
 
-const BLOCK_STORAGE_COLUMNS = [
-  {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
-  {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},
-  {name: 'properties_json', definition: "properties_json TEXT NOT NULL DEFAULT '{}'"},
-  {name: 'child_ids_json', definition: "child_ids_json TEXT NOT NULL DEFAULT '[]'"},
-  {name: 'parent_id', definition: 'parent_id TEXT'},
-  {name: 'create_time', definition: 'create_time INTEGER NOT NULL'},
-  {name: 'update_time', definition: 'update_time INTEGER NOT NULL'},
-  {name: 'created_by_user_id', definition: 'created_by_user_id TEXT NOT NULL'},
-  {name: 'updated_by_user_id', definition: 'updated_by_user_id TEXT NOT NULL'},
-  {name: 'references_json', definition: "references_json TEXT NOT NULL DEFAULT '[]'"},
-] as const satisfies readonly BlockStorageColumn[]
+export class BlockStorage {
+  private writeQueue: Promise<void> = Promise.resolve()
 
-const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
+  constructor(readonly db: PowerSyncDatabase) {}
 
-const BLOCK_SYNC_COLUMN_NAMES = BLOCK_COLUMN_NAMES.filter(
-  (name): name is Exclude<BlockColumnName, 'id'> => name !== 'id',
-)
+  async loadBlock(id: string): Promise<BlockData | undefined> {
+    const row = await this.db.getOptional<BlockRow>(SELECT_BLOCK_SQL, [id])
+    return row ? parseBlockRow(row) : undefined
+  }
 
-const formatSqlList = (items: readonly string[], indentSize: number) => {
-  const indent = ' '.repeat(indentSize)
-  return items.map(item => `${indent}${item}`).join(',\n')
-}
+  async loadBlocksByIds(ids: string[]): Promise<Map<string, BlockData>> {
+    if (!ids.length) return new Map()
+    const rows = await this.db.getAll<BlockRow>(
+      buildSelectBlocksByIdsSql(ids.length),
+      ids,
+    )
+    return new Map(rows.map(row => [row.id, parseBlockRow(row)]))
+  }
 
-export const SELECT_BLOCK_COLUMNS_SQL = BLOCK_COLUMN_NAMES.join(',\n  ')
+  async loadSubtree(rootId: string, includeRoot: boolean): Promise<BlockData[]> {
+    const rows = await this.db.getAll<BlockRow>(
+      buildSelectSubtreeBlocksSql(includeRoot),
+      includeRoot ? [rootId] : [rootId, rootId],
+    )
+    return rows.map(parseBlockRow)
+  }
 
-export const buildQualifiedBlockColumnsSql = (tableName: string) =>
-  BLOCK_COLUMN_NAMES
-    .map(columnName => `${tableName}.${columnName} AS ${columnName}`)
-    .join(',\n  ')
+  async findFirstRootId(): Promise<string | undefined> {
+    const row = await this.db.getOptional<{id: string}>(SELECT_FIRST_ROOT_BLOCK_ID_SQL)
+    return row?.id
+  }
 
-export const CREATE_BLOCKS_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS blocks (
-${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
-  )
-`
+  async existsBlock(id: string): Promise<boolean> {
+    const row = await this.db.getOptional<{id: string}>(SELECT_BLOCK_EXISTS_SQL, [id])
+    return Boolean(row)
+  }
 
-export const CREATE_BLOCKS_PARENT_ID_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_blocks_parent_id
-  ON blocks (parent_id)
-`
+  async findBlockByAliasInSubtree(rootId: string, alias: string): Promise<BlockData | null> {
+    const row = await this.db.getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
+      [rootId, alias],
+    )
+    return row ? parseBlockRow(row) : null
+  }
 
-export const UPSERT_BLOCK_SQL = `
-  INSERT INTO blocks (
-${formatSqlList(BLOCK_COLUMN_NAMES, 4)}
-  ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-  ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`), 4)}
-`
+  async findBlocksByTypeInSubtree(rootId: string, type: string): Promise<BlockData[]> {
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
+      [rootId, rootId, type],
+    )
+    return rows.map(parseBlockRow)
+  }
 
-const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
-  columnName === 'id' ? 'Id' : {Column: columnName}
+  async findFirstChildByContent(parentId: string, content: string): Promise<BlockData | null> {
+    const row = await this.db.getOptional<BlockRow>(
+      SELECT_FIRST_CHILD_BY_CONTENT_SQL,
+      [parentId, content],
+    )
+    return row ? parseBlockRow(row) : null
+  }
 
-export const BLOCKS_RAW_TABLE = {
-  put: {
-    sql: `
-      INSERT OR REPLACE INTO blocks (
-${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
-      ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-    `,
-    params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
-  },
-  delete: {
-    sql: 'DELETE FROM blocks WHERE id = ?',
-    params: ['Id'],
-  },
-} satisfies RawTableType
+  async getAliasesInSubtree(rootId: string, filter: string): Promise<string[]> {
+    const rows = await this.db.getAll<{alias: string}>(
+      SELECT_ALIASES_IN_SUBTREE_SQL,
+      [rootId, filter, filter],
+    )
+    return rows.map(row => row.alias)
+  }
 
-export const buildBlockCrudJsonSql = (rowRef: string) => `
-  json_object(
-${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `'${columnName}', ${rowRef}.${columnName}`), 4)}
-  )
-`
+  async getBlockStateAt(id: string, timestamp: number): Promise<BlockData | undefined> {
+    const row = await this.db.getOptional<{afterJson: string | null}>(
+      SELECT_BLOCK_STATE_AT_SQL,
+      [id, timestamp],
+    )
+    return parseBlockSnapshotJson(row?.afterJson)
+  }
 
-type BlockSnapshotJsonField = {
-  readonly key: keyof BlockData
-  readonly sqlExpression: (rowRef: string) => string
-}
+  async getAllBlockStatesAt(timestamp: number): Promise<BlockData[]> {
+    const rows = await this.db.getAll<{afterJson: string | null}>(
+      SELECT_ALL_BLOCK_STATES_AT_SQL,
+      [timestamp],
+    )
+    return rows
+      .map(row => parseBlockSnapshotJson(row.afterJson))
+      .filter((snapshot): snapshot is BlockData => Boolean(snapshot))
+  }
 
-const BLOCK_SNAPSHOT_JSON_FIELDS = [
-  {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
-  {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
-  {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
-  {key: 'childIds', sqlExpression: rowRef => `json(${rowRef}.child_ids_json)`},
-  {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
-  {key: 'createTime', sqlExpression: rowRef => `${rowRef}.create_time`},
-  {key: 'updateTime', sqlExpression: rowRef => `${rowRef}.update_time`},
-  {key: 'createdByUserId', sqlExpression: rowRef => `${rowRef}.created_by_user_id`},
-  {key: 'updatedByUserId', sqlExpression: rowRef => `${rowRef}.updated_by_user_id`},
-  {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
-] as const satisfies readonly BlockSnapshotJsonField[]
+  async getMaxEventSeq(): Promise<number> {
+    const row = await this.db.get<{seq: number}>(SELECT_MAX_BLOCK_EVENT_SEQ_SQL)
+    return row.seq
+  }
 
-export const buildBlockSnapshotJsonSql = (rowRef: string) => `
-  json_object(
-${formatSqlList(BLOCK_SNAPSHOT_JSON_FIELDS.map(field => `'${field.key}', ${field.sqlExpression(rowRef)}`), 4)}
-  )
-`
+  async getEventsAfter(seq: number): Promise<BlockEventChangeRow[]> {
+    return this.db.getAll<BlockEventChangeRow>(SELECT_BLOCK_EVENTS_AFTER_SQL, [seq])
+  }
 
-const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
-  if (!value) return fallback
+  enqueueUpsert(snapshot: BlockData, eventContext: WriteEventContext): void {
+    const next = structuredClone(snapshot)
+    this.writeQueue = this.writeQueue
+      .then(async () => {
+        await this.executeWithEventContext(eventContext, (tx) =>
+          tx.execute(UPSERT_BLOCK_SQL, blockToRowParams(next)),
+        )
+      })
+      .catch((error) => {
+        console.error(`Failed to persist block ${next.id}`, error)
+      })
+  }
 
-  try {
-    return JSON.parse(value) as T
-  } catch (error) {
-    console.warn('Failed to parse stored block JSON', error)
-    return fallback
+  enqueueDelete(id: string, eventContext: WriteEventContext): void {
+    this.writeQueue = this.writeQueue
+      .then(async () => {
+        await this.executeWithEventContext(eventContext, (tx) =>
+          tx.execute(DELETE_BLOCK_SQL, [id]),
+        )
+      })
+      .catch((error) => {
+        console.error(`Failed to delete block ${id}`, error)
+      })
+  }
+
+  async flush(): Promise<void> {
+    await this.writeQueue
+  }
+
+  trackBlockEvents(tracker: BlockEventTracker): void {
+    this.db.onChange({
+      onChange: async () => {
+        await tracker.onChange()
+      },
+      onError: tracker.onError,
+    }, {
+      tables: ['block_events'],
+      throttleMs: 16,
+    })
+  }
+
+  private async executeWithEventContext(
+    eventContext: WriteEventContext,
+    callback: (tx: {execute: (sql: string, params?: unknown[]) => Promise<unknown>}) => Promise<unknown>,
+  ): Promise<void> {
+    await this.db.writeLock(async (tx) => {
+      await tx.execute(CLEAR_EVENT_CONTEXT_SQL)
+      await tx.execute(
+        INSERT_EVENT_CONTEXT_SQL,
+        [eventContext.txId, eventContext.source, eventContext.actorUserId ?? null],
+      )
+
+      try {
+        await callback(tx)
+      } finally {
+        await tx.execute(CLEAR_EVENT_CONTEXT_SQL)
+      }
+    })
   }
 }
-
-export const parseBlockSnapshotJson = (value: string | null | undefined) =>
-  value ? safeJsonParse<BlockData | null>(value, null) ?? undefined : undefined
-
-export const parseBlockRow = (row: BlockRow): BlockData => ({
-  id: row.id,
-  content: row.content,
-  properties: safeJsonParse<BlockProperties>(row.properties_json, {}),
-  childIds: safeJsonParse<string[]>(row.child_ids_json, []),
-  parentId: row.parent_id ?? undefined,
-  createTime: row.create_time,
-  updateTime: row.update_time,
-  createdByUserId: row.created_by_user_id,
-  updatedByUserId: row.updated_by_user_id,
-  references: safeJsonParse<Array<{id: string, alias: string}>>(row.references_json, []),
-})
-
-type BlockRowParams = [
-  id: string,
-  content: string,
-  propertiesJson: string,
-  childIdsJson: string,
-  parentId: string | null,
-  createTime: number,
-  updateTime: number,
-  createdByUserId: string,
-  updatedByUserId: string,
-  referencesJson: string,
-]
-
-export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
-  blockData.id,
-  blockData.content,
-  JSON.stringify(blockData.properties ?? {}),
-  JSON.stringify(blockData.childIds ?? []),
-  blockData.parentId ?? null,
-  blockData.createTime,
-  blockData.updateTime,
-  blockData.createdByUserId,
-  blockData.updatedByUserId,
-  JSON.stringify(blockData.references ?? []),
-]
