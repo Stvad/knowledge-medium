@@ -1,14 +1,11 @@
 import { BlockRendererProps } from '@/types.ts'
-import { topLevelBlockIdProp } from '@/data/properties.ts'
 import Markdown from 'react-markdown'
-import { useInEditMode, useInFocus, useIsSelected, useUIStateBlock, useUIStateProperty } from '@/data/globalState'
-import { useMemo, useRef, MouseEvent, TouchEvent } from 'react'
+import { useRef, MouseEvent, TouchEvent } from 'react'
 import { useBlockContext } from '@/context/block.tsx'
 import { useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
-import { useRepo } from '@/context/repo.tsx'
-import { blockContentGestureHandlersFacet } from '@/extensions/blockInteraction.ts'
+import { useBlockContentGestureHandlers } from '@/extensions/blockInteractionContext.tsx'
 
 type Touch = { x: number; y: number; time: number }
 
@@ -25,35 +22,10 @@ const isSwipe = (touchEnd: Touch, touchStart: Touch) => {
 }
 
 export function MarkdownContentRenderer({block}: BlockRendererProps) {
-  const repo = useRepo()
   const blockData = useData(block)
-  const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
   const runtime = useAppRuntime()
-  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
-  const inFocus = useInFocus(block.id)
-  const inEditMode = useInEditMode(block.id)
-  const isSelected = useIsSelected(block.id)
-  const blockInteractionContext = useMemo(() => ({
-    block,
-    repo,
-    uiStateBlock,
-    topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
-    isTopLevel: block.id === topLevelBlockId,
-  }), [
-    block,
-    repo,
-    uiStateBlock,
-    topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
-  ])
-  const resolveContentGestureHandlers = runtime.read(blockContentGestureHandlersFacet)
-  const contentGestureHandlers = resolveContentGestureHandlers(blockInteractionContext)
+  const contentGestureHandlers = useBlockContentGestureHandlers()
 
   const handleMouseDoubleClick = (e: MouseEvent) => {
     void contentGestureHandlers.onDoubleClick?.(e)

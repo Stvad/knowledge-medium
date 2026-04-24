@@ -8,7 +8,6 @@ import {
   BaseShortcutDependencies,
   ActionContextTypes,
   BlockShortcutDependencies,
-  EditModeDependencies,
   PropertyEditingDependencies,
   CommandPaletteDependencies,
   MultiSelectModeDependencies,
@@ -25,9 +24,6 @@ const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependen
 
 const isBlockShortcutDependencies = (deps: unknown): deps is BlockShortcutDependencies =>
   isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block
-
-const isEditModeDependencies = (deps: unknown): deps is EditModeDependencies =>
-  isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'textarea' in deps && deps.textarea instanceof HTMLTextAreaElement
 
 const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEditModeDependencies =>
   isBaseShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'block' in deps && deps.block instanceof Block && 'editorView' in deps && deps.editorView instanceof EditorView
@@ -54,18 +50,6 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     type: ActionContextTypes.NORMAL_MODE,
     displayName: 'Normal Mode',
     validateDependencies: isBlockShortcutDependencies,
-  },
-  {
-    type: ActionContextTypes.EDIT_MODE,
-    displayName: 'Edit Mode (Textarea)',
-    defaultEventOptions: {
-      preventDefault: false,
-    },
-    eventFilter: (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement
-      return target?.tagName === 'TEXTAREA'
-    },
-    validateDependencies: isEditModeDependencies,
   },
   {
     type: ActionContextTypes.EDIT_MODE_CM,

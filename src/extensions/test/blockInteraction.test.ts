@@ -15,7 +15,6 @@ import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import {
   blockEditingContentRenderer,
   codeMirrorEditModeActivation,
-  textareaEditModeActivation,
   vimContentGestureBehavior,
   vimNormalModeActivation,
 } from '@/shortcuts/blockInteractionPolicies.ts'
@@ -109,27 +108,14 @@ describe('block interaction facets', () => {
     })).toEqual([])
   })
 
-  it('defines edit mode contexts through editor surface activations', () => {
+  it('defines CodeMirror edit mode through editor surface activations', () => {
     const runtime = resolveFacetRuntimeSync([
-      shortcutSurfaceActivationsFacet.of(textareaEditModeActivation),
       shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation),
     ])
 
     const resolveActivations = runtime.read(shortcutSurfaceActivationsFacet)
-    const textarea = {} as HTMLTextAreaElement
     const editorView = {} as never
 
-    expect(resolveActivations({
-      ...context,
-      surface: 'textarea',
-      textarea,
-    })).toEqual([{
-      context: ActionContextTypes.EDIT_MODE,
-      dependencies: {
-        block: context.block,
-        textarea,
-      },
-    }])
     expect(resolveActivations({
       ...context,
       surface: 'codemirror',

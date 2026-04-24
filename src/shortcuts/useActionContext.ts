@@ -5,7 +5,6 @@ import {
   ActionContextActivation,
   BaseShortcutDependencies,
   ActionContextTypes,
-  EditModeDependencies,
   PropertyEditingDependencies,
   CommandPaletteDependencies,
   BlockShortcutDependencies,
@@ -72,14 +71,6 @@ export function useActionContext(
  */
 export function useNormalModeShortcuts(dependencies: Omit<BlockShortcutDependencies, 'uiStateBlock'>, enabled: boolean = true): void {
   useActionContext(ActionContextTypes.NORMAL_MODE, dependencies, enabled)
-}
-
-/**
- * Hook for edit mode shortcuts
- * This will automatically deactivate normal mode shortcuts due to priority
- */
-export function useEditModeShortcuts(dependencies: Omit<EditModeDependencies, 'uiStateBlock'>, enabled: boolean = true): void {
-  useActionContext(ActionContextTypes.EDIT_MODE, dependencies, enabled)
 }
 
 /**

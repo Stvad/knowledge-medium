@@ -70,13 +70,11 @@ export type BlockContentGestureResolver =
 
 export type ShortcutSurface =
   | 'block'
-  | 'textarea'
   | 'codemirror'
   | (string & {})
 
 export interface ShortcutSurfaceContext extends BlockInteractionContext {
   surface: ShortcutSurface
-  textarea?: HTMLTextAreaElement
   editorView?: EditorView
 }
 

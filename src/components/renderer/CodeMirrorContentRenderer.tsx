@@ -2,32 +2,18 @@ import { BlockRendererProps } from '@/types.ts'
 import { useMemo, ClipboardEvent, useState } from 'react'
 import { createMinimalMarkdownConfig } from '@/utils/codemirror.ts'
 import { BlockEditor } from '@/components/BlockEditor.tsx'
-import {
-  useInEditMode,
-  useInFocus,
-  useIsSelected,
-  useUIStateBlock,
-  useUIStateProperty,
-} from '@/data/globalState.ts'
-import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties.ts'
+import { useUIStateProperty } from '@/data/globalState.ts'
+import { focusedBlockIdProp } from '@/data/properties.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
 import { EditorView } from '@codemirror/view'
 import { getAliases } from '@/data/aliasUtils'
 import { useBlockContext } from '@/context/block.tsx'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.ts'
+import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
-  const runtime = useAppRuntime()
   const blockContext = useBlockContext()
-  const uiStateBlock = useUIStateBlock()
-  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
-  const inFocus = useInFocus(block.id)
-  const inEditMode = useInEditMode(block.id)
-  const isSelected = useIsSelected(block.id)
   
   // Create getAliases function for autocomplete
   const getAliasesForAutocomplete = useMemo(() => {
@@ -47,31 +33,11 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
   const [editorView, setEditorView] = useState<EditorView| undefined>(undefined)
 
-  const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
-  const shortcutActivations = useMemo(() => resolveShortcutActivations({
-    block,
-    repo,
-    uiStateBlock,
-    topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
-    isTopLevel: block.id === topLevelBlockId,
-    surface: 'codemirror',
+  const shortcutSurfaceOptions = useMemo(() => ({
     editorView,
-  }), [
-    resolveShortcutActivations,
-    block,
-    repo,
-    uiStateBlock,
-    topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
-    editorView,
-  ])
+  }), [editorView])
 
-  useActionContextActivations(shortcutActivations)
+  useShortcutSurfaceActivations('codemirror', shortcutSurfaceOptions)
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     e.stopPropagation()

@@ -223,13 +223,6 @@ img {
   overflow: visible;
 }
 
-@media (max-width: 640px) {
-
-  textarea.block-content {
-    max-width: calc(100vw - 40px); /* Account for bullet and padding */
-  }
-}
-
 html {
   scrollbar-gutter: stable;
 }

@@ -48,6 +48,7 @@ import {
   blockContentRendererFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
+import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -329,7 +330,9 @@ export function DefaultBlockRenderer(
 
             <div className={'block-content'} ref={contentContainerRef}>
               <ErrorBoundary FallbackComponent={FallbackComponent}>
-                <ContentRenderer block={block}/>
+                <BlockInteractionProvider context={blockInteractionContext}>
+                  <ContentRenderer block={block}/>
+                </BlockInteractionProvider>
               </ErrorBoundary>
             </div>
 

@@ -74,18 +74,6 @@ export const vimNormalModeActivation: ShortcutActivationContribution = context =
   }]
 }
 
-export const textareaEditModeActivation: ShortcutActivationContribution = context => {
-  if (context.surface !== 'textarea' || !context.textarea) return null
-
-  return [{
-    context: ActionContextTypes.EDIT_MODE,
-    dependencies: {
-      block: context.block,
-      textarea: context.textarea,
-    },
-  }]
-}
-
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
   if (context.surface !== 'codemirror' || !context.editorView) return null
 
@@ -104,9 +92,6 @@ export const plainOutlinerInteractionExtension: AppExtension = [
   }),
   blockClickHandlersFacet.of(plainOutlinerBlockClickBehavior, {
     source: 'plain-outliner',
-  }),
-  shortcutSurfaceActivationsFacet.of(textareaEditModeActivation, {
-    source: 'textarea-edit-mode',
   }),
   shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation, {
     source: 'codemirror-edit-mode',

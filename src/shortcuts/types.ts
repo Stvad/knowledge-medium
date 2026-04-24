@@ -33,7 +33,6 @@ export interface ActionContextConfig<T extends ActionContextType = ActionContext
 export type BuiltInActionContextType =
   | 'global'
   | 'normal-mode'
-  | 'edit-mode'
   | 'edit-mode-cm'
   | 'property-editing'
   | 'command-palette'
@@ -44,7 +43,6 @@ export type ActionContextType = BuiltInActionContextType | (string & {})
 export const ActionContextTypes = {
   GLOBAL: 'global',
   NORMAL_MODE: 'normal-mode',
-  EDIT_MODE: 'edit-mode',
   EDIT_MODE_CM: 'edit-mode-cm',
   PROPERTY_EDITING: 'property-editing',
   COMMAND_PALETTE: 'command-palette',
@@ -57,10 +55,6 @@ export interface BaseShortcutDependencies {
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
   block: Block;
-}
-
-export interface EditModeDependencies extends BlockShortcutDependencies {
-  textarea: HTMLTextAreaElement;
 }
 
 export interface CodeMirrorEditModeDependencies extends BaseShortcutDependencies {
@@ -83,7 +77,6 @@ export interface ShortcutDependenciesMap {
   [context: string]: BaseShortcutDependencies;
   [ActionContextTypes.GLOBAL]: BaseShortcutDependencies;
   [ActionContextTypes.NORMAL_MODE]: BlockShortcutDependencies;
-  [ActionContextTypes.EDIT_MODE]: EditModeDependencies;
   [ActionContextTypes.EDIT_MODE_CM]: CodeMirrorEditModeDependencies;
   [ActionContextTypes.PROPERTY_EDITING]: PropertyEditingDependencies;
   [ActionContextTypes.COMMAND_PALETTE]: CommandPaletteDependencies;

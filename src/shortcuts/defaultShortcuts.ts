@@ -5,7 +5,6 @@ import {
 } from './ActionManager.ts'
 import {
   BlockShortcutDependencies,
-  EditModeDependencies,
   ActionContextTypes,
   BaseShortcutDependencies,
   ActionConfig,
@@ -21,7 +20,6 @@ import {
   getRootBlock,
   getLastVisibleDescendant,
 } from '@/data/block.ts'
-import { splitBlockAtCursor } from '@/components/renderer/TextAreaContentRenderer.tsx'
 import { Repo } from '@/data/repo.ts'
 import { importState } from '@/utils/state.ts'
 import {
@@ -37,7 +35,7 @@ import {
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
-import { applyToAllBlocksInSelection, makeNormalMode, makeEditMode, makeMultiSelect, makeCMMode } from './utils'
+import { applyToAllBlocksInSelection, makeNormalMode, makeMultiSelect, makeCMMode } from './utils'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import {
@@ -162,11 +160,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
-  const moveBlockUp: ActionConfig<typeof ActionContextTypes.EDIT_MODE> = {
+  const moveBlockUp: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'move_block_up',
     description: 'Move block up',
-    context: ActionContextTypes.EDIT_MODE,
-    handler: async (deps: EditModeDependencies) => {
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
       await block.changeOrder(-1)
@@ -180,11 +178,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
-  const moveBlockDown: ActionConfig<typeof ActionContextTypes.EDIT_MODE> = {
+  const moveBlockDown: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'move_block_down',
     description: 'Move block down',
-    context: ActionContextTypes.EDIT_MODE,
-    handler: async (deps: EditModeDependencies) => {
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
       await block.changeOrder(1)
@@ -582,125 +580,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   ]
 
-  // Textarea-specific edit mode actions
-  const editModeActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE>[] = [
-    {
-      id: 'exit_edit_mode',
-      description: 'Exit edit mode',
-      context: ActionContextTypes.EDIT_MODE,
-      handler: async (deps: EditModeDependencies) => setIsEditing(deps.uiStateBlock, false),
-      defaultBinding: {
-        keys: 'escape',
-      },
-    },
-    {
-      id: 'split_block_textarea',
-      description: 'Split block at cursor (Textarea)',
-      context: ActionContextTypes.EDIT_MODE,
-      handler: async (deps: EditModeDependencies) => {
-        const {block, textarea, uiStateBlock} = deps
-        if (!block || !textarea || !uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-        const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-        const isTopLevel = block.id === topLevelBlockId
-
-        // Case 1: Cursor is in middle of text
-        if (textarea.selectionStart < textarea.value.length) {
-          const blockInFocus = await splitBlockAtCursor(block, textarea, isTopLevel)
-          setFocusedBlockId(uiStateBlock, blockInFocus.id)
-        }
-        // Case 2: Cursor is at end of text and block has children
-        else if (textarea.selectionStart === textarea.value.length &&
-          (await block.hasChildren() && !isCollapsed || isTopLevel)) {
-          const newBlock = await block.createChild({position: 'first'})
-          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
-        }
-        // Case 3: Cursor at end, no children or they are collapsed
-        else {
-          const newBlock = await block.createSiblingBelow()
-          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
-        }
-      },
-      defaultBinding: {
-        keys: 'enter',
-        eventOptions: {
-          preventDefault: true,
-        },
-      },
-    },
-    {
-      id: 'move_up_from_textarea_start',
-      description: 'Move to previous block when cursor is at start of textarea',
-      context: ActionContextTypes.EDIT_MODE,
-      handler: async (deps: EditModeDependencies) => {
-        const {block, textarea, uiStateBlock} = deps
-        if (!block || !textarea || !uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        if (textarea.selectionStart === 0 && textarea.selectionEnd === 0) {
-          const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-          if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
-        }
-      },
-      defaultBinding: {
-        keys: 'up',
-        eventOptions: {
-          preventDefault: false,
-        },
-      },
-    },
-    {
-      id: 'move_down_from_textarea_end',
-      description: 'Move to next block when cursor is at end of textarea',
-      context: ActionContextTypes.EDIT_MODE,
-      handler: async (deps: EditModeDependencies) => {
-        const {block, textarea, uiStateBlock} = deps
-        if (!block || !textarea || !uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        if (textarea.selectionStart === textarea.value.length &&
-          textarea.selectionEnd === textarea.value.length) {
-          const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
-          if (nextVisible) setFocusedBlockId(uiStateBlock, nextVisible.id)
-        }
-      },
-      defaultBinding: {
-        keys: 'down',
-      },
-    },
-    {
-      id: 'delete_empty_block_textarea',
-      description: 'Delete empty block on backspace (Textarea)',
-      context: ActionContextTypes.EDIT_MODE,
-      handler: async (deps: EditModeDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-        const blockData = await block.data()
-        if (!(blockData?.content === '')) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-        block.delete()
-        if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
-      },
-      defaultBinding: {
-        keys: 'backspace',
-      },
-    },
-    makeEditMode(indentBlock),
-    makeEditMode(outdentBlock),
-    moveBlockUp,
-    moveBlockDown,
-  ]
-
   // CodeMirror-specific edit mode actions
   const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
     {
@@ -900,7 +779,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   return {
     globalActions,
     vimNormalModeActions: normalModeActions,
-    editModeActions,
     editModeCMActions,
     multiSelectModeActions,
   }
@@ -910,7 +788,6 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   const {
     globalActions,
     vimNormalModeActions,
-    editModeActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
@@ -918,7 +795,6 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   return [
     ...globalActions,
     ...vimNormalModeActions,
-    ...editModeActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
@@ -928,14 +804,12 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
     globalActions,
     vimNormalModeActions,
-    editModeActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
   const defaultActions = [
     ...globalActions,
-    ...editModeActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
