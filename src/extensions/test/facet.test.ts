@@ -7,7 +7,6 @@ describe('facet runtime', () => {
       id: 'test.labels',
       combine: values => values.join(','),
       empty: () => '',
-      validate: (value): value is string => typeof value === 'string',
     })
 
     const runtime = await resolveFacetRuntime([
@@ -26,7 +25,6 @@ describe('facet runtime', () => {
       id: 'test.count',
       combine: values => values.reduce((sum, value) => sum + value, 0),
       empty: () => 0,
-      validate: (value): value is number => typeof value === 'number',
     })
 
     const runtime = await resolveFacetRuntime([])
@@ -39,7 +37,6 @@ describe('facet runtime', () => {
       id: 'test.sync-labels',
       combine: values => values.join(','),
       empty: () => '',
-      validate: (value): value is string => typeof value === 'string',
     })
 
     const runtime = resolveFacetRuntimeSync([

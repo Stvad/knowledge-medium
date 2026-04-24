@@ -6,7 +6,7 @@ export interface Facet<Input, Output = readonly Input[]> {
   id: string
   combine: (values: readonly Input[], context: FacetResolveContext) => Output
   empty: (context: FacetResolveContext) => Output
-  validate: (value: unknown) => value is Input
+  validate?: (value: unknown) => value is Input
   of: (value: Input, options?: FacetContributionOptions) => FacetContribution<Input>
 }
 
@@ -67,7 +67,7 @@ export function defineFacet<Input, Output = readonly Input[]>({
   id: string
   combine?: (values: readonly Input[], context: FacetResolveContext) => Output
   empty?: (context: FacetResolveContext) => Output
-  validate: (value: unknown) => value is Input
+  validate?: (value: unknown) => value is Input
 }): Facet<Input, Output> {
   const facet: Facet<Input, Output> = {
     id,
@@ -149,16 +149,7 @@ const pushValidatedContribution = (
   output: FacetContribution<unknown>[],
 ): void => {
   const validate = contribution.facet.validate
-  if (!validate) {
-    console.error(
-      `Dropping contribution for facet "${contribution.facet.id}": facet is missing a validator. ` +
-        `Every facet must declare a \`validate\` predicate.`,
-      {source: contribution.source, value: contribution.value},
-    )
-    return
-  }
-
-  if (!validate(contribution.value)) {
+  if (validate && !validate(contribution.value)) {
     console.error(
       `Dropping invalid contribution for facet "${contribution.facet.id}"`,
       {source: contribution.source, value: contribution.value},
