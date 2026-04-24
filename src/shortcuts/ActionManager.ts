@@ -44,18 +44,18 @@ const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDe
   'selectedBlocks' in deps && Array.isArray(deps.selectedBlocks) && (deps.selectedBlocks as unknown[]).every(b => b instanceof Block) &&
   'anchorBlock' in deps && (deps.anchorBlock === null || deps.anchorBlock instanceof Block);
 
-const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
-  [ActionContextTypes.GLOBAL, {
+export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
+  {
     type: ActionContextTypes.GLOBAL,
     displayName: 'Global',
     validateDependencies: isBaseShortcutDependencies,
-  }],
-  [ActionContextTypes.NORMAL_MODE, {
+  },
+  {
     type: ActionContextTypes.NORMAL_MODE,
     displayName: 'Normal Mode',
     validateDependencies: isBlockShortcutDependencies,
-  }],
-  [ActionContextTypes.EDIT_MODE, {
+  },
+  {
     type: ActionContextTypes.EDIT_MODE,
     displayName: 'Edit Mode (Textarea)',
     defaultEventOptions: {
@@ -66,8 +66,8 @@ const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
       return target?.tagName === 'TEXTAREA'
     },
     validateDependencies: isEditModeDependencies,
-  }],
-  [ActionContextTypes.EDIT_MODE_CM, {
+  },
+  {
     type: ActionContextTypes.EDIT_MODE_CM,
     displayName: 'Edit Mode (CodeMirror)',
     defaultEventOptions: {
@@ -78,23 +78,27 @@ const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>([
       return target?.closest('.cm-editor') !== null
     },
     validateDependencies: isCodeMirrorEditModeDependencies,
-  }],
-  [ActionContextTypes.PROPERTY_EDITING, {
+  },
+  {
     type: ActionContextTypes.PROPERTY_EDITING,
     displayName: 'Property Editing',
     validateDependencies: isPropertyEditingDependencies,
-  }],
-  [ActionContextTypes.COMMAND_PALETTE, {
+  },
+  {
     type: ActionContextTypes.COMMAND_PALETTE,
     displayName: 'Command Palette',
     validateDependencies: isCommandPaletteDependencies,
-  }],
-  [ActionContextTypes.MULTI_SELECT_MODE, {
+  },
+  {
     type: ActionContextTypes.MULTI_SELECT_MODE,
     displayName: 'Multi-Select Mode',
     validateDependencies: isMultiSelectModeDependencies,
-  }],
-])
+  },
+]
+
+const defaultContextConfigs = new Map<ActionContextType, ActionContextConfig>(
+  defaultActionContextConfigs.map(config => [config.type, config]),
+)
 
 const defaultEventFilter = (event: KeyboardEvent) => {
   return !(isSingleKeyPress(event) && hasEditableTarget(event))
@@ -119,10 +123,14 @@ export class ActionManager {
 
   registerContext<T extends ActionContextType>(config: ActionContextConfig<T>): void {
     if (this.contexts.has(config.type)) {
-      console.warn(`[ShortcutManager] Context ${config.type} already registered. Overwriting.`)
+      console.debug(`[ShortcutManager] Context ${config.type} already registered. Overwriting.`)
     }
     this.contexts.set(config.type, config)
     console.debug(`[ShortcutManager] Registered context: ${config.type}`)
+  }
+
+  registerContexts(contexts: readonly ActionContextConfig[]): void {
+    contexts.forEach(context => this.registerContext(context))
   }
 
   registerAction<T extends ActionContextType>(config: ActionConfig<T>): void {

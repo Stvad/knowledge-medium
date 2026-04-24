@@ -1,5 +1,5 @@
 import { defineFacet } from '@/extensions/facet.ts'
-import { ActionConfig, ActionContextType, ActionContextTypes } from '@/shortcuts/types.ts'
+import { ActionConfig, ActionContextConfig, ActionContextType, ActionContextTypes } from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
 
 export interface RendererContribution {
@@ -67,4 +67,17 @@ export const blockRenderersFacet = defineFacet<RendererContribution, RendererReg
 export const actionsFacet = defineFacet<ActionConfig, readonly ActionConfig[]>({
   id: 'core.actions',
   validate: isActionConfig,
+})
+
+export const isActionContextConfig = (value: unknown): value is ActionContextConfig =>
+  isRecord(value) &&
+  isActionContextType(value.type) &&
+  typeof value.displayName === 'string' &&
+  (value.defaultEventOptions === undefined || isRecord(value.defaultEventOptions)) &&
+  (value.eventFilter === undefined || typeof value.eventFilter === 'function') &&
+  typeof value.validateDependencies === 'function'
+
+export const actionContextsFacet = defineFacet<ActionContextConfig, readonly ActionContextConfig[]>({
+  id: 'core.action-contexts',
+  validate: isActionContextConfig,
 })

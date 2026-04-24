@@ -3,10 +3,12 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import { Block } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
-import { blockRenderersFacet, actionsFacet } from '@/extensions/core.ts'
+import { blockRenderersFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
+import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { BlockData, BlockProperties } from '@/types.ts'
+import { ActionConfig } from '@/shortcuts/types.ts'
 
 type SqlMode = 'all' | 'get' | 'optional' | 'execute'
 type BlockPosition = 'first' | 'last' | number
@@ -29,7 +31,7 @@ interface AgentRuntimeContext {
   getSubtree: (rootId?: string, includeRoot?: boolean) => Promise<BlockData[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | undefined>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | undefined>
-  actions: ReturnType<typeof actionsFacet.empty>
+  actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime
   React: typeof React
@@ -496,7 +498,7 @@ export function useAgentRuntimeBridge({
           currentRepo.getSubtreeBlockData(rootId ?? currentRootBlock.id, {includeRoot}),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
-        actions: currentRuntime.read(actionsFacet),
+        actions: readRuntimeActions(currentRuntime),
         renderers: currentRuntime.read(blockRenderersFacet),
         refreshAppRuntime,
         React,

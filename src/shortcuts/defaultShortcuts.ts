@@ -1,4 +1,8 @@
-import { actionManager as defaultActionManager, ActionManager } from './ActionManager.ts'
+import {
+  actionManager as defaultActionManager,
+  ActionManager,
+  defaultActionContextConfigs,
+} from './ActionManager.ts'
 import {
   BlockShortcutDependencies,
   EditModeDependencies,
@@ -46,9 +50,10 @@ import {
 import { EditorSelectionState } from '@/types.ts'
 import { copySelectedBlocksToClipboard, copyBlockToClipboard } from '@/utils/copy.ts'
 import { resetBlockSelection } from '@/data/globalState.ts'
-import { actionsFacet } from '@/extensions/core.ts'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
+import { vimNormalModeActionsFacet, VimNormalModeAction } from '@/shortcuts/vimNormalMode.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -116,7 +121,7 @@ const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   }
 }
 
-export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
+export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // Define base actions that have transformations
   const indentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
     id: 'indent_block',
@@ -417,7 +422,7 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
       }
     },
   }
-  const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
+  const normalModeActions: VimNormalModeAction[] = [
     indentBlock,
     outdentBlock,
     {
@@ -888,15 +893,54 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
     },
   ];
 
-  return [...globalActions,
-    ...normalModeActions,
+  return {
+    globalActions,
+    vimNormalModeActions: normalModeActions,
+    editModeActions,
+    editModeCMActions,
+    multiSelectModeActions,
+  }
+}
+
+export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
+  const {
+    globalActions,
+    vimNormalModeActions,
+    editModeActions,
+    editModeCMActions,
+    multiSelectModeActions,
+  } = getDefaultActionGroups({repo})
+
+  return [
+    ...globalActions,
+    ...vimNormalModeActions,
     ...editModeActions,
     ...editModeCMActions,
-    ...multiSelectModeActions] as ActionConfig[]
+    ...multiSelectModeActions,
+  ] as ActionConfig[]
 }
 
 export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
-  return getDefaultActions({repo}).map(action => actionsFacet.of(action))
+  const {
+    globalActions,
+    vimNormalModeActions,
+    editModeActions,
+    editModeCMActions,
+    multiSelectModeActions,
+  } = getDefaultActionGroups({repo})
+
+  const defaultActions = [
+    ...globalActions,
+    ...editModeActions,
+    ...editModeCMActions,
+    ...multiSelectModeActions,
+  ] as ActionConfig[]
+
+  return [
+    defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
+    defaultActions.map(action => actionsFacet.of(action)),
+    vimNormalModeActions.map(action => vimNormalModeActionsFacet.of(action)),
+  ]
 }
 
 export function registerDefaultShortcuts(
