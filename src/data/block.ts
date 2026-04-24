@@ -1,11 +1,18 @@
 import { BlockData, User, BlockProperty } from '@/types'
-import { memoize } from 'lodash'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
 import { parseReferences } from '@/utils/referenceParser'
 import { findBlockByAlias } from '@/data/aliasUtils.ts'
-import { aliasProp, fromList, isCollapsedProp } from '@/data/properties.ts'
+import { aliasProp, fromList } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
+import { getRootBlock } from '@/data/blockTraversal.ts'
+
+export {
+  getLastVisibleDescendant,
+  getRootBlock,
+  nextVisibleBlock,
+  previousVisibleBlock,
+} from '@/data/blockTraversal.ts'
 
 export type ChangeFn<T> = (doc: T) => void;
 export type ChangeOptions<T> = UndoRedoOptions<T>;
@@ -318,70 +325,6 @@ export class Block {
 
 const getChildIndex = (parent: BlockData, childId: string) =>
   parent.childIds.indexOf(childId)
-
-export const getRootBlock = memoize(async (block: Block): Promise<Block> => {
-  const parent = await block.parent()
-
-  if (!parent) return block
-
-  return getRootBlock(parent)
-}, (block) => `${block.repo.instanceId}:${block.id}`)
-
-export const nextVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
-  const doc = await block.data()
-  if (!doc) return null
-
-  const blockIsTopLevel = block.id === topLevelBlockId
-
-  const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-  if (doc.childIds.length > 0 && (!isCollapsed || blockIsTopLevel)) {
-    return block.repo.find(doc.childIds[0])
-  }
-
-  let currentBlock = block
-  while (true) {
-    const parent = await currentBlock.parent()
-    if (!parent || currentBlock.id === topLevelBlockId) return null
-
-    const parentDoc = await parent.data()
-    if (!parentDoc) return null
-
-    const currentIndex = getChildIndex(parentDoc, currentBlock.id)
-    if (currentIndex < parentDoc.childIds.length - 1) {
-      return block.repo.find(parentDoc.childIds[currentIndex + 1])
-    }
-
-    currentBlock = parent
-  }
-}
-
-export const getLastVisibleDescendant = async (block: Block, ignoreTopLevelCollapsed?: boolean): Promise<Block> => {
-  const doc = await block.data()
-  if (!doc) throw new Error('Cant get block data')
-
-  const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-  if (doc.childIds.length === 0 || isCollapsed && !(ignoreTopLevelCollapsed === true)) return block
-
-  const lastChild = block.repo.find(doc.childIds[doc.childIds.length - 1])
-  return getLastVisibleDescendant(lastChild)
-}
-
-export const previousVisibleBlock = async (block: Block, topLevelBlockId: string): Promise<Block | null> => {
-  if (block.id === topLevelBlockId) return null
-  const parent = await block.parent()
-  if (!parent) return null
-
-  const parentDoc = await parent.data()
-  if (!parentDoc) throw new Error(`Can't get parent data`)
-  const currentIndex = getChildIndex(parentDoc, block.id)
-
-  if (currentIndex > 0) {
-    const previousSibling = block.repo.find(parentDoc.childIds[currentIndex - 1])
-    return getLastVisibleDescendant(previousSibling)
-  }
-
-  return parent
-}
 
 export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
   return block.repo.getSubtreeBlocks(block.id)

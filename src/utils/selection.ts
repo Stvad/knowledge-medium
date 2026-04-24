@@ -1,6 +1,7 @@
 import { Block } from '@/data/block';
 import { Repo } from '@/data/repo';
-import { isCollapsedProp, selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp } from '@/data/properties';
+import { selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp } from '@/data/properties';
+import { getVisibleBlockIdsInOrder } from '@/data/blockTraversal.ts';
 
 /**
  * Retrieves all visible block IDs in their document order for a given panel.
@@ -11,28 +12,7 @@ import { isCollapsedProp, selectionStateProp, topLevelBlockIdProp, focusedBlockI
 export async function getAllVisibleBlockIdsInOrder(
   topLevelBlock: Block,
 ): Promise<string[]> {
-  const visibleBlockIds: string[] = [];
-
-  async function traverse(block: Block) {
-    visibleBlockIds.push(block.id);
-
-    const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-    if (isCollapsed && block.id !== topLevelBlock.id) {
-      // If the block is collapsed and it's not the top-level block,
-      // we don't traverse its children.
-      // If it is the top-level block, we ignore the collapsed state
-      // and process its children anyway.
-      return;
-    }
-
-    const children = await block.children(); // Assumes children are already sorted by order
-    for (const child of children) {
-      await traverse(child);
-    }
-  }
-
-  await traverse(topLevelBlock);
-  return visibleBlockIds;
+  return getVisibleBlockIdsInOrder(topLevelBlock);
 }
 
 /**

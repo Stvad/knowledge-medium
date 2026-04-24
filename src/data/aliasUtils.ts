@@ -3,7 +3,8 @@
  */
 
 import { aliasProp } from '@/data/properties'
-import { Block } from '@/data/block'
+import type { Block } from '@/data/block'
+import { visitBlocks } from '@/data/blockTraversal.ts'
 
 const hasQueryBackedAliasLookup = (
   block: Block,
@@ -15,49 +16,6 @@ const hasQueryBackedAliasLookup = (
 } =>
   typeof block.repo?.getAliasesInSubtree === 'function' &&
   typeof block.repo?.findBlockByAliasInSubtree === 'function'
-
-/**
- * Generic block visitor that traverses a block tree and calls a visitor function on each block
- * @param rootBlock The root block to start traversal from
- * @param visitor Function called for each block, can return a value to stop traversal early
- * @returns Promise resolving to the early return value if any, or undefined
- */
-async function visitBlocks<T>(
-  rootBlock: Block,
-  visitor: (block: Block) => Promise<T | undefined>
-): Promise<T | undefined> {
-  const visitedBlocks = new Set<string>()
-  
-  const traverse = async (block: Block): Promise<T | undefined> => {
-    if (visitedBlocks.has(block.id)) return undefined
-    visitedBlocks.add(block.id)
-    
-    try {
-      // Call visitor function - if it returns a value, stop traversal
-      const result = await visitor(block)
-      if (result !== undefined) return result
-      
-      // Recursively traverse children
-      const children = await block.children()
-      for (const child of children) {
-        const childResult = await traverse(child)
-        if (childResult !== undefined) return childResult
-      }
-    } catch (error) {
-      // Skip blocks that can't be read
-      console.warn('Error visiting block:', block.id, error)
-    }
-    
-    return undefined
-  }
-  
-  try {
-    return traverse(rootBlock)
-  } catch (error) {
-    console.warn('Error in block traversal:', error)
-    return undefined
-  }
-}
 
 /**
  * Get all aliases from blocks, optionally filtered by a search term
@@ -82,7 +40,7 @@ export async function getAliases(rootBlock: Block, filter: string = ''): Promise
       allAliases.push(...aliasProperty.value)
     }
     return undefined // Continue traversal
-  })
+  }, {catchErrors: true})
   
   // Filter aliases based on search term
   const filteredAliases = filter 
@@ -118,7 +76,7 @@ export async function findBlockByAlias(rootBlock: Block, alias: string): Promise
       }
     }
     return undefined // Continue traversal
-  })
+  }, {catchErrors: true})
   
   return foundBlock || null
 }
