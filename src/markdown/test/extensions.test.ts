@@ -12,22 +12,19 @@ const basePlugin: Plugin = () => undefined
 const videoPlugin: Plugin = () => undefined
 
 describe('markdown extensions', () => {
-  it('resolves plugins and components from matching extensions', () => {
+  it('resolves plugins and components from extension functions', () => {
     const baseComponents: Components = {p: 'p'}
     const videoComponents: Components = {strong: 'strong'}
 
     const config = resolveMarkdownRenderConfig([
-      {
-        id: 'base',
+      () => ({
         remarkPlugins: [basePlugin],
         components: baseComponents,
-      },
-      {
-        id: 'video',
-        appliesTo: ({blockContext}) => blockContext.videoPlayerBlockId === 'video-1',
-        remarkPlugins: () => [videoPlugin],
-        components: () => videoComponents,
-      },
+      }),
+      () => ({
+        remarkPlugins: [videoPlugin],
+        components: videoComponents,
+      }),
     ], {
       block,
       blockContext: {videoPlayerBlockId: 'video-1'},
@@ -42,15 +39,12 @@ describe('markdown extensions', () => {
 
   it('skips extensions that do not apply to the current markdown context', () => {
     const config = resolveMarkdownRenderConfig([
-      {
-        id: 'base',
+      () => ({
         remarkPlugins: [basePlugin],
-      },
-      {
-        id: 'video',
-        appliesTo: ({blockContext}) => blockContext.videoPlayerBlockId === 'video-1',
-        remarkPlugins: [videoPlugin],
-      },
+      }),
+      ({blockContext}) => blockContext.videoPlayerBlockId === 'video-1'
+        ? {remarkPlugins: [videoPlugin]}
+        : null,
     ], {
       block,
       blockContext: {},
@@ -60,15 +54,7 @@ describe('markdown extensions', () => {
   })
 
   it('validates the public markdown extension shape', () => {
-    expect(isMarkdownExtension({
-      id: 'valid',
-      remarkPlugins: [],
-      components: {},
-    })).toBe(true)
-
-    expect(isMarkdownExtension({
-      id: 'invalid',
-      remarkPlugins: {},
-    })).toBe(false)
+    expect(isMarkdownExtension(() => null)).toBe(true)
+    expect(isMarkdownExtension({remarkPlugins: []})).toBe(false)
   })
 })

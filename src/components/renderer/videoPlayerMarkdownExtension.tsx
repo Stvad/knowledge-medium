@@ -14,24 +14,21 @@ interface TimestampComponentProps {
   node?: TimestampNode
 }
 
-export const videoPlayerMarkdownExtension: MarkdownExtension = {
-  id: 'video-player.timestamps',
-  appliesTo: ({blockContext}) =>
-    typeof blockContext.videoPlayerBlockId === 'string',
-  remarkPlugins: [remarkTimestamps],
-  components: ({blockContext}) => {
-    const videoBlockId = blockContext.videoPlayerBlockId
-    if (typeof videoBlockId !== 'string') return {}
+export const videoPlayerMarkdownExtension: MarkdownExtension = ({blockContext}) => {
+  const videoBlockId = blockContext.videoPlayerBlockId
+  if (typeof videoBlockId !== 'string') return null
 
-    return {
+  return {
+    remarkPlugins: [remarkTimestamps],
+    components: {
       'time-stamp': ({node}: TimestampComponentProps) => {
         const hms = node?.properties?.hms
         if (typeof hms !== 'string') return null
 
         return <VideoTimeStamp hms={hms} videoBlockId={videoBlockId}/>
       },
-    } as unknown as Components
-  },
+    } as unknown as Components,
+  }
 }
 
 export const videoPlayerMarkdownExtensionContribution = markdownExtensionsFacet.of(

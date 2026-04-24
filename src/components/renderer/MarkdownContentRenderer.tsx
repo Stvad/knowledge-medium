@@ -6,7 +6,7 @@ import { useRef, MouseEvent, TouchEvent } from 'react'
 import { useBlockContext } from '@/context/block.tsx'
 import { useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { markdownExtensionsFacet, resolveMarkdownRenderConfig } from '@/markdown/extensions.ts'
+import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 
 type Touch = { x: number; y: number; time: number }
 
@@ -89,10 +89,8 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   }
 
   if (!blockData) return null
-  const markdownConfig = resolveMarkdownRenderConfig(
-    runtime.read(markdownExtensionsFacet),
-    {block, blockContext},
-  )
+  const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
+  const markdownConfig = resolveMarkdownConfig({block, blockContext})
 
   return (
     <div
