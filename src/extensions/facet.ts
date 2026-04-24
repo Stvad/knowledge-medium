@@ -35,6 +35,29 @@ export const isFunction = <T extends FacetFunction>(
   value: unknown,
 ): value is T => typeof value === 'function'
 
+export type OptionalContributionResult<T> = T | null | undefined | false
+
+export const resolveLastContributionResult = <Context, Result>(
+  contributions: readonly ((context: Context) => OptionalContributionResult<Result>)[],
+  context: Context,
+  initialValue?: Result,
+): Result | undefined => {
+  let result = initialValue
+
+  for (const contribution of contributions) {
+    const contributionResult = contribution(context)
+    if (contributionResult) result = contributionResult
+  }
+
+  return result
+}
+
+export const combineLastContributionResult =
+  <Context, Result>(getInitialValue?: (context: Context) => Result | undefined) =>
+    (contributions: readonly ((context: Context) => OptionalContributionResult<Result>)[]) =>
+      (context: Context): Result | undefined =>
+        resolveLastContributionResult(contributions, context, getInitialValue?.(context))
+
 export function defineFacet<Input, Output = readonly Input[]>({
   id,
   combine,

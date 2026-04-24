@@ -13,7 +13,7 @@ import {
   resetBlockSelection,
 } from '@/data/globalState.ts'
 import { Repo } from '@/data/repo.ts'
-import { defineFacet, isFunction } from '@/extensions/facet.ts'
+import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.ts'
 import type { ActionContextActivation } from '@/shortcuts/types.ts'
 import type { BlockRenderer } from '@/types.ts'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.ts'
@@ -90,50 +90,24 @@ export const getBlockContentRendererSlot = (
 ): BlockRenderer | undefined =>
   context.contentRenderers?.find(slot => slot.id === slotId)?.renderer
 
-export const resolveBlockContentRenderer = (
-  contributions: readonly BlockContentRendererContribution[],
-  context: BlockInteractionContext,
-): BlockRenderer | undefined => {
-  let renderer = getBlockContentRendererSlot(context, 'primary')
-
-  for (const contribution of contributions) {
-    const contributedRenderer = contribution(context)
-    if (contributedRenderer) renderer = contributedRenderer
-  }
-
-  return renderer
-}
-
 export const blockContentRendererFacet = defineFacet<
   BlockContentRendererContribution,
   BlockContentRendererResolver
 >({
   id: 'core.block-content-renderer',
-  combine: contributions => context => resolveBlockContentRenderer(contributions, context),
+  combine: combineLastContributionResult<BlockInteractionContext, BlockRenderer>(
+    context => getBlockContentRendererSlot(context, 'primary'),
+  ),
   empty: () => context => getBlockContentRendererSlot(context, 'primary'),
   validate: isFunction<BlockContentRendererContribution>,
 })
-
-export const resolveBlockClickHandler = (
-  contributions: readonly BlockClickContribution[],
-  context: BlockInteractionContext,
-): BlockMouseHandler | undefined => {
-  let handler: BlockMouseHandler | undefined
-
-  for (const contribution of contributions) {
-    const contributedHandler = contribution(context)
-    if (contributedHandler) handler = contributedHandler
-  }
-
-  return handler
-}
 
 export const blockClickHandlersFacet = defineFacet<
   BlockClickContribution,
   BlockClickResolver
 >({
   id: 'core.block-click-handlers',
-  combine: contributions => context => resolveBlockClickHandler(contributions, context),
+  combine: combineLastContributionResult<BlockInteractionContext, BlockMouseHandler>(),
   empty: () => () => undefined,
   validate: isFunction<BlockClickContribution>,
 })
