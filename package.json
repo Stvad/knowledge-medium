@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "check": "yarn run compile && yarn run lint && yarn run test"
+    "check": "yarn run compile && yarn run lint && yarn run test",
+    "agent:server": "node scripts/agent-runtime-server.mjs",
+    "agent": "node scripts/agent-runtime.mjs"
   },
   "dependencies": {
     "@babel/standalone": "^7.26.4",

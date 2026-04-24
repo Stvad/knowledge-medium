@@ -7,6 +7,7 @@ import { AppExtension, FacetResolveContext, resolveFacetRuntime, resolveFacetRun
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
+import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 
 export function AppRuntimeProvider({
   children,
@@ -73,6 +74,13 @@ export function AppRuntimeProvider({
       cancelled = true
     }
   }, [baseExtensions, rootBlock, runtimeContext, safeMode])
+
+  useAgentRuntimeBridge({
+    repo,
+    rootBlock,
+    runtime,
+    safeMode,
+  })
 
   return (
     <AppRuntimeContextProvider value={runtime}>
