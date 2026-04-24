@@ -13,7 +13,7 @@ import {
   resetBlockSelection,
 } from '@/data/globalState.ts'
 import { Repo } from '@/data/repo.ts'
-import { defineFacet } from '@/extensions/facet.ts'
+import { defineFacet, isFunction } from '@/extensions/facet.ts'
 import type { ActionContextActivation } from '@/shortcuts/types.ts'
 import type { BlockRenderer } from '@/types.ts'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.ts'
@@ -84,26 +84,6 @@ export type ShortcutActivationContribution =
 export type ShortcutActivationResolver =
   (context: ShortcutSurfaceContext) => readonly ActionContextActivation[]
 
-export const isBlockContentRendererContribution = (
-  value: unknown,
-): value is BlockContentRendererContribution =>
-  typeof value === 'function'
-
-export const isBlockClickContribution = (
-  value: unknown,
-): value is BlockClickContribution =>
-  typeof value === 'function'
-
-export const isBlockContentGestureContribution = (
-  value: unknown,
-): value is BlockContentGestureContribution =>
-  typeof value === 'function'
-
-export const isShortcutActivationContribution = (
-  value: unknown,
-): value is ShortcutActivationContribution =>
-  typeof value === 'function'
-
 export const getBlockContentRendererSlot = (
   context: BlockInteractionContext,
   slotId: string,
@@ -131,7 +111,7 @@ export const blockContentRendererFacet = defineFacet<
   id: 'core.block-content-renderer',
   combine: contributions => context => resolveBlockContentRenderer(contributions, context),
   empty: () => context => getBlockContentRendererSlot(context, 'primary'),
-  validate: isBlockContentRendererContribution,
+  validate: isFunction<BlockContentRendererContribution>,
 })
 
 export const resolveBlockClickHandler = (
@@ -155,7 +135,7 @@ export const blockClickHandlersFacet = defineFacet<
   id: 'core.block-click-handlers',
   combine: contributions => context => resolveBlockClickHandler(contributions, context),
   empty: () => () => undefined,
-  validate: isBlockClickContribution,
+  validate: isFunction<BlockClickContribution>,
 })
 
 export const resolveBlockContentGestureHandlers = (
@@ -181,7 +161,7 @@ export const blockContentGestureHandlersFacet = defineFacet<
   id: 'core.block-content-gesture-handlers',
   combine: contributions => context => resolveBlockContentGestureHandlers(contributions, context),
   empty: () => () => ({}),
-  validate: isBlockContentGestureContribution,
+  validate: isFunction<BlockContentGestureContribution>,
 })
 
 export const resolveShortcutActivations = (
@@ -197,7 +177,7 @@ export const shortcutSurfaceActivationsFacet = defineFacet<
   id: 'core.shortcut-surface-activations',
   combine: contributions => context => resolveShortcutActivations(contributions, context),
   empty: () => () => [],
-  validate: isShortcutActivationContribution,
+  validate: isFunction<ShortcutActivationContribution>,
 })
 
 export const focusBlock = ({block, uiStateBlock}: BlockInteractionContext) => {

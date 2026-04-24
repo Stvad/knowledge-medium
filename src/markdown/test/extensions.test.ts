@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block.ts'
 import {
-  isMarkdownExtension,
   resolveMarkdownRenderConfig,
 } from '@/markdown/extensions.ts'
+import { isFunction } from '@/extensions/facet.ts'
 import type { Components } from 'react-markdown'
 import type { Plugin } from 'unified'
 
@@ -53,8 +53,8 @@ describe('markdown extensions', () => {
     expect(config.remarkPlugins).toEqual([basePlugin])
   })
 
-  it('validates the public markdown extension shape', () => {
-    expect(isMarkdownExtension(() => null)).toBe(true)
-    expect(isMarkdownExtension({remarkPlugins: []})).toBe(false)
+  it('validates extension contributions as functions', () => {
+    expect(isFunction(() => null)).toBe(true)
+    expect(isFunction({remarkPlugins: []})).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 import type { Block } from '@/data/block.ts'
-import { defineFacet } from '@/extensions/facet.ts'
+import { defineFacet, isFunction } from '@/extensions/facet.ts'
 import type { BlockContextType } from '@/types.ts'
 import type { Components } from 'react-markdown'
 import type { PluggableList } from 'unified'
@@ -22,9 +22,6 @@ export type MarkdownExtensionConfig =
 
 export type MarkdownExtension =
   (context: MarkdownRenderContext) => MarkdownExtensionConfig
-
-export const isMarkdownExtension = (value: unknown): value is MarkdownExtension =>
-  typeof value === 'function'
 
 export type MarkdownRenderConfigResolver =
   (context: MarkdownRenderContext) => MarkdownRenderConfig
@@ -62,5 +59,5 @@ export const markdownExtensionsFacet = defineFacet<MarkdownExtension, MarkdownRe
     remarkPlugins: [],
     components: {},
   }),
-  validate: isMarkdownExtension,
+  validate: isFunction<MarkdownExtension>,
 })

@@ -29,6 +29,12 @@ export type AppExtension =
   | undefined
   | false
 
+export type FacetFunction = (...args: never[]) => unknown
+
+export const isFunction = <T extends FacetFunction>(
+  value: unknown,
+): value is T => typeof value === 'function'
+
 export function defineFacet<Input, Output = readonly Input[]>({
   id,
   combine,
