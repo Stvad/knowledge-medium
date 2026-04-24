@@ -7,7 +7,6 @@ import { focusedBlockIdProp } from '@/data/properties.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { EditorView } from '@codemirror/view'
-import { getAliases } from '@/data/aliasUtils'
 import { useBlockContext } from '@/context/block.tsx'
 import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
 
@@ -22,7 +21,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         console.warn('No root block ID available for alias search')
         return []
       }
-      return getAliases(repo.find(blockContext.rootBlockId), filter)
+      return repo.getAliasesInSubtree(blockContext.rootBlockId, filter)
     }
   }, [repo, blockContext.rootBlockId])
 

@@ -2,7 +2,6 @@ import { BlockData, User, BlockProperty } from '@/types'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
 import { parseReferences } from '@/utils/referenceParser'
-import { findBlockByAlias } from '@/data/aliasUtils.ts'
 import { aliasProp, fromList } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
 import { getRootBlock } from '@/data/blockTraversal.ts'
@@ -356,7 +355,7 @@ const parseAndUpdateReferences = async (block: Block) => {
 
 const getOrCreateBlockForAlias = async (block: Block, alias: string) => {
   const rootBlock = await getRootBlock(block)
-  const existingBlock = await findBlockByAlias(rootBlock, alias)
+  const existingBlock = await rootBlock.repo.findBlockByAliasInSubtree(rootBlock.id, alias)
 
   const referenceWasRemoved = (candidate: Block) =>
     (block.dataSync()?.references ?? []).findIndex(ref => ref.id === candidate.id) === -1
