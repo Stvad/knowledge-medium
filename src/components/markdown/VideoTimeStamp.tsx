@@ -1,5 +1,5 @@
 import { hmsToSeconds } from '@/utils/time.ts'
-import { seekTo } from '@/components/renderer/VideoPlayerRenderer.tsx'
+import { seekTo } from '@/components/renderer/videoPlayerEvents.ts'
 import { SyntheticEvent } from 'react'
 
 export interface TimeStampProps {

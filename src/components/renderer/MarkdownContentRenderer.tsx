@@ -1,13 +1,12 @@
 import { BlockRendererProps } from '@/types.ts'
 import { focusedBlockIdProp, editorSelection, isEditingProp, requestEditorFocus } from '@/data/properties.ts'
-import Markdown, { Components } from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import Markdown from 'react-markdown'
 import { useUIStateBlock } from '@/data/globalState'
-import { useRef, MouseEvent, TouchEvent, ComponentType } from 'react'
-import { remarkTimestamps } from '@/markdown/remark-timestamps.ts'
-import VideoTimeStamp from '@/components/markdown/VideoTimeStamp.tsx'
+import { useRef, MouseEvent, TouchEvent } from 'react'
 import { useBlockContext } from '@/context/block.tsx'
 import { useData } from '@/hooks/block.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { markdownExtensionsFacet, resolveMarkdownRenderConfig } from '@/markdown/extensions.ts'
 
 type Touch = { x: number; y: number; time: number }
 
@@ -27,6 +26,7 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   const blockData = useData(block)
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
+  const runtime = useAppRuntime()
 
   const activateEditing = (coords: { x: number, y: number }) => {
     uiStateBlock.setProperty({
@@ -89,14 +89,11 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   }
 
   if (!blockData) return null
+  const markdownConfig = resolveMarkdownRenderConfig(
+    runtime.read(markdownExtensionsFacet),
+    {block, blockContext},
+  )
 
-  /**
-   * Todo the timestamp plugin should not be passed here directly, instead we need a mechanism to configure plugins
-   * for a given context. In a way that can be altered by the code running inside blocks.
-   *
-   * The requirement of dynamic re-configuration is making for a worse mental model/we can't just assemble relevant plugins
-   * I wonder if we can avoid such requirements by employing hooks, so we'd run some startup code, that uses them and gets config
-   */
   return (
     <div
       className="min-h-[1.7em] whitespace-pre-wrap overflow-x-hidden max-w-full"
@@ -110,24 +107,11 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
       onTouchEnd={handleTouchEnd}
     >
       <Markdown
-        remarkPlugins={[remarkGfm, ...(blockContext.videoPlayerBlockId ? [remarkTimestamps] : [])]}
-        components={{
-          ...(blockContext.videoPlayerBlockId ? {
-            'time-stamp': ({node}) =>
-              <VideoTimeStamp hms={node.properties.hms} videoBlockId={blockContext.videoPlayerBlockId as string}/>,
-          } : {}),
-        } as ExtendedComponents}
+        remarkPlugins={markdownConfig.remarkPlugins}
+        components={markdownConfig.components}
       >
         {blockData.content}
       </Markdown>
     </div>
   )
 }
-
-// Define extended components type
-type ExtendedComponents = Components & {
-  'time-stamp'?: ComponentType<{
-    node: { properties: { hms: string } }
-    [key: string]: unknown;
-  }>;
-};

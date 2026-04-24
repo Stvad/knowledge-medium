@@ -5,20 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ActionContextType as OriginalActionContextType } from '@/shortcuts/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useData } from '@/hooks/block.ts'
-
-// Define the event type for seeking
-interface SeekToEventDetail {
-  seconds: number;
-  blockId: string;
-}
-
-const seekToEventName = 'video-seek-to'
-export const seekTo = (seconds: number, blockId: string) => {
-  const event = new CustomEvent<SeekToEventDetail>(seekToEventName, {
-    detail: {seconds, blockId},
-  })
-  window.dispatchEvent(event)
-}
+import { seekToEventName, SeekToEventDetail } from '@/components/renderer/videoPlayerEvents.ts'
 
 declare global {
   export type ActionContextType = OriginalActionContextType | 'last-video-player'

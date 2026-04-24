@@ -6,7 +6,10 @@ import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer.t
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { VideoPlayerRenderer } from '@/components/renderer/VideoPlayerRenderer.tsx'
+import { videoPlayerMarkdownExtensionContribution } from '@/components/renderer/videoPlayerMarkdownExtension.tsx'
 import { blockRenderersFacet, createRendererRegistry, RendererContribution } from '@/extensions/core.ts'
+import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.ts'
 
 export const defaultRendererContributions: RendererContribution[] = [
   {id: 'default', renderer: DefaultBlockRenderer},
@@ -21,6 +24,10 @@ export const defaultRendererContributions: RendererContribution[] = [
 
 export const defaultRegistry = createRendererRegistry(defaultRendererContributions)
 
-export const defaultRenderersExtension = defaultRendererContributions.map(contribution =>
-  blockRenderersFacet.of(contribution),
-)
+export const defaultRenderersExtension = [
+  markdownExtensionsFacet.of(gfmMarkdownExtension, {source: 'defaultRenderers'}),
+  videoPlayerMarkdownExtensionContribution,
+  ...defaultRendererContributions.map(contribution =>
+    blockRenderersFacet.of(contribution),
+  ),
+]
