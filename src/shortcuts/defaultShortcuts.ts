@@ -14,7 +14,6 @@ import {
   defaultChangeScope,
   Block,
   getRootBlock,
-  getLastVisibleDescendant,
 } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
 import { importState } from '@/utils/state.ts'
@@ -31,7 +30,7 @@ import {
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
 import { extendSelection } from '@/utils/selection'
-import { applyToAllBlocksInSelection, makeNormalMode, makeMultiSelect, makeCMMode } from './utils'
+import { applyToAllBlocksInSelection, makeMultiSelect, makeCMMode } from './utils'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import {
@@ -41,14 +40,10 @@ import {
   cursorIsAtEnd,
   cursorIsAtStart,
 } from '@/utils/codemirror.ts'
-import { EditorSelectionState } from '@/types.ts'
-import { copySelectedBlocksToClipboard, copyBlockToClipboard } from '@/utils/copy.ts'
-import { resetBlockSelection } from '@/data/globalState.ts'
+import { copySelectedBlocksToClipboard } from '@/utils/copy.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-
-type VimNormalModeAction = ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -99,15 +94,6 @@ const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
   if (!prevBlock) return
 
   await extendSelection(prevBlock.id, uiStateBlock, repo)
-}
-
-const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) => {
-  resetBlockSelection(uiStateBlock)
-
-  setIsEditing(uiStateBlock, true)
-
-  if (selection) uiStateBlock.setProperty({...editorSelection, value: selection})
-  requestEditorFocus(uiStateBlock)
 }
 
 const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
@@ -405,162 +391,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       }
     },
   }
-  const normalModeActions: VimNormalModeAction[] = [
-    indentBlock,
-    outdentBlock,
-    {
-      id: 'move_down',
-      description: 'Move to next block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
-        if (nextVisible) setFocusedBlockId(uiStateBlock, nextVisible.id)
-      },
-      defaultBinding: {
-        keys: ['down', 'k'],
-      },
-    },
-    {
-      id: 'move_up',
-      description: 'Move to previous block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-        if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
-      },
-      defaultBinding: {
-        keys: ['up', 'h'],
-      },
-    },
-    {
-      id: 'enter_edit_mode',
-      description: 'Enter edit mode',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => enterEditMode(deps.uiStateBlock),
-      defaultBinding: {
-        keys: 'i',
-      },
-    },
-    {
-      id: 'enter_edit_mode_at_end',
-      description: 'Enter edit mode at end',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        enterEditMode(uiStateBlock, {blockId: block.id, start: block.dataSync()?.content.length})
-      },
-      defaultBinding: {
-        keys: 'a',
-      },
-    },
-    toggleBlockCollapse,
-    togglePropertiesDisplay,
-    deleteBlock,
-    {
-      id: 'create_block_below_and_edit',
-      description: 'Create block below (or as child) and enter edit mode',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-        const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-        const hasChildren = await block.hasChildren()
-        const isTopLevel = block.id === topLevelBlockId
-
-        const hasUncollapsedChildren = hasChildren && !isCollapsed
-        const result = hasUncollapsedChildren || isTopLevel ? await block.createChild({position: 'first'}) : await block.createSiblingBelow()
-        if (result) {
-          setFocusedBlockId(uiStateBlock, result.id)
-          setIsEditing(uiStateBlock, true)
-        }
-      },
-      defaultBinding: {
-        keys: 'o',
-      },
-    },
-    {
-      id: 'select_focused_block_and_start_selection',
-      description: 'Select focused block and start selection',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: [block.id],
-            anchorBlockId: block.id,
-          },
-        })
-      },
-      defaultBinding: {
-        keys: ['space', 'v'],
-      },
-    },
-    extendSelectionUpNormal,
-    extendSelectionDownNormal,
-    makeNormalMode(moveBlockUp),
-    makeNormalMode(moveBlockDown),
-    {
-      id: 'jump_to_first_visible_block',
-      description: 'Jump to first visible block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        setFocusedBlockId(uiStateBlock, topLevelBlockId)
-      },
-      defaultBinding: {
-        keys: 'g g',
-      },
-    },
-    {
-      id: 'jump_to_last_visible_block',
-      description: 'Jump to last visible block',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-        if (!topLevelBlockId) return
-
-        const lastBlock = await getLastVisibleDescendant(repo.find(topLevelBlockId), true)
-        if (!lastBlock) return
-
-        setFocusedBlockId(uiStateBlock, lastBlock.id)
-      },
-      defaultBinding: {
-        keys: 'shift+g',
-      },
-    },
-    {
-      id: 'copy_block',
-      description: 'Copy block to clipboard',
-      context: ActionContextTypes.NORMAL_MODE,
-      handler: ({block}) => copyBlockToClipboard(block),
-      defaultBinding: {
-        keys: ['cmd+c', 'ctrl+c'],
-        eventOptions: {
-          preventDefault: true,
-        },
-      },
-    },
-  ]
-
   // CodeMirror-specific edit mode actions
   const editModeCMActions: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>[] = [
     {
@@ -759,7 +589,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
   return {
     globalActions,
-    vimNormalModeActions: normalModeActions,
     editModeCMActions,
     multiSelectModeActions,
   }
@@ -768,14 +597,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   const {
     globalActions,
-    vimNormalModeActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
   return [
     ...globalActions,
-    ...vimNormalModeActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
