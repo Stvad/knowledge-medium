@@ -1,6 +1,5 @@
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
-  BlockShortcutDependencies,
   ActionContextTypes,
   BaseShortcutDependencies,
   ActionConfig,
@@ -18,19 +17,20 @@ import {
 import { Repo } from '@/data/repo.ts'
 import { importState } from '@/utils/state.ts'
 import {
-  focusedBlockIdProp,
   isCollapsedProp,
-  showPropertiesProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
   setFocusedBlockId,
-  requestEditorFocus,
-  isEditingProp,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
-import { extendSelection } from '@/utils/selection'
 import { applyToAllBlocksInSelection, makeMultiSelect, makeCMMode } from './utils'
+import {
+  createSharedBlockActions,
+  extendSelectionDown,
+  extendSelectionUp,
+  requestEditorFocusIfEditing,
+} from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import {
@@ -70,107 +70,18 @@ const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView
   }
 }
 
-const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-  if (!topLevelBlockId) return
-
-  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
-  if (!focusedBlockId) return
-
-  const nextBlock = await nextVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
-  if (!nextBlock) return
-
-  await extendSelection(nextBlock.id, uiStateBlock, repo)
-}
-
-const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-  if (!topLevelBlockId) return
-
-  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
-  if (!focusedBlockId) return
-
-  const prevBlock = await previousVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
-  if (!prevBlock) return
-
-  await extendSelection(prevBlock.id, uiStateBlock, repo)
-}
-
-const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
-  if (uiStateBlock.dataSync()?.properties[isEditingProp.name]?.value) {
-    requestEditorFocus(uiStateBlock)
-  }
-}
-
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
-  // Define base actions that have transformations
-  const indentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
-    id: 'indent_block',
-    description: 'Indent block',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      await deps.block.indent()
-      requestEditorFocusIfEditing(deps.uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'tab',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
-  }
-
-  const outdentBlock: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
-    id: 'outdent_block',
-    description: 'Outdent block',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-      if (!topLevelBlockId) return
-
-      await block.outdent(topLevelBlockId)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'shift+tab',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
-  }
-
-  const moveBlockUp: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
-    id: 'move_block_up',
-    description: 'Move block up',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block) return
-      await block.changeOrder(-1)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'cmd+shift+up',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
-  }
-
-  const moveBlockDown: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
-    id: 'move_block_down',
-    description: 'Move block down',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block) return
-      await block.changeOrder(1)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'cmd+shift+down',
-    },
-  }
+  const {
+    indentBlock,
+    outdentBlock,
+    moveBlockUp,
+    moveBlockDown,
+    deleteBlock,
+    togglePropertiesDisplay,
+    toggleBlockCollapse,
+    extendSelectionUpNormal,
+    extendSelectionDownNormal,
+  } = createSharedBlockActions({repo})
 
   // CodeMirror versions of move actions
   const moveBlockUpCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
@@ -302,67 +213,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   ]
 
-  const deleteBlock = {
-    id: 'delete_block',
-    description: 'Delete block',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block || !uiStateBlock) return
-
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-      if (!topLevelBlockId) return
-
-      const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-      void block.delete()
-      if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
-    },
-    defaultBinding: {
-      keys: 'delete',
-    },
-  }
-
-  // Normal mode actions
-  const togglePropertiesDisplay = {
-    id: 'toggle_properties',
-    description: 'Toggle block properties',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block} = deps
-      if (!block) return
-
-      const showProperties = (await block.getProperty(showPropertiesProp))?.value
-      block.setProperty({...showPropertiesProp, value: !showProperties})
-    },
-    defaultBinding: {
-      keys: 't',
-    },
-  }
-  const toggleBlockCollapse = {
-    id: 'toggle_collapse',
-    description: 'Toggle block collapse',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block} = deps
-      if (!block) return
-
-      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-      block.setProperty({...isCollapsedProp, value: !isCollapsed})
-    },
-    defaultBinding: {
-      keys: 'z',
-    },
-  }
-  const extendSelectionUpNormal = {
-    id: 'extend_selection_up',
-    description: 'Extend selection up',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionUp(deps.uiStateBlock, repo),
-    defaultBinding: {
-      keys: 'shift+up',
-    },
-  }
   const extendSelectionUpEdit = {
     ...makeCMMode(extendSelectionUpNormal),
     handler: async (deps: CodeMirrorEditModeDependencies) => {
@@ -370,16 +220,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         setIsEditing(deps.uiStateBlock, false)
         await extendSelectionUp(deps.uiStateBlock, repo)
       }
-    },
-  }
-  const extendSelectionDownNormal = {
-    id: 'extend_selection_down',
-    description: 'Extend selection down',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionDown(deps.uiStateBlock, repo),
-    defaultBinding: {
-      keys: 'shift+down',
     },
   }
   const extendSelectionDownEdit = {

@@ -1,220 +1,43 @@
 import {
-  Block,
   getLastVisibleDescendant,
   nextVisibleBlock,
   previousVisibleBlock,
 } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
 import {
-  editorSelection,
-  focusedBlockIdProp,
   isCollapsedProp,
-  isEditingProp,
-  requestEditorFocus,
   setFocusedBlockId,
   setIsEditing,
-  showPropertiesProp,
   topLevelBlockIdProp,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
-import { resetBlockSelection } from '@/data/globalState.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { copyBlockToClipboard } from '@/utils/copy.ts'
-import { extendSelection } from '@/utils/selection'
-import { EditorSelectionState } from '@/types.ts'
 import { makeNormalMode } from '@/shortcuts/utils'
+import {
+  createSharedBlockActions,
+  enterEditMode,
+  NormalModeAction,
+} from '@/shortcuts/blockActions.ts'
 import {
   ActionConfig,
   ActionContextTypes,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.ts'
 
-type VimNormalModeAction = ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
-
-const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
-  if (uiStateBlock.dataSync()?.properties[isEditingProp.name]?.value) {
-    requestEditorFocus(uiStateBlock)
-  }
-}
-
-const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) => {
-  resetBlockSelection(uiStateBlock)
-
-  setIsEditing(uiStateBlock, true)
-
-  if (selection) uiStateBlock.setProperty({...editorSelection, value: selection})
-  requestEditorFocus(uiStateBlock)
-}
-
-const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-  if (!topLevelBlockId) return
-
-  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
-  if (!focusedBlockId) return
-
-  const nextBlock = await nextVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
-  if (!nextBlock) return
-
-  await extendSelection(nextBlock.id, uiStateBlock, repo)
-}
-
-const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-  if (!topLevelBlockId) return
-
-  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
-  if (!focusedBlockId) return
-
-  const prevBlock = await previousVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
-  if (!prevBlock) return
-
-  await extendSelection(prevBlock.id, uiStateBlock, repo)
-}
-
-export function getVimNormalModeActions({repo}: { repo: Repo }): VimNormalModeAction[] {
-  const indentBlock: VimNormalModeAction = {
-    id: 'indent_block',
-    description: 'Indent block',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      await deps.block.indent()
-      requestEditorFocusIfEditing(deps.uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'tab',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
-  }
-
-  const outdentBlock: VimNormalModeAction = {
-    id: 'outdent_block',
-    description: 'Outdent block',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-      if (!topLevelBlockId) return
-
-      await block.outdent(topLevelBlockId)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'shift+tab',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
-  }
-
-  const moveBlockUp: VimNormalModeAction = {
-    id: 'move_block_up',
-    description: 'Move block up',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block) return
-      await block.changeOrder(-1)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'cmd+shift+up',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
-  }
-
-  const moveBlockDown: VimNormalModeAction = {
-    id: 'move_block_down',
-    description: 'Move block down',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block) return
-      await block.changeOrder(1)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'cmd+shift+down',
-    },
-  }
-
-  const deleteBlock: VimNormalModeAction = {
-    id: 'delete_block',
-    description: 'Delete block',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block || !uiStateBlock) return
-
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-      if (!topLevelBlockId) return
-
-      const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-      void block.delete()
-      if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
-    },
-    defaultBinding: {
-      keys: 'delete',
-    },
-  }
-
-  const togglePropertiesDisplay: VimNormalModeAction = {
-    id: 'toggle_properties',
-    description: 'Toggle block properties',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block} = deps
-      if (!block) return
-
-      const showProperties = (await block.getProperty(showPropertiesProp))?.value
-      block.setProperty({...showPropertiesProp, value: !showProperties})
-    },
-    defaultBinding: {
-      keys: 't',
-    },
-  }
-
-  const toggleBlockCollapse: VimNormalModeAction = {
-    id: 'toggle_collapse',
-    description: 'Toggle block collapse',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) => {
-      const {block} = deps
-      if (!block) return
-
-      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-      block.setProperty({...isCollapsedProp, value: !isCollapsed})
-    },
-    defaultBinding: {
-      keys: 'z',
-    },
-  }
-
-  const extendSelectionUpNormal: VimNormalModeAction = {
-    id: 'extend_selection_up',
-    description: 'Extend selection up',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionUp(deps.uiStateBlock, repo),
-    defaultBinding: {
-      keys: 'shift+up',
-    },
-  }
-
-  const extendSelectionDownNormal: VimNormalModeAction = {
-    id: 'extend_selection_down',
-    description: 'Extend selection down',
-    context: ActionContextTypes.NORMAL_MODE,
-    handler: async (deps: BlockShortcutDependencies) =>
-      await extendSelectionDown(deps.uiStateBlock, repo),
-    defaultBinding: {
-      keys: 'shift+down',
-    },
-  }
+export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeAction[] {
+  const {
+    indentBlock,
+    outdentBlock,
+    moveBlockUp,
+    moveBlockDown,
+    deleteBlock,
+    togglePropertiesDisplay,
+    toggleBlockCollapse,
+    extendSelectionUpNormal,
+    extendSelectionDownNormal,
+  } = createSharedBlockActions({repo})
 
   return [
     indentBlock,
