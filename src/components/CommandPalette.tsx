@@ -7,8 +7,6 @@ import {
   CommandGroup,
   CommandItem,
 } from '@/components/ui/command'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { OpenRouterSettings } from '@/components/settings/OpenRouterSettings'
 import { useCommandPaletteShortcuts } from '@/shortcuts/useActionContext.ts'
 import { useAvailableActions } from '@/shortcuts/useAvailableActions.ts'
 import { useRunAction } from '@/shortcuts/runAction.ts'
@@ -27,7 +25,6 @@ const formatShortcutKeys = (bindings: readonly ShortcutBinding[]): string[] => {
 
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
-  const [openSettingsDialog, setOpenSettingsDialog] = useState(false)
 
   const shortcutDependencies = useMemo(() => ({}), [])
 
@@ -54,13 +51,6 @@ export function CommandPalette() {
   }, [open, actions, activeContexts])
 
   const runCommand = (actionId: string) => {
-    if (actionId === 'open_router_settings') {
-      // todo move the open router settings away from here
-      setOpen(false)
-      setOpenSettingsDialog(true)
-      return
-    }
-
     try {
       runAction(actionId, new CustomEvent('command-pallet-trigger'))
     } catch (error) {
@@ -71,57 +61,46 @@ export function CommandPalette() {
   }
 
   return (
-    <>
-      <CommandDialog open={open} onOpenChange={setOpen}>
-        <CommandInput placeholder="Type a command or search..."/>
-        <CommandList>
-          <CommandEmpty>No results found.</CommandEmpty>
-          {activeContextsInfo.map(({config}) => {
-            const contextType = config.type
-            const actionsInGroup = groupedActions[contextType]
+    <CommandDialog open={open} onOpenChange={setOpen}>
+      <CommandInput placeholder="Type a command or search..."/>
+      <CommandList>
+        <CommandEmpty>No results found.</CommandEmpty>
+        {activeContextsInfo.map(({config}) => {
+          const contextType = config.type
+          const actionsInGroup = groupedActions[contextType]
 
-            if (!actionsInGroup || actionsInGroup.length === 0) {
-              return null
-            }
-            const groupHeading = config.displayName || contextType
+          if (!actionsInGroup || actionsInGroup.length === 0) {
+            return null
+          }
+          const groupHeading = config.displayName || contextType
 
-            return (
-              <CommandGroup key={contextType} heading={groupHeading}>
-                {actionsInGroup.map((action: ActionConfig) => {
-                  const bindings = bindingsFor(action.id)
-                  const shortcutKeys = formatShortcutKeys(bindings)
-                  return (
-                    <CommandItem
-                      key={action.id}
-                      value={`${groupHeading} ${action.description}`}
-                      onSelect={() => runCommand(action.id)}
-                      className="flex justify-between items-center"
-                    >
-                      <span>{action.description}</span>
-                      {shortcutKeys.length > 0 && (
-                        <div className="flex gap-1">
-                          {shortcutKeys.map((keyStr, index) => (
-                            <Kbd key={index}>{keyStr}</Kbd>
-                          ))}
-                        </div>
-                      )}
-                    </CommandItem>
-                  )
-                })}
-              </CommandGroup>
-            )
-          })}
-        </CommandList>
-      </CommandDialog>
-
-      <Dialog open={openSettingsDialog} onOpenChange={setOpenSettingsDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>OpenRouter Settings</DialogTitle>
-          </DialogHeader>
-          <OpenRouterSettings onSave={() => setOpenSettingsDialog(false)}/>
-        </DialogContent>
-      </Dialog>
-    </>
+          return (
+            <CommandGroup key={contextType} heading={groupHeading}>
+              {actionsInGroup.map((action: ActionConfig) => {
+                const bindings = bindingsFor(action.id)
+                const shortcutKeys = formatShortcutKeys(bindings)
+                return (
+                  <CommandItem
+                    key={action.id}
+                    value={`${groupHeading} ${action.description}`}
+                    onSelect={() => runCommand(action.id)}
+                    className="flex justify-between items-center"
+                  >
+                    <span>{action.description}</span>
+                    {shortcutKeys.length > 0 && (
+                      <div className="flex gap-1">
+                        {shortcutKeys.map((keyStr, index) => (
+                          <Kbd key={index}>{keyStr}</Kbd>
+                        ))}
+                      </div>
+                    )}
+                  </CommandItem>
+                )
+              })}
+            </CommandGroup>
+          )
+        })}
+      </CommandList>
+    </CommandDialog>
   )
 }

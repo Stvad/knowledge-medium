@@ -64,12 +64,11 @@ Prefer to use block properties and sub-blocks to "unpack state" instead of stori
 
 #### Exceptions
 Credentials and sensitive information should not be stored in the document state, as they may be shared. These include:
-- API keys (like OpenRouter API keys)
+- API keys (like third-party API keys)
 - Authentication tokens
 
 ### Configuration UI
 Configuration UIs should be implemented as custom renderers for configuration blocks. This pattern is used for:
-- OpenRouter settings
 - Keyboard shortcut configuration
 - Other user preferences
 

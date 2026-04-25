@@ -260,18 +260,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       },
     },
     {
-      id: 'open_router_settings',
-      description: 'Open Router Settings',
-      context: ActionContextTypes.GLOBAL,
-      handler: () => {
-        // No-op: Logic is handled directly in CommandPalette's runCommand
-        console.log('[Action:open_settings] Triggered. Dialog opening handled by CommandPalette.')
-
-        // todo this is not good and we should move towards something like "popup managed by layout renderer"
-        // and we pass a block to render to it
-      },
-    },
-    {
       id: 'refresh_renderers',
       description: 'Refresh Renderer Registry',
       context: ActionContextTypes.GLOBAL,

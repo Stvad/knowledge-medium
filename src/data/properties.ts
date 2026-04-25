@@ -81,10 +81,6 @@ export const typeProp = stringProperty('type')
 export const rendererProp = stringProperty('renderer')
 export const rendererNameProp = stringProperty('rendererName')
 
-// OpenRouter properties
-export const baseUrlProp = stringProperty('baseUrl', undefined, 'plugin-settings')
-export const modelProp = stringProperty('model', undefined, 'plugin-settings')
-
 // Timing properties
 export const previousLoadTimeProp = numberProperty('previousLoadTime')
 export const currentLoadTimeProp = numberProperty('currentLoadTime')

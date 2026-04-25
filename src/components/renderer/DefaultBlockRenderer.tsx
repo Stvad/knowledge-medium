@@ -27,7 +27,6 @@ import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useHoverDirty } from 'react-use'
 import { Breadcrumbs } from '@/components/Breadcrumbs.tsx'
-import { GenerateRendererDialog } from '@/components/GenerateRendererDialog'
 import { ErrorBoundary } from 'react-error-boundary'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import {
@@ -81,79 +80,60 @@ const BlockBullet = ({block}: { block: Block }) => {
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
-  const [dialogOpen, setDialogOpen] = useState(false)
   const {panelId} = useBlockContext()
   const hasChildren = useHasChildren(block)
 
-  const openGenerateRendererDialog = () => {
-    setDialogOpen(true)
-  }
-
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <a
-            href={`#${block.id}`}
-            className="bullet-link flex items-center justify-center h-6 w-5"
-            onClick={(e) => {
-              e.stopPropagation()
-              // todo this should work for any link, so it again calls for a more general navigation handler
-              if (e.shiftKey) {
-                e.preventDefault()
-                window.dispatchEvent(new CustomEvent('open-panel', {
-                  detail: {
-                    blockId: block.id,
-                    sourcePanelId: panelId,
-                  },
-                }))
-              }
-            }}
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <a
+          href={`#${block.id}`}
+          className="bullet-link flex items-center justify-center h-6 w-5"
+          onClick={(e) => {
+            e.stopPropagation()
+            // todo this should work for any link, so it again calls for a more general navigation handler
+            if (e.shiftKey) {
+              e.preventDefault()
+              window.dispatchEvent(new CustomEvent('open-panel', {
+                detail: {
+                  blockId: block.id,
+                  sourcePanelId: panelId,
+                },
+              }))
+            }
+          }}
+        >
+            <span
+              className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
+                (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
+        </a>
+      </ContextMenuTrigger>
+      <ContextMenuPortal>
+        <ContextMenuContent
+          className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
+        >
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => copyBlockId(block)}
           >
-              <span
-                className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-                  (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
-          </a>
-        </ContextMenuTrigger>
-        <ContextMenuPortal>
-          <ContextMenuContent
-            className="min-w-[160px] bg-background rounded-md p-1 shadow-md border border-border"
+            Copy ID
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => zoomIn(block)}
           >
-            <ContextMenuItem
-              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={() => copyBlockId(block)}
-            >
-              Copy ID
-            </ContextMenuItem>
-            <ContextMenuItem
-              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={() => zoomIn(block)}
-            >
-              Zoom In
-            </ContextMenuItem>
-            <ContextMenuSeparator className="h-px bg-border my-1"/>
-            <ContextMenuItem
-              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={openGenerateRendererDialog}
-            >
-              Generate Custom Renderer
-            </ContextMenuItem>
-            <ContextMenuItem
-              className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-              onSelect={() => setShowProperties(!showProperties)}
-            >
-              {showProperties ? 'Hide' : 'Show'} Properties
-            </ContextMenuItem>
-          </ContextMenuContent>
-        </ContextMenuPortal>
-      </ContextMenu>
-
-      <GenerateRendererDialog
-        block={block}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-      />
-    </>
+            Zoom In
+          </ContextMenuItem>
+          <ContextMenuSeparator className="h-px bg-border my-1"/>
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => setShowProperties(!showProperties)}
+          >
+            {showProperties ? 'Hide' : 'Show'} Properties
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenuPortal>
+    </ContextMenu>
   )
 }
 
