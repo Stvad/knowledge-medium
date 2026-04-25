@@ -1,11 +1,11 @@
 import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.ts'
-import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { ActionContextType as OriginalActionContextType } from '@/shortcuts/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useData } from '@/hooks/block.ts'
-import { seekToEventName, SeekToEventDetail } from '@/components/renderer/videoPlayerEvents.ts'
+import { seekToEventName, SeekToEventDetail } from './events.ts'
 
 declare global {
   export type ActionContextType = OriginalActionContextType | 'last-video-player'

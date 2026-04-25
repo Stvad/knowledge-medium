@@ -1,7 +1,6 @@
-import VideoTimeStamp from '@/components/markdown/VideoTimeStamp.tsx'
-import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+import VideoTimeStamp from './VideoTimeStamp.tsx'
 import type { MarkdownExtension } from '@/markdown/extensions.ts'
-import { remarkTimestamps } from '@/markdown/remark-timestamps.ts'
+import { remarkTimestamps } from './remark-timestamps.ts'
 import type { Components } from 'react-markdown'
 
 interface TimestampNode {
@@ -30,8 +29,3 @@ export const videoPlayerMarkdownExtension: MarkdownExtension = ({blockContext}) 
     } as unknown as Components,
   }
 }
-
-export const videoPlayerMarkdownExtensionContribution = markdownExtensionsFacet.of(
-  videoPlayerMarkdownExtension,
-  {source: 'videoPlayer'},
-)

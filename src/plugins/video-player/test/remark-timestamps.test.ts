@@ -1,5 +1,5 @@
 import { expect, it, describe, afterEach } from 'vitest'
-import { TS_RE } from '../remark-timestamps'
+import { TS_RE } from '../remark-timestamps.ts'
 
 describe('timestamp regex', () => {
   afterEach(() => {

@@ -10,6 +10,7 @@ import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
+import { videoPlayerPlugin } from '@/plugins/video-player'
 
 export function AppRuntimeProvider({
   children,
@@ -33,6 +34,7 @@ export function AppRuntimeProvider({
   const baseExtensions: AppExtension[] = useMemo(() => [
     defaultRenderersExtension,
     defaultActionsExtension({repo}),
+    videoPlayerPlugin,
   ], [repo])
 
   const baseRuntime = useMemo(() =>
