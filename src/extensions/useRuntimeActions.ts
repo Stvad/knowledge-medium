@@ -1,15 +1,19 @@
-import { useEffect, useMemo } from 'react'
-import { readRuntimeActionContexts, readRuntimeActions } from '@/extensions/runtimeActions.ts'
+import { useEffect } from 'react'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { actionManager as defaultActionManager, ActionManager } from '@/shortcuts/ActionManager.ts'
 
-export function useRuntimeActions(actionManager: ActionManager = defaultActionManager): void {
+/**
+ * Synchronize the singleton ActionManager with the current FacetRuntime.
+ *
+ * The runtime is the authoritative source of action/context contributions.
+ * Whenever it changes (e.g. a new extension generation after dynamic renderers
+ * reload) this effect re-syncs the engine, releasing stale actions and
+ * installing new ones without requiring a page refresh.
+ */
+export function useRuntimeActions(engine: ActionManager = defaultActionManager): void {
   const runtime = useAppRuntime()
-  const contexts = useMemo(() => readRuntimeActionContexts(runtime), [runtime])
-  const actions = useMemo(() => readRuntimeActions(runtime), [runtime])
 
   useEffect(() => {
-    actionManager.registerContexts(contexts)
-    actionManager.registerActions(actions)
-  }, [actionManager, actions, contexts])
+    engine.sync(runtime)
+  }, [engine, runtime])
 }

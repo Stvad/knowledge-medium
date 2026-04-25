@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { OpenRouterSettings } from '@/components/settings/OpenRouterSettings'
 import { useCommandPaletteShortcuts } from '@/shortcuts/useActionContext.ts'
 import { actionManager } from '@/shortcuts/ActionManager.ts'
-import { Action, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
+import { useAvailableActions } from '@/shortcuts/useAvailableActions.ts'
+import { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
 import { Kbd } from '@/components/ui/kbd'
 import { groupBy } from 'lodash'
 
@@ -40,15 +41,16 @@ export function CommandPalette() {
     return () => window.removeEventListener('toggle-command-palette', handleToggle)
   }, [])
 
+  const {actions, activeContexts, bindingsFor} = useAvailableActions()
+
   const {activeContextsInfo, groupedActions} = useMemo(() => {
     if (!open) {
-      return {activeContextsInfo: [], groupedActions: {} as Record<ActionContextType, Action[]>}
+      return {activeContextsInfo: [], groupedActions: {} as Record<ActionContextType, ActionConfig[]>}
     }
-    const activeInfo = actionManager.getActiveContexts().reverse() // Reverse order of activation
-    const actions = actionManager.getAvailableActions().filter(it => !it.hideFromCommandPallet)
-    const groups = groupBy(actions, 'context') as Record<ActionContextType, Action[]>
+    const activeInfo = [...activeContexts].reverse() // Reverse order of activation
+    const groups = groupBy(actions, 'context') as Record<ActionContextType, ActionConfig[]>
     return {activeContextsInfo: activeInfo, groupedActions: groups}
-  }, [open])
+  }, [open, actions, activeContexts])
 
   const runCommand = (actionId: string) => {
     if (actionId === 'open_router_settings') {
@@ -84,8 +86,8 @@ export function CommandPalette() {
 
             return (
               <CommandGroup key={contextType} heading={groupHeading}>
-                {actionsInGroup.map((action: Action) => {
-                  const bindings = actionManager.getBindingsForAction(action.id)
+                {actionsInGroup.map((action: ActionConfig) => {
+                  const bindings = bindingsFor(action.id)
                   const shortcutKeys = formatShortcutKeys(bindings)
                   return (
                     <CommandItem

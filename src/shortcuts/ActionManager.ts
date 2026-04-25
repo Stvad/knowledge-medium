@@ -18,6 +18,8 @@ import {
 import { isSingleKeyPress, hasEditableTarget, createAction } from '@/shortcuts/utils.ts'
 import { Block } from '@/data/block'
 import { EditorView } from '@codemirror/view'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
+import type { FacetRuntime } from '@/extensions/facet.ts'
 
 const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependencies =>
   typeof deps === 'object' && deps !== null && 'uiStateBlock' in deps && deps.uiStateBlock instanceof Block
@@ -88,11 +90,30 @@ const defaultEventFilter = (event: KeyboardEvent) => {
   return !(isSingleKeyPress(event) && hasEditableTarget(event))
 }
 
+const normalizeKeys = (keys: string | string[]): string[] =>
+  Array.isArray(keys) ? keys : [keys]
+
+const bindingKeySignature = (keys: string | string[]): string =>
+  [...normalizeKeys(keys)].sort().join('|')
+
 export class ActionManager {
   private actions: Map<string, Action> = new Map()
   private bindings: Map<string, ShortcutBinding[]> = new Map()
   private activeContexts: Map<ActionContextType, BaseShortcutDependencies> = new Map()
   private contexts: Map<ActionContextType, ActionContextConfig>
+  /**
+   * Reference count for globally-bound hotkey keys. `hotkeys.unbind(key)`
+   * removes all handlers for that key, so we only unbind once no live
+   * action still wants it.
+   */
+  private keyRefs: Map<string, number> = new Map()
+  private activationListeners: Set<() => void> = new Set()
+  /**
+   * Cached snapshot of active context type ids. Identity changes only when
+   * activations actually change, allowing useSyncExternalStore consumers
+   * to bail out cheaply.
+   */
+  private activeContextTypesSnapshot: readonly ActionContextType[] = []
 
   constructor(initialContexts: Map<ActionContextType, ActionContextConfig> = defaultContextConfigs) {
     this.contexts = new Map(initialContexts)
@@ -105,46 +126,76 @@ export class ActionManager {
     }
   }
 
-  registerContext<T extends ActionContextType>(config: ActionContextConfig<T>): void {
-    if (this.contexts.has(config.type)) {
-      console.debug(`[ShortcutManager] Context ${config.type} already registered. Overwriting.`)
+  /**
+   * Synchronize the engine with a FacetRuntime. Diffs the desired set of
+   * actions/contexts against the engine's current state and updates
+   * hotkeys-js bindings accordingly.
+   */
+  sync(runtime: FacetRuntime): void {
+    const contextConfigs = runtime.read(actionContextsFacet)
+    const actionConfigs = runtime.read(actionsFacet)
+
+    // Upsert contexts (last-write-wins, matching prior registerContext semantics).
+    for (const config of contextConfigs) {
+      this._upsertContext(config)
     }
+
+    const desiredActionIds = new Set<string>()
+    for (const actionConfig of actionConfigs) {
+      desiredActionIds.add(actionConfig.id)
+      this._upsertAction(actionConfig)
+    }
+
+    // Remove actions that are no longer contributed.
+    for (const existingId of Array.from(this.actions.keys())) {
+      if (!desiredActionIds.has(existingId)) {
+        this._removeAction(existingId)
+      }
+    }
+  }
+
+  private _upsertContext<T extends ActionContextType>(config: ActionContextConfig<T>): void {
     this.contexts.set(config.type, config)
-    console.debug(`[ShortcutManager] Registered context: ${config.type}`)
   }
 
-  registerContexts(contexts: readonly ActionContextConfig[]): void {
-    contexts.forEach(context => this.registerContext(context))
-  }
+  private _upsertAction<T extends ActionContextType>(config: ActionConfig<T>): void {
+    const nextAction = createAction(config) as unknown as Action
+    const previous = this.actions.get(nextAction.id)
 
-  registerAction<T extends ActionContextType>(config: ActionConfig<T>): void {
-    const action = createAction(config)
-    console.debug(`[ShortcutManager] Registering action: ${action.id} for context: ${action.context}`)
+    const prevBindingSignature = previous?.defaultBinding
+      ? bindingKeySignature(previous.defaultBinding.keys)
+      : null
+    const nextBindingSignature = nextAction.defaultBinding
+      ? bindingKeySignature(nextAction.defaultBinding.keys)
+      : null
 
-    if (this.actions.has(action.id)) {
-      console.debug(`[ShortcutManager] Action ${action.id} already registered, skipping`)
+    const isSameHandler = previous?.handler === nextAction.handler
+    const isSameContext = previous?.context === nextAction.context
+    const isSameBinding = prevBindingSignature === nextBindingSignature
+
+    if (previous && isSameHandler && isSameContext && isSameBinding) {
+      // Nothing meaningful changed. Update stored config (description etc.) and bail out.
+      this.actions.set(nextAction.id, nextAction)
       return
     }
 
-    // Cast the specifically typed Action<T> to the map's expected Action type.
-    // This bypasses the TS2345 error at the assignment site.
-    // Runtime safety is ensured by validateDependencies and the cast in handleEvent.
-    this.actions.set(action.id, action as unknown as Action)
+    // Something changed (or this is new). Tear down any existing bindings
+    // for this action, then re-register fresh.
+    if (previous) {
+      this._removeAction(nextAction.id)
+    }
 
-    if (action.defaultBinding) {
-      this.registerBinding({
-        ...action.defaultBinding,
-        action: action.id,
+    this.actions.set(nextAction.id, nextAction)
+
+    if (nextAction.defaultBinding) {
+      this._upsertBinding({
+        ...nextAction.defaultBinding,
+        action: nextAction.id,
       })
     }
   }
 
-  registerActions(actions: readonly ActionConfig[]): void {
-    actions.forEach(action => this.registerAction(action))
-  }
-
-  registerBinding(binding: ShortcutBinding): void {
-    console.debug(`[ShortcutManager] Registering binding for action: ${binding.action}, keys: ${binding.keys}`)
+  private _upsertBinding(binding: ShortcutBinding): void {
     const action = this.actions.get(binding.action)
     if (!action) {
       throw new Error(`Action ${binding.action} not registered`)
@@ -152,14 +203,11 @@ export class ActionManager {
 
     const actionBindings = this.bindings.get(binding.action) || []
 
-    const bindingExists = actionBindings.some(existing => {
-      const existingKeys = Array.isArray(existing.keys) ? existing.keys : [existing.keys]
-      const newKeys = Array.isArray(binding.keys) ? binding.keys : [binding.keys]
-      return JSON.stringify(existingKeys.sort()) === JSON.stringify(newKeys.sort())
-    })
+    const bindingExists = actionBindings.some(existing =>
+      bindingKeySignature(existing.keys) === bindingKeySignature(binding.keys),
+    )
 
     if (bindingExists) {
-      console.debug(`[ShortcutManager] Binding for action ${binding.action} with keys ${binding.keys} already exists, skipping`)
       return
     }
 
@@ -169,6 +217,29 @@ export class ActionManager {
     if (this.activeContexts.has(action.context)) {
       this.registerHotkey(binding, action)
     }
+  }
+
+  /**
+   * Remove an action and all of its hotkey bindings, releasing reference
+   * counts on any globally-bound keys.
+   */
+  private _removeAction(actionId: string): void {
+    const action = this.actions.get(actionId)
+    if (!action) return
+
+    const bindings = this.bindings.get(actionId) || []
+    const contextActive = this.activeContexts.has(action.context)
+
+    if (contextActive) {
+      for (const binding of bindings) {
+        for (const key of normalizeKeys(binding.keys)) {
+          this.releaseKey(key)
+        }
+      }
+    }
+
+    this.bindings.delete(actionId)
+    this.actions.delete(actionId)
   }
 
   private handleEvent(event: KeyboardEvent, binding: ShortcutBinding, action: Action): boolean {
@@ -203,14 +274,51 @@ export class ActionManager {
   }
 
   private registerHotkey(binding: ShortcutBinding, action: Action): void {
-    const keys = Array.isArray(binding.keys) ? binding.keys : [binding.keys]
-
-    keys.forEach(key => {
+    for (const key of normalizeKeys(binding.keys)) {
+      this.retainKey(key)
       hotkeys(key, (event) => {
-        console.debug(`[ShortcutManager] Handling event for key: ${key}, action: ${action.id}, context: ${action.context}`)
+        // Another action may share this key; only the action whose context is
+        // currently active should actually fire.
+        if (!this.activeContexts.has(action.context)) return true
         return this.handleEvent(event, binding, action)
       })
-    })
+    }
+  }
+
+  private retainKey(key: string): void {
+    this.keyRefs.set(key, (this.keyRefs.get(key) ?? 0) + 1)
+  }
+
+  private releaseKey(key: string): void {
+    const count = this.keyRefs.get(key) ?? 0
+    if (count <= 1) {
+      this.keyRefs.delete(key)
+      hotkeys.unbind(key)
+    } else {
+      this.keyRefs.set(key, count - 1)
+    }
+  }
+
+  private updateActiveContextTypesSnapshot(): void {
+    this.activeContextTypesSnapshot = Array.from(this.activeContexts.keys())
+  }
+
+  private emitActivationChange(): void {
+    this.updateActiveContextTypesSnapshot()
+    for (const listener of this.activationListeners) {
+      try {
+        listener()
+      } catch (error) {
+        console.error('[ShortcutManager] Activation listener threw', error)
+      }
+    }
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.activationListeners.add(listener)
+    return () => {
+      this.activationListeners.delete(listener)
+    }
   }
 
   activateContext(context: ActionContextType, dependencies: BaseShortcutDependencies): void {
@@ -229,12 +337,6 @@ export class ActionManager {
     // Ensure context is removed before re-adding to potentially update order if map maintains insertion order
     this.deactivateContext(context)
 
-    console.debug(`[ShortcutManager] Activating context: ${context}`, {
-      existingContexts: Array.from(this.activeContexts.keys()),
-      dependencies,
-      bindings: this.bindings,
-    })
-
     this.activeContexts.set(context, dependencies)
 
     this.actions.forEach((action, actionId) => {
@@ -243,12 +345,12 @@ export class ActionManager {
         bindings.forEach(binding => this.registerHotkey(binding, action))
       }
     })
+
+    this.emitActivationChange()
   }
 
   deactivateContext(context: ActionContextType): void {
-    console.debug(`[ShortcutManager] Deactivating context: ${context}`)
     if (!this.activeContexts.has(context)) {
-      console.debug(`[ShortcutManager] Context ${context} was not active`)
       return
     }
 
@@ -258,16 +360,21 @@ export class ActionManager {
       if (action.context === context) {
         const bindings = this.bindings.get(actionId) || []
         bindings.forEach(binding => {
-          const keys = Array.isArray(binding.keys) ? binding.keys : [binding.keys]
-          keys.forEach(key => hotkeys.unbind(key))
+          for (const key of normalizeKeys(binding.keys)) {
+            this.releaseKey(key)
+          }
         })
       }
     })
+
+    this.emitActivationChange()
   }
 
   reset(): void {
     hotkeys.unbind()
     this.activeContexts.clear()
+    this.keyRefs.clear()
+    this.emitActivationChange()
   }
 
   /**
@@ -278,6 +385,14 @@ export class ActionManager {
   getActiveContexts(): ActiveContextInfo[] {
     return Array.from(this.activeContexts.entries()).map(([contextType, dependencies]) =>
       ({config: this.contexts.get(contextType)!, dependencies}))
+  }
+
+  /**
+   * Returns a cached snapshot (stable identity between activation changes)
+   * of the currently active context types. Intended for useSyncExternalStore.
+   */
+  getActiveContextTypesSnapshot(): readonly ActionContextType[] {
+    return this.activeContextTypesSnapshot
   }
 
   /**
@@ -316,7 +431,6 @@ export class ActionManager {
 
     const dependencies = this.activeContexts.get(action.context)!
 
-    console.debug(`[ShortcutManager] Running action "${actionId}" from command palette.`)
     return action.handler(dependencies, trigger)
   }
 }

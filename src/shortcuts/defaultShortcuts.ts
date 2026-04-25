@@ -1,8 +1,4 @@
-import {
-  actionManager as defaultActionManager,
-  ActionManager,
-  defaultActionContextConfigs,
-} from './ActionManager.ts'
+import { defaultActionContextConfigs } from './ActionManager.ts'
 import {
   BlockShortcutDependencies,
   ActionContextTypes,
@@ -51,11 +47,12 @@ import { resetBlockSelection } from '@/data/globalState.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { vimNormalModeActionsFacet, VimNormalModeAction } from '@/shortcuts/vimNormalMode.ts'
 import {
   plainOutlinerInteractionExtension,
   vimNormalModeInteractionExtension,
 } from '@/shortcuts/blockInteractionPolicies.ts'
+
+type VimNormalModeAction = ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -808,7 +805,7 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
-  const defaultActions = [
+  const nonVimActions = [
     ...globalActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
@@ -817,17 +814,14 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   return [
     defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
     plainOutlinerInteractionExtension,
-    defaultActions.map(action => actionsFacet.of(action)),
+    nonVimActions.map(action => actionsFacet.of(action)),
+    // Vim normal-mode bundle: interaction policies + normal-mode actions. Opting
+    // out of vim means excluding this sub-extension entirely.
     [
       vimNormalModeInteractionExtension,
-      vimNormalModeActions.map(action => vimNormalModeActionsFacet.of(action)),
+      vimNormalModeActions.map(action =>
+        actionsFacet.of(action as ActionConfig, {source: 'vim-normal-mode'}),
+      ),
     ],
   ]
-}
-
-export function registerDefaultShortcuts(
-  {repo}: { repo: Repo },
-  actionManager: ActionManager = defaultActionManager,
-) {
-  actionManager.registerActions(getDefaultActions({repo}))
 }
