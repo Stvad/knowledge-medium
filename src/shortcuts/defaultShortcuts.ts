@@ -47,10 +47,7 @@ import { resetBlockSelection } from '@/data/globalState.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import {
-  plainOutlinerInteractionExtension,
-  vimNormalModeInteractionExtension,
-} from '@/shortcuts/blockInteractionPolicies.ts'
+import { plainOutlinerInteractionExtension } from '@/shortcuts/blockInteractionPolicies.ts'
 
 type VimNormalModeAction = ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
 
@@ -788,7 +785,6 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
 export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
     globalActions,
-    vimNormalModeActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
@@ -803,13 +799,5 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
     plainOutlinerInteractionExtension,
     nonVimActions.map(action => actionsFacet.of(action)),
-    // Vim normal-mode bundle: interaction policies + normal-mode actions. Opting
-    // out of vim means excluding this sub-extension entirely.
-    [
-      vimNormalModeInteractionExtension,
-      vimNormalModeActions.map(action =>
-        actionsFacet.of(action as ActionConfig, {source: 'vim-normal-mode'}),
-      ),
-    ],
   ]
 }

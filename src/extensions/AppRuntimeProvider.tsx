@@ -11,6 +11,7 @@ import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
 import { videoPlayerPlugin } from '@/plugins/video-player'
+import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 
 export function AppRuntimeProvider({
   children,
@@ -34,6 +35,7 @@ export function AppRuntimeProvider({
   const baseExtensions: AppExtension[] = useMemo(() => [
     defaultRenderersExtension,
     defaultActionsExtension({repo}),
+    vimNormalModePlugin({repo}),
     videoPlayerPlugin,
   ], [repo])
 

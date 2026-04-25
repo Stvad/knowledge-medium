@@ -1,7 +1,6 @@
-import type { MouseEvent, TouchEvent } from 'react'
+import type { MouseEvent } from 'react'
 import {
   BlockClickContribution,
-  BlockContentGestureContribution,
   BlockContentRendererContribution,
   enterBlockEditMode,
   getBlockContentRendererSlot,
@@ -9,7 +8,6 @@ import {
   isSelectionClick,
   ShortcutActivationContribution,
   blockClickHandlersFacet,
-  blockContentGestureHandlersFacet,
   blockContentRendererFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
@@ -37,43 +35,6 @@ export const plainOutlinerBlockClickBehavior: BlockClickContribution = context =
     })
   }
 
-export const vimBlockClickBehavior: BlockClickContribution = context =>
-  event => handleBlockSelectionClick(context, event)
-
-export const vimContentGestureBehavior: BlockContentGestureContribution = context => ({
-  onDoubleClick: async (event: MouseEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-
-    await enterBlockEditMode(context, {
-      x: event.clientX,
-      y: event.clientY,
-    })
-  },
-  onTap: async (event: TouchEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-
-    const touch = event.changedTouches[0]
-    await enterBlockEditMode(context, touch
-      ? {x: touch.clientX, y: touch.clientY}
-      : undefined)
-  },
-})
-
-export const vimNormalModeActivation: ShortcutActivationContribution = context => {
-  if (context.surface !== 'block' || !context.inFocus || context.inEditMode || context.isSelected) {
-    return null
-  }
-
-  return [{
-    context: ActionContextTypes.NORMAL_MODE,
-    dependencies: {
-      block: context.block,
-    },
-  }]
-}
-
 export const codeMirrorEditModeActivation: ShortcutActivationContribution = context => {
   if (context.surface !== 'codemirror' || !context.editorView) return null
 
@@ -95,20 +56,5 @@ export const plainOutlinerInteractionExtension: AppExtension = [
   }),
   shortcutSurfaceActivationsFacet.of(codeMirrorEditModeActivation, {
     source: 'codemirror-edit-mode',
-  }),
-]
-
-export const vimNormalModeInteractionExtension: AppExtension = [
-  blockClickHandlersFacet.of(vimBlockClickBehavior, {
-    precedence: 100,
-    source: 'vim-normal-mode',
-  }),
-  blockContentGestureHandlersFacet.of(vimContentGestureBehavior, {
-    precedence: 100,
-    source: 'vim-normal-mode',
-  }),
-  shortcutSurfaceActivationsFacet.of(vimNormalModeActivation, {
-    precedence: 100,
-    source: 'vim-normal-mode',
   }),
 ]

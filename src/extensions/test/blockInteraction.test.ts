@@ -5,7 +5,6 @@ import type { BlockRenderer } from '@/types.ts'
 import {
   blockClickHandlersFacet,
   BlockClickContribution,
-  blockContentGestureHandlersFacet,
   blockContentRendererFacet,
   BlockInteractionContext,
   ShortcutActivationContribution,
@@ -15,8 +14,6 @@ import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import {
   blockEditingContentRenderer,
   codeMirrorEditModeActivation,
-  vimContentGestureBehavior,
-  vimNormalModeActivation,
 } from '@/shortcuts/blockInteractionPolicies.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 
@@ -72,40 +69,6 @@ describe('block interaction facets', () => {
     const handler = runtime.read(blockClickHandlersFacet)(context)
 
     expect(handler).toBe(replacementHandler)
-  })
-
-  it('supplies content gestures separately from block click behavior', () => {
-    const runtime = resolveFacetRuntimeSync([
-      blockContentGestureHandlersFacet.of(vimContentGestureBehavior),
-    ])
-
-    const handlers = runtime.read(blockContentGestureHandlersFacet)(context)
-
-    expect(handlers.onDoubleClick).toBeDefined()
-    expect(handlers.onTap).toBeDefined()
-  })
-
-  it('defines Vim normal mode as a shortcut surface activation', () => {
-    const runtime = resolveFacetRuntimeSync([
-      shortcutSurfaceActivationsFacet.of(vimNormalModeActivation),
-    ])
-
-    const resolveActivations = runtime.read(shortcutSurfaceActivationsFacet)
-
-    expect(resolveActivations({
-      ...context,
-      surface: 'block',
-    })).toEqual([{
-      context: ActionContextTypes.NORMAL_MODE,
-      dependencies: {
-        block: context.block,
-      },
-    }])
-    expect(resolveActivations({
-      ...context,
-      inEditMode: true,
-      surface: 'block',
-    })).toEqual([])
   })
 
   it('defines CodeMirror edit mode through editor surface activations', () => {
