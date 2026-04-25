@@ -12,6 +12,8 @@ import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
+import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 
 export function AppRuntimeProvider({
   children,
@@ -34,7 +36,9 @@ export function AppRuntimeProvider({
 
   const baseExtensions: AppExtension[] = useMemo(() => [
     defaultRenderersExtension,
+    defaultEditorInteractionExtension,
     defaultActionsExtension({repo}),
+    plainOutlinerPlugin,
     vimNormalModePlugin({repo}),
     videoPlayerPlugin,
   ], [repo])

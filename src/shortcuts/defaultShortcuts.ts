@@ -47,7 +47,6 @@ import { resetBlockSelection } from '@/data/globalState.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { plainOutlinerInteractionExtension } from '@/shortcuts/blockInteractionPolicies.ts'
 
 type VimNormalModeAction = ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
 
@@ -797,7 +796,6 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
 
   return [
     defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
-    plainOutlinerInteractionExtension,
     nonVimActions.map(action => actionsFacet.of(action)),
   ]
 }

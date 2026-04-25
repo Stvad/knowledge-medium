@@ -1,24 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block.ts'
 import type { Repo } from '@/data/repo.ts'
-import type { BlockRenderer } from '@/types.ts'
 import {
   blockClickHandlersFacet,
   BlockClickContribution,
-  blockContentRendererFacet,
   BlockInteractionContext,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import {
-  blockEditingContentRenderer,
-  codeMirrorEditModeActivation,
-} from '@/shortcuts/blockInteractionPolicies.ts'
+import { codeMirrorEditModeActivation } from '@/extensions/defaultEditorInteractions.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
-
-const PrimaryRenderer: BlockRenderer = () => null
-const SecondaryRenderer: BlockRenderer = () => null
 
 const context = {
   block: {id: 'block-1'} as Block,
@@ -29,33 +21,10 @@ const context = {
   inEditMode: false,
   isSelected: false,
   isTopLevel: false,
-  contentRenderers: [
-    {
-      id: 'primary',
-      renderer: PrimaryRenderer,
-    },
-    {
-      id: 'secondary',
-      renderer: SecondaryRenderer,
-    },
-  ],
+  contentRenderers: [],
 } satisfies BlockInteractionContext
 
 describe('block interaction facets', () => {
-  it('chooses block content renderers through a renderer facet', () => {
-    const runtime = resolveFacetRuntimeSync([
-      blockContentRendererFacet.of(blockEditingContentRenderer),
-    ])
-
-    const resolveRenderer = runtime.read(blockContentRendererFacet)
-
-    expect(resolveRenderer(context)).toBe(PrimaryRenderer)
-    expect(resolveRenderer({
-      ...context,
-      inEditMode: true,
-    })).toBe(SecondaryRenderer)
-  })
-
   it('lets a higher precedence click contribution replace baseline block clicks', () => {
     const baselineHandler = () => undefined
     const replacementHandler = () => undefined
