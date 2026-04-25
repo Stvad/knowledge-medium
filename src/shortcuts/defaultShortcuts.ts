@@ -24,12 +24,12 @@ import {
   setFocusedBlockId,
 } from '@/data/properties.ts'
 import { selectionStateProp } from '@/data/properties'
-import { applyToAllBlocksInSelection, makeMultiSelect, makeCMMode } from './utils'
+import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
 import {
+  bindBlockActionContext,
   createSharedBlockActions,
   extendSelectionDown,
   extendSelectionUp,
-  requestEditorFocusIfEditing,
 } from './blockActions.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
@@ -79,42 +79,31 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     deleteBlock,
     togglePropertiesDisplay,
     toggleBlockCollapse,
-    extendSelectionUpNormal,
-    extendSelectionDownNormal,
+    extendSelectionUp: extendSelectionUpBlock,
+    extendSelectionDown: extendSelectionDownBlock,
   } = createSharedBlockActions({repo})
+
+  const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
+  const outdentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, outdentBlock)
+  const moveBlockUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveBlockUp)
+  const moveBlockDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveBlockDown)
+  const deleteBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock)
+  const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
+  const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
+  const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock)
+  const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock)
 
   // CodeMirror versions of move actions
   const moveBlockUpCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, moveBlockUp),
     id: 'move_block_up_cm',
     description: 'Move block up (CodeMirror)',
-    context: ActionContextTypes.EDIT_MODE_CM,
-    handler: async (deps: CodeMirrorEditModeDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block) return
-      await block.changeOrder(-1)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'cmd+shift+up',
-      eventOptions: {
-        preventDefault: true,
-      },
-    },
   }
 
   const moveBlockDownCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
+    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, moveBlockDown),
     id: 'move_block_down_cm',
     description: 'Move block down (CodeMirror)',
-    context: ActionContextTypes.EDIT_MODE_CM,
-    handler: async (deps: CodeMirrorEditModeDependencies) => {
-      const {block, uiStateBlock} = deps
-      if (!block) return
-      await block.changeOrder(1)
-      requestEditorFocusIfEditing(uiStateBlock)
-    },
-    defaultBinding: {
-      keys: 'cmd+shift+down',
-    },
   }
 
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
@@ -214,7 +203,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   ]
 
   const extendSelectionUpEdit = {
-    ...makeCMMode(extendSelectionUpNormal),
+    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionUpBlock, {idPrefix: 'edit.cm'}),
     handler: async (deps: CodeMirrorEditModeDependencies) => {
       if (cursorIsAtStart(deps.editorView)) {
         setIsEditing(deps.uiStateBlock, false)
@@ -223,7 +212,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
   const extendSelectionDownEdit = {
-    ...makeCMMode(extendSelectionDownNormal),
+    ...bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, extendSelectionDownBlock, {idPrefix: 'edit.cm'}),
     handler: async (deps: CodeMirrorEditModeDependencies) => {
       if (cursorIsAtEnd(deps.editorView)) {
         setIsEditing(deps.uiStateBlock, false)
@@ -385,8 +374,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: 'backspace',
       },
     },
-    makeCMMode(indentBlock),
-    makeCMMode(outdentBlock),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: 'edit.cm'}),
     moveBlockUpCM,
     moveBlockDownCM,
     extendSelectionDownEdit,
@@ -395,15 +384,15 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
   // Multi-select mode actions
   const multiSelectModeActions: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>[] = [
-    makeMultiSelect(extendSelectionUpNormal),
-    makeMultiSelect(extendSelectionDownNormal),
-    applyToAllBlocksInSelection(toggleBlockCollapse),
-    applyToAllBlocksInSelection(togglePropertiesDisplay),
-    applyToAllBlocksInSelection(indentBlock),
-    applyToAllBlocksInSelection(outdentBlock, {applyInReverseOrder: true}),
-    applyToAllBlocksInSelection(deleteBlock),
-    applyToAllBlocksInSelection(moveBlockUp),
-    applyToAllBlocksInSelection(moveBlockDown, {applyInReverseOrder: true}),
+    makeMultiSelect(extendSelectionUpAction),
+    makeMultiSelect(extendSelectionDownAction),
+    applyToAllBlocksInSelection(toggleBlockCollapseAction),
+    applyToAllBlocksInSelection(togglePropertiesDisplayAction),
+    applyToAllBlocksInSelection(indentBlockAction),
+    applyToAllBlocksInSelection(outdentBlockAction, {applyInReverseOrder: true}),
+    applyToAllBlocksInSelection(deleteBlockAction),
+    applyToAllBlocksInSelection(moveBlockUpAction),
+    applyToAllBlocksInSelection(moveBlockDownAction, {applyInReverseOrder: true}),
     {
       id: 'clear_selection',
       description: 'Clear selection',

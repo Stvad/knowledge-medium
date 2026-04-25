@@ -16,23 +16,46 @@ import {
   showPropertiesProp,
   topLevelBlockIdProp,
 } from '@/data/properties.ts'
-import { ActionConfig, ActionContextTypes, BlockShortcutDependencies } from '@/shortcuts/types.ts'
+import {
+  ActionConfig,
+  ActionContextType,
+  ActionTrigger,
+  BlockShortcutDependencies,
+  ShortcutBinding,
+} from '@/shortcuts/types.ts'
 import { EditorSelectionState } from '@/types.ts'
 import { extendSelection } from '@/utils/selection'
 
-export type NormalModeAction = ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
+export interface BlockAction {
+  id: string
+  description: string
+  handler: (dependencies: BlockShortcutDependencies, trigger: ActionTrigger) => void | Promise<void>
+  defaultBinding?: Omit<ShortcutBinding, 'action'>
+  hideFromCommandPallet?: boolean
+}
 
 export interface SharedBlockActions {
-  indentBlock: NormalModeAction
-  outdentBlock: NormalModeAction
-  moveBlockUp: NormalModeAction
-  moveBlockDown: NormalModeAction
-  deleteBlock: NormalModeAction
-  togglePropertiesDisplay: NormalModeAction
-  toggleBlockCollapse: NormalModeAction
-  extendSelectionUpNormal: NormalModeAction
-  extendSelectionDownNormal: NormalModeAction
+  indentBlock: BlockAction
+  outdentBlock: BlockAction
+  moveBlockUp: BlockAction
+  moveBlockDown: BlockAction
+  deleteBlock: BlockAction
+  togglePropertiesDisplay: BlockAction
+  toggleBlockCollapse: BlockAction
+  extendSelectionUp: BlockAction
+  extendSelectionDown: BlockAction
 }
+
+export const bindBlockActionContext = <T extends ActionContextType>(
+  context: T,
+  action: BlockAction,
+  {idPrefix}: { idPrefix?: string } = {},
+): ActionConfig<T> => ({
+  ...action,
+  id: idPrefix ? `${idPrefix}.${action.id}` : action.id,
+  context,
+  handler: action.handler as ActionConfig<T>['handler'],
+})
 
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   if (uiStateBlock.dataSync()?.properties[isEditingProp.name]?.value) {
@@ -76,10 +99,9 @@ export const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
 }
 
 export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockActions => {
-  const indentBlock: NormalModeAction = {
+  const indentBlock: BlockAction = {
     id: 'indent_block',
     description: 'Indent block',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       await deps.block.indent()
       requestEditorFocusIfEditing(deps.uiStateBlock)
@@ -92,10 +114,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const outdentBlock: NormalModeAction = {
+  const outdentBlock: BlockAction = {
     id: 'outdent_block',
     description: 'Outdent block',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
       const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
       if (!topLevelBlockId) return
@@ -111,10 +132,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const moveBlockUp: NormalModeAction = {
+  const moveBlockUp: BlockAction = {
     id: 'move_block_up',
     description: 'Move block up',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
@@ -129,10 +149,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const moveBlockDown: NormalModeAction = {
+  const moveBlockDown: BlockAction = {
     id: 'move_block_down',
     description: 'Move block down',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
@@ -144,10 +163,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const deleteBlock: NormalModeAction = {
+  const deleteBlock: BlockAction = {
     id: 'delete_block',
     description: 'Delete block',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
@@ -164,10 +182,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const togglePropertiesDisplay: NormalModeAction = {
+  const togglePropertiesDisplay: BlockAction = {
     id: 'toggle_properties',
     description: 'Toggle block properties',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block} = deps
       if (!block) return
@@ -180,10 +197,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const toggleBlockCollapse: NormalModeAction = {
+  const toggleBlockCollapse: BlockAction = {
     id: 'toggle_collapse',
     description: 'Toggle block collapse',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) => {
       const {block} = deps
       if (!block) return
@@ -196,10 +212,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const extendSelectionUpNormal: NormalModeAction = {
+  const extendSelectionUpAction: BlockAction = {
     id: 'extend_selection_up',
     description: 'Extend selection up',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) =>
       await extendSelectionUp(deps.uiStateBlock, repo),
     defaultBinding: {
@@ -207,10 +222,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const extendSelectionDownNormal: NormalModeAction = {
+  const extendSelectionDownAction: BlockAction = {
     id: 'extend_selection_down',
     description: 'Extend selection down',
-    context: ActionContextTypes.NORMAL_MODE,
     handler: async (deps: BlockShortcutDependencies) =>
       await extendSelectionDown(deps.uiStateBlock, repo),
     defaultBinding: {
@@ -226,7 +240,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     deleteBlock,
     togglePropertiesDisplay,
     toggleBlockCollapse,
-    extendSelectionUpNormal,
-    extendSelectionDownNormal,
+    extendSelectionUp: extendSelectionUpAction,
+    extendSelectionDown: extendSelectionDownAction,
   }
 }

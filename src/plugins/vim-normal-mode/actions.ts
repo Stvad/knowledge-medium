@@ -14,19 +14,19 @@ import { selectionStateProp } from '@/data/properties'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { copyBlockToClipboard } from '@/utils/copy.ts'
-import { makeNormalMode } from '@/shortcuts/utils'
 import {
+  bindBlockActionContext,
   createSharedBlockActions,
   enterEditMode,
-  NormalModeAction,
 } from '@/shortcuts/blockActions.ts'
+import type { BlockAction } from '@/shortcuts/blockActions.ts'
 import {
   ActionConfig,
   ActionContextTypes,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.ts'
 
-export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeAction[] {
+export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
   const {
     indentBlock,
     outdentBlock,
@@ -35,17 +35,25 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
     deleteBlock,
     togglePropertiesDisplay,
     toggleBlockCollapse,
-    extendSelectionUpNormal,
-    extendSelectionDownNormal,
+    extendSelectionUp,
+    extendSelectionDown,
   } = createSharedBlockActions({repo})
 
+  const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
+  const outdentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, outdentBlock)
+  const deleteBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, deleteBlock)
+  const togglePropertiesDisplayAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, togglePropertiesDisplay)
+  const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
+  const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUp)
+  const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDown)
+  const bindNormal = (action: BlockAction) => bindBlockActionContext(ActionContextTypes.NORMAL_MODE, action)
+
   return [
-    indentBlock,
-    outdentBlock,
-    {
+    indentBlockAction,
+    outdentBlockAction,
+    bindNormal({
       id: 'move_down',
       description: 'Move to next block',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async (deps: BlockShortcutDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
@@ -59,11 +67,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
       defaultBinding: {
         keys: ['down', 'k'],
       },
-    },
-    {
+    }),
+    bindNormal({
       id: 'move_up',
       description: 'Move to previous block',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async (deps: BlockShortcutDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
@@ -77,34 +84,31 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
       defaultBinding: {
         keys: ['up', 'h'],
       },
-    },
-    {
+    }),
+    bindNormal({
       id: 'enter_edit_mode',
       description: 'Enter edit mode',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async (deps: BlockShortcutDependencies) => enterEditMode(deps.uiStateBlock),
       defaultBinding: {
         keys: 'i',
       },
-    },
-    {
+    }),
+    bindNormal({
       id: 'enter_edit_mode_at_end',
       description: 'Enter edit mode at end',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
         enterEditMode(uiStateBlock, {blockId: block.id, start: block.dataSync()?.content.length})
       },
       defaultBinding: {
         keys: 'a',
       },
-    },
-    toggleBlockCollapse,
-    togglePropertiesDisplay,
-    deleteBlock,
-    {
+    }),
+    toggleBlockCollapseAction,
+    togglePropertiesDisplayAction,
+    deleteBlockAction,
+    bindNormal({
       id: 'create_block_below_and_edit',
       description: 'Create block below (or as child) and enter edit mode',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async (deps: BlockShortcutDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
@@ -125,11 +129,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
       defaultBinding: {
         keys: 'o',
       },
-    },
-    {
+    }),
+    bindNormal({
       id: 'select_focused_block_and_start_selection',
       description: 'Select focused block and start selection',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async (deps: BlockShortcutDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
@@ -145,15 +148,14 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
       defaultBinding: {
         keys: ['space', 'v'],
       },
-    },
-    extendSelectionUpNormal,
-    extendSelectionDownNormal,
-    makeNormalMode(moveBlockUp),
-    makeNormalMode(moveBlockDown),
-    {
+    }),
+    extendSelectionUpAction,
+    extendSelectionDownAction,
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveBlockUp, {idPrefix: 'normal'}),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveBlockDown, {idPrefix: 'normal'}),
+    bindNormal({
       id: 'jump_to_first_visible_block',
       description: 'Jump to first visible block',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
         const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
         if (!topLevelBlockId) return
@@ -163,11 +165,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
       defaultBinding: {
         keys: 'g g',
       },
-    },
-    {
+    }),
+    bindNormal({
       id: 'jump_to_last_visible_block',
       description: 'Jump to last visible block',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
         const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
         if (!topLevelBlockId) return
@@ -180,11 +181,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
       defaultBinding: {
         keys: 'shift+g',
       },
-    },
-    {
+    }),
+    bindNormal({
       id: 'copy_block',
       description: 'Copy block to clipboard',
-      context: ActionContextTypes.NORMAL_MODE,
       handler: ({block}) => copyBlockToClipboard(block),
       defaultBinding: {
         keys: ['cmd+c', 'ctrl+c'],
@@ -192,7 +192,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): NormalModeActio
           preventDefault: true,
         },
       },
-    },
+    }),
   ]
 }
 
