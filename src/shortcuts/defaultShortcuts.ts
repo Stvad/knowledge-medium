@@ -1,4 +1,4 @@
-import { defaultActionContextConfigs } from './ActionManager.ts'
+import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   BlockShortcutDependencies,
   ActionContextTypes,

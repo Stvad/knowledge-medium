@@ -9,7 +9,6 @@ import { memoize } from 'lodash'
 import { Block } from '@/data/block.ts'
 import { useUserBlock } from '@/data/globalState.ts'
 import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
-import { useRuntimeActions } from '@/extensions/useRuntimeActions.ts'
 
 // todo this is kind of a random place for this, I think a more principled way to do this is to have
 // on-load hook and fire this there
@@ -46,7 +45,6 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
    *
    */
 
-  useRuntimeActions()
   useActionContext(ActionContextTypes.GLOBAL)
 
   return (

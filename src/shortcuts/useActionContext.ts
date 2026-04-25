@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { actionManager } from './ActionManager.ts'
+import { useActiveContextsDispatch } from '@/shortcuts/ActiveContexts.tsx'
 import {
   ActionContextType,
   ActionContextActivation,
@@ -19,6 +19,10 @@ export function useActionContextActivations(
   activations: readonly ActionContextActivation[],
 ): void {
   const uiStateBlock = useUIStateBlock()
+  // Subscribe to the STABLE dispatch context — this hook is called by every
+  // block that registers shortcut surfaces, so re-rendering them all on every
+  // activation change would be a fan-out nightmare.
+  const {activate, deactivate} = useActiveContextsDispatch()
 
   const activeActivations = useMemo(() => activations
     .filter(activation => activation.enabled !== false)
@@ -35,15 +39,15 @@ export function useActionContextActivations(
     if (!activeActivations.length) return
 
     for (const activation of activeActivations) {
-      actionManager.activateContext(activation.context, activation.dependencies)
+      activate(activation.context, activation.dependencies)
     }
 
     return () => {
       for (const activation of activeActivations) {
-        actionManager.deactivateContext(activation.context)
+        deactivate(activation.context)
       }
     }
-  }, [activeActivations])
+  }, [activeActivations, activate, deactivate])
 }
 
 /**

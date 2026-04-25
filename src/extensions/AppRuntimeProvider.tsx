@@ -8,6 +8,8 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
+import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
+import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
 
 export function AppRuntimeProvider({
   children,
@@ -84,7 +86,10 @@ export function AppRuntimeProvider({
 
   return (
     <AppRuntimeContextProvider value={runtime}>
-      {children}
+      <ActiveContextsProvider>
+        <HotkeyReconciler/>
+        {children}
+      </ActiveContextsProvider>
     </AppRuntimeContextProvider>
   )
 }

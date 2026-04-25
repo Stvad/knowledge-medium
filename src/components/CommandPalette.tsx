@@ -10,13 +10,13 @@ import {
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { OpenRouterSettings } from '@/components/settings/OpenRouterSettings'
 import { useCommandPaletteShortcuts } from '@/shortcuts/useActionContext.ts'
-import { actionManager } from '@/shortcuts/ActionManager.ts'
 import { useAvailableActions } from '@/shortcuts/useAvailableActions.ts'
+import { useRunAction } from '@/shortcuts/runAction.ts'
 import { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
 import { Kbd } from '@/components/ui/kbd'
 import { groupBy } from 'lodash'
 
-const formatShortcutKeys = (bindings: ShortcutBinding[]): string[] => {
+const formatShortcutKeys = (bindings: readonly ShortcutBinding[]): string[] => {
   if (!bindings || bindings.length === 0) {
     return []
   }
@@ -42,6 +42,7 @@ export function CommandPalette() {
   }, [])
 
   const {actions, activeContexts, bindingsFor} = useAvailableActions()
+  const runAction = useRunAction()
 
   const {activeContextsInfo, groupedActions} = useMemo(() => {
     if (!open) {
@@ -61,7 +62,7 @@ export function CommandPalette() {
     }
 
     try {
-      actionManager.runActionById(actionId, new CustomEvent('command-pallet-trigger'))
+      runAction(actionId, new CustomEvent('command-pallet-trigger'))
     } catch (error) {
       console.error(`[CommandPalette] Failed to execute action: ${actionId}`, error)
     } finally {
