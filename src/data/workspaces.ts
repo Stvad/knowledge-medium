@@ -162,19 +162,6 @@ export const declineInvitation = async (invitationId: string): Promise<void> => 
 }
 
 // ---------------------------------------------------------------------------
-// Server-side workspace listings (RLS-filtered to the current user's set).
-// ---------------------------------------------------------------------------
-
-export const listMyWorkspaceIdsViaRest = async (): Promise<Set<string>> => {
-  const client = assertSupabase()
-  const {data, error} = await client
-    .from('workspaces')
-    .select('id')
-  if (error) throw error
-  return new Set((data ?? []).map((row: {id: string}) => row.id))
-}
-
-// ---------------------------------------------------------------------------
 // Pending-invitation reads (RLS keys these on auth.email()).
 // ---------------------------------------------------------------------------
 
