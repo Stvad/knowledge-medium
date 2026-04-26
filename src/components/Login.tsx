@@ -9,6 +9,7 @@ import { Session } from '@supabase/supabase-js'
 interface UserContextType {
   user: User
   setUser: (user?: User) => void
+  signOut: () => Promise<void>
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined)
@@ -17,6 +18,12 @@ export const useUser = () => {
   const context = useContext(UserContext)
   if (!context) throw new Error('useUser must be used within a Login component')
   return context.user
+}
+
+export const useSignOut = () => {
+  const context = useContext(UserContext)
+  if (!context) throw new Error('useSignOut must be used within a Login component')
+  return context.signOut
 }
 
 export function Login({children}: { children: ReactNode }) {
@@ -32,8 +39,11 @@ function LocalLogin({children}: { children: ReactNode }) {
   const [name, setName] = useState('')
 
   if (user) {
+    const signOut = async () => {
+      setUser(undefined)
+    }
     return (
-      <UserContext value={{user, setUser}}>
+      <UserContext value={{user, setUser, signOut}}>
         {children}
       </UserContext>
     )
@@ -118,8 +128,33 @@ function SupabaseLogin({children}: { children: ReactNode }) {
 
   if (session) {
     const user = sessionUserToAppUser(session)
+    const signOut = async () => {
+      const {error: err} = await client.auth.signOut()
+      if (err) {
+        // eslint-disable-next-line no-console
+        console.error('Sign-out failed', err)
+      }
+      // The local PowerSync cache holds blocks scoped to the previous user;
+      // wipe it so the next sign-in doesn't leak rows visually until sync
+      // re-evaluates membership.
+      try {
+        const dbs = (indexedDB as IDBFactory & {databases?: () => Promise<{name?: string}[]>}).databases
+        if (typeof dbs === 'function') {
+          const list = await dbs.call(indexedDB)
+          for (const entry of list) {
+            if (entry.name && entry.name.includes('powersync')) {
+              indexedDB.deleteDatabase(entry.name)
+            }
+          }
+        }
+      } catch {
+        // best-effort
+      }
+      // Force a full reload so React state, the Repo, and PowerSync all reset.
+      window.location.reload()
+    }
     return (
-      <UserContext value={{user, setUser: () => {}}}>
+      <UserContext value={{user, setUser: () => {}, signOut}}>
         {children}
       </UserContext>
     )

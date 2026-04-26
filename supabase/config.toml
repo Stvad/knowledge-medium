@@ -10,3 +10,16 @@ additional_redirect_urls = [
 ]
 enable_signup = true
 enable_anonymous_sign_ins = true
+
+[auth.email]
+enable_signup = true
+# OTP-code flow: the code in the email is the credential the user types back.
+# Disable email-confirmation links so the same template is used for new and
+# returning users.
+enable_confirmations = false
+otp_length = 6
+otp_expiry = 3600
+
+[auth.email.template.magic_link]
+subject = "Your sign-in code"
+content_path = "./supabase/templates/magic_link.html"

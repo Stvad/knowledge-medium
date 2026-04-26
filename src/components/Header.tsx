@@ -1,9 +1,10 @@
 import { ThemeToggle } from './ui/theme-toggle'
-import { useUser } from '@/components/Login'
+import { useSignOut, useUser } from '@/components/Login'
 
 
 export function Header() {
   const user = useUser()
+  const signOut = useSignOut()
 
   return (
     <div className="flex justify-end py-2 ">
@@ -21,7 +22,18 @@ export function Header() {
           </kbd>
         </button>
         <ThemeToggle/>
-        {user && <span className="text-sm text-muted-foreground">{user.name}</span>}
+        {user && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <span>{user.name}</span>
+            <button
+              className="hover:text-foreground transition-colors underline-offset-2 hover:underline"
+              onClick={() => { void signOut() }}
+              title="Sign out"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )
