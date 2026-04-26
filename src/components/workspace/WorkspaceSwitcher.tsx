@@ -76,12 +76,21 @@ export function WorkspaceSwitcher() {
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => setCreateOpen(true)}>
+          <DropdownMenuItem
+            // Defer opening the dialog by a tick. Radix DropdownMenu's
+            // close-cleanup (releases body inert + pointer-events) and
+            // Dialog's mount-setup (re-acquires them) collide if both run
+            // synchronously, leaving `pointer-events: none` stuck on body
+            // after the dialog closes.
+            onSelect={() => { setTimeout(() => setCreateOpen(true), 0) }}
+          >
             <Plus className="h-3.5 w-3.5" />
             <span>New workspace</span>
           </DropdownMenuItem>
           {activeWorkspace && (
-            <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+            <DropdownMenuItem
+              onSelect={() => { setTimeout(() => setSettingsOpen(true), 0) }}
+            >
               <Settings className="h-3.5 w-3.5" />
               <span>Workspace settings</span>
             </DropdownMenuItem>
