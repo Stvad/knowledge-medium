@@ -1,0 +1,230 @@
+import { FormEvent, useEffect, useState } from 'react'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { useRepo } from '@/context/repo'
+import { useWorkspaceMembers } from '@/hooks/useWorkspaces'
+import {
+  deleteWorkspace,
+  inviteMemberByEmail,
+  removeWorkspaceMember,
+  renameWorkspace,
+} from '@/data/workspaces'
+import type { Workspace } from '@/types'
+
+interface Props {
+  workspace: Workspace
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onDeleted: () => void
+}
+
+export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDeleted}: Props) {
+  const repo = useRepo()
+  const isOwner = workspace.ownerUserId === repo.currentUser.id
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl">
+        <DialogHeader>
+          <DialogTitle>Workspace settings</DialogTitle>
+          <DialogDescription>{workspace.name}</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-6">
+          <RenameSection workspace={workspace} disabled={!isOwner} />
+          <MembersSection workspace={workspace} canManage={isOwner} />
+          {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
+          {!isOwner && (
+            <p className="text-sm text-muted-foreground">
+              Only the workspace owner can rename, invite members, or delete this workspace.
+            </p>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function RenameSection({workspace, disabled}: {workspace: Workspace, disabled: boolean}) {
+  const [name, setName] = useState(workspace.name)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [info, setInfo] = useState<string | null>(null)
+
+  // Reset form when the workspace changes.
+  useEffect(() => {
+    setName(workspace.name)
+    setError(null)
+    setInfo(null)
+  }, [workspace.id, workspace.name])
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === workspace.name) return
+    setSubmitting(true); setError(null); setInfo(null)
+    try {
+      await renameWorkspace(workspace.id, trimmed)
+      setInfo('Renamed.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Rename failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <form onSubmit={submit} className="space-y-2">
+      <Label htmlFor="ws-rename">Name</Label>
+      <div className="flex gap-2">
+        <Input
+          id="ws-rename"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          disabled={disabled || submitting}
+        />
+        <Button
+          type="submit"
+          disabled={disabled || submitting || !name.trim() || name.trim() === workspace.name}
+        >
+          {submitting ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {info && <p className="text-sm text-muted-foreground">{info}</p>}
+    </form>
+  )
+}
+
+function MembersSection({workspace, canManage}: {workspace: Workspace, canManage: boolean}) {
+  const repo = useRepo()
+  const {members} = useWorkspaceMembers(workspace.id)
+  const [email, setEmail] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [info, setInfo] = useState<string | null>(null)
+
+  const invite = async (event: FormEvent) => {
+    event.preventDefault()
+    const trimmed = email.trim()
+    if (!trimmed) return
+    setSubmitting(true); setError(null); setInfo(null)
+    try {
+      await inviteMemberByEmail(workspace.id, trimmed, 'editor')
+      setInfo(`Invitation sent to ${trimmed}. They'll see it next time they sign in.`)
+      setEmail('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invite failed')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const remove = async (userId: string) => {
+    setError(null); setInfo(null)
+    try {
+      await removeWorkspaceMember(workspace.id, userId)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Remove failed')
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <Label>Members</Label>
+      <ul className="space-y-1 rounded-md border divide-y">
+        {members.length === 0 && (
+          <li className="px-3 py-2 text-sm text-muted-foreground">Just you for now.</li>
+        )}
+        {members.map((m) => (
+          <li key={m.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+            <span className="font-mono text-xs text-muted-foreground truncate flex-1">{m.userId}</span>
+            <span className="text-xs uppercase tracking-wide rounded bg-muted px-2 py-0.5">{m.role}</span>
+            {canManage && m.role !== 'owner' && m.userId !== repo.currentUser.id && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+                onClick={() => void remove(m.userId)}
+              >
+                Remove
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      {canManage && (
+        <form onSubmit={invite} className="space-y-2">
+          <Label htmlFor="ws-invite">Invite by email</Label>
+          <div className="flex gap-2">
+            <Input
+              id="ws-invite"
+              type="email"
+              placeholder="someone@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              disabled={submitting}
+            />
+            <Button type="submit" disabled={submitting || !email.trim()}>
+              {submitting ? 'Sending…' : 'Invite'}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {info && <p className="text-sm text-muted-foreground">{info}</p>}
+    </div>
+  )
+}
+
+function DangerSection({workspace, onDeleted}: {workspace: Workspace, onDeleted: () => void}) {
+  const [confirmName, setConfirmName] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const canDelete = confirmName === workspace.name
+
+  const submit = async () => {
+    if (!canDelete) return
+    setSubmitting(true); setError(null)
+    try {
+      await deleteWorkspace(workspace.id)
+      onDeleted()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-2 rounded-md border border-destructive/40 p-3">
+      <Label className="text-destructive">Delete workspace</Label>
+      <p className="text-sm text-muted-foreground">
+        This permanently deletes the workspace and all its blocks. To confirm, type the workspace name below.
+      </p>
+      <Input
+        placeholder={workspace.name}
+        value={confirmName}
+        onChange={(e) => setConfirmName(e.target.value)}
+        disabled={submitting}
+      />
+      <Button
+        variant="outline"
+        className="border-destructive/60 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        disabled={!canDelete || submitting}
+        onClick={() => void submit()}
+      >
+        {submitting ? 'Deleting…' : 'Delete workspace'}
+      </Button>
+      {error && <p className="text-sm text-destructive">{error}</p>}
+    </div>
+  )
+}

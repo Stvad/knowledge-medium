@@ -1,5 +1,7 @@
 import { ThemeToggle } from './ui/theme-toggle'
 import { useSignOut, useUser } from '@/components/Login'
+import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher'
+import { PendingInvitations } from '@/components/workspace/PendingInvitations'
 
 
 export function Header() {
@@ -7,7 +9,10 @@ export function Header() {
   const signOut = useSignOut()
 
   return (
-    <div className="flex justify-end py-2 ">
+    <div className="flex items-center justify-between py-2 gap-4">
+      <div className="flex items-center gap-2">
+        <WorkspaceSwitcher/>
+      </div>
       <div className="flex items-center gap-4">
         <button
           className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
@@ -21,6 +26,7 @@ export function Header() {
             {navigator.platform.toLowerCase().includes('mac') ? '⌘' : 'Ctrl+'}K
           </kbd>
         </button>
+        <PendingInvitations/>
         <ThemeToggle/>
         {user && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">

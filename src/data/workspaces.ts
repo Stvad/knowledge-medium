@@ -103,6 +103,19 @@ export const deleteWorkspace = async (workspaceId: string): Promise<void> => {
   if (error) throw error
 }
 
+// Rename uses a direct UPDATE — workspaces_update RLS allows writers
+// (owner + editor) to modify the row. No RPC needed.
+export const renameWorkspace = async (workspaceId: string, name: string): Promise<void> => {
+  const client = assertSupabase()
+  const trimmed = name.trim()
+  if (!trimmed) throw new Error('Workspace name cannot be empty')
+  const {error} = await client
+    .from('workspaces')
+    .update({name: trimmed, update_time: Date.now()})
+    .eq('id', workspaceId)
+  if (error) throw error
+}
+
 export const updateWorkspaceMemberRole = async (
   workspaceId: string,
   userId: string,
