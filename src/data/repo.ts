@@ -19,6 +19,7 @@ export class Repo {
   private readonly cache = new BlockCache()
   private readonly blockCache = new Map<string, Block>()
   private lastProcessedBlockEventSeq = 0
+  private _activeWorkspaceId: string | null = null
   readonly instanceId = Repo.nextInstanceId++
 
   constructor(
@@ -33,6 +34,14 @@ export class Repo {
     })
 
     void this.startReactiveBlockTracking()
+  }
+
+  get activeWorkspaceId(): string | null {
+    return this._activeWorkspaceId
+  }
+
+  setActiveWorkspaceId(workspaceId: string | null): void {
+    this._activeWorkspaceId = workspaceId
   }
 
   find(id: string): Block {
@@ -53,15 +62,22 @@ export class Repo {
     return this.storage.existsBlock(id)
   }
 
-  async findFirstRootBlockId() {
-    return this.storage.findFirstRootId()
+  async findFirstRootBlockId(workspaceId: string) {
+    return this.storage.findFirstRootId(workspaceId)
   }
 
   create(data: Partial<BlockData>): Block {
-    const id = uuidv4()
+    const id = data.id ?? uuidv4()
     const createTime = data.createTime ?? Date.now()
+    const workspaceId = data.workspaceId ?? this._activeWorkspaceId
+    if (!workspaceId) {
+      throw new Error(
+        'Cannot create block: provide workspaceId or call repo.setActiveWorkspaceId() first',
+      )
+    }
     const snapshot: BlockData = {
       id,
+      workspaceId,
       content: data.content ?? '',
       properties: structuredClone(data.properties ?? {}),
       childIds: [...(data.childIds ?? [])],
@@ -220,6 +236,15 @@ export class Repo {
 
     callback(next)
     next.id = id
+
+    // workspace_id is immutable on the server (blocks_prevent_workspace_change_trg).
+    // Defensively reject local mutations that would change it so the PowerSync
+    // upload queue doesn't get stuck retrying a doomed PATCH.
+    if (next.workspaceId !== current.workspaceId) {
+      throw new Error(
+        `Cannot change workspaceId of an existing block (${current.workspaceId} -> ${next.workspaceId})`,
+      )
+    }
 
     if (!options.skipMetadataUpdate) {
       next.updateTime = Date.now()

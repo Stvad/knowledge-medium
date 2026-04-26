@@ -15,6 +15,7 @@ Object.defineProperty(navigator, 'clipboard', {
 // Helper function to create mock BlockData objects
 const mockBlockData = (data: Partial<BlockData>): BlockData => ({
   id: 'defaultId',
+  workspaceId: 'testWorkspace',
   content: '',
   properties: {},
   childIds: [],

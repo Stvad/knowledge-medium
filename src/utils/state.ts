@@ -3,12 +3,20 @@ import {isNotNullish} from './types.ts'
 import { Block } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
 
-export const importState = async (state: { blocks: Partial<BlockData>[] }, repo: Repo) => {
+export const importState = async (
+  state: { blocks: Partial<BlockData>[] },
+  repo: Repo,
+  options: { workspaceId?: string } = {},
+) => {
     const blockMap = new Map<string, Block>()
-    
-    // First create all blocks
+
+    // First create all blocks. If a workspaceId is provided here it overrides
+    // any per-block workspaceId in the source data; otherwise repo.create
+    // falls back to repo.activeWorkspaceId.
     await Promise.all(state.blocks.map(async block => {
-        const newBlock = repo.create(block)
+        const newBlock = repo.create(
+          options.workspaceId ? {...block, workspaceId: options.workspaceId} : block,
+        )
         blockMap.set(block.id!, newBlock)
     }))
 

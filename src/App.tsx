@@ -10,6 +10,32 @@ import { memoize } from 'lodash'
 import { importState } from '@/utils/state.ts'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
+import {
+  ensurePersonalWorkspace,
+  getLocalWorkspace,
+  listLocalWorkspaces,
+  primeLocalMembership,
+  primeLocalWorkspace,
+} from '@/data/workspaces.ts'
+import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
+
+const LAST_WORKSPACE_STORAGE_KEY = 'ftm.lastWorkspaceId'
+
+const rememberWorkspace = (workspaceId: string) => {
+  try {
+    window.localStorage.setItem(LAST_WORKSPACE_STORAGE_KEY, workspaceId)
+  } catch {
+    // ignore (incognito, quota, etc.)
+  }
+}
+
+const recallRememberedWorkspace = (): string | undefined => {
+  try {
+    return window.localStorage.getItem(LAST_WORKSPACE_STORAGE_KEY) ?? undefined
+  } catch {
+    return undefined
+  }
+}
 
 const waitForInitialRemoteSync = async (repo: Repo, timeoutMs: number) => {
   const controller = new AbortController()
@@ -19,43 +45,104 @@ const waitForInitialRemoteSync = async (repo: Repo, timeoutMs: number) => {
 
   try {
     await repo.db.waitForFirstSync(controller.signal)
+  } catch {
+    // best-effort wait; surface no error so the bootstrap path still proceeds
   } finally {
     window.clearTimeout(timeoutId)
   }
 }
 
+// Resolve which workspace to enter, in order of preference:
+//   1. Explicit workspaceId in the URL hash (trusted; server RLS rejects
+//      reads/writes if the user isn't a member).
+//   2. localStorage-remembered last workspace, if it's locally available.
+//   3. ensure_personal_workspace RPC, which is idempotent — returns the
+//      caller's first workspace or creates one. Also primes local SQLite
+//      so the workspace appears in the switcher before sync replicates.
+//   4. Local fallback for the no-Supabase dev path.
+//
+// Critically: if the URL specified a workspace, NEVER auto-bootstrap a
+// fresh one — that creates a ping-pong with the URL the moment we just
+// wrote to it.
+const resolveWorkspaceId = async (
+  repo: Repo,
+  requestedWorkspaceId: string | undefined,
+  useRemoteSync: boolean,
+): Promise<string> => {
+  if (requestedWorkspaceId) {
+    return requestedWorkspaceId
+  }
+
+  const remembered = recallRememberedWorkspace()
+  if (remembered) {
+    const ws = await getLocalWorkspace(repo, remembered)
+    if (ws) return ws.id
+  }
+
+  if (useRemoteSync) {
+    const workspace = await ensurePersonalWorkspace()
+    await primeLocalWorkspace(repo, workspace)
+    await primeLocalMembership(repo, {
+      id: `bootstrap-${workspace.id}`,
+      workspaceId: workspace.id,
+      userId: repo.currentUser.id,
+      role: 'owner',
+      createTime: workspace.createTime,
+    })
+    return workspace.id
+  }
+
+  const locals = await listLocalWorkspaces(repo)
+  if (locals.length > 0) return locals[0].id
+
+  throw new Error('No workspace available and remote sync is disabled')
+}
+
 const getInitialBlock = memoize(
-  async (repo: Repo, rootDocId: string | undefined, useRemoteSync: boolean): Promise<Block> => {
-    if (rootDocId && await repo.exists(rootDocId)) {
-      return repo.find(rootDocId)
+  async (
+    repo: Repo,
+    requestedWorkspaceId: string | undefined,
+    requestedBlockId: string | undefined,
+    useRemoteSync: boolean,
+  ): Promise<{workspaceId: string, block: Block}> => {
+    const workspaceId = await resolveWorkspaceId(repo, requestedWorkspaceId, useRemoteSync)
+    repo.setActiveWorkspaceId(workspaceId)
+    rememberWorkspace(workspaceId)
+
+    if (requestedBlockId && await repo.exists(requestedBlockId)) {
+      const block = repo.find(requestedBlockId)
+      const data = await block.data()
+      if (data && data.workspaceId === workspaceId) {
+        writeAppHash(workspaceId, requestedBlockId)
+        return {workspaceId, block}
+      }
     }
 
-    let rootId = await repo.findFirstRootBlockId()
+    let rootId = await repo.findFirstRootBlockId(workspaceId)
 
     if (!rootId && useRemoteSync) {
       await waitForInitialRemoteSync(repo, 5000)
-      rootId = await repo.findFirstRootBlockId()
+      rootId = await repo.findFirstRootBlockId(workspaceId)
     }
 
     if (rootId) {
-      if (document.location.hash !== `#${rootId}`) {
-        document.location.hash = rootId
-      }
-      return repo.find(rootId)
+      writeAppHash(workspaceId, rootId)
+      return {workspaceId, block: repo.find(rootId)}
     }
 
-    if (useRemoteSync) {
-      throw new Error('No root block was found after remote sync. Run the Supabase migration seed and verify the PowerSync stream for public.blocks.')
-    }
-
-    const blockMap = await importState({blocks: getExampleBlocks()}, repo)
+    // Empty workspace: seed the starter tree.
+    const blockMap = await importState(
+      {blocks: getExampleBlocks()},
+      repo,
+      {workspaceId},
+    )
     await repo.flush()
     const block = blockMap.values().next().value!
-    document.location.hash = block.id
-    return block
+    writeAppHash(workspaceId, block.id)
+    return {workspaceId, block}
   },
-  (repo, rootDocId, useRemoteSync) =>
-    `${repo.instanceId}:${rootDocId ?? '__default__'}:${useRemoteSync ? 'remote' : 'local'}`,
+  (repo, workspaceId, blockId, useRemoteSync) =>
+    `${repo.instanceId}:${workspaceId ?? '__no_ws__'}:${blockId ?? '__no_block__'}:${useRemoteSync ? 'remote' : 'local'}`,
 )
 
 const App = () => {
@@ -63,8 +150,10 @@ const App = () => {
   const location = useLocation()
   const safeMode = Boolean(useSearchParam('safeMode'))
 
-  const initialDocId = location.hash?.substring(1)
-  const handle = use(getInitialBlock(repo, initialDocId, hasRemoteSyncConfig))
+  const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(location.hash)
+  const {block: handle} = use(
+    getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, hasRemoteSyncConfig),
+  )
   const rootBlock = use(getRootBlock(repo.find(handle.id)))
 
   return (

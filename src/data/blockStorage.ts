@@ -36,6 +36,7 @@ const SELECT_FIRST_ROOT_BLOCK_ID_SQL = `
   SELECT id
   FROM blocks
   WHERE parent_id IS NULL
+    AND workspace_id = ?
   ORDER BY create_time ASC, id ASC
   LIMIT 1
 `
@@ -81,8 +82,11 @@ export class BlockStorage {
     return rows.map(parseBlockRow)
   }
 
-  async findFirstRootId(): Promise<string | undefined> {
-    const row = await this.db.getOptional<{id: string}>(SELECT_FIRST_ROOT_BLOCK_ID_SQL)
+  async findFirstRootId(workspaceId: string): Promise<string | undefined> {
+    const row = await this.db.getOptional<{id: string}>(
+      SELECT_FIRST_ROOT_BLOCK_ID_SQL,
+      [workspaceId],
+    )
     return row?.id
   }
 

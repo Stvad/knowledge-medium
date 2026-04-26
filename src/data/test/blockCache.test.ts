@@ -4,6 +4,7 @@ import type { BlockData } from '@/types'
 
 const makeSnapshot = (overrides: Partial<BlockData> = {}): BlockData => ({
   id: 'block-1',
+  workspaceId: 'workspace-1',
   content: '',
   properties: {},
   childIds: [],

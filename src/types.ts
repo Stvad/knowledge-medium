@@ -49,6 +49,7 @@ export interface BlockProperties {
 // Each block is stored as a local PowerSync-backed SQLite record
 export interface BlockData {
     id: string;
+    workspaceId: string;
     content: string;
     properties: BlockProperties;
     childIds: string[];  // URLs of child block documents
@@ -59,6 +60,33 @@ export interface BlockData {
     updatedByUserId: string;
     references: {id: string, alias: string}[];  // Required, outgoing references to other blocks
     // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
+}
+
+export type WorkspaceRole = 'owner' | 'editor' | 'viewer'
+
+export interface Workspace {
+  id: string
+  name: string
+  ownerUserId: string
+  createTime: number
+  updateTime: number
+}
+
+export interface WorkspaceMembership {
+  id: string
+  workspaceId: string
+  userId: string
+  role: WorkspaceRole
+  createTime: number
+}
+
+export interface WorkspaceInvitation {
+  id: string
+  workspaceId: string
+  email: string
+  role: Exclude<WorkspaceRole, 'owner'>
+  invitedByUserId: string
+  createTime: number
 }
 
 export interface BlockRendererProps {

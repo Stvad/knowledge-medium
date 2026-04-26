@@ -3,6 +3,7 @@ import type { BlockData, BlockProperties } from '@/types'
 
 export interface BlockRow {
   id: string
+  workspace_id: string
   content: string
   properties_json: string
   child_ids_json: string
@@ -23,6 +24,7 @@ type BlockStorageColumn = {
 
 const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
+  {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
   {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},
   {name: 'properties_json', definition: "properties_json TEXT NOT NULL DEFAULT '{}'"},
   {name: 'child_ids_json', definition: "child_ids_json TEXT NOT NULL DEFAULT '[]'"},
@@ -102,6 +104,7 @@ type BlockSnapshotJsonField = {
 
 const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
+  {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
   {key: 'childIds', sqlExpression: rowRef => `json(${rowRef}.child_ids_json)`},
@@ -135,6 +138,7 @@ export const parseBlockSnapshotJson = (value: string | null | undefined) =>
 
 export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
+  workspaceId: row.workspace_id,
   content: row.content,
   properties: safeJsonParse<BlockProperties>(row.properties_json, {}),
   childIds: safeJsonParse<string[]>(row.child_ids_json, []),
@@ -148,6 +152,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
 
 type BlockRowParams = [
   id: string,
+  workspaceId: string,
   content: string,
   propertiesJson: string,
   childIdsJson: string,
@@ -161,6 +166,7 @@ type BlockRowParams = [
 
 export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.id,
+  blockData.workspaceId,
   blockData.content,
   JSON.stringify(blockData.properties ?? {}),
   JSON.stringify(blockData.childIds ?? []),

@@ -8,17 +8,28 @@ import {
   buildBlockCrudJsonSql,
   buildBlockSnapshotJsonSql,
 } from '@/data/blockSchema'
+import {
+  CREATE_WORKSPACES_TABLE_SQL,
+  CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
+  CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
+  WORKSPACES_RAW_TABLE,
+  WORKSPACE_MEMBERS_RAW_TABLE,
+} from '@/data/workspaceSchema'
 
 const appSchema = new Schema({})
 
 appSchema.withRawTables({
   blocks: BLOCKS_RAW_TABLE,
+  workspaces: WORKSPACES_RAW_TABLE,
+  workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
 
 export const powerSyncDb = new PowerSyncDatabase({
   schema: appSchema,
   database: {
-    dbFilename: 'knowledge-medium-powersync.db',
+    // Filename is versioned so the workspace-id schema break abandons the
+    // old local SQLite cache instead of trying to migrate it in place.
+    dbFilename: 'knowledge-medium-powersync-v2.db',
   },
   flags: {
     enableMultiTabs: false,
@@ -70,8 +81,15 @@ const initializePowerSync = async () => {
   await powerSyncDb.init()
 
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
-
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ID_INDEX_SQL)
+  await powerSyncDb.execute(`
+    CREATE INDEX IF NOT EXISTS idx_blocks_workspace_id
+    ON blocks (workspace_id)
+  `)
+
+  await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
+  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
   await powerSyncDb.execute(`
     CREATE TABLE IF NOT EXISTS block_event_context (
