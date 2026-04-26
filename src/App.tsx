@@ -67,7 +67,26 @@ const resolveWorkspaceId = async (
   useRemoteSync: boolean,
 ): Promise<{id: string, freshlyCreated: boolean}> => {
   if (requestedWorkspaceId) {
-    return {id: requestedWorkspaceId, freshlyCreated: false}
+    // Trust the URL hash only if PowerSync has actually replicated this
+    // workspace into our local DB. RLS gates replication to workspaces
+    // the user has access to, so a missing local row means either
+    // (a) we don't have access (deleted, removed, never invited), or
+    // (b) sync is still catching up. Wait briefly to disambiguate; if
+    // it's still missing, fall through to the default flow rather than
+    // adopting an inaccessible workspace (which previously crashed the
+    // app at the "no blocks yet" throw below).
+    let ws = await getLocalWorkspace(repo, requestedWorkspaceId)
+    if (!ws && useRemoteSync) {
+      await waitForInitialRemoteSync(repo, 12000)
+      ws = await getLocalWorkspace(repo, requestedWorkspaceId)
+    }
+    if (ws) return {id: ws.id, freshlyCreated: false}
+    // Inaccessible URL hash. Don't remember it, don't crash; just let
+    // the default-flow paths below pick a real workspace. The eventual
+    // writeAppHash call will overwrite the bad hash.
+    console.warn(
+      `Workspace ${requestedWorkspaceId} from URL is not accessible; falling back to default workspace.`,
+    )
   }
 
   const remembered = recallRememberedWorkspace()
