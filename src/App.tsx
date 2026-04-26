@@ -14,6 +14,7 @@ import {
   ensurePersonalWorkspace,
   getLocalWorkspace,
   listLocalWorkspaces,
+  listMyWorkspaceIdsViaRest,
   primeLocalMembership,
   primeLocalWorkspace,
 } from '@/data/workspaces.ts'
@@ -52,34 +53,45 @@ const waitForInitialRemoteSync = async (repo: Repo, timeoutMs: number) => {
   }
 }
 
-// Resolve which workspace to enter, in order of preference:
-//   1. Explicit workspaceId in the URL hash (trusted; server RLS rejects
-//      reads/writes if the user isn't a member).
+// Resolve which workspace to enter.
+//
+// Order of preference:
+//   1. Explicit workspaceId in the URL hash, but only after the server
+//      confirms the current user is a member. This guards against a
+//      shared/copied URL pointing at someone else's workspace, where
+//      the upload queue would otherwise pile up RLS rejections.
 //   2. localStorage-remembered last workspace, if it's locally available.
 //   3. ensure_personal_workspace RPC, which is idempotent — returns the
 //      caller's first workspace or creates one. Also primes local SQLite
 //      so the workspace appears in the switcher before sync replicates.
 //   4. Local fallback for the no-Supabase dev path.
-//
-// Critically: if the URL specified a workspace, NEVER auto-bootstrap a
-// fresh one — that creates a ping-pong with the URL the moment we just
-// wrote to it.
 const resolveWorkspaceId = async (
   repo: Repo,
   requestedWorkspaceId: string | undefined,
   useRemoteSync: boolean,
 ): Promise<string> => {
-  if (requestedWorkspaceId) {
-    return requestedWorkspaceId
-  }
-
-  const remembered = recallRememberedWorkspace()
-  if (remembered) {
-    const ws = await getLocalWorkspace(repo, remembered)
-    if (ws) return ws.id
-  }
-
   if (useRemoteSync) {
+    const accessibleIds = await listMyWorkspaceIdsViaRest()
+
+    if (requestedWorkspaceId && accessibleIds.has(requestedWorkspaceId)) {
+      return requestedWorkspaceId
+    }
+
+    if (requestedWorkspaceId) {
+      // URL pointed at a workspace this user can't access (typical when a
+      // shared link is opened in a session that isn't the original owner's).
+      // Drop the requested id and bootstrap our own.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[workspaces] URL workspace ${requestedWorkspaceId} is not accessible to ${repo.currentUser.id}; bootstrapping personal workspace`,
+      )
+    }
+
+    const remembered = recallRememberedWorkspace()
+    if (remembered && accessibleIds.has(remembered)) {
+      return remembered
+    }
+
     const workspace = await ensurePersonalWorkspace()
     await primeLocalWorkspace(repo, workspace)
     await primeLocalMembership(repo, {
@@ -90,6 +102,17 @@ const resolveWorkspaceId = async (
       createTime: workspace.createTime,
     })
     return workspace.id
+  }
+
+  // No-Supabase dev fallback: trust local-only state.
+  if (requestedWorkspaceId) {
+    return requestedWorkspaceId
+  }
+
+  const remembered = recallRememberedWorkspace()
+  if (remembered) {
+    const ws = await getLocalWorkspace(repo, remembered)
+    if (ws) return ws.id
   }
 
   const locals = await listLocalWorkspaces(repo)
