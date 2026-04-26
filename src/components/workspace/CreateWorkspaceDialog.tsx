@@ -12,7 +12,34 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { createWorkspace, primeLocalMembership, primeLocalWorkspace } from '@/data/workspaces'
 import { useRepo } from '@/context/repo'
+import { aliasProp, fromList } from '@/data/properties'
 import type { Workspace } from '@/types'
+
+// Roam-style daily-page date: "April 26th, 2026". Used as the seed
+// block's content AND as one of its aliases, so the user can re-find
+// today's page via [[April 26th, 2026]] autocomplete.
+const ordinalSuffix = (day: number): string => {
+  if (day >= 11 && day <= 13) return 'th'
+  switch (day % 10) {
+    case 1: return 'st'
+    case 2: return 'nd'
+    case 3: return 'rd'
+    default: return 'th'
+  }
+}
+
+const formatRoamDate = (date: Date): string => {
+  const month = date.toLocaleString('en-US', {month: 'long'})
+  const day = date.getDate()
+  return `${month} ${day}${ordinalSuffix(day)}, ${date.getFullYear()}`
+}
+
+const formatIsoDate = (date: Date): string => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
 
 interface Props {
   open: boolean
@@ -51,13 +78,21 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
         role: 'owner',
         createTime: workspace.createTime,
       })
-      // Seed an empty root block for the new workspace. Without this, the
-      // bootstrap on the next reload would find the workspace locally but
-      // no blocks (and no way to know "this is brand new" vs "blocks are
-      // syncing"), so it would poll for 12s and then throw. Creating the
-      // root block here makes the workspace immediately usable and the
-      // bootstrap path identical to navigating to any other workspace.
-      repo.create({workspaceId: workspace.id})
+      // Seed a Roam/Logseq-style daily-page root block: today's date as
+      // both the content and an alias, so the user can immediately start
+      // typing AND re-find this page via [[April 26th, 2026]] later.
+      // The seed is also load-bearing for bootstrap: without a block,
+      // the next reload would find the workspace locally but no blocks
+      // (with no way to tell "brand new" from "blocks are syncing"), poll
+      // for 12s, and then throw.
+      const today = new Date()
+      const dateLabel = formatRoamDate(today)
+      const dateIso = formatIsoDate(today)
+      repo.create({
+        workspaceId: workspace.id,
+        content: dateLabel,
+        properties: fromList(aliasProp([dateLabel, dateIso])),
+      })
       await repo.flush()
       onCreated(workspace)
       reset()
