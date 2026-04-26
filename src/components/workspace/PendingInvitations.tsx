@@ -68,8 +68,11 @@ export function PendingInvitations() {
         <ul className="max-h-80 overflow-y-auto">
           {invitations.map((inv) => (
             <li key={inv.id} className="px-2 py-2 text-sm space-y-2">
-              <div className="text-xs text-muted-foreground">
-                Workspace <span className="font-mono">{inv.workspaceId.slice(0, 8)}</span> · role <span className="font-medium">{inv.role}</span>
+              <div className="space-y-0.5">
+                <div className="font-medium truncate">{inv.workspaceName ?? inv.workspaceId}</div>
+                <div className="text-xs text-muted-foreground">
+                  Joining as <span className="font-medium">{inv.role}</span>
+                </div>
               </div>
               <div className="flex gap-2">
                 <Button

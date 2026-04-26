@@ -18,6 +18,8 @@ begin;
 
 drop publication if exists powersync;
 
+drop function if exists public.list_my_pending_invitations() cascade;
+drop function if exists public.list_workspace_members_with_emails(text) cascade;
 drop function if exists public.decline_invitation(text) cascade;
 drop function if exists public.accept_invitation(text) cascade;
 drop function if exists public.invite_member_by_email(text, text, text) cascade;
@@ -540,6 +542,82 @@ begin
 end $$;
 
 grant execute on function public.decline_invitation(text) to authenticated;
+
+
+-- Read-only listing RPCs. SECURITY DEFINER so we can join through auth.users
+-- and workspaces without granting direct table access.
+
+-- Returns workspace members enriched with their email from auth.users. The
+-- caller must already be a member of the workspace.
+create or replace function public.list_workspace_members_with_emails(p_workspace_id text)
+returns table (
+  id text,
+  workspace_id text,
+  user_id text,
+  role text,
+  email text,
+  create_time bigint
+)
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select
+    m.id,
+    m.workspace_id,
+    m.user_id,
+    m.role,
+    coalesce(u.email, '')::text as email,
+    m.create_time
+  from public.workspace_members m
+  left join auth.users u on u.id::text = m.user_id
+  where m.workspace_id = p_workspace_id
+    and public.is_workspace_member(p_workspace_id, auth.uid()::text)
+  order by m.create_time asc, m.id asc;
+$$;
+
+grant execute on function public.list_workspace_members_with_emails(text) to authenticated;
+
+
+-- Returns pending invitations addressed to the caller's email, with the
+-- inviting workspace's name pre-joined so the recipient sees a friendly
+-- label instead of a UUID. Filters server-side on auth.email() so an
+-- inviter (who can read their own workspace's invitations via the
+-- workspace_invitations_read_by_owner policy) does NOT see their own
+-- outgoing invites in their personal inbox.
+create or replace function public.list_my_pending_invitations()
+returns table (
+  id text,
+  workspace_id text,
+  workspace_name text,
+  email text,
+  role text,
+  invited_by_user_id text,
+  create_time bigint
+)
+language sql
+security definer
+stable
+set search_path = public
+as $$
+  select
+    i.id,
+    i.workspace_id,
+    w.name as workspace_name,
+    i.email,
+    i.role,
+    i.invited_by_user_id,
+    i.create_time
+  from public.workspace_invitations i
+  join public.workspaces w on w.id = i.workspace_id
+  where auth.email() is not null
+    and lower(i.email) = lower(auth.email())
+  order by i.create_time desc, i.id asc;
+$$;
+
+grant execute on function public.list_my_pending_invitations() to authenticated;
+
 
 -- ============================================================================
 -- 7. PowerSync publication

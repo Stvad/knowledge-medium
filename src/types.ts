@@ -83,10 +83,15 @@ export interface WorkspaceMembership {
 export interface WorkspaceInvitation {
   id: string
   workspaceId: string
+  workspaceName?: string  // populated by list_my_pending_invitations RPC
   email: string
   role: Exclude<WorkspaceRole, 'owner'>
   invitedByUserId: string
   createTime: number
+}
+
+export interface WorkspaceMemberWithEmail extends WorkspaceMembership {
+  email: string
 }
 
 export interface BlockRendererProps {

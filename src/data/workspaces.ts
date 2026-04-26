@@ -3,6 +3,7 @@ import type {
   Workspace,
   WorkspaceInvitation,
   WorkspaceMembership,
+  WorkspaceMemberWithEmail,
   WorkspaceRole,
 } from '@/types'
 import type { Repo } from '@/data/repo'
@@ -62,6 +63,7 @@ const parseRpcWorkspaceMember = (row: RpcWorkspaceMemberRow): WorkspaceMembershi
 type RpcWorkspaceInvitationRow = {
   id: string
   workspace_id: string
+  workspace_name?: string
   email: string
   role: string
   invited_by_user_id: string
@@ -71,9 +73,30 @@ type RpcWorkspaceInvitationRow = {
 const parseRpcWorkspaceInvitation = (row: RpcWorkspaceInvitationRow): WorkspaceInvitation => ({
   id: row.id,
   workspaceId: row.workspace_id,
+  workspaceName: row.workspace_name,
   email: row.email,
   role: row.role as Exclude<WorkspaceRole, 'owner'>,
   invitedByUserId: row.invited_by_user_id,
+  createTime: toNumber(row.create_time),
+})
+
+type RpcWorkspaceMemberWithEmailRow = {
+  id: string
+  workspace_id: string
+  user_id: string
+  role: string
+  email: string
+  create_time: number | string
+}
+
+const parseRpcWorkspaceMemberWithEmail = (
+  row: RpcWorkspaceMemberWithEmailRow,
+): WorkspaceMemberWithEmail => ({
+  id: row.id,
+  workspaceId: row.workspace_id,
+  userId: row.user_id,
+  role: row.role as WorkspaceRole,
+  email: row.email,
   createTime: toNumber(row.create_time),
 })
 
@@ -175,16 +198,29 @@ export const declineInvitation = async (invitationId: string): Promise<void> => 
 }
 
 // ---------------------------------------------------------------------------
-// Pending-invitation reads (RLS keys these on auth.email()).
+// Pending-invitation + member-with-email reads (server-joined, server-filtered).
 // ---------------------------------------------------------------------------
 
 export const listMyPendingInvitations = async (): Promise<WorkspaceInvitation[]> => {
   const client = assertSupabase()
-  const {data, error} = await client
-    .from('workspace_invitations')
-    .select('*')
+  // The RPC filters server-side by auth.email() AND joins workspace.name, so
+  // (a) inviters don't see their outgoing invites in their personal inbox
+  // (the RLS owner-read policy would otherwise leak them), and (b) the
+  // notification UI can render a friendly workspace name.
+  const {data, error} = await client.rpc('list_my_pending_invitations')
   if (error) throw error
   return (data as RpcWorkspaceInvitationRow[]).map(parseRpcWorkspaceInvitation)
+}
+
+export const listWorkspaceMembersWithEmails = async (
+  workspaceId: string,
+): Promise<WorkspaceMemberWithEmail[]> => {
+  const client = assertSupabase()
+  const {data, error} = await client.rpc('list_workspace_members_with_emails', {
+    p_workspace_id: workspaceId,
+  })
+  if (error) throw error
+  return (data as RpcWorkspaceMemberWithEmailRow[]).map(parseRpcWorkspaceMemberWithEmail)
 }
 
 // ---------------------------------------------------------------------------

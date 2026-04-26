@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -10,14 +10,14 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo'
-import { useWorkspaceMembers } from '@/hooks/useWorkspaces'
 import {
   deleteWorkspace,
   inviteMemberByEmail,
+  listWorkspaceMembersWithEmails,
   removeWorkspaceMember,
   renameWorkspace,
 } from '@/data/workspaces'
-import type { Workspace } from '@/types'
+import type { Workspace, WorkspaceMemberWithEmail } from '@/types'
 
 interface Props {
   workspace: Workspace
@@ -105,11 +105,21 @@ function RenameSection({workspace, disabled}: {workspace: Workspace, disabled: b
 
 function MembersSection({workspace, canManage}: {workspace: Workspace, canManage: boolean}) {
   const repo = useRepo()
-  const {members} = useWorkspaceMembers(workspace.id)
+  const [members, setMembers] = useState<WorkspaceMemberWithEmail[]>([])
   const [email, setEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
+
+  const refreshMembers = useCallback(async () => {
+    try {
+      setMembers(await listWorkspaceMembersWithEmails(workspace.id))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load members')
+    }
+  }, [workspace.id])
+
+  useEffect(() => { void refreshMembers() }, [refreshMembers])
 
   const invite = async (event: FormEvent) => {
     event.preventDefault()
@@ -131,6 +141,7 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
     setError(null); setInfo(null)
     try {
       await removeWorkspaceMember(workspace.id, userId)
+      await refreshMembers()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Remove failed')
     }
@@ -145,7 +156,7 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
         )}
         {members.map((m) => (
           <li key={m.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-            <span className="font-mono text-xs text-muted-foreground truncate flex-1">{m.userId}</span>
+            <span className="truncate flex-1">{m.email || <span className="font-mono text-xs text-muted-foreground">{m.userId}</span>}</span>
             <span className="text-xs uppercase tracking-wide rounded bg-muted px-2 py-0.5">{m.role}</span>
             {canManage && m.role !== 'owner' && m.userId !== repo.currentUser.id && (
               <button
