@@ -52,35 +52,37 @@ const waitForInitialRemoteSync = async (repo: Repo, timeoutMs: number) => {
   }
 }
 
-// Resolve which workspace to enter, in order of preference:
-//   1. Explicit workspaceId in the URL hash (trusted; server RLS rejects
-//      reads/writes if the user isn't a member).
-//   2. localStorage-remembered last workspace, if it's locally available.
-//   3. ensure_personal_workspace RPC, which is idempotent — returns the
-//      caller's first workspace or creates one. Also primes local SQLite
-//      so the workspace appears in the switcher before sync replicates.
-//   4. Local fallback for the no-Supabase dev path.
+// Resolve which workspace to enter.
 //
-// Critically: if the URL specified a workspace, NEVER auto-bootstrap a
-// fresh one — that creates a ping-pong with the URL the moment we just
-// wrote to it.
+// Returns a `freshlyCreated` flag so getInitialBlock can decide whether
+// it's safe to seed the starter tree. Seeding is only correct when this
+// run actually CREATED the workspace via ensure_personal_workspace; for
+// any path where the workspace already existed (URL nav, remembered, RPC
+// returned an existing row), the workspace's blocks are coming via
+// PowerSync sync and we must NOT pre-empt them with a seed (which would
+// create duplicate roots that then collide on the server).
 const resolveWorkspaceId = async (
   repo: Repo,
   requestedWorkspaceId: string | undefined,
   useRemoteSync: boolean,
-): Promise<string> => {
+): Promise<{id: string, freshlyCreated: boolean}> => {
   if (requestedWorkspaceId) {
-    return requestedWorkspaceId
+    return {id: requestedWorkspaceId, freshlyCreated: false}
   }
 
   const remembered = recallRememberedWorkspace()
   if (remembered) {
     const ws = await getLocalWorkspace(repo, remembered)
-    if (ws) return ws.id
+    if (ws) return {id: ws.id, freshlyCreated: false}
   }
 
   if (useRemoteSync) {
+    const calledAt = Date.now()
     const workspace = await ensurePersonalWorkspace()
+    // The RPC is idempotent. A returned create_time at or after our
+    // pre-call timestamp means the row was inserted by *this* call —
+    // i.e. a fresh first-ever workspace for this user.
+    const freshlyCreated = workspace.createTime >= calledAt
     await primeLocalWorkspace(repo, workspace)
     await primeLocalMembership(repo, {
       id: `bootstrap-${workspace.id}`,
@@ -89,11 +91,11 @@ const resolveWorkspaceId = async (
       role: 'owner',
       createTime: workspace.createTime,
     })
-    return workspace.id
+    return {id: workspace.id, freshlyCreated}
   }
 
   const locals = await listLocalWorkspaces(repo)
-  if (locals.length > 0) return locals[0].id
+  if (locals.length > 0) return {id: locals[0].id, freshlyCreated: false}
 
   throw new Error('No workspace available and remote sync is disabled')
 }
@@ -105,7 +107,11 @@ const getInitialBlock = memoize(
     requestedBlockId: string | undefined,
     useRemoteSync: boolean,
   ): Promise<{workspaceId: string, block: Block}> => {
-    const workspaceId = await resolveWorkspaceId(repo, requestedWorkspaceId, useRemoteSync)
+    const {id: workspaceId, freshlyCreated} = await resolveWorkspaceId(
+      repo,
+      requestedWorkspaceId,
+      useRemoteSync,
+    )
     repo.setActiveWorkspaceId(workspaceId)
     rememberWorkspace(workspaceId)
 
@@ -121,7 +127,12 @@ const getInitialBlock = memoize(
     let rootId = await repo.findFirstRootBlockId(workspaceId)
 
     if (!rootId && useRemoteSync) {
-      await waitForInitialRemoteSync(repo, 5000)
+      // For a workspace we did NOT just create, blocks come from sync —
+      // wait longer and never fall back to a local seed. Generating local
+      // blocks for a workspace whose roots are still in transit creates
+      // duplicate roots that fight on the server.
+      const waitMs = freshlyCreated ? 5000 : 12000
+      await waitForInitialRemoteSync(repo, waitMs)
       rootId = await repo.findFirstRootBlockId(workspaceId)
     }
 
@@ -130,7 +141,17 @@ const getInitialBlock = memoize(
       return {workspaceId, block: repo.find(rootId)}
     }
 
-    // Empty workspace: seed the starter tree.
+    if (!freshlyCreated) {
+      // Existing workspace, but no root block has reached us. Don't seed —
+      // surface the situation so the user can reload (sync may simply be
+      // slow) instead of silently creating a duplicate root that will
+      // collide with the real one once it arrives.
+      throw new Error(
+        `Workspace ${workspaceId} has no blocks yet. If you just joined, give sync a moment and reload.`,
+      )
+    }
+
+    // Freshly created workspace with no remote blocks: seed the starter tree.
     const blockMap = await importState(
       {blocks: getExampleBlocks()},
       repo,
