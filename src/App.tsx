@@ -11,6 +11,7 @@ import { importState } from '@/utils/state.ts'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 import {
+  canAccessRemoteWorkspace,
   ensurePersonalWorkspace,
   getLocalWorkspace,
   listLocalWorkspaces,
@@ -37,19 +38,24 @@ const recallRememberedWorkspace = (): string | undefined => {
   }
 }
 
-const waitForInitialRemoteSync = async (repo: Repo, timeoutMs: number) => {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => {
-    controller.abort()
-  }, timeoutMs)
-
-  try {
-    await repo.db.waitForFirstSync(controller.signal)
-  } catch {
-    // best-effort wait; surface no error so the bootstrap path still proceeds
-  } finally {
-    window.clearTimeout(timeoutId)
+// Poll local PowerSync state for the workspace's first root block. We can't
+// use `db.waitForFirstSync` for this — it resolves immediately on subsequent
+// sessions (persistent IndexedDB remembers first sync was already done), so
+// it doesn't actually wait for *this* workspace's blocks to arrive. A small
+// polling loop is crude but actually does what we need: keep checking until
+// the row appears or we give up.
+const pollForLocalRootBlock = async (
+  repo: Repo,
+  workspaceId: string,
+  timeoutMs: number,
+): Promise<string | undefined> => {
+  const deadline = Date.now() + timeoutMs
+  let rootId = await repo.findFirstRootBlockId(workspaceId)
+  while (!rootId && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 300))
+    rootId = await repo.findFirstRootBlockId(workspaceId)
   }
+  return rootId
 }
 
 // Resolve which workspace to enter.
@@ -67,26 +73,37 @@ const resolveWorkspaceId = async (
   useRemoteSync: boolean,
 ): Promise<{id: string, freshlyCreated: boolean}> => {
   if (requestedWorkspaceId) {
-    // Trust the URL hash only if PowerSync has actually replicated this
-    // workspace into our local DB. RLS gates replication to workspaces
-    // the user has access to, so a missing local row means either
-    // (a) we don't have access (deleted, removed, never invited), or
-    // (b) sync is still catching up. Wait briefly to disambiguate; if
-    // it's still missing, fall through to the default flow rather than
-    // adopting an inaccessible workspace (which previously crashed the
-    // app at the "no blocks yet" throw below).
-    let ws = await getLocalWorkspace(repo, requestedWorkspaceId)
-    if (!ws && useRemoteSync) {
-      await waitForInitialRemoteSync(repo, 12000)
-      ws = await getLocalWorkspace(repo, requestedWorkspaceId)
+    // Ask the server (RLS-gated) whether the user can read this workspace.
+    // This is deterministic in O(1 round-trip) — no waiting on sync timing.
+    // We can't use the local PowerSync table as the access oracle: rows
+    // arrive asynchronously and `db.waitForFirstSync` resolves instantly
+    // on subsequent sessions, so a missing row is ambiguous between "no
+    // access" and "sync hasn't replicated yet".
+    const hasAccess = useRemoteSync
+      ? await canAccessRemoteWorkspace(requestedWorkspaceId).catch((err) => {
+          // Treat transport errors as "unknown" rather than "denied" — fall
+          // back to local state, which at worst routes to the default flow.
+          console.warn('canAccessRemoteWorkspace failed; falling back to local check', err)
+          return null
+        })
+      : null
+
+    if (hasAccess === true) {
+      return {id: requestedWorkspaceId, freshlyCreated: false}
     }
-    if (ws) return {id: ws.id, freshlyCreated: false}
-    // Inaccessible URL hash. Don't remember it, don't crash; just let
-    // the default-flow paths below pick a real workspace. The eventual
-    // writeAppHash call will overwrite the bad hash.
-    console.warn(
-      `Workspace ${requestedWorkspaceId} from URL is not accessible; falling back to default workspace.`,
-    )
+    if (hasAccess === null) {
+      // Network error or non-remote-sync mode — fall back to local check.
+      const ws = await getLocalWorkspace(repo, requestedWorkspaceId)
+      if (ws) return {id: ws.id, freshlyCreated: false}
+    }
+    // Inaccessible URL hash (server denied or no local row). Don't remember
+    // it, don't crash; the default-flow paths below pick a real workspace
+    // and the eventual writeAppHash overwrites the bad hash.
+    if (hasAccess === false) {
+      console.warn(
+        `Workspace ${requestedWorkspaceId} from URL is not accessible; falling back to default workspace.`,
+      )
+    }
   }
 
   const remembered = recallRememberedWorkspace()
@@ -145,14 +162,13 @@ const getInitialBlock = memoize(
 
     let rootId = await repo.findFirstRootBlockId(workspaceId)
 
-    if (!rootId && useRemoteSync) {
-      // For a workspace we did NOT just create, blocks come from sync —
-      // wait longer and never fall back to a local seed. Generating local
+    if (!rootId && useRemoteSync && !freshlyCreated) {
+      // Existing workspace, blocks not yet local — they're coming via sync.
+      // Poll until the first root block appears or we give up. We do NOT
+      // fall back to a local seed for non-fresh workspaces: generating local
       // blocks for a workspace whose roots are still in transit creates
       // duplicate roots that fight on the server.
-      const waitMs = freshlyCreated ? 5000 : 12000
-      await waitForInitialRemoteSync(repo, waitMs)
-      rootId = await repo.findFirstRootBlockId(workspaceId)
+      rootId = await pollForLocalRootBlock(repo, workspaceId, 12000)
     }
 
     if (rootId) {

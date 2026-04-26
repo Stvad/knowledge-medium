@@ -9,29 +9,13 @@ export function FallbackComponent({error}: { error: Error }) {
 // reaches here means we couldn't render the App at all — show a friendly UI
 // with recovery actions instead of a blank screen or a raw stack trace.
 //
-// Common triggers:
-//   - URL hash points at a workspace the user no longer has access to (we
-//     try to validate access in resolveWorkspaceId, but a slow first-sync
-//     can still slip through).
-//   - First-sync hasn't replicated any blocks yet for a workspace we just
-//     joined, and the throw in resolveWorkspaceId fires.
-//   - PowerSync / Supabase config errors at startup.
-const LAST_WORKSPACE_STORAGE_KEY = 'ftm.lastWorkspaceId'
-
-const clearStaleStateAndReload = () => {
-  try {
-    window.localStorage.removeItem(LAST_WORKSPACE_STORAGE_KEY)
-  } catch {
-    // ignore
-  }
-  try {
-    history.replaceState(null, '', window.location.pathname + window.location.search)
-  } catch {
-    // ignore
-  }
-  window.location.reload()
-}
-
+// Reload is the cheap retry: if blocks for a recently-joined workspace
+// finally arrived, the next bootstrap succeeds. Sign-out is the escape
+// hatch when state is genuinely poisoned (auth, per-user db corruption).
+// We don't clear localStorage here — `recallRememberedWorkspace` already
+// falls through cleanly when the remembered id no longer resolves locally,
+// and PowerSync removes rows the user lost access to, so localStorage is
+// almost always self-healing.
 export function BootstrapErrorFallback({error}: { error: Error }) {
   const signOut = useSignOut()
 
@@ -50,16 +34,16 @@ export function BootstrapErrorFallback({error}: { error: Error }) {
         <div className="space-y-1">
           <h1 className="text-lg font-semibold">Something went wrong</h1>
           <p className="text-sm text-muted-foreground">
-            We couldn&apos;t open your workspace. This usually means the link is
-            stale or sync is still catching up.
+            We couldn&apos;t open your workspace. Try reloading — if that
+            doesn&apos;t help, sign out to fully reset.
           </p>
         </div>
         <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">
           {error.message}
         </pre>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button onClick={clearStaleStateAndReload} className="flex-1">
-            Reset and reload
+          <Button onClick={() => window.location.reload()} className="flex-1">
+            Reload
           </Button>
           <Button variant="outline" onClick={() => void handleSignOut()} className="flex-1">
             Sign out

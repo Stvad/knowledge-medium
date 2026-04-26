@@ -104,6 +104,28 @@ const parseRpcWorkspaceMemberWithEmail = (
 // RPC wrappers
 // ---------------------------------------------------------------------------
 
+// Server-side, RLS-gated access check. Returns true iff the current user
+// can read this workspace per the policy (i.e. has a workspace_members row
+// or owns it). We use this at bootstrap to decide whether to trust a URL
+// hash workspace id BEFORE relying on PowerSync's local replication —
+// `waitForFirstSync` returns instantly on subsequent visits (first sync
+// already done, persistent IndexedDB), so polling for the local row to
+// "appear" is unreliable as an access check.
+//
+// A null/no-row result is RLS denial OR a deleted/non-existent workspace —
+// both mean "fall through to default flow". A real network error is
+// re-thrown so the caller can surface it instead of silently misrouting.
+export const canAccessRemoteWorkspace = async (workspaceId: string): Promise<boolean> => {
+  const client = assertSupabase()
+  const {data, error} = await client
+    .from('workspaces')
+    .select('id')
+    .eq('id', workspaceId)
+    .maybeSingle()
+  if (error) throw error
+  return !!data
+}
+
 export const ensurePersonalWorkspace = async (): Promise<Workspace> => {
   const client = assertSupabase()
   const {data, error} = await client.rpc('ensure_personal_workspace')
