@@ -30,6 +30,7 @@ export const undoRedoManager = new UndoRedoManager()
 
 let initPromise: Promise<void> | null = null
 let activeConnectionKey: string | null = null
+let connectChain: Promise<void> = Promise.resolve()
 
 export const ensurePowerSyncReady = async (connectionKey?: string) => {
   if (!initPromise) {
@@ -50,12 +51,19 @@ export const ensurePowerSyncReady = async (connectionKey?: string) => {
     return
   }
 
-  if (activeConnectionKey) {
-    await powerSyncDb.disconnect()
-  }
-
-  await powerSyncDb.connect(createPowerSyncConnector())
+  const previousKey = activeConnectionKey
   activeConnectionKey = connectionKey
+
+  connectChain = connectChain
+    .then(async () => {
+      if (previousKey) {
+        await powerSyncDb.disconnect()
+      }
+      await powerSyncDb.connect(createPowerSyncConnector())
+    })
+    .catch((error) => {
+      console.error('PowerSync background connect failed:', error)
+    })
 }
 
 const initializePowerSync = async () => {
