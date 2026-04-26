@@ -4,13 +4,12 @@
 
 This repo now expects:
 - Supabase hosted Postgres for the source database
-- Supabase Auth for app sessions
+- Supabase Auth for app sessions (email OTP, with anonymous as a fallback)
 - PowerSync Cloud for syncing into local SQLite
 
-The committed config is optimized for the lowest-friction dev setup:
-- anonymous Supabase auth is enabled
-- the PowerSync stream auto-subscribes the full `public.blocks` table
-- the remote database is seeded with a starter block tree by the Supabase migration
+Sign-in flow:
+- Primary: enter your email, Supabase emails a 6-digit code, type it back in the app
+- Fallback: "Continue without an account" button performs an anonymous sign-in (per-device session, can't invite or be invited until you sign in with email)
 
 ### One-Time Setup
 
