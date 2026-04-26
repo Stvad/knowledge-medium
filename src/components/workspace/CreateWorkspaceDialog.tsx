@@ -51,6 +51,14 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
         role: 'owner',
         createTime: workspace.createTime,
       })
+      // Seed an empty root block for the new workspace. Without this, the
+      // bootstrap on the next reload would find the workspace locally but
+      // no blocks (and no way to know "this is brand new" vs "blocks are
+      // syncing"), so it would poll for 12s and then throw. Creating the
+      // root block here makes the workspace immediately usable and the
+      // bootstrap path identical to navigating to any other workspace.
+      repo.create({workspaceId: workspace.id})
+      await repo.flush()
       onCreated(workspace)
       reset()
       onOpenChange(false)
