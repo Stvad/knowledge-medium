@@ -2,13 +2,14 @@ import { createContext, ReactNode, use, useContext } from 'react'
 import { PowerSyncContext } from '@powersync/react'
 import { Repo } from '@/data/repo'
 import { useUser } from '@/components/Login'
-import { ensurePowerSyncReady, powerSyncDb, undoRedoManager } from '@/data/repoInstance'
+import { ensurePowerSyncReady, getPowerSyncDb, undoRedoManager } from '@/data/repoInstance'
 import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 
 const initRepo = memoize(async (user: User) => {
   await ensurePowerSyncReady(user.id)
-  return new Repo(powerSyncDb, undoRedoManager, user)
+  const db = getPowerSyncDb(user.id)
+  return new Repo(db, undoRedoManager, user)
 }, (user) => user.id)
 
 const RepoContext = createContext<Repo | undefined>(undefined)

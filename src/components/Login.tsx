@@ -134,23 +134,11 @@ function SupabaseLogin({children}: { children: ReactNode }) {
         // eslint-disable-next-line no-console
         console.error('Sign-out failed', err)
       }
-      // The local PowerSync cache holds blocks scoped to the previous user;
-      // wipe it so the next sign-in doesn't leak rows visually until sync
-      // re-evaluates membership.
-      try {
-        const dbs = (indexedDB as IDBFactory & {databases?: () => Promise<{name?: string}[]>}).databases
-        if (typeof dbs === 'function') {
-          const list = await dbs.call(indexedDB)
-          for (const entry of list) {
-            if (entry.name && entry.name.includes('powersync')) {
-              indexedDB.deleteDatabase(entry.name)
-            }
-          }
-        }
-      } catch {
-        // best-effort
-      }
-      // Force a full reload so React state, the Repo, and PowerSync all reset.
+      // We DON'T wipe the local PowerSync database. Per-user databases
+      // (see src/data/repoInstance.ts) mean this user's local SQLite is
+      // already isolated from any other user's; signing back in as the
+      // same user reopens it and unsynced edits resume uploading. A
+      // different user signs into a fresh database.
       window.location.reload()
     }
     return (

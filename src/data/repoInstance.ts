@@ -16,20 +16,49 @@ import {
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 
-const appSchema = new Schema({})
+// Each Supabase user gets their own IndexedDB-backed SQLite database. The
+// database itself is the per-user isolation boundary: there's no shared
+// CRUD queue, no shared cache, no chance for one session's pending uploads
+// to be retried under another session's JWT (which is what would happen if
+// we kept a single global db across user changes — RLS would reject every
+// upload from the wrong user forever).
+//
+// Sign-out is therefore inert with respect to local data: it just clears
+// the Supabase session. A later sign-in as the same user reopens the same
+// database and unsynced edits resume uploading. A sign-in as a different
+// user opens a fresh database; the previous user's data stays put on
+// disk until they sign back in.
 
+const appSchema = new Schema({})
 appSchema.withRawTables({
   blocks: BLOCKS_RAW_TABLE,
   workspaces: WORKSPACES_RAW_TABLE,
   workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
 })
 
-export const powerSyncDb = new PowerSyncDatabase({
+// wa-sqlite's VFS caps pathnames at 64 chars (mxPathname in
+// node_modules/@journeyapps/wa-sqlite/src/VFS.js). SQLite derives WAL/journal/
+// shm paths from the dbFilename with suffixes up to ~10 chars, so the base
+// has to stay well under 64 or sqlite3_open_v2 fails with no useful error
+// message ("Filename too long"). 7 (prefix) + 40 (user) + 3 (suffix) = 50.
+const MAX_USER_SEGMENT = 40
+
+const dbFilenameForUser = (userId: string) => {
+  const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
+  return `kmp-v2-${sanitized}.db`
+}
+
+const dbsByUser = new Map<string, PowerSyncDatabase>()
+const initPromises = new Map<string, Promise<void>>()
+let activeUserId: string | null = null
+let connectChain: Promise<void> = Promise.resolve()
+
+export const undoRedoManager = new UndoRedoManager()
+
+const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
   database: {
-    // Filename is versioned so the workspace-id schema break abandons the
-    // old local SQLite cache instead of trying to migrate it in place.
-    dbFilename: 'knowledge-medium-powersync-v2.db',
+    dbFilename: dbFilenameForUser(userId),
   },
   flags: {
     enableMultiTabs: false,
@@ -37,47 +66,54 @@ export const powerSyncDb = new PowerSyncDatabase({
   },
 })
 
-export const undoRedoManager = new UndoRedoManager()
+export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
+  const existing = dbsByUser.get(userId)
+  if (existing) return existing
+  const db = buildPowerSyncDb(userId)
+  dbsByUser.set(userId, db)
+  return db
+}
 
-let initPromise: Promise<void> | null = null
-let activeConnectionKey: string | null = null
-let connectChain: Promise<void> = Promise.resolve()
+export const ensurePowerSyncReady = async (userId: string) => {
+  const db = getPowerSyncDb(userId)
 
-export const ensurePowerSyncReady = async (connectionKey?: string) => {
+  let initPromise = initPromises.get(userId)
   if (!initPromise) {
-    initPromise = initializePowerSync()
+    initPromise = initializePowerSyncDb(db)
+    initPromises.set(userId, initPromise)
   }
-
   await initPromise
 
   if (!hasRemoteSyncConfig) {
     return
   }
 
-  if (!connectionKey) {
-    throw new Error('A connection key is required when remote sync is configured')
-  }
-
-  if (activeConnectionKey === connectionKey) {
+  if (activeUserId === userId) {
     return
   }
 
-  const previousKey = activeConnectionKey
-  activeConnectionKey = connectionKey
+  const previousUserId = activeUserId
+  activeUserId = userId
 
+  // Run disconnect+connect serially so we don't race two connect attempts.
+  // Don't await the chain here — connect can take a while and we want render
+  // to proceed against the local cache.
   connectChain = connectChain
     .then(async () => {
-      if (previousKey) {
-        await powerSyncDb.disconnect()
+      if (previousUserId && previousUserId !== userId) {
+        const previousDb = dbsByUser.get(previousUserId)
+        if (previousDb) {
+          await previousDb.disconnect()
+        }
       }
-      await powerSyncDb.connect(createPowerSyncConnector())
+      await db.connect(createPowerSyncConnector())
     })
     .catch((error) => {
-      console.error('PowerSync background connect failed:', error)
+      console.error(`PowerSync background connect failed for ${userId}:`, error)
     })
 }
 
-const initializePowerSync = async () => {
+const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.init()
 
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
