@@ -1,19 +1,67 @@
 config:
   edition: 3
 
+# Sync streams scoped to the requesting user. PowerSync re-evaluates the set
+# whenever workspace_members changes.
+#
+# IMPORTANT: do not alias the primary table in the FROM clause. PowerSync uses
+# the FROM-clause name as the row_type that maps back to the client's raw
+# table name. `FROM public.blocks b` would surface row_type='b' and the
+# client would never hydrate its `blocks` table.
+#
+# workspace_invitations is intentionally NOT synced. Invitations are queried
+# on demand via Supabase REST + the workspace_invitations RLS policy keyed
+# on auth.email(); putting the email claim into a sync rule would require
+# threading the JWT through PowerSync's parameter system, and invitations
+# are low-frequency events so polling on login is fine.
+
 streams:
+  workspaces:
+    auto_subscribe: true
+    query: |
+      SELECT
+        workspaces.id,
+        workspaces.name,
+        workspaces.owner_user_id,
+        workspaces.create_time,
+        workspaces.update_time
+      FROM public.workspaces
+      JOIN public.workspace_members
+        ON workspace_members.workspace_id = workspaces.id
+       AND workspace_members.user_id = auth.user_id()
+
+  workspace_members:
+    auto_subscribe: true
+    query: |
+      SELECT
+        workspace_members.id,
+        workspace_members.workspace_id,
+        workspace_members.user_id,
+        workspace_members.role,
+        workspace_members.create_time
+      FROM public.workspace_members
+      WHERE workspace_members.workspace_id IN (
+        SELECT workspace_id
+        FROM public.workspace_members
+        WHERE user_id = auth.user_id()
+      )
+
   blocks:
     auto_subscribe: true
     query: |
       SELECT
-        id,
-        content,
-        properties_json,
-        child_ids_json,
-        parent_id,
-        create_time,
-        update_time,
-        created_by_user_id,
-        updated_by_user_id,
-        references_json
+        blocks.id,
+        blocks.workspace_id,
+        blocks.content,
+        blocks.properties_json,
+        blocks.child_ids_json,
+        blocks.parent_id,
+        blocks.create_time,
+        blocks.update_time,
+        blocks.created_by_user_id,
+        blocks.updated_by_user_id,
+        blocks.references_json
       FROM public.blocks
+      JOIN public.workspace_members
+        ON workspace_members.workspace_id = blocks.workspace_id
+       AND workspace_members.user_id = auth.user_id()
