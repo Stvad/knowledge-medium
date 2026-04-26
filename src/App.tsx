@@ -73,37 +73,36 @@ const resolveWorkspaceId = async (
   useRemoteSync: boolean,
 ): Promise<{id: string, freshlyCreated: boolean}> => {
   if (requestedWorkspaceId) {
-    // Ask the server (RLS-gated) whether the user can read this workspace.
-    // This is deterministic in O(1 round-trip) — no waiting on sync timing.
-    // We can't use the local PowerSync table as the access oracle: rows
-    // arrive asynchronously and `db.waitForFirstSync` resolves instantly
-    // on subsequent sessions, so a missing row is ambiguous between "no
-    // access" and "sync hasn't replicated yet".
-    const hasAccess = useRemoteSync
-      ? await canAccessRemoteWorkspace(requestedWorkspaceId).catch((err) => {
-          // Treat transport errors as "unknown" rather than "denied" — fall
-          // back to local state, which at worst routes to the default flow.
-          console.warn('canAccessRemoteWorkspace failed; falling back to local check', err)
-          return null
-        })
-      : null
+    // Fast path: if PowerSync has already replicated this workspace into
+    // our local DB, RLS allowed it — we have access, trust the URL.
+    const localWs = await getLocalWorkspace(repo, requestedWorkspaceId)
+    if (localWs) return {id: localWs.id, freshlyCreated: false}
 
-    if (hasAccess === true) {
-      return {id: requestedWorkspaceId, freshlyCreated: false}
-    }
-    if (hasAccess === null) {
-      // Network error or non-remote-sync mode — fall back to local check.
-      const ws = await getLocalWorkspace(repo, requestedWorkspaceId)
-      if (ws) return {id: ws.id, freshlyCreated: false}
-    }
-    // Inaccessible URL hash (server denied or no local row). Don't remember
-    // it, don't crash; the default-flow paths below pick a real workspace
-    // and the eventual writeAppHash overwrites the bad hash.
-    if (hasAccess === false) {
+    // Slow path: not local. This could be either "we don't have access"
+    // or "we have access but sync hasn't replicated yet". Ask the server
+    // (RLS-gated) to disambiguate. We can't poll local sqlite for this:
+    // `db.waitForFirstSync` resolves instantly on subsequent sessions
+    // (persistent IndexedDB), and a missing row could legitimately mean
+    // either case.
+    if (useRemoteSync) {
+      const hasAccess = await canAccessRemoteWorkspace(requestedWorkspaceId).catch((err) => {
+        // Treat transport errors as "unknown" rather than "denied" — fall
+        // through to default flow rather than misclassifying offline mode
+        // as a permission denial.
+        console.warn('canAccessRemoteWorkspace failed; falling back to default flow', err)
+        return false
+      })
+      if (hasAccess) {
+        // Server confirms access; getInitialBlock will poll for the blocks
+        // to land via sync.
+        return {id: requestedWorkspaceId, freshlyCreated: false}
+      }
       console.warn(
         `Workspace ${requestedWorkspaceId} from URL is not accessible; falling back to default workspace.`,
       )
     }
+    // No access (or no remote sync) — fall through to default flow. The
+    // eventual writeAppHash will overwrite the bad hash.
   }
 
   const remembered = recallRememberedWorkspace()
