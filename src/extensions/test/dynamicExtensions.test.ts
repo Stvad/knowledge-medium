@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions'
 import {
-  __resetCompileCacheForTest,
   __setCompileImplForTest,
+  createCompileCache,
+  type CompileCache,
   type ExtensionModule,
 } from '@/extensions/compileExtensionModule'
 import {
@@ -59,8 +60,10 @@ const stubCompileByBlockId = (
   })
 }
 
+let cache: CompileCache
+
 beforeEach(() => {
-  __resetCompileCacheForTest()
+  cache = createCompileCache()
 })
 
 afterEach(() => {
@@ -78,6 +81,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -105,6 +109,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -132,6 +137,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -161,6 +167,7 @@ describe('dynamicExtensionsExtension — happy paths', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
         errorReporter,
       })
@@ -190,6 +197,7 @@ describe('dynamicExtensionsExtension — provenance', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -223,6 +231,7 @@ describe('dynamicExtensionsExtension — system:disabled', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -249,6 +258,7 @@ describe('dynamicExtensionsExtension — system:disabled', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
       })
       const runtime = await resolveFacetRuntime(ext)
@@ -268,6 +278,7 @@ describe('dynamicExtensionsExtension — safeMode', () => {
     const ext = dynamicExtensionsExtension({
       repo,
       workspaceId: 'ws-1',
+        cache,
       safeMode: true,
     })
     const runtime = await resolveFacetRuntime(ext)
@@ -294,6 +305,7 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
         errorReporter,
       })
@@ -322,6 +334,7 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
       const ext = dynamicExtensionsExtension({
         repo: makeRepo(blocks),
         workspaceId: 'ws-1',
+        cache,
         safeMode: false,
         errorReporter,
       })
@@ -347,6 +360,7 @@ describe('dynamicExtensionsExtension — workspace scoping', () => {
     const ext = dynamicExtensionsExtension({
       repo,
       workspaceId: 'ws-target',
+      cache,
       safeMode: false,
     })
     await resolveFacetRuntime(ext)

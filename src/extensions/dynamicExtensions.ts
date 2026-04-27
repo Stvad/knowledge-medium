@@ -1,4 +1,7 @@
-import { compileExtensionModule } from '@/extensions/compileExtensionModule.ts'
+import {
+  compileExtensionModule,
+  type CompileCache,
+} from '@/extensions/compileExtensionModule.ts'
 import {
   AppExtension,
   FacetContribution,
@@ -16,6 +19,9 @@ export interface DynamicExtensionsOptions {
   workspaceId: string
   safeMode: boolean
   errorReporter?: ExtensionLoadErrorReporter
+  // Optional override for tests. Production uses the module-wide
+  // singleton in compileExtensionModule.ts.
+  cache?: CompileCache
 }
 
 /**
@@ -45,7 +51,7 @@ export interface DynamicExtensionsOptions {
 export const dynamicExtensionsExtension = (
   options: DynamicExtensionsOptions,
 ): AppExtension => async () => {
-  const {repo, workspaceId, safeMode, errorReporter} = options
+  const {repo, workspaceId, safeMode, errorReporter, cache} = options
 
   if (safeMode) {
     console.log('Safe mode enabled — skipping dynamic extension blocks')
@@ -66,7 +72,7 @@ export const dynamicExtensionsExtension = (
     if (block.properties[extensionDisabledProp.name]?.value === true) continue
 
     try {
-      const {module} = await compileExtensionModule(block.content, block.id)
+      const {module} = await compileExtensionModule(block.content, block.id, cache)
       const exported = module.default as AppExtension
       const validated = validateAndPrefix(exported, block.id)
       if (validated !== null) {

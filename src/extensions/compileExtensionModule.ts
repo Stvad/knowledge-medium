@@ -11,26 +11,36 @@ export interface CompileResult {
   contentHash: string
 }
 
-// L1: contentHash -> in-flight or resolved compile.
-//
-// Same content compiled from any block returns the same module instance,
-// which is what we want — extensions are pure values keyed by source. The
-// in-flight promise also dedupes concurrent compiles of the same content.
-//
-// Note: L1 is currently unbounded. For the workspace sizes we target this
-// is fine (a workspace with 50 extension blocks each edited 10 times is
-// 500 small entries). LRU eviction is a follow-up.
-const compileByHash = new Map<string, Promise<ExtensionModule>>()
+/**
+ * A compile cache. The app uses a single shared instance (lives for
+ * the lifetime of the page); tests construct their own instances to
+ * avoid cross-test pollution from the module-level singleton.
+ */
+export interface CompileCache {
+  // L1: contentHash -> in-flight or resolved compile.
+  // Same content from any block returns the same module instance.
+  // Also dedupes concurrent compiles of the same content.
+  byHash: Map<string, Promise<ExtensionModule>>
 
-// L2: blockId -> { contentHash, modulePromise }.
-//
-// Lets unchanged blocks return the *same* module reference across
-// multiple resolutions — critical for renderer modules so React doesn't
-// unmount/remount on every refreshAppRuntime.
-const moduleByBlock = new Map<
-  string,
-  {contentHash: string, modulePromise: Promise<ExtensionModule>}
->()
+  // L2: blockId -> { contentHash, modulePromise }.
+  // Lets unchanged blocks return the same module reference across
+  // multiple resolutions — critical for renderer modules so React
+  // doesn't unmount/remount on every refreshAppRuntime.
+  byBlock: Map<
+    string,
+    {contentHash: string, modulePromise: Promise<ExtensionModule>}
+  >
+}
+
+export const createCompileCache = (): CompileCache => ({
+  byHash: new Map(),
+  byBlock: new Map(),
+})
+
+// Process-wide singleton used by the loader in production. Bounded only
+// by the number of distinct block content versions that have ever been
+// compiled this session — eviction is a follow-up.
+const defaultCache = createCompileCache()
 
 // Underlying compile is injectable so tests can drive cache behavior
 // without depending on jsdom's blob-URL dynamic-import support.
@@ -47,8 +57,8 @@ export function __setCompileImplForTest(impl: CompileImpl): () => void {
 }
 
 export function __resetCompileCacheForTest(): void {
-  compileByHash.clear()
-  moduleByBlock.clear()
+  defaultCache.byHash.clear()
+  defaultCache.byBlock.clear()
 }
 
 const hexEncoder = (bytes: Uint8Array) =>
@@ -87,16 +97,20 @@ async function defaultCompileViaBabelBlob(content: string): Promise<ExtensionMod
  * and by blockId (L2) so unchanged blocks return identical module
  * references across runtime resolutions.
  *
+ * Pass a `cache` instance to scope caching (tests use this for
+ * isolation). Omit to use the process-wide singleton.
+ *
  * Throws if compilation fails — caller is expected to catch and report.
  */
 export async function compileExtensionModule(
   content: string,
   blockId: string,
+  cache: CompileCache = defaultCache,
 ): Promise<CompileResult> {
   const contentHash = await hashContent(content)
 
   // L2 hit: same block + same content → reuse the module reference.
-  const cachedForBlock = moduleByBlock.get(blockId)
+  const cachedForBlock = cache.byBlock.get(blockId)
   if (cachedForBlock?.contentHash === contentHash) {
     const module = await cachedForBlock.modulePromise
     return {module, contentHash}
@@ -106,27 +120,26 @@ export async function compileExtensionModule(
   // for a different block). Two blocks with the same source share the
   // same module instance — extensions are values, identity follows
   // source.
-  let modulePromise = compileByHash.get(contentHash)
+  let modulePromise = cache.byHash.get(contentHash)
   if (!modulePromise) {
     modulePromise = compileImpl(content)
-    compileByHash.set(contentHash, modulePromise)
+    cache.byHash.set(contentHash, modulePromise)
     // Don't poison the cache forever on a transient failure: drop the
     // rejected promise from BOTH cache layers so the next call retries.
-    // L2 cleanup needs blockId from this scope; do both here.
     modulePromise.catch(() => {
-      if (compileByHash.get(contentHash) === modulePromise) {
-        compileByHash.delete(contentHash)
+      if (cache.byHash.get(contentHash) === modulePromise) {
+        cache.byHash.delete(contentHash)
       }
-      const l2 = moduleByBlock.get(blockId)
+      const l2 = cache.byBlock.get(blockId)
       if (l2?.modulePromise === modulePromise) {
-        moduleByBlock.delete(blockId)
+        cache.byBlock.delete(blockId)
       }
     })
   }
 
   // Update L2 to point at this contentHash. Replaces any prior entry
   // for the block (whose content has changed).
-  moduleByBlock.set(blockId, {contentHash, modulePromise})
+  cache.byBlock.set(blockId, {contentHash, modulePromise})
 
   const module = await modulePromise
   return {module, contentHash}
@@ -137,6 +150,9 @@ export async function compileExtensionModule(
  * modulePromise is eligible for GC. (L1 entry under the old hash may
  * survive — that's acceptable since other blocks could share it.)
  */
-export function evictBlockFromCache(blockId: string): void {
-  moduleByBlock.delete(blockId)
+export function evictBlockFromCache(
+  blockId: string,
+  cache: CompileCache = defaultCache,
+): void {
+  cache.byBlock.delete(blockId)
 }

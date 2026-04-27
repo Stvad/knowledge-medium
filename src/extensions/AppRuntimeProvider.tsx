@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
-import { dynamicRenderersExtension } from '@/extensions/dynamicRenderers.ts'
+import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
 import { AppExtension, FacetResolveContext, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
@@ -14,6 +14,10 @@ import { videoPlayerPlugin } from '@/plugins/video-player'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
+import {
+  ExtensionLoadErrorsProvider,
+  ExtensionLoadErrorStore,
+} from '@/extensions/extensionLoadErrors.tsx'
 
 export function AppRuntimeProvider({
   children,
@@ -26,6 +30,14 @@ export function AppRuntimeProvider({
 }) {
   const repo = useRepo()
   const [generation, setGeneration] = useState('initial-load')
+
+  // One store per provider instance — survives runtime re-resolutions
+  // (so the renderer can show errors from the most recent load) but
+  // re-creates if the workspace's rootBlock changes.
+  const errorStore = useMemo(
+    () => new ExtensionLoadErrorStore(),
+    [rootBlock.id],
+  )
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
     repo,
@@ -64,12 +76,31 @@ export function AppRuntimeProvider({
 
   useEffect(() => {
     let cancelled = false
+    // Wipe stale errors from the previous resolution; the loader will
+    // re-report any that still apply.
+    errorStore.reset()
+
+    const workspaceId =
+      rootBlock.dataSync()?.workspaceId ?? repo.activeWorkspaceId
+    if (!workspaceId) {
+      // Should not happen — getInitialBlock sets activeWorkspaceId
+      // before any render. If it does, there's nothing to load.
+      return
+    }
 
     void (async () => {
       try {
         const nextRuntime = await resolveFacetRuntime([
           baseExtensions,
-          dynamicRenderersExtension({rootBlock, safeMode}),
+          dynamicExtensionsExtension({
+            repo,
+            workspaceId,
+            safeMode,
+            errorReporter: (blockId, error) => {
+              if (cancelled) return
+              errorStore.reportError(blockId, error)
+            },
+          }),
         ], runtimeContext)
 
         if (!cancelled) {
@@ -83,7 +114,7 @@ export function AppRuntimeProvider({
     return () => {
       cancelled = true
     }
-  }, [baseExtensions, rootBlock, runtimeContext, safeMode])
+  }, [baseExtensions, errorStore, repo, rootBlock, runtimeContext, safeMode])
 
   useAgentRuntimeBridge({
     repo,
@@ -94,10 +125,12 @@ export function AppRuntimeProvider({
 
   return (
     <AppRuntimeContextProvider value={runtime}>
-      <ActiveContextsProvider>
-        <HotkeyReconciler/>
-        {children}
-      </ActiveContextsProvider>
+      <ExtensionLoadErrorsProvider store={errorStore}>
+        <ActiveContextsProvider>
+          <HotkeyReconciler/>
+          {children}
+        </ActiveContextsProvider>
+      </ExtensionLoadErrorsProvider>
     </AppRuntimeContextProvider>
   )
 }

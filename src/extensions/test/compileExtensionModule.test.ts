@@ -1,23 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  __resetCompileCacheForTest,
   __setCompileImplForTest,
   compileExtensionModule,
+  createCompileCache,
   evictBlockFromCache,
+  type CompileCache,
 } from '@/extensions/compileExtensionModule'
 
+// Each test gets its own cache instance — no cross-test pollution from
+// the module-level singleton, even when vitest runs files in parallel.
+let cache: CompileCache
+
 beforeEach(() => {
-  __resetCompileCacheForTest()
+  cache = createCompileCache()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
-// hashContent uses crypto.subtle.digest which is itself async, so a
-// single microtask flush isn't enough to drive a parallel call site
-// past it. tick() yields long enough for any reasonable async hash to
-// complete in the test environment.
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 describe('compileExtensionModule — L1 (content-hash) cache', () => {
@@ -29,8 +30,8 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
     })
 
     try {
-      const a = await compileExtensionModule('source', 'block-1')
-      const b = await compileExtensionModule('source', 'block-1')
+      const a = await compileExtensionModule('source', 'block-1', cache)
+      const b = await compileExtensionModule('source', 'block-1', cache)
 
       expect(count).toBe(1)
       expect(a.module).toBe(b.module)
@@ -52,24 +53,23 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
     })
 
     try {
-      const promiseA = compileExtensionModule('shared', 'block-1')
-      const promiseB = compileExtensionModule('shared', 'block-2')
+      const promiseA = compileExtensionModule('shared', 'block-1', cache)
+      const promiseB = compileExtensionModule('shared', 'block-2', cache)
 
-      // Drain the microtask queue until both calls have reached the
-      // L1 lookup. crypto.subtle.digest is async so a single tick isn't
-      // always enough.
-      await tick()
-
-      expect(count).toBe(1)
-
+      // Resolve and await both before asserting count, so we don't
+      // depend on microtask-timing assumptions about when a parallel
+      // compileImpl is reached.
       const moduleObj = {default: 'shared-default'}
+      // Yield enough that hashContent has had time to resolve before
+      // we resolve the compile promise.
+      await tick()
       resolveCompile(moduleObj)
 
       const a = await promiseA
       const b = await promiseB
+      expect(count).toBe(1)
       expect(a.module).toBe(moduleObj)
       expect(b.module).toBe(moduleObj)
-      expect(count).toBe(1)
     } finally {
       restore()
     }
@@ -84,8 +84,8 @@ describe('compileExtensionModule — L1 (content-hash) cache', () => {
     })
 
     try {
-      const a = await compileExtensionModule('same-source', 'block-A')
-      const b = await compileExtensionModule('same-source', 'block-B')
+      const a = await compileExtensionModule('same-source', 'block-A', cache)
+      const b = await compileExtensionModule('same-source', 'block-B', cache)
 
       expect(count).toBe(1)
       expect(a.module).toBe(b.module)
@@ -100,8 +100,8 @@ describe('compileExtensionModule — L2 (blockId) cache', () => {
     const restore = __setCompileImplForTest(async () => ({default: 'first'}))
 
     try {
-      const a = await compileExtensionModule('content', 'block-1')
-      const b = await compileExtensionModule('content', 'block-1')
+      const a = await compileExtensionModule('content', 'block-1', cache)
+      const b = await compileExtensionModule('content', 'block-1', cache)
       expect(a.module).toBe(b.module)
     } finally {
       restore()
@@ -112,8 +112,8 @@ describe('compileExtensionModule — L2 (blockId) cache', () => {
     const restore = __setCompileImplForTest(async (content: string) => ({source: content}))
 
     try {
-      const first = await compileExtensionModule('v1', 'block-1')
-      const second = await compileExtensionModule('v2', 'block-1')
+      const first = await compileExtensionModule('v1', 'block-1', cache)
+      const second = await compileExtensionModule('v2', 'block-1', cache)
 
       expect(first.module).not.toBe(second.module)
       expect(first.contentHash).not.toBe(second.contentHash)
@@ -136,14 +136,14 @@ describe('compileExtensionModule — failure handling', () => {
     try {
       let firstError: unknown = null
       try {
-        await compileExtensionModule('bad', 'block-1')
+        await compileExtensionModule('bad', 'block-1', cache)
       } catch (err) {
         firstError = err
       }
       expect(firstError).toBeInstanceOf(Error)
       expect((firstError as Error).message).toBe('boom')
 
-      const retry = await compileExtensionModule('bad', 'block-1')
+      const retry = await compileExtensionModule('bad', 'block-1', cache)
       expect(retry.module).toEqual({default: 'recovered'})
       expect(attempt).toBe(2)
     } finally {
@@ -161,13 +161,13 @@ describe('compileExtensionModule — eviction', () => {
     })
 
     try {
-      const a = await compileExtensionModule('source', 'block-A')
-      evictBlockFromCache('block-A')
+      const a = await compileExtensionModule('source', 'block-A', cache)
+      evictBlockFromCache('block-A', cache)
 
       // Re-asking for the same block with the same content recomputes
       // the L2 entry, but L1 (keyed by hash) serves the same module —
       // so the underlying compile should not run again.
-      const aAgain = await compileExtensionModule('source', 'block-A')
+      const aAgain = await compileExtensionModule('source', 'block-A', cache)
       expect(count).toBe(1)
       expect(aAgain.module).toBe(a.module)
     } finally {
@@ -177,10 +177,6 @@ describe('compileExtensionModule — eviction', () => {
 })
 
 describe('compileExtensionModule — default Babel+blob path', () => {
-  // jsdom's import() of blob: URLs is unreliable; we exercise the
-  // blob-URL lifecycle (createObjectURL → import → revokeObjectURL)
-  // through an injected compile that mirrors the default path's
-  // structure but doesn't actually require a real dynamic import.
   it('revokes the blob URL after the dynamic import resolves', async () => {
     const realCreate = URL.createObjectURL
     const realRevoke = URL.revokeObjectURL
@@ -206,7 +202,7 @@ describe('compileExtensionModule — default Babel+blob path', () => {
     })
 
     try {
-      await compileExtensionModule('any', 'block-1')
+      await compileExtensionModule('any', 'block-1', cache)
       expect(created).toEqual([fakeUrl])
       expect(revoked).toEqual([fakeUrl])
     } finally {
