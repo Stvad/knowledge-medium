@@ -164,6 +164,14 @@ export const enterBlockEditMode = async (
 ) => {
   const {block, uiStateBlock} = context
 
+  // Read-only workspace: clicks/keyboard shouldn't drop into edit mode, but
+  // we still want the click target to register as focused so navigation
+  // affordances (highlight, keyboard nav anchor) work.
+  if (uiStateBlock.repo.isReadOnly) {
+    setFocusedBlockId(uiStateBlock, block.id)
+    return
+  }
+
   await resetBlockSelection(uiStateBlock)
   setFocusedBlockId(uiStateBlock, block.id)
   setIsEditing(uiStateBlock, true)

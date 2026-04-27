@@ -64,6 +64,11 @@ export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
 }
 
 export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) => {
+  // No-op in read-only workspaces — see setIsEditing for the source-level
+  // gate. Bailing here also avoids the side-effects (selection reset, focus
+  // request) that would otherwise fire for nothing.
+  if (uiStateBlock.repo.isReadOnly) return
+
   resetBlockSelection(uiStateBlock)
 
   setIsEditing(uiStateBlock, true)

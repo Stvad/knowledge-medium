@@ -91,6 +91,10 @@ export const sourceBlockIdProp = stringProperty('sourceBlockId')
 
 
 export const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
+  // In a read-only workspace, refuse the transition into edit mode at the
+  // source. Wrappers like enterBlockEditMode / enterEditMode also short-
+  // circuit, but gating here keeps any future caller honest.
+  if (editing && uiStateBlock.repo.isReadOnly) return
   uiStateBlock.setProperty({...isEditingProp, value: editing})
 }
 export const setFocusedBlockId = (uiStateBlock: Block, id: string) => {

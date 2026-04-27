@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager } from '@/data/undoRedo'
-import { uiChangeScope } from '@/data/properties'
+import { isEditingProp, setIsEditing, uiChangeScope } from '@/data/properties'
 import type { PowerSyncDatabase } from '@powersync/web'
 import type { BlockData, User } from '@/types'
 
@@ -127,6 +127,31 @@ describe('Repo read-only mode', () => {
       expect.anything(),
       expect.objectContaining({skipUndo: true}),
     )
+  })
+
+  it('refuses setIsEditing(true) when read-only', () => {
+    const repo = new Repo(makeStubDb([]), new UndoRedoManager(), makeUser())
+    repo.hydrateBlockData(seedSnapshot())
+    repo.setReadOnly(true)
+
+    const uiStateBlock = repo.find('block-1')
+    setIsEditing(uiStateBlock, true)
+
+    // The set was a no-op — the property never landed on the cached snapshot.
+    expect(repo.getCachedBlockData('block-1')?.properties[isEditingProp.name]).toBeUndefined()
+  })
+
+  it('allows setIsEditing(false) even when read-only', () => {
+    const repo = new Repo(makeStubDb([]), new UndoRedoManager(), makeUser())
+    repo.hydrateBlockData(seedSnapshot({
+      properties: {[isEditingProp.name]: {...isEditingProp, value: true}},
+    }))
+    repo.setReadOnly(true)
+
+    const uiStateBlock = repo.find('block-1')
+    setIsEditing(uiStateBlock, false)
+
+    expect(repo.getCachedBlockData('block-1')?.properties[isEditingProp.name]?.value).toBe(false)
   })
 
   it('uses local source when not read-only', async () => {

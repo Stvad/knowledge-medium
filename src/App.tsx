@@ -11,6 +11,7 @@ import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 import {
   canAccessRemoteWorkspace,
   ensurePersonalWorkspace,
+  getLocalMemberRole,
   getLocalWorkspace,
   listLocalWorkspaces,
   primeLocalWorkspaceAndMember,
@@ -174,6 +175,17 @@ const getInitialBlock = memoize(
       useRemoteSync,
     )
     repo.setActiveWorkspaceId(workspaceId)
+
+    // Derive read-only from the local membership row. workspace_members rides
+    // the same sync stream as workspaces, so for any workspace we just
+    // resolved as accessible, the role row is normally already local. Null
+    // (membership not yet synced) defaults to read-only=false; if the role
+    // is actually 'viewer', the very next sync tick flips us — and any
+    // edits attempted in the meantime would be RLS-rejected server-side
+    // anyway.
+    const role = await getLocalMemberRole(repo, workspaceId, repo.currentUser.id)
+    repo.setReadOnly(role === 'viewer')
+
     rememberWorkspace(workspaceId)
 
     if (requestedBlockId && await repo.exists(requestedBlockId)) {

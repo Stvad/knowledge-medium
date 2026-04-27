@@ -383,6 +383,22 @@ export const listLocalMembershipsForUser = async (
   return rows.map(parseWorkspaceMemberRow)
 }
 
+// Returns null when the membership hasn't synced locally yet (rare — happens
+// only when the workspace itself just became accessible via URL hop and
+// PowerSync hasn't replicated the membership row yet). Caller decides the
+// default behavior in that case.
+export const getLocalMemberRole = async (
+  repo: Repo,
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceRole | null> => {
+  const row = await repo.db.getOptional<{role: string}>(
+    `SELECT role FROM workspace_members WHERE workspace_id = ? AND user_id = ? LIMIT 1`,
+    [workspaceId, userId],
+  )
+  return row ? (row.role as WorkspaceRole) : null
+}
+
 // ---------------------------------------------------------------------------
 // Optimistic local seeding (after RPC returns, before sync replicates).
 //
