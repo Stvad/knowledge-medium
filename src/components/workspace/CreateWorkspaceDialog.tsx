@@ -14,6 +14,7 @@ import { createWorkspace, primeLocalMembership, primeLocalWorkspace } from '@/da
 import { useRepo } from '@/context/repo'
 import { aliasProp, fromList } from '@/data/properties'
 import type { Workspace } from '@/types'
+import type { Repo } from '@/data/repo'
 
 // Roam-style daily-page date: "April 26th, 2026". Used as the seed
 // block's content AND as one of its aliases, so the user can re-find
@@ -39,6 +40,18 @@ const formatIsoDate = (date: Date): string => {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+const seedDailyPageContent = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
+  const today = new Date()
+  const dateLabel = formatRoamDate(today)
+  const dateIso = formatIsoDate(today)
+  repo.create({
+    id: rootBlockId,
+    workspaceId,
+    content: dateLabel,
+    properties: fromList(aliasProp([dateLabel, dateIso])),
+  })
 }
 
 interface Props {
@@ -67,34 +80,25 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
     setSubmitting(true)
 
     try {
-      const workspace = await createWorkspace(trimmed)
+      const result = await createWorkspace(trimmed)
       // Optimistically write to local SQLite so the new workspace shows up
-      // in the switcher before PowerSync replicates it.
-      await primeLocalWorkspace(repo, workspace)
-      await primeLocalMembership(repo, {
-        id: `bootstrap-${workspace.id}`,
-        workspaceId: workspace.id,
-        userId: repo.currentUser.id,
-        role: 'owner',
-        createTime: workspace.createTime,
-      })
-      // Seed a Roam/Logseq-style daily-page root block: today's date as
-      // both the content and an alias, so the user can immediately start
-      // typing AND re-find this page via [[April 26th, 2026]] later.
-      // The seed is also load-bearing for bootstrap: without a block,
-      // the next reload would find the workspace locally but no blocks
-      // (with no way to tell "brand new" from "blocks are syncing"), poll
-      // for 12s, and then throw.
-      const today = new Date()
-      const dateLabel = formatRoamDate(today)
-      const dateIso = formatIsoDate(today)
-      repo.create({
-        workspaceId: workspace.id,
-        content: dateLabel,
-        properties: fromList(aliasProp([dateLabel, dateIso])),
-      })
+      // in the switcher before PowerSync replicates it. We use the
+      // canonical member row returned by the RPC (real id) so we don't
+      // collide with the row PowerSync will later sync down.
+      await primeLocalWorkspace(repo, result.workspace)
+      await primeLocalMembership(repo, result.member)
+
+      // The RPC has already created an empty seed root block server-side
+      // (so reload-driven bootstrap can never find a block-less workspace
+      // and soft-lock). Customize it into a Roam/Logseq-style daily page:
+      // today's date as both the content and an alias, so the user can
+      // immediately start typing AND re-find this page via
+      // [[April 26th, 2026]] later. repo.create with the known id is an
+      // upsert — it overwrites whatever's there whether or not sync has
+      // already delivered the empty seed.
+      seedDailyPageContent(repo, result.rootBlockId, result.workspace.id)
       await repo.flush()
-      onCreated(workspace)
+      onCreated(result.workspace)
       reset()
       onOpenChange(false)
     } catch (err) {

@@ -126,20 +126,68 @@ export const canAccessRemoteWorkspace = async (workspaceId: string): Promise<boo
   return !!data
 }
 
-export const ensurePersonalWorkspace = async (): Promise<Workspace> => {
+// Both create_workspace and ensure_personal_workspace now return a jsonb
+// envelope so we can deliver the canonical member row + root block id
+// alongside the workspace in a single round-trip. The client uses these
+// to (a) prime local state with the real member id (avoiding duplicate
+// rows once PowerSync replicates the server-generated row) and (b) skip
+// the client-side seed-block dance that used to cause soft-locks if it
+// failed mid-flight — the workspace always has at least one block when
+// the RPC returns successfully.
+type WorkspaceCreationPayload = {
+  workspace: RpcWorkspaceRow
+  member: RpcWorkspaceMemberRow
+  root_block_id: string | null
+}
+
+type EnsurePersonalWorkspacePayload = WorkspaceCreationPayload & {
+  inserted: boolean
+}
+
+export interface CreatedWorkspace {
+  workspace: Workspace
+  member: WorkspaceMembership
+  rootBlockId: string
+}
+
+export interface EnsuredPersonalWorkspace {
+  workspace: Workspace
+  member: WorkspaceMembership
+  rootBlockId: string | null
+  inserted: boolean
+}
+
+const parseCreatedWorkspace = (payload: WorkspaceCreationPayload): CreatedWorkspace => {
+  if (!payload.root_block_id) {
+    throw new Error('create_workspace returned no root_block_id')
+  }
+  return {
+    workspace: parseRpcWorkspace(payload.workspace),
+    member: parseRpcWorkspaceMember(payload.member),
+    rootBlockId: payload.root_block_id,
+  }
+}
+
+export const ensurePersonalWorkspace = async (): Promise<EnsuredPersonalWorkspace> => {
   const client = assertSupabase()
   const {data, error} = await client.rpc('ensure_personal_workspace')
   if (error) throw error
-  if (!data) throw new Error('ensure_personal_workspace returned no row')
-  return parseRpcWorkspace(data as RpcWorkspaceRow)
+  if (!data) throw new Error('ensure_personal_workspace returned no payload')
+  const payload = data as EnsurePersonalWorkspacePayload
+  return {
+    workspace: parseRpcWorkspace(payload.workspace),
+    member: parseRpcWorkspaceMember(payload.member),
+    rootBlockId: payload.root_block_id,
+    inserted: payload.inserted,
+  }
 }
 
-export const createWorkspace = async (name: string): Promise<Workspace> => {
+export const createWorkspace = async (name: string): Promise<CreatedWorkspace> => {
   const client = assertSupabase()
   const {data, error} = await client.rpc('create_workspace', {p_name: name})
   if (error) throw error
-  if (!data) throw new Error('create_workspace returned no row')
-  return parseRpcWorkspace(data as RpcWorkspaceRow)
+  if (!data) throw new Error('create_workspace returned no payload')
+  return parseCreatedWorkspace(data as WorkspaceCreationPayload)
 }
 
 export const deleteWorkspace = async (workspaceId: string): Promise<void> => {
