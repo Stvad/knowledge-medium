@@ -46,11 +46,20 @@ const seedDailyPageContent = (repo: Repo, rootBlockId: string, workspaceId: stri
   const today = new Date()
   const dateLabel = formatRoamDate(today)
   const dateIso = formatIsoDate(today)
+  // Give the user an empty child bullet to type into. Without it, the
+  // first key they press would edit the root content — i.e. the page
+  // name (the date) — which is rarely what they want.
+  const childBlock = repo.create({
+    workspaceId,
+    parentId: rootBlockId,
+    content: '',
+  })
   repo.create({
     id: rootBlockId,
     workspaceId,
     content: dateLabel,
     properties: fromList(aliasProp([dateLabel, dateIso])),
+    childIds: [childBlock.id],
   })
 }
 
