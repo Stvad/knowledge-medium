@@ -1,5 +1,5 @@
 import { BreadcrumbRenderer } from '@/components/renderer/BreadcrumbRenderer.tsx'
-import { CodeMirrorRendererBlockRenderer } from '@/components/renderer/CodeMirrorRendererBlockRenderer.tsx'
+import { CodeMirrorExtensionBlockRenderer } from '@/components/renderer/CodeMirrorExtensionBlockRenderer.tsx'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer.tsx'
@@ -11,7 +11,7 @@ import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.ts'
 
 export const defaultRendererContributions: RendererContribution[] = [
   {id: 'default', renderer: DefaultBlockRenderer},
-  {id: 'renderer', renderer: CodeMirrorRendererBlockRenderer},
+  {id: 'extension', renderer: CodeMirrorExtensionBlockRenderer},
   {id: 'topLevel', renderer: TopLevelRenderer},
   {id: 'layout', renderer: LayoutRenderer},
   {id: 'panel', renderer: PanelRenderer},
