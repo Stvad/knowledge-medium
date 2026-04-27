@@ -93,8 +93,13 @@ export class Repo {
     }
 
     if (this._isReadOnly && options.scope !== uiChangeScope) {
-      throw new Error(
-        `Cannot create block in read-only workspace (scope: ${options.scope ?? 'default'})`,
+      // Surface as a warning rather than crashing — the line between UI and
+      // content writes isn't always crisp (e.g. typeProp / load-time props
+      // are shared between panel infra and content), so a missing scope on a
+      // non-malicious caller shouldn't take down the app. The write still
+      // gets routed to ephemeral source below, so it never escapes locally.
+      console.warn(
+        `[readonly] create with non-ui scope '${options.scope ?? 'default'}' — routing to ephemeral. Tag the call site with uiChangeScope if it's UI state.`,
       )
     }
 
@@ -247,8 +252,10 @@ export class Repo {
     options: UndoRedoOptions<BlockData> = {},
   ) {
     if (this._isReadOnly && options.scope !== uiChangeScope) {
-      throw new Error(
-        `Cannot change block in read-only workspace (scope: ${options.scope ?? 'default'})`,
+      // See create() — warn but don't throw. The write still goes ephemeral
+      // (via the source flag below + skipUndo) so nothing escapes locally.
+      console.warn(
+        `[readonly] applyBlockChange with non-ui scope '${options.scope ?? 'default'}' — routing to ephemeral. Tag the call site with uiChangeScope if it's UI state.`,
       )
     }
 

@@ -7,13 +7,13 @@ import { Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
-import { topLevelBlockIdProp, typeProp, fromList } from '@/data/properties.ts'
+import { topLevelBlockIdProp, typeProp, fromList, uiChangeScope } from '@/data/properties.ts'
 import { useChildren } from '@/hooks/block.ts'
 
 const mainPanelName = 'main'
 
 const getMainPanelBlock = memoize(
-  (panelsBlock: Block) => panelsBlock.childByContent(mainPanelName, true),
+  (panelsBlock: Block) => panelsBlock.childByContent(mainPanelName, true, {scope: uiChangeScope}),
   (panelsBlock) => `${panelsBlock.repo.instanceId}:${panelsBlock.id}`
 )
 
@@ -33,7 +33,11 @@ export function LayoutRenderer({block}: BlockRendererProps) {
      * though for page URL to stay meaningful,
      * we probably want some sort of story where changing it navigates "main" panel
      */
-    mainPanelBlock.setProperty({...typeProp, value: 'panel'})
+    // typeProp / topLevelBlockIdProp don't carry uiChangeScope by default
+    // (typeProp is shared with content blocks). Override at the call site so
+    // panel-infrastructure writes register as UI state — important for the
+    // read-only-workspace ephemeral path.
+    mainPanelBlock.setProperty({...typeProp, value: 'panel', changeScope: uiChangeScope})
     mainPanelBlock.setProperty({...topLevelBlockIdProp, value: block.id})
       // todo a more ergonomic way to do the init?
   }, [block.id, mainPanelBlock])
@@ -49,11 +53,12 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         data: {
           content: blockToOpenId,
           properties: fromList(
-            {...typeProp, value: 'panel'},
+            {...typeProp, value: 'panel', changeScope: uiChangeScope},
             {...topLevelBlockIdProp, value: blockToOpenId},
           )
         },
         position: afterPanelIdx === -1 ? 'last' : afterPanelIdx + 1,
+        scope: uiChangeScope,
       })
     }
 
