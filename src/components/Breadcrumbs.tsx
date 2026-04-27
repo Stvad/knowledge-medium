@@ -2,8 +2,11 @@ import { Block } from '@/data/block.ts'
 import { use, useMemo } from 'react'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { useRepo } from '@/context/repo.tsx'
+import { buildBlockHash } from '@/utils/routing.ts'
 
 export const Breadcrumbs = ({block}: { block: Block }) => {
+  const repo = useRepo()
   const parents = use(useMemo(() => block.parents(), [block.id]))
 
   if (parents.length === 0) {
@@ -15,7 +18,7 @@ export const Breadcrumbs = ({block}: { block: Block }) => {
       {parents.map((parent) => (
         <div key={parent.id} className="flex items-center min-w-0">
           <a
-            href={`#${parent.id}`}
+            href={buildBlockHash(repo.activeWorkspaceId, parent.id)}
             className="no-underline cursor-pointer truncate max-w-full"
           >
             <div className="inline [&>*]:inline [&>p]:m-0 [&>*]:whitespace-nowrap

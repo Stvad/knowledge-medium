@@ -44,6 +44,7 @@ import { copySelectedBlocksToClipboard } from '@/utils/copy.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
+import { buildBlockHash } from '@/utils/routing.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -188,7 +189,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               const blockMap = await importState(data, repo)
               const block = blockMap.values().next().value
               if (block) {
-                document.location.hash = block.id
+                // Imported blocks default to repo.activeWorkspaceId in
+                // repo.create, so the freshly-imported root lives in the
+                // current workspace. Build the hash with the workspace
+                // prefix so App.tsx can resolve it.
+                document.location.hash = buildBlockHash(repo.activeWorkspaceId, block.id)
               }
             } catch (err) {
               console.error('Failed to import document:', err)

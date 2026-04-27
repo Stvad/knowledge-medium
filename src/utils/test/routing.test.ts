@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildAppHash, parseAppHash } from '@/utils/routing'
+import { buildAppHash, buildBlockHash, parseAppHash } from '@/utils/routing'
 
 describe('parseAppHash', () => {
   it('returns empty when hash is empty/undefined/null', () => {
@@ -45,5 +45,18 @@ describe('buildAppHash', () => {
 
   it('renders workspace-only when blockId is omitted', () => {
     expect(buildAppHash('ws-1')).toBe('#ws-1')
+  })
+})
+
+describe('buildBlockHash', () => {
+  it('includes the workspace prefix when workspaceId is present', () => {
+    expect(buildBlockHash('ws-1', 'block-2')).toBe('#ws-1/block-2')
+  })
+
+  it('falls back to a bare #<blockId> when workspaceId is missing', () => {
+    // The legacy shape — won't resolve cleanly under the workspace-aware
+    // bootstrap, but at least keeps the renderer from crashing.
+    expect(buildBlockHash(null, 'block-2')).toBe('#block-2')
+    expect(buildBlockHash(undefined, 'block-2')).toBe('#block-2')
   })
 })
