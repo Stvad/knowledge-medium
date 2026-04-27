@@ -11,9 +11,11 @@ import { Button } from '@/components/ui/button'
 import { usePendingInvitations } from '@/hooks/usePendingInvitations'
 import { acceptInvitation, declineInvitation } from '@/data/workspaces'
 import { buildAppHash } from '@/utils/routing'
+import { useHash } from 'react-use'
 
 export function PendingInvitations() {
   const {invitations, refresh} = usePendingInvitations()
+  const [, setHash] = useHash()
   const [busyId, setBusyId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -27,10 +29,11 @@ export function PendingInvitations() {
     try {
       await acceptInvitation(id)
       await refresh()
-      // Navigate to the newly-joined workspace; reload re-runs bootstrap so
-      // PowerSync re-syncs the workspace's blocks under the new membership.
-      window.location.hash = buildAppHash(workspaceId)
-      window.location.reload()
+      // Hand off to App.tsx by changing the hash. App subscribes to it via
+      // useHash and will re-resolve through getInitialBlock — which will
+      // poll local sqlite for the workspace's blocks to arrive over
+      // PowerSync once the new membership row replicates.
+      setHash(buildAppHash(workspaceId))
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to accept invitation')
       setBusyId(null)

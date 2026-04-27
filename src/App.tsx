@@ -3,7 +3,7 @@ import { BlockContextProvider } from '@/context/block.tsx'
 import { use } from 'react'
 import { getRootBlock, Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { useLocation, useSearchParam } from 'react-use'
+import { useHash, useSearchParam } from 'react-use'
 import { Repo } from '@/data/repo'
 import { memoize } from 'lodash'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
@@ -17,25 +17,8 @@ import {
   primeLocalWorkspace,
 } from '@/data/workspaces.ts'
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
+import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedTutorialBlocks } from '@/initData.ts'
-
-const LAST_WORKSPACE_STORAGE_KEY = 'ftm.lastWorkspaceId'
-
-const rememberWorkspace = (workspaceId: string) => {
-  try {
-    window.localStorage.setItem(LAST_WORKSPACE_STORAGE_KEY, workspaceId)
-  } catch {
-    // ignore (incognito, quota, etc.)
-  }
-}
-
-const recallRememberedWorkspace = (): string | undefined => {
-  try {
-    return window.localStorage.getItem(LAST_WORKSPACE_STORAGE_KEY) ?? undefined
-  } catch {
-    return undefined
-  }
-}
 
 // Poll local PowerSync state for the workspace's first root block. We can't
 // use `db.waitForFirstSync` for this — it resolves immediately on subsequent
@@ -201,10 +184,16 @@ const getInitialBlock = memoize(
 
 const App = () => {
   const repo = useRepo()
-  const location = useLocation()
+  // useHash subscribes to the browser `hashchange` event. react-use's
+  // useLocation only listens for popstate/pushstate/replacestate, so a
+  // plain `window.location.hash = X` would not re-render this component —
+  // historically the workspace switcher worked around that by hard-reloading
+  // the page on every navigation. With useHash, switching workspaces just
+  // updates the hash and React re-resolves through getInitialBlock.
+  const [hash] = useHash()
   const safeMode = Boolean(useSearchParam('safeMode'))
 
-  const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(location.hash)
+  const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(hash)
   const {block: handle} = use(
     getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, hasRemoteSyncConfig),
   )

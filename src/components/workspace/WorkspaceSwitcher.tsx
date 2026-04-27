@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { ChevronDown, Plus, Settings } from 'lucide-react'
 import {
   DropdownMenu,
@@ -10,42 +10,49 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useWorkspaces } from '@/hooks/useWorkspaces'
 import { useRepo } from '@/context/repo'
-import { useLocation } from 'react-use'
+import { useHash } from 'react-use'
 import { buildAppHash, parseAppHash } from '@/utils/routing'
+import { forgetRememberedWorkspace } from '@/utils/lastWorkspace'
 import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog'
 import { WorkspaceSettingsDialog } from '@/components/workspace/WorkspaceSettingsDialog'
 import type { Workspace } from '@/types'
 
-const navigateToWorkspace = (workspace: Workspace) => {
-  // Switching workspaces is a navigation event. We intentionally reload so the
-  // App.tsx bootstrap re-runs with the new workspace id and resolves its root
-  // block via the same code path as a cold start.
-  window.location.hash = buildAppHash(workspace.id)
-  window.location.reload()
-}
-
 export function WorkspaceSwitcher() {
   const repo = useRepo()
-  const location = useLocation()
+  // useHash listens for `hashchange` (which `useLocation` does not). That's
+  // what makes a hash assignment alone enough to re-render — no page reload
+  // needed when switching workspaces.
+  const [hash, setHash] = useHash()
   const {workspaces} = useWorkspaces()
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
   const activeWorkspaceId = useMemo(() => {
-    const {workspaceId} = parseAppHash(location.hash)
+    const {workspaceId} = parseAppHash(hash)
     return workspaceId ?? repo.activeWorkspaceId ?? null
-  }, [location.hash, repo.activeWorkspaceId])
+  }, [hash, repo.activeWorkspaceId])
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const displayName = activeWorkspace?.name ?? 'Loading…'
 
-  const handleDeleted = () => {
-    // After delete, drop the URL workspace and reload — App.tsx bootstrap will
-    // route to ensure_personal_workspace (which returns the user's next-oldest
-    // workspace, or creates a fresh one).
-    window.location.hash = ''
-    window.location.reload()
-  }
+  const navigateToWorkspace = useCallback((workspace: Workspace) => {
+    if (workspace.id === activeWorkspaceId) return
+    // App.tsx subscribes to the hash via useHash; updating it triggers a
+    // re-resolve of getInitialBlock for the new workspace. The new
+    // workspace's root block id isn't known here (it may not even be local
+    // yet for a just-joined workspace), so we navigate without a block id
+    // and let App.tsx's bootstrap fill it in via writeAppHash once resolved.
+    setHash(buildAppHash(workspace.id))
+  }, [activeWorkspaceId, setHash])
+
+  const handleDeleted = useCallback(() => {
+    // The deleted workspace must NOT come back as the "remembered" default on
+    // the next render — clear it before emptying the hash, so App.tsx's
+    // bootstrap falls through to ensure_personal_workspace and lands on the
+    // user's next-oldest workspace (or creates a fresh one).
+    forgetRememberedWorkspace()
+    setHash('')
+  }, [setHash])
 
   return (
     <>
