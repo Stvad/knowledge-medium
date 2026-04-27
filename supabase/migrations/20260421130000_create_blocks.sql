@@ -236,19 +236,10 @@ grant select on public.workspace_invitations to authenticated;
 -- 6. RPCs
 -- ============================================================================
 
--- Create a workspace, add the caller as sole owner, and seed an empty root
--- block — all in one transaction. The empty root prevents the client
--- bootstrap from soft-locking on "workspace exists but has no blocks": any
--- subsequent reload sees at least one block, even if the client crashed
--- mid-customization. Callers customize the root afterward (set content,
--- add children) via the normal block write path.
---
--- Returns jsonb: { workspace, member, root_block_id }. The canonical member
--- row is returned so the client can prime local state with the real id
--- instead of a synthetic "bootstrap-..." placeholder (which would otherwise
--- coexist with the real row once PowerSync replicates it).
+-- Create a workspace and add the caller as the sole owner. Single round-trip,
+-- atomic on success.
 create or replace function public.create_workspace(p_name text)
-returns jsonb
+returns public.workspaces
 language plpgsql
 security definer
 set search_path = public
@@ -256,10 +247,8 @@ as $$
 declare
   v_user_id text := auth.uid()::text;
   v_workspace public.workspaces;
-  v_member public.workspace_members;
   v_now bigint := (extract(epoch from now()) * 1000)::bigint;
   v_name text := coalesce(nullif(trim(p_name), ''), 'Workspace');
-  v_root_block_id text := gen_random_uuid()::text;
 begin
   if v_user_id is null then
     raise exception 'Not authenticated';
@@ -270,23 +259,9 @@ begin
   returning * into v_workspace;
 
   insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
-  values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now)
-  returning * into v_member;
+  values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now);
 
-  insert into public.blocks (
-    id, workspace_id, content, properties_json, child_ids_json, parent_id,
-    create_time, update_time, created_by_user_id, updated_by_user_id, references_json
-  )
-  values (
-    v_root_block_id, v_workspace.id, '', '{}', '[]', null,
-    v_now, v_now, v_user_id, v_user_id, '[]'
-  );
-
-  return jsonb_build_object(
-    'workspace', to_jsonb(v_workspace),
-    'member', to_jsonb(v_member),
-    'root_block_id', v_root_block_id
-  );
+  return v_workspace;
 end $$;
 
 grant execute on function public.create_workspace(text) to authenticated;
@@ -295,14 +270,8 @@ grant execute on function public.create_workspace(text) to authenticated;
 -- Idempotent first-bootstrap RPC. Returns the user's first workspace
 -- (in create_time order) if any exist, else creates a fresh one.
 -- Replaces the racy client-side "wait for sync, then create" pattern.
---
--- Returns jsonb: { workspace, member, root_block_id, inserted }.
---   inserted=true  → this call created the workspace; root_block_id is the
---                    empty seed block the client may customize.
---   inserted=false → returning an existing workspace; root_block_id is null
---                    (the existing root will arrive via PowerSync sync).
 create or replace function public.ensure_personal_workspace()
-returns jsonb
+returns public.workspaces
 language plpgsql
 security definer
 set search_path = public
@@ -310,10 +279,8 @@ as $$
 declare
   v_user_id text := auth.uid()::text;
   v_workspace public.workspaces;
-  v_member public.workspace_members;
   v_default_name text;
   v_email text;
-  v_create_result jsonb;
 begin
   if v_user_id is null then
     raise exception 'Not authenticated';
@@ -327,17 +294,7 @@ begin
   limit 1;
 
   if found then
-    select m.* into v_member
-    from public.workspace_members m
-    where m.workspace_id = v_workspace.id and m.user_id = v_user_id
-    limit 1;
-
-    return jsonb_build_object(
-      'workspace', to_jsonb(v_workspace),
-      'member', to_jsonb(v_member),
-      'root_block_id', null::text,
-      'inserted', false
-    );
+    return v_workspace;
   end if;
 
   v_email := nullif(trim(coalesce(auth.email(), '')), '');
@@ -347,8 +304,7 @@ begin
     v_default_name := 'Personal';
   end if;
 
-  v_create_result := public.create_workspace(v_default_name);
-  return v_create_result || jsonb_build_object('inserted', true);
+  return public.create_workspace(v_default_name);
 end $$;
 
 grant execute on function public.ensure_personal_workspace() to authenticated;
