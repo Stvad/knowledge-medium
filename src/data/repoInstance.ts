@@ -173,10 +173,22 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     ON block_events (tx_id, seq ASC)
   `)
 
+  // The CRUD-forwarding triggers gate on block_event_context.source. When the
+  // application sets source='local-ephemeral' for a write (read-only workspace
+  // viewers), the row still lands in `blocks` and `block_events` but is *not*
+  // forwarded to powersync_crud. Since the write never enters ps_crud, it
+  // never reaches the server, never enters ps_oplog, and PowerSync's
+  // sync_local query (which iterates only over ps_oplog row ids) cannot see
+  // or clobber it on reconnect / bucket changes / re-sync.
+  //
+  // We DROP+CREATE rather than CREATE IF NOT EXISTS so existing dev databases
+  // pick up the WHEN clause without needing a schema reset.
+  await powerSyncDb.execute('DROP TRIGGER IF EXISTS blocks_insert_to_powersync_crud')
   await powerSyncDb.execute(`
-    CREATE TRIGGER IF NOT EXISTS blocks_insert_to_powersync_crud
+    CREATE TRIGGER blocks_insert_to_powersync_crud
     AFTER INSERT ON blocks
     FOR EACH ROW
+    WHEN COALESCE((SELECT source FROM block_event_context WHERE id = 1), 'sync') != 'local-ephemeral'
     BEGIN
       INSERT INTO powersync_crud (op, id, type, data)
       VALUES (
@@ -188,10 +200,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     END
   `)
 
+  await powerSyncDb.execute('DROP TRIGGER IF EXISTS blocks_update_to_powersync_crud')
   await powerSyncDb.execute(`
-    CREATE TRIGGER IF NOT EXISTS blocks_update_to_powersync_crud
+    CREATE TRIGGER blocks_update_to_powersync_crud
     AFTER UPDATE ON blocks
     FOR EACH ROW
+    WHEN COALESCE((SELECT source FROM block_event_context WHERE id = 1), 'sync') != 'local-ephemeral'
     BEGIN
       SELECT CASE
         WHEN OLD.id != NEW.id
@@ -208,10 +222,12 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     END
   `)
 
+  await powerSyncDb.execute('DROP TRIGGER IF EXISTS blocks_delete_to_powersync_crud')
   await powerSyncDb.execute(`
-    CREATE TRIGGER IF NOT EXISTS blocks_delete_to_powersync_crud
+    CREATE TRIGGER blocks_delete_to_powersync_crud
     AFTER DELETE ON blocks
     FOR EACH ROW
+    WHEN COALESCE((SELECT source FROM block_event_context WHERE id = 1), 'sync') != 'local-ephemeral'
     BEGIN
       INSERT INTO powersync_crud (op, id, type)
       VALUES ('DELETE', OLD.id, 'blocks');

@@ -24,7 +24,12 @@ import type { BlockEventChangeRow } from '@/data/blockQueries'
 
 export interface WriteEventContext {
   actorUserId?: string
-  source: 'local' | 'system'
+  // 'local-ephemeral' suppresses the powersync_crud trigger so the write never
+  // enters the upload queue. Used for writes in read-only workspaces — they
+  // land in SQLite and the block_events log (so reads + reactive tracking work
+  // normally) but never reach ps_oplog, so PowerSync's sync_local can never
+  // see or clobber them. See repoInstance.ts trigger WHEN clauses.
+  source: 'local' | 'system' | 'local-ephemeral'
   txId: string
 }
 

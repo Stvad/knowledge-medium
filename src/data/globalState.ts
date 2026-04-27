@@ -58,6 +58,9 @@ export const useUserProperty = <T extends BlockProperty>(
 /**
  * Memoized for using with \`use\` react function
  */
+// The user/ui-state subtree under [system]/[users]/{userId} is per-viewer UI
+// state. We tag the bootstrap creates with uiChangeScope so they're allowed
+// (and routed to ephemeral storage) when the active workspace is read-only.
 export const getUIStateBlock = memoize(
   async (repo: Repo, rootBlock: Block, user: User, context: BlockContextType): Promise<Block> => {
     const userBlock = await getUserBlock(rootBlock, user)
@@ -66,18 +69,20 @@ export const getUIStateBlock = memoize(
       return repo.find(context.panelId)
     }
 
-    return userBlock.childByContent('ui-state', true)
+    return userBlock.childByContent('ui-state', true, {scope: uiChangeScope})
   }, (repo, rootBlock, user, context) =>
     `${repo.instanceId}:${rootBlock.id}:${user.id}:${context.panelId ?? '__root__'}`)
 
 export const getUserBlock = memoize(
-  async (rootBlock: Block, user: User): Promise<Block> => rootBlock.childByContent(['system', 'users', user.id], true),
+  async (rootBlock: Block, user: User): Promise<Block> =>
+    rootBlock.childByContent(['system', 'users', user.id], true, {scope: uiChangeScope}),
   (rootBlock, user) => `${rootBlock.repo.instanceId}:${rootBlock.id}:${user.id}`)
 
 
 const panelsPathPart = 'panels'
 export const getPanelsBlock = memoize(
-  async (uiStateBlock: Block): Promise<Block> => uiStateBlock.childByContent([panelsPathPart], true),
+  async (uiStateBlock: Block): Promise<Block> =>
+    uiStateBlock.childByContent([panelsPathPart], true, {scope: uiChangeScope}),
   (uiBlock) => `${uiBlock.repo.instanceId}:${uiBlock.id}`)
 
 export function useSelectionState(): [

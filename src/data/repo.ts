@@ -6,6 +6,7 @@ import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
 import { BlockStorage } from '@/data/blockStorage'
 import type { WriteEventContext } from '@/data/blockStorage'
 import { BlockCache } from '@/data/blockCache'
+import { uiChangeScope } from '@/data/properties.ts'
 
 export type { BlockRow } from '@/data/blockSchema'
 export { parseBlockRow } from '@/data/blockSchema'
@@ -20,6 +21,7 @@ export class Repo {
   private readonly blockCache = new Map<string, Block>()
   private lastProcessedBlockEventSeq = 0
   private _activeWorkspaceId: string | null = null
+  private _isReadOnly = false
   readonly instanceId = Repo.nextInstanceId++
 
   constructor(
@@ -44,6 +46,20 @@ export class Repo {
     this._activeWorkspaceId = workspaceId
   }
 
+  get isReadOnly(): boolean {
+    return this._isReadOnly
+  }
+
+  // Toggle when the active workspace's role for the current user is 'viewer'.
+  // While true, only writes scoped to uiChangeScope are accepted; they're
+  // routed to the ephemeral source so the powersync_crud trigger skips them
+  // (see repoInstance.ts) — they live in local SQLite for the session and
+  // disappear on reload because they never enter ps_oplog. Other-scope writes
+  // throw to surface UI gating bugs loudly.
+  setReadOnly(readOnly: boolean): void {
+    this._isReadOnly = readOnly
+  }
+
   find(id: string): Block {
     if (!id) throw new Error('Invalid block id')
 
@@ -66,7 +82,7 @@ export class Repo {
     return this.storage.findFirstRootId(workspaceId)
   }
 
-  create(data: Partial<BlockData>): Block {
+  create(data: Partial<BlockData>, options: {scope?: string} = {}): Block {
     const id = data.id ?? uuidv4()
     const createTime = data.createTime ?? Date.now()
     const workspaceId = data.workspaceId ?? this._activeWorkspaceId
@@ -75,6 +91,13 @@ export class Repo {
         'Cannot create block: provide workspaceId or call repo.setActiveWorkspaceId() first',
       )
     }
+
+    if (this._isReadOnly && options.scope !== uiChangeScope) {
+      throw new Error(
+        `Cannot create block in read-only workspace (scope: ${options.scope ?? 'default'})`,
+      )
+    }
+
     const snapshot: BlockData = {
       id,
       workspaceId,
@@ -91,7 +114,7 @@ export class Repo {
 
     const eventContext: WriteEventContext = {
       actorUserId: snapshot.updatedByUserId,
-      source: 'local',
+      source: this._isReadOnly ? 'local-ephemeral' : 'local',
       txId: this.undoRedoManager.getCurrentTransactionId() ?? uuidv4(),
     }
 
@@ -223,6 +246,12 @@ export class Repo {
     callback: (doc: BlockData) => void,
     options: UndoRedoOptions<BlockData> = {},
   ) {
+    if (this._isReadOnly && options.scope !== uiChangeScope) {
+      throw new Error(
+        `Cannot change block in read-only workspace (scope: ${options.scope ?? 'default'})`,
+      )
+    }
+
     const current = this.cache.requireSnapshot(id)
     const next = structuredClone(current)
 
@@ -245,11 +274,15 @@ export class Repo {
 
     const eventContext: WriteEventContext = {
       actorUserId: next.updatedByUserId,
-      source: 'local',
+      source: this._isReadOnly ? 'local-ephemeral' : 'local',
       txId: this.undoRedoManager.getCurrentTransactionId() ?? uuidv4(),
     }
 
-    this.undoRedoManager.recordChange(id, current, next, options)
+    // Skip undo for ephemeral writes. The undo path would replay through
+    // applySnapshots with source='local', re-entering the upload queue and
+    // defeating the gate.
+    const recordOptions = this._isReadOnly ? {...options, skipUndo: true} : options
+    this.undoRedoManager.recordChange(id, current, next, recordOptions)
     this.cache.markDirty(id)
     this.cache.setSnapshot(next)
     this.storage.enqueueUpsert(next, eventContext)

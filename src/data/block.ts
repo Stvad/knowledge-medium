@@ -231,13 +231,22 @@ export class Block {
     return this.createSibling(data, 0)
   }
 
-  async childByContent(contentPath: string | string[], createIfNotExists: true): Promise<Block>;
-  async childByContent(contentPath: string | string[], createIfNotExists: boolean = false): Promise<Block | null> {
+  async childByContent(contentPath: string | string[], createIfNotExists: true, options?: {scope?: string}): Promise<Block>;
+  async childByContent(contentPath: string | string[], createIfNotExists?: boolean, options?: {scope?: string}): Promise<Block | null>;
+  async childByContent(
+    contentPath: string | string[],
+    createIfNotExists: boolean = false,
+    options: {scope?: string} = {},
+  ): Promise<Block | null> {
     const path = Array.isArray(contentPath) ? contentPath : [contentPath]
-    return this.childByContentPath(path, createIfNotExists)
+    return this.childByContentPath(path, createIfNotExists, options)
   }
 
-  async childByContentPath(path: string[], createIfNotExists: boolean): Promise<Block | null> {
+  async childByContentPath(
+    path: string[],
+    createIfNotExists: boolean,
+    options: {scope?: string} = {},
+  ): Promise<Block | null> {
     if (path.length === 0) return null
 
     const [currentContent, ...remainingPath] = path
@@ -248,16 +257,16 @@ export class Block {
       if (remainingPath.length === 0) {
         return existingChild
       }
-      return existingChild.childByContentPath(remainingPath, createIfNotExists)
+      return existingChild.childByContentPath(remainingPath, createIfNotExists, options)
     }
 
     if (!createIfNotExists) return null
 
-    const newBlock = await this.createChild({data: {content: currentContent}})
+    const newBlock = await this.createChild({data: {content: currentContent}, scope: options.scope})
     if (remainingPath.length === 0) {
       return newBlock
     }
-    return newBlock.childByContentPath(remainingPath, createIfNotExists)
+    return newBlock.childByContentPath(remainingPath, createIfNotExists, options)
   }
 
   async getProperty<T extends BlockProperty>(key: string | T): Promise<T | undefined> {
@@ -288,14 +297,16 @@ export class Block {
   async createChild({
     data = {},
     position = 'last',
+    scope,
   }: {
     data?: Partial<BlockData>,
-    position?: 'first' | 'last' | number
+    position?: 'first' | 'last' | number,
+    scope?: string,
   } = {}) {
     const newBlock = this.repo.create({
       ...data,
       parentId: this.id,
-    })
+    }, {scope})
 
     this.change((doc) => {
       if (position === 'first') {
@@ -305,7 +316,7 @@ export class Block {
       } else {
         doc.childIds.push(newBlock.id)
       }
-    })
+    }, {scope})
 
     return newBlock
   }
