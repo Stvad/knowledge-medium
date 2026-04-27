@@ -23,7 +23,7 @@ import {
   useInEditMode,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
-import { buildBlockHash } from '@/utils/routing.ts'
+import { buildAppHash } from '@/utils/routing.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useHoverDirty } from 'react-use'
@@ -71,13 +71,9 @@ const copyBlockId = (block: Block) => {
   navigator.clipboard.writeText(block.id)
 }
 
-const zoomIn = (block: Block, workspaceId: string | null | undefined) => {
+const zoomIn = (block: Block, workspaceId: string) => {
   if (typeof window !== 'undefined') {
-    // buildBlockHash includes the workspace prefix so App.tsx's bootstrap
-    // resolves the destination correctly. A bare `#<blockId>` (the legacy
-    // pre-workspace shape) gets misparsed as `{workspaceId: blockId}` and
-    // bumps the user to their default workspace.
-    window.location.hash = buildBlockHash(workspaceId, block.id)
+    window.location.hash = buildAppHash(workspaceId, block.id)
   }
 }
 
@@ -89,11 +85,15 @@ const BlockBullet = ({block}: { block: Block }) => {
   const {panelId} = useBlockContext()
   const hasChildren = useHasChildren(block)
 
+  // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
+  // the non-null assertion is the contract — not a defensive fallback.
+  const workspaceId = repo.activeWorkspaceId!
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <a
-          href={buildBlockHash(repo.activeWorkspaceId, block.id)}
+          href={buildAppHash(workspaceId, block.id)}
           className="bullet-link flex items-center justify-center h-6 w-5"
           onClick={(e) => {
             e.stopPropagation()
@@ -126,7 +126,7 @@ const BlockBullet = ({block}: { block: Block }) => {
           </ContextMenuItem>
           <ContextMenuItem
             className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => zoomIn(block, repo.activeWorkspaceId)}
+            onSelect={() => zoomIn(block, workspaceId)}
           >
             Zoom In
           </ContextMenuItem>

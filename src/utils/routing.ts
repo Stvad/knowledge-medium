@@ -35,15 +35,3 @@ export const writeAppHash = (workspaceId: string, blockId?: string): void => {
     window.location.hash = next
   }
 }
-
-// In-app block navigation (zoom-in, breadcrumb, bullet-link). The block lives
-// in some workspace; the hash needs the `<workspaceId>/<blockId>` shape so
-// App.tsx's bootstrap can resolve it. Callers pass `workspaceId` explicitly
-// (almost always `repo.activeWorkspaceId` since cross-workspace embedding
-// isn't a thing yet) — if it's missing we fall back to a bare `#<blockId>`,
-// which will NOT resolve cleanly under the new scheme but is still better
-// than crashing the renderer mid-render.
-export const buildBlockHash = (
-  workspaceId: string | null | undefined,
-  blockId: string,
-): string => (workspaceId ? buildAppHash(workspaceId, blockId) : `#${blockId}`)
