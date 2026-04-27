@@ -13,39 +13,12 @@ import { Label } from '@/components/ui/label'
 import { createWorkspace, primeLocalMembership, primeLocalWorkspace } from '@/data/workspaces'
 import { useRepo } from '@/context/repo'
 import { aliasProp, fromList } from '@/data/properties'
+import { dailyPageAliases } from '@/utils/dailyPage'
 import type { Workspace } from '@/types'
 import type { Repo } from '@/data/repo'
 
-// Roam-style daily-page date: "April 26th, 2026". Used as the seed
-// block's content AND as one of its aliases, so the user can re-find
-// today's page via [[April 26th, 2026]] autocomplete.
-const ordinalSuffix = (day: number): string => {
-  if (day >= 11 && day <= 13) return 'th'
-  switch (day % 10) {
-    case 1: return 'st'
-    case 2: return 'nd'
-    case 3: return 'rd'
-    default: return 'th'
-  }
-}
-
-const formatRoamDate = (date: Date): string => {
-  const month = date.toLocaleString('en-US', {month: 'long'})
-  const day = date.getDate()
-  return `${month} ${day}${ordinalSuffix(day)}, ${date.getFullYear()}`
-}
-
-const formatIsoDate = (date: Date): string => {
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
 const seedDailyPageContent = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
-  const today = new Date()
-  const dateLabel = formatRoamDate(today)
-  const dateIso = formatIsoDate(today)
+  const [dateLabel, dateIso] = dailyPageAliases(new Date())
   // Give the user an empty child bullet to type into. Without it, the
   // first key they press would edit the root content — i.e. the page
   // name (the date) — which is rarely what they want.
