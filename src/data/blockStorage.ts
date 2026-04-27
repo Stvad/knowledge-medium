@@ -155,15 +155,14 @@ export class BlockStorage {
   }
 
   enqueueUpsert(snapshot: BlockData, eventContext: WriteEventContext): void {
-    const next = structuredClone(snapshot)
     this.writeQueue = this.writeQueue
       .then(async () => {
         await this.executeWithEventContext(eventContext, (tx) =>
-          tx.execute(UPSERT_BLOCK_SQL, blockToRowParams(next)),
+          tx.execute(UPSERT_BLOCK_SQL, blockToRowParams(snapshot)),
         )
       })
       .catch((error) => {
-        console.error(`Failed to persist block ${next.id}`, error)
+        console.error(`Failed to persist block ${snapshot.id}`, error)
       })
   }
 

@@ -29,13 +29,14 @@ describe('BlockCache snapshot storage', () => {
       .toThrowError('Block is not loaded yet: missing')
   })
 
-  it('stores a defensive clone so external mutations do not bleed in', () => {
+  it('freezes the stored snapshot so subsequent mutations throw', () => {
     const cache = new BlockCache()
     const original = makeSnapshot({content: 'hello'})
 
     cache.setSnapshot(original)
-    original.content = 'mutated'
 
+    expect(() => { original.content = 'mutated' }).toThrow()
+    expect(() => { original.childIds.push('x') }).toThrow()
     expect(cache.getSnapshot('block-1')?.content).toBe('hello')
   })
 
@@ -64,35 +65,6 @@ describe('BlockCache change detection', () => {
     cache.setSnapshot(makeSnapshot())
     expect(cache.deleteSnapshot('block-1')).toBe(true)
     expect(cache.hasSnapshot('block-1')).toBe(false)
-  })
-})
-
-describe('BlockCache revisions', () => {
-  it('starts at zero for unseen ids', () => {
-    const cache = new BlockCache()
-    expect(cache.getRevision('block-1')).toBe(0)
-  })
-
-  it('increments only when the snapshot actually changes', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(makeSnapshot({content: 'a'}))
-    expect(cache.getRevision('block-1')).toBe(1)
-
-    cache.setSnapshot(makeSnapshot({content: 'a'}))
-    expect(cache.getRevision('block-1')).toBe(1)
-
-    cache.setSnapshot(makeSnapshot({content: 'b'}))
-    expect(cache.getRevision('block-1')).toBe(2)
-  })
-
-  it('increments on delete and survives subsequent sets', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(makeSnapshot({content: 'a'}))
-    cache.deleteSnapshot('block-1')
-    expect(cache.getRevision('block-1')).toBe(2)
-
-    cache.setSnapshot(makeSnapshot({content: 'a'}))
-    expect(cache.getRevision('block-1')).toBe(3)
   })
 })
 

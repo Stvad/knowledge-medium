@@ -214,14 +214,6 @@ export class Repo {
     return this.cache.subscribe(id, listener)
   }
 
-  getBlockRevision(id: string) {
-    return this.cache.getRevision(id)
-  }
-
-  isBlockDirty(id: string) {
-    return this.cache.isDirty(id)
-  }
-
   hydrateBlockData(snapshot: BlockData) {
     this.cache.hydrate(snapshot)
   }
@@ -231,8 +223,8 @@ export class Repo {
     callback: (doc: BlockData) => void,
     options: UndoRedoOptions<BlockData> = {},
   ) {
-    const current = cloneBlockData(this.cache.requireSnapshot(id))
-    const next = cloneBlockData(current)
+    const current = this.cache.requireSnapshot(id)
+    const next = structuredClone(current)
 
     callback(next)
     next.id = id

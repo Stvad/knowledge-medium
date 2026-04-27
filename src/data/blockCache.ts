@@ -1,13 +1,20 @@
 import type { BlockData } from '@/types'
 
-const cloneBlockData = (blockData: BlockData) => structuredClone(blockData)
+const deepFreeze = <T>(value: T): T => {
+  if (value === null || typeof value !== 'object') return value
+  if (Object.isFrozen(value)) return value
+  Object.freeze(value)
+  for (const key of Object.keys(value)) {
+    deepFreeze((value as Record<string, unknown>)[key])
+  }
+  return value
+}
 
 const blockFingerprint = (blockData: BlockData | undefined) =>
   blockData ? JSON.stringify(blockData) : ''
 
 export class BlockCache {
   private readonly snapshots = new Map<string, BlockData>()
-  private readonly revisions = new Map<string, number>()
   private readonly listeners = new Map<string, Set<() => void>>()
   private readonly dirty = new Set<string>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
@@ -29,15 +36,13 @@ export class BlockCache {
   }
 
   setSnapshot(snapshot: BlockData): boolean {
-    const next = cloneBlockData(snapshot)
     const existing = this.snapshots.get(snapshot.id)
 
-    if (existing && blockFingerprint(existing) === blockFingerprint(next)) {
+    if (existing && blockFingerprint(existing) === blockFingerprint(snapshot)) {
       return false
     }
 
-    this.snapshots.set(snapshot.id, next)
-    this.revisions.set(snapshot.id, this.getRevision(snapshot.id) + 1)
+    this.snapshots.set(snapshot.id, deepFreeze(snapshot))
     this.notify(snapshot.id)
     return true
   }
@@ -45,7 +50,6 @@ export class BlockCache {
   deleteSnapshot(id: string): boolean {
     if (!this.snapshots.delete(id)) return false
 
-    this.revisions.set(id, this.getRevision(id) + 1)
     this.notify(id)
     return true
   }
@@ -77,10 +81,6 @@ export class BlockCache {
         this.listeners.delete(id)
       }
     }
-  }
-
-  getRevision(id: string): number {
-    return this.revisions.get(id) ?? 0
   }
 
   markDirty(id: string): void {
