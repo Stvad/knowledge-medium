@@ -81,6 +81,10 @@ export const typeProp = stringProperty('type')
 export const rendererProp = stringProperty('renderer')
 export const rendererNameProp = stringProperty('rendererName')
 
+// Extension lifecycle properties — content-scope (a flagged extension
+// stays disabled across reloads), so no uiChangeScope.
+export const extensionDisabledProp = boolProp('system:disabled', false)
+
 // Timing properties
 export const previousLoadTimeProp = numberProperty('previousLoadTime')
 export const currentLoadTimeProp = numberProperty('currentLoadTime')
