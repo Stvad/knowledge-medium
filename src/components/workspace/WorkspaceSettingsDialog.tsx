@@ -9,6 +9,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 import { useRepo } from '@/context/repo'
 import {
   deleteWorkspace,
@@ -16,8 +17,19 @@ import {
   listWorkspaceMembersWithEmails,
   removeWorkspaceMember,
   renameWorkspace,
+  updateWorkspaceMemberRole,
 } from '@/data/workspaces'
-import type { Workspace, WorkspaceMemberWithEmail } from '@/types'
+import type { Workspace, WorkspaceMemberWithEmail, WorkspaceRole } from '@/types'
+
+type InviteRole = Exclude<WorkspaceRole, 'owner'>
+
+const INVITE_ROLES: ReadonlyArray<{value: InviteRole, label: string, hint: string}> = [
+  {value: 'editor', label: 'Editor', hint: 'Can read and edit the workspace.'},
+  {value: 'viewer', label: 'Viewer', hint: 'Read-only access; UI navigation state stays local to their session.'},
+]
+
+const roleSelectClassName =
+  'h-9 rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50'
 
 interface Props {
   workspace: Workspace
@@ -107,7 +119,9 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
   const repo = useRepo()
   const [members, setMembers] = useState<WorkspaceMemberWithEmail[]>([])
   const [email, setEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<InviteRole>('editor')
   const [submitting, setSubmitting] = useState(false)
+  const [pendingRoleUserId, setPendingRoleUserId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
@@ -127,8 +141,8 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
     if (!trimmed) return
     setSubmitting(true); setError(null); setInfo(null)
     try {
-      await inviteMemberByEmail(workspace.id, trimmed, 'editor')
-      setInfo(`Invitation sent to ${trimmed}. They'll see it next time they sign in.`)
+      await inviteMemberByEmail(workspace.id, trimmed, inviteRole)
+      setInfo(`Invitation sent to ${trimmed} as ${inviteRole}. They'll see it next time they sign in.`)
       setEmail('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invite failed')
@@ -147,6 +161,20 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
     }
   }
 
+  const changeRole = async (userId: string, role: WorkspaceRole) => {
+    setError(null); setInfo(null); setPendingRoleUserId(userId)
+    try {
+      await updateWorkspaceMemberRole(workspace.id, userId, role)
+      await refreshMembers()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Role change failed')
+    } finally {
+      setPendingRoleUserId(null)
+    }
+  }
+
+  const inviteHint = INVITE_ROLES.find((r) => r.value === inviteRole)?.hint
+
   return (
     <div className="space-y-3">
       <Label>Members</Label>
@@ -154,21 +182,41 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
         {members.length === 0 && (
           <li className="px-3 py-2 text-sm text-muted-foreground">Just you for now.</li>
         )}
-        {members.map((m) => (
-          <li key={m.id} className="flex items-center gap-3 px-3 py-2 text-sm">
-            <span className="truncate flex-1">{m.email || <span className="font-mono text-xs text-muted-foreground">{m.userId}</span>}</span>
-            <span className="text-xs uppercase tracking-wide rounded bg-muted px-2 py-0.5">{m.role}</span>
-            {canManage && m.role !== 'owner' && m.userId !== repo.currentUser.id && (
-              <button
-                type="button"
-                className="text-xs text-muted-foreground hover:text-destructive transition-colors"
-                onClick={() => void remove(m.userId)}
-              >
-                Remove
-              </button>
-            )}
-          </li>
-        ))}
+        {members.map((m) => {
+          const canEditThisMember =
+            canManage && m.role !== 'owner' && m.userId !== repo.currentUser.id
+          return (
+            <li key={m.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+              <span className="truncate flex-1">
+                {m.email || <span className="font-mono text-xs text-muted-foreground">{m.userId}</span>}
+              </span>
+              {canEditThisMember ? (
+                <select
+                  className={cn(roleSelectClassName, 'h-7 py-0 text-xs uppercase tracking-wide')}
+                  value={m.role}
+                  disabled={pendingRoleUserId === m.userId}
+                  onChange={(e) => void changeRole(m.userId, e.target.value as WorkspaceRole)}
+                  aria-label={`Change role for ${m.email || m.userId}`}
+                >
+                  {INVITE_ROLES.map((r) => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+              ) : (
+                <span className="text-xs uppercase tracking-wide rounded bg-muted px-2 py-0.5">{m.role}</span>
+              )}
+              {canEditThisMember && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground hover:text-destructive transition-colors"
+                  onClick={() => void remove(m.userId)}
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          )
+        })}
       </ul>
 
       {canManage && (
@@ -182,11 +230,26 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               disabled={submitting}
+              className="flex-1"
             />
+            <select
+              className={roleSelectClassName}
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as InviteRole)}
+              disabled={submitting}
+              aria-label="Invite role"
+            >
+              {INVITE_ROLES.map((r) => (
+                <option key={r.value} value={r.value}>{r.label}</option>
+              ))}
+            </select>
             <Button type="submit" disabled={submitting || !email.trim()}>
               {submitting ? 'Sending…' : 'Invite'}
             </Button>
           </div>
+          {inviteHint && (
+            <p className="text-xs text-muted-foreground">{inviteHint}</p>
+          )}
         </form>
       )}
 
