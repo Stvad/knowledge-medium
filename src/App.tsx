@@ -20,24 +20,63 @@ import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedTutorialBlocks } from '@/initData.ts'
 
-// Poll local PowerSync state for the workspace's first root block. We can't
-// use `db.waitForFirstSync` for this — it resolves immediately on subsequent
-// sessions (persistent IndexedDB remembers first sync was already done), so
-// it doesn't actually wait for *this* workspace's blocks to arrive. A small
-// polling loop is crude but actually does what we need: keep checking until
-// the row appears or we give up.
-const pollForLocalRootBlock = async (
+// Wait for the workspace's first root block to appear in local PowerSync
+// state. We can't use `db.waitForFirstSync` for this — it resolves
+// immediately on subsequent sessions (persistent IndexedDB remembers the
+// first sync was already done), so it doesn't actually wait for *this*
+// workspace's blocks to arrive.
+//
+// Subscribe to changes on the `blocks` table via PowerSync's reactive
+// `onChange` API and re-run the SELECT each time it fires. Default
+// throttle is 30ms (DEFAULT_WATCH_THROTTLE_MS in @powersync/common), so
+// reaction is fast on arrival and there's no idle CPU cost — the previous
+// 300ms polling loop ran ~40 times per 12s timeout regardless of activity.
+// Aborting the AbortController disposes the listener (PowerSync's
+// onChangeWithCallback wires `signal.addEventListener('abort', dispose)`).
+const awaitLocalRootBlock = async (
   repo: Repo,
   workspaceId: string,
   timeoutMs: number,
 ): Promise<string | undefined> => {
-  const deadline = Date.now() + timeoutMs
-  let rootId = await repo.findFirstRootBlockId(workspaceId)
-  while (!rootId && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 300))
-    rootId = await repo.findFirstRootBlockId(workspaceId)
-  }
-  return rootId
+  // Common case: the row is already there (seeded locally, or sync ran
+  // ahead of us). Skip the subscription entirely.
+  const initial = await repo.findFirstRootBlockId(workspaceId)
+  if (initial) return initial
+
+  return new Promise<string | undefined>((resolve) => {
+    const controller = new AbortController()
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const settle = (id: string | undefined) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      controller.abort()
+      resolve(id)
+    }
+    timer = setTimeout(() => settle(undefined), timeoutMs)
+
+    repo.db.onChange(
+      {
+        onChange: async () => {
+          if (settled) return
+          const id = await repo.findFirstRootBlockId(workspaceId).catch((err) => {
+            console.warn('awaitLocalRootBlock query failed', err)
+            return undefined
+          })
+          if (id) settle(id)
+        },
+        onError: (err) => {
+          console.warn('awaitLocalRootBlock onChange error', err)
+          settle(undefined)
+        },
+      },
+      {
+        tables: ['blocks'],
+        signal: controller.signal,
+      },
+    )
+  })
 }
 
 // Resolved-workspace bundle. `seedRootBlockId` is non-null only when this
@@ -162,11 +201,12 @@ const getInitialBlock = memoize(
 
     if (!rootId && useRemoteSync) {
       // Existing workspace, blocks not yet local — they're coming via sync.
-      // Poll until the first root block appears or we give up. Workspace
-      // creation always seeds a root server-side (see create_workspace
-      // RPC), so this poll terminates with a real id under any normal
-      // condition; only true network silence will time out.
-      rootId = await pollForLocalRootBlock(repo, workspaceId, 12000)
+      // Subscribe to the blocks table and resolve the moment the first root
+      // arrives, or give up after 12s. Workspace creation always seeds a
+      // root server-side (see create_workspace RPC), so this terminates
+      // with a real id under any normal condition; only true network
+      // silence will time out.
+      rootId = await awaitLocalRootBlock(repo, workspaceId, 12000)
     }
 
     if (rootId) {
