@@ -52,5 +52,7 @@ export const dynamicRenderersExtension = ({
 }
 
 const getRendererBlocks = async (rootBlock: Block): Promise<BlockData[]> => {
-  return rootBlock.repo.findBlocksByTypeInSubtree(rootBlock.id, 'renderer')
+  const workspaceId = rootBlock.dataSync()?.workspaceId ?? rootBlock.repo.activeWorkspaceId
+  if (!workspaceId) return []
+  return rootBlock.repo.findBlocksByType(workspaceId, 'renderer')
 }

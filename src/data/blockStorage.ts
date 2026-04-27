@@ -14,7 +14,7 @@ import {
   SELECT_BLOCK_EVENTS_AFTER_SQL,
   SELECT_BLOCK_SQL,
   SELECT_BLOCK_STATE_AT_SQL,
-  SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
+  SELECT_BLOCKS_BY_TYPE_SQL,
   SELECT_FIRST_CHILD_BY_CONTENT_SQL,
   SELECT_MAX_BLOCK_EVENT_SEQ_SQL,
   buildSelectBlocksByIdsSql,
@@ -108,10 +108,10 @@ export class BlockStorage {
     return row ? parseBlockRow(row) : null
   }
 
-  async findBlocksByTypeInSubtree(rootId: string, type: string): Promise<BlockData[]> {
+  async findBlocksByType(workspaceId: string, type: string): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL,
-      [rootId, rootId, type],
+      SELECT_BLOCKS_BY_TYPE_SQL,
+      [workspaceId, type],
     )
     return rows.map(parseBlockRow)
   }

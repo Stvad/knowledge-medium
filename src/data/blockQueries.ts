@@ -125,15 +125,13 @@ export const SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL = `
   LIMIT 1
 `
 
-export const SELECT_BLOCKS_BY_TYPE_IN_SUBTREE_SQL = `
-  ${SUBTREE_CTE_SQL}
+export const SELECT_BLOCKS_BY_TYPE_SQL = `
   SELECT
-    ${buildQualifiedBlockColumnsSql('blocks')}
+    ${SELECT_BLOCK_COLUMNS_SQL}
   FROM blocks
-  JOIN subtree ON subtree.id = blocks.id
-  WHERE blocks.id != ?
-    AND json_extract(blocks.properties_json, '$.type.value') = ?
-  ORDER BY subtree.sort_key
+  WHERE workspace_id = ?
+    AND json_extract(properties_json, '$.type.value') = ?
+  ORDER BY create_time ASC, id ASC
 `
 
 export const SELECT_FIRST_CHILD_BY_CONTENT_SQL = `

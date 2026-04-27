@@ -196,10 +196,10 @@ export class Repo {
     return result
   }
 
-  async findBlocksByTypeInSubtree(rootId: string, type: string) {
+  async findBlocksByType(workspaceId: string, type: string) {
     await this.flush()
 
-    const snapshots = await this.storage.findBlocksByTypeInSubtree(rootId, type)
+    const snapshots = await this.storage.findBlocksByType(workspaceId, type)
     return this.hydrateSnapshots(snapshots)
   }
 
