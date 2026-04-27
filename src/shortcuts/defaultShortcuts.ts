@@ -45,6 +45,7 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { buildAppHash } from '@/utils/routing.ts'
+import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -149,6 +150,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: () => {
         refreshAppRuntime()
         console.log('Renderer registry refreshed.')
+      },
+    },
+    {
+      id: 'restart_agent_runtime_bridge',
+      description: 'Restart agent runtime bridge',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        window.dispatchEvent(new CustomEvent(agentRuntimeBridgeRestartEvent))
       },
     },
     {

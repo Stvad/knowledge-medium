@@ -66,7 +66,10 @@ interface UseAgentRuntimeBridgeOptions {
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
-const retryMaxMs = 10_000
+const retryMaxMs = 30_000
+const maxAttemptsBeforeIdle = 6
+
+export const agentRuntimeBridgeRestartEvent = 'agent-runtime-bridge:restart'
 
 const bridgeUrl = () =>
   (import.meta.env.VITE_AGENT_RUNTIME_URL?.trim() || defaultBridgeUrl).replace(/\/+$/, '')
@@ -473,6 +476,23 @@ export function useAgentRuntimeBridge({
     const abortController = new AbortController()
     const baseUrl = bridgeUrl()
     let retryMs = retryBaseMs
+    let attempts = 0
+    let restartResolve: (() => void) | null = null
+
+    const waitForRestart = () => new Promise<void>(resolve => {
+      restartResolve = resolve
+    })
+
+    const handleRestart = () => {
+      attempts = 0
+      retryMs = retryBaseMs
+      if (restartResolve) {
+        restartResolve()
+        restartResolve = null
+      }
+    }
+
+    window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
 
     const context = (): AgentRuntimeContext => {
       const {
@@ -548,6 +568,7 @@ export function useAgentRuntimeBridge({
 
           const command = await response.json() as AgentRuntimeCommand | null
           retryMs = retryBaseMs
+          attempts = 0
 
           if (!command) {
             continue
@@ -571,6 +592,17 @@ export function useAgentRuntimeBridge({
             return
           }
 
+          attempts += 1
+          if (attempts >= maxAttemptsBeforeIdle) {
+            console.info(
+              `Agent runtime bridge unavailable at ${baseUrl}; pausing reconnects. ` +
+              `Run "Restart agent runtime bridge" from the command palette to retry.`,
+            )
+            await waitForRestart()
+            if (abortController.signal.aborted) return
+            continue
+          }
+
           await delay(retryMs)
           retryMs = Math.min(retryMs * 2, retryMaxMs)
         }
@@ -581,6 +613,11 @@ export function useAgentRuntimeBridge({
 
     return () => {
       abortController.abort()
+      window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
+      if (restartResolve) {
+        restartResolve()
+        restartResolve = null
+      }
     }
   }, [clientId])
 }
