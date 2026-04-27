@@ -18,7 +18,7 @@ import {
 } from '@/data/workspaces.ts'
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
-import { seedTutorialBlocks } from '@/initData.ts'
+import { seedNewWorkspace } from '@/initData.ts'
 
 // Wait for the workspace's first root block to appear in local PowerSync
 // state. We can't use `db.waitForFirstSync` for this — it resolves
@@ -191,7 +191,7 @@ const getInitialBlock = memoize(
     // block server-side; install the starter tutorial INTO that root so
     // there's a single canonical root in the workspace.
     if (seedRootBlockId) {
-      seedTutorialBlocks(repo, seedRootBlockId, workspaceId)
+      seedNewWorkspace(repo, seedRootBlockId, workspaceId, 'tutorial')
       await repo.flush()
       writeAppHash(workspaceId, seedRootBlockId)
       return {workspaceId, block: repo.find(seedRootBlockId)}

@@ -12,29 +12,8 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { createWorkspace, primeLocalMembership, primeLocalWorkspace } from '@/data/workspaces'
 import { useRepo } from '@/context/repo'
-import { aliasProp, fromList } from '@/data/properties'
-import { dailyPageAliases } from '@/utils/dailyPage'
+import { seedNewWorkspace } from '@/initData'
 import type { Workspace } from '@/types'
-import type { Repo } from '@/data/repo'
-
-const seedDailyPageContent = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
-  const [dateLabel, dateIso] = dailyPageAliases(new Date())
-  // Give the user an empty child bullet to type into. Without it, the
-  // first key they press would edit the root content — i.e. the page
-  // name (the date) — which is rarely what they want.
-  const childBlock = repo.create({
-    workspaceId,
-    parentId: rootBlockId,
-    content: '',
-  })
-  repo.create({
-    id: rootBlockId,
-    workspaceId,
-    content: dateLabel,
-    properties: fromList(aliasProp([dateLabel, dateIso])),
-    childIds: [childBlock.id],
-  })
-}
 
 interface Props {
   open: boolean
@@ -78,7 +57,7 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
       // [[April 26th, 2026]] later. repo.create with the known id is an
       // upsert — it overwrites whatever's there whether or not sync has
       // already delivered the empty seed.
-      seedDailyPageContent(repo, result.rootBlockId, result.workspace.id)
+      seedNewWorkspace(repo, result.rootBlockId, result.workspace.id, 'daily')
       await repo.flush()
       onCreated(result.workspace)
       reset()

@@ -1,6 +1,9 @@
 import { v4 as uuidv4 } from 'uuid'
-import { typeProp, rendererProp } from '@/data/properties'
+import { typeProp, rendererProp, aliasProp, fromList } from '@/data/properties'
 import type { Repo } from '@/data/repo'
+import { dailyPageAliases } from '@/utils/dailyPage'
+
+export type WorkspaceSeedKind = 'tutorial' | 'daily'
 
 const RENDERER_EXAMPLE_SOURCE = `import { DefaultBlockRenderer } from "@/components/DefaultBlockRenderer";
 
@@ -20,13 +23,14 @@ function ContentRenderer({ block, changeBlock }) {
 export default ({ block, changeBlock }) => <DefaultBlockRenderer block={block} changeBlock={changeBlock} ContentRenderer={ContentRenderer}/>
 `
 
-// Seed the starter tutorial INTO an existing empty root block (the one
-// that create_workspace / ensure_personal_workspace creates server-side).
+// Each seeder customizes the empty root block that
+// create_workspace / ensure_personal_workspace seeded server-side.
 // repo.create is UPSERT under the hood, so writing the root with the
 // already-known id overwrites whatever's there — whether the seed has
 // already synced down or not. Children are fresh blocks parented to the
 // existing root. The result is exactly one root in the workspace.
-export function seedTutorialBlocks(repo: Repo, rootBlockId: string, workspaceId: string): void {
+
+const seedTutorial = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
   const child1Id = uuidv4()
   const child2Id = uuidv4()
   const child3Id = uuidv4()
@@ -57,4 +61,38 @@ export function seedTutorialBlocks(repo: Repo, rootBlockId: string, workspaceId:
     content: 'This block uses the custom renderer',
     properties: {renderer: {...rendererProp, value: child2Id}},
   })
+}
+
+const seedDailyPage = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
+  const [dateLabel, dateIso] = dailyPageAliases(new Date())
+  // Empty child bullet so the user has somewhere to type without
+  // overwriting the page title (the date) on first keystroke.
+  const childBlock = repo.create({
+    workspaceId,
+    parentId: rootBlockId,
+    content: '',
+  })
+  repo.create({
+    id: rootBlockId,
+    workspaceId,
+    content: dateLabel,
+    properties: fromList(aliasProp([dateLabel, dateIso])),
+    childIds: [childBlock.id],
+  })
+}
+
+export const seedNewWorkspace = (
+  repo: Repo,
+  rootBlockId: string,
+  workspaceId: string,
+  kind: WorkspaceSeedKind,
+): void => {
+  switch (kind) {
+    case 'tutorial':
+      seedTutorial(repo, rootBlockId, workspaceId)
+      return
+    case 'daily':
+      seedDailyPage(repo, rootBlockId, workspaceId)
+      return
+  }
 }
