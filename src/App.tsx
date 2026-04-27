@@ -1,6 +1,6 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
-import { use } from 'react'
+import { use, useEffect } from 'react'
 import { getRootBlock, Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useHash, useSearchParam } from 'react-use'
@@ -19,6 +19,7 @@ import {
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedNewWorkspace } from '@/initData.ts'
+import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 
 // Wait for the workspace's first root block to appear in local PowerSync
 // state. We can't use `db.waitForFirstSync` for this — it resolves
@@ -244,10 +245,22 @@ const App = () => {
   const safeMode = Boolean(useSearchParam('safeMode'))
 
   const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(hash)
-  const {block: handle} = use(
+  const {workspaceId: activeWorkspaceId, block: handle} = use(
     getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, hasRemoteSyncConfig),
   )
   const rootBlock = use(getRootBlock(repo.find(handle.id)))
+
+  // Reactive role tracking. The imperative setReadOnly inside
+  // resolveWorkspace handles the *initial* render (so the first paint
+  // already has the right flag). This effect handles role changes pushed by
+  // the server mid-session — e.g. an owner demoting an editor to viewer
+  // while they're online — without requiring a reload.
+  const {rolesByWorkspaceId} = useMyWorkspaceRoles()
+  const activeRole = rolesByWorkspaceId.get(activeWorkspaceId)
+  useEffect(() => {
+    if (!activeRole) return
+    repo.setReadOnly(activeRole === 'viewer')
+  }, [activeRole, repo])
 
   return (
     <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>

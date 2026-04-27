@@ -41,6 +41,7 @@ interface Props {
 export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDeleted}: Props) {
   const repo = useRepo()
   const isOwner = workspace.ownerUserId === repo.currentUser.id
+  const isViewer = repo.isReadOnly
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -53,7 +54,12 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
           <RenameSection workspace={workspace} disabled={!isOwner} />
           <MembersSection workspace={workspace} canManage={isOwner} />
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
-          {!isOwner && (
+          {!isOwner && isViewer && (
+            <p className="text-sm text-muted-foreground">
+              You have read-only access to this workspace. Edits made locally won't be saved.
+            </p>
+          )}
+          {!isOwner && !isViewer && (
             <p className="text-sm text-muted-foreground">
               Only the workspace owner can rename, invite members, or delete this workspace.
             </p>

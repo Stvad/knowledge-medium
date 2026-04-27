@@ -13,9 +13,10 @@ interface BlockPropertiesProps {
 }
 
 // Component for editing list properties
-function ListPropertyEditor({ property, onUpdate }: { 
-  property: ListBlockProperty<string>, 
-  onUpdate: (newProperty: ListBlockProperty<string>) => void 
+function ListPropertyEditor({ property, onUpdate, readOnly }: {
+  property: ListBlockProperty<string>,
+  onUpdate: (newProperty: ListBlockProperty<string>) => void,
+  readOnly: boolean,
 }) {
   const [newItem, setNewItem] = useState('')
   const items = property.value || []
@@ -47,53 +48,60 @@ function ListPropertyEditor({ property, onUpdate }: {
             onChange={(e) => updateItem(index, e.target.value)}
             className="text-xs md:text-sm"
             placeholder="Enter value..."
+            disabled={readOnly}
+          />
+          {!readOnly && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => removeItem(index)}
+              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      ))}
+      {!readOnly && (
+        <div className="flex gap-2 items-center">
+          <Input
+            value={newItem}
+            onChange={(e) => setNewItem(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                addItem()
+              }
+            }}
+            className="text-xs md:text-sm"
+            placeholder="Add new item..."
           />
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => removeItem(index)}
-            className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+            onClick={addItem}
+            className="h-8 w-8 p-0"
           >
-            <X className="h-4 w-4" />
+            <Plus className="h-4 w-4" />
           </Button>
         </div>
-      ))}
-      <div className="flex gap-2 items-center">
-        <Input
-          value={newItem}
-          onChange={(e) => setNewItem(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault()
-              addItem()
-            }
-          }}
-          className="text-xs md:text-sm"
-          placeholder="Add new item..."
-        />
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={addItem}
-          className="h-8 w-8 p-0"
-        >
-          <Plus className="h-4 w-4" />
-        </Button>
-      </div>
+      )}
     </div>
   )
 }
 
 // Component for rendering different property types
-function PropertyValueEditor({ property, onUpdate }: { 
-  property: BlockProperty, 
-  onUpdate: (newProperty: BlockProperty) => void 
+function PropertyValueEditor({ property, onUpdate, readOnly }: {
+  property: BlockProperty,
+  onUpdate: (newProperty: BlockProperty) => void,
+  readOnly: boolean,
 }) {
   if (property.type === 'list') {
     return (
-      <ListPropertyEditor 
-        property={property as ListBlockProperty<string>} 
+      <ListPropertyEditor
+        property={property as ListBlockProperty<string>}
         onUpdate={onUpdate as (newProperty: ListBlockProperty<string>) => void}
+        readOnly={readOnly}
       />
     )
   }
@@ -101,11 +109,12 @@ function PropertyValueEditor({ property, onUpdate }: {
   if (property.type === 'boolean') {
     return (
       <select
-        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm"
+        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm disabled:cursor-not-allowed disabled:opacity-50"
         value={property.value?.toString() ?? 'false'}
         onChange={(e) => {
           onUpdate({ ...property, value: e.target.value === 'true' })
         }}
+        disabled={readOnly}
       >
         <option value="true">true</option>
         <option value="false">false</option>
@@ -123,6 +132,7 @@ function PropertyValueEditor({ property, onUpdate }: {
           const numValue = parseFloat(e.target.value)
           onUpdate({ ...property, value: isNaN(numValue) ? undefined : numValue })
         }}
+        disabled={readOnly}
       />
     )
   }
@@ -135,6 +145,7 @@ function PropertyValueEditor({ property, onUpdate }: {
       onChange={(e) => {
         onUpdate({ ...property, value: e.target.value })
       }}
+      disabled={readOnly}
     />
   )
 }
@@ -229,8 +240,9 @@ function AddPropertyForm({ onAdd }: { onAdd: (property: BlockProperty) => void }
 export function BlockProperties({ block }: BlockPropertiesProps) {
   const blockData = useData(block)
   if (!blockData) return null
-  
+
   const properties = blockData.properties || {}
+  const readOnly = block.repo.isReadOnly
 
   const updateKey = (newKey: string, key: string, property: BlockProperty) => {
     if (newKey && newKey !== key) {
@@ -286,6 +298,7 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
                       }
                     }}
                     onBlur={(e) => updateKey(e.target.value, key, property)}
+                    disabled={readOnly}
                   />
                 </div>
                 <div className="text-xs text-muted-foreground">
@@ -293,24 +306,27 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
                 </div>
               </div>
               <div className="flex-1">
-                <PropertyValueEditor 
-                  property={property} 
+                <PropertyValueEditor
+                  property={property}
                   onUpdate={updateProperty}
+                  readOnly={readOnly}
                 />
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => deleteProperty(key)}
-                className="h-9 w-9 p-0 text-destructive hover:text-destructive"
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+              {!readOnly && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => deleteProperty(key)}
+                  className="h-9 w-9 p-0 text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </div>
         ))}
 
-      <AddPropertyForm onAdd={addProperty} />
+      {!readOnly && <AddPropertyForm onAdd={addProperty} />}
     </div>
   )
 }

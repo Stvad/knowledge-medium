@@ -1,4 +1,6 @@
 import { useQuery } from '@powersync/react'
+import { useMemo } from 'react'
+import { useRepo } from '@/context/repo'
 import type { Workspace, WorkspaceMembership, WorkspaceRole } from '@/types'
 
 interface WorkspaceRowResult {
@@ -67,4 +69,29 @@ export const useWorkspaceMembers = (
     members: workspaceId ? data.map(parseMember) : [],
     isLoading,
   }
+}
+
+const SELECT_MY_ROLES_SQL = `
+  SELECT workspace_id, role
+  FROM workspace_members
+  WHERE user_id = ?
+`
+
+/** Reactive map of (workspaceId -> current user's role) for every workspace
+ *  the user belongs to. Backed by PowerSync's useQuery so role changes
+ *  pushed by the server flow through to subscribers without a reload. */
+export const useMyWorkspaceRoles = (): {
+  rolesByWorkspaceId: Map<string, WorkspaceRole>,
+  isLoading: boolean,
+} => {
+  const repo = useRepo()
+  const {data, isLoading} = useQuery<{workspace_id: string, role: string}>(
+    SELECT_MY_ROLES_SQL,
+    [repo.currentUser.id],
+  )
+  const rolesByWorkspaceId = useMemo(
+    () => new Map(data.map((row) => [row.workspace_id, row.role as WorkspaceRole])),
+    [data],
+  )
+  return {rolesByWorkspaceId, isLoading}
 }

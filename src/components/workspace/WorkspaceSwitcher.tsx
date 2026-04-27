@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { ChevronDown, Plus, Settings } from 'lucide-react'
+import { ChevronDown, Eye, Plus, Settings } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -8,7 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { useWorkspaces } from '@/hooks/useWorkspaces'
+import { useWorkspaces, useMyWorkspaceRoles } from '@/hooks/useWorkspaces'
 import { useRepo } from '@/context/repo'
 import { useHash } from 'react-use'
 import { buildAppHash, parseAppHash } from '@/utils/routing'
@@ -24,6 +24,7 @@ export function WorkspaceSwitcher() {
   // needed when switching workspaces.
   const [hash, setHash] = useHash()
   const {workspaces} = useWorkspaces()
+  const {rolesByWorkspaceId} = useMyWorkspaceRoles()
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -34,6 +35,9 @@ export function WorkspaceSwitcher() {
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId)
   const displayName = activeWorkspace?.name ?? 'Loading…'
+  const activeIsViewer = activeWorkspaceId
+    ? rolesByWorkspaceId.get(activeWorkspaceId) === 'viewer'
+    : false
 
   const navigateToWorkspace = useCallback((workspace: Workspace) => {
     if (workspace.id === activeWorkspaceId) return
@@ -63,6 +67,12 @@ export function WorkspaceSwitcher() {
             aria-label="Switch workspace"
           >
             <span className="truncate">{displayName}</span>
+            {activeIsViewer && (
+              <Eye
+                className="h-3.5 w-3.5 shrink-0 opacity-70"
+                aria-label="Read-only"
+              />
+            )}
             <ChevronDown className="h-3 w-3 shrink-0 opacity-60" />
           </button>
         </DropdownMenuTrigger>
@@ -70,18 +80,27 @@ export function WorkspaceSwitcher() {
           <DropdownMenuLabel className="text-xs uppercase tracking-wide text-muted-foreground">
             Workspaces
           </DropdownMenuLabel>
-          {workspaces.map((w) => (
-            <DropdownMenuItem
-              key={w.id}
-              onSelect={() => navigateToWorkspace(w)}
-              className={w.id === activeWorkspaceId ? 'font-medium' : undefined}
-            >
-              <span className="truncate">{w.name}</span>
-              {w.id === activeWorkspaceId && (
-                <span className="ml-auto text-xs text-muted-foreground">current</span>
-              )}
-            </DropdownMenuItem>
-          ))}
+          {workspaces.map((w) => {
+            const isViewer = rolesByWorkspaceId.get(w.id) === 'viewer'
+            return (
+              <DropdownMenuItem
+                key={w.id}
+                onSelect={() => navigateToWorkspace(w)}
+                className={w.id === activeWorkspaceId ? 'font-medium' : undefined}
+              >
+                <span className="truncate">{w.name}</span>
+                {isViewer && (
+                  <Eye
+                    className="h-3.5 w-3.5 shrink-0 opacity-60"
+                    aria-label="Read-only"
+                  />
+                )}
+                {w.id === activeWorkspaceId && (
+                  <span className="ml-auto text-xs text-muted-foreground">current</span>
+                )}
+              </DropdownMenuItem>
+            )
+          })}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             // Defer opening the dialog by a tick. Radix DropdownMenu's
