@@ -13,8 +13,7 @@ import {
   ensurePersonalWorkspace,
   getLocalWorkspace,
   listLocalWorkspaces,
-  primeLocalMembership,
-  primeLocalWorkspace,
+  primeLocalWorkspaceAndMember,
 } from '@/data/workspaces.ts'
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
@@ -145,12 +144,11 @@ const resolveWorkspace = async (
 
   if (useRemoteSync) {
     const result = await ensurePersonalWorkspace()
-    await primeLocalWorkspace(repo, result.workspace)
-    // Use the canonical member row from the RPC. Priming with a synthetic
-    // id (and waiting for sync to deliver the real one) would leave two
-    // membership rows in local sqlite, since the raw table has no
-    // (workspace_id, user_id) UNIQUE constraint.
-    await primeLocalMembership(repo, result.member)
+    // Prime with the canonical member row from the RPC. Priming with a
+    // synthetic id (and waiting for sync to deliver the real one) would
+    // leave two membership rows in local sqlite, since the raw table has
+    // no (workspace_id, user_id) UNIQUE constraint.
+    await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
     return {
       id: result.workspace.id,
       seedRootBlockId: result.inserted ? result.rootBlockId : null,

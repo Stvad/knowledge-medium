@@ -391,7 +391,10 @@ export const listLocalMembershipsForUser = async (
 // the canonical row when sync replicates.
 // ---------------------------------------------------------------------------
 
-export const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<void> => {
+// Module-private — call sites should use primeLocalWorkspaceAndMember so
+// we always prime both rows together (and don't accidentally drift back
+// toward inlined two-step primes with synthesized member ids).
+const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Promise<void> => {
   await repo.db.execute(
     `INSERT OR REPLACE INTO workspaces (id, name, owner_user_id, create_time, update_time)
      VALUES (?, ?, ?, ?, ?)`,
@@ -399,7 +402,7 @@ export const primeLocalWorkspace = async (repo: Repo, workspace: Workspace): Pro
   )
 }
 
-export const primeLocalMembership = async (
+const primeLocalMembership = async (
   repo: Repo,
   membership: WorkspaceMembership,
 ): Promise<void> => {
@@ -414,4 +417,27 @@ export const primeLocalMembership = async (
       membership.createTime,
     ],
   )
+}
+
+// Optimistic-prime convenience for "I just got a workspace + canonical
+// member back from create_workspace / ensure_personal_workspace": writes
+// both rows to local SQLite so the switcher renders immediately, before
+// PowerSync replicates them.
+//
+// Both call sites (App.tsx ensure-personal-workspace bootstrap and
+// CreateWorkspaceDialog create flow) used to inline this two-step prime
+// independently. Keeping it in one helper means future tweaks (e.g.
+// wrapping in a transaction, adding logging, retry logic) only land once.
+//
+// The member must be the canonical row returned by the RPC (with the
+// server-generated id), NOT a synthesized one — local raw `workspace_members`
+// has no (workspace_id, user_id) UNIQUE constraint, so a fake id would
+// coexist with the canonical row once sync delivers it.
+export const primeLocalWorkspaceAndMember = async (
+  repo: Repo,
+  workspace: Workspace,
+  member: WorkspaceMembership,
+): Promise<void> => {
+  await primeLocalWorkspace(repo, workspace)
+  await primeLocalMembership(repo, member)
 }

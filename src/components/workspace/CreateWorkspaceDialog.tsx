@@ -10,7 +10,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { createWorkspace, primeLocalMembership, primeLocalWorkspace } from '@/data/workspaces'
+import { createWorkspace, primeLocalWorkspaceAndMember } from '@/data/workspaces'
 import { useRepo } from '@/context/repo'
 import { seedNewWorkspace } from '@/initData'
 import type { Workspace } from '@/types'
@@ -46,8 +46,7 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
       // in the switcher before PowerSync replicates it. We use the
       // canonical member row returned by the RPC (real id) so we don't
       // collide with the row PowerSync will later sync down.
-      await primeLocalWorkspace(repo, result.workspace)
-      await primeLocalMembership(repo, result.member)
+      await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
 
       // The RPC has already created an empty seed root block server-side
       // (so reload-driven bootstrap can never find a block-less workspace
