@@ -87,24 +87,32 @@ const resolveWorkspace = async (
     // (persistent IndexedDB), and a missing row could legitimately mean
     // either case.
     if (useRemoteSync) {
-      const hasAccess = await canAccessRemoteWorkspace(requestedWorkspaceId).catch((err) => {
-        // Treat transport errors as "unknown" rather than "denied" — fall
-        // through to default flow rather than misclassifying offline mode
-        // as a permission denial.
-        console.warn('canAccessRemoteWorkspace failed; falling back to default flow', err)
-        return false
-      })
-      if (hasAccess) {
+      const access = await canAccessRemoteWorkspace(requestedWorkspaceId)
+      if (access.kind === 'allowed') {
         // Server confirms access; getInitialBlock will poll for the blocks
         // to land via sync.
+        return {id: requestedWorkspaceId, seedRootBlockId: null}
+      }
+      if (access.kind === 'unknown') {
+        // Transport-level failure (offline, 5xx, JWT mid-refresh). We don't
+        // know if the user has access. Trust the URL hash rather than
+        // silently bumping them to a different workspace — the misroute is
+        // worse UX than a momentary "no blocks yet" page (which the user
+        // can fix with a reload once back online). If they really lack
+        // access, the next online bootstrap re-runs this check and falls
+        // through cleanly.
+        console.warn(
+          `canAccessRemoteWorkspace failed for ${requestedWorkspaceId}; trusting URL workspace and proceeding`,
+          access.error,
+        )
         return {id: requestedWorkspaceId, seedRootBlockId: null}
       }
       console.warn(
         `Workspace ${requestedWorkspaceId} from URL is not accessible; falling back to default workspace.`,
       )
     }
-    // No access (or no remote sync) — fall through to default flow. The
-    // eventual writeAppHash will overwrite the bad hash.
+    // Confirmed-denied (or no remote sync) — fall through to default flow.
+    // The eventual writeAppHash will overwrite the bad hash.
   }
 
   const remembered = recallRememberedWorkspace()

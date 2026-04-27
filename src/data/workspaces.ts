@@ -104,26 +104,54 @@ const parseRpcWorkspaceMemberWithEmail = (
 // RPC wrappers
 // ---------------------------------------------------------------------------
 
-// Server-side, RLS-gated access check. Returns true iff the current user
-// can read this workspace per the policy (i.e. has a workspace_members row
-// or owns it). We use this at bootstrap to decide whether to trust a URL
-// hash workspace id BEFORE relying on PowerSync's local replication —
-// `waitForFirstSync` returns instantly on subsequent visits (first sync
-// already done, persistent IndexedDB), so polling for the local row to
-// "appear" is unreliable as an access check.
+// Server-side, RLS-gated access check. We use this at bootstrap to decide
+// whether to trust a URL hash workspace id BEFORE relying on PowerSync's
+// local replication — `waitForFirstSync` returns instantly on subsequent
+// visits (first sync already done, persistent IndexedDB), so polling for
+// the local row to "appear" is unreliable as an access check.
 //
-// A null/no-row result is RLS denial OR a deleted/non-existent workspace —
-// both mean "fall through to default flow". A real network error is
-// re-thrown so the caller can surface it instead of silently misrouting.
-export const canAccessRemoteWorkspace = async (workspaceId: string): Promise<boolean> => {
+// Tri-state result so the caller can distinguish offline / transient
+// failure from a real "no access":
+//
+//   - 'allowed' — RLS lets us read the row; trust the URL.
+//   - 'denied'  — request succeeded with no row. RLS denial OR a
+//                 deleted/non-existent workspace; both mean "fall through
+//                 to the default workspace" since the user provably can't
+//                 see it.
+//   - 'unknown' — transport failure (offline, 5xx, JWT refresh in flight,
+//                 structured PostgREST error). We can't tell allowed
+//                 from denied, so the caller MUST NOT silently bump the
+//                 user to a different workspace — that misroutes anyone
+//                 offline with a previously-cached workspace they
+//                 legitimately have access to.
+export type WorkspaceAccessResult =
+  | {kind: 'allowed'}
+  | {kind: 'denied'}
+  | {kind: 'unknown', error: unknown}
+
+export const canAccessRemoteWorkspace = async (
+  workspaceId: string,
+): Promise<WorkspaceAccessResult> => {
   const client = assertSupabase()
-  const {data, error} = await client
-    .from('workspaces')
-    .select('id')
-    .eq('id', workspaceId)
-    .maybeSingle()
-  if (error) throw error
-  return !!data
+  try {
+    const {data, error} = await client
+      .from('workspaces')
+      .select('id')
+      .eq('id', workspaceId)
+      .maybeSingle()
+    if (error) {
+      // Structured PostgREST/auth error (JWT expired, 5xx, schema cache
+      // miss, etc.). Treat as unknown rather than denied so we don't
+      // misroute on a transient failure.
+      return {kind: 'unknown', error}
+    }
+    return data ? {kind: 'allowed'} : {kind: 'denied'}
+  } catch (error) {
+    // Network failure thrown by fetch (TypeError: Failed to fetch,
+    // AbortError, DNS, etc.) — the user is offline or the server is
+    // unreachable.
+    return {kind: 'unknown', error}
+  }
 }
 
 // Both create_workspace and ensure_personal_workspace now return a jsonb
