@@ -1,6 +1,6 @@
 import {
   blockClickHandlersFacet,
-  blockContentGestureHandlersFacet,
+  blockContentSurfacePropsFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
 import { AppExtension } from '@/extensions/facet.ts'
@@ -8,7 +8,7 @@ import { Repo } from '@/data/repo.ts'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
   vimBlockClickBehavior,
-  vimContentGestureBehavior,
+  vimContentSurfaceBehavior,
   vimNormalModeActivation,
 } from './interactions.ts'
 
@@ -17,7 +17,7 @@ export const vimNormalModeInteractionExtension: AppExtension = [
     precedence: 100,
     source: 'vim-normal-mode',
   }),
-  blockContentGestureHandlersFacet.of(vimContentGestureBehavior, {
+  blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior, {
     precedence: 100,
     source: 'vim-normal-mode',
   }),

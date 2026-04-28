@@ -46,11 +46,11 @@ export {
 // Extension authors should import it directly:
 //   import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
-// --- Block-interaction facets (click handlers, content renderers, gestures, shortcut activations) ---
+// --- Block-interaction facets (click handlers, content renderers, content-surface props, shortcut activations) ---
 export {
   blockClickHandlersFacet,
   blockContentRendererFacet,
-  blockContentGestureHandlersFacet,
+  blockContentSurfacePropsFacet,
   shortcutSurfaceActivationsFacet,
   enterBlockEditMode,
   focusBlock,
@@ -58,9 +58,10 @@ export {
   handleBlockSelectionClick,
   isSelectionClick,
   type BlockClickContribution,
-  type BlockContentGestureContribution,
   type BlockContentRendererContribution,
   type BlockContentRendererSlot,
+  type BlockContentSurfaceContribution,
+  type BlockContentSurfaceProps,
   type BlockInteractionContext,
   type ShortcutActivationContribution,
   type ShortcutSurfaceContext,

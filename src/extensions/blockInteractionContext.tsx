@@ -1,10 +1,6 @@
 import { createContext, useContext, useMemo } from 'react'
-import {
-  blockContentGestureHandlersFacet,
-  shortcutSurfaceActivationsFacet,
-} from '@/extensions/blockInteraction.ts'
+import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.ts'
 import type {
-  BlockContentGestureHandlers,
   BlockInteractionContext,
   ShortcutSurface,
   ShortcutSurfaceContext,
@@ -16,17 +12,6 @@ export const ReactBlockInteractionContext = createContext<BlockInteractionContex
 
 export const useBlockInteractionContext = () =>
   useContext(ReactBlockInteractionContext)
-
-export function useBlockContentGestureHandlers(): BlockContentGestureHandlers {
-  const context = useBlockInteractionContext()
-  const runtime = useAppRuntime()
-  const resolveContentGestureHandlers = runtime.read(blockContentGestureHandlersFacet)
-
-  return useMemo(
-    () => context ? resolveContentGestureHandlers(context) : {},
-    [context, resolveContentGestureHandlers],
-  )
-}
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &

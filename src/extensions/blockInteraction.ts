@@ -1,4 +1,4 @@
-import type { MouseEvent, TouchEvent } from 'react'
+import type { HTMLAttributes, MouseEvent } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '@/data/block.ts'
 import {
@@ -43,7 +43,6 @@ export interface EditorActivationSelection {
 }
 
 export type BlockMouseHandler = (event: MouseEvent) => void | Promise<void>
-export type BlockTouchHandler = (event: TouchEvent) => void | Promise<void>
 
 export type BlockContentRendererContribution =
   (context: BlockInteractionContext) => BlockRenderer | null | undefined | false
@@ -57,16 +56,13 @@ export type BlockClickContribution =
 export type BlockClickResolver =
   (context: BlockInteractionContext) => BlockMouseHandler | undefined
 
-export interface BlockContentGestureHandlers {
-  onDoubleClick?: BlockMouseHandler
-  onTap?: BlockTouchHandler
-}
+export type BlockContentSurfaceProps = HTMLAttributes<HTMLDivElement>
 
-export type BlockContentGestureContribution =
-  (context: BlockInteractionContext) => BlockContentGestureHandlers | null | undefined | false
+export type BlockContentSurfaceContribution =
+  (context: BlockInteractionContext) => BlockContentSurfaceProps | null | undefined | false
 
-export type BlockContentGestureResolver =
-  (context: BlockInteractionContext) => BlockContentGestureHandlers
+export type BlockContentSurfaceResolver =
+  (context: BlockInteractionContext) => BlockContentSurfaceProps
 
 export type ShortcutSurface =
   | 'block'
@@ -112,30 +108,48 @@ export const blockClickHandlersFacet = defineFacet<
   validate: isFunction<BlockClickContribution>,
 })
 
-export const resolveBlockContentGestureHandlers = (
-  contributions: readonly BlockContentGestureContribution[],
+// Compose props from multiple contributions onto the same DOM node:
+// - function-valued props (event handlers) are chained in contribution order
+// - className strings are concatenated with a space
+// - everything else is last-wins
+export const mergeBlockContentSurfaceProps = (
+  contributions: readonly BlockContentSurfaceContribution[],
   context: BlockInteractionContext,
-): BlockContentGestureHandlers => {
-  const handlers: BlockContentGestureHandlers = {}
+): BlockContentSurfaceProps => {
+  const merged: Record<string, unknown> = {}
 
   for (const contribution of contributions) {
-    const contributedHandlers = contribution(context)
-    if (!contributedHandlers) continue
+    const props = contribution(context)
+    if (!props) continue
 
-    Object.assign(handlers, contributedHandlers)
+    for (const [key, value] of Object.entries(props)) {
+      const existing = merged[key]
+      if (typeof value === 'function' && typeof existing === 'function') {
+        const prev = existing as (...args: unknown[]) => unknown
+        const next = value as (...args: unknown[]) => unknown
+        merged[key] = (...args: unknown[]) => {
+          prev(...args)
+          next(...args)
+        }
+      } else if (key === 'className' && typeof value === 'string' && typeof existing === 'string') {
+        merged[key] = `${existing} ${value}`
+      } else {
+        merged[key] = value
+      }
+    }
   }
 
-  return handlers
+  return merged as BlockContentSurfaceProps
 }
 
-export const blockContentGestureHandlersFacet = defineFacet<
-  BlockContentGestureContribution,
-  BlockContentGestureResolver
+export const blockContentSurfacePropsFacet = defineFacet<
+  BlockContentSurfaceContribution,
+  BlockContentSurfaceResolver
 >({
-  id: 'core.block-content-gesture-handlers',
-  combine: contributions => context => resolveBlockContentGestureHandlers(contributions, context),
+  id: 'core.block-content-surface-props',
+  combine: contributions => context => mergeBlockContentSurfaceProps(contributions, context),
   empty: () => () => ({}),
-  validate: isFunction<BlockContentGestureContribution>,
+  validate: isFunction<BlockContentSurfaceContribution>,
 })
 
 export const resolveShortcutActivations = (

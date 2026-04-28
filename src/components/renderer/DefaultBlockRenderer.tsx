@@ -46,6 +46,7 @@ import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import {
   blockClickHandlersFacet,
   blockContentRendererFacet,
+  blockContentSurfacePropsFacet,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
 import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
@@ -257,6 +258,11 @@ export function DefaultBlockRenderer(
   const ContentRenderer = resolveBlockContentRenderer(blockInteractionContext) ?? DefaultContentRenderer
   const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
   const handleBlockClick = resolveBlockClickHandler(blockInteractionContext)
+  const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
+  const contentSurfaceProps = useMemo(
+    () => resolveContentSurfaceProps(blockInteractionContext),
+    [blockInteractionContext, resolveContentSurfaceProps],
+  )
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
   const shortcutActivations = useMemo(
     () => resolveShortcutActivations({
@@ -314,7 +320,11 @@ export function DefaultBlockRenderer(
           <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
             <UpdateIndicator block={block}/>
 
-            <div className={'block-content'} ref={contentContainerRef}>
+            <div
+              {...contentSurfaceProps}
+              className={`block-content${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
+              ref={contentContainerRef}
+            >
               <ErrorBoundary FallbackComponent={FallbackComponent}>
                 <BlockInteractionProvider context={blockInteractionContext}>
                   <ContentRenderer block={block}/>

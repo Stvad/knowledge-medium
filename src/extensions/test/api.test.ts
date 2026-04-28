@@ -19,7 +19,7 @@ describe('@/extensions/api — public surface', () => {
     // Block-interaction facets
     'blockClickHandlersFacet',
     'blockContentRendererFacet',
-    'blockContentGestureHandlersFacet',
+    'blockContentSurfacePropsFacet',
     'shortcutSurfaceActivationsFacet',
     'enterBlockEditMode',
     'focusBlock',

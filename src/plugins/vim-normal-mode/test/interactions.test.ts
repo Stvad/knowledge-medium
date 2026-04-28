@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block.ts'
 import type { Repo } from '@/data/repo.ts'
 import {
-  blockContentGestureHandlersFacet,
+  blockContentSurfacePropsFacet,
   BlockInteractionContext,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import {
-  vimContentGestureBehavior,
+  vimContentSurfaceBehavior,
   vimNormalModeActivation,
 } from '../interactions.ts'
 
@@ -26,15 +26,26 @@ const context = {
 } satisfies BlockInteractionContext
 
 describe('vim normal mode interactions', () => {
-  it('supplies content gestures separately from block click behavior', () => {
+  it('contributes content-surface props for double-click and tap detection', () => {
     const runtime = resolveFacetRuntimeSync([
-      blockContentGestureHandlersFacet.of(vimContentGestureBehavior),
+      blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),
     ])
 
-    const handlers = runtime.read(blockContentGestureHandlersFacet)(context)
+    const props = runtime.read(blockContentSurfacePropsFacet)(context)
 
-    expect(handlers.onDoubleClick).toBeDefined()
-    expect(handlers.onTap).toBeDefined()
+    expect(props.onMouseDownCapture).toBeDefined()
+    expect(props.onTouchStart).toBeDefined()
+    expect(props.onTouchEnd).toBeDefined()
+  })
+
+  it('contributes nothing in edit mode', () => {
+    const runtime = resolveFacetRuntimeSync([
+      blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),
+    ])
+
+    const props = runtime.read(blockContentSurfacePropsFacet)({...context, inEditMode: true})
+
+    expect(props).toEqual({})
   })
 
   it('defines Vim normal mode as a shortcut surface activation', () => {
