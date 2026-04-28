@@ -43,6 +43,14 @@ describe('parseRelativeDate', () => {
     expect(parseRelativeDate('Monday', NOW)?.iso).toBe('2026-05-04')
   })
 
+  it('parses three-letter weekday abbreviations', () => {
+    // Backlink autocomplete fires while the user is mid-typing, so we
+    // need partial words to resolve too — typing "fri" inside [[…]] must
+    // suggest Friday, not nothing.
+    expect(parseRelativeDate('fri', NOW)?.iso).toBe('2026-05-01')
+    expect(parseRelativeDate('mon', NOW)?.iso).toBe('2026-05-04')
+  })
+
   it('parses month + day forward when the date is past', () => {
     // April 1 is past; forwardDate pushes to next year.
     expect(parseRelativeDate('April 1', NOW)?.iso).toBe('2027-04-01')
