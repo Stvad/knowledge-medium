@@ -24,6 +24,7 @@ const mockBlockData = (data: Partial<BlockData>): BlockData => ({
   createdByUserId: 'testUser',
   updatedByUserId: 'testUser',
   references: [],
+  deleted: false,
   ...data,
 })
 

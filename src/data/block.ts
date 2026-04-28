@@ -176,10 +176,27 @@ export class Block {
     const parent = await this.parent()
     if (!parent) return
 
-    parent.change((parentDoc) => {
-      const index = getChildIndex(parentDoc, this.id)
-      parentDoc.childIds.splice(index, 1)
-    })
+    // Pre-load the whole subtree so each descendant has a cached snapshot
+    // for the synchronous _change() calls below. getSubtreeBlocks hydrates
+    // via the recursive CTE.
+    const subtree = await this.repo.getSubtreeBlocks(this.id, {includeRoot: true})
+
+    this._transaction(() => {
+      parent._change((parentDoc) => {
+        const index = getChildIndex(parentDoc, this.id)
+        parentDoc.childIds.splice(index, 1)
+      })
+
+      // Mark every descendant deleted, not just the root of the deleted
+      // subtree. Workspace-wide queries (findBlocksByType) bypass the tree,
+      // so a deleted parent with a still-`deleted=false` extension child
+      // would otherwise keep loading after reload.
+      for (const block of subtree) {
+        block._change((doc) => {
+          doc.deleted = true
+        })
+      }
+    }, {description: 'Delete block'})
   }
 
   async insertChildren({

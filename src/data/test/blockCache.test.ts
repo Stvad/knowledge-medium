@@ -13,6 +13,7 @@ const makeSnapshot = (overrides: Partial<BlockData> = {}): BlockData => ({
   createdByUserId: 'user',
   updatedByUserId: 'user',
   references: [],
+  deleted: false,
   ...overrides,
 })
 

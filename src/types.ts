@@ -59,6 +59,10 @@ export interface BlockData {
     createdByUserId: string;
     updatedByUserId: string;
     references: {id: string, alias: string}[];  // Required, outgoing references to other blocks
+    // Soft-delete flag. Block.delete() sets this true on the block and all its
+    // descendants; the row stays in storage so undo can restore it. Workspace-
+    // wide queries (e.g. findBlocksByType) MUST filter on this.
+    deleted: boolean;
     // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
 }
 

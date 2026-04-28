@@ -29,6 +29,7 @@ const fakeBlock = (id: string, properties: BlockData['properties'] = {}): Block 
     createdByUserId: 'user-1',
     updatedByUserId: 'user-1',
     references: [],
+    deleted: false,
   }
   return {
     id,

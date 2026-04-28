@@ -13,6 +13,10 @@ export interface BlockRow {
   created_by_user_id: string
   updated_by_user_id: string
   references_json: string
+  // SQLite has no native boolean — booleans are stored as INTEGER 0/1 and the
+  // wa-sqlite driver hands them back as JS numbers verbatim. Narrow to 0 | 1
+  // so consumers know they're working with the raw integer encoding.
+  deleted: 0 | 1
 }
 
 type BlockColumnName = keyof BlockRow
@@ -34,6 +38,7 @@ const BLOCK_STORAGE_COLUMNS = [
   {name: 'created_by_user_id', definition: 'created_by_user_id TEXT NOT NULL'},
   {name: 'updated_by_user_id', definition: 'updated_by_user_id TEXT NOT NULL'},
   {name: 'references_json', definition: "references_json TEXT NOT NULL DEFAULT '[]'"},
+  {name: 'deleted', definition: 'deleted INTEGER NOT NULL DEFAULT 0'},
 ] as const satisfies readonly BlockStorageColumn[]
 
 const BLOCK_COLUMN_NAMES = BLOCK_STORAGE_COLUMNS.map(column => column.name)
@@ -114,6 +119,7 @@ const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'createdByUserId', sqlExpression: rowRef => `${rowRef}.created_by_user_id`},
   {key: 'updatedByUserId', sqlExpression: rowRef => `${rowRef}.updated_by_user_id`},
   {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
+  {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
 ] as const satisfies readonly BlockSnapshotJsonField[]
 
 export const buildBlockSnapshotJsonSql = (rowRef: string) => `
@@ -148,6 +154,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   createdByUserId: row.created_by_user_id,
   updatedByUserId: row.updated_by_user_id,
   references: safeJsonParse<Array<{id: string, alias: string}>>(row.references_json, []),
+  deleted: Boolean(row.deleted),
 })
 
 type BlockRowParams = [
@@ -162,6 +169,7 @@ type BlockRowParams = [
   createdByUserId: string,
   updatedByUserId: string,
   referencesJson: string,
+  deleted: 0 | 1,
 ]
 
 export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
@@ -176,4 +184,5 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.createdByUserId,
   blockData.updatedByUserId,
   JSON.stringify(blockData.references ?? []),
+  blockData.deleted ? 1 : 0,
 ]

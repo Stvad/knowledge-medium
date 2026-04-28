@@ -31,6 +31,7 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
   createdByUserId: overrides.createdByUserId ?? 'user-1',
   updatedByUserId: overrides.updatedByUserId ?? 'user-1',
   references: overrides.references ?? [],
+  deleted: overrides.deleted ?? false,
 })
 
 const typeProperty = (value: string): BlockProperties => ({
@@ -54,6 +55,7 @@ const toRow = (data: BlockData) => {
     created_by_user_id: params[8],
     updated_by_user_id: params[9],
     references_json: params[10],
+    deleted: params[11],
   }
 }
 
@@ -120,6 +122,22 @@ describe('Repo.findBlocksByType', () => {
 
     const result = await repo.findBlocksByType('ws-1', 'extension')
     expect(result).toEqual([])
+  })
+
+  it('filters out soft-deleted blocks at the SQL level', async () => {
+    // Smoke test for the `deleted = 0` predicate. Real per-row filtering
+    // happens inside SQLite, which the stubbed db can't evaluate, so we
+    // assert the SQL shape — Block.delete() writing the flag is covered
+    // separately in blockDelete.test.ts.
+    const getAll = vi.fn(async () => [])
+    const repo = new Repo(makeStubDb(getAll as PowerSyncDatabase['getAll']), new UndoRedoManager(), makeUser())
+
+    await repo.findBlocksByType('ws-1', 'extension')
+
+    const calls = findCallsByType(getAll)
+    expect(calls).toHaveLength(1)
+    const [sql] = calls[0]
+    expect(sql).toMatch(/deleted\s*=\s*0/)
   })
 
   it('hydrates the cache so repo.find(id).dataSync() reads succeed', async () => {

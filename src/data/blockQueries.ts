@@ -125,11 +125,16 @@ export const SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL = `
   LIMIT 1
 `
 
+// `deleted = 0` filters soft-deleted blocks. Block.delete() marks the block
+// and all descendants deleted, so this catches both leaf and subtree deletes.
+// Backed by idx_blocks_workspace_active (partial index on workspace_id WHERE
+// deleted = 0).
 export const SELECT_BLOCKS_BY_TYPE_SQL = `
   SELECT
     ${SELECT_BLOCK_COLUMNS_SQL}
   FROM blocks
   WHERE workspace_id = ?
+    AND deleted = 0
     AND json_extract(properties_json, '$.type.value') = ?
   ORDER BY create_time ASC, id ASC
 `

@@ -114,6 +114,7 @@ export class Repo {
       createdByUserId: data.createdByUserId ?? this.currentUser.id,
       updatedByUserId: data.updatedByUserId ?? this.currentUser.id,
       references: structuredClone(data.references ?? []),
+      deleted: data.deleted ?? false,
       ...(data.parentId ? {parentId: data.parentId} : {}),
     }
 

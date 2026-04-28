@@ -123,6 +123,20 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     ON blocks (workspace_id)
   `)
 
+  // Live-migrate dev databases that predate the `deleted` column so reads
+  // and the powersync raw-table PUT (which binds every column by name)
+  // don't fail. CREATE TABLE IF NOT EXISTS won't touch an existing schema.
+  const blocksColumns = await powerSyncDb.getAll<{name: string}>('PRAGMA table_info(blocks)')
+  if (!blocksColumns.some(column => column.name === 'deleted')) {
+    await powerSyncDb.execute('ALTER TABLE blocks ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0')
+  }
+  // Partial index on live blocks. Mirrors the Supabase index of the same
+  // shape; readers (e.g. findBlocksByType) all want deleted=0.
+  await powerSyncDb.execute(`
+    CREATE INDEX IF NOT EXISTS idx_blocks_workspace_active
+    ON blocks (workspace_id) WHERE deleted = 0
+  `)
+
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)

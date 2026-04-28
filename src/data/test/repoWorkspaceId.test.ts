@@ -34,6 +34,7 @@ const seedSnapshot = (overrides: Partial<BlockData> = {}): BlockData => ({
   createdByUserId: 'user-1',
   updatedByUserId: 'user-1',
   references: [],
+  deleted: false,
   ...overrides,
 })
 

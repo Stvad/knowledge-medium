@@ -35,6 +35,7 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
   createdByUserId: overrides.createdByUserId ?? 'user-1',
   updatedByUserId: overrides.updatedByUserId ?? 'user-1',
   references: overrides.references ?? [],
+  deleted: overrides.deleted ?? false,
 })
 
 const disabledProperty = (value: boolean): BlockProperties => ({
