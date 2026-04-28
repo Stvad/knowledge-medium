@@ -1,5 +1,10 @@
 import { useState, useEffect, KeyboardEvent } from 'react'
-import { Dialog, DialogContent } from '@/components/ui/dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import {
   Command,
   CommandInput,
@@ -193,6 +198,10 @@ export function QuickFind() {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent className="overflow-hidden p-0">
+        <DialogTitle className="sr-only">Quick find</DialogTitle>
+        <DialogDescription className="sr-only">
+          Find or create a page or block by alias or content.
+        </DialogDescription>
         <Command
           shouldFilter={false}
           value={value}
