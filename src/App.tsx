@@ -18,7 +18,7 @@ import {
 } from '@/data/workspaces.ts'
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
-import { seedNewWorkspace } from '@/initData.ts'
+import { seedDailyPage, seedTutorial } from '@/initData.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 
@@ -141,10 +141,14 @@ const getInitialBlock = memoize(
     }
 
     // Freshly inserted personal workspace: the RPC seeded an empty root
-    // block server-side; install the starter tutorial INTO that root so
-    // there's a single canonical root in the workspace.
+    // block at the deterministic daily-note id. Populate it as today's
+    // daily note (so it has aliases + a typeable child bullet) AND
+    // install the tutorial as a separate parent-less page the user can
+    // discover via QuickFind. We still land on today's note — the
+    // tutorial is reachable via [[Tutorial]] but not the home view.
     if (seedRootBlockId) {
-      seedNewWorkspace(repo, seedRootBlockId, workspaceId, 'tutorial')
+      seedDailyPage(repo, seedRootBlockId, workspaceId)
+      seedTutorial(repo, workspaceId)
       await repo.flush()
       writeAppHash(workspaceId, seedRootBlockId)
       return {workspaceId, block: repo.find(seedRootBlockId)}

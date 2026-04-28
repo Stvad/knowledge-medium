@@ -4,15 +4,6 @@ import type { Repo } from '@/data/repo'
 import { dailyPageAliases } from '@/utils/dailyPage'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
 
-export type WorkspaceSeedKind = 'tutorial' | 'daily'
-
-// Each seeder customizes the empty root block that
-// create_workspace / ensure_personal_workspace seeded server-side.
-// repo.create is UPSERT under the hood, so writing the root with the
-// already-known id overwrites whatever's there — whether the seed has
-// already synced down or not. Children are fresh blocks parented to the
-// existing root. The result is exactly one root in the workspace.
-
 const seedExtensionBlocks = (
   repo: Repo,
   parentId: string,
@@ -30,50 +21,20 @@ const seedExtensionBlocks = (
     return id
   })
 
-const seedTutorial = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
-  const introId = uuidv4()
-  const sampleId = uuidv4()
-  const extensionsParentId = uuidv4()
-
-  // Extension subtree first so we know the ids.
-  const extensionIds = seedExtensionBlocks(repo, extensionsParentId, workspaceId)
-
-  repo.create({
-    id: extensionsParentId,
-    workspaceId,
-    parentId: rootBlockId,
-    content: 'extensions',
-    properties: fromList(aliasProp(['extensions'])),
-    childIds: extensionIds,
-  })
-
-  repo.create({
-    id: introId,
-    workspaceId,
-    parentId: rootBlockId,
-    content: TUTORIAL_README,
-  })
-
-  repo.create({
-    id: sampleId,
-    workspaceId,
-    parentId: rootBlockId,
-    content: 'A block that uses the hello-renderer extension',
-    properties: {renderer: {...rendererProp, value: 'hello-renderer'}},
-  })
-
-  repo.create({
-    id: rootBlockId,
-    workspaceId,
-    content: 'Welcome',
-    childIds: [introId, sampleId, extensionsParentId],
-  })
-}
-
-const seedDailyPage = (repo: Repo, rootBlockId: string, workspaceId: string): void => {
+// Seeds today's date as the content/aliases of an existing block id.
+// `rootBlockId` is supplied by create_workspace, which derives it as
+// uuid_generate_v5(DAILY_NOTE_NS, workspace_id || ':' || today_iso) so
+// it lines up with what client-side dailyNoteBlockId() computes.
+// repo.create is UPSERT — writing with the known id overwrites the
+// empty seed whether or not sync has delivered it yet.
+export const seedDailyPage = (
+  repo: Repo,
+  rootBlockId: string,
+  workspaceId: string,
+): void => {
   const [dateLabel, dateIso] = dailyPageAliases(new Date())
   // Empty child bullet so the user has somewhere to type without
-  // overwriting the page title (the date) on first keystroke.
+  // overwriting the page title on first keystroke.
   const childBlock = repo.create({
     workspaceId,
     parentId: rootBlockId,
@@ -88,18 +49,52 @@ const seedDailyPage = (repo: Repo, rootBlockId: string, workspaceId: string): vo
   })
 }
 
-export const seedNewWorkspace = (
-  repo: Repo,
-  rootBlockId: string,
-  workspaceId: string,
-  kind: WorkspaceSeedKind,
-): void => {
-  switch (kind) {
-    case 'tutorial':
-      seedTutorial(repo, rootBlockId, workspaceId)
-      return
-    case 'daily':
-      seedDailyPage(repo, rootBlockId, workspaceId)
-      return
-  }
+// Creates a separate parent-less Tutorial root carrying intro text +
+// a sample renderer-bound block + the example-extensions subtree.
+// Distinct from the workspace's daily-note seed root so the tutorial
+// doesn't squat on the deterministic daily-note id and confuse later
+// `getOrCreateDailyNote` resolution. Returns the tutorial root id so
+// callers can navigate to it if they want a tutorial-first landing.
+export const seedTutorial = (repo: Repo, workspaceId: string): string => {
+  const tutorialRootId = uuidv4()
+  const introId = uuidv4()
+  const sampleId = uuidv4()
+  const extensionsParentId = uuidv4()
+
+  // Extension subtree first so we know the ids.
+  const extensionIds = seedExtensionBlocks(repo, extensionsParentId, workspaceId)
+
+  repo.create({
+    id: extensionsParentId,
+    workspaceId,
+    parentId: tutorialRootId,
+    content: 'extensions',
+    properties: fromList(aliasProp(['extensions'])),
+    childIds: extensionIds,
+  })
+
+  repo.create({
+    id: introId,
+    workspaceId,
+    parentId: tutorialRootId,
+    content: TUTORIAL_README,
+  })
+
+  repo.create({
+    id: sampleId,
+    workspaceId,
+    parentId: tutorialRootId,
+    content: 'A block that uses the hello-renderer extension',
+    properties: {renderer: {...rendererProp, value: 'hello-renderer'}},
+  })
+
+  repo.create({
+    id: tutorialRootId,
+    workspaceId,
+    content: 'Tutorial',
+    properties: fromList(aliasProp(['Tutorial'])),
+    childIds: [introId, sampleId, extensionsParentId],
+  })
+
+  return tutorialRootId
 }
