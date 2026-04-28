@@ -13,9 +13,12 @@ import { DAILY_NOTE_NS } from '@/data/dailyNotes'
 // content-match: assert the migration source includes the same NS
 // literal and the same `workspace_id || ':' || iso_date` input shape.
 
+// Pin to the most recent function-body migration, since each one
+// supersedes the prior via drop+recreate. Bump this when shipping a
+// follow-up that touches create_workspace.
 const MIGRATION_PATH = resolve(
   __dirname,
-  '../../../supabase/migrations/20260428123232_deterministic_seed_daily_note.sql',
+  '../../../supabase/migrations/20260428132623_qualify_uuid_generate_v5.sql',
 )
 
 describe('DAILY_NOTE_NS parity with supabase migration', () => {
