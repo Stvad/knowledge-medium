@@ -73,6 +73,33 @@ export type BlockContentSurfaceContribution =
 export type BlockContentSurfaceResolver =
   (context: BlockInteractionContext) => BlockContentSurfaceProps
 
+// Slot for sections rendered after a block's children — Roam-style "Linked
+// References" lives here. Each contribution returns a renderer (or null/
+// undefined/false to opt out for this block); the DefaultBlockRenderer
+// renders all returned components in contribution order.
+export type BlockChildrenFooterContribution =
+  (context: BlockInteractionContext) => BlockRenderer | null | undefined | false
+
+export type BlockChildrenFooterResolver =
+  (context: BlockInteractionContext) => readonly BlockRenderer[]
+
+export const blockChildrenFooterFacet = defineFacet<
+  BlockChildrenFooterContribution,
+  BlockChildrenFooterResolver
+>({
+  id: 'core.block-children-footer',
+  combine: contributions => context => {
+    const result: BlockRenderer[] = []
+    for (const contribution of contributions) {
+      const renderer = contribution(context)
+      if (renderer) result.push(renderer)
+    }
+    return result
+  },
+  empty: () => () => [],
+  validate: isFunction<BlockChildrenFooterContribution>,
+})
+
 export type ShortcutSurface =
   | 'block'
   | 'codemirror'

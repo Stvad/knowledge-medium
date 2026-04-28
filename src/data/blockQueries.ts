@@ -145,6 +145,28 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   LIMIT ?
 `
 
+// Find blocks whose `references_json` contains the target block id. Used to
+// surface "Linked References" on a zoomed-in block. The EXISTS+json_each path
+// expands to the partial index `idx_blocks_workspace_references` (see
+// repoInstance.ts), which only contains blocks that actually have outgoing
+// references — keeping the scan small even on workspaces with thousands of
+// link-free blocks.
+export const SELECT_BACKLINKS_FOR_BLOCK_SQL = `
+  SELECT
+    ${SELECT_BLOCK_COLUMNS_SQL}
+  FROM blocks
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND blocks.id != ?
+    AND blocks.references_json != '[]'
+    AND EXISTS (
+      SELECT 1
+      FROM json_each(blocks.references_json) AS ref
+      WHERE json_extract(ref.value, '$.id') = ?
+    )
+  ORDER BY blocks.update_time DESC, blocks.id
+`
+
 export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   SELECT
     ${SELECT_BLOCK_COLUMNS_SQL}

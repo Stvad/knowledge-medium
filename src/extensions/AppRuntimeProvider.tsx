@@ -13,6 +13,7 @@ import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { backlinksPlugin } from '@/plugins/backlinks'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import {
   ExtensionLoadErrorsProvider,
@@ -53,6 +54,7 @@ export function AppRuntimeProvider({
     plainOutlinerPlugin,
     vimNormalModePlugin({repo}),
     videoPlayerPlugin,
+    backlinksPlugin,
   ], [repo])
 
   const baseRuntime = useMemo(() =>

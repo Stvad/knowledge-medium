@@ -17,6 +17,7 @@ describe('@/extensions/api — public surface', () => {
     'actionContextsFacet',
     'blockRenderersFacet',
     // Block-interaction facets
+    'blockChildrenFooterFacet',
     'blockClickHandlersFacet',
     'blockContentDecoratorsFacet',
     'blockContentRendererFacet',

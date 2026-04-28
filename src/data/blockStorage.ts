@@ -11,6 +11,7 @@ import {
   SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
   SELECT_ALIASES_IN_WORKSPACE_SQL,
   SELECT_ALL_BLOCK_STATES_AT_SQL,
+  SELECT_BACKLINKS_FOR_BLOCK_SQL,
   SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_EVENTS_AFTER_SQL,
   SELECT_BLOCK_SQL,
@@ -115,6 +116,14 @@ export class BlockStorage {
     const rows = await this.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL,
       [workspaceId, query, limit],
+    )
+    return rows.map(parseBlockRow)
+  }
+
+  async findBacklinks(workspaceId: string, targetId: string): Promise<BlockData[]> {
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BACKLINKS_FOR_BLOCK_SQL,
+      [workspaceId, targetId, targetId],
     )
     return rows.map(parseBlockRow)
   }
