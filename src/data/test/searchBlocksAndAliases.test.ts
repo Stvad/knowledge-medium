@@ -34,6 +34,7 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
   createdByUserId: overrides.createdByUserId ?? 'user-1',
   updatedByUserId: overrides.updatedByUserId ?? 'user-1',
   references: overrides.references ?? [],
+  deleted: overrides.deleted ?? false,
 })
 
 const aliasProperties = (...aliases: string[]) => ({
@@ -54,6 +55,7 @@ const toRow = (data: BlockData) => {
     created_by_user_id: params[8],
     updated_by_user_id: params[9],
     references_json: params[10],
+    deleted: params[11],
   }
 }
 
@@ -75,7 +77,8 @@ describe('Repo.getAliasesInWorkspace', () => {
 
     const calls = findCalls(getAll, /\$\.alias\.value.*workspace_id\s*=\s*\?/s)
     expect(calls).toHaveLength(1)
-    const [, params] = calls[0]
+    const [sql, params] = calls[0]
+    expect(sql).toMatch(/blocks\.deleted\s*=\s*0/)
     expect(params).toEqual(['ws-1', 'foo', 'foo'])
   })
 
@@ -133,6 +136,11 @@ describe('Repo.findBlockByAliasInWorkspace', () => {
     const block = await repo.findBlockByAliasInWorkspace('ws-1', 'Foo')
     expect(block?.id).toBe('page-1')
     expect(repo.find('page-1').dataSync()?.content).toBe('page content')
+    const calls = getOptional.mock.calls.filter(
+      ([sql]) =>
+        typeof sql === 'string' && /\$\.alias\.value.*alias\.value\s*=\s*\?/s.test(sql),
+    )
+    expect(calls[0][0]).toMatch(/blocks\.deleted\s*=\s*0/)
   })
 
   it('returns null when no row matches', async () => {
@@ -162,7 +170,8 @@ describe('Repo.findAliasMatchesInWorkspace', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0]).toEqual({alias: 'Foo', blockId: 'b1', content: 'foo content'})
     const calls = findCalls(getAll, /blocks\.id AS blockId/)
-    const [, params] = calls[0]
+    const [sql, params] = calls[0]
+    expect(sql).toMatch(/blocks\.deleted\s*=\s*0/)
     expect(params).toEqual(['ws-1', 'foo', 'foo', 10])
   })
 })
@@ -193,7 +202,8 @@ describe('Repo.searchBlocksByContent', () => {
     await repo.searchBlocksByContent('ws-1', 'foo', 25)
     const calls = findCalls(getAll, /content\s*!=\s*''/)
     expect(calls).toHaveLength(1)
-    const [, params] = calls[0]
+    const [sql, params] = calls[0]
+    expect(sql).toMatch(/deleted\s*=\s*0/)
     expect(params).toEqual(['ws-1', 'foo', 25])
   })
 
