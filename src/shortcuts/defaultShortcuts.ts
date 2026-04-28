@@ -47,9 +47,9 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { buildAppHash } from '@/utils/routing.ts'
+import { buildAppHash, writeAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
-import { getActivePanelBlock } from '@/data/globalState.ts'
+import { getActivePanelBlock, isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
@@ -258,6 +258,99 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         const created = await insertExampleExtensionsUnder(repo.find(parentId))
         if (created[0]) panel.setProperty({...focusedBlockIdProp, value: created[0].id})
+      },
+    },
+    {
+      id: 'zoom_in',
+      description: 'Zoom into focused block',
+      context: ActionContextTypes.GLOBAL,
+      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        const panel = await getActivePanelBlock(uiStateBlock)
+        if (!panel) return
+
+        const data = await panel.data()
+        const focusedBlockId = data?.properties[focusedBlockIdProp.name]?.value as string | undefined
+        if (!focusedBlockId) return
+
+        if (isMainPanel(panel)) {
+          const workspaceId = repo.activeWorkspaceId
+          if (!workspaceId) return
+          writeAppHash(workspaceId, focusedBlockId)
+        } else {
+          panel.setProperty({...topLevelBlockIdProp, value: focusedBlockId})
+        }
+      },
+      defaultBinding: {
+        keys: ['cmd+.', 'ctrl+.'],
+      },
+    },
+    {
+      id: 'zoom_out',
+      description: 'Zoom out to parent of current view',
+      context: ActionContextTypes.GLOBAL,
+      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        const panel = await getActivePanelBlock(uiStateBlock)
+        if (!panel) return
+
+        const data = await panel.data()
+        const topLevelBlockId = data?.properties[topLevelBlockIdProp.name]?.value as string | undefined
+        if (!topLevelBlockId) return
+
+        const parent = await repo.find(topLevelBlockId).parent()
+        if (!parent) return
+
+        if (isMainPanel(panel)) {
+          const workspaceId = repo.activeWorkspaceId
+          if (!workspaceId) return
+          writeAppHash(workspaceId, parent.id)
+        } else {
+          panel.setProperty({...topLevelBlockIdProp, value: parent.id})
+        }
+      },
+      defaultBinding: {
+        keys: ['cmd+,', 'ctrl+,'],
+      },
+    },
+    {
+      id: 'open_focused_in_panel',
+      description: 'Open focused block in a side panel',
+      context: ActionContextTypes.GLOBAL,
+      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        const panel = await getActivePanelBlock(uiStateBlock)
+        if (!panel) return
+
+        const data = await panel.data()
+        const focusedBlockId = data?.properties[focusedBlockIdProp.name]?.value as string | undefined
+        if (!focusedBlockId) return
+
+        window.dispatchEvent(new CustomEvent('open-panel', {
+          detail: {blockId: focusedBlockId, sourcePanelId: panel.id},
+        }))
+      },
+      defaultBinding: {
+        keys: ['cmd+shift+.', 'ctrl+shift+.'],
+      },
+    },
+    {
+      id: 'navigate_back',
+      description: 'Go back in navigation history',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        window.history.back()
+      },
+      defaultBinding: {
+        keys: ['cmd+[', 'ctrl+['],
+      },
+    },
+    {
+      id: 'navigate_forward',
+      description: 'Go forward in navigation history',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        window.history.forward()
+      },
+      defaultBinding: {
+        keys: ['cmd+]', 'ctrl+]'],
       },
     },
   ]

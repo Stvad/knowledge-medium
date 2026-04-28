@@ -4,7 +4,7 @@ import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { X } from 'lucide-react'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
-import { useSelectionState } from '@/data/globalState'
+import { useSelectionState, MAIN_PANEL_NAME } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
@@ -15,7 +15,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [selectionState] = useSelectionState();
   const blockContent = useContent(block)
-  const isMainPanel = blockContent === 'main'
+  const isMainPanel = blockContent === MAIN_PANEL_NAME
 
   const repo = useRepo();
 
