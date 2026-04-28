@@ -26,7 +26,7 @@ type BlockStorageColumn = {
   readonly definition: string
 }
 
-const BLOCK_STORAGE_COLUMNS = [
+export const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
   {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},

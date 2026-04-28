@@ -29,14 +29,15 @@ npx powersync@latest deploy --skip-validations=connections   # deploy sync-confi
 
 `--skip-validations=connections` is needed because the local env has no `PS_DATABASE_URI` (it's a server-side secret). Schema + sync-config validations still run.
 
-## Adding a column to a synced table — four-layer change
+## Adding a column to a synced table — three-layer change
 
-`blocks`, `workspaces`, `workspace_members` are PowerSync-synced. A new column needs ALL FOUR:
+`blocks`, `workspaces`, `workspace_members` are PowerSync-synced. A new column needs:
 
 1. **Postgres migration** (`supabase/migrations/<UTC>_<verb>_<noun>.sql`) — additive (`add column if not exists`), with a `default` for non-null columns. Wrap in `begin; … commit;`.
 2. **Local SQLite + raw-table mapping** — add to `BLOCK_STORAGE_COLUMNS` (or `WORKSPACE_COLUMNS` / `WORKSPACE_MEMBER_COLUMNS`) in `src/data/blockSchema.ts` / `workspaceSchema.ts`, plus parse helpers and the `BlockRow`/`WorkspaceRow`/etc. types.
-3. **PowerSync sync stream** — add the column to the `SELECT` clause in `powersync/sync-config.yaml`. **Skip this and the column is invisible to clients regardless of what's in Postgres.**
-4. **`BlockData` / `Workspace` / `WorkspaceMembership`** in `src/types.ts`.
+3. **`BlockData` / `Workspace` / `WorkspaceMembership`** in `src/types.ts`.
+
+Then run `yarn gen:sync-config` — it regenerates `powersync/sync-config.yaml` from the TS column lists, so the sync-stream SELECT can't drift from the local-SQLite shape. **Don't hand-edit the YAML** — `yarn check` runs `check:sync-config` and will fail CI on hand-edits.
 
 For dev databases that already exist, also add an `ALTER TABLE … ADD COLUMN` block in `repoInstance.ts` after `CREATE_BLOCKS_TABLE_SQL` (use `PRAGMA table_info(blocks)` to no-op when the column is already present).
 

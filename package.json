@@ -13,7 +13,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "check": "yarn run compile && yarn run lint && yarn run test",
+    "gen:sync-config": "vite-node scripts/gen-sync-config.ts",
+    "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
+    "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config",
     "agent:server": "node scripts/agent-runtime-server.mjs",
     "agent": "node scripts/agent-runtime.mjs"
   },

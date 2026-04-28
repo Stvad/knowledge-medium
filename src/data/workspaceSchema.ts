@@ -38,7 +38,7 @@ export interface WorkspaceRow {
   update_time: number
 }
 
-const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
+export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'name', definition: "name TEXT NOT NULL DEFAULT ''"},
   {name: 'owner_user_id', definition: 'owner_user_id TEXT NOT NULL'},
@@ -79,7 +79,7 @@ export interface WorkspaceMemberRow {
   create_time: number
 }
 
-const WORKSPACE_MEMBER_COLUMNS: readonly ColumnDef[] = [
+export const WORKSPACE_MEMBER_COLUMNS: readonly ColumnDef[] = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
   {name: 'user_id', definition: 'user_id TEXT NOT NULL'},
