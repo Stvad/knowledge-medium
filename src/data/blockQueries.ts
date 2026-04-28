@@ -116,9 +116,12 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
   ORDER BY MIN(blocks.create_time), alias.value
 `
 
+// json_each() exposes its own `id` column, so any unqualified `SELECT id ...`
+// alongside the join is ambiguous. Qualify every block column to keep SQLite
+// happy.
 export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   SELECT
-    ${SELECT_BLOCK_COLUMNS_SQL}
+    ${buildQualifiedBlockColumnsSql('blocks')}
   FROM blocks
   JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
   WHERE blocks.workspace_id = ?
