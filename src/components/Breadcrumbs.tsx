@@ -1,6 +1,6 @@
 import { Block } from '@/data/block.ts'
-import { use, useMemo } from 'react'
 import { BreadcrumbList } from '@/components/BreadcrumbList.tsx'
+import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 
 const OVERRIDES = {isBreadcrumb: true}
@@ -9,7 +9,7 @@ export const Breadcrumbs = ({block}: { block: Block }) => {
   const repo = useRepo()
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders.
   const workspaceId = repo.activeWorkspaceId!
-  const parents = use(useMemo(() => block.parents(), [block.id]))
+  const parents = useParents(block)
 
   return (
     <BreadcrumbList

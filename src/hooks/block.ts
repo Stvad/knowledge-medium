@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { BlockData, BlockProperty } from '@/types.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { Block } from '@/data/block.ts'
+import { Repo } from '@/data/repo.ts'
 
 const EMPTY_CHILD_IDS: string[] = []
 
@@ -112,6 +113,53 @@ export const useChildren = (block: Block): Block[] =>
 
 export const useHasChildren = (block: Block) =>
   useDataWithSelector(block, (data?: BlockData) => data ? data.childIds.length > 0 : false)
+
+// Walk parent chain from cached snapshots (synchronous). Returns what's
+// currently in cache; missing links short-circuit the walk so we never
+// render stale chains.
+const computeParentsFromCache = (repo: Repo, blockId: string): Block[] => {
+  const result: Block[] = []
+  const seen = new Set<string>([blockId])
+  let currentId: string | undefined = blockId
+  while (currentId) {
+    const data = repo.getCachedBlockData(currentId)
+    if (!data?.parentId || seen.has(data.parentId)) break
+    seen.add(data.parentId)
+    result.unshift(repo.find(data.parentId))
+    currentId = data.parentId
+  }
+  return result
+}
+
+// Returns the parent chain for a block reactively, without suspending.
+// Initial render uses the cached chain (typically complete for blocks
+// we've already rendered); an effect then asks the repo to load any
+// missing ancestors and updates state when they arrive.
+export const useParents = (block: Block): Block[] => {
+  const repo = useRepo()
+  const blockId = block.id
+  const [parents, setParents] = useState<Block[]>(() => computeParentsFromCache(repo, blockId))
+
+  useEffect(() => {
+    setParents(computeParentsFromCache(repo, blockId))
+
+    let cancelled = false
+    void block.parents().then(loaded => {
+      if (cancelled) return
+      setParents(prev => {
+        const sameChain =
+          loaded.length === prev.length &&
+          loaded.every((p, i) => p.id === prev[i]?.id)
+        return sameChain ? prev : loaded
+      })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [repo, block, blockId])
+
+  return parents
+}
 
 const EMPTY_BACKLINK_IDS: string[] = []
 
