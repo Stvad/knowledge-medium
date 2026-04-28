@@ -2332,6 +2332,11 @@ chokidar@^3.6.0:
   optionalDependencies:
     fsevents "~2.3.2"
 
+chrono-node@^2.9.0:
+  version "2.9.0"
+  resolved "https://registry.yarnpkg.com/chrono-node/-/chrono-node-2.9.0.tgz#a702016d6ec8f6d835a3ba09c6f842fc76969404"
+  integrity sha512-glI4YY2Jy6JII5l3d5FN6rcrIbKSQqKPhWsIRYPK2IK8Mm4Q1ZZFdYIaDqglUNf7gNwG+kWIzTn0omzzE0VkvQ==
+
 class-variance-authority@^0.7.1:
   version "0.7.1"
   resolved "https://registry.npmjs.org/class-variance-authority/-/class-variance-authority-0.7.1.tgz"
