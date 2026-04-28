@@ -147,12 +147,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       },
     },
     {
-      id: 'refresh_renderers',
-      description: 'Refresh Renderer Registry',
+      id: 'refresh_extensions',
+      description: 'Reload extensions',
       context: ActionContextTypes.GLOBAL,
       handler: () => {
         refreshAppRuntime()
-        console.log('Renderer registry refreshed.')
+        console.log('Runtime extensions reloaded')
       },
     },
     {
