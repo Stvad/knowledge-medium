@@ -1,3 +1,4 @@
+import { ReactNode } from 'react'
 import type { Components } from 'react-markdown'
 import type { MarkdownExtension } from '@/markdown/extensions.ts'
 import { remarkWikilinks } from './remark-wikilinks.ts'
@@ -12,6 +13,7 @@ interface WikilinkNode {
 
 interface WikilinkComponentProps {
   node?: WikilinkNode
+  children?: ReactNode
 }
 
 export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
@@ -26,7 +28,7 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
       [remarkWikilinks, {resolveAlias: (alias: string) => refMap.get(alias)}],
     ],
     components: {
-      wikilink: ({node}: WikilinkComponentProps) => {
+      wikilink: ({node, children}: WikilinkComponentProps) => {
         const alias = node?.properties?.alias
         const blockId = node?.properties?.blockId
         if (typeof alias !== 'string') return null
@@ -35,7 +37,9 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
             alias={alias}
             blockId={typeof blockId === 'string' ? blockId : ''}
             workspaceId={workspaceId}
-          />
+          >
+            {children}
+          </Wikilink>
         )
       },
     } as unknown as Components,
