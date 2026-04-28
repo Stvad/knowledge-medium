@@ -123,7 +123,7 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
   // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
   // mounted — for any consumer (markdown editor, extension editor, future).
-  const shortcutSurfaceOptions = useMemo(() => ({editorView}), [editorView])
+  const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations('codemirror', shortcutSurfaceOptions)
 
   if (!blockData) return null
