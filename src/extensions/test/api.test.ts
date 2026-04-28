@@ -23,6 +23,7 @@ describe('@/extensions/api — public surface', () => {
     'shortcutSurfaceActivationsFacet',
     'enterBlockEditMode',
     'focusBlock',
+    'getBlockContentRendererSlot',
     // Markdown
     'markdownExtensionsFacet',
     // Actions

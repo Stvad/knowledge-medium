@@ -17,12 +17,14 @@ import {
 import { Repo } from '@/data/repo.ts'
 import { importState } from '@/utils/state.ts'
 import {
+  focusedBlockIdProp,
   isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
   setFocusedBlockId,
 } from '@/data/properties.ts'
+import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.ts'
 import { selectionStateProp } from '@/data/properties'
 import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
 import {
@@ -212,6 +214,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         }
 
         input.click()
+      },
+    },
+    {
+      id: 'insert_example_extensions',
+      description: 'Insert example extensions under current block',
+      context: ActionContextTypes.GLOBAL,
+      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        const focusedId = uiStateBlock.dataSync()?.properties[focusedBlockIdProp.name]?.value as string | undefined
+        const topLevelId = uiStateBlock.dataSync()?.properties[topLevelBlockIdProp.name]?.value as string | undefined
+        const parentId = focusedId ?? topLevelId
+        if (!parentId) return
+
+        const parent = repo.find(parentId)
+        const created = await insertExampleExtensionsUnder(parent)
+        if (created[0]) setFocusedBlockId(uiStateBlock, created[0].id)
       },
     },
   ]
