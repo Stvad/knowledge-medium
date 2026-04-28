@@ -46,15 +46,13 @@ export interface BlockProperties {
     [key: string]: BlockProperty | undefined;
 }
 
-// Outgoing reference. `kind: 'page'` is the wikilink case ([[Some Page]]) where
-// `alias` is the human-typed text and `id` is the block resolved from it.
-// `kind: 'block'` is a block-ref (((uuid))) — `id` is the target block's UUID
-// and `alias` mirrors the id (kept populated so backlinks queries that group by
-// alias keep working unchanged).
+// Outgoing reference. For page wikilinks ([[Some Page]]) `alias` is the
+// human-typed text and `id` is the block resolved from it. For block refs
+// (((uuid))) both `alias` and `id` are the target's UUID — the duplication
+// keeps the row shape uniform so backlinks queries don't need to branch.
 export interface BlockReference {
     id: string;
     alias: string;
-    kind: 'page' | 'block';
 }
 
 // Each block is stored as a local PowerSync-backed SQLite record

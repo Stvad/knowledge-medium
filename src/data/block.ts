@@ -366,17 +366,12 @@ const parseAndUpdateReferences = async (block: Block) => {
   const pageRefs: BlockReference[] = await Promise.all(aliases.map(async alias => ({
     id: (await getOrCreateBlockForAlias(block, alias)).id,
     alias,
-    kind: 'page' as const,
   })))
 
   const blockRefIds = Array.from(
     new Set(parseBlockRefs(blockData.content).map(ref => ref.blockId)),
   )
-  const blockRefs: BlockReference[] = blockRefIds.map(id => ({
-    id,
-    alias: id,
-    kind: 'block' as const,
-  }))
+  const blockRefs: BlockReference[] = blockRefIds.map(id => ({id, alias: id}))
 
   const newReferenceSet: BlockReference[] = [...pageRefs, ...blockRefs]
 

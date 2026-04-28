@@ -21,12 +21,12 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
   const data = block.dataSync()
   if (!data) return null
 
-  // Block-kind entries have alias === id (a UUID) which would silently shadow
-  // a real alias if a user happened to type [[uuid]]. Limit the alias→id map
-  // to page-kind refs so the lookup is unambiguous.
+  // Block refs store alias === id (both the target UUID); page refs store the
+  // human-typed alias separately from the resolved id. Filter to the latter
+  // so a stray [[uuid]] wikilink can't silently resolve via a block-ref entry.
   const refMap = new Map(
     data.references
-      .filter(ref => ref.kind === 'page')
+      .filter(ref => ref.alias !== ref.id)
       .map(({alias, id}) => [alias, id]),
   )
   const workspaceId = data.workspaceId
