@@ -1,5 +1,6 @@
-import { MouseEvent, Suspense, use, useCallback, useMemo, useState } from 'react'
+import { MouseEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { Block } from '@/data/block.ts'
+import { Repo } from '@/data/repo.ts'
 import { BlockRendererProps } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
@@ -9,6 +10,57 @@ import { buildAppHash } from '@/utils/routing.ts'
 
 const NESTED_OVERRIDES = {topLevel: false, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
+
+// Walk parent chain from cached snapshots (synchronous). The blocks we
+// render here are already loaded — backlinks query just hydrated them
+// and unfurl moves to a parent whose chain we've also rendered. Returns
+// what's currently in cache; missing links short-circuit the walk so we
+// never render stale chains.
+const computeParentsFromCache = (repo: Repo, blockId: string): Block[] => {
+  const result: Block[] = []
+  const seen = new Set<string>([blockId])
+  let currentId: string | undefined = blockId
+  while (currentId) {
+    const data = repo.getCachedBlockData(currentId)
+    if (!data?.parentId || seen.has(data.parentId)) break
+    seen.add(data.parentId)
+    result.unshift(repo.find(data.parentId))
+    currentId = data.parentId
+  }
+  return result
+}
+
+// Returns the parent chain for a block reactively, without suspending.
+// Initial render uses the cached chain (typically complete for blocks
+// we've already rendered); an effect then asks the repo to load any
+// missing ancestors and updates state when they arrive.
+const useParents = (block: Block): Block[] => {
+  const repo = useRepo()
+  const blockId = block.id
+  const [parents, setParents] = useState<Block[]>(() => computeParentsFromCache(repo, blockId))
+
+  useEffect(() => {
+    setParents(computeParentsFromCache(repo, blockId))
+
+    let cancelled = false
+    void block.parents().then(loaded => {
+      if (cancelled) return
+      const sameChain =
+        loaded.length === parents.length &&
+        loaded.every((p, i) => p.id === parents[i]?.id)
+      if (!sameChain) setParents(loaded)
+    })
+    return () => {
+      cancelled = true
+    }
+    // We intentionally do not depend on `parents` — re-running the
+    // async load every time we set state would loop. The dep on blockId
+    // is what should drive a re-fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo, block, blockId])
+
+  return parents
+}
 
 interface BreadcrumbsProps {
   shownBlock: Block
@@ -23,7 +75,7 @@ interface BreadcrumbsProps {
 const BacklinkBreadcrumbs = ({shownBlock, onSelect}: BreadcrumbsProps) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
-  const parents = use(useMemo(() => shownBlock.parents(), [shownBlock.id]))
+  const parents = useParents(shownBlock)
 
   if (parents.length === 0 || !workspaceId) return null
 
@@ -74,9 +126,7 @@ const BacklinkItem = ({block}: { block: Block }) => {
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
-      <Suspense fallback={null}>
-        <BacklinkBreadcrumbs shownBlock={shownBlock} onSelect={handleSelect}/>
-      </Suspense>
+      <BacklinkBreadcrumbs shownBlock={shownBlock} onSelect={handleSelect}/>
       {isUnfurled && (
         <button
           type="button"
