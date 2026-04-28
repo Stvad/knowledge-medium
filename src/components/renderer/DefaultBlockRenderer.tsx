@@ -74,6 +74,14 @@ const copyBlockId = (block: Block) => {
   navigator.clipboard.writeText(block.id)
 }
 
+const copyBlockRef = (block: Block) => {
+  navigator.clipboard.writeText(`((${block.id}))`)
+}
+
+const copyBlockEmbed = (block: Block) => {
+  navigator.clipboard.writeText(`{{embed: ((${block.id}))}}`)
+}
+
 const zoomIn = (block: Block, workspaceId: string) => {
   if (typeof window !== 'undefined') {
     window.location.hash = buildAppHash(workspaceId, block.id)
@@ -126,6 +134,18 @@ const BlockBullet = ({block}: { block: Block }) => {
             onSelect={() => copyBlockId(block)}
           >
             Copy ID
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => copyBlockRef(block)}
+          >
+            Copy Block Ref
+          </ContextMenuItem>
+          <ContextMenuItem
+            className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
+            onSelect={() => copyBlockEmbed(block)}
+          >
+            Copy Block Embed
           </ContextMenuItem>
           <ContextMenuItem
             className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"

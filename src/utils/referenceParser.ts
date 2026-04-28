@@ -14,6 +14,22 @@ export interface ParsedReference {
   endIndex: number;
 }
 
+export interface ParsedBlockRef {
+  blockId: string;
+  startIndex: number;
+  endIndex: number;
+  embed: boolean;  // true for {{embed: ((id))}}, false for plain ((id))
+}
+
+// UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
+// this strict so accidental double-parens in prose (e.g. "((not an id))")
+// don't get treated as references.
+const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const BLOCK_REF_RE = new RegExp(`\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
+const BLOCK_EMBED_RE = new RegExp(`\\{\\{\\s*\\[?\\[?embed\\]?\\]?\\s*:?\\s*\\(\\((${UUID_RE_SOURCE})\\)\\)\\s*\\}\\}`, 'gi')
+
+export const isBlockRefId = (s: string) => new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(s)
+
 /**
  * Parse [[alias]] patterns from text content using remark
  * @param content The text content to parse
@@ -110,4 +126,45 @@ export function extractAliases(content: string): string[] {
  */
 export function hasReferences(content: string): boolean {
   return /\[\[([^\]]+)\]\]/.test(content)
+}
+
+/**
+ * Parse `((uuid))` block-refs and `{{embed: ((uuid))}}` block-embeds out of
+ * text. Embeds are matched first so the outer `{{embed: ...}}` isn't double-
+ * counted as a bare ref.
+ */
+export function parseBlockRefs(content: string): ParsedBlockRef[] {
+  const found: ParsedBlockRef[] = []
+  const consumed: Array<[number, number]> = []
+
+  BLOCK_EMBED_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = BLOCK_EMBED_RE.exec(content)) !== null) {
+    found.push({
+      blockId: match[1].toLowerCase(),
+      startIndex: match.index,
+      endIndex: match.index + match[0].length,
+      embed: true,
+    })
+    consumed.push([match.index, match.index + match[0].length])
+  }
+
+  BLOCK_REF_RE.lastIndex = 0
+  while ((match = BLOCK_REF_RE.exec(content)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    if (consumed.some(([s, e]) => start >= s && end <= e)) continue
+    found.push({
+      blockId: match[1].toLowerCase(),
+      startIndex: start,
+      endIndex: end,
+      embed: false,
+    })
+  }
+
+  return found.sort((a, b) => a.startIndex - b.startIndex)
+}
+
+export function extractBlockRefIds(content: string): string[] {
+  return Array.from(new Set(parseBlockRefs(content).map(r => r.blockId)))
 }

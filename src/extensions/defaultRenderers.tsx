@@ -9,6 +9,7 @@ import { blockRenderersFacet, createRendererRegistry, RendererContribution } fro
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.ts'
 import { wikilinkMarkdownExtension } from '@/markdown/wikilinks/index.tsx'
+import { blockrefMarkdownExtension } from '@/markdown/blockrefs/index.tsx'
 
 export const defaultRendererContributions: RendererContribution[] = [
   {id: 'default', renderer: DefaultBlockRenderer},
@@ -25,6 +26,7 @@ export const defaultRegistry = createRendererRegistry(defaultRendererContributio
 export const defaultRenderersExtension = [
   markdownExtensionsFacet.of(gfmMarkdownExtension, {source: 'defaultRenderers'}),
   markdownExtensionsFacet.of(wikilinkMarkdownExtension, {source: 'defaultRenderers'}),
+  markdownExtensionsFacet.of(blockrefMarkdownExtension, {source: 'defaultRenderers'}),
   ...defaultRendererContributions.map(contribution =>
     blockRenderersFacet.of(contribution),
   ),

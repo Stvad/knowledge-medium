@@ -1,7 +1,7 @@
-import { BlockData, User, BlockProperty } from '@/types'
+import { BlockData, BlockReference, User, BlockProperty } from '@/types'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
-import { parseReferences } from '@/utils/referenceParser'
+import { parseBlockRefs, parseReferences } from '@/utils/referenceParser'
 import { aliasProp, fromList } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
@@ -363,10 +363,22 @@ const parseAndUpdateReferences = async (block: Block) => {
   if (!blockData) return
 
   const aliases = parseReferences(blockData.content).map(ref => ref.alias)
-  const newReferenceSet = await Promise.all(aliases.map(async alias => ({
+  const pageRefs: BlockReference[] = await Promise.all(aliases.map(async alias => ({
     id: (await getOrCreateBlockForAlias(block, alias)).id,
     alias,
+    kind: 'page' as const,
   })))
+
+  const blockRefIds = Array.from(
+    new Set(parseBlockRefs(blockData.content).map(ref => ref.blockId)),
+  )
+  const blockRefs: BlockReference[] = blockRefIds.map(id => ({
+    id,
+    alias: id,
+    kind: 'block' as const,
+  }))
+
+  const newReferenceSet: BlockReference[] = [...pageRefs, ...blockRefs]
 
   const currentReferences = block.dataSync()?.references ?? []
   if (JSON.stringify(currentReferences) === JSON.stringify(newReferenceSet)) {

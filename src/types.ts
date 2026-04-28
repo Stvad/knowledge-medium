@@ -46,6 +46,17 @@ export interface BlockProperties {
     [key: string]: BlockProperty | undefined;
 }
 
+// Outgoing reference. `kind: 'page'` is the wikilink case ([[Some Page]]) where
+// `alias` is the human-typed text and `id` is the block resolved from it.
+// `kind: 'block'` is a block-ref (((uuid))) — `id` is the target block's UUID
+// and `alias` mirrors the id (kept populated so backlinks queries that group by
+// alias keep working unchanged).
+export interface BlockReference {
+    id: string;
+    alias: string;
+    kind?: 'page' | 'block';  // optional for backwards-compat; absent === 'page'
+}
+
 // Each block is stored as a local PowerSync-backed SQLite record
 export interface BlockData {
     id: string;
@@ -58,7 +69,7 @@ export interface BlockData {
     updateTime: number;
     createdByUserId: string;
     updatedByUserId: string;
-    references: {id: string, alias: string}[];  // Required, outgoing references to other blocks
+    references: BlockReference[];  // Required, outgoing references to other blocks
     // Soft-delete flag. Block.delete() sets this true on the block and all its
     // descendants; the row stays in storage so undo can restore it. Workspace-
     // wide queries (e.g. findBlocksByType) MUST filter on this.

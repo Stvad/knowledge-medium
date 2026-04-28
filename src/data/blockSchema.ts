@@ -1,5 +1,5 @@
 import type { PendingStatementParameter, RawTableType } from '@powersync/web'
-import type { BlockData, BlockProperties } from '@/types'
+import type { BlockData, BlockProperties, BlockReference } from '@/types'
 
 export interface BlockRow {
   id: string
@@ -153,7 +153,7 @@ export const parseBlockRow = (row: BlockRow): BlockData => ({
   updateTime: row.update_time,
   createdByUserId: row.created_by_user_id,
   updatedByUserId: row.updated_by_user_id,
-  references: safeJsonParse<Array<{id: string, alias: string}>>(row.references_json, []),
+  references: safeJsonParse<BlockReference[]>(row.references_json, []),
   deleted: Boolean(row.deleted),
 })
 

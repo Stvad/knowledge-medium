@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseReferences, parseReferencesMarkdownAware, extractAliases, hasReferences } from '../referenceParser'
+import { parseReferences, parseReferencesMarkdownAware, extractAliases, hasReferences, parseBlockRefs, isBlockRefId } from '../referenceParser'
 
 describe('referenceParser', () => {
   describe('parseReferences', () => {
@@ -160,6 +160,49 @@ Another [[normal-ref]]
 
     it('should return false for malformed references', () => {
       expect(hasReferences('Malformed [[ reference')).toBe(false)
+    })
+  })
+
+  describe('parseBlockRefs', () => {
+    const id = '0123abcd-4567-89ef-0123-456789abcdef'
+    const id2 = 'fedcba98-7654-3210-fedc-ba9876543210'
+
+    it('parses a bare ((uuid)) ref', () => {
+      const result = parseBlockRefs(`see ((${id})) for context`)
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({blockId: id, embed: false})
+    })
+
+    it('parses a {{embed: ((uuid))}} embed', () => {
+      const result = parseBlockRefs(`{{embed: ((${id}))}}`)
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({blockId: id, embed: true})
+    })
+
+    it('does not double-count the inner ref of an embed', () => {
+      const result = parseBlockRefs(`{{embed: ((${id}))}} and ((${id2}))`)
+      expect(result).toHaveLength(2)
+      expect(result[0]).toMatchObject({blockId: id, embed: true})
+      expect(result[1]).toMatchObject({blockId: id2, embed: false})
+    })
+
+    it('ignores ((not-a-uuid))', () => {
+      expect(parseBlockRefs('((hello world))')).toHaveLength(0)
+    })
+
+    it('lowercases the captured id', () => {
+      const upper = id.toUpperCase()
+      const [ref] = parseBlockRefs(`((${upper}))`)
+      expect(ref.blockId).toBe(id)
+    })
+  })
+
+  describe('isBlockRefId', () => {
+    it('accepts a uuid', () => {
+      expect(isBlockRefId('0123abcd-4567-89ef-0123-456789abcdef')).toBe(true)
+    })
+    it('rejects non-uuid', () => {
+      expect(isBlockRefId('not-a-uuid')).toBe(false)
     })
   })
 })
