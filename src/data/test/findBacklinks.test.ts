@@ -98,7 +98,7 @@ describe('Repo.findBacklinks', () => {
       id: 'block-with-link',
       workspaceId: 'ws-1',
       content: 'I link to [[Foo]]',
-      references: [{id: 'page-1', alias: 'Foo'}],
+      references: [{id: 'page-1', alias: 'Foo', kind: 'page'}],
     })
     const getAll = vi.fn(async (sql: string) => {
       if (/references_json\s*!=\s*'\[\]'/.test(sql)) return [toRow(referencingBlock)]

@@ -54,7 +54,7 @@ export interface BlockProperties {
 export interface BlockReference {
     id: string;
     alias: string;
-    kind?: 'page' | 'block';  // optional for backwards-compat; absent === 'page'
+    kind: 'page' | 'block';
 }
 
 // Each block is stored as a local PowerSync-backed SQLite record
