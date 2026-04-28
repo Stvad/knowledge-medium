@@ -30,6 +30,18 @@ describe('seedDailyPage', () => {
     const child = repo.getCachedBlockData(root.childIds[0])
     expect(child?.content).toBe('')
   })
+
+  it('places preface bullets above the empty typing bullet', () => {
+    const repo = new Repo(makeStubDb(), new UndoRedoManager(), {id: 'u', name: 'Test'})
+    const rootId = 'root-3'
+
+    seedDailyPage(repo, rootId, 'ws-1', ['[[Tutorial]]'])
+
+    const root = repo.getCachedBlockData(rootId)!
+    expect(root.childIds).toHaveLength(2)
+    expect(repo.getCachedBlockData(root.childIds[0])?.content).toBe('[[Tutorial]]')
+    expect(repo.getCachedBlockData(root.childIds[1])?.content).toBe('')
+  })
 })
 
 describe('seedTutorial', () => {

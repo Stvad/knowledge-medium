@@ -27,15 +27,23 @@ const seedExtensionBlocks = (
 // it lines up with what client-side dailyNoteBlockId() computes.
 // repo.create is UPSERT — writing with the known id overwrites the
 // empty seed whether or not sync has delivered it yet.
+//
+// `prefaceContents` are inserted as bullets above the empty typing
+// bullet — used by the personal-workspace flow to drop a [[Tutorial]]
+// link onto today's note for first-run discoverability.
 export const seedDailyPage = (
   repo: Repo,
   rootBlockId: string,
   workspaceId: string,
+  prefaceContents: string[] = [],
 ): void => {
   const [dateLabel, dateIso] = dailyPageAliases(new Date())
+  const prefaceBullets = prefaceContents.map(content =>
+    repo.create({workspaceId, parentId: rootBlockId, content}),
+  )
   // Empty child bullet so the user has somewhere to type without
   // overwriting the page title on first keystroke.
-  const childBlock = repo.create({
+  const typingBullet = repo.create({
     workspaceId,
     parentId: rootBlockId,
     content: '',
@@ -45,7 +53,7 @@ export const seedDailyPage = (
     workspaceId,
     content: dateLabel,
     properties: fromList(aliasProp([dateLabel, dateIso])),
-    childIds: [childBlock.id],
+    childIds: [...prefaceBullets.map(b => b.id), typingBullet.id],
   })
 }
 

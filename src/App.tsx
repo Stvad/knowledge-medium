@@ -142,13 +142,14 @@ const getInitialBlock = memoize(
 
     // Freshly inserted personal workspace: the RPC seeded an empty root
     // block at the deterministic daily-note id. Populate it as today's
-    // daily note (so it has aliases + a typeable child bullet) AND
-    // install the tutorial as a separate parent-less page the user can
-    // discover via QuickFind. We still land on today's note — the
-    // tutorial is reachable via [[Tutorial]] but not the home view.
+    // daily note AND install the tutorial as a separate parent-less
+    // page. The daily page gets a `[[Tutorial]]` bullet at the top so
+    // first-run users can find it from the home view without us
+    // hijacking the landing page. Returning users land on the empty
+    // typing bullet below it as usual.
     if (seedRootBlockId) {
-      seedDailyPage(repo, seedRootBlockId, workspaceId)
       seedTutorial(repo, workspaceId)
+      seedDailyPage(repo, seedRootBlockId, workspaceId, ['[[Tutorial]]'])
       await repo.flush()
       writeAppHash(workspaceId, seedRootBlockId)
       return {workspaceId, block: repo.find(seedRootBlockId)}
