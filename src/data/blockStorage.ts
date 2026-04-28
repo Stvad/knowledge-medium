@@ -8,12 +8,14 @@ import {
 } from '@/data/blockSchema'
 import type { BlockRow } from '@/data/blockSchema'
 import {
-  SELECT_ALIASES_IN_SUBTREE_SQL,
+  SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
+  SELECT_ALIASES_IN_WORKSPACE_SQL,
   SELECT_ALL_BLOCK_STATES_AT_SQL,
-  SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
   SELECT_BLOCK_EVENTS_AFTER_SQL,
   SELECT_BLOCK_SQL,
   SELECT_BLOCK_STATE_AT_SQL,
+  SELECT_BLOCKS_BY_CONTENT_SQL,
   SELECT_BLOCKS_BY_TYPE_SQL,
   SELECT_FIRST_CHILD_BY_CONTENT_SQL,
   SELECT_MAX_BLOCK_EVENT_SEQ_SQL,
@@ -100,12 +102,21 @@ export class BlockStorage {
     return Boolean(row)
   }
 
-  async findBlockByAliasInSubtree(rootId: string, alias: string): Promise<BlockData | null> {
+  async findBlockByAliasInWorkspace(workspaceId: string, alias: string): Promise<BlockData | null> {
     const row = await this.db.getOptional<BlockRow>(
-      SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL,
-      [rootId, alias],
+      SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+      [workspaceId, alias],
     )
     return row ? parseBlockRow(row) : null
+  }
+
+  async searchBlocksByContent(workspaceId: string, query: string, limit: number): Promise<BlockData[]> {
+    if (!query) return []
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_CONTENT_SQL,
+      [workspaceId, query, limit],
+    )
+    return rows.map(parseBlockRow)
   }
 
   async findBlocksByType(workspaceId: string, type: string): Promise<BlockData[]> {
@@ -124,12 +135,23 @@ export class BlockStorage {
     return row ? parseBlockRow(row) : null
   }
 
-  async getAliasesInSubtree(rootId: string, filter: string): Promise<string[]> {
+  async getAliasesInWorkspace(workspaceId: string, filter: string): Promise<string[]> {
     const rows = await this.db.getAll<{alias: string}>(
-      SELECT_ALIASES_IN_SUBTREE_SQL,
-      [rootId, filter, filter],
+      SELECT_ALIASES_IN_WORKSPACE_SQL,
+      [workspaceId, filter, filter],
     )
     return rows.map(row => row.alias)
+  }
+
+  async findAliasMatchesInWorkspace(
+    workspaceId: string,
+    filter: string,
+    limit: number,
+  ): Promise<Array<{alias: string, blockId: string, content: string}>> {
+    return this.db.getAll<{alias: string, blockId: string, content: string}>(
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
+      [workspaceId, filter, filter, limit],
+    )
   }
 
   async getBlockStateAt(id: string, timestamp: number): Promise<BlockData | undefined> {

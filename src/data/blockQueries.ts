@@ -100,35 +100,60 @@ export const buildSelectSubtreeBlocksSql = (includeRoot: boolean) => `
   ORDER BY subtree.sort_key
 `
 
-export const SELECT_ALIASES_IN_SUBTREE_SQL = `
-  ${SUBTREE_CTE_SQL}
-  SELECT
-    alias.value AS alias,
-    MIN(subtree.sort_key) AS first_sort_key
-  FROM blocks
-  JOIN subtree ON subtree.id = blocks.id
-  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
-  WHERE (? = '' OR LOWER(alias.value) LIKE '%' || LOWER(?) || '%')
-  GROUP BY alias.value
-  ORDER BY first_sort_key, alias.value
-`
-
-export const SELECT_BLOCK_BY_ALIAS_IN_SUBTREE_SQL = `
-  ${SUBTREE_CTE_SQL}
-  SELECT
-    ${buildQualifiedBlockColumnsSql('blocks')}
-  FROM blocks
-  JOIN subtree ON subtree.id = blocks.id
-  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
-  WHERE alias.value = ?
-  ORDER BY subtree.sort_key
-  LIMIT 1
-`
-
 // `deleted = 0` filters soft-deleted blocks. Block.delete() marks the block
 // and all descendants deleted, so this catches both leaf and subtree deletes.
 // Backed by idx_blocks_workspace_active (partial index on workspace_id WHERE
 // deleted = 0).
+export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
+  SELECT
+    alias.value AS alias
+  FROM blocks
+  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND (? = '' OR LOWER(alias.value) LIKE '%' || LOWER(?) || '%')
+  GROUP BY alias.value
+  ORDER BY MIN(blocks.create_time), alias.value
+`
+
+export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
+  SELECT
+    ${SELECT_BLOCK_COLUMNS_SQL}
+  FROM blocks
+  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND alias.value = ?
+  ORDER BY blocks.create_time
+  LIMIT 1
+`
+
+export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
+  SELECT
+    alias.value AS alias,
+    blocks.id AS blockId,
+    blocks.content AS content
+  FROM blocks
+  JOIN json_each(blocks.properties_json, '$.alias.value') AS alias
+  WHERE blocks.workspace_id = ?
+    AND blocks.deleted = 0
+    AND (? = '' OR LOWER(alias.value) LIKE '%' || LOWER(?) || '%')
+  ORDER BY blocks.create_time, alias.value
+  LIMIT ?
+`
+
+export const SELECT_BLOCKS_BY_CONTENT_SQL = `
+  SELECT
+    ${SELECT_BLOCK_COLUMNS_SQL}
+  FROM blocks
+  WHERE workspace_id = ?
+    AND deleted = 0
+    AND content != ''
+    AND LOWER(content) LIKE '%' || LOWER(?) || '%'
+  ORDER BY update_time DESC
+  LIMIT ?
+`
+
 export const SELECT_BLOCKS_BY_TYPE_SQL = `
   SELECT
     ${SELECT_BLOCK_COLUMNS_SQL}

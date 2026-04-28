@@ -383,7 +383,11 @@ const parseAndUpdateReferences = async (block: Block) => {
 
 const getOrCreateBlockForAlias = async (block: Block, alias: string) => {
   const rootBlock = await getRootBlock(block)
-  const existingBlock = await rootBlock.repo.findBlockByAliasInSubtree(rootBlock.id, alias)
+  const workspaceId = block.dataSync()?.workspaceId ?? rootBlock.repo.activeWorkspaceId
+  if (!workspaceId) {
+    throw new Error('Cannot resolve alias without a workspace')
+  }
+  const existingBlock = await rootBlock.repo.findBlockByAliasInWorkspace(workspaceId, alias)
 
   const referenceWasRemoved = (candidate: Block) =>
     (block.dataSync()?.references ?? []).findIndex(ref => ref.id === candidate.id) === -1
@@ -392,8 +396,7 @@ const getOrCreateBlockForAlias = async (block: Block, alias: string) => {
 }
 
 const createNewBlockForAlias = async (rootBlock: Block, alias: string) => {
-  const library = await rootBlock.childByContent('library', true)
-  return library.createChild({data: {content: alias, properties: fromList(aliasProp([alias]))}})
+  return rootBlock.createChild({data: {content: alias, properties: fromList(aliasProp([alias]))}})
 }
 
 const createSelfDestructingBlockForAlias = async (rootBlock: Block, alias: string, condition: (newBlock: Block) => boolean) => {

@@ -125,6 +125,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       hideFromCommandPallet: true,
     },
     {
+      id: 'quick_find',
+      description: 'Find or create page or block',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        window.dispatchEvent(new CustomEvent('toggle-quick-find'))
+      },
+      defaultBinding: {
+        keys: ['cmd+shift+k', 'ctrl+shift+k'],
+      },
+    },
+    {
       id: 'undo',
       description: 'Undo last action',
       context: ActionContextTypes.GLOBAL,

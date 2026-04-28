@@ -61,6 +61,15 @@ export const topLevelBlockIdProp = stringProperty('topLevelBlockId', undefined, 
 export const focusedBlockIdProp = stringProperty('focusedBlockId', undefined, uiChangeScope)
 export const editorSelection = objectProperty<EditorSelectionState>('editorSelection', undefined, uiChangeScope)
 export const editorFocusRequestProp = numberProperty('editorFocusRequest', 0, uiChangeScope)
+export const recentBlockIdsProp = listProperty<string>('recentBlockIds', [], uiChangeScope)
+
+export const RECENT_BLOCKS_LIMIT = 10
+
+export const pushRecentBlockId = (uiStateBlock: Block, blockId: string) => {
+  const current = (uiStateBlock.dataSync()?.properties[recentBlockIdsProp.name]?.value as string[] | undefined) ?? []
+  const next = [blockId, ...current.filter(id => id !== blockId)].slice(0, RECENT_BLOCKS_LIMIT)
+  uiStateBlock.setProperty({...recentBlockIdsProp, value: next})
+}
 
 export interface BlockSelectionState {
   selectedBlockIds: string[];

@@ -6,22 +6,20 @@ import { useUIStateProperty } from '@/data/globalState.ts'
 import { focusedBlockIdProp } from '@/data/properties.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { useBlockContext } from '@/context/block.tsx'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
-  const blockContext = useBlockContext()
 
-  // Create getAliases function for autocomplete
   const getAliasesForAutocomplete = useMemo(() => {
     return async (filter: string): Promise<string[]> => {
-      if (!blockContext.rootBlockId) {
-        console.warn('No root block ID available for alias search')
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId) {
+        console.warn('No active workspace for alias search')
         return []
       }
-      return repo.getAliasesInSubtree(blockContext.rootBlockId, filter)
+      return repo.getAliasesInWorkspace(workspaceId, filter)
     }
-  }, [repo, blockContext.rootBlockId])
+  }, [repo])
 
   const extensions = useMemo(() => createMinimalMarkdownConfig({
     getAliases: getAliasesForAutocomplete

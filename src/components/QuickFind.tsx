@@ -1,0 +1,288 @@
+import { useState, useEffect, KeyboardEvent } from 'react'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
+import {
+  Command,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+} from '@/components/ui/command'
+import { Kbd } from '@/components/ui/kbd'
+import { useRepo } from '@/context/repo.tsx'
+import { useUIStateBlock, useUIStateProperty } from '@/data/globalState.ts'
+import {
+  aliasProp,
+  fromList,
+  pushRecentBlockId,
+  recentBlockIdsProp,
+} from '@/data/properties.ts'
+import { writeAppHash } from '@/utils/routing.ts'
+import { getRootBlock } from '@/data/blockTraversal.ts'
+
+const SEARCH_LIMIT = 25
+const DEBOUNCE_MS = 80
+const QUICK_FIND_TOGGLE_EVENT = 'toggle-quick-find'
+
+interface AliasMatch {
+  alias: string
+  blockId: string
+  content: string
+}
+
+interface BlockMatch {
+  blockId: string
+  content: string
+}
+
+interface RecentItem {
+  blockId: string
+  label: string
+}
+
+const truncate = (text: string, max = 80) =>
+  text.length > max ? text.slice(0, max - 1) + '…' : text
+
+export function QuickFind() {
+  const repo = useRepo()
+  const uiStateBlock = useUIStateBlock()
+  const [recentIds] = useUIStateProperty(recentBlockIdsProp)
+
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [value, setValue] = useState('')
+  const [aliases, setAliases] = useState<AliasMatch[]>([])
+  const [blocks, setBlocks] = useState<BlockMatch[]>([])
+  const [recents, setRecents] = useState<RecentItem[]>([])
+
+  useEffect(() => {
+    const handleToggle = () => {
+      setOpen(prev => {
+        const next = !prev
+        if (next) {
+          setQuery('')
+          setValue('')
+        }
+        return next
+      })
+    }
+    window.addEventListener(QUICK_FIND_TOGGLE_EVENT, handleToggle)
+    return () => window.removeEventListener(QUICK_FIND_TOGGLE_EVENT, handleToggle)
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const workspaceId = repo.activeWorkspaceId
+    if (!workspaceId) return
+    if (!query.trim()) {
+      setAliases([])
+      setBlocks([])
+      return
+    }
+
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      const [aliasRows, blockRows] = await Promise.all([
+        repo.findAliasMatchesInWorkspace(workspaceId, query, SEARCH_LIMIT),
+        repo.searchBlocksByContent(workspaceId, query, SEARCH_LIMIT),
+      ])
+      if (cancelled) return
+
+      const aliasBlockIds = new Set(aliasRows.map(row => row.blockId))
+      const blockMatches: BlockMatch[] = []
+      for (const block of blockRows) {
+        if (aliasBlockIds.has(block.id)) continue
+        const data = block.dataSync()
+        blockMatches.push({blockId: block.id, content: data?.content ?? ''})
+      }
+
+      setAliases(aliasRows)
+      setBlocks(blockMatches)
+    }, DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [open, query, repo])
+
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    const ids = (recentIds as string[] | undefined) ?? []
+    const load = async () => {
+      const items: RecentItem[] = []
+      for (const id of ids) {
+        const data = await repo.find(id).data()
+        if (!data) continue
+        const blockAliases = (data.properties[aliasProp().name]?.value as string[] | undefined) ?? []
+        items.push({blockId: id, label: blockAliases[0] ?? data.content ?? id})
+      }
+      if (!cancelled) setRecents(items)
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [open, recentIds, repo])
+
+  const jumpToBlock = (blockId: string) => {
+    const workspaceId = repo.activeWorkspaceId
+    if (!workspaceId) return
+    pushRecentBlockId(uiStateBlock, blockId)
+    writeAppHash(workspaceId, blockId)
+    setOpen(false)
+  }
+
+  const openInNewPanel = (blockId: string) => {
+    pushRecentBlockId(uiStateBlock, blockId)
+    window.dispatchEvent(new CustomEvent('open-panel', {detail: {blockId}}))
+    setOpen(false)
+  }
+
+  const createPage = async (alias: string) => {
+    const workspaceId = repo.activeWorkspaceId
+    if (!workspaceId) return
+    const trimmed = alias.trim()
+    if (!trimmed) return
+
+    const existing = await repo.findBlockByAliasInWorkspace(workspaceId, trimmed)
+    if (existing) {
+      jumpToBlock(existing.id)
+      return
+    }
+
+    const rootBlock = await getRootBlock(repo.find(uiStateBlock.id))
+    const newBlock = await rootBlock.createChild({
+      data: {content: trimmed, properties: fromList(aliasProp([trimmed]))},
+    })
+    jumpToBlock(newBlock.id)
+  }
+
+  const handleSelect = (selectedValue: string, openInPanel: boolean) => {
+    const colonIdx = selectedValue.indexOf(':')
+    if (colonIdx === -1) return
+    const kind = selectedValue.slice(0, colonIdx)
+    const payload = selectedValue.slice(colonIdx + 1)
+
+    if (kind === 'create') {
+      void createPage(payload)
+      return
+    }
+    const blockId = payload.split(':')[0]
+    if (!blockId) return
+    if (openInPanel) openInNewPanel(blockId)
+    else jumpToBlock(blockId)
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && (event.shiftKey || event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (value) handleSelect(value, true)
+    }
+  }
+
+  const trimmedQuery = query.trim()
+  const exactAliasMatch = aliases.some(
+    match => match.alias.toLowerCase() === trimmedQuery.toLowerCase(),
+  )
+  const showCreate = trimmedQuery.length > 0 && !exactAliasMatch
+  const showRecents = !trimmedQuery && recents.length > 0
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogContent className="overflow-hidden p-0">
+        <Command
+          shouldFilter={false}
+          value={value}
+          onValueChange={setValue}
+          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5"
+        >
+          <CommandInput
+            placeholder="Find or create page or block..."
+            value={query}
+            onValueChange={setQuery}
+            onKeyDown={handleKeyDown}
+          />
+          <CommandList>
+            <CommandEmpty>
+              {trimmedQuery ? 'No results.' : 'Type to search.'}
+            </CommandEmpty>
+
+            {showRecents && (
+              <CommandGroup heading="Recent">
+                {recents.map(item => (
+                  <CommandItem
+                    key={`recent:${item.blockId}`}
+                    value={`recent:${item.blockId}`}
+                    onSelect={selectedValue => handleSelect(selectedValue, false)}
+                    className="flex justify-between items-center"
+                  >
+                    <span className="truncate">{truncate(item.label)}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {aliases.length > 0 && (
+              <CommandGroup heading="Pages">
+                {aliases.map(match => (
+                  <CommandItem
+                    key={`page:${match.blockId}:${match.alias}`}
+                    value={`page:${match.blockId}:${match.alias}`}
+                    onSelect={selectedValue => handleSelect(selectedValue, false)}
+                    className="flex justify-between items-center gap-2"
+                  >
+                    <span className="truncate">{match.alias}</span>
+                    {match.content && match.content !== match.alias && (
+                      <span className="text-xs text-muted-foreground truncate max-w-[40%]">
+                        {truncate(match.content, 50)}
+                      </span>
+                    )}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {blocks.length > 0 && (
+              <CommandGroup heading="Blocks">
+                {blocks.map(match => (
+                  <CommandItem
+                    key={`block:${match.blockId}`}
+                    value={`block:${match.blockId}`}
+                    onSelect={selectedValue => handleSelect(selectedValue, false)}
+                  >
+                    <span className="truncate">{truncate(match.content)}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {showCreate && (
+              <CommandGroup heading="Create">
+                <CommandItem
+                  key={`create:${trimmedQuery}`}
+                  value={`create:${trimmedQuery}`}
+                  onSelect={selectedValue => handleSelect(selectedValue, false)}
+                >
+                  <span>Create page “{trimmedQuery}”</span>
+                </CommandItem>
+              </CommandGroup>
+            )}
+          </CommandList>
+          <div className="flex justify-end gap-3 border-t px-3 py-2 text-xs text-muted-foreground">
+            <span className="flex items-center gap-1">
+              <Kbd>↵</Kbd> jump
+            </span>
+            <span className="flex items-center gap-1">
+              <Kbd>⇧↵</Kbd> open in panel
+            </span>
+          </div>
+        </Command>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export const toggleQuickFindEvent = QUICK_FIND_TOGGLE_EVENT

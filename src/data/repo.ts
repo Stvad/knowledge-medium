@@ -204,21 +204,35 @@ export class Repo {
     return this.hydrateSnapshots(snapshots)
   }
 
-  async getAliasesInSubtree(rootId: string, filter: string = '') {
+  async getAliasesInWorkspace(workspaceId: string, filter: string = '') {
     await this.flush()
-    return this.storage.getAliasesInSubtree(rootId, filter)
+    return this.storage.getAliasesInWorkspace(workspaceId, filter)
   }
 
-  async findBlockByAliasInSubtree(rootId: string, alias: string) {
+  async findBlockByAliasInWorkspace(workspaceId: string, alias: string) {
     if (!alias) return null
 
     await this.flush()
 
-    const snapshot = await this.storage.findBlockByAliasInSubtree(rootId, alias)
+    const snapshot = await this.storage.findBlockByAliasInWorkspace(workspaceId, alias)
     if (!snapshot) return null
 
     this.cache.hydrate(snapshot)
     return this.find(snapshot.id)
+  }
+
+  async searchBlocksByContent(workspaceId: string, query: string, limit: number = 50) {
+    if (!query) return []
+
+    await this.flush()
+
+    const snapshots = await this.storage.searchBlocksByContent(workspaceId, query, limit)
+    return this.hydrateSnapshots(snapshots).map(snapshot => this.find(snapshot.id))
+  }
+
+  async findAliasMatchesInWorkspace(workspaceId: string, filter: string, limit: number = 50) {
+    await this.flush()
+    return this.storage.findAliasMatchesInWorkspace(workspaceId, filter, limit)
   }
 
   async findFirstChildByContent(parentId: string, content: string) {
