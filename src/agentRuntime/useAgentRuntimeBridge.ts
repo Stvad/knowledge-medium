@@ -5,6 +5,7 @@ import { Block } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
+import { describeRuntime } from '@/agentRuntime/describeRuntime.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { BlockData, BlockProperties } from '@/types.ts'
@@ -294,18 +295,8 @@ const executeCommand = async (
   }
 }
 
-const describeRuntime = (context: AgentRuntimeContext) => ({
-  rootBlockId: context.rootBlock.id,
-  currentUser: context.repo.currentUser,
-  safeMode: context.safeMode,
-  actions: context.actions.map(action => ({
-    id: action.id,
-    description: action.description,
-    context: action.context,
-    hasDefaultBinding: Boolean(action.defaultBinding),
-  })),
-  renderers: Object.keys(context.renderers),
-})
+// describeRuntime extracted to a non-React module so it's testable in
+// isolation; see @/agentRuntime/describeRuntime.
 
 const executeArbitraryCode = async (
   code: string,

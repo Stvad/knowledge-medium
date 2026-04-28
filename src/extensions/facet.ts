@@ -124,6 +124,23 @@ export class FacetRuntime {
   contributions<Input>(facet: Facet<Input, unknown>): FacetContribution<Input>[] {
     return (this.contributionsByFacet.get(facet.id) ?? []) as FacetContribution<Input>[]
   }
+
+  /**
+   * Every facet id that has at least one contribution. Useful for
+   * introspection (agent bridge describeRuntime, debug pages).
+   */
+  facetIds(): string[] {
+    return Array.from(this.contributionsByFacet.keys())
+  }
+
+  /**
+   * Raw contributions for a facet, looked up by id rather than by
+   * facet object. Lets introspection callers enumerate without
+   * needing the original Facet definition in scope.
+   */
+  contributionsById(facetId: string): FacetContribution<unknown>[] {
+    return this.contributionsByFacet.get(facetId) ?? []
+  }
 }
 
 export async function resolveFacetRuntime(
