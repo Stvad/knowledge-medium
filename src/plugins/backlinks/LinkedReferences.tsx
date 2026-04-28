@@ -1,12 +1,12 @@
-import { MouseEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Block } from '@/data/block.ts'
 import { Repo } from '@/data/repo.ts'
 import { BlockRendererProps } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
+import { BreadcrumbList } from '@/components/BreadcrumbList.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useBacklinks } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { buildAppHash } from '@/utils/routing.ts'
 
 const NESTED_OVERRIDES = {topLevel: false, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
@@ -77,39 +77,18 @@ const BacklinkBreadcrumbs = ({shownBlock, onSelect}: BreadcrumbsProps) => {
   const workspaceId = repo.activeWorkspaceId
   const parents = useParents(shownBlock)
 
-  if (parents.length === 0 || !workspaceId) return null
+  if (!workspaceId) return null
 
   return (
-    <div className="flex items-center gap-1 text-xs text-muted-foreground/80 mb-1 flex-wrap">
-      {parents.map((parent) => (
-        <span key={parent.id} className="flex items-center min-w-0">
-          <a
-            href={buildAppHash(workspaceId, parent.id)}
-            className="no-underline cursor-pointer truncate max-w-[24ch] hover:text-foreground"
-            // Plain click unfurls inline; modified clicks (cmd/ctrl/shift,
-            // middle/right) fall through to the href so the user can still
-            // navigate or open in a panel the way the rest of the app's
-            // links work. Stop propagation either way — without it, the
-            // event bubbles to the surrounding block's click handler,
-            // which preventDefaults and swallows the browser navigation.
-            onClick={(event: MouseEvent) => {
-              event.stopPropagation()
-              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-              if (event.button !== 0) return
-              event.preventDefault()
-              onSelect(parent)
-            }}
-          >
-            <span className="inline [&>*]:inline [&>p]:m-0 [&>*]:whitespace-nowrap [&>*]:overflow-hidden [&>*]:text-ellipsis [&>*]:font-normal [&>*]:text-inherit text-muted-foreground/80">
-              <NestedBlockContextProvider overrides={BREADCRUMB_OVERRIDES}>
-                <BlockComponent blockId={parent.id}/>
-              </NestedBlockContextProvider>
-            </span>
-          </a>
-          <span className="mx-1 text-muted-foreground/40">›</span>
-        </span>
-      ))}
-    </div>
+    <BreadcrumbList
+      parents={parents}
+      workspaceId={workspaceId}
+      overrides={BREADCRUMB_OVERRIDES}
+      onSelect={onSelect}
+      className="flex items-center gap-1 text-xs text-muted-foreground/80 mb-1 flex-wrap"
+      itemClassName="no-underline cursor-pointer truncate max-w-[24ch] hover:text-foreground"
+      separatorClassName="mx-1 text-muted-foreground/40"
+    />
   )
 }
 
