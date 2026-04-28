@@ -3,7 +3,13 @@ import { visit, SKIP } from 'unist-util-visit'
 import { Literal, Parent, RootContent } from 'mdast'
 import { parseReferences } from '@/utils/referenceParser'
 
-export const remarkWikilinks: Plugin = () => (tree) => {
+export interface RemarkWikilinksOptions {
+  resolveAlias: (alias: string) => string | undefined
+}
+
+export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (tree) => {
+  const resolveAlias = options?.resolveAlias
+
   visit(tree, 'text', (node: Literal, index, parent: Parent) => {
     if (index === undefined || !parent) return
 
@@ -27,12 +33,13 @@ export const remarkWikilinks: Plugin = () => (tree) => {
       if (ref.startIndex > last) {
         out.push({type: 'text', value: src.slice(last, ref.startIndex)})
       }
+      const blockId = resolveAlias?.(ref.alias) ?? ''
       out.push({
         type: 'wikilink',
         value: src.slice(ref.startIndex, ref.endIndex),
         data: {
           hName: 'wikilink',
-          hProperties: {alias: ref.alias},
+          hProperties: {alias: ref.alias, blockId},
           hChildren: [{type: 'text', value: ref.alias}],
         },
       } as unknown as RootContent)
