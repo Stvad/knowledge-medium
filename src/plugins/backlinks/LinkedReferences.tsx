@@ -122,20 +122,9 @@ const BacklinkItem = ({block}: { block: Block }) => {
     setShownBlockId(parent.id)
   }, [])
 
-  const isUnfurled = shownBlockId !== block.id
-
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
       <BacklinkBreadcrumbs shownBlock={shownBlock} onSelect={handleSelect}/>
-      {isUnfurled && (
-        <button
-          type="button"
-          onClick={() => setShownBlockId(block.id)}
-          className="text-xs text-muted-foreground/70 hover:text-foreground mb-1"
-        >
-          ↩ collapse to reference
-        </button>
-      )}
       <NestedBlockContextProvider overrides={NESTED_OVERRIDES}>
         <BlockComponent blockId={shownBlockId}/>
       </NestedBlockContextProvider>
