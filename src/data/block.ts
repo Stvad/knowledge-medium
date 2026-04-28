@@ -4,6 +4,8 @@ import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
 import { parseReferences } from '@/utils/referenceParser'
 import { aliasProp, fromList } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
+import { parseRelativeDate } from '@/utils/relativeDate.ts'
+import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
 
 export {
   getLastVisibleDescendant,
@@ -380,11 +382,22 @@ const parseAndUpdateReferences = async (block: Block) => {
   })
 }
 
-const getOrCreateBlockForAlias = async (block: Block, alias: string) => {
+export const getOrCreateBlockForAlias = async (block: Block, alias: string) => {
   const workspaceId = block.dataSync()?.workspaceId ?? block.repo.activeWorkspaceId
   if (!workspaceId) {
     throw new Error('Cannot resolve alias without a workspace')
   }
+
+  // Date-shaped aliases ([[Friday]], [[April 28]], [[2026-04-28]]) all
+  // funnel through the daily-note path so cross-client offline creates
+  // collapse onto the deterministic id instead of duplicating. Skip the
+  // self-destruct dance: a casually-typed date reference still creates
+  // a real daily note that should stay even if the user undoes.
+  const dateMatch = parseRelativeDate(alias)
+  if (dateMatch) {
+    return getOrCreateDailyNote(block.repo, workspaceId, dateMatch.iso)
+  }
+
   const existingBlock = await block.repo.findBlockByAliasInWorkspace(workspaceId, alias)
 
   const referenceWasRemoved = (candidate: Block) =>
