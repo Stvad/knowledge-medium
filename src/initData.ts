@@ -42,11 +42,15 @@ const FOLD_ALL_ACTION_SOURCE = `import { actionsFacet, ActionContextTypes, isCol
 
 // Toggle collapse on every visible descendant of the top-level block.
 // Demonstrates a single action contribution with a default keybinding.
+//
+// Note on key syntax: this app uses hotkeys-js, which has no 'mod'
+// alias — list cmd and ctrl variants explicitly for cross-platform
+// support.
 export default actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
   context: ActionContextTypes.GLOBAL,
-  defaultBinding: { keys: 'mod+shift+f' },
+  defaultBinding: { keys: ['cmd+shift+f', 'ctrl+shift+f'] },
   handler: async ({ uiStateBlock }) => {
     const repo = uiStateBlock.repo
     const topLevelId = uiStateBlock.dataSync()?.properties.topLevelBlockId?.value
@@ -124,7 +128,7 @@ export default [
     id: 'user.add-reaction',
     description: 'Add a reaction emoji to the focused block',
     context: ActionContextTypes.NORMAL_MODE,
-    defaultBinding: { keys: 'mod+shift+r' },
+    defaultBinding: { keys: ['cmd+shift+r', 'ctrl+shift+r'] },
     handler: async ({ block }) => cycleReaction(block),
   }),
 
