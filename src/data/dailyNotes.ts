@@ -9,8 +9,17 @@ import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 // sync has happened. Without this, two offline clients each create
 // their own "today" page on first launch and we ship duplicate pages
 // on first sync.
-const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
-const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
+//
+// DAILY_NOTE_NS is mirrored by `v_daily_note_ns` in
+// supabase/migrations/20260428123232_deterministic_seed_daily_note.sql so
+// that the server-seeded root block id matches what client-side
+// dailyNoteBlockId() computes. The input format (`workspace_id || ':' ||
+// iso`) is mirrored there too. Drift between the two — namespace, input
+// shape, or order — reintroduces the duplication. Enforced by
+// dailyNotesMigrationParity.test.ts, which fails if the SQL file no
+// longer references this exact constant.
+export const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
+export const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
 const JOURNAL_ALIAS = 'Journal'
 const JOURNAL_TYPE = 'journal'

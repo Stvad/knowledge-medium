@@ -45,8 +45,12 @@ declare
   v_workspace_id text := gen_random_uuid()::text;
   v_root_block_id text;
   -- Daily-note namespace UUID. Mirrors DAILY_NOTE_NS in
-  -- src/data/dailyNotes.ts. Changing one without the other will diverge
-  -- ids and reintroduce the duplication this migration prevents.
+  -- src/data/dailyNotes.ts. The input format below
+  -- (workspace_id || ':' || iso) mirrors `${workspaceId}:${iso}` in
+  -- dailyNoteBlockId(). Drift between the two reintroduces the
+  -- duplication this migration prevents — enforced by
+  -- src/data/test/dailyNotesMigrationParity.test.ts, which fails the
+  -- build before either edit ships unaccompanied.
   v_daily_note_ns uuid := '53421e08-2f31-42f8-b73a-43830bb718f1';
 begin
   if v_user_id is null then
