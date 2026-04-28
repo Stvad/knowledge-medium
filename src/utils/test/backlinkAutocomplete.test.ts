@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createBacklinkAutocomplete, isInsideBacklinkBrackets } from '../backlinkAutocomplete'
+import { EditorState } from '@codemirror/state'
+import { CompletionContext } from '@codemirror/autocomplete'
+import {
+  backlinkCompletionSource,
+  createBacklinkAutocomplete,
+  isInsideBacklinkBrackets,
+} from '../backlinkAutocomplete'
 
 describe('backlinkAutocomplete', () => {
   describe('isInsideBacklinkBrackets', () => {
@@ -84,6 +90,28 @@ describe('backlinkAutocomplete', () => {
       
       const result = await getAliases('case')
       expect(result).toEqual(['CamelCase', 'lowercase', 'UPPERCASE'])
+    })
+  })
+
+  describe('completion source filter behavior', () => {
+    const callSource = async (text: string, cursorPos: number, aliases: string[]) => {
+      const state = EditorState.create({doc: text})
+      const context = new CompletionContext(state, cursorPos, false)
+      const source = backlinkCompletionSource({getAliases: async () => aliases})
+      return source(context)
+    }
+
+    it('returns filter:false so non-substring suggestions (e.g. resolved dates) survive CM filtering', async () => {
+      // Simulate user typing "[[fri" — getAliases returns the long-form
+      // date that the relative-date parser resolved upstream.
+      const result = await callSource('[[fri', 5, ['April 30th, 2026'])
+      expect(result).not.toBeNull()
+      expect(result!.filter).toBe(false)
+    })
+
+    it('still surfaces option labels verbatim — CM uses them for insertion', async () => {
+      const result = await callSource('[[fri', 5, ['April 30th, 2026'])
+      expect(result!.options.map(opt => opt.label)).toEqual(['April 30th, 2026'])
     })
   })
 

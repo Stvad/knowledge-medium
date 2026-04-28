@@ -32,7 +32,7 @@ export function createBacklinkAutocomplete(options: BacklinkAutocompleteOptions)
 /**
  * Completion source for [[alias]] syntax
  */
-function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
+export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const { state, pos } = context
     const line = state.doc.lineAt(pos)
@@ -67,6 +67,13 @@ function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
     return {
       from: startPos,
       to: pos,
+      // Source-side filtering is final — `getAliases` already runs a
+      // workspace-scoped LIKE filter, and we surface entries the user
+      // didn't *type* (e.g. typing "fri" suggests "April 30th, 2026"
+      // via the relative-date parser). CodeMirror's default fuzzy
+      // filter would hide those, since the label doesn't contain the
+      // typed substring.
+      filter: false,
       options: aliases.map(alias => ({
         label: alias,
         apply: (view, _, from, to) => {
