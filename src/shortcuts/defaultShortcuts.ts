@@ -147,7 +147,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         document.location.hash = buildAppHash(workspaceId, note.id)
       },
       defaultBinding: {
-        keys: ['cmd+shift+d', 'ctrl+shift+d'],
+        keys: ['cmd+shift+`', 'ctrl+shift+`'],
       },
     },
     {
