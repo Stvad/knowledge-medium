@@ -18,7 +18,7 @@ export interface ParsedBlockRef {
   blockId: string;
   startIndex: number;
   endIndex: number;
-  embed: boolean;  // true for {{embed: ((id))}}, false for plain ((id))
+  embed: boolean;  // true for !((id)), false for plain ((id))
 }
 
 // UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
@@ -26,7 +26,7 @@ export interface ParsedBlockRef {
 // don't get treated as references.
 const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
 const BLOCK_REF_RE = new RegExp(`\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
-const BLOCK_EMBED_RE = new RegExp(`\\{\\{\\s*\\[?\\[?embed\\]?\\]?\\s*:?\\s*\\(\\((${UUID_RE_SOURCE})\\)\\)\\s*\\}\\}`, 'gi')
+const BLOCK_EMBED_RE = new RegExp(`!\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
 
 export const isBlockRefId = (s: string) => new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(s)
 

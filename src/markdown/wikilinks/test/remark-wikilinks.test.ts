@@ -165,4 +165,44 @@ describe('remarkWikilinks', () => {
       expect(links.map(wikilinkChildText)).toEqual(['a', 'b', 'Z'])
     })
   })
+
+  describe('![[alias]] page-embed', () => {
+    const collectEmbeds = (tree: Root) => {
+      const out: Array<{alias: string; blockId: string; raw: string}> = []
+      visit(tree, (node) => {
+        if ((node as {type: string}).type === 'pageembed') {
+          const props = (node as unknown as {data: {hProperties: {alias: string; blockId: string}}; value: string})
+          out.push({
+            alias: props.data.hProperties.alias,
+            blockId: props.data.hProperties.blockId,
+            raw: props.value,
+          })
+        }
+      })
+      return out
+    }
+
+    it('rewrites ![[Foo]] as a pageembed', () => {
+      const tree = transform('See ![[Foo]] for context.', {Foo: 'block-foo'})
+      const embeds = collectEmbeds(tree)
+      expect(embeds).toEqual([{alias: 'Foo', blockId: 'block-foo', raw: '![[Foo]]'}])
+      // And no wikilink for the same span.
+      expect(collectWikilinks(tree)).toHaveLength(0)
+    })
+
+    it('does not consume the ! when the bracket pair is bare [[Foo]]', () => {
+      const tree = transform('![[Foo]]', {Foo: 'x'})
+      const embeds = collectEmbeds(tree)
+      expect(embeds).toHaveLength(1)
+      expect(embeds[0].raw).toBe('![[Foo]]')
+    })
+
+    it('mixes embed and bare wikilink in the same paragraph', () => {
+      const tree = transform('Embed ![[A]] with link [[B]] inline.', {A: 'a', B: 'b'})
+      const embeds = collectEmbeds(tree)
+      const links = collectWikilinks(tree)
+      expect(embeds).toEqual([{alias: 'A', blockId: 'a', raw: '![[A]]'}])
+      expect(links.map(l => l.data.hProperties.alias)).toEqual(['B'])
+    })
+  })
 })

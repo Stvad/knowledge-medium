@@ -79,7 +79,7 @@ const copyBlockRef = (block: Block) => {
 }
 
 const copyBlockEmbed = (block: Block) => {
-  navigator.clipboard.writeText(`{{embed: ((${block.id}))}}`)
+  navigator.clipboard.writeText(`!((${block.id}))`)
 }
 
 const zoomIn = (block: Block, workspaceId: string) => {

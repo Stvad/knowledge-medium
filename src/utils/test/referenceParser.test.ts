@@ -173,17 +173,22 @@ Another [[normal-ref]]
       expect(result[0]).toMatchObject({blockId: id, embed: false})
     })
 
-    it('parses a {{embed: ((uuid))}} embed', () => {
-      const result = parseBlockRefs(`{{embed: ((${id}))}}`)
+    it('parses a !((uuid)) embed', () => {
+      const result = parseBlockRefs(`!((${id}))`)
       expect(result).toHaveLength(1)
       expect(result[0]).toMatchObject({blockId: id, embed: true})
     })
 
-    it('does not double-count the inner ref of an embed', () => {
-      const result = parseBlockRefs(`{{embed: ((${id}))}} and ((${id2}))`)
+    it('does not double-count the inner ref of a !((uuid)) embed', () => {
+      const result = parseBlockRefs(`!((${id})) and ((${id2}))`)
       expect(result).toHaveLength(2)
       expect(result[0]).toMatchObject({blockId: id, embed: true})
       expect(result[1]).toMatchObject({blockId: id2, embed: false})
+    })
+
+    it('treats a bare !((uuid)) at start of line as embed', () => {
+      const result = parseBlockRefs(`!((${id}))\nrest`)
+      expect(result[0]).toMatchObject({blockId: id, embed: true})
     })
 
     it('ignores ((not-a-uuid))', () => {

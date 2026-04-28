@@ -30,6 +30,20 @@ const buildWikilinkNode = (
   },
 } as unknown as RootContent)
 
+const buildPageEmbedNode = (
+  alias: string,
+  blockId: string,
+  raw: string,
+): RootContent => ({
+  type: 'pageembed',
+  value: raw,
+  children: [{type: 'text', value: raw}],
+  data: {
+    hName: 'pageembed',
+    hProperties: {alias, blockId},
+  },
+} as unknown as RootContent)
+
 export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (tree) => {
   const resolve = (alias: string) => options?.resolveAlias?.(alias) ?? ''
 
@@ -105,15 +119,24 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     const out: RootContent[] = []
     let last = 0
     for (const ref of topLevel) {
-      if (ref.startIndex > last) {
-        out.push({type: 'text', value: src.slice(last, ref.startIndex)})
+      // `![[alias]]` is a page-embed (Obsidian-style transclusion). When the
+      // wikilink is preceded by `!` we consume it together with the bang and
+      // emit a pageembed node instead of an inline wikilink.
+      const isEmbed = ref.startIndex > 0 && src[ref.startIndex - 1] === '!'
+      const spanStart = isEmbed ? ref.startIndex - 1 : ref.startIndex
+      if (spanStart > last) {
+        out.push({type: 'text', value: src.slice(last, spanStart)})
       }
-      out.push(buildWikilinkNode(
-        ref.alias,
-        resolve(ref.alias),
-        [{type: 'text', value: ref.alias}],
-        src.slice(ref.startIndex, ref.endIndex),
-      ))
+      const raw = src.slice(spanStart, ref.endIndex)
+      out.push(isEmbed
+        ? buildPageEmbedNode(ref.alias, resolve(ref.alias), raw)
+        : buildWikilinkNode(
+            ref.alias,
+            resolve(ref.alias),
+            [{type: 'text', value: ref.alias}],
+            raw,
+          ),
+      )
       last = ref.endIndex
     }
     if (last < src.length) out.push({type: 'text', value: src.slice(last)})
