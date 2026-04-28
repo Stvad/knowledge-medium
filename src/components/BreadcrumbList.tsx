@@ -4,6 +4,7 @@ import { BlockContextType } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { buildAppHash } from '@/utils/routing.ts'
+import { cn } from '@/lib/utils.ts'
 
 interface BreadcrumbListProps {
   parents: Block[]
@@ -38,7 +39,9 @@ export const BreadcrumbList = ({
         <span key={parent.id} className="flex items-center min-w-0">
           <a
             href={buildAppHash(workspaceId, parent.id)}
-            className={itemClassName}
+            // text-inherit so the link picks up the container's muted color
+            // instead of the user-agent blue.
+            className={cn('text-inherit', itemClassName)}
             onClick={(event: MouseEvent) => {
               // Stop propagation either way — without it, the event bubbles
               // to a surrounding block's click handler, which preventDefaults
