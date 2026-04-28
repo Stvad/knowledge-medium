@@ -1,4 +1,4 @@
-import { useState, useEffect, KeyboardEvent } from 'react'
+import { useState, useEffect, useMemo, KeyboardEvent } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -23,6 +23,9 @@ import {
   recentBlockIdsProp,
 } from '@/data/properties.ts'
 import { writeAppHash } from '@/utils/routing.ts'
+import { parseRelativeDate } from '@/utils/relativeDate.ts'
+import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
+import { formatRoamDate } from '@/utils/dailyPage.ts'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
@@ -164,6 +167,13 @@ export function QuickFind() {
     jumpToBlock(newBlock.id)
   }
 
+  const openDailyNote = async (iso: string) => {
+    const workspaceId = repo.activeWorkspaceId
+    if (!workspaceId) return
+    const note = await getOrCreateDailyNote(repo, workspaceId, iso)
+    jumpToBlock(note.id)
+  }
+
   const handleSelect = (selectedValue: string, openInPanel: boolean) => {
     const colonIdx = selectedValue.indexOf(':')
     if (colonIdx === -1) return
@@ -172,6 +182,10 @@ export function QuickFind() {
 
     if (kind === 'create') {
       void createPage(payload)
+      return
+    }
+    if (kind === 'date') {
+      void openDailyNote(payload)
       return
     }
     const blockId = payload.split(':')[0]
@@ -189,10 +203,20 @@ export function QuickFind() {
   }
 
   const trimmedQuery = query.trim()
+  // chrono-node parser is recreated each call; cheap, but memoize to keep
+  // the resolved date stable across re-renders for the same input.
+  const parsedDate = useMemo(
+    () => (trimmedQuery ? parseRelativeDate(trimmedQuery) : null),
+    [trimmedQuery],
+  )
+  const dateLabel = parsedDate ? formatRoamDate(parsedDate.date) : null
   const exactAliasMatch = aliases.some(
     match => match.alias.toLowerCase() === trimmedQuery.toLowerCase(),
   )
-  const showCreate = trimmedQuery.length > 0 && !exactAliasMatch
+  // If the query is itself a date (typed verbatim, like "2026-04-28") the
+  // date item already gets us to the daily note — suppress the "Create"
+  // fallback so we don't offer a duplicate path for the same intent.
+  const showCreate = trimmedQuery.length > 0 && !exactAliasMatch && !parsedDate
   const showRecents = !trimmedQuery && recents.length > 0
 
   return (
@@ -231,6 +255,20 @@ export function QuickFind() {
                     <span className="truncate">{truncate(item.label)}</span>
                   </CommandItem>
                 ))}
+              </CommandGroup>
+            )}
+
+            {parsedDate && (
+              <CommandGroup heading="Date">
+                <CommandItem
+                  key={`date:${parsedDate.iso}`}
+                  value={`date:${parsedDate.iso}`}
+                  onSelect={selectedValue => handleSelect(selectedValue, false)}
+                  className="flex justify-between items-center gap-2"
+                >
+                  <span className="truncate">{dateLabel}</span>
+                  <span className="text-xs text-muted-foreground">{parsedDate.iso}</span>
+                </CommandItem>
               </CommandGroup>
             )}
 
