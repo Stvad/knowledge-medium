@@ -6,7 +6,11 @@ import tseslint from 'typescript-eslint'
 import reactCompiler from 'eslint-plugin-react-compiler'
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
+  // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
+  // dirs explicitly. .claude/worktrees/ in particular contains full repo
+  // copies that shouldn't be re-linted.
+  { ignores: ['dist', '.claude/**', '.playwright-mcp/**', 'tmp/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

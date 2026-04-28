@@ -47,15 +47,16 @@ const awaitLocalRootBlock = async (
   return new Promise<string | undefined>((resolve) => {
     const controller = new AbortController()
     let settled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
     const settle = (id: string | undefined) => {
       if (settled) return
       settled = true
-      if (timer) clearTimeout(timer)
+      clearTimeout(timer)
       controller.abort()
       resolve(id)
     }
-    timer = setTimeout(() => settle(undefined), timeoutMs)
+    // settle references `timer` in the cleanup; only invoked after the
+    // setTimeout has returned, so the TDZ window never opens.
+    const timer = setTimeout(() => settle(undefined), timeoutMs)
 
     repo.db.onChange(
       {
