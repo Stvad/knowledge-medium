@@ -36,6 +36,16 @@ export {
   type RendererContribution,
 } from '@/extensions/core.ts'
 
+// DefaultBlockRenderer (the default block chrome — bullet, children,
+// properties, edit affordances) is intentionally NOT re-exported here:
+// it pulls in radix-ui's Dialog/ContextMenu, which transitively
+// imports react-dom. react-dom is provided in the browser via the
+// page-global importmap (vite externalizes it) but is unresolved in
+// vitest. Importing api.ts in tests would otherwise fail to load.
+//
+// Extension authors should import it directly:
+//   import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+
 // --- Block-interaction facets (click handlers, content renderers, gestures, shortcut activations) ---
 export {
   blockClickHandlersFacet,

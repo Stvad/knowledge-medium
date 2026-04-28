@@ -7,11 +7,12 @@
 // resolve through the page-global importmap, so `@/extensions/api.js`
 // returns the same module instance the running app uses.
 //
-// Renderer-bearing examples here use `blockContentRendererFacet` and
-// compose the primary slot, so the host block keeps its bullet,
-// children, properties, and edit affordances. Use
-// `blockRenderersFacet` only when you genuinely need to replace the
-// whole block presentation (e.g. a top-level layout renderer).
+// Renderer-bearing examples register a renderer via blockRenderersFacet
+// and compose with the default block chrome by delegating to
+// DefaultBlockRenderer with a custom ContentRenderer prop — same shape
+// as plugins/video-player/VideoPlayerRenderer. The block keeps its
+// bullet, children, properties, and edit affordances; only the
+// content area is customized.
 
 import type { Block } from '@/data/block.ts'
 import { typeProp } from '@/data/properties.ts'
@@ -23,29 +24,30 @@ export interface ExampleExtensionDefinition {
   source: string
 }
 
-const HELLO_RENDERER_SOURCE = `import {
-  blockContentRendererFacet,
-  getBlockContentRendererSlot,
-} from '@/extensions/api.js'
+const HELLO_RENDERER_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
-// Wraps the block's primary content renderer instead of replacing the
-// whole block. The host DefaultBlockRenderer still draws the bullet,
-// children, properties, and edit affordances; we just decorate the
-// content area.
+// Property-keyed renderer: any block with property 'renderer: hello-renderer'
+// routes here directly via the registry. The renderer delegates to
+// DefaultBlockRenderer so the bullet, children, properties, and edit
+// affordances all keep working — we just supply a custom ContentRenderer
+// for the content area.
 
-const HelloContentRenderer = ({ block, PrimaryContent }) => (
+const HelloContent = ({ block }) => (
   <div style={{ padding: 8, border: '1px dashed #888', borderRadius: 4 }}>
     <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
-      hello-renderer wraps the default content:
+      hello-renderer custom content area:
     </div>
-    {PrimaryContent ? <PrimaryContent block={block} /> : null}
+    <em>{block.dataSync()?.content}</em>
   </div>
 )
 
-export default blockContentRendererFacet.of((context) => {
-  if (context.block.dataSync()?.properties.renderer?.value !== 'hello-renderer') return
-  const PrimaryContent = getBlockContentRendererSlot(context, 'primary')
-  return ({ block }) => <HelloContentRenderer block={block} PrimaryContent={PrimaryContent} />
+const HelloRenderer = (props) =>
+  <DefaultBlockRenderer {...props} ContentRenderer={HelloContent} />
+
+export default blockRenderersFacet.of({
+  id: 'hello-renderer',
+  renderer: HelloRenderer,
 })
 `
 
@@ -92,17 +94,24 @@ export default actionsFacet.of({
 const EMOJI_REACT_SOURCE = `import {
   actionsFacet,
   blockClickHandlersFacet,
-  blockContentRendererFacet,
-  getBlockContentRendererSlot,
+  blockRenderersFacet,
   ActionContextTypes,
   isSelectionClick,
 } from '@/extensions/api.js'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
-// Multi-facet plugin: an action, a click handler, and a content
+// Multi-facet plugin: an action, a click handler, and a data-keyed
 // renderer that appends the block's reactions (stored under
-// properties['user:reactions']) below the primary content. The
-// content renderer composes with the primary slot, so the block's
-// regular text/markdown still renders normally.
+// properties['user:reactions']) below the content. The renderer claims
+// the block via canRender when reactions exist, then delegates to
+// DefaultBlockRenderer with a wrapping ContentRenderer.
+//
+// Tradeoff vs property-keyed (e.g. hello-renderer): canRender competes
+// with other plugin renderers — if a block has property
+// 'renderer: hello-renderer' AND reactions, the property route wins
+// and the reactions don't show. For cross-cutting decoration that
+// always layers on top, you'd need a different facet (or to fold the
+// decoration into a base content renderer).
 
 const EMOJI_OPTIONS = ['🔥', '👍', '🎉', '❤️']
 
@@ -112,12 +121,27 @@ const ReactionsRow = ({ reactions }) => (
   </div>
 )
 
-const ContentWithReactions = ({ block, PrimaryContent, reactions }) => (
-  <div>
-    {PrimaryContent ? <PrimaryContent block={block} /> : null}
-    <ReactionsRow reactions={reactions} />
-  </div>
-)
+const ReactionsContent = ({ block }) => {
+  const data = block.dataSync()
+  const reactions = data?.properties['user:reactions']?.value ?? []
+  return (
+    <div>
+      <em>{data?.content}</em>
+      <ReactionsRow reactions={reactions} />
+    </div>
+  )
+}
+
+const ReactionsRenderer = (props) =>
+  <DefaultBlockRenderer {...props} ContentRenderer={ReactionsContent} />
+ReactionsRenderer.canRender = ({ block }) => {
+  const reactions = block.dataSync()?.properties['user:reactions']?.value
+  return Array.isArray(reactions) && reactions.length > 0
+}
+// Below the default canRender priority for plugin renderers (e.g.
+// video-player at 5), so a video block with reactions still renders
+// as a video.
+ReactionsRenderer.priority = () => 1
 
 const cycleReaction = (block) => {
   const current = block.dataSync()?.properties['user:reactions']?.value ?? []
@@ -150,33 +174,20 @@ export default [
     handler: async ({ block }) => cycleReaction(block),
   }),
 
-  // Decorate the content area with a reactions row when the block has
-  // any. Falls through (returns undefined) for blocks without
-  // reactions so other content-renderer contributions can apply.
-  blockContentRendererFacet.of((context) => {
-    const reactions = context.block.dataSync()?.properties['user:reactions']?.value
-    if (!Array.isArray(reactions) || reactions.length === 0) return
-    const PrimaryContent = getBlockContentRendererSlot(context, 'primary')
-    return ({ block }) => (
-      <ContentWithReactions
-        block={block}
-        PrimaryContent={PrimaryContent}
-        reactions={reactions}
-      />
-    )
+  blockRenderersFacet.of({
+    id: 'reactions-row',
+    renderer: ReactionsRenderer,
   }),
 ]
 `
 
-const KUDOS_FACET_SOURCE = `import {
-  defineFacet,
-  blockContentRendererFacet,
-  getBlockContentRendererSlot,
-} from '@/extensions/api.js'
+const KUDOS_FACET_SOURCE = `import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
-// contributing to it from the same block, and rendering its values
-// alongside the block's primary content.
+// contributing to it from the same block, and registering a
+// property-keyed renderer ('renderer: kudos-banner') that delegates to
+// DefaultBlockRenderer with a wrapping ContentRenderer.
 //
 // Other extension blocks can import this same facet by id (a separate
 // block can do  defineFacet({ id: 'user.kudos' })  and the FacetRuntime
@@ -189,21 +200,23 @@ const kudosFacet = defineFacet({
   empty: () => [],
 })
 
-const KudosBanner = ({ block, PrimaryContent }) => (
+const KudosBannerContent = ({ block }) => (
   <div>
-    {PrimaryContent ? <PrimaryContent block={block} /> : null}
+    <em>{block.dataSync()?.content}</em>
     <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
       Kudos facet defined. (Other extensions can contribute to user.kudos.)
     </div>
   </div>
 )
 
+const KudosBannerRenderer = (props) =>
+  <DefaultBlockRenderer {...props} ContentRenderer={KudosBannerContent} />
+
 export default [
   kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
-  blockContentRendererFacet.of((context) => {
-    if (context.block.dataSync()?.properties.renderer?.value !== 'kudos-banner') return
-    const PrimaryContent = getBlockContentRendererSlot(context, 'primary')
-    return ({ block }) => <KudosBanner block={block} PrimaryContent={PrimaryContent} />
+  blockRenderersFacet.of({
+    id: 'kudos-banner',
+    renderer: KudosBannerRenderer,
   }),
 ]
 `
