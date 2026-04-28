@@ -49,6 +49,7 @@ import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { buildAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 import { getActivePanelBlock } from '@/data/globalState.ts'
+import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -133,6 +134,20 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       },
       defaultBinding: {
         keys: ['cmd+p', 'ctrl+p', 'cmd+shift+k', 'ctrl+shift+k'],
+      },
+    },
+    {
+      id: 'open_today',
+      description: "Open today's daily note",
+      context: ActionContextTypes.GLOBAL,
+      handler: async () => {
+        const workspaceId = repo.activeWorkspaceId
+        if (!workspaceId) return
+        const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+        document.location.hash = buildAppHash(workspaceId, note.id)
+      },
+      defaultBinding: {
+        keys: ['cmd+shift+d', 'ctrl+shift+d'],
       },
     },
     {
