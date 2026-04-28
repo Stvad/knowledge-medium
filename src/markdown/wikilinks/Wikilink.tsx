@@ -1,19 +1,20 @@
-import { MouseEvent } from 'react'
+import { MouseEvent, ReactNode } from 'react'
 import { useBlockContext } from '@/context/block'
 import { buildAppHash } from '@/utils/routing'
 
-export function Wikilink({alias, blockId, workspaceId}: {
+export function Wikilink({alias, blockId, workspaceId, children}: {
   alias: string
   blockId: string
   workspaceId: string
+  children: ReactNode
 }) {
   const {panelId} = useBlockContext()
 
   // Reference resolution is an invariant maintained by parseAndUpdateReferences
   // on every block.change(). If we ever land here without a blockId it's a
-  // transient lookup miss — render the alias as plain text and let the next
-  // edit reconcile it, rather than inventing a "broken link" UI state.
-  if (!blockId) return <span>{alias}</span>
+  // transient lookup miss — render the display text as plain text and let the
+  // next edit reconcile it, rather than inventing a "broken link" UI state.
+  if (!blockId) return <span>{children}</span>
 
   const href = buildAppHash(workspaceId, blockId)
 
@@ -29,7 +30,7 @@ export function Wikilink({alias, blockId, workspaceId}: {
 
   return (
     <a href={href} className="wikilink" data-alias={alias} onClick={onClick}>
-      {alias}
+      {children}
     </a>
   )
 }

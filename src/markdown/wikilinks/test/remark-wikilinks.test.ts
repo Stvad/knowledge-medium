@@ -2,16 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { visit } from 'unist-util-visit'
-import type { Root } from 'mdast'
+import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
 
 interface WikilinkNode {
   type: 'wikilink'
   value: string
+  children: RootContent[]
   data: {
     hName: string
     hProperties: { alias: string; blockId: string }
-    hChildren: { type: 'text'; value: string }[]
   }
 }
 
@@ -37,63 +37,99 @@ const collectText = (tree: Root): string[] => {
   return out
 }
 
+const wikilinkChildText = (link: WikilinkNode): string =>
+  link.children
+    .map(child => (child as { value?: string; children?: RootContent[] }).value
+      ?? ((child as { children?: RootContent[] }).children
+        ? wikilinkChildText({children: (child as { children: RootContent[] }).children} as WikilinkNode)
+        : ''))
+    .join('')
+
 describe('remarkWikilinks', () => {
-  it('rewrites a [[link]] into a wikilink mdast node carrying alias and resolved blockId', () => {
-    const tree = transform('See [[Foo]] for context.', {Foo: 'block-foo'})
-    const links = collectWikilinks(tree)
-    expect(links).toHaveLength(1)
-    expect(links[0].data.hName).toBe('wikilink')
-    expect(links[0].data.hProperties.alias).toBe('Foo')
-    expect(links[0].data.hProperties.blockId).toBe('block-foo')
-    expect(links[0].data.hChildren[0].value).toBe('Foo')
+  describe('bare [[alias]] in text', () => {
+    it('rewrites [[link]] into a wikilink node with alias and resolved blockId', () => {
+      const tree = transform('See [[Foo]] for context.', {Foo: 'block-foo'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hName).toBe('wikilink')
+      expect(links[0].data.hProperties.alias).toBe('Foo')
+      expect(links[0].data.hProperties.blockId).toBe('block-foo')
+      expect(wikilinkChildText(links[0])).toBe('Foo')
+    })
+
+    it('emits an empty blockId when the resolver returns nothing', () => {
+      const tree = transform('See [[Unknown]] here.', {})
+      expect(collectWikilinks(tree)[0].data.hProperties.blockId).toBe('')
+    })
+
+    it('handles multiple links on one line', () => {
+      const tree = transform('A [[one]] and [[two]] on one line.', {one: '1', two: '2'})
+      const links = collectWikilinks(tree)
+      expect(links.map(n => n.data.hProperties.alias)).toEqual(['one', 'two'])
+      expect(links.map(n => n.data.hProperties.blockId)).toEqual(['1', '2'])
+    })
+
+    it('preserves surrounding text', () => {
+      const tree = transform('before [[Foo]] after', {Foo: 'x'})
+      const texts = collectText(tree)
+      expect(texts).toContain('before ')
+      expect(texts).toContain(' after')
+    })
+
+    it('does not touch text without [[...]]', () => {
+      expect(collectWikilinks(transform('Plain text without links'))).toHaveLength(0)
+    })
+
+    it('trims whitespace inside brackets', () => {
+      const tree = transform('Hello [[  Spaced Alias  ]] world', {'Spaced Alias': 'sa'})
+      const link = collectWikilinks(tree)[0]
+      expect(link.data.hProperties.alias).toBe('Spaced Alias')
+      expect(link.data.hProperties.blockId).toBe('sa')
+    })
+
+    it('does not rewrite inside inline code', () => {
+      expect(collectWikilinks(transform('Inline `[[notlink]]` here'))).toHaveLength(0)
+    })
+
+    it('does not rewrite inside fenced code blocks', () => {
+      expect(collectWikilinks(transform('```\n[[notlink]]\n```\n'))).toHaveLength(0)
+    })
+
+    it('emits a single span for nested [[a [[b]] c]]', () => {
+      const tree = transform('Nested [[outer [[inner]] tail]] end')
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('outer [[inner]] tail')
+    })
   })
 
-  it('emits an empty blockId when the resolver returns nothing', () => {
-    const tree = transform('See [[Unknown]] here.', {})
-    const links = collectWikilinks(tree)
-    expect(links[0].data.hProperties.blockId).toBe('')
-  })
+  describe('link-form [display]([[alias]])', () => {
+    it('rewrites the link into a wikilink with the display text as children', () => {
+      const tree = transform('See [my page]([[Foo]]) here.', {Foo: 'block-foo'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('Foo')
+      expect(links[0].data.hProperties.blockId).toBe('block-foo')
+      expect(wikilinkChildText(links[0])).toBe('my page')
+    })
 
-  it('handles multiple links on one line', () => {
-    const tree = transform('A [[one]] and [[two]] on one line.', {one: '1', two: '2'})
-    const links = collectWikilinks(tree)
-    expect(links.map(n => n.data.hProperties.alias)).toEqual(['one', 'two'])
-    expect(links.map(n => n.data.hProperties.blockId)).toEqual(['1', '2'])
-  })
+    it('preserves rich children inside the display text', () => {
+      const tree = transform('Read [the **bold** doc]([[Foo]]).', {Foo: 'x'})
+      const link = collectWikilinks(tree)[0]
+      expect(wikilinkChildText(link)).toBe('the bold doc')
+    })
 
-  it('preserves surrounding text', () => {
-    const tree = transform('before [[Foo]] after', {Foo: 'x'})
-    const texts = collectText(tree)
-    expect(texts).toContain('before ')
-    expect(texts).toContain(' after')
-  })
+    it('leaves regular markdown links alone', () => {
+      const tree = transform('A [normal](https://example.com) link.', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+    })
 
-  it('does not touch text without [[...]]', () => {
-    const tree = transform('Plain text without links')
-    expect(collectWikilinks(tree)).toHaveLength(0)
-  })
-
-  it('trims whitespace inside brackets', () => {
-    const tree = transform('Hello [[  Spaced Alias  ]] world', {'Spaced Alias': 'sa'})
-    const links = collectWikilinks(tree)
-    expect(links[0].data.hProperties.alias).toBe('Spaced Alias')
-    expect(links[0].data.hProperties.blockId).toBe('sa')
-  })
-
-  it('does not rewrite inside inline code', () => {
-    const tree = transform('Inline `[[notlink]]` here')
-    expect(collectWikilinks(tree)).toHaveLength(0)
-  })
-
-  it('does not rewrite inside fenced code blocks', () => {
-    const tree = transform('```\n[[notlink]]\n```\n')
-    expect(collectWikilinks(tree)).toHaveLength(0)
-  })
-
-  it('emits a single span for nested [[a [[b]] c]]', () => {
-    const tree = transform('Nested [[outer [[inner]] tail]] end')
-    const links = collectWikilinks(tree)
-    expect(links).toHaveLength(1)
-    expect(links[0].data.hProperties.alias).toBe('outer [[inner]] tail')
+    it('mixes link-form and bare-form on one line', () => {
+      const tree = transform('Bare [[Foo]] and named [name]([[Bar]]).', {Foo: '1', Bar: '2'})
+      const links = collectWikilinks(tree)
+      expect(links.map(n => n.data.hProperties.alias)).toEqual(['Foo', 'Bar'])
+      expect(wikilinkChildText(links[0])).toBe('Foo')
+      expect(wikilinkChildText(links[1])).toBe('name')
+    })
   })
 })
