@@ -3,6 +3,7 @@ import { Block } from '@/data/block.ts'
 import { use, useCallback } from 'react'
 import { BlockProperty, User, BlockContextType } from '@/types.ts'
 import { memoize } from 'lodash'
+import { v5 as uuidv5 } from 'uuid'
 import { useRepo } from '@/context/repo.tsx'
 import { useUser } from '@/components/Login.tsx'
 import { Repo } from '@/data/repo.ts'
@@ -14,12 +15,24 @@ import {
   focusedBlockIdProp,
   isEditingProp,
   topLevelBlockIdProp,
+  aliasProp,
+  fromList,
 } from '@/data/properties.ts'
 import { usePropertyValue, useDataWithSelector } from '@/hooks/block.ts'
 
 /**
  * One of core principles of the system is to store all state within the system
  */
+
+// Deterministic id for the per-user "user page" — a parent-less alias-bearing
+// block that hosts the user's `ui-state` subtree for a given workspace. Same
+// pattern as DAILY_NOTE_NS in dailyNotes.ts: two clients booting offline
+// converge on the same row when they later sync, so we don't end up with
+// duplicate user pages competing for alias resolution.
+const USER_PAGE_NS = '4d9d2a73-3e5a-4f43-95e3-2a76b1b7e6d7'
+
+const userPageBlockId = (workspaceId: string, userId: string): string =>
+  uuidv5(`${workspaceId}:${userId}`, USER_PAGE_NS)
 
 /**
  * Hook to access and modify UI state properties
@@ -35,20 +48,29 @@ export function useUIStateProperty<T extends BlockProperty>(
   return usePropertyValue(block, uiConfig)
 }
 
+const requireWorkspaceId = (repo: Repo, caller: string): string => {
+  const workspaceId = repo.activeWorkspaceId
+  if (!workspaceId) {
+    throw new Error(`${caller} requires an active workspace; call repo.setActiveWorkspaceId() first`)
+  }
+  return workspaceId
+}
+
 export function useUIStateBlock(): Block {
   const context = useBlockContext()
   const repo = useRepo()
   const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'useUIStateBlock')
 
-  return use(getUIStateBlock(repo, repo.find(context.rootBlockId!), user, context))
+  return use(getUIStateBlock(repo, workspaceId, user, context))
 }
 
 export function useUserBlock(): Block {
-  const context = useBlockContext()
   const repo = useRepo()
   const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
 
-  return use(getUserBlock(repo.find(context.rootBlockId!), user))
+  return use(getUserBlock(repo, workspaceId, user))
 }
 
 export const useUserProperty = <T extends BlockProperty>(
@@ -59,25 +81,43 @@ export const useUserProperty = <T extends BlockProperty>(
 /**
  * Memoized for using with \`use\` react function
  */
-// The user/ui-state subtree under [system]/[users]/{userId} is per-viewer UI
-// state. We tag the bootstrap creates with uiChangeScope so they're allowed
-// (and routed to ephemeral storage) when the active workspace is read-only.
+// Per-user UI state is stored under a parent-less "user page" block addressed
+// by a deterministic id derived from (workspaceId, user.id). Both the create
+// and any resurrect-from-soft-delete go through uiChangeScope so they're
+// tolerated in read-only workspaces (routed to ephemeral storage there — UI
+// state lives session-only for viewers, never escapes locally).
 export const getUIStateBlock = memoize(
-  async (repo: Repo, rootBlock: Block, user: User, context: BlockContextType): Promise<Block> => {
-    const userBlock = await getUserBlock(rootBlock, user)
-
+  async (repo: Repo, workspaceId: string, user: User, context: BlockContextType): Promise<Block> => {
     if (context.panelId) {
       return repo.find(context.panelId)
     }
 
+    const userBlock = await getUserBlock(repo, workspaceId, user)
     return userBlock.childByContent('ui-state', true, {scope: uiChangeScope})
-  }, (repo, rootBlock, user, context) =>
-    `${repo.instanceId}:${rootBlock.id}:${user.id}:${context.panelId ?? '__root__'}`)
+  }, (repo, workspaceId, user, context) =>
+    `${repo.instanceId}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`)
 
 export const getUserBlock = memoize(
-  async (rootBlock: Block, user: User): Promise<Block> =>
-    rootBlock.childByContent(['system', 'users', user.id], true, {scope: uiChangeScope}),
-  (rootBlock, user) => `${rootBlock.repo.instanceId}:${rootBlock.id}:${user.id}`)
+  async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
+    const id = userPageBlockId(workspaceId, user.id)
+    const existing = await repo.loadBlockData(id)
+
+    if (existing && !existing.deleted) return repo.find(id)
+
+    if (existing && existing.deleted) {
+      const block = repo.find(id)
+      block.change((doc) => { doc.deleted = false }, {scope: uiChangeScope})
+      return block
+    }
+
+    return repo.create({
+      id,
+      workspaceId,
+      content: user.name,
+      properties: fromList(aliasProp([user.name])),
+    }, {scope: uiChangeScope})
+  },
+  (repo, workspaceId, user) => `${repo.instanceId}:${workspaceId}:${user.id}`)
 
 
 const panelsPathPart = 'panels'
