@@ -60,7 +60,8 @@ streams:
         blocks.update_time,
         blocks.created_by_user_id,
         blocks.updated_by_user_id,
-        blocks.references_json
+        blocks.references_json,
+        blocks.deleted
       FROM public.blocks
       JOIN public.workspace_members
         ON workspace_members.workspace_id = blocks.workspace_id
