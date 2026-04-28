@@ -9,6 +9,12 @@ export interface RemarkWikilinksOptions {
 
 const LINK_URL_RE = /^\[\[(.+)\]\]$/
 
+// Matches `[display]([[alias]])` literally inside a text node. Used for the
+// case where remark didn't parse this as a link node — typically because the
+// alias contains spaces (CommonMark link destinations forbid bare spaces),
+// e.g. `[name]([[April 30th, 2026]])`.
+const LINK_FORM_RE = /\[([^[\]\n]*)\]\(\[\[([^[\]\n]+?)\]\]\)/g
+
 const buildWikilinkNode = (
   alias: string,
   blockId: string,
@@ -45,7 +51,40 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     return [SKIP, index + 1]
   })
 
-  // Second pass: split bare `[[alias]]` spans inside text nodes.
+  // Second pass: rewrite `[display]([[alias]])` written as plain text. Order
+  // matters — must run before the bare scan, otherwise the bare scan would
+  // chew the inner `[[alias]]` and lose the display text wrapper.
+  visit(tree, 'text', (node: Literal, index, parent: Parent | undefined) => {
+    if (index === undefined || !parent) return
+
+    const src = node.value
+    LINK_FORM_RE.lastIndex = 0
+    const out: RootContent[] = []
+    let last = 0
+    let match: RegExpExecArray | null
+    while ((match = LINK_FORM_RE.exec(src)) !== null) {
+      const [whole, displayText, rawAlias] = match
+      const alias = rawAlias.trim()
+      if (!alias) continue
+      if (match.index > last) {
+        out.push({type: 'text', value: src.slice(last, match.index)})
+      }
+      out.push(buildWikilinkNode(
+        alias,
+        resolve(alias),
+        [{type: 'text', value: displayText}],
+        whole,
+      ))
+      last = match.index + whole.length
+    }
+    if (out.length === 0) return
+    if (last < src.length) out.push({type: 'text', value: src.slice(last)})
+
+    parent.children.splice(index, 1, ...out)
+    return [SKIP, index + out.length]
+  })
+
+  // Third pass: split bare `[[alias]]` spans inside text nodes.
   visit(tree, 'text', (node: Literal, index, parent: Parent | undefined) => {
     if (index === undefined || !parent) return
 

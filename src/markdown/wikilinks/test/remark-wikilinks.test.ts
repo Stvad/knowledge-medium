@@ -131,5 +131,38 @@ describe('remarkWikilinks', () => {
       expect(wikilinkChildText(links[0])).toBe('Foo')
       expect(wikilinkChildText(links[1])).toBe('name')
     })
+
+    it('handles spaced aliases that remark leaves as plain text', () => {
+      // `[X]([[April 30th, 2026]])` — the space in the alias means remark
+      // never produces a link node, so this lands in our text-form scan.
+      const tree = transform(
+        'Meeting [notes]([[April 30th, 2026]]) attached.',
+        {'April 30th, 2026': 'block-date'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('April 30th, 2026')
+      expect(links[0].data.hProperties.blockId).toBe('block-date')
+      expect(wikilinkChildText(links[0])).toBe('notes')
+      expect(collectText(tree)).toContain('Meeting ')
+      expect(collectText(tree)).toContain(' attached.')
+    })
+
+    it('handles multi-word aliases without commas', () => {
+      const tree = transform('See [docs]([[Foo Bar]]) here.', {'Foo Bar': 'fb'})
+      const links = collectWikilinks(tree)
+      expect(links[0].data.hProperties.alias).toBe('Foo Bar')
+      expect(wikilinkChildText(links[0])).toBe('docs')
+    })
+
+    it('does not mangle adjacent bare links sharing a paragraph with a spaced one', () => {
+      const tree = transform(
+        '[a]([[X]]) then [b]([[Long Y]]) then [[Z]] end',
+        {X: 'x', 'Long Y': 'y', Z: 'z'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links.map(n => n.data.hProperties.alias)).toEqual(['X', 'Long Y', 'Z'])
+      expect(links.map(wikilinkChildText)).toEqual(['a', 'b', 'Z'])
+    })
   })
 })
