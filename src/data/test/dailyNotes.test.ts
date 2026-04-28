@@ -182,6 +182,26 @@ describe('getOrCreateDailyNote', () => {
     )
   })
 
+  it('reuses an existing daily-aliased block found by alias instead of creating a duplicate', async () => {
+    // A workspace seeder might install today's page under a server-supplied
+    // UUID before we ever call getOrCreateDailyNote. Make sure the alias
+    // lookup short-circuits and returns the seeded block.
+    const {repo} = stubReposity()
+    const seeded = repo.create({
+      workspaceId: 'ws-1',
+      content: 'April 28th, 2026',
+      properties: fromList(aliasProp(['April 28th, 2026', '2026-04-28'])),
+    })
+    // Spy on the alias query to short-circuit it: stubReposity defaults to
+    // returning null, but we want the spy to pretend the seeded row was
+    // matched.
+    vi.spyOn(repo, 'findBlockByAliasInWorkspace').mockResolvedValue(seeded)
+
+    const note = await getOrCreateDailyNote(repo, 'ws-1', '2026-04-28')
+    expect(note.id).toBe(seeded.id)
+    expect(note.id).not.toBe(dailyNoteBlockId('ws-1', '2026-04-28'))
+  })
+
   it('resurrects a soft-deleted daily note and re-links it under the journal', async () => {
     const id = dailyNoteBlockId('ws-1', '2026-04-28')
     const stored = blockData({
