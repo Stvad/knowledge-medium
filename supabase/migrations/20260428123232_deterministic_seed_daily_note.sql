@@ -18,9 +18,12 @@
 -- the user's first action ("create workspace, then immediately type
 -- [[today]]") would produce a duplicate row.
 --
--- Backwards-compatible: existing seeded blocks (created before this
--- migration) keep their random ids and continue to resolve via the
--- alias-first lookup in getOrCreateDailyNote.
+-- No backfill: workspaces created before this migration keep their
+-- random-id seed blocks, which now sit alongside any deterministic-id
+-- daily note the client creates next time it resolves "today" — the
+-- two won't dedupe. Acceptable per "early dev, no old data" stance;
+-- the dup, if it happens, is a one-row cosmetic miss in pre-migration
+-- workspaces and doesn't break anything.
 
 begin;
 

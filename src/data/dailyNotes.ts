@@ -100,15 +100,6 @@ export const getOrCreateJournalBlock = async (
   })
 }
 
-// `findDailyNote` only looks via the workspace-scoped alias index,
-// which filters out soft-deleted rows. Returns null if the day's
-// note doesn't exist or has been deleted.
-export const findDailyNote = async (
-  repo: Repo,
-  workspaceId: string,
-  iso: string,
-): Promise<Block | null> => repo.findBlockByAliasInWorkspace(workspaceId, iso)
-
 // Deterministic-id upsert path. Two clients calling concurrently with
 // the same (workspaceId, iso) write to the same row, so the daily
 // note never duplicates even when both clients are offline at boot.
@@ -122,15 +113,6 @@ export const getOrCreateDailyNote = async (
   workspaceId: string,
   iso: string,
 ): Promise<Block> => {
-  // Reuse any live daily note found by alias before creating a fresh
-  // deterministic-id row. Workspace seeders (seedDailyPage,
-  // ensure_personal_workspace flows) install today's page under a
-  // server-supplied UUID, not our deterministic one — without this
-  // lookup we'd create a second row in the same workspace with the
-  // same aliases and end up with a duplicate.
-  const byAlias = await findDailyNote(repo, workspaceId, iso)
-  if (byAlias) return byAlias
-
   const id = dailyNoteBlockId(workspaceId, iso)
   const existing = await loadById(repo, id)
 
