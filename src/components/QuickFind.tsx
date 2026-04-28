@@ -18,7 +18,6 @@ import {
   recentBlockIdsProp,
 } from '@/data/properties.ts'
 import { writeAppHash } from '@/utils/routing.ts'
-import { getRootBlock } from '@/data/blockTraversal.ts'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
@@ -152,9 +151,10 @@ export function QuickFind() {
       return
     }
 
-    const rootBlock = await getRootBlock(repo.find(uiStateBlock.id))
-    const newBlock = await rootBlock.createChild({
-      data: {content: trimmed, properties: fromList(aliasProp([trimmed]))},
+    const newBlock = repo.create({
+      workspaceId,
+      content: trimmed,
+      properties: fromList(aliasProp([trimmed])),
     })
     jumpToBlock(newBlock.id)
   }

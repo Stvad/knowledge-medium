@@ -4,7 +4,6 @@ import { UndoRedoManager, UndoRedoOptions } from '@/data/undoRedo.ts'
 import { parseReferences } from '@/utils/referenceParser'
 import { aliasProp, fromList } from '@/data/properties.ts'
 import { delay } from '@/utils/async.ts'
-import { getRootBlock } from '@/data/blockTraversal.ts'
 
 export {
   getLastVisibleDescendant,
@@ -382,25 +381,33 @@ const parseAndUpdateReferences = async (block: Block) => {
 }
 
 const getOrCreateBlockForAlias = async (block: Block, alias: string) => {
-  const rootBlock = await getRootBlock(block)
-  const workspaceId = block.dataSync()?.workspaceId ?? rootBlock.repo.activeWorkspaceId
+  const workspaceId = block.dataSync()?.workspaceId ?? block.repo.activeWorkspaceId
   if (!workspaceId) {
     throw new Error('Cannot resolve alias without a workspace')
   }
-  const existingBlock = await rootBlock.repo.findBlockByAliasInWorkspace(workspaceId, alias)
+  const existingBlock = await block.repo.findBlockByAliasInWorkspace(workspaceId, alias)
 
   const referenceWasRemoved = (candidate: Block) =>
     (block.dataSync()?.references ?? []).findIndex(ref => ref.id === candidate.id) === -1
 
-  return existingBlock || await createSelfDestructingBlockForAlias(rootBlock, alias, referenceWasRemoved)
+  return existingBlock || await createSelfDestructingBlockForAlias(block.repo, workspaceId, alias, referenceWasRemoved)
 }
 
-const createNewBlockForAlias = async (rootBlock: Block, alias: string) => {
-  return rootBlock.createChild({data: {content: alias, properties: fromList(aliasProp([alias]))}})
+const createNewBlockForAlias = (repo: Repo, workspaceId: string, alias: string) => {
+  return repo.create({
+    workspaceId,
+    content: alias,
+    properties: fromList(aliasProp([alias])),
+  })
 }
 
-const createSelfDestructingBlockForAlias = async (rootBlock: Block, alias: string, condition: (newBlock: Block) => boolean) => {
-  const newBlock = await createNewBlockForAlias(rootBlock, alias)
+const createSelfDestructingBlockForAlias = async (
+  repo: Repo,
+  workspaceId: string,
+  alias: string,
+  condition: (newBlock: Block) => boolean,
+) => {
+  const newBlock = createNewBlockForAlias(repo, workspaceId, alias)
   void selfDestructIf(newBlock, 4000, condition)
 
   return newBlock
