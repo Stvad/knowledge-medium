@@ -31,3 +31,15 @@ supabase/.branches
 
 # Local Netlify folder
 .netlify
+
+# Local agent state (Claude Code). .claude/skills/ and .claude/launch.json
+# are shared and tracked; everything else under .claude/ is per-machine.
+.claude/worktrees/
+.claude/settings.local.json
+.claude/cache/
+
+# MCP server caches
+.playwright-mcp/
+
+# Scratch / temp
+tmp/
