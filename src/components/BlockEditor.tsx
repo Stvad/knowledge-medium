@@ -14,9 +14,8 @@ import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { useData, useDataWithSelector } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
-import { EditorView, keymap } from '@codemirror/view'
-import { Prec } from '@codemirror/state'
-import { completionStatus } from '@codemirror/autocomplete'
+import { EditorView } from '@codemirror/view'
+import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur'> {
   block: Block
@@ -24,7 +23,6 @@ interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChang
 
 export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
   block,
-  extensions: userExtensions,
   ...codeMirrorProps
 }, ref) => {
   const blockData = useData(block)
@@ -122,23 +120,11 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
     }
   }, [block.id, editorView, focusedBlockId, focusRequestId, isEditing, uiStateBlock])
 
-  // Escape exits edit mode. Wired here (CM keymap, Prec.highest) so it beats
-  // any default keymap that might claim Escape (e.g., autocomplete when no
-  // popup is showing). When a completion popup IS active, return false so
-  // CM's autocomplete keymap closes the popup instead.
-  const exitOnEscape = useMemo(() => Prec.highest(keymap.of([{
-    key: 'Escape',
-    run: (view) => {
-      if (completionStatus(view.state) === 'active') return false
-      setIsEditing(false)
-      return true
-    },
-  }])), [setIsEditing])
-
-  const mergedExtensions = useMemo(
-    () => [exitOnEscape, ...(userExtensions ?? [])],
-    [exitOnEscape, userExtensions],
-  )
+  // Activate the EDIT_MODE_CM shortcut surface so actions bound to that
+  // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
+  // mounted — for any consumer (markdown editor, extension editor, future).
+  const shortcutSurfaceOptions = useMemo(() => ({editorView}), [editorView])
+  useShortcutSurfaceActivations('codemirror', shortcutSurfaceOptions)
 
   if (!blockData) return null
 
@@ -178,7 +164,6 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
           }
         })
       }}
-      extensions={mergedExtensions}
       {...codeMirrorProps}
     />
   )

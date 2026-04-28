@@ -1,19 +1,17 @@
 import { BlockRendererProps } from '@/types.ts'
-import { useMemo, ClipboardEvent, useState } from 'react'
+import { useMemo, ClipboardEvent } from 'react'
 import { createMinimalMarkdownConfig } from '@/utils/codemirror.ts'
 import { BlockEditor } from '@/components/BlockEditor.tsx'
 import { useUIStateProperty } from '@/data/globalState.ts'
 import { focusedBlockIdProp } from '@/data/properties.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { EditorView } from '@codemirror/view'
 import { useBlockContext } from '@/context/block.tsx'
-import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
   const blockContext = useBlockContext()
-  
+
   // Create getAliases function for autocomplete
   const getAliasesForAutocomplete = useMemo(() => {
     return async (filter: string): Promise<string[]> => {
@@ -30,13 +28,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   }), [getAliasesForAutocomplete])
 
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
-  const [editorView, setEditorView] = useState<EditorView| undefined>(undefined)
-
-  const shortcutSurfaceOptions = useMemo(() => ({
-    editorView,
-  }), [editorView])
-
-  useShortcutSurfaceActivations('codemirror', shortcutSurfaceOptions)
 
   const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
     e.stopPropagation()
@@ -50,10 +41,6 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
 
   return (
     <BlockEditor
-      ref={(val) => {
-        // Once, we're relying on EditorView to be stable
-        setEditorView(e => e ? e : val?.view)
-      }}
       block={block}
       extensions={extensions}
       className="min-h-[1.7em]"
