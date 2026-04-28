@@ -282,6 +282,7 @@ export function DefaultBlockRenderer(
   useActionContextActivations(shortcutActivations)
 
   useEffect(() => {
+    if (!inFocus) return
     const element = contentContainerRef.current
     if (element && !isElementProperlyVisible(element)) element.scrollIntoView({behavior: 'instant', block: 'nearest'})
   }, [inFocus])
