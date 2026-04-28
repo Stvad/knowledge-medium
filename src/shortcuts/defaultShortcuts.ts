@@ -43,6 +43,7 @@ import {
   cursorIsAtStart,
 } from '@/utils/codemirror.ts'
 import { copySelectedBlocksToClipboard } from '@/utils/copy.ts'
+import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
@@ -471,6 +472,65 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         eventOptions: {
           preventDefault: true,
         },
+      },
+    },
+    {
+      id: 'cut_selected_blocks',
+      description: 'Cut selected blocks to clipboard',
+      context: ActionContextTypes.MULTI_SELECT_MODE,
+      handler: async (deps: MultiSelectModeDependencies) => {
+        const {uiStateBlock, selectedBlocks} = deps
+        if (!selectedBlocks.length) return
+
+        await copySelectedBlocksToClipboard(uiStateBlock, repo)
+        for (const block of selectedBlocks.toReversed()) {
+          await block.delete()
+        }
+        uiStateBlock.setProperty(selectionStateProp)
+      },
+      defaultBinding: {
+        keys: ['cmd+x', 'ctrl+x', 'd'],
+        eventOptions: {
+          preventDefault: true,
+        },
+      },
+    },
+    {
+      id: 'paste_after_selection',
+      description: 'Paste from clipboard after selection',
+      context: ActionContextTypes.MULTI_SELECT_MODE,
+      handler: async (deps: MultiSelectModeDependencies) => {
+        const {uiStateBlock, selectedBlocks} = deps
+        const target = selectedBlocks.at(-1)
+        if (!target) return
+
+        const pasted = await pasteFromClipboard(target, repo, {position: 'after'})
+        if (pasted[0]) {
+          uiStateBlock.setProperty(selectionStateProp)
+          setFocusedBlockId(uiStateBlock, pasted[0].id)
+        }
+      },
+      defaultBinding: {
+        keys: 'p',
+      },
+    },
+    {
+      id: 'paste_before_selection',
+      description: 'Paste from clipboard before selection',
+      context: ActionContextTypes.MULTI_SELECT_MODE,
+      handler: async (deps: MultiSelectModeDependencies) => {
+        const {uiStateBlock, selectedBlocks} = deps
+        const target = selectedBlocks[0]
+        if (!target) return
+
+        const pasted = await pasteFromClipboard(target, repo, {position: 'before'})
+        if (pasted[0]) {
+          uiStateBlock.setProperty(selectionStateProp)
+          setFocusedBlockId(uiStateBlock, pasted[0].id)
+        }
+      },
+      defaultBinding: {
+        keys: 'shift+p',
       },
     },
   ];
