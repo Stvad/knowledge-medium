@@ -201,6 +201,18 @@ a {
   word-break: break-all;
 }
 
+a.wikilink {
+  @apply text-purple-600 dark:text-purple-400 no-underline;
+}
+
+a.wikilink:hover {
+  @apply underline;
+}
+
+a.wikilink-broken {
+  @apply text-gray-500 dark:text-gray-400;
+}
+
 img {
   max-width: 100%;
   height: auto;
