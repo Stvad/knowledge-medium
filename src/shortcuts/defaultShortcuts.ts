@@ -132,7 +132,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         window.dispatchEvent(new CustomEvent('toggle-quick-find'))
       },
       defaultBinding: {
-        keys: ['cmd+shift+k', 'ctrl+shift+k'],
+        keys: ['cmd+p', 'ctrl+p', 'cmd+shift+k', 'ctrl+shift+k'],
       },
     },
     {
