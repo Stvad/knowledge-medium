@@ -94,24 +94,19 @@ export default actionsFacet.of({
 const EMOJI_REACT_SOURCE = `import {
   actionsFacet,
   blockClickHandlersFacet,
-  blockRenderersFacet,
+  blockContentDecoratorsFacet,
   ActionContextTypes,
   isSelectionClick,
 } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
-// Multi-facet plugin: an action, a click handler, and a data-keyed
-// renderer that appends the block's reactions (stored under
-// properties['user:reactions']) below the content. The renderer claims
-// the block via canRender when reactions exist, then delegates to
-// DefaultBlockRenderer with a wrapping ContentRenderer.
-//
-// Tradeoff vs property-keyed (e.g. hello-renderer): canRender competes
-// with other plugin renderers — if a block has property
-// 'renderer: hello-renderer' AND reactions, the property route wins
-// and the reactions don't show. For cross-cutting decoration that
-// always layers on top, you'd need a different facet (or to fold the
-// decoration into a base content renderer).
+// Multi-facet plugin: an action, a click handler, and a content
+// decorator that layers a reactions row (stored under
+// properties['user:reactions']) below whatever the block already
+// renders — markdown, video player, edit-mode CodeMirror, or another
+// custom renderer. Decorators stack on top of the chosen content
+// renderer, so a video block with reactions shows both, and a block
+// with a custom 'renderer: hello-renderer' property still gets its
+// reactions row.
 
 const EMOJI_OPTIONS = ['🔥', '👍', '🎉', '❤️']
 
@@ -120,28 +115,6 @@ const ReactionsRow = ({ reactions }) => (
     {reactions.map((emoji, i) => <span key={i}>{emoji}</span>)}
   </div>
 )
-
-const ReactionsContent = ({ block }) => {
-  const data = block.dataSync()
-  const reactions = data?.properties['user:reactions']?.value ?? []
-  return (
-    <div>
-      <em>{data?.content}</em>
-      <ReactionsRow reactions={reactions} />
-    </div>
-  )
-}
-
-const ReactionsRenderer = (props) =>
-  <DefaultBlockRenderer {...props} ContentRenderer={ReactionsContent} />
-ReactionsRenderer.canRender = ({ block }) => {
-  const reactions = block.dataSync()?.properties['user:reactions']?.value
-  return Array.isArray(reactions) && reactions.length > 0
-}
-// Below the default canRender priority for plugin renderers (e.g.
-// video-player at 5), so a video block with reactions still renders
-// as a video.
-ReactionsRenderer.priority = () => 1
 
 const cycleReaction = (block) => {
   const current = block.dataSync()?.properties['user:reactions']?.value ?? []
@@ -174,9 +147,19 @@ export default [
     handler: async ({ block }) => cycleReaction(block),
   }),
 
-  blockRenderersFacet.of({
-    id: 'reactions-row',
-    renderer: ReactionsRenderer,
+  blockContentDecoratorsFacet.of((ctx) => {
+    const reactions = ctx.block.dataSync()?.properties['user:reactions']?.value
+    if (!Array.isArray(reactions) || reactions.length === 0) return null
+
+    return (Inner) => {
+      const Decorated = (props) => (
+        <div>
+          <Inner {...props} />
+          <ReactionsRow reactions={reactions} />
+        </div>
+      )
+      return Decorated
+    }
   }),
 ]
 `

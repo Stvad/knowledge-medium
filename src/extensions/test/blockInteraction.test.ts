@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block.ts'
 import type { Repo } from '@/data/repo.ts'
+import type { BlockRenderer } from '@/types.ts'
 import {
   blockClickHandlersFacet,
   BlockClickContribution,
+  blockContentDecoratorsFacet,
+  BlockContentDecoratorContribution,
   BlockInteractionContext,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
@@ -59,6 +62,101 @@ describe('block interaction facets', () => {
         editorView,
       },
     }])
+  })
+
+  it('returns the inner renderer unchanged when no decorator contributions are registered', () => {
+    const runtime = resolveFacetRuntimeSync([])
+    const inner: BlockRenderer = () => null
+
+    const decorate = runtime.read(blockContentDecoratorsFacet)
+
+    expect(decorate(context, inner)).toBe(inner)
+  })
+
+  it('layers content decorators with the last contribution as the outermost wrapper', () => {
+    const inner: BlockRenderer = () => null
+    const tagged = (label: string): BlockContentDecoratorContribution => () => (Inner) => {
+      const Wrapped: BlockRenderer = (props) => Inner(props)
+      ;(Wrapped as { __layer?: string }).__layer = label
+      ;(Wrapped as { __inner?: BlockRenderer }).__inner = Inner
+      return Wrapped
+    }
+
+    const runtime = resolveFacetRuntimeSync([
+      blockContentDecoratorsFacet.of(tagged('inner-most')),
+      blockContentDecoratorsFacet.of(tagged('outer-most')),
+    ])
+
+    const decorated = runtime.read(blockContentDecoratorsFacet)(context, inner) as BlockRenderer & {
+      __layer?: string
+      __inner?: BlockRenderer & { __layer?: string; __inner?: BlockRenderer }
+    }
+
+    expect(decorated.__layer).toBe('outer-most')
+    expect(decorated.__inner?.__layer).toBe('inner-most')
+    expect(decorated.__inner?.__inner).toBe(inner)
+  })
+
+  it('respects facet precedence: lower precedence wraps closer to the inner renderer', () => {
+    const inner: BlockRenderer = () => null
+    const tagged = (label: string): BlockContentDecoratorContribution => () => (Inner) => {
+      const Wrapped: BlockRenderer = (props) => Inner(props)
+      ;(Wrapped as { __layer?: string }).__layer = label
+      ;(Wrapped as { __inner?: BlockRenderer }).__inner = Inner
+      return Wrapped
+    }
+
+    const runtime = resolveFacetRuntimeSync([
+      blockContentDecoratorsFacet.of(tagged('outer-most'), {precedence: 100}),
+      blockContentDecoratorsFacet.of(tagged('inner-most'), {precedence: 0}),
+    ])
+
+    const decorated = runtime.read(blockContentDecoratorsFacet)(context, inner) as BlockRenderer & {
+      __layer?: string
+      __inner?: BlockRenderer & { __layer?: string }
+    }
+
+    expect(decorated.__layer).toBe('outer-most')
+    expect(decorated.__inner?.__layer).toBe('inner-most')
+  })
+
+  it('skips decorators that return null/undefined/false for the given block', () => {
+    const inner: BlockRenderer = () => null
+    const skip: BlockContentDecoratorContribution = () => null
+    const wrap: BlockContentDecoratorContribution = () => (Inner) => {
+      const Wrapped: BlockRenderer = (props) => Inner(props)
+      ;(Wrapped as { __wrapped?: boolean }).__wrapped = true
+      return Wrapped
+    }
+
+    const runtime = resolveFacetRuntimeSync([
+      blockContentDecoratorsFacet.of(skip),
+      blockContentDecoratorsFacet.of(wrap),
+    ])
+
+    const decorated = runtime.read(blockContentDecoratorsFacet)(context, inner) as BlockRenderer & {
+      __wrapped?: boolean
+    }
+
+    expect(decorated.__wrapped).toBe(true)
+    expect(decorated).not.toBe(inner)
+  })
+
+  it('passes the block-interaction context to each decorator contribution', () => {
+    const inner: BlockRenderer = () => null
+    const seen: BlockInteractionContext[] = []
+    const observer: BlockContentDecoratorContribution = (ctx) => {
+      seen.push(ctx)
+      return null
+    }
+
+    const runtime = resolveFacetRuntimeSync([
+      blockContentDecoratorsFacet.of(observer),
+    ])
+
+    runtime.read(blockContentDecoratorsFacet)(context, inner)
+
+    expect(seen).toEqual([context])
   })
 
   it('allows a contribution to introduce an application-specific mode', () => {

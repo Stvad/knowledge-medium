@@ -50,6 +50,15 @@ export type BlockContentRendererContribution =
 export type BlockContentRendererResolver =
   (context: BlockInteractionContext) => BlockRenderer | undefined
 
+export type BlockContentDecorator =
+  (innerRenderer: BlockRenderer) => BlockRenderer
+
+export type BlockContentDecoratorContribution =
+  (context: BlockInteractionContext) => BlockContentDecorator | null | undefined | false
+
+export type BlockContentDecoratorResolver =
+  (context: BlockInteractionContext, inner: BlockRenderer) => BlockRenderer
+
 export type BlockClickContribution =
   (context: BlockInteractionContext) => BlockMouseHandler | null | undefined | false
 
@@ -96,6 +105,29 @@ export const blockContentRendererFacet = defineFacet<
   ),
   empty: () => context => getBlockContentRendererSlot(context, 'primary'),
   validate: isFunction<BlockContentRendererContribution>,
+})
+
+// Layered decoration on top of the chosen content renderer. Lower
+// precedence wraps closer to the inner renderer; the last contribution
+// applied is the outermost layer (its chrome is furthest from the inner
+// content). Returning null/undefined/false from a contribution skips it
+// for that block. Decorator authors should memoize the wrapped component
+// per-inner so React doesn't unmount the inner subtree on every render.
+export const blockContentDecoratorsFacet = defineFacet<
+  BlockContentDecoratorContribution,
+  BlockContentDecoratorResolver
+>({
+  id: 'core.block-content-decorators',
+  combine: contributions => (context, inner) => {
+    let renderer = inner
+    for (const contribution of contributions) {
+      const decorator = contribution(context)
+      if (decorator) renderer = decorator(renderer)
+    }
+    return renderer
+  },
+  empty: () => (_context, inner) => inner,
+  validate: isFunction<BlockContentDecoratorContribution>,
 })
 
 export const blockClickHandlersFacet = defineFacet<

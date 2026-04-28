@@ -45,6 +45,7 @@ import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import {
   blockClickHandlersFacet,
+  blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContentSurfacePropsFacet,
   shortcutSurfaceActivationsFacet,
@@ -255,7 +256,13 @@ export function DefaultBlockRenderer(
   ])
 
   const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-  const ContentRenderer = resolveBlockContentRenderer(blockInteractionContext) ?? DefaultContentRenderer
+  const baseContentRenderer =
+    resolveBlockContentRenderer(blockInteractionContext) ?? DefaultContentRenderer
+  const decorateContent = runtime.read(blockContentDecoratorsFacet)
+  const ContentRenderer = useMemo(
+    () => decorateContent(blockInteractionContext, baseContentRenderer),
+    [decorateContent, blockInteractionContext, baseContentRenderer],
+  )
   const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
   const handleBlockClick = resolveBlockClickHandler(blockInteractionContext)
   const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
