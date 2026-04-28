@@ -44,6 +44,7 @@ import { isElementProperlyVisible } from '@/utils/dom.ts'
 import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import {
+  blockChildrenFooterFacet,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
@@ -278,6 +279,11 @@ export function DefaultBlockRenderer(
     }),
     [blockInteractionContext, resolveShortcutActivations],
   )
+  const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
+  const childrenFooterSections = useMemo(
+    () => resolveChildrenFooterSections(blockInteractionContext),
+    [blockInteractionContext, resolveChildrenFooterSections],
+  )
 
   useActionContextActivations(shortcutActivations)
 
@@ -347,6 +353,12 @@ export function DefaultBlockRenderer(
           <CollapsibleContent>
             <BlockChildren block={block}/>
           </CollapsibleContent>
+
+          {childrenFooterSections.map((SectionRenderer, index) => (
+            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+              <SectionRenderer block={block}/>
+            </ErrorBoundary>
+          ))}
         </div>
 
         {hasChildren && isMobile && !isTopLevel && (

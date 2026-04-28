@@ -1,5 +1,5 @@
 import { isEqual } from 'lodash'
-import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { BlockData, BlockProperty } from '@/types.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { Block } from '@/data/block.ts'
@@ -112,3 +112,55 @@ export const useChildren = (block: Block): Block[] =>
 
 export const useHasChildren = (block: Block) =>
   useDataWithSelector(block, (data?: BlockData) => data ? data.childIds.length > 0 : false)
+
+const EMPTY_BACKLINK_IDS: string[] = []
+
+// Returns the set of blocks whose `references` field points at `block.id`,
+// reactively re-querying when any block changes (writes flush to block_events).
+// 250ms throttle keeps it cheap during bursts of typing.
+export const useBacklinks = (block: Block): Block[] => {
+  const repo = useRepo()
+  const [backlinkIds, setBacklinkIds] = useState<string[]>(EMPTY_BACKLINK_IDS)
+
+  const blockId = block.id
+  useEffect(() => {
+    let cancelled = false
+    const refresh = async () => {
+      const workspaceId =
+        repo.getCachedBlockData(blockId)?.workspaceId ?? repo.activeWorkspaceId
+      if (!workspaceId) return
+      try {
+        const blocks = await repo.findBacklinks(workspaceId, blockId)
+        if (cancelled) return
+        const nextIds = blocks.map(b => b.id)
+        setBacklinkIds(prev => isEqual(prev, nextIds) ? prev : nextIds)
+      } catch (error) {
+        if (!cancelled) console.warn('useBacklinks query failed', error)
+      }
+    }
+
+    void refresh()
+
+    const dispose = repo.db.onChange(
+      {
+        onChange: () => {
+          void refresh()
+        },
+        onError: (error) => {
+          console.warn('useBacklinks onChange error', error)
+        },
+      },
+      {tables: ['block_events'], throttleMs: 250},
+    )
+
+    return () => {
+      cancelled = true
+      dispose()
+    }
+  }, [repo, blockId])
+
+  return useMemo(
+    () => backlinkIds.map(id => repo.find(id)),
+    [backlinkIds, repo],
+  )
+}

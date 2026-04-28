@@ -197,6 +197,15 @@ export class Repo {
     return result
   }
 
+  async findBacklinks(workspaceId: string, targetId: string) {
+    if (!targetId) return []
+
+    await this.flush()
+
+    const snapshots = await this.storage.findBacklinks(workspaceId, targetId)
+    return this.hydrateSnapshots(snapshots).map(snapshot => this.find(snapshot.id))
+  }
+
   async findBlocksByType(workspaceId: string, type: string) {
     await this.flush()
 

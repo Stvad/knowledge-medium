@@ -48,6 +48,7 @@ export {
 
 // --- Block-interaction facets (click handlers, content renderers, content-surface props, shortcut activations) ---
 export {
+  blockChildrenFooterFacet,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
@@ -58,6 +59,7 @@ export {
   getBlockContentRendererSlot,
   handleBlockSelectionClick,
   isSelectionClick,
+  type BlockChildrenFooterContribution,
   type BlockClickContribution,
   type BlockContentDecorator,
   type BlockContentDecoratorContribution,

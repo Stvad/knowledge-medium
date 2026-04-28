@@ -137,6 +137,16 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     ON blocks (workspace_id) WHERE deleted = 0
   `)
 
+  // Backlink lookups (SELECT_BACKLINKS_FOR_BLOCK_SQL) scan blocks that
+  // actually carry outgoing references. Most blocks have an empty
+  // references_json, so a partial index keyed on workspace_id keeps the
+  // scan proportional to the link-bearing subset rather than the full
+  // workspace.
+  await powerSyncDb.execute(`
+    CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references
+    ON blocks (workspace_id) WHERE deleted = 0 AND references_json != '[]'
+  `)
+
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
