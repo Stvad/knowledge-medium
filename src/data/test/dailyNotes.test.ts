@@ -102,6 +102,21 @@ describe('deterministic ids', () => {
     expect(a).not.toBe(dailyNoteBlockId('ws-1', '2026-04-29'))
     expect(a).not.toBe(dailyNoteBlockId('ws-2', '2026-04-28'))
   })
+
+  // Pinned reference value. The supabase migration
+  // 20260428123232_deterministic_seed_daily_note.sql computes the same
+  // value via uuid_generate_v5() server-side; if either side changes the
+  // namespace constant or the input format, this test fails before the
+  // bug ships. Cross-verify after running the migration with:
+  //   select uuid_generate_v5(
+  //     '53421e08-2f31-42f8-b73a-43830bb718f1'::uuid,
+  //     'test-workspace:2026-04-28'
+  //   );
+  it('matches the documented reference value for cross-implementation parity', () => {
+    expect(dailyNoteBlockId('test-workspace', '2026-04-28')).toBe(
+      'ee4a18e7-8665-504c-93bb-1701784f307c',
+    )
+  })
 })
 
 describe('getOrCreateJournalBlock', () => {

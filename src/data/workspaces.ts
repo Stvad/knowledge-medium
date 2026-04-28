@@ -13,6 +13,7 @@ import {
   type WorkspaceMemberRow,
   type WorkspaceRow,
 } from '@/data/workspaceSchema'
+import { todayIso } from '@/data/dailyNotes'
 
 const assertSupabase = () => {
   if (!supabase) {
@@ -196,9 +197,17 @@ const parseCreatedWorkspace = (payload: WorkspaceCreationPayload): CreatedWorksp
   }
 }
 
+// Pass the user's local-TZ ISO so the server seeds the workspace's first
+// block with the deterministic id `dailyNoteBlockId(workspaceId, todayIso)`.
+// Server's UTC `now()` would disagree with the user's wall-clock day
+// during the ~12h overlap window, which would make the seed id mismatch
+// what `getOrCreateDailyNote(repo, workspaceId, todayIso())` computes
+// client-side and re-introduce the duplication this whole flow prevents.
 export const ensurePersonalWorkspace = async (): Promise<EnsuredPersonalWorkspace> => {
   const client = assertSupabase()
-  const {data, error} = await client.rpc('ensure_personal_workspace')
+  const {data, error} = await client.rpc('ensure_personal_workspace', {
+    p_today_iso: todayIso(),
+  })
   if (error) throw error
   if (!data) throw new Error('ensure_personal_workspace returned no payload')
   const payload = data as EnsurePersonalWorkspacePayload
@@ -212,7 +221,10 @@ export const ensurePersonalWorkspace = async (): Promise<EnsuredPersonalWorkspac
 
 export const createWorkspace = async (name: string): Promise<CreatedWorkspace> => {
   const client = assertSupabase()
-  const {data, error} = await client.rpc('create_workspace', {p_name: name})
+  const {data, error} = await client.rpc('create_workspace', {
+    p_name: name,
+    p_today_iso: todayIso(),
+  })
   if (error) throw error
   if (!data) throw new Error('create_workspace returned no payload')
   return parseCreatedWorkspace(data as WorkspaceCreationPayload)
