@@ -79,6 +79,7 @@ export {
 // --- Block / data primitives ---
 export { Block } from '@/data/block.ts'
 export { Repo } from '@/data/repo.ts'
+export { getActivePanelBlock, getPanelsBlock } from '@/data/globalState.ts'
 export {
   boolProp,
   booleanProperty,

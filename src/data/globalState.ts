@@ -13,6 +13,7 @@ import {
   BlockSelectionState,
   focusedBlockIdProp,
   isEditingProp,
+  topLevelBlockIdProp,
 } from '@/data/properties.ts'
 import { usePropertyValue, useDataWithSelector } from '@/hooks/block.ts'
 
@@ -84,6 +85,32 @@ export const getPanelsBlock = memoize(
   async (uiStateBlock: Block): Promise<Block> =>
     uiStateBlock.childByContent([panelsPathPart], true, {scope: uiChangeScope}),
   (uiBlock) => `${uiBlock.repo.instanceId}:${uiBlock.id}`)
+
+/**
+ * Resolve the panel ui-state block the user is most likely working in.
+ *
+ * GLOBAL action handlers receive the user-level ui-state block, where
+ * per-panel state — focusedBlockId, topLevelBlockId — is *not* stored.
+ * Panel state lives on each panel's own block under ui-state/panels,
+ * so any GLOBAL handler that wants to act on "the current view" needs
+ * to walk to the right panel first.
+ *
+ * Picks the first panel with a focused block; falls back to the first
+ * panel that has a topLevelBlockId so the helper still resolves on a
+ * fresh page where the user hasn't focused anything yet. Returns
+ * undefined only if no panels exist.
+ */
+export const getActivePanelBlock = async (uiStateBlock: Block): Promise<Block | undefined> => {
+  const panelsBlock = await getPanelsBlock(uiStateBlock)
+  const panels = await panelsBlock.children()
+  let fallback: Block | undefined
+  for (const panel of panels) {
+    const data = await panel.data()
+    if (data?.properties[focusedBlockIdProp.name]?.value) return panel
+    if (!fallback && data?.properties[topLevelBlockIdProp.name]?.value) fallback = panel
+  }
+  return fallback
+}
 
 export function useSelectionState(): [
   BlockSelectionState,

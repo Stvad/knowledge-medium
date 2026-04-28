@@ -49,10 +49,20 @@ export default blockContentRendererFacet.of((context) => {
 })
 `
 
-const FOLD_ALL_ACTION_SOURCE = `import { actionsFacet, ActionContextTypes, isCollapsedProp } from '@/extensions/api.js'
+const FOLD_ALL_ACTION_SOURCE = `import {
+  actionsFacet,
+  ActionContextTypes,
+  getActivePanelBlock,
+  isCollapsedProp,
+  topLevelBlockIdProp,
+} from '@/extensions/api.js'
 
 // Toggle collapse on every visible descendant of the top-level block.
 // Demonstrates a single action contribution with a default keybinding.
+//
+// GLOBAL action handlers receive the user-level ui-state block; the
+// per-panel topLevelBlockId / focusedBlockId live on each panel's own
+// block under ui-state/panels. getActivePanelBlock walks there for us.
 //
 // Note on key syntax: this app uses hotkeys-js, which has no 'mod'
 // alias — list cmd and ctrl variants explicitly for cross-platform
@@ -63,10 +73,11 @@ export default actionsFacet.of({
   context: ActionContextTypes.GLOBAL,
   defaultBinding: { keys: ['cmd+shift+f', 'ctrl+shift+f'] },
   handler: async ({ uiStateBlock }) => {
-    const repo = uiStateBlock.repo
-    const topLevelId = uiStateBlock.dataSync()?.properties.topLevelBlockId?.value
+    const panel = await getActivePanelBlock(uiStateBlock)
+    const topLevelId = (await panel?.data())?.properties[topLevelBlockIdProp.name]?.value
     if (!topLevelId) return
 
+    const repo = uiStateBlock.repo
     const subtree = await repo.getSubtreeBlockData(topLevelId, { includeRoot: false })
     // If anything is uncollapsed, collapse all; otherwise expand all.
     const anyExpanded = subtree.some(b => b.properties[isCollapsedProp.name]?.value !== true)

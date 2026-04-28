@@ -48,7 +48,7 @@ import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { buildAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
-import { getPanelsBlock } from '@/data/globalState.ts'
+import { getActivePanelBlock } from '@/data/globalState.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -222,28 +222,15 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Insert example extensions under current block',
       context: ActionContextTypes.GLOBAL,
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
-        // GLOBAL is activated outside of any panel, so the dep here is the
-        // user-level ui-state block. focusedBlockId / topLevelBlockId are
-        // stored on each panel's ui-state block — walk the panels subtree
-        // to find a usable parent.
-        const panelsBlock = await getPanelsBlock(uiStateBlock)
-        const panels = await panelsBlock.children()
-        let chosenPanel: Block | undefined
-        let parentId: string | undefined
-        for (const panel of panels) {
-          const data = await panel.data()
-          const focused = data?.properties[focusedBlockIdProp.name]?.value as string | undefined
-          if (focused) { chosenPanel = panel; parentId = focused; break }
-          if (!chosenPanel) {
-            const top = data?.properties[topLevelBlockIdProp.name]?.value as string | undefined
-            if (top) { chosenPanel = panel; parentId = top }
-          }
-        }
-        if (!parentId || !chosenPanel) return
+        const panel = await getActivePanelBlock(uiStateBlock)
+        const data = await panel?.data()
+        const parentId =
+          (data?.properties[focusedBlockIdProp.name]?.value as string | undefined) ??
+          (data?.properties[topLevelBlockIdProp.name]?.value as string | undefined)
+        if (!panel || !parentId) return
 
-        const parent = repo.find(parentId)
-        const created = await insertExampleExtensionsUnder(parent)
-        if (created[0]) chosenPanel.setProperty({...focusedBlockIdProp, value: created[0].id})
+        const created = await insertExampleExtensionsUnder(repo.find(parentId))
+        if (created[0]) panel.setProperty({...focusedBlockIdProp, value: created[0].id})
       },
     },
   ]

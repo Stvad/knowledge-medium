@@ -33,6 +33,7 @@ describe('@/extensions/api — public surface', () => {
     // Block / data primitives
     'Block',
     'Repo',
+    'getActivePanelBlock',
     'boolProp',
     'numberProperty',
     'stringProperty',
