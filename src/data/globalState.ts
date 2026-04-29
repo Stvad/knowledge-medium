@@ -126,6 +126,9 @@ export const getPanelsBlock = memoize(
     uiStateBlock.childByContent([panelsPathPart], true, {scope: uiChangeScope}),
   (uiBlock) => `${uiBlock.repo.instanceId}:${uiBlock.id}`)
 
+export const MAIN_PANEL_NAME = 'main'
+export const isMainPanel = (panel: Block) => panel.dataSync()?.content === MAIN_PANEL_NAME
+
 /**
  * Resolve the panel ui-state block the user is most likely working in.
  *

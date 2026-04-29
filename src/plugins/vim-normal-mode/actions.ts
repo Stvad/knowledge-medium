@@ -1,4 +1,5 @@
 import {
+  defaultChangeScope,
   getLastVisibleDescendant,
   nextVisibleBlock,
   previousVisibleBlock,
@@ -14,6 +15,7 @@ import { selectionStateProp } from '@/data/properties'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { copyBlockToClipboard } from '@/utils/copy.ts'
+import { pasteFromClipboard } from '@/utils/paste.ts'
 import {
   bindBlockActionContext,
   createSharedBlockActions,
@@ -25,6 +27,26 @@ import {
   ActionContextTypes,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.ts'
+
+const JUMP_BLOCK_COUNT = 8
+
+const jumpVisibleBlocks = async (
+  startBlock: BlockShortcutDependencies['block'],
+  topLevelBlockId: string,
+  count: number,
+  direction: 'up' | 'down',
+) => {
+  const step = direction === 'up' ? previousVisibleBlock : nextVisibleBlock
+  let current = startBlock
+  let last = startBlock
+  for (let i = 0; i < count; i++) {
+    const next = await step(current, topLevelBlockId)
+    if (!next) break
+    current = next
+    last = next
+  }
+  return last === startBlock ? null : last
+}
 
 export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
   const {
@@ -191,6 +213,106 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         eventOptions: {
           preventDefault: true,
         },
+      },
+    }),
+    bindNormal({
+      id: 'jump_many_down',
+      description: 'Jump down several blocks',
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId) return
+
+        const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'down')
+        if (target) setFocusedBlockId(uiStateBlock, target.id)
+      },
+      defaultBinding: {
+        keys: 'ctrl+d',
+      },
+    }),
+    bindNormal({
+      id: 'jump_many_up',
+      description: 'Jump up several blocks',
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId) return
+
+        const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'up')
+        if (target) setFocusedBlockId(uiStateBlock, target.id)
+      },
+      defaultBinding: {
+        keys: 'ctrl+u',
+      },
+    }),
+    bindNormal({
+      id: 'create_block_above_and_edit',
+      description: 'Create block above and enter edit mode',
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        const created = await block.createSiblingAbove()
+        if (!created) return
+        setFocusedBlockId(uiStateBlock, created.id)
+        setIsEditing(uiStateBlock, true)
+      },
+      defaultBinding: {
+        keys: 'shift+o',
+      },
+    }),
+    bindNormal({
+      id: 'paste_after',
+      description: 'Paste from clipboard after current block',
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        const pasted = await pasteFromClipboard(block, repo, {position: 'after'})
+        if (pasted[0]) setFocusedBlockId(uiStateBlock, pasted[0].id)
+      },
+      defaultBinding: {
+        keys: 'p',
+      },
+    }),
+    bindNormal({
+      id: 'paste_before',
+      description: 'Paste from clipboard before current block',
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        const pasted = await pasteFromClipboard(block, repo, {position: 'before'})
+        if (pasted[0]) setFocusedBlockId(uiStateBlock, pasted[0].id)
+      },
+      defaultBinding: {
+        keys: 'shift+p',
+      },
+    }),
+    bindNormal({
+      id: 'normal_undo',
+      description: 'Undo last action',
+      handler: () => {
+        repo.undoRedoManager.undo(defaultChangeScope)
+      },
+      defaultBinding: {
+        keys: 'u',
+      },
+    }),
+    bindNormal({
+      id: 'normal_redo',
+      description: 'Redo last action',
+      handler: () => {
+        repo.undoRedoManager.redo(defaultChangeScope)
+      },
+      defaultBinding: {
+        keys: 'ctrl+r',
+      },
+    }),
+    bindNormal({
+      id: 'collapse_into_parent',
+      description: 'Collapse current block into its parent and focus parent',
+      handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        if (!topLevelBlockId || block.id === topLevelBlockId) return
+
+        const parent = await block.parent()
+        if (!parent || parent.id === topLevelBlockId) return
+
+        parent.setProperty({...isCollapsedProp, value: true})
+        setFocusedBlockId(uiStateBlock, parent.id)
+      },
+      defaultBinding: {
+        keys: 'shift+z',
       },
     }),
   ]
