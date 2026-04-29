@@ -78,10 +78,6 @@ export class Repo {
     return this.storage.existsBlock(id)
   }
 
-  async findFirstRootBlockId(workspaceId: string) {
-    return this.storage.findFirstRootId(workspaceId)
-  }
-
   create(data: Partial<BlockData>, options: {scope?: string} = {}): Block {
     const id = data.id ?? uuidv4()
     const createTime = data.createTime ?? Date.now()
