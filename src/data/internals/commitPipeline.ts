@@ -42,11 +42,17 @@ const sourceForScope = (scope: ChangeScope) =>
 const scopeUploadsToServer = (scope: ChangeScope) =>
   scope === ChangeScopeConst.BlockDefault || scope === ChangeScopeConst.References
 
-/** Minimal subset of the full PowerSync DB our pipeline talks to. The
- *  test harness (`createTestDb`) returns a real `PowerSyncDatabase`
- *  that satisfies this; production passes the same. */
+/** Minimal subset of the full PowerSync DB our pipeline + Repo talks
+ *  to. The test harness (`createTestDb`) returns a real
+ *  `PowerSyncDatabase` that satisfies this; production passes the
+ *  same. Both `writeTransaction` (for tx primitives) and the read
+ *  surface (`getAll` / `getOptional` / `get` for `repo.load`) are
+ *  needed. */
 export interface PowerSyncDb {
   writeTransaction<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  get<T>(sql: string, params?: unknown[]): Promise<T>
 }
 
 export interface RunTxParams<R> {

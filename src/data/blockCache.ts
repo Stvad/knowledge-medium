@@ -18,6 +18,12 @@ export class BlockCache {
   private readonly listeners = new Map<string, Set<() => void>>()
   private readonly dirty = new Set<string>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
+  /** Per-parent "all children loaded" marker (data-layer §5.2). The
+   *  cache cannot distinguish "leaf node" from "children not yet
+   *  loaded" by sibling-scanning alone; the marker is the only honest
+   *  signal. `repo.load(id, {children: true})` sets it; the row_events
+   *  tail clears it when a new child arrives via sync. */
+  private readonly allChildrenLoaded = new Set<string>()
 
   getSnapshot(id: string): BlockData | undefined {
     return this.snapshots.get(id)
@@ -115,5 +121,48 @@ export class BlockCache {
 
   private notify(id: string): void {
     this.listeners.get(id)?.forEach(listener => listener())
+  }
+
+  // ──── allChildrenLoaded markers ────
+
+  /** Mark that the cache holds the complete set of children for a
+   *  parent. Set by `repo.load(parentId, {children: true})` and by the
+   *  subtree loader. */
+  markChildrenLoaded(parentId: string): void {
+    this.allChildrenLoaded.add(parentId)
+  }
+
+  /** Clear the marker — call when a new child has appeared (e.g.
+   *  sync-applied insert with this parent_id). */
+  clearChildrenLoaded(parentId: string): void {
+    this.allChildrenLoaded.delete(parentId)
+  }
+
+  /** True iff the cache marker says all children of `parentId` are
+   *  loaded. Used by `Block.childIds` / `Block.children` to decide
+   *  whether the sync getter is honest or should throw
+   *  `ChildrenNotLoadedError`. */
+  areChildrenLoaded(parentId: string): boolean {
+    return this.allChildrenLoaded.has(parentId)
+  }
+
+  /** Children of `parentId` from the cache, ordered by `(orderKey, id)`,
+   *  filtered to non-deleted rows. The caller is responsible for
+   *  having checked `areChildrenLoaded(parentId)` first; this helper
+   *  doesn't verify the marker because (a) `block.childIds` does it
+   *  in the throw path, and (b) sometimes — e.g. inside a tx —
+   *  callers want a best-effort sibling list and accept the
+   *  partial-cache risk. */
+  childrenOf(parentId: string): BlockData[] {
+    const out: BlockData[] = []
+    for (const data of this.snapshots.values()) {
+      if (data.parentId === parentId && !data.deleted) out.push(data)
+    }
+    out.sort((a, b) => {
+      if (a.orderKey < b.orderKey) return -1
+      if (a.orderKey > b.orderKey) return 1
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+    })
+    return out
   }
 }
