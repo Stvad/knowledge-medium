@@ -82,12 +82,18 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Service-role grep check scoped properly** (§4 + §13.1 acceptance). The check is `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'`, not the whole repo — this spec discusses the term but doesn't bundle into the app, so it's intentionally excluded.
 >   - **Stray closing code fence removed** in §5.7 prose. Was breaking markdown rendering of the section between the afterCommit type and the scheduling-channels list.
 >   - **Read-only invariant updated** (§15 #1) to permit `Repair` scope alongside `UiState`. v4.12 fixed §5.4 and §10.3 but left invariant #1 saying "UI-state txs always allowed" without the Repair carve-out.
-> - v4.15 (this): round-13 fixes — type-contract cleanup.
+> - v4.15: round-13 fixes — type-contract cleanup.
 >   - **`source?: never` on non-Repair `RepoTxOptions` branches** (§5.3). v4.14's "omit the field" approach only blocked excess properties on fresh literals; variables like `{ scope: BlockDefault, source: 'local-ephemeral' }` were still structurally assignable. `source?: never` makes the rejection type-level for both literal and variable callers.
 >   - **`Tx.afterCommit` typed via `ScheduledArgsFor<P>`** (§5.3, §5.7). v4.14 prose claimed the args were narrowed but the Tx interface still had `args: unknown`. Now both agree: `afterCommit<P extends string>(name: P, args: ScheduledArgsFor<P>, opts?)`. Backed by a `PostCommitProcessorRegistry` plugins augment per processor (mirrors `MutatorRegistry`); built-ins (e.g. `core.cleanupOrphanAliases`) are augmented in §5.7.
 >   - **`repo.mutate.X` resolves `Mutator.scope` from args** (§10.1). v4.14 forwarded `mutator.scope` directly to `repo.tx`, which fails when `scope` is a function `(args) => ChangeScope`. Wrapper now resolves to a concrete scope before opening the tx (and resolves Repair source from `repo.canWrite(workspaceId)` if applicable). The engine needs concrete values pre-user-fn for read-only gating and `tx_context.source` setting.
 >   - **`ChangeScope` type wired through `ChangeScopeRegistry`** (§5.8). v4.14 declared the registry but `ChangeScope` was defined only over the const built-ins, so plugin augmentations didn't actually flow into the public type. Now: `ChangeScope = (built-in values) | keyof ChangeScopeRegistry`. Plugin scopes default to `BlockDefault` semantics; metadata-shaped registry entries deferred to a future revision.
 >   - **`NewBlockData` defined** (§4.1.1). `tx.create` referenced this type but it wasn't defined. Added next to `BlockDataPatch`: `id` optional (engine generates UUID if absent; deterministic-id mutators pass an explicit id), `workspaceId` / `parentId` / `orderKey` required, defaults documented, engine-managed fields (`createdAt`, etc.) and `deleted` rejected at the type level.
+> - v4.16 (this): round-14 fixes.
+>   - **`deleted` removed from `BlockDataPatch`** (§4.1.1). v4.15 still allowed `tx.update(id, { deleted: true })` as a public end-run around the `tx.delete` soft-delete contract. Now lifecycle is single-path through `tx.delete`. Undo's engine-internal applier writes raw rows from snapshots (doesn't go through `tx.update`/`BlockDataPatch`), so excluding `deleted` from the user-facing patch type doesn't block restore-on-undo.
+>   - **Repair branch takes `repairWorkspaceId`, not caller-supplied `source`** (§5.3, §5.8.1, §4.7). v4.15 trusted callers to pass a correct `source` for Repair, but a non-writable caller could force `source: 'user'` and trigger a rejected upload. Now the engine derives source from `repo.canWrite(repairWorkspaceId)`; `source?: never` everywhere closes the literal-and-variable assignability paths.
+>   - **Repair-scoped mutators forbidden through `repo.mutate.X`** (§10.1). The generic dispatch wrapper has no way to compute `repairWorkspaceId` from arbitrary mutator args. Repair-scoped writes go through `repo.tx` directly with the worker computing the workspace from cycle-detection state. The wrapper throws if a mutator's resolved scope is `Repair`, with a message pointing to §5.8.1.
+>   - **Cleanup arg renamed `attemptedAliasTargetIds`** (§7 + §7.6 + §7.5). v4.15 called this `candidateIds` / `newlyCreatedIds`, both of which implied same-tx insertion knowledge that §10.4 says is unavailable. The list is every non-date id returned by `createAliasTarget`, regardless of insert/conflict outcome; the row_events gate (§7.5) sorts genuinely-inserted from pre-existing post-commit. Schema in `PostCommitProcessorRegistry` updated to match.
+>   - **Service-role grep claim split** (§4 + §13.1 acceptance). `git grep` only sees tracked files, so it cannot validate a gitignored local `.env`. Now: tracked-file/browser-bundle guard via `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` (mechanical, CI-runnable) PLUS a separate filename-only local-`.env` check (`grep -lE '^SUPABASE_SERVICE_ROLE_KEY' .env || echo OK`) that doesn't print secret values. PR docs reviewers to run the local check.
 
 ---
 
@@ -292,13 +298,18 @@ export interface BlockData {
   deleted: boolean                              // hydrated from 0/1
 }
 
-/** Allowed patch shape for tx.update — excludes immutable fields (id,
- *  workspaceId) AND engine-managed metadata (createdAt, createdBy,
- *  updatedAt, updatedBy). Tx.update accepts this type and rejects
- *  patches that include disallowed keys at compile time. */
+/** Allowed patch shape for tx.update — excludes:
+ *  - immutable fields (id, workspaceId)
+ *  - engine-managed metadata (createdAt, createdBy, updatedAt, updatedBy)
+ *  - deleted (lifecycle goes through tx.delete; restore is not a v1 primitive)
+ *
+ *  The undo machinery does NOT use tx.update / BlockDataPatch — it has its
+ *  own engine-internal applier that writes raw rows from before/after
+ *  snapshots, so excluding `deleted` from the user-facing patch type doesn't
+ *  prevent undo from restoring a soft-deleted block. */
 export type BlockDataPatch = Partial<Omit<
   BlockData,
-  'id' | 'workspaceId' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'
+  'id' | 'workspaceId' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy' | 'deleted'
 >>
 
 /** Allowed shape for tx.create.
@@ -496,18 +507,15 @@ for (const { start_id, cycle_depth } of detected) {
 // repair: lex-smallest in each cycle becomes a workspace root
 for (const members of cycles.values()) {
   const loser = [...members].sort()[0]
-  // Decide source BEFORE opening the writeTransaction — the engine sets
-  // tx_context.source in pipeline step 1, before the user fn runs. We can't
-  // infer workspace from staged writes (those don't exist yet), so the
-  // repair worker passes source explicitly via tx options.
+  // The engine sets tx_context.source in pipeline step 1, before the user fn
+  // runs. The caller passes the affected workspace; the engine consults
+  // canWrite() and derives source itself. Caller can't lie about source.
   const targetWorkspaceId = (await repo.block(loser).load())?.workspaceId
-  const source = (targetWorkspaceId && repo.canWrite(targetWorkspaceId))
-    ? 'user'
-    : 'local-ephemeral'
+  if (!targetWorkspaceId) continue                  // block missing; skip this loser
 
   await repo.tx(async tx => tx.update(loser, { parentId: null }), {
     scope: ChangeScope.Repair,
-    source,                                     // explicit per-tx source
+    repairWorkspaceId: targetWorkspaceId,           // engine derives source from canWrite
     description: `Cycle repair: ${loser}`,
   })
 }
@@ -673,23 +681,24 @@ export interface Tx {
   readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string; source: TxSource }
 }
 
-/** RepoTxOptions is discriminated on `scope` so the source-derivation contract
- *  is enforceable at the type level:
+/** RepoTxOptions is discriminated on `scope` so source/permission contracts
+ *  are enforceable at the type level:
  *
- *  - Repair scope:  caller MUST pass `source` (computed from
- *    repo.canWrite(workspaceId) per §5.8.1). The engine has no default for Repair.
+ *  - Repair scope:  caller passes `repairWorkspaceId` (the workspace of the
+ *    affected block); the engine derives source via `repo.canWrite(repairWorkspaceId)`
+ *    per §5.8.1. The caller cannot pass `source` directly — that path would
+ *    let a non-writable client force `source: 'user'` and trigger an upload
+ *    the server would reject. The engine is the only entity that decides.
  *  - All other scopes: source is derived statically from scope
- *    (BlockDefault/References → 'user', UiState → 'local-ephemeral').
- *    `source` is intentionally absent from these option types so callers
- *    cannot bypass the scope→upload contract by writing a doc edit as
- *    'local-ephemeral' or a UI-state write as 'user'.
+ *    (BlockDefault / References → 'user', UiState → 'local-ephemeral').
+ *    `source` and `repairWorkspaceId` are both absent from these branches.
  *
  *  ('sync' is reserved for sync-applied writes that bypass repo.tx entirely;
  *  it is not assignable from anywhere in this API.) */
 
 export type RepoTxOptions =
-  | (RepoTxOptionsBase & { scope: typeof ChangeScope.Repair; source: TxSource })
-  | (RepoTxOptionsBase & { scope: Exclude<ChangeScope, typeof ChangeScope.Repair>; source?: never })
+  | (RepoTxOptionsBase & { scope: typeof ChangeScope.Repair; repairWorkspaceId: string; source?: never })
+  | (RepoTxOptionsBase & { scope: Exclude<ChangeScope, typeof ChangeScope.Repair>; source?: never; repairWorkspaceId?: never })
 
 interface RepoTxOptionsBase {
   description?: string
@@ -697,7 +706,7 @@ interface RepoTxOptionsBase {
 }
 ```
 
-`source?: never` (rather than just omitting the field) is load-bearing: TypeScript's excess-property checks only fire on fresh object literals, so a variable like `{ scope: ChangeScope.BlockDefault, source: 'local-ephemeral' }` would otherwise be structurally assignable to the non-Repair branch. With `source?: never`, that variable is rejected at compile time.
+`source?: never` and `repairWorkspaceId?: never` (rather than just omitting fields) are load-bearing: TypeScript's excess-property checks only fire on fresh object literals, so without them, a variable like `{ scope: BlockDefault, source: 'local-ephemeral' }` would still be structurally assignable to the non-Repair branch. The `?: never` declarations make the rejection type-level for both literal and variable callers — and crucially make `source` impossible for Repair callers too, so the engine's `canWrite` decision is the only path.
 
 ```ts
 interface TxWriteOpts {
@@ -991,7 +1000,7 @@ export type ScheduledArgsFor<P extends string> =
 // Built-in registration (kernel):
 declare module '@/data/api' {
   interface PostCommitProcessorRegistry {
-    'core.cleanupOrphanAliases': { candidateIds: string[]; originatingTxId: string }
+    'core.cleanupOrphanAliases': { attemptedAliasTargetIds: string[]; originatingTxId: string }
   }
 }
 
@@ -1097,17 +1106,17 @@ Repair has to behave differently per-block based on whether the local user can a
 
 The `Repo` exposes `repo.canWrite(workspaceId): boolean` — a synchronous query against whatever permission state the app maintains (today: per-workspace role; for v1 frequently just one workspace, so this often degrades to `!repo.isReadOnly`, but the spec is permission-based, not flag-based, so future multi-workspace permission distinctions don't break repair).
 
-**The repair worker decides source per-tx and passes it explicitly via `RepoTxOptions.source`** (§5.3). The engine cannot derive source for Repair-scoped txs from scope alone — there's no general "Repair source" — and it cannot infer workspace from staged writes because `tx_context.source` is set in pipeline step 1, before the user fn runs. Hence the explicit option.
+**The repair worker passes `repairWorkspaceId` (not `source`) via `RepoTxOptions`** (§5.3). The engine consults `repo.canWrite(repairWorkspaceId)` at tx-open time (pipeline step 1) and sets `tx_context.source` itself. The caller can't pass `source` directly — that would let a non-writable caller force `source: 'user'` and trigger uploads the server would reject. The engine is the only entity that decides.
 
 Per cycle, the worker:
 1. Reads the loser block's `workspaceId` (cycle detection has already loaded enough to know this).
-2. Computes `source = repo.canWrite(workspaceId) ? 'user' : 'local-ephemeral'`.
-3. Calls `repo.tx(fn, { scope: ChangeScope.Repair, source, description })`.
+2. Calls `repo.tx(fn, { scope: ChangeScope.Repair, repairWorkspaceId, description })`.
 
-- **`source = 'user'`** → repair uploads. Peers receive the deterministic fix via sync; LWW makes it idempotent.
-- **`source = 'local-ephemeral'`** → repair fixes the local view only. Trigger doesn't forward; server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (overwrites the local-ephemeral repair with an identical value — convergent).
+The engine then:
+- If `repo.canWrite(repairWorkspaceId)` → `tx_context.source = 'user'`. Repair uploads. Peers receive the deterministic fix via sync; LWW makes it idempotent.
+- Else → `tx_context.source = 'local-ephemeral'`. Repair fixes the local view only. Trigger doesn't forward; server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (overwrites the local-ephemeral repair with an identical value — convergent).
 
-This is the only scope where `source` is supplied by the caller. Every other scope has its source derived statically by the engine.
+This is the only scope whose `source` is computed dynamically per tx; every other scope has a static source derived from scope alone. Because `source` is engine-derived (never caller-supplied) for Repair, the safety rule is enforced — no caller path forces an upload to a non-writable workspace.
 
 Why not "read-only clients don't run repair at all": leaving the local view cyclic means CTE depth guards (§4.7 layer 3) cap results at 100 deep — fine for correctness, but visually misleading. Local-only repair gives the user a correct local view while waiting for a writable peer's authoritative fix.
 
@@ -1152,9 +1161,9 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
 | Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
-| Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. **Date alias targets are NEVER added to `candidateIds`** (see Self-destruct row below) — daily notes persist regardless of whether a referencing block is removed within 4s. |
+| Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. **Date alias targets are NEVER added to `attemptedAliasTargetIds`** (see Self-destruct row below) — daily notes persist regardless of whether a referencing block is removed within 4s. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
-| Self-destruct (newly-created NON-DATE alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { candidateIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`candidateIds` excludes date-shaped alias-target ids** — daily notes are persistent by convention. The cleanup processor (mode `'follow-up'`, `watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ candidateIds: z.array(z.string()), originatingTxId: z.string() })` so the engine validates at `tx.afterCommit` enqueue. Cleanup checks each candidate with **two gates**: (a) verify this tx actually inserted the row via `ctx.db.getAll('SELECT 1 FROM row_events WHERE tx_id = ? AND block_id = ? AND kind = ? LIMIT 1', [originatingTxId, id, 'create'])`; skip if empty. (b) verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. Only when both gates pass does `ctx.tx.delete(id)` proceed. See §7.5 for the rationale. |
+| Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { attemptedAliasTargetIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`attemptedAliasTargetIds` is every non-date id returned by `createAliasTarget` calls in this tx, regardless of whether each one hit a conflict or actually inserted** — same-tx insertion detection is unavailable (§7.5, §10.4); the row_events gate sorts inserted from existing post-commit. Date-shaped ids are excluded at this list-build step (daily notes are persistent — see §7.6). The cleanup processor (mode `'follow-up'`, `watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ attemptedAliasTargetIds: z.array(z.string()), originatingTxId: z.string() })` so the engine validates at `tx.afterCommit` enqueue. Cleanup checks each attempted id with **two gates**: (a) verify this tx actually inserted the row via `ctx.db.getAll('SELECT 1 FROM row_events WHERE tx_id = ? AND block_id = ? AND kind = ? LIMIT 1', [originatingTxId, id, 'create'])`; skip if empty (the row pre-existed). (b) verify no block's `references` contains the id (`ctx.db` query against `references_json`); skip if any does (someone references it). Only when both gates pass does `ctx.tx.delete(id)` proceed. See §7.5 for why this layered approach is necessary. |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
 | `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
@@ -1169,7 +1178,7 @@ This matches today's behavior. No "two undos to revert one edit" UX issue.
 
 ### 7.6 Daily-note exemption from cleanup
 
-Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a newly-created daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **not adding date-shaped alias-target ids to `candidateIds`** in the first place — `parseReferences` checks each freshly-created alias's id against the daily-note id format and excludes matches.
+Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **not adding date-shaped alias-target ids to `attemptedAliasTargetIds`** in the first place — `parseReferences` checks each id returned by `createAliasTarget` against the daily-note format and excludes matches.
 
 Implementation:
 
@@ -1179,13 +1188,18 @@ function isDateAliasTargetId(id: string): boolean {
   return /^daily-[a-z0-9]+-\d{4}-\d{2}-\d{2}$/.test(id)
 }
 
-// inside parseReferences, after createAliasTarget:
-const newlyCreatedIds = …
-const candidateIds = newlyCreatedIds.filter(id => !isDateAliasTargetId(id))
-tx.afterCommit('core.cleanupOrphanAliases', { candidateIds, originatingTxId: tx.meta.txId }, { delayMs: 4000 })
+// inside parseReferences:
+//   - For every parsed alias not already resolved by aliasLookup,
+//     run tx.run(createAliasTarget, { alias, workspaceId }) to get the id.
+//     The returned id may be newly inserted OR pre-existing (deterministic-id
+//     race; same-tx insertion detection is unavailable).
+//   - Collect ALL non-date ids returned, regardless of insert/conflict outcome:
+const attemptedAliasTargetIds = idsReturnedByCreateAliasTarget
+  .filter(id => !isDateAliasTargetId(id))
+tx.afterCommit('core.cleanupOrphanAliases', { attemptedAliasTargetIds, originatingTxId: tx.meta.txId }, { delayMs: 4000 })
 ```
 
-This is filter-at-schedule-time, not gate-at-cleanup-time, so cleanup never even sees the daily-note ids. (We could double-gate at cleanup for defense in depth, but it's not needed if the format check is reliable.)
+The filter excludes date-shaped ids at schedule-time, so cleanup never sees them. The cleanup processor's row_events gate (§7.5) then sorts genuinely-inserted from pre-existing among the remaining attempted ids.
 
 ### 7.5 Why cleanup needs the row_events insertion check
 
@@ -1194,7 +1208,7 @@ The "no references" check alone is insufficient. Consider this race:
 1. Alice creates page "Inbox" via the create-page UI (NOT via `[[Inbox]]` typing). Alice's `Inbox` alias-target row has no incoming `references_json` entries from any block.
 2. Sync propagates Alice's Inbox row to Bob's local DB.
 3. Bob types `[[Inbox]]` somewhere. parseReferences runs the alias-by-name lookup (raw SQL in Phase 3 / `repo.query.aliasLookup` in Phase 4 — same SQL either way), finds Alice's existing Inbox, calls `createAliasTarget` with `onConflict: 'ignore'`. The create is a no-op (row exists); `createAliasTarget` returns the id.
-4. parseReferences adds the id to `candidateIds` and schedules cleanup with delay 4s.
+4. parseReferences adds the id to `attemptedAliasTargetIds` (the list of ids returned by `createAliasTarget` calls in this tx, regardless of whether each one inserted or hit a conflict — same-tx insertion detection is unavailable per §10.4) and schedules cleanup with delay 4s.
 5. Bob deletes the `[[Inbox]]` text within 4s. parseReferences re-runs, removing the reference from Bob's block.
 6. Cleanup runs after 4s. Without the insertion check, it sees:
    - No block's `references_json` contains Inbox's id.
@@ -1409,7 +1423,7 @@ If 5 or 6 throws (DB-level) → rollback, same.
 
 ### 10.1 `repo.mutate.X` is a 1-mutator tx
 
-`Mutator.scope` may be a function of args (`scope: ChangeScope | ((args) => ChangeScope)`). The wrapper resolves it to a concrete scope **before** opening the tx — the engine needs a concrete scope to set `tx_context.source` (pipeline step 1) and to enforce read-only gating, both of which happen pre-user-fn. For `Repair`-scoped mutators, the wrapper similarly computes `source` from `repo.canWrite(workspaceId)` before opening.
+`Mutator.scope` may be a function of args (`scope: ChangeScope | ((args) => ChangeScope)`). The wrapper resolves it to a concrete scope **before** opening the tx — the engine needs a concrete scope to set `tx_context.source` (pipeline step 1) and to enforce read-only gating, both of which happen pre-user-fn.
 
 ```ts
 await repo.mutate.indent({ id })
@@ -1420,18 +1434,27 @@ await repo.mutate.indent({ id })
     ? indentMutator.scope({ id })
     : indentMutator.scope
 
-  // 2. For Repair scope: also resolve source per workspace permission.
-  //    For non-Repair scopes: source is derived statically by the engine.
-  const opts: RepoTxOptions = scope === ChangeScope.Repair
-    ? { scope, source: /* repo.canWrite(workspaceId) ? 'user' : 'local-ephemeral' */, description: indentMutator.describe?.({ id }) }
-    : { scope, description: indentMutator.describe?.({ id }) }
+  // 2. Repair scope is forbidden through generic mutator dispatch — see below.
+  if (scope === ChangeScope.Repair) {
+    throw new Error(
+      `Mutator '${indentMutator.name}' resolved to Repair scope, which is not ` +
+      `dispatchable via repo.mutate.X. Repair-scoped writes must go through ` +
+      `repo.tx directly with { scope: Repair, repairWorkspaceId } so the ` +
+      `engine can derive source from canWrite(workspaceId). See §5.8.1.`,
+    )
+  }
 
-  // 3. Open tx with concrete scope/source.
-  await repo.tx(async tx => tx.run(indentMutator, { id }), opts)
+  // 3. Open tx with concrete scope.
+  await repo.tx(async tx => tx.run(indentMutator, { id }), {
+    scope,
+    description: indentMutator.describe?.({ id }),
+  })
 }
 ```
 
-Mutators with arg-dependent scopes are rare in v1 (none in the kernel mutator list), but the API permits them and the wrapper handles them correctly. Most mutators have a static scope and the resolution is a no-op.
+**Why Repair is forbidden through `repo.mutate.X`**: Repair scope requires a `repairWorkspaceId` for source derivation (§5.3 / §5.8.1), but `Mutator` has no standard way to compute the affected workspace from args before the tx opens — the args shape is mutator-specific. Adding a per-mutator `repairWorkspaceId(args)` hook would bloat every Mutator definition for a feature only Repair needs. Cleaner to constrain Repair to a direct-`repo.tx` path: the cycle-repair worker calls `repo.tx(async tx => tx.run(repairCycleMutator, args), { scope: Repair, repairWorkspaceId })` itself, where the worker knows the workspace from cycle detection. v1's only Repair-scoped mutator is `core.repairCycle`, and only the worker invokes it.
+
+Mutators with arg-dependent scopes are rare in v1 (none in the kernel list), but the API permits them and the wrapper handles them correctly for non-Repair scopes. Most mutators have a static scope and the resolution is a no-op.
 
 ### 10.2 Scope unification within a tx
 
@@ -1625,7 +1648,8 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - **Secret handling — strict split.** The new Supabase project produces three credentials; they are NOT all the same kind of secret:
   - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — **public**, RLS-gated, intentionally exposed to the browser. These go into `.env` (gitignored) and `.env.example` (committed, with placeholder values).
   - `SUPABASE_SERVICE_ROLE_KEY` — **server-side secret**, bypasses RLS, must never reach the browser. Does NOT go into `.env`, does NOT go into `.env.example`, does NOT appear in any committed file. Lives only in the developer's local supabase CLI auth (`~/.supabase`) or a gitignored secrets path used by ad-hoc admin scripts. If a script needs it, the script reads it from the CLI's auth state, not from the app's env.
-  - The Phase 1 PR verifies: no `service_role` reference in `.env*` or in any browser-bundled source — i.e. `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` returns nothing. (This spec is excluded from the check; it discusses the term but doesn't bundle into the app.) `.env.example` contains only the two `VITE_*` placeholders.
+  - **Tracked-file guard**: the Phase 1 PR runs `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` and verifies it returns nothing. This catches accidental commits of service-role references in browser-bundled source or in any tracked env-shaped file. (This spec is excluded from the check; it discusses the term but doesn't bundle into the app.)
+  - **Local `.env` is gitignored and out of `git grep`'s reach** — developers confirm their checkout's `.env` doesn't carry the service-role key via a filename-only check (`grep -lE '^SUPABASE_SERVICE_ROLE_KEY' .env || echo OK`) that doesn't print secret-bearing contents. Documented in the PR for reviewers to run locally. `.env.example` contains only the two `VITE_*` placeholders.
 - **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus **five triggers**: three row_events writers (INSERT/UPDATE/DELETE) and two upload-routing triggers (INSERT/UPDATE only — DELETE upload routing is intentionally omitted in v1; see §4.5). The trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
 - PowerSync sync-config matches the new `blocks` shape. `tx_context`, `row_events`, `command_events` are not declared in sync-config (they don't sync; they're local-only).
 - **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE handles tagging and the equality test on `'user'` correctly excludes sync writes from the upload trigger. Don't try to hook PowerSync's CRUD-apply path.
@@ -1651,7 +1675,10 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - UI-state writes set `source='local-ephemeral'` and don't enter the upload queue.
 - Sync-applied writes leave `source=NULL`; row_events COALESCE-tags them as `'sync'`; upload trigger doesn't loop them back.
 - `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
-- New Supabase project provisioned via `supabase` CLI; `.env` (gitignored) contains the new `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`; `.env.example` (committed) contains placeholder values for those two only; **no service-role key in any browser-bundled source or env file** (verified via `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` returning nothing). Old project URL noted in the PR description as the historical snapshot. `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` against the new project produces the target Postgres schema directly.
+- New Supabase project provisioned via `supabase` CLI; `.env` (gitignored) contains the new `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`; `.env.example` (committed) contains placeholder values for those two only.
+- **Tracked-files / browser-bundle guard against service-role leakage**: `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` returns nothing. (This is mechanical — runs in CI / pre-commit. It only sees tracked files.)
+- **Local `.env` validation is a separate manual check**: developers verify their gitignored `.env` does not define `SUPABASE_SERVICE_ROLE_KEY` via something like `grep -lE '^SUPABASE_SERVICE_ROLE_KEY' .env || echo OK` (filename-only output; the value never gets printed). The Phase 1 PR description includes a one-liner reminding reviewers to run this on their own checkout. `git grep` cannot validate gitignored files and must not be claimed to.
+- Old project URL noted in the PR description as the historical snapshot. `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` against the new project produces the target Postgres schema directly.
 - Client-side DDL lives in `src/data/internals/clientSchema.ts` (or equivalent) and runs at app startup after PowerSync's schema initialization; a fresh local DB has `tx_context` (one row), `row_events`, `command_events`, and exactly five triggers populated (3 row_events writers + 2 upload-routing for INSERT/UPDATE only).
 
 ### Phase 2 — Sync `Block` + Handles + React migration
