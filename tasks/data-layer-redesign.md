@@ -20,6 +20,12 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - **v4.20: four dead-code drops.** `mode: 'same-tx'` processors removed (zero v1 callers; the hypothetical use case was rejected in v4.4 anyway). `watches.kind: 'mutator'` removed (field-watching is the correctness path; mutator-name watches miss plugin mutators that bypass the named one). `tx.create({...}, { onConflict: 'ignore' })` replaced by `tx.createOrGet(data) → { id, inserted: boolean }`. `ChangeScopeRegistry` removed (plugin scopes were behaving as `BlockDefault` anyway).
 > - **v4.21: write-through Tx primitives.** No staged write-set; no flush step. Each `tx.create` / `tx.update` / `tx.delete` / `tx.setProperty` runs INSERT/UPDATE inline against SQL; engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Reads inside a tx see own writes natively (`tx.get` via writeTransaction; `tx.peek` via snapshots-then-cache fallback). Made possible by v4.20 dropping the two consumers of pre-flush state (same-tx processors, createOrGet's reconciliation hook). **The shared cache is updated on commit walk only — see v4.24 below; do NOT re-add inline cache writes during the tx.**
 > - **v4.23: drop deterministic cycle repair entirely.** The old Layer 2 (post-sync deterministic repair via `repairTreeInvariants` + lex-smallest-loser) is removed. The protocol becomes: Layer 1 (local move-mutator validation) + Layer 2 (depth-100 CTE guards, formerly Layer 3) + a row_events-tail detection scan that logs cycles for telemetry. **`ChangeScope.Repair`, `repo.repairTreeInvariants`, `repo.canWrite`, the `repairCycle` kernel mutator, and the per-workspace repair gating prose are all gone.** Rationale: cycles are a narrow concurrent-write window; alpha population is small; the two remaining layers keep queries finite under any cyclic state; revisit auto-repair only if the detection log fires. **Don't re-add this without telemetry showing it's needed** — v4.12 → v4.18 chased per-workspace repair plumbing through several round-trips before v4.23 cut the whole branch.
+> - **v4.25: second-round reviewer fixes against v4.24.** Six items, mostly about getting v4.24's SQL right:
+>   1. **`tx.createOrGet` rewritten as SELECT-then-branch** (§5.3, §10.4). The v4.24 attempt to discriminate insert-vs-restore via `RETURNING *, excluded.created_at AS …` was invalid SQLite — `excluded.*` is only legal in `ON CONFLICT DO UPDATE`'s SET/WHERE, not in RETURNING. Engine now SELECTs the existing row first (which it does anyway for `before` capture), then branches: missing → INSERT; cross-workspace → throw `DeterministicIdCrossWorkspaceError`; deleted=1 → UPDATE in place to restore (workspace_id is **not** updated — the row never moves between workspaces); deleted=0 → no write. Folds in the P1 "live conflict cannot refresh cache" finding (no snapshot recorded for deleted=0 hits, no spurious commit-walk reconciliation claim) and the P1 "restore can move a block between workspaces" finding (workspace-pin guard + frozen workspace_id on restore).
+>   2. **Path encoding rewritten for §11.1/§11.2/§11.3** (also touched in §4.7). v4.24 had two bugs: (a) the subtree separator `~` (0x7E) sorts *after* every alphanumeric, so prefix order keys (`a` vs `aa`) sorted backwards under `ORDER BY path` for any sibling pair the fractional-indexing alphabet produced in a prefix relationship; (b) the ancestor/isDescendantOf recursive segments were `hex(id)/` instead of `!hex(id)/`, so the visited-guard `INSTR(path, '!hex/')` only matched the root node — a chain entering a non-root cycle (start → A → B → C → B) didn't catch the repeat until the depth-100 cap. Both fixed by switching the in-segment separator to `!` (0x21, less than every alnum + hex char) and using the uniform `!hex/` segment shape across all three CTEs.
+>   3. **Cycle truncation is silent in result shape** (§4.7, §11.1). The visited-id guard truncates cleanly, but `Handle<BlockData[]>` has no per-edge "cycle here" metadata and we're not adding one for a rare case. The §4.7 "UI marker" claim is dropped; operators learn cycles happened from the `repo.events.cycleDetected` log only.
+>   4. **Zero-write tx still writes a `command_events` row** (§5.3 invariant prose). The pipeline (§10 step 4) inserts unconditionally; §4.4 says one row per `repo.tx`; the previous §5.3 wording suggested zero-write txs skipped this. Reconciled to "uniform: always one row, with `workspace_id = NULL` and `mutator_calls = []` for zero-write txs."
+>
 > - **v4.24: reviewer-found correctness fixes.** Seven changes, all addressing real bugs the spec previously hand-waved:
 >   1. **`tx.createOrGet` restores soft-deleted rows** in-place (§5.3, §10.4). Previously `[[foo]]` typed → cleaned-up → re-typed would resolve to a hidden tombstone; now it un-soft-deletes via `ON CONFLICT DO UPDATE … WHERE blocks.deleted = 1` and returns `inserted: true`. The "restore = inserted:true" semantic keeps §7's cleanup-eligibility filter correct.
 >   2. **Cache update deferred to commit walk** (§5.3, §10). SQL is still write-through inside `db.writeTransaction`; the shared cache is no longer mutated mid-tx. `tx.peek` reads snapshots-then-cache; outside-tx readers see only committed state. Closes the dirty-read window. v4.21's "no staged write-set" intent stands — write-through is just to SQL, the cache update is batched into the commit walk that fires handles.
@@ -479,7 +485,7 @@ Why engine-side, not mutator-side: kernel mutators (`move`, `indent`, `outdent`)
 
 `tx.create` doesn't need this check: a brand-new id has no descendants, so the proposed parent is trivially not a descendant of it. Same for the fresh-insert branch of `tx.createOrGet`. Only writes against pre-existing rows (`tx.update`, the restore branch of `tx.createOrGet`) carry the check.
 
-**Layer 2 — CTE guards (depth + visited-id).** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries two guards: a `depth < 100` defensive cap, and a visited-id check via path-INSTR (§11.1) that skips any row whose id already appears in the recursion path-so-far. Even if a sync-applied cycle slips through Layer 1, the visited-id guard truncates the cyclic subtree at the cycle entry — each block appears at most once in the result, no UNION-ALL duplicate explosion — and the depth guard is the additional safety net for any pathological non-cycle deep tree (a 200-level deep, non-cyclic tree gets capped, but that's an extreme corner case). This is what gives the UI a clean, finite result it can render with a "cycle here" marker against the truncation point.
+**Layer 2 — CTE guards (depth + visited-id).** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries two guards: a `depth < 100` defensive cap, and a visited-id check via path-INSTR (§11.1) that skips any row whose id already appears in the recursion path-so-far. Even if a sync-applied cycle slips through Layer 1, the visited-id guard truncates the cyclic subtree at the cycle entry — each block appears at most once in the result, no UNION-ALL duplicate explosion — and the depth guard is the additional safety net for any pathological non-cycle deep tree (a 200-level deep, non-cyclic tree gets capped, but that's an extreme corner case). The result is a clean, finite tree the UI can render. The truncation itself is silent in the result shape — `Handle<BlockData[]>` does not carry per-edge "cycle here" metadata; surfacing the cycle in-UI would require a parallel result channel that we're not building for this rare case. Operators learn cycles happened from the `repo.events.cycleDetected` log (next paragraph).
 
 **Detection-only telemetry.** When the row_events tail (§9.3) sees sync-applied writes that changed `parent_id`, the engine runs a bounded scan scoped to the affected ids:
 
@@ -497,11 +503,11 @@ WHERE depth > 0 AND id = start_id
 GROUP BY start_id;
 ```
 
-Each result row gives `(start_id, cycle_depth)`. When the result set is non-empty, the engine emits a single warning log (`console.warn` + a `repo.events.cycleDetected` event with `{ startIds, workspaceId, txIdsInvolved }`) so the team finds out *that* a cycle happened in the wild. **No automatic repair.** The cycle stays in the data; queries truncate at depth 100; one of the cycle members has to be moved by a user (any move that breaks the loop works) or by manual operator intervention before the affected subtree renders in full.
+Each result row gives `(start_id, cycle_depth)`. When the result set is non-empty, the engine emits a single warning log (`console.warn` + a `repo.events.cycleDetected` event with `{ startIds, workspaceId, txIdsInvolved }`) so the team finds out *that* a cycle happened in the wild. **No automatic repair, and no in-UI marker.** The cycle stays in the data; queries dedup-and-truncate via the §11 visited-id guard; one of the cycle members has to be moved by a user (any move that breaks the loop works) or by manual operator intervention.
 
-This is a deliberate alpha cut. Cycles only arise from concurrent moves on overlapping subtrees by writable peers in the same workspace — a narrow window in a small alpha population. Layers 1 + 2 keep the local view *correct* (just visually capped) under any cyclic state syncs in. The detection log gives us the data to revisit deterministic auto-repair (lex-smallest-loser, per-workspace-canWrite-gating) in a later round if it becomes a real problem; until then, none of that machinery exists in the engine, on `Repo`, or in the type system.
+This is a deliberate alpha cut. Cycles only arise from concurrent moves on overlapping subtrees by writable peers in the same workspace — a narrow window in a small alpha population. Layers 1 + 2 keep the local view *correct* (cleanly truncated, finite result) under any cyclic state syncs in. The detection log gives us the data to revisit deterministic auto-repair (lex-smallest-loser, per-workspace-canWrite-gating) in a later round if it becomes a real problem; until then, none of that machinery exists in the engine, on `Repo`, or in the type system.
 
-Operational runbook on a logged cycle: identify the cycle members from the log payload, decide which edge to break (typically the most recent move), and have the relevant user perform a move that takes one of the members out of the loop. The depth-100 truncation means the cyclic subtree is reachable for inspection — every member appears in some other tree query at depth ≤ 100 — so the UI can still show the operator what to act on.
+Operational runbook on a logged cycle: read the log payload (it carries `startIds` for every cycle member visible at the row_events tail's scan), identify which edge to break (typically the most recent move, which is the one most likely the user-actor wanted), and have that user perform a move that takes one of the members out of the loop. The data is still in the table (the visited-id guard truncates the *result* of recursive queries, not the underlying rows), so a worker query against `blocks` directly can list every member by id without going through the truncating CTE.
 
 This is roughly the pattern Linear / Roam / Logseq use for hierarchical data under last-writer-wins sync, minus the auto-repair step we're not yet adding.
 
@@ -644,30 +650,43 @@ export interface Tx {
    *  insertion status. Required for deterministic-id callers
    *  (createAliasTargetInline; daily notes).
    *
-   *  - id is REQUIRED on the input — without an id, conflict semantics are undefined.
-   *  - **No row exists** → INSERT runs; returns `{ id, inserted: true }`; engine
-   *    captures (null, after).
-   *  - **Row exists, `deleted = 0`** → SELECTs the live row inside the same
-   *    writeTransaction, returns `{ id, inserted: false }`; engine captures no
-   *    snapshot for this id (the row didn't change). Subsequent `tx.get(id)`
-   *    reads the live row from SQL.
-   *  - **Row exists, `deleted = 1`** (soft-deleted) → UPDATEs the row in place:
-   *    sets `deleted = 0` and overwrites the input fields with the new values
-   *    (semantically: "the page is back; treat it like a fresh creation"),
-   *    returns `{ id, inserted: true }`. Engine captures (before-row, after-row)
-   *    in the snapshots map. **`inserted: true` is honest here** — from the
-   *    user's POV a live row at this id was produced by this tx, which is exactly
-   *    what the cleanup-eligibility filter in §7 needs. (See §10.4 for the
-   *    discriminating SQL.)
+   *  Implementation is SELECT-then-branch inside the active writeTransaction
+   *  (full SQL in §10.4). High-level behavior:
    *
-   *  Why restore-on-conflict (not "return inserted:false even when un-soft-deleted"):
-   *  the deterministic-id contract is "two clients writing the same id converge to
-   *  the same live row." If client A typed `[[foo]]`, deleted it (soft-delete via
-   *  cleanup), then later types `[[foo]]` again, the user's intent on the second
-   *  type is "create [[foo]]" — they don't know about the soft-deleted tombstone
-   *  and shouldn't see the alias resolve to a hidden row. Restoring is the only
-   *  behavior that makes typing `[[foo]]` after a delete work correctly. */
-  createOrGet(data: NewBlockData & { id: string }, opts?: TxWriteOpts): Promise<{ id: string; inserted: boolean }>
+   *  - id and workspaceId are REQUIRED on the input — without them, conflict
+   *    semantics are undefined.
+   *  - Engine SELECTs the existing row first (this is the same `before` capture
+   *    §10 step 3 does for any first-touch id), then branches:
+   *
+   *    1. **No row exists** → INSERT runs; returns `{ id, inserted: true }`;
+   *       engine captures `(null, after)` in the snapshots map.
+   *    2. **Row exists in a different workspace** → throws
+   *       `DeterministicIdCrossWorkspaceError`. Defensive guard against
+   *       plugin-defined deterministic ids that don't include workspaceId
+   *       (kernel ids — alias targets, daily notes — encode workspaceId by
+   *       construction and never trigger this).
+   *    3. **Row exists, `deleted = 0`** → no write; returns
+   *       `{ id, inserted: false }`. No snapshot, no cache mutation. Cache
+   *       freshness for this id is the row_events tail's job (§9.3); within
+   *       this tx, `tx.get(id)` reads SQL directly.
+   *    4. **Row exists, `deleted = 1`** (soft-deleted) → UPDATEs in place:
+   *       sets `deleted = 0` and overwrites the input fields with the new
+   *       values. **workspace_id is NOT updated** — it stays at the (verified-
+   *       matching) existing value, so a soft-deleted row never moves between
+   *       workspaces. Returns `{ id, inserted: true }`. Engine captures
+   *       `(before-row, after-row)` in the snapshots map.
+   *
+   *  Why restore-on-conflict (not "return inserted:false even when un-soft-
+   *  deleted"): the deterministic-id contract is "two clients writing the same
+   *  id converge to the same live row." If client A typed `[[foo]]`, deleted
+   *  it (soft-delete via cleanup), then later types `[[foo]]` again, the user's
+   *  intent on the second type is "create [[foo]]" — they don't know about the
+   *  soft-deleted tombstone and shouldn't see the alias resolve to a hidden row.
+   *  Restoring is the only behavior that makes typing `[[foo]]` after a delete
+   *  work correctly. `inserted: true` is the honest semantic for the cleanup-
+   *  eligibility filter in §7 — "this tx made a live row exist at this id
+   *  where none did before" — covering both fresh-insert and restore branches. */
+  createOrGet(data: NewBlockData & { id: string; workspaceId: string }, opts?: TxWriteOpts): Promise<{ id: string; inserted: boolean }>
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): void
   delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
 
@@ -723,9 +742,12 @@ export interface Tx {
  *    matches `meta.workspaceId`. Mismatch throws `WorkspaceMismatchError` and
  *    aborts the primitive (the writeTransaction rolls back when the user fn
  *    propagates the throw).
- *  - A tx with zero writes leaves `meta.workspaceId = null`; this is fine
- *    because such a tx produces no row_events / command_events rows that
- *    need the workspaceId disambiguated.
+ *  - A tx with zero writes still produces a `command_events` row (per §10
+ *    pipeline step 4 — uniform behavior, one row per `repo.tx` invocation per
+ *    §4.4). `meta.workspaceId` is `null` and the `command_events.workspace_id`
+ *    column is NULL (the column is nullable per §4.4); `mutator_calls` is `[]`.
+ *    Such txs are rare (programming errors or genuine no-ops); keeping the audit
+ *    row uniform is simpler than gating it.
  *
  *  Why enforce: command_events, CommittedEvent, and processor alias-lookup
  *  all carry one workspace_id. Cross-workspace writes inside a single tx
@@ -1370,12 +1392,14 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │          (or update existing entry's `after`).                 │
 │          Cache is NOT mutated here — the shared cache stays   │
 │          at its pre-tx state until commit walk.                │
-│        - tx.createOrGet: INSERT…ON CONFLICT DO UPDATE         │
-│          (restore-if-soft-deleted) WHERE blocks.deleted = 1;  │
-│          empty RETURNING → live-row hit, follow-up SELECT,    │
-│          no snapshot; non-empty RETURNING → fresh insert OR   │
-│          soft-deleted row restored, snapshot recorded          │
-│          (see §10.4 for the discriminator + branching SQL).    │
+│        - tx.createOrGet: SELECT existing row (= `before`);    │
+│          if missing → INSERT (snapshot null→after);            │
+│          else if workspace mismatch → throw                    │
+│          DeterministicIdCrossWorkspaceError;                   │
+│          else if deleted=1 → UPDATE in place to restore        │
+│          (snapshot before→after); else → no write, no          │
+│          snapshot, return inserted:false. See §10.4 for the   │
+│          full branching SQL.                                   │
 │        Reads:                                                 │
 │          - tx.get / tx.childrenOf / tx.parentOf → SQL via     │
 │            txDb; sees own writes natively (read-your-own-     │
@@ -1448,34 +1472,60 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 `tx.create` throws `DuplicateIdError` on PK conflict — the safe default for accidental id collisions.
 
-`tx.createOrGet({ id, ... })` is the deterministic-id path (daily notes, alias targets). Three outcomes — fresh insert, live-row hit, soft-deleted-row restore — all resolved inside the active writeTransaction:
+`tx.createOrGet({ id, workspaceId, ... })` is the deterministic-id path (daily notes, alias targets). Three outcomes — fresh insert, live-row hit, soft-deleted-row restore — resolved by **SELECT-then-branch** inside the active writeTransaction. (The earlier v4.24 attempt to discriminate via `RETURNING *, excluded.*` was invalid SQLite — `excluded.*` is only legal in `ON CONFLICT DO UPDATE`'s `SET` and `WHERE`, not in `RETURNING`. The SELECT-first form is also clearer and lets us enforce the workspace-pin invariant.)
 
-```sql
--- Step 1 (write-through): try the insert; on conflict, restore-if-deleted in place.
-INSERT INTO blocks (id, workspace_id, parent_id, order_key, content, properties_json, ...)
-VALUES (?, ?, ?, ?, ?, ?, ...)
-ON CONFLICT(id) DO UPDATE SET
-  deleted         = 0,
-  workspace_id    = excluded.workspace_id,
-  parent_id       = excluded.parent_id,
-  order_key       = excluded.order_key,
-  content         = excluded.content,
-  properties_json = excluded.properties_json,
-  references_json = excluded.references_json,
-  updated_at      = excluded.updated_at,
-  updated_by      = excluded.updated_by
-WHERE blocks.deleted = 1                 -- ONLY restore soft-deleted; live rows stay untouched
-RETURNING *,
-  -- discriminator: was this row mutated by THIS statement?
-  (blocks.created_at = excluded.created_at) AS was_fresh_insert,
-  (blocks.deleted    = 0 AND blocks.created_at != excluded.created_at) AS was_restore;
+```ts
+// Step 1: read the existing row, if any. This is the engine's pre-write SELECT
+// — the same one §10 step 3 captures as `before` for any first-touch id.
+const before = await txDb.get('SELECT * FROM blocks WHERE id = ?', [id])
+
+if (before === undefined) {
+  // (a) Fresh insert.
+  await txDb.run('INSERT INTO blocks (id, workspace_id, ...) VALUES (?, ?, ...)', [...])
+  // Snapshot: (null, after-from-input). Cache updated on commit walk.
+  return { id, inserted: true }
+}
+
+// Workspace-pin guard: if the existing row belongs to a different workspace,
+// the deterministic-id contract is broken (collision across workspaces). Throw
+// rather than silently moving the row + its subtree. This is defensive — kernel
+// id encodings (alias targets, daily notes) include workspaceId, so collisions
+// shouldn't happen — but plugin-defined deterministic ids could bug.
+if (before.workspace_id !== input.workspaceId) {
+  throw new DeterministicIdCrossWorkspaceError(id, before.workspace_id, input.workspaceId)
+}
+
+if (before.deleted === 1) {
+  // (b) Restore branch: row was soft-deleted; un-soft-delete in place,
+  // overwrite the input fields. Workspace_id stays at `before.workspace_id`
+  // (verified to match input above) — never moves.
+  await txDb.run(
+    `UPDATE blocks SET deleted = 0, parent_id = ?, order_key = ?, content = ?,
+                       properties_json = ?, references_json = ?,
+                       updated_at = ?, updated_by = ?
+     WHERE id = ?`,
+    [...]
+  )
+  // Snapshot: (before-with-deleted=1, after-with-deleted=0-and-fresh-fields).
+  // Cache updated on commit walk; handles diff to the new live shape.
+  return { id, inserted: true }
+}
+
+// (c) Live-row hit: row exists, deleted = 0. No write, no snapshot.
+// Cache is NOT mutated by this primitive. If the cached entry for this id
+// is stale, that's the row_events tail's job (§9.3) — which already runs
+// against sync-applied changes. Within this tx, tx.get(id) reads SQL
+// directly so it sees the up-to-date row regardless.
+return { id, inserted: false }
 ```
 
-The engine then branches on the discriminator and the empty/non-empty RETURNING:
+**Why SELECT-then-branch beats `INSERT … ON CONFLICT DO UPDATE` with discriminator**:
+- SQLite doesn't allow `excluded.*` in `RETURNING`, so the discriminator approach can't run as written.
+- Engine pre-write SELECTs every first-touch id anyway (per §10 step 3, to capture `before`); reusing it here is free.
+- Branching is explicit — implementers can read what each path does.
+- Workspace-pin enforcement (next paragraph) is a natural pre-write check, not an awkward CHECK constraint or post-INSERT validation.
 
-- **Empty RETURNING** → `ON CONFLICT DO UPDATE WHERE blocks.deleted = 1` matched a live row, which the WHERE clause excluded; no row mutated. Engine runs a follow-up `SELECT * FROM blocks WHERE id = ?` inside the same writeTransaction to read the live row. **No snapshot recorded** (nothing changed). Returns `{ id, inserted: false }`. Cache is untouched (stays at pre-tx state); on commit walk the live-row contents may be reconciled into the cache if the cached entry was stale.
-- **Non-empty RETURNING + `was_fresh_insert`** → fresh insert. Engine captures `(null, after)` in the tx-private snapshots map. Cache is updated on commit walk (step 6 of §10 pipeline). Returns `{ id, inserted: true }`.
-- **Non-empty RETURNING + `was_restore`** → soft-deleted row restored in place. Engine captures `(before-row-with-deleted=1, after-row-with-deleted=0-and-fresh-fields)` in the snapshots map. On commit walk the cache entry transitions from "deleted/missing" to the new live shape, and handles diff accordingly. Returns `{ id, inserted: true }` — see §5.3 for why "restore = inserted:true" is the honest semantic for the cleanup-eligibility filter.
+**Why workspace-pin is enforced** (P1 v4.25): without it, a deterministic-id collision across workspaces could move a soft-deleted row — and *its subtree*, since the children's `parent_id` would still resolve to this row but in a new workspace_id — into a different workspace, silently violating the §4.1.1 workspace invariant. Throwing `DeterministicIdCrossWorkspaceError` makes this loud. v1 kernel deterministic ids (`daily/<workspaceId>/<date>` for daily notes, alias-target ids that include workspaceId) don't collide across workspaces by construction; the check protects against plugin-defined deterministic ids that may not.
 
 Within-tx reads: `tx.get(id)` after `tx.createOrGet` reads SQL via the writeTransaction — sees the live row whether this tx inserted, restored, or hit an existing live row. The `inserted` boolean is in the return value, available immediately.
 
@@ -1489,25 +1539,27 @@ Within-tx reads: `tx.get(id)` after `tx.createOrGet` reads SQL via the writeTran
 
 ```sql
 WITH RECURSIVE subtree AS (
-  SELECT *, '~' || hex(id) || '/' AS path, 0 AS depth
+  SELECT *, '!' || hex(id) || '/' AS path, 0 AS depth
   FROM blocks
   WHERE id = :rootId AND deleted = 0
   UNION ALL
   SELECT child.*,
-         subtree.path || child.order_key || '~' || hex(child.id) || '/',
+         subtree.path || child.order_key || '!' || hex(child.id) || '/',
          subtree.depth + 1
   FROM subtree
   JOIN blocks AS child ON child.parent_id = subtree.id
   WHERE child.deleted = 0
     AND subtree.depth < 100                                   -- depth guard
-    AND INSTR(subtree.path, '~' || hex(child.id) || '/') = 0  -- visited-id guard
+    AND INSTR(subtree.path, '!' || hex(child.id) || '/') = 0  -- visited-id guard
 )
 SELECT * FROM subtree ORDER BY path;
 ```
 
-**Path encoding**: each path segment is `<order_key>~hex(<id>)/`, concatenated. `hex()` is SQLite's built-in hex-encoder (each byte → two hex digits). Hex-encoding the id makes the path lexically safe regardless of id format — block ids may contain `/` (e.g., `daily/<workspaceId>/<date>` deterministic ids) without breaking the sort. The `~` separator between order_key and hex(id) is chosen because `~` (0x7E) is lexicographically greater than every alphanumeric character used in `order_key` strings, so order_key alone determines order until tied (then id-hex tiebreaks). The trailing `/` per segment is what makes the visited-id guard's INSTR match unambiguous (`~hex/` is found only as a complete segment, never as a prefix of a longer hex). The root segment (`~hex(rootId)/`) has no order_key — fine, root has no siblings.
+**Path encoding**: each recursive segment is `<order_key>!hex(<id>)/`; the root segment is `!hex(<rootId>)/` (no order_key context). `hex()` is SQLite's built-in hex-encoder (each byte → two hex digits, uppercase `0-9A-F`). Hex-encoding the id makes the path lexically safe regardless of id format — block ids may contain `/` (e.g., `daily/<workspaceId>/<date>` deterministic ids) without breaking the sort.
 
-**Visited-id guard**: `INSTR(subtree.path, '~' || hex(child.id) || '/') = 0` skips any child whose id already appears in the path-so-far. This is the cycle truncation: in a cyclic subtree like `A.parent_id = B, B.parent_id = A` reached from some root, the recursion stops the moment it tries to add a node already on the path, so each block appears at most once in the result. **Without this guard, UNION ALL with the depth-100 fallback would return the same blocks dozens of times** (every loop iteration re-emits the cycle members), bloating tree-handle results with duplicates. With the guard, the result is a cleanly-truncated tree the UI can render and surface a "cycle here" marker against. See §4.7 for the v4.23 detection-only telemetry that logs when this guard fires.
+**Why `!` (0x21) as the in-segment separator** (v4.25): `!` is lexicographically *less* than every character that can appear in `order_key` (digits `0-9` = 0x30+, lowercase `a-z` = 0x61+, `_` = 0x5F, plus any other alphanumeric the fractional-indexing alphabet uses) AND less than every uppercase hex character (`0-9A-F`). This is what makes `ORDER BY path` produce the correct sibling ordering even when one order_key is a prefix of another. Concretely: keys `a` and `aa` produce segments `a!hex1/` and `aa!hex2/`; comparing position-by-position, `a == a`, then `!` (0x21) vs `a` (0x61) → `!` < `a` → `a!hex1/` sorts before `aa!hex2/`, matching the intended `ORDER BY order_key, id`. With the v4.24 separator `~` (0x7E, *greater* than letters), the same comparison reversed and produced `aa…` before `a…` — a real bug for any pair of siblings whose order_keys are in a prefix relationship, which `fractional-indexing-jittered` does produce. The trailing `/` per segment is what makes the visited-id guard's INSTR match unambiguous (`!hex/` is found only as a complete segment, never as a prefix of a longer hex).
+
+**Visited-id guard**: `INSTR(subtree.path, '!' || hex(child.id) || '/') = 0` skips any child whose id already appears in the path-so-far. This is the cycle truncation: in a cyclic subtree like `A.parent_id = B, B.parent_id = A` reached from some root, the recursion stops the moment it tries to add a node already on the path, so each block appears at most once in the result. **Without this guard, UNION ALL with the depth-100 fallback would return the same blocks dozens of times** (every loop iteration re-emits the cycle members), bloating tree-handle results with duplicates. The guard truncates silently — `Handle<BlockData[]>` does not surface the truncation point to the UI (no per-row "cycle edge" metadata; that would expand the result shape for a rare case). Operators learn cycles happened from the `repo.events.cycleDetected` log per §4.7; the UI just sees a clean, finite tree.
 
 Path is internal to the CTE; consumers ignore it. The hex-encoded id is decoded back via `parseBlockRow` into the regular text `id` field of `BlockData`.
 
@@ -1515,41 +1567,41 @@ Path is internal to the CTE; consumers ignore it. The hex-encoded id is decoded 
 
 ```sql
 WITH RECURSIVE chain AS (
-  SELECT *, '~' || hex(id) || '/' AS path, 0 AS depth
+  SELECT *, '!' || hex(id) || '/' AS path, 0 AS depth
   FROM blocks WHERE id = :id AND deleted = 0
   UNION ALL
   SELECT parent.*,
-         chain.path || hex(parent.id) || '/',
+         chain.path || '!' || hex(parent.id) || '/',
          chain.depth + 1
   FROM chain
   JOIN blocks AS parent ON parent.id = chain.parent_id
   WHERE parent.deleted = 0
     AND chain.depth < 100                                       -- depth guard
-    AND INSTR(chain.path, '~' || hex(parent.id) || '/') = 0     -- visited-id guard
+    AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0     -- visited-id guard
 )
 SELECT * FROM chain WHERE id != :id ORDER BY depth ASC;
 ```
 
-`depth` is computed in the CTE for explicit `ORDER BY` (SQL doesn't guarantee CTE recursion order without it) and as the depth guard. The visited-id guard via `path INSTR` mirrors §11.1's pattern (parent-chain segments use `hex(id)/` since ancestors have no order_key context, but the `~hex/` shape is preserved for the same reason — unambiguous segment match). Result is leaf-to-root.
+`depth` is computed in the CTE for explicit `ORDER BY` (SQL doesn't guarantee CTE recursion order without it) and as the depth guard. **Path encoding shape is uniform across recursion depths** (v4.25 fix): every segment is `!hex(id)/`, including the recursive segments — pre-v4.25 the recursive segment was `hex(parent.id)/` without the leading `!`, so the visited-guard's `INSTR(path, '!' || hex(X) || '/')` only ever matched the root segment. That meant a chain entering a pre-existing cycle that *didn't include the start node* (e.g. start → A → B → C → B) wouldn't catch the B-to-C-to-B repeat until the depth-100 cap, producing repeated cycle members. The uniform `!hex/` shape catches every repeat at the entry point. Result is leaf-to-root.
 
 ### 11.3 isDescendantOf
 
 ```sql
 WITH RECURSIVE chain AS (
-  SELECT id, parent_id, '~' || hex(id) || '/' AS path, 0 AS depth
+  SELECT id, parent_id, '!' || hex(id) || '/' AS path, 0 AS depth
   FROM blocks WHERE id = :id AND deleted = 0
   UNION ALL
-  SELECT b.id, b.parent_id, chain.path || hex(b.id) || '/', chain.depth + 1
+  SELECT b.id, b.parent_id, chain.path || '!' || hex(b.id) || '/', chain.depth + 1
   FROM blocks AS b
   JOIN chain ON chain.parent_id = b.id
   WHERE b.deleted = 0
     AND chain.depth < 100                                       -- depth guard
-    AND INSTR(chain.path, '~' || hex(b.id) || '/') = 0          -- visited-id guard
+    AND INSTR(chain.path, '!' || hex(b.id) || '/') = 0          -- visited-id guard
 )
 SELECT 1 FROM chain WHERE id = :potentialAncestor LIMIT 1;
 ```
 
-Order is irrelevant here (we only need existence), so no `ORDER BY` needed. The visited-id guard makes a cycle terminate as soon as the recursion tries to re-enter a node — the result is the same boolean either way, but bounded by the path length, not by the depth-100 cap.
+Order is irrelevant here (we only need existence), so no `ORDER BY` needed. Path uses the uniform `!hex/` segment shape (v4.25); like §11.2, the visited guard catches non-root cycle re-entries that the pre-v4.25 encoding missed.
 
 ### 11.4 Children of one parent
 
@@ -1963,8 +2015,13 @@ Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces t
 - [ ] v4.18 → v4.23 trajectory: cycle-repair was workspace-aware (v4.17), then engine-unaware with `repairTreeInvariants` worker (v4.18), then deleted entirely (v4.23). The current spec has no Repair scope, no repair worker, no per-workspace canWrite gating; sync-induced cycles are detected via the row_events tail (§4.7) and logged as `repo.events.cycleDetected`, not repaired. **Don't re-add any of this without telemetry showing it's needed.**
 - [ ] v4.21 write-through reflected throughout: Tx primitives execute their INSERT/UPDATE inline within `db.writeTransaction`; the engine captures `(before, after)` per id in the snapshots map for handle diffing / undo (§5.3, §10 pipeline, §15 #7). Reads inside a tx see own writes natively (`tx.get` via writeTransaction; `tx.peek` via snapshots-then-cache fallback). `tx.createOrGet` is just one more write-through primitive (§10.4). The shared cache is updated on commit walk only — see v4.24 below; do NOT re-add inline cache writes during the tx.
 - [ ] v4.23 cycle-repair drop reflected throughout: Layer 1 = engine-side validation on every parent_id-changing write (§4.7), Layer 2 = CTE depth + visited-id guards (§4.7, §11), plus a detection-only row_events-tail scan that logs cycles for telemetry. **No automatic repair.** `ChangeScope.Repair`, `repo.repairTreeInvariants`, `repo.canWrite`, the `repairCycle` kernel mutator, and §5.8.1 are all removed. Read-only mode (§10.3, §15 #1) collapses to "BlockDefault / References reject; UiState always allowed."
-- [ ] **v4.24 reviewer-found correctness fixes reflected throughout** (this round):
-  - **createOrGet restores soft-deleted rows** (§5.3, §10.4): `tx.createOrGet` no longer returns `inserted: false` against a soft-deleted tombstone — it un-soft-deletes in-place via `ON CONFLICT DO UPDATE … WHERE blocks.deleted = 1` and returns `inserted: true`. The cleanup-eligibility filter in §7 stays correct because "restore = inserted:true" is the honest semantic ("this tx made a live row exist where none did before"). Test coverage for the soft-delete-then-recreate path is in §7.4. Closes the P0 finding that `[[foo]]` after a previous create-and-cleanup would silently resolve to a hidden row.
+- [ ] **v4.25 reviewer fixes against v4.24** (this round):
+  - **createOrGet uses SELECT-then-branch** (§5.3, §10.4): the v4.24 `INSERT … ON CONFLICT DO UPDATE … RETURNING *, excluded.created_at AS …` form was invalid SQLite. Engine SELECTs the existing row first, then branches into INSERT / restore-UPDATE / no-write paths. Workspace-pin guard added (`DeterministicIdCrossWorkspaceError` on cross-workspace conflict); restore branch no longer updates `workspace_id`, so soft-deleted rows can never move between workspaces. Live-row conflict no longer claims commit-walk cache reconciliation — there's no snapshot, so step 6 doesn't see this id; the row_events tail handles cache freshness for sync-applied changes.
+  - **Path encoding fixes** (§11.1/§11.2/§11.3, §4.7): separator changed from `~` (0x7E, greater than alnum) to `!` (0x21, less than alnum) so subtree `ORDER BY path` produces correct sibling order for prefix order keys. Recursive segments in ancestors / isDescendantOf now use the uniform `!hex/` shape (pre-v4.25 they used `hex/` without the leading `!`, so the visited-guard only caught returning-to-the-start cycles, not non-root cycle re-entries).
+  - **Cycle truncation is silent** (§4.7, §11.1): dropped the "UI cycle-here marker" claim. `Handle<BlockData[]>` carries no per-edge truncation metadata; operators learn from the `repo.events.cycleDetected` log only.
+  - **Zero-write tx behavior reconciled** (§5.3): always writes a `command_events` row (matches §10 pipeline + §4.4), with `workspace_id = NULL` and `mutator_calls = []` when no writes happened.
+- [ ] **v4.24 reviewer-found correctness fixes reflected throughout**:
+  - **createOrGet restores soft-deleted rows** (§5.3, §10.4): `tx.createOrGet` no longer returns `inserted: false` against a soft-deleted tombstone — it un-soft-deletes in-place and returns `inserted: true`. The cleanup-eligibility filter in §7 stays correct because "restore = inserted:true" is the honest semantic ("this tx made a live row exist where none did before"). Test coverage for the soft-delete-then-recreate path is in §7.4. Closes the P0 finding that `[[foo]]` after a previous create-and-cleanup would silently resolve to a hidden row. (Implementation details further refined in v4.25 above.)
   - **Cache update deferred to commit walk** (§5.3, §10 pipeline, §10 atomicity-boundary prose, §15 #9): SQL is still write-through inside `db.writeTransaction`; the shared cache is no longer mutated mid-tx. The snapshots map (already kept for handle diffing / undo) is the tx-private overlay; `tx.peek` reads snapshots-then-cache; outside-tx readers see only committed state. Closes the dirty-read window where a render or imperative `block.peek` could observe uncommitted state. v4.21's "no staged write-set" intent stands: write-through to SQL, no overlay arithmetic, no flush step — the cache update is simply batched into the commit walk that fires handles.
   - **Engine-side cycle validation** (§4.7 Layer 1): every primitive that sets `parent_id` on an existing row (`tx.update`, the restore branch of `tx.createOrGet`) runs `isDescendantOf` and throws `CycleError` on cycle creation. Replaces the per-mutator validation that `tx.update` could bypass.
   - **CTE visited-id guards** (§11.1, §11.2, §11.3, §4.7): subtree / ancestors / isDescendantOf get visited-id INSTR checks via the path encoding. Cycles produce cleanly-truncated, dedup'd results instead of UNION-ALL-driven duplicates.
