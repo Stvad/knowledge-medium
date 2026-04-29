@@ -98,7 +98,14 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Workspace-trigger conflict resolved** (§4.1.1). v4.18's local trigger had two bugs: it silently accepted dangling parents (the `IS NOT NULL AND !=` predicate evaluated to NULL on missing parent rows, no ABORT), and it would have aborted sync-applied cross-workspace edges before row_events could record them, contradicting the spec's repair-via-sync-tail story. Now: server-side composite FK is the canonical enforcement (`FOREIGN KEY (workspace_id, parent_id) REFERENCES blocks (workspace_id, id)`); client-side triggers gate on `tx_context.source IS NOT NULL` (local writes only) and use `NOT EXISTS` to catch dangling-parent / cross-workspace / soft-deleted-parent in one check. v4.17's "row_events tail demotes cross-workspace edges" path is dropped — the server-side FK makes such edges impossible to sync in the first place. Cycle repair handles cycles only.
 >   - **`repo.repairTreeInvariants(targetId, fix, description?)` added** as the canonical repair worker entry point (§5.8.1, §3 architecture diagram). v4.18 had `ChangeScope.Repair` publicly accepted by `repo.tx`, with the canWrite gate as a worker-discipline rule — any plugin/kernel bug could open `scope: Repair` against a non-writable workspace and trigger a rejected-upload loop. The new method DRYs the canWrite gate (one place instead of every worker call site) and provides a clear "official" entry point. ~10 lines of code; the engine remains workspace-unaware for Repair (no per-tx workspace derivation, no discriminated options type — none of the v4.17 machinery comes back). Defense-in-depth via `isReadOnly` rejection (§10.3) is preserved.
 >   - **`createAliasTarget` reduced to a plain helper, not a registered Mutator** (§7 mapping, §13.3 Phase 3 mutator list). v4.18 had it in the kernel mutator list, which would have made it `repo.mutate.createAliasTarget(...)` callable from any caller — bypassing the parseReferences flow that the cleanup processor's row_events gate assumes. Now it's `createAliasTargetInline(tx, alias, workspaceId)`, a private helper called only from `core.parseReferences.apply`. No public API surface; no scope-rule confusion (it inherits parseReferences's tx scope automatically); no registration in `mutatorsFacet`.
-> - v4.20 (this): four simplifications — pure dead-code removal except for #3 which is a substitution.
+> - v4.21 (this): write-through Tx primitives — drop the staged write-set abstraction.
+>   - **Tx primitives are write-through** (§3 architecture diagram, §5.3 Tx interface, §9.3 invalidation, §10 pipeline + atomicity prose, §10.4, §15 invariants #7 and #9). Each `tx.create` / `tx.createOrGet` / `tx.update` / `tx.delete` / `tx.setProperty` runs its INSERT or UPDATE inline within the active `db.writeTransaction`, instead of staging in an in-memory write-set that a separate flush step later applied. Triggers fire per primitive call; reads (`tx.get` / `tx.peek` / `tx.childrenOf` / `tx.parentOf`) go cache → SQL with no staged-write overlay (own-writes are already visible to SQL within the writeTransaction).
+>   - **Removed**: pipeline step "metadata bump pass over the staged write-set" — metadata bumps happen at the write site, just before the engine issues each INSERT/UPDATE. Pipeline step "flush staged writes to blocks" — gone (writes already landed). The "engine merges staged + SQL for the four read primitives" overlay logic — gone (SQL natively returns this tx's writes).
+>   - **Kept (relocated)**: a per-tx snapshots map `id → { before, after }` is captured at the write site for cache hydration, handle diffing, and undo entries. Same data shape as before; just sourced from inline-captured snapshots instead of the post-flush staged set. On rollback, the engine reverts cache entries to their `before` values via this map.
+>   - **`tx.createOrGet` stops being a special case.** Its conflict path was the canary that motivated v4.20's substitution; under write-through, every primitive is INSERT/UPDATE inline, so createOrGet's `INSERT…ON CONFLICT DO NOTHING RETURNING` is just one more write-through. §10.4 collapses from a section about pipeline-step-7 reconciliation into a brief note about the SQL primitive's behavior.
+>   - **Why this is safe**: SQLite `writeTransaction` rolls back atomically on throw (no manual "discard staged writes" needed); SQL inside the writeTransaction sees its own writes natively (no overlay needed for read-your-own-writes); same-tx processors are gone (v4.20) so there's no consumer of pre-flush staged state. The two reasons the staged model existed are both gone.
+>   - Net spec savings: roughly −80 lines (pipeline diagram contracted, §5.3 prose simpler, §10.4 condensed); one fewer pipeline step; one fewer engine concept (the staged write-set); the "Engine merges staged + SQL" line in invariant #9 simplifies to "reads are plain SQL/cache lookups against the active writeTransaction."
+> - v4.20: four simplifications — pure dead-code removal except for #3 which is a substitution.
 >   - **Dropped `mode: 'same-tx'` processors** (§5.7, §10 pipeline, §15 invariant #10, §16.2). v1 shipped zero same-tx processors and the only hypothetical use case (atomic backlinks) was already rejected in v4.4. Discriminated PostCommitProcessor union → flat shape; `SameTxCtx` deleted; pipeline step 4 deleted; atomicity prose simplified. Re-add the mode if a real use case ever appears.
 >   - **Dropped `watches.kind: 'mutator'`** (§5.7, §16.2). Zero v1 callers; the design itself argued for `field`-watching whenever correctness matters (mutator-name watches don't catch plugin mutators bypassing the named one). Discriminated union 3 → 2 variants (`field` + `explicit`). `CommittedEvent.matchedCalls` deleted.
 >   - **Replaced `tx.create({...}, { onConflict: 'ignore' })` with `tx.createOrGet(data)` returning `{ id, inserted: boolean }`** (§5.3, §7 mapping, §7.5, §7.6, §10 pipeline, §10.4). The "same-tx insertion detection unavailable" caveat goes away because `inserted` is a return value. The post-flush conflict-reconciliation SELECT (old pipeline step 7) goes away because the primitive does the SELECT inline on conflict — the staged write set is correct as soon as the user fn returns. The §7.5 row_events insertion gate goes away because parseReferences filters at schedule time using `inserted` directly. The cleanup arg renames `attemptedAliasTargetIds` → `newlyInsertedAliasTargetIds` (now a literally-honest name). `tx.create` simplifies back to "throws on conflict" only — `TxCreateOpts` deleted.
@@ -217,15 +224,19 @@ We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reade
 ┌─────────────────────────────────────────────────────────────┐
 │ TxEngine (db.writeTransaction)                              │
 │   set tx_context (tx_id, user_id, scope, source)            │
-│   stage writes; reads = staged → cache → SQL via txDb       │
-│   tx.createOrGet runs INSERT…ON CONFLICT inline             │
-│   write blocks rows + command_events row                    │
+│   write-through: each tx primitive runs its INSERT/UPDATE   │
+│     immediately; engine captures (before, after) per id and │
+│     updates cache inline                                    │
+│   reads = cache → SQL via txDb (no staged-write overlay —   │
+│     own writes already in SQL within this tx)               │
 │   row_events written by triggers (read tx_context)          │
 │   trigger forwards to powersync_crud unless source=sync|ephem│
-│ on success: hydrate cache, diff handles, fire, undo entry   │
+│   write command_events row                                  │
+│ on success: walk snapshots, diff handles, fire, undo entry  │
 │              run scheduled tx.afterCommit + field-watch     │
 │              follow-up processors                           │
-│ on throw: full rollback                                      │
+│ on throw: db.writeTransaction rollback; engine reverts cache │
+│           from captured before-snapshots                    │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
@@ -412,8 +423,8 @@ export type BlockDataPatch = Partial<Omit<
  *  - content / properties / references: optional with defaults
  *    ('', {}, [] respectively).
  *  - createdAt, createdBy, updatedAt, updatedBy: NOT accepted —
- *    engine sets all four from tx_context at flush time. Passing
- *    them is a compile error.
+ *    engine sets all four from tx_context at the write site (just
+ *    before issuing the INSERT). Passing them is a compile error.
  *  - deleted: NOT accepted — newly-created blocks default to false;
  *    soft-delete goes through tx.delete, not tx.create. */
 export type NewBlockData = {
@@ -726,43 +737,52 @@ The single-block sugar above (`set`, `setContent`, `delete`) is the only mutatin
 
 ```ts
 export interface Tx {
-  /** Read with read-your-own-writes:
-   *  staged writes in this tx → cache → SQL via the active writeTransaction.
-   *  Returns null if the row doesn't exist. */
+  /** Read with read-your-own-writes. The Tx runs inside `db.writeTransaction`,
+   *  so SQL sees writes already issued by this tx natively — no staged-write
+   *  overlay. Returns null if the row doesn't exist. */
   get(id: string): Promise<BlockData | null>
 
-  /** Sync version: requires the row to be already preloaded into cache or staged. */
+  /** Sync read from cache (which the engine updates inline as primitives
+   *  execute, and reverts on rollback via the snapshots map). Returns null
+   *  if the row isn't in cache. Use `get` for the source-of-truth read. */
   peek(id: string): BlockData | null
 
-  /** Low-level primitives. */
+  /** Low-level primitives. Each runs its INSERT / UPDATE immediately within
+   *  the active writeTransaction; the engine captures (before, after) per id
+   *  for cache hydration, handle diffing, and undo. Triggers fire per primitive
+   *  call (row_events written, upload routing decided), not in a flush batch. */
   create(data: NewBlockData, opts?: TxWriteOpts): string     // throws DuplicateIdError on PK conflict
   /** Insert OR return the existing row, with explicit insertion status.
    *  Required for deterministic-id callers (createAliasTargetInline; daily notes).
    *  - id is REQUIRED on the input — without an id, conflict semantics are undefined.
-   *  - On insert: stages the new row, returns { id, inserted: true }.
-   *  - On conflict: SELECTs the live row inside the same writeTransaction, stages
-   *    the live row (so subsequent tx.get returns it), returns { id, inserted: false }.
-   *  - Within-tx tx.get(id) sees the staged row (inserted or live) — no caveat.
-   *  Implementation note: `INSERT INTO blocks(...) VALUES(...) ON CONFLICT(id) DO NOTHING
-   *  RETURNING *` returns nothing on conflict in SQLite; the engine follows up with
-   *  a SELECT. Same-statement on Postgres if the server ever runs this directly. */
+   *  - On insert: returns { id, inserted: true }; engine captures (null, after).
+   *  - On conflict: SELECTs the live row inside the same writeTransaction, returns
+   *    { id, inserted: false }; engine captures no snapshot for this id (the row
+   *    didn't change). Subsequent `tx.get(id)` reads the live row from SQL.
+   *  Implementation: `INSERT INTO blocks(...) VALUES(...) ON CONFLICT(id) DO NOTHING
+   *  RETURNING *`. SQLite returns nothing on conflict; the engine follows up with
+   *  a SELECT for the conflict path only. */
   createOrGet(data: NewBlockData & { id: string }, opts?: TxWriteOpts): Promise<{ id: string; inserted: boolean }>
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): void
   delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
 
   /** Typed property primitives — the only path that runs codecs.
-   *  setProperty: codec.encode applied; engine merges into the staged BlockData.properties.
-   *  getProperty: codec.decode applied to the staged-or-cache-or-DB value.
+   *  setProperty: codec.encode applied; engine merges into the row's `properties`
+   *    map and writes through immediately.
+   *  getProperty: codec.decode applied to the value read from SQL/cache.
    *  Direct properties manipulation via tx.update(id, { properties: ... }) writes raw
    *  encoded values and bypasses codecs — reserved for cases where the caller is
    *  intentionally working at the encoded-JSON level. */
   setProperty<T>(id: string, schema: PropertySchema<T>, value: T, opts?: TxWriteOpts): void
   getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T | undefined>
 
-  /** Compose another mutator. Reads see prior staged writes. */
+  /** Compose another mutator. Sub-mutator's writes go through immediately; the
+   *  parent's subsequent reads see them via SQL (read-your-own-writes inside
+   *  the writeTransaction). No overlay arithmetic. */
   run<Args, R>(mutator: Mutator<Args, R>, args: Args): Promise<R>
 
-  /** Within-tx tree primitives. Engine merges staged writes with SQL results explicitly. */
+  /** Within-tx tree primitives. Plain SQL against the writeTransaction; sees
+   *  writes already issued by this tx. */
   childrenOf(parentId: string): Promise<BlockData[]>          // ordered by (order_key, id)
   parentOf(childId: string): Promise<BlockData | null>
 
@@ -814,14 +834,14 @@ interface TxWriteOpts {
 type TxSource = 'user' | 'local-ephemeral'                   // sync writes bypass repo.tx; tx_context.source stays NULL for them, COALESCE'd to 'sync' in row_events
 ```
 
-**No arbitrary `tx.query`.** Arbitrary queries cannot honestly overlay staged writes (the Query.resolve gets raw SQL, doesn't know about the tx). Within-tx reads are limited to: `tx.get`/`tx.peek` (single block) and `tx.childrenOf`/`tx.parentOf` (immediate relatives). The engine implements these with explicit overlay logic.
+**No arbitrary `tx.query`.** Even with write-through making own-writes visible to SQL, queries are still kept off the Tx surface. Reasons: (a) `Query` handles maintain dynamic dependency declarations (§5.5) for invalidation, which only make sense for live handles outside a tx; running them inside a tx tangles their dep-graph with the tx's lifecycle. (b) Most query results are reactive views the caller already has via `useHandle` outside the tx; running them again inside is duplication. (c) Limiting in-tx reads to `tx.get` / `tx.peek` / `tx.childrenOf` / `tx.parentOf` keeps mutator code shaped around well-defined neighborhoods and makes preload hints (`mutator.reads`) meaningful.
 
 If a mutator needs broader information (e.g., "all blocks of a type in this workspace"), it should:
 - Call `await query.load()` *before* opening the tx (passing results in via args), or
 - Call `tx.childrenOf` repeatedly to traverse a known structure, or
 - For derived state, use a post-commit processor that reads the committed state.
 
-This is the same constraint Replicache and Zero accept: tx reads are limited to what the engine can overlay. Anything richer happens outside the tx.
+This is the same constraint Replicache and Zero accept: in-tx reads stay on the row-and-immediate-relatives shape. Anything richer happens outside the tx.
 
 ### 5.4 `Mutator<Args, Result>`
 
@@ -1249,7 +1269,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
 | Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<{ id: string; inserted: boolean }>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow. The helper computes the deterministic id, calls `tx.createOrGet({ id, ... })` (per §5.3), and returns both the id and whether *this* tx was the one that inserted. The `inserted` boolean drives cleanup eligibility (see Self-destruct row). |
-| Daily-note deterministic id | `createAliasTargetInline` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true`, the other gets `inserted: false` plus the existing live row staged. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s. |
+| Daily-note deterministic id | `createAliasTargetInline` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true`, the other gets `inserted: false` and reads the existing live row from SQL. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
 | Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds: [...] }, { delayMs: 4000 })`. **`newlyInsertedAliasTargetIds`** is built by filtering `createAliasTargetInline` results: include only ids where `inserted === true` AND the id is non-date-shaped. This is the literal honest meaning — `tx.createOrGet` returns `inserted` directly, so we know at parse time which ids this tx actually wrote vs which ones already existed. The cleanup processor (`watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ newlyInsertedAliasTargetIds: z.array(z.string()) })` so the engine validates at `tx.afterCommit` enqueue. Cleanup runs **one gate**: verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. When the gate passes, `ctx.tx.delete(id)` proceeds. (No row_events insertion check needed — the `inserted` boolean from `tx.createOrGet` already gave us that information at the call site, before we even scheduled cleanup.) |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
@@ -1435,9 +1455,9 @@ For changes that affect the parent-edge itself (a row's `parent_id` changes), th
 
 Invalidation feeds the same handle-walk logic from two places:
 
-1. **TxEngine fast path** (local writes via `repo.tx`): on commit success, the engine has the staged write-set in hand and walks affected handles synchronously. Cheap, immediate, no DB round-trip. This is the primary path for everything the user does in this tab.
+1. **TxEngine fast path** (local writes via `repo.tx`): on commit success, the engine has the per-tx snapshots map (id → before, after, captured at write site) and walks affected handles synchronously. Cheap, immediate, no DB round-trip. This is the primary path for everything the user does in this tab.
 
-2. **`row_events` tail** (sync-applied writes from PowerSync): PowerSync's CRUD apply writes directly to the local SQLite, bypassing `repo.tx`. Those writes leave no staged set for the TxEngine to walk — but they *do* fire the row_events trigger, which appends rows tagged (via `COALESCE(tx_context.source, 'sync')`) as `source = 'sync'`. The Repo subscribes to `row_events` via `db.onChange`, **filters to `source = 'sync'`**, consumes new rows since the last seen `id`, and walks the same handle-invalidation logic. Throttled (~100ms; see §16.13) to coalesce sync-burst invalidations.
+2. **`row_events` tail** (sync-applied writes from PowerSync): PowerSync's CRUD apply writes directly to the local SQLite, bypassing `repo.tx`. Those writes don't go through any TxEngine snapshots — but they *do* fire the row_events trigger, which appends rows tagged (via `COALESCE(tx_context.source, 'sync')`) as `source = 'sync'`. The Repo subscribes to `row_events` via `db.onChange`, **filters to `source = 'sync'`**, consumes new rows since the last seen `id`, and walks the same handle-invalidation logic. Throttled (~100ms; see §16.13) to coalesce sync-burst invalidations.
 
    **Filter rationale**: `db.onChange` on `row_events` would otherwise fire for every local write too (`source = 'user'` or `'local-ephemeral'`), causing double invalidation (once via TxEngine fast path, once via tail) and risking the tail clearing a marker that the fast path just populated correctly. Filtering to `source = 'sync'` makes the tail handle exactly the cases the fast path can't see, with no overlap. This is correct for both single-tab today and multi-tab in the future (a write from another tab arrives via PowerSync's CRUD-apply on this tab → leaves `tx_context.source = NULL` → COALESCE'd to `'sync'`).
 
@@ -1467,44 +1487,44 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │ ─────────────────────────────────────────────────────────── │
 │ db.writeTransaction(async (txDb) => {                        │
 │   1. UPDATE tx_context SET tx_id, user_id, scope, source     │
-│   2. construct Tx (staged write-set; reads via cache + txDb) │
-│   3. user fn(tx) runs:                                       │
-│        tx.create / tx.createOrGet / tx.update / tx.delete /  │
-│        tx.setProperty / tx.run / ...                         │
-│        reads: staged → cache → txDb                          │
-│        (tx.createOrGet runs INSERT…ON CONFLICT DO NOTHING    │
-│         RETURNING immediately; on conflict, follow-up SELECT │
-│         inside the same txDb. Caller learns inserted: bool.) │
-│   4. engine auto-bumps metadata fields on writes that didn't │
-│        opt out via skipMetadata; codecs already applied for  │
-│        any tx.setProperty calls                              │
-│   5. flush staged writes to blocks (txDb)                    │
-│        triggers fire: row_events rows, upload routing        │
-│   6. INSERT command_event row (txDb)                         │
-│   7. UPDATE tx_context SET tx_id=NULL, user_id=NULL,         │
-│        scope=NULL, source=NULL  (clear ALL fields together)   │
-│ })   // PowerSync COMMIT or ROLLBACK                         │
-│                                                              │
-│ on success (post-COMMIT, synchronous before promise resolves):│
-│   8. hydrate cache from staged writes (encoded shape)         │
-│   9. walk affected handles, structural-diff, fire             │
-│   10. record undo entry from staged before/after snapshots    │
-│   11. resolve repo.tx promise with user fn's return value     │
+│   2. construct Tx; init empty snapshots map (id → before/after)│
+│   3. user fn(tx) runs. Each primitive is write-through:      │
+│        - on first touch of an id, engine SELECTs the current  │
+│          row (the tx's `before` for that id)                  │
+│        - apply metadata bumps (unless skipMetadata)            │
+│        - run INSERT / UPDATE inline (triggers fire NOW —      │
+│          row_events written, upload routing decided)          │
+│        - update cache to `after`; record (before, after) in    │
+│          snapshots map (or update existing entry's `after`)    │
+│        - tx.createOrGet: INSERT…ON CONFLICT DO NOTHING        │
+│          RETURNING; on conflict, follow-up SELECT for the     │
+│          live row; no snapshot recorded on conflict (no change)│
+│        Reads (tx.get / tx.peek / tx.childrenOf / tx.parentOf) │
+│          go cache → SQL via txDb; SQL sees own writes natively│
+│   4. INSERT command_event row (txDb)                          │
+│   5. UPDATE tx_context SET tx_id=NULL, user_id=NULL,          │
+│        scope=NULL, source=NULL  (clear ALL fields together)    │
+│ })   // PowerSync COMMIT or ROLLBACK                          │
 │                                                               │
-│ post-resolve (fire-and-after):                                │
-│   12. dispatch tx.afterCommit jobs (own writeTransactions)    │
-│        and field-watch follow-up processors                   │
+│ on success (post-COMMIT, synchronous before promise resolves):│
+│   6. walk snapshots map, structural-diff handles, fire         │
+│   7. record undo entry from snapshots map                      │
+│   8. resolve repo.tx promise with user fn's return value       │
+│                                                                │
+│ post-resolve (fire-and-after):                                 │
+│   9. dispatch tx.afterCommit jobs (own writeTransactions)      │
+│       and field-watch follow-up processors                     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Atomicity boundary**: steps 1–7 all run inside `db.writeTransaction`, so they commit or roll back together. If anything throws, PowerSync rolls back the whole writeTransaction — including any `tx.createOrGet` follow-up SELECTs (step 3) and the `tx_context` clear (step 7), so nothing leaks. Steps 8–11 happen after COMMIT but before `repo.tx`'s promise resolves; the cache and undo stack reflect the committed state by the time the caller sees the resolved promise. Step 12 is async after the promise resolves.
+**Atomicity boundary**: steps 1–5 all run inside `db.writeTransaction`, so they commit or roll back together. If anything throws, PowerSync rolls back the whole writeTransaction — including any `tx.createOrGet` follow-up SELECTs and the `tx_context` clear (step 5), so SQL state reverts atomically. The engine then walks the snapshots map and reverts cache entries to their `before` values (or evicts entries whose `before` was null). Steps 6–8 happen after COMMIT but before `repo.tx`'s promise resolves; the cache and undo stack reflect the committed state by the time the caller sees the resolved promise. Step 9 is async after the promise resolves.
 
 Failure modes:
-- User fn throws in step 3 → rollback. Cache untouched, no `command_event`, no `row_events`, `tx_context` reverts to its pre-tx state automatically.
-- DB error in steps 4–7 → rollback.
-- Cache-hydration error in step 8 → tx is already committed; the engine logs the error and re-reads affected ids from SQLite to recover. (Should be impossible in practice — cache hydration is a pure in-memory operation on already-validated rows.)
+- User fn throws in step 3 → SQLite rolls back the writeTransaction (no row_events committed, no command_event, no upload-routing forwarded, `tx_context` reverts). Engine reverts cache from snapshots map.
+- DB error during step 3, step 4, or step 5 → same rollback path.
+- Snapshot/handle-diffing error in step 6 → tx is already committed; the engine logs the error and re-reads affected ids from SQLite to recover. (Should be impossible in practice — these are pure in-memory operations on already-validated rows.)
 
-(v4.20 dropped what used to be steps 4 and 7. The same-tx-processor step is gone because v1 ships zero same-tx processors and we don't keep an unused hook. The post-flush conflict-reconciliation SELECT is gone because `tx.createOrGet` does the SELECT inline on conflict — staged rows are correct as soon as the user fn returns.)
+**Why write-through, not staged-then-flush** (v4.21): the staged model existed for two historical reasons that no longer apply. (a) Same-tx processors needed to inspect the staged write-set before flush — gone in v4.20. (b) `tx.createOrGet`'s conflict path needed a post-flush reconciliation SELECT to fix the cache — also gone in v4.20, where the primitive does its own SELECT inline. Once both are gone, staging adds no value: SQL inside `writeTransaction` already gives reads-your-own-writes, metadata bumping happens at the write site naturally, and the snapshots map (kept anyway for cache hydration / undo / handle diffing) is the only in-memory state needed. v4.21 deletes the staged write-set as a concept; primitives are write-through and the pipeline collapses by two steps.
 
 ### 10.1 `repo.mutate.X` is a 1-mutator tx
 
@@ -1545,19 +1565,15 @@ Repair is a normal write scope as far as the engine is concerned — it uploads,
 
 ### 10.4 `tx.createOrGet` semantics
 
-`tx.create` (the plain primitive) throws `DuplicateIdError` on PK conflict — the safe default for accidental id collisions.
+`tx.create` throws `DuplicateIdError` on PK conflict — the safe default for accidental id collisions.
 
-`tx.createOrGet({ id, ... })` is the deterministic-id path (daily notes, alias targets). Implementation, all inside the active writeTransaction:
+`tx.createOrGet({ id, ... })` is the deterministic-id path (daily notes, alias targets). Implementation, inline within the active writeTransaction (write-through, like every other primitive):
 
-1. Run `INSERT INTO blocks(...) VALUES(...) ON CONFLICT(id) DO NOTHING RETURNING *`. (SQLite 3.35+; PowerSync ships modern SQLite.)
-2. If the RETURNING result is non-empty: the row was inserted. Stage the new row (so subsequent `tx.get(id)` returns it). Return `{ id, inserted: true }`.
-3. If RETURNING is empty (conflict): the row already existed. Run `SELECT * FROM blocks WHERE id = ?` inside the same writeTransaction; stage the live row (so subsequent `tx.get(id)` returns the existing version, not the proposed one). Return `{ id, inserted: false }`.
+- Run `INSERT INTO blocks(...) VALUES(...) ON CONFLICT(id) DO NOTHING RETURNING *`. (SQLite 3.35+; PowerSync ships modern SQLite.)
+- RETURNING non-empty → inserted. Engine captures `(null, after)` in snapshots map; updates cache. Returns `{ id, inserted: true }`.
+- RETURNING empty (conflict) → row already existed. Engine runs `SELECT * FROM blocks WHERE id = ?` inside the same writeTransaction to read the live row, but does **not** record a snapshot for this id (the row didn't change, so cache hydration / undo / handle diffing have nothing to do). Cache stays as-is unless the live row differs from the cached one, in which case the engine refreshes the cache entry. Returns `{ id, inserted: false }`.
 
-The follow-up SELECT in step 3 is the only extra cost over the plain `tx.create` path — and it only fires on conflict (the rare case for deterministic ids). The common case (no conflict) is one statement.
-
-Cache coherence: by the time the user fn returns, the staged write-set already reflects what's actually in SQLite. Pipeline step 8 (cache hydration) hydrates from staged → live state. No post-flush reconciliation step needed; v4.20 dropped the old pipeline step 7.
-
-Within-tx semantics: `tx.get(id)` after `tx.createOrGet` returns the staged row, which is the live row whether this tx inserted or not. There's no "intentionally unavailable" caveat — the `inserted` boolean is in the return value, available immediately.
+Within-tx reads: `tx.get(id)` after `tx.createOrGet` reads SQL via the writeTransaction — sees the live row whether this tx inserted or not. The `inserted` boolean is in the return value, available immediately. No "intentionally unavailable" caveat.
 
 ---
 
@@ -1845,9 +1861,9 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 4. **Sync-applied writes**: bypass `repo.tx` entirely. `tx_context.source` stays `NULL` (no `repo.tx` is open to set it). row_events triggers `COALESCE(tx_context.source, 'sync')` to tag them; upload-routing triggers gate on `= 'user'` so sync writes don't loop back into `powersync_crud`. row_events have `tx_id = NULL` (no tx). **No PowerSync sync-apply wrapper exists or should be added** — the COALESCE + equality-test pair handles this without one.
 5. **Order_key determinism**: `ORDER BY order_key, id` everywhere children are listed. Order_key collisions are possible (concurrent inserts at same position) and resolve via `id` tiebreak.
 6. **Codecs at boundaries only**: descriptor `codec.encode`/`codec.decode` runs only at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty`. Storage and cache always hold encoded shape. `tx.update(..., { properties: ... })` bypasses codecs and is opt-in.
-7. **Metadata auto-bump**: engine sets `updated_at` / `updated_by` on writes by default. Bookkeeping writes (e.g. parseReferences updating `references`) opt out via `{ skipMetadata: true }`.
+7. **Metadata auto-bump**: engine sets `updated_at` / `updated_by` on writes at the write site (just before issuing the INSERT/UPDATE), unless the call passes `{ skipMetadata: true }`. Used by bookkeeping writes (e.g. parseReferences updating `references`) that aren't user intent.
 8. **Tx snapshot**: `repo.tx` runs against the registry snapshot taken at tx start. Mid-tx facet-runtime changes don't affect the running tx.
-9. **Tx queries are limited**: only `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`. Arbitrary cross-row reads happen out-of-tx (caller awaits a query handle, then passes results via args). Engine merges staged + SQL for the four primitives above.
+9. **Tx queries are limited**: only `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`. Arbitrary cross-row reads happen out-of-tx (caller awaits a query handle, then passes results via args). Reads inside a tx are plain SQL/cache lookups against the active writeTransaction — read-your-own-writes works natively because primitives are write-through (v4.21).
 10. **All processors are follow-up**: post-commit processors run in their own writeTransaction after the originating user tx commits. (v4.20 dropped same-tx mode.)
 11. **`tx.afterCommit` doesn't run on rollback**: scheduled jobs only fire if the parent tx commits.
 12. **`block.data` is sync after load**: after `repo.tx` resolves, any `block.data` read sees the post-tx state — the cache update happens before the promise resolves.
@@ -2024,6 +2040,7 @@ Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces t
 - [ ] Reviewer's round-9 findings addressed: alias cleanup row_events insertion gate (§7 mapping + new §7.5) prevents deletion of pre-existing pages on `[[Inbox]]`-into-existing-page race; Repair source uses `repo.canWrite(workspaceId)` per affected workspace, not blanket `isReadOnly` (§5.8.1); Stage 2 dynamic discovery has a transitional non-facet path for Phases 1-3 (§8); `BlockData` shape standardized as camelCase domain with explicit storage-mapping in §4.1.1, and stale `parent_id` / `properties_json` references in TS examples fixed; §4.5 trigger prose aligned with the actual v1 set (5 triggers).
 - [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
 - [ ] v4.18 simplification reflected throughout: Repair scope is workspace-unaware in the engine; the cycle-repair worker pre-gates per-workspace via `repo.canWrite(workspaceId)` and skips non-writable workspaces (§4.7); `RepoTxOptions` is a single non-discriminated interface (§5.3); §5.8.1 documents the worker-as-gate model and the visual-truncation tradeoff for read-only viewers; Repair is rejected under `repo.isReadOnly` like any other write scope (§10.3, §15 #1); `repo.mutate.X` no longer special-cases Repair (§10.1). Supersedes round-8's conditional-source approach and round-9's per-tx engine-side `canWrite` derivation (those entries above describe interim designs, not the current spec state).
+- [ ] v4.21 write-through reflected throughout: Tx primitives execute their INSERT/UPDATE inline within `db.writeTransaction`; the engine captures `(before, after)` per id at the write site for cache hydration, handle diffing, and undo (§5.3, §10 pipeline, §15 #7). Reads inside a tx are plain SQL/cache lookups — no staged-write overlay (§5.3 footer prose, §15 #9). `tx.createOrGet` is no longer a "special case" relative to the rest of the Tx surface — it's just one more write-through primitive (§10.4 collapsed). Supersedes v4.20's pipeline-step-7 mention (the staged-flush model is gone entirely; that step had already been deleted in v4.20, and v4.21 deletes the staging concept itself).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1 (zod) and §16.12 (jittered fractional indexing) resolved in v4.10. No remaining gating decisions before Phase 1 — everything else in §16 is intentionally deferred.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime via staged `setFacetRuntime` waves (§8 Bootstrap stages, §12.2). Pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) reject with `MutatorNotRegisteredError` for unknown names.
