@@ -8,7 +8,8 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - v1: initial sketch.
 > - v2: event-log split, schema reset accepted, `writeTransaction`, async `tx.get`, reference processor full semantics, Repo lifecycle, Handle nullable.
 > - v3: regular `tx_context` table; bounded tx-read primitives; honest Phase 1 break; jittered order_key + `id` tiebreak; `Mutator.scope`; `tx.afterCommit`; upload triggers preserved.
-> - v4 (this): `parseReferences` is a **follow-up** processor (not same-tx), which matches today's UX (it already uses `skipUndo: true` and runs fire-and-forget) and avoids adding latency to typing/setContent. With follow-up, the engine-side alias-prefetch problem disappears and `tx.aliasLookup` is no longer needed — dropped from the API. No sync-apply wrapper required (trigger gates on `source = 'user'`, `row_events.source` COALESCE-defaults to `'sync'`); separate INSERT/UPDATE/DELETE triggers (SQLite syntax); `tx.update` options typed with `skipMetadata`; `tx.setProperty`/`tx.getProperty` to keep codecs at the boundary; `PropertySchema.codec` is a real bidirectional `Codec<T>`, not a zod schema.
+> - v4: `parseReferences` is a **follow-up** processor (not same-tx); `tx.aliasLookup` dropped; no sync-apply wrapper required (trigger gates on `source = 'user'`, `row_events.source` COALESCE-defaults to `'sync'`); separate INSERT/UPDATE/DELETE triggers; `tx.update` options typed with `skipMetadata`; `tx.setProperty`/`tx.getProperty` to keep codecs at the boundary; `PropertySchema.codec` is a real bidirectional `Codec<T>`.
+> - v4.1 (this): `PropertySchema` extended with `kind: PropertyKind` (required UI hint), optional `label` / `Editor` / `Renderer` for plugin-defined custom UI. Added §5.6.1 documenting how the property panel renders from the descriptor registry, with graceful degradation when a property's schema is not registered (e.g., plugin uninstalled). Closes the "how does the property UI know how to render now?" gap.
 
 ---
 
@@ -456,10 +457,8 @@ zod schemas validate but don't bidirectionally serialize (e.g. `z.coerce.date()`
 
 ```ts
 export interface Codec<T> {
-  /** Encode a TS value to a JSON-serializable shape. */
-  encode(value: T): unknown
-  /** Decode a JSON-decoded value back to TS. Throws on shape mismatch. */
-  decode(json: unknown): T
+  encode(value: T): unknown                                  // → JSON-serializable
+  decode(json: unknown): T                                   // ← from JSON-decoded; throws on mismatch
 }
 
 // Built-in helpers shipped from @/data/api:
@@ -475,15 +474,39 @@ export const codecs = {
       return new Date(s)
     },
   } satisfies Codec<Date>,
-  // For arbitrary structural shapes, callers can compose their own codec.
 }
+
+export type PropertyKind =
+  | 'string' | 'number' | 'boolean' | 'list' | 'object' | 'date'
 
 export interface PropertySchema<T> {
   readonly name: string
+
+  /** Storage codec; runs only at the four boundary call sites listed below. */
   readonly codec: Codec<T>
+
   readonly defaultValue: T
   readonly changeScope: ChangeScope
-  readonly category?: string
+
+  /** UI hint. The kernel ships a default editor + renderer per kind.
+   *  Plugins with primitive types pick the matching kind and (optionally) override
+   *  Editor/Renderer for richer UX. */
+  readonly kind: PropertyKind
+
+  /** UI metadata. */
+  readonly label?: string                                    // human-readable; defaults to `name`
+  readonly category?: string                                 // for property-editor grouping
+
+  /** Optional custom UI. Override the default editor/renderer for this kind. */
+  readonly Editor?: PropertyEditor<T>
+  readonly Renderer?: PropertyRenderer<T>
+}
+
+interface PropertyEditor<T> {
+  (props: { value: T; onChange: (next: T) => void; block: Block }): JSX.Element
+}
+interface PropertyRenderer<T> {
+  (props: { value: T; block: Block }): JSX.Element
 }
 ```
 
@@ -493,7 +516,21 @@ export interface PropertySchema<T> {
 - `tx.setProperty(id, schema, value)` → `codec.encode`
 - `tx.getProperty(id, schema)` → `codec.decode`
 
-Storage (`properties_json`) and cache always hold the encoded shape. Codecs do not run inside the storage layer, the cache, the trigger, or PowerSync sync. This keeps the storage shape canonical and lossless across roundtrips.
+Storage (`properties_json`) and cache always hold the encoded shape. Codecs do not run inside the storage layer, the cache, the trigger, or PowerSync sync.
+
+### 5.6.1 How the property UI renders from descriptors
+
+The property panel (`BlockProperties.tsx`) iterates over `block.data.properties` (a `Record<string, unknown>` of encoded values) and for each entry:
+
+1. Look up the schema in `propertySchemasFacet`'s registry by `name`.
+2. **If known**: `codec.decode` the stored value; render via `schema.Editor ?? defaultEditorForKind(schema.kind)`.
+3. **If unknown** (no plugin registered the schema, or plugin was uninstalled): infer a `PropertyKind` from the JSON shape (`string` / `number` / `boolean` / `list` / `object`); render via the default editor for that inferred kind. Show a small "schema not registered" indicator so users know edits may not round-trip cleanly through the original plugin's codec.
+
+Default editors/renderers per kind ship from the kernel. Custom ones from plugins override per-property. Unknown properties never disappear from the UI — they degrade gracefully to JSON-shape inference. This keeps data discoverable when plugins are absent (after uninstall, before a slow plugin loads, etc.).
+
+The `category` field groups properties in the panel. The `label` field is the display name (defaults to `name`).
+
+The trade we're making by lifting schema out of stored values: gain plugin extension + type safety + single-source-of-truth for descriptor metadata, accept that "schema not registered" is a state the UI must handle. The fallback is straightforward; the benefits compound.
 
 ### 5.7 `PostCommitProcessor`
 
@@ -804,11 +841,16 @@ ORDER BY order_key, id;
 ```ts
 // schema.ts
 import { codecs } from '@/data/api'
+import { TaskDueDateEditor } from './editors'
 
 export const dueDateProp = defineProperty('tasks:due-date', {
   codec: codecs.date,                              // bidirectional Codec<Date>, NOT a zod schema
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
+  kind: 'date',                                    // default editor: ISO date input
+  label: 'Due date',
+  category: 'Tasks',
+  Editor: TaskDueDateEditor,                       // optional: custom calendar picker overrides default
 })
 
 // mutators.ts
