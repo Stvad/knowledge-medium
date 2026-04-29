@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import { typeProp, rendererProp, aliasProp, fromList } from '@/data/properties'
 import type { Repo } from '@/data/repo'
-import { dailyPageAliases } from '@/utils/dailyPage'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
 
 const seedExtensionBlocks = (
@@ -21,48 +20,12 @@ const seedExtensionBlocks = (
     return id
   })
 
-// Seeds today's date as the content/aliases of an existing block id.
-// `rootBlockId` is supplied by create_workspace, which derives it as
-// uuid_generate_v5(DAILY_NOTE_NS, workspace_id || ':' || today_iso) so
-// it lines up with what client-side dailyNoteBlockId() computes.
-// repo.create is UPSERT — writing with the known id overwrites the
-// empty seed whether or not sync has delivered it yet.
-//
-// `prefaceContents` are inserted as bullets above the empty typing
-// bullet — used by the personal-workspace flow to drop a [[Tutorial]]
-// link onto today's note for first-run discoverability.
-export const seedDailyPage = (
-  repo: Repo,
-  rootBlockId: string,
-  workspaceId: string,
-  prefaceContents: string[] = [],
-): void => {
-  const [dateLabel, dateIso] = dailyPageAliases(new Date())
-  const prefaceBullets = prefaceContents.map(content =>
-    repo.create({workspaceId, parentId: rootBlockId, content}),
-  )
-  // Empty child bullet so the user has somewhere to type without
-  // overwriting the page title on first keystroke.
-  const typingBullet = repo.create({
-    workspaceId,
-    parentId: rootBlockId,
-    content: '',
-  })
-  repo.create({
-    id: rootBlockId,
-    workspaceId,
-    content: dateLabel,
-    properties: fromList(aliasProp([dateLabel, dateIso])),
-    childIds: [...prefaceBullets.map(b => b.id), typingBullet.id],
-  })
-}
-
-// Creates a separate parent-less Tutorial root carrying intro text +
-// a sample renderer-bound block + the example-extensions subtree.
-// Distinct from the workspace's daily-note seed root so the tutorial
-// doesn't squat on the deterministic daily-note id and confuse later
-// `getOrCreateDailyNote` resolution. Returns the tutorial root id so
-// callers can navigate to it if they want a tutorial-first landing.
+// Creates a parent-less Tutorial page carrying intro text + a sample
+// renderer-bound block + the example-extensions subtree. Used by the
+// personal-workspace bootstrap; reachable from the landing daily note
+// via a `[[Tutorial]]` bullet that App.tsx prepends on first run.
+// Returns the tutorial page id so callers can navigate to it if they
+// want a tutorial-first landing.
 export const seedTutorial = (repo: Repo, workspaceId: string): string => {
   const tutorialRootId = uuidv4()
   const introId = uuidv4()

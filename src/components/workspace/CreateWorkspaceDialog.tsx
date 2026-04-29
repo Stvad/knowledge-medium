@@ -12,7 +12,6 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { createWorkspace, primeLocalWorkspaceAndMember } from '@/data/workspaces'
 import { useRepo } from '@/context/repo'
-import { seedDailyPage } from '@/initData'
 import type { Workspace } from '@/types'
 
 interface Props {
@@ -48,13 +47,10 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
       // collide with the row PowerSync will later sync down.
       await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
 
-      // The RPC has already seeded an empty root block at the
-      // deterministic daily-note id. Populate it with today's date
-      // content + aliases so the user can immediately start typing AND
-      // re-find the page via [[April 26th, 2026]] later. repo.create
-      // with the known id is an upsert — it overwrites whatever's
-      // there whether or not sync has delivered the empty seed.
-      seedDailyPage(repo, result.rootBlockId, result.workspace.id)
+      // No daily-note seed here: navigateToWorkspace updates the hash,
+      // App.tsx re-runs getInitialBlock for the new workspace, and
+      // getOrCreateDailyNote creates today's note client-side. Doing
+      // it again here would just race with that path.
       await repo.flush()
       onCreated(result.workspace)
       reset()
