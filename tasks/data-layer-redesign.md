@@ -7,7 +7,8 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > **Revision history:**
 > - v1: initial sketch.
 > - v2: event-log split, schema reset accepted, `writeTransaction`, async `tx.get`, reference processor full semantics, Repo lifecycle, Handle nullable.
-> - v3 (this): trigger context redesigned (regular `tx_context` table, not TEMP); `tx.query` constrained to within-tx primitives that explicitly overlay staged writes; order_key uses jittered fractional indexing with `id` secondary tiebreak (collisions acknowledged, not denied); `Mutator` gains `scope` field; `Tx` gains `afterCommit` for processor follow-ups; Phase 1 absorbs the tree-API rewrite + property-flat storage (no compat shim claims); upload triggers + `source='local-ephemeral'` mechanism preserved.
+> - v3: regular `tx_context` table; bounded tx-read primitives; honest Phase 1 break; jittered order_key + `id` tiebreak; `Mutator.scope`; `tx.afterCommit`; upload triggers preserved.
+> - v4 (this): `parseReferences` is a **follow-up** processor (not same-tx), which matches today's UX (it already uses `skipUndo: true` and runs fire-and-forget) and avoids adding latency to typing/setContent. With follow-up, the engine-side alias-prefetch problem disappears and `tx.aliasLookup` is no longer needed — dropped from the API. No sync-apply wrapper required (trigger gates on `source = 'user'`, `row_events.source` COALESCE-defaults to `'sync'`); separate INSERT/UPDATE/DELETE triggers (SQLite syntax); `tx.update` options typed with `skipMetadata`; `tx.setProperty`/`tx.getProperty` to keep codecs at the boundary; `PropertySchema.codec` is a real bidirectional `Codec<T>`, not a zod schema.
 
 ---
 
@@ -176,30 +177,32 @@ A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too lo
 
 ```sql
 CREATE TABLE tx_context (
-  id     INTEGER PRIMARY KEY CHECK (id = 1),                -- single-row table
+  id        INTEGER PRIMARY KEY CHECK (id = 1),             -- single-row table
   tx_id     TEXT,
   user_id   TEXT,
   scope     TEXT,
-  source    TEXT                                            -- 'user' | 'sync' | 'local-ephemeral'
+  source    TEXT                                            -- 'user' | 'local-ephemeral'; NULL when no repo.tx is active
 );
 INSERT OR IGNORE INTO tx_context (id) VALUES (1);
 ```
 
-A normal one-row table (mirroring today's `block_event_context` pattern). Triggers read from it via `(SELECT tx_id FROM tx_context WHERE id = 1)`. **Why not a TEMP table**: SQLite triggers in `main` schema cannot reference `temp.X` tables (resolves to `main.X` and fails). This is the existing project pattern and it works.
+A normal one-row table (mirroring today's `block_event_context` pattern). Triggers read via `(SELECT … FROM tx_context WHERE id = 1)`. **Why not a TEMP table**: SQLite triggers in `main` schema cannot reference `temp.X` tables.
 
-The TxEngine writes to `tx_context` at the start of `writeTransaction` and clears it at the end. Sync-applied writes (PowerSync's CRUD apply) bypass `repo.tx` entirely; for those, the `tx_context.source` defaults to `'sync'` because it's set that way by a wrapper in PowerSync's CRUD-apply path. (We add this wrapper as part of Phase 1.)
+The TxEngine sets `tx_context` at the start of `writeTransaction` (source = `'user'` or `'local-ephemeral'`) and clears it at the end (source = `NULL`). **Sync-applied writes (PowerSync's CRUD apply) bypass `repo.tx`**, so they leave `tx_context.source = NULL`. Triggers treat `NULL` as a synthetic `'sync'` (via `COALESCE`). No wrapper around PowerSync's CRUD apply is required — the absence of a tx_context entry is itself the signal.
+
+The discipline this requires: every write to `blocks` either goes through `repo.tx` (which sets source) or is a PowerSync sync-apply (which doesn't). No third path. The codebase already follows this — the new `Repo` enforces it by removing every other write path.
 
 ### 4.3 `row_events`
 
 ```sql
 CREATE TABLE row_events (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  tx_id           TEXT,                                     -- nullable: NULL for sync-applied
+  tx_id           TEXT,                                     -- NULL for sync-applied
   block_id        TEXT NOT NULL,
   kind            TEXT NOT NULL,                            -- 'create' | 'update' | 'delete'
   before_json     TEXT,
   after_json      TEXT,
-  source          TEXT NOT NULL,                            -- copied from tx_context.source
+  source          TEXT NOT NULL,                            -- COALESCE(tx_context.source, 'sync')
   created_at      INTEGER NOT NULL
 );
 
@@ -230,21 +233,41 @@ CREATE INDEX idx_command_events_workspace ON command_events(workspace_id, create
 
 One row per `repo.tx` invocation. Sync-applied writes don't go through `repo.tx` so they don't produce `command_events`; their row_events have `tx_id = NULL` and `source = 'sync'`.
 
-### 4.5 Upload routing trigger
+### 4.5 Upload routing triggers
 
-Today's app has a custom trigger that forwards local writes into `powersync_crud` (PowerSync's outgoing queue) and excludes writes tagged `source='local-ephemeral'`. We preserve that:
+SQLite doesn't allow `INSERT OR UPDATE OR DELETE` in a single trigger — three separate triggers, gated identically on `source = 'user'`:
 
 ```sql
-CREATE TRIGGER blocks_upload_router
-AFTER INSERT OR UPDATE OR DELETE ON blocks
-WHEN (SELECT source FROM tx_context WHERE id = 1) NOT IN ('sync', 'local-ephemeral')
+-- Forward LOCAL USER writes to powersync_crud (PowerSync's outgoing queue).
+-- Sync-applied writes (source = NULL → COALESCE to 'sync') and UI-state writes
+-- (source = 'local-ephemeral') do NOT upload.
+
+CREATE TRIGGER blocks_upload_insert
+AFTER INSERT ON blocks
+WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
 BEGIN
-  -- forward to powersync_crud (operation-specific JSON, schema per existing system)
+  -- forward INSERT to powersync_crud (existing schema)
+  …
+END;
+
+CREATE TRIGGER blocks_upload_update
+AFTER UPDATE ON blocks
+WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
+BEGIN
+  -- forward UPDATE to powersync_crud
+  …
+END;
+
+CREATE TRIGGER blocks_upload_delete
+AFTER DELETE ON blocks
+WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
+BEGIN
+  -- forward DELETE to powersync_crud
   …
 END;
 ```
 
-The exact body matches the existing trigger; only the `WHEN` clause is updated to read from `tx_context` instead of the existing `block_event_context`. UI-state writes set `source='local-ephemeral'` so they don't upload. Sync-applied writes set `source='sync'` so the trigger doesn't loop them back.
+The same INSERT/UPDATE/DELETE-split pattern is used for the `row_events` triggers (each with its own `INSERT INTO row_events SELECT … COALESCE((SELECT source FROM tx_context …), 'sync') …`).
 
 ### 4.6 PowerSync sync-config
 
@@ -331,27 +354,38 @@ export interface Tx {
   peek(id: string): BlockData | null
 
   /** Low-level primitives. */
-  create(data: NewBlockData): string                         // returns new id
-  update(id: string, patch: Partial<BlockData>): void
+  create(data: NewBlockData, opts?: TxWriteOpts): string     // returns new id
+  update(id: string, patch: Partial<BlockData>, opts?: TxWriteOpts): void
   delete(id: string): void                                   // soft delete (sets deleted=1)
+
+  /** Typed property primitives — the only path that runs codecs.
+   *  setProperty: codec.encode applied; engine merges into properties_json patch.
+   *  getProperty: codec.decode applied to the staged-or-cache-or-DB value.
+   *  Direct properties manipulation via tx.update(...) bypasses codecs and is
+   *  reserved for cases where the caller is intentionally working at the JSON level. */
+  setProperty<T>(id: string, schema: PropertySchema<T>, value: T, opts?: TxWriteOpts): void
+  getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T | undefined>
 
   /** Compose another mutator. Reads see prior staged writes. */
   run<Args, R>(mutator: Mutator<Args, R>, args: Args): Promise<R>
 
-  /** Within-tx tree primitives. Engine merges staged writes with SQL results explicitly:
-   *    1. Run SQL to get committed children.
-   *    2. Apply staged creates/updates/deletes that change parent_id or affect membership.
-   *    3. Sort by (order_key, id).
-   *  Engine knows how to overlay these because it owns both staged set and SQL. */
-  childrenOf(parentId: string): Promise<BlockData[]>
+  /** Within-tx tree primitives. Engine merges staged writes with SQL results explicitly. */
+  childrenOf(parentId: string): Promise<BlockData[]>          // ordered by (order_key, id)
   parentOf(childId: string): Promise<BlockData | null>
 
   /** Schedule a follow-up post-commit job. Runs in its own writeTransaction
-   *  after this tx commits. Args opaque to the engine; processor receives them. */
+   *  after this tx commits. Does NOT run if the tx rolls back. */
   afterCommit(processorName: string, args: unknown, options?: { delayMs?: number }): void
 
   /** Tx metadata. */
   readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string; source: TxSource }
+}
+
+interface TxWriteOpts {
+  /** When true, engine does NOT auto-bump updated_at/updated_by (or created_at/created_by
+   *  on tx.create). Used by same-tx processors whose writes are bookkeeping, not user
+   *  intent. Default false. User-facing mutators should not set this. */
+  skipMetadata?: boolean
 }
 
 type TxSource = 'user' | 'local-ephemeral'                   // 'sync' is set externally for sync-apply
@@ -416,19 +450,50 @@ interface QueryCtx {
 
 Queries are out-of-tx. Built-in queries (`subtree`, `ancestors`, `backlinks`, `searchByContent`, `byType`, `firstChildByContent`, `firstRootBlock`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`) are kernel facet contributions.
 
-### 5.6 `PropertySchema<T>`
+### 5.6 `PropertySchema<T>` and `Codec<T>`
+
+zod schemas validate but don't bidirectionally serialize (e.g. `z.coerce.date()` decodes ISO → Date but doesn't re-encode). Property storage needs both directions, so we ship a small `Codec` interface separate from zod (which we still use for mutator `argsSchema` validation):
 
 ```ts
+export interface Codec<T> {
+  /** Encode a TS value to a JSON-serializable shape. */
+  encode(value: T): unknown
+  /** Decode a JSON-decoded value back to TS. Throws on shape mismatch. */
+  decode(json: unknown): T
+}
+
+// Built-in helpers shipped from @/data/api:
+export const codecs = {
+  identity: <T>(): Codec<T> => ({ encode: x => x, decode: x => x as T }),
+  string: codecs.identity<string>(),
+  number: codecs.identity<number>(),
+  boolean: codecs.identity<boolean>(),
+  date: {
+    encode: (d: Date) => d.toISOString(),
+    decode: (s: unknown) => {
+      if (typeof s !== 'string') throw new Error('date codec expects string')
+      return new Date(s)
+    },
+  } satisfies Codec<Date>,
+  // For arbitrary structural shapes, callers can compose their own codec.
+}
+
 export interface PropertySchema<T> {
   readonly name: string
-  readonly codec: Schema<T>                                  // (de)serialization for non-JSON values
+  readonly codec: Codec<T>
   readonly defaultValue: T
   readonly changeScope: ChangeScope
   readonly category?: string
 }
 ```
 
-`codec` runs at boundaries: `block.set(prop, v)` encodes `v` to the JSON shape stored in `properties_json`; `block.get(prop)` decodes back to `T`. No codec invocations inside the storage layer or the cache.
+**Codec call sites are exactly four** (the boundary between typed values and stored JSON):
+- `block.set(schema, value)` → `codec.encode`
+- `block.get(schema)` → `codec.decode`
+- `tx.setProperty(id, schema, value)` → `codec.encode`
+- `tx.getProperty(id, schema)` → `codec.decode`
+
+Storage (`properties_json`) and cache always hold the encoded shape. Codecs do not run inside the storage layer, the cache, the trigger, or PowerSync sync. This keeps the storage shape canonical and lossless across roundtrips.
 
 ### 5.7 `PostCommitProcessor`
 
@@ -500,33 +565,47 @@ Naming convention: kernel uses bare names; plugins prefix with `<plugin-id>:`. C
 
 ## 7. Reference parsing — full design
 
-The current `parseAndUpdateReferences` does materially more than "extract refs from content". The redesign maps every behavior:
+The current `parseAndUpdateReferences` runs **after** content changes, fire-and-forget, with `skipUndo: true`. The redesign keeps that shape — a follow-up processor with its own scope — and adds explicit scheduling for the orphan-cleanup step.
+
+### 7.1 Why follow-up, not same-tx
+
+Same-tx parseReferences would be cleaner in theory: refs and content commit atomically, no brief-stale-window for backlinks panels, undo undoes both naturally. The cost is typing latency: every `setContent` (per-keystroke, per-debounce, etc.) waits for parseReferences to complete inside the writeTransaction.
+
+Today's app already runs parseReferences fire-and-forget. Users expect (and apparently don't notice) the brief stale window. Going same-tx would *upgrade* atomicity in exchange for adding latency to a hot path — the wrong trade.
+
+Follow-up keeps the existing UX, removes typing latency entirely, and avoids the engine-side overlay machinery that same-tx required.
+
+### 7.2 Mapping today's behaviors
 
 | Current behavior | New shape |
 |---|---|
-| Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: ['setContent', 'create', 'splitBlock', 'mergeBlocks'], mode: 'same-tx', … })` |
+| Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: ['setContent', 'create', 'splitBlock', 'mergeBlocks'], mode: 'follow-up' })`. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
-| Resolve aliases | `tx.get` on a known id, or use a kernel **mutator** `resolveAlias` (not query — must run in-tx). For unknown aliases, read out-of-tx via the `aliasLookup` query *before* the user's tx (results passed in via mutator args), or accept an extra round trip. **Decision**: parseReferences runs same-tx and uses an in-tx alias-lookup primitive: walk staged-creates first (might match), then call `tx.peek` against a small set of known alias ids passed in by the engine from a pre-tx alias prefetch (engine collects all `[[alias]]` patterns from the user's `setContent`/`create` args before opening the tx, prefetches matching alias targets into cache; processor finds them via `tx.peek`). Unmatched aliases fall through to creation. |
-| Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` — kernel mutator. Generates a regular id (or deterministic id for date-shaped aliases). |
-| Daily-note deterministic id | `createAliasTarget` checks if the alias is date-shaped, computes `daily/<workspaceId>/<date>` deterministically. Two clients creating it concurrently end up with the same id — the second client's `tx.create({ id: deterministic, … })` is idempotent (existing row wins, no clobber). |
-| Update `references` field | `tx.update(sourceId, { references: resolvedIds })`. |
-| Self-destruct (newly created alias-target dropped if not retained within ~4s) | `parseReferences` ends by calling `tx.afterCommit('core.cleanupOrphanAliases', { createdIds: [...] }, { delayMs: 4000 })`. The cleanup processor (mode: `'follow-up'`) checks each id: if no other block's `references_json` contains it, delete. |
-| `skipUndo` | Same-tx processor writes are part of the user's tx → one undo entry covers everything. The flag becomes implicit. |
-| `skipMetadataUpdate` | Convention: the engine recognizes that updates *originating from a same-tx processor* don't bump `updated_at`/`updated_by`. Implementation: the processor uses a flag on `tx.update(id, patch, { metadata: 'inherit' })` (default `'fresh'`). Engine knows. |
+| Resolve aliases | Plain query against committed state — `tx.get` for known ids, kernel `aliasLookup` query for alias-by-name. The processor runs *after* the user's tx commits, so committed-state queries are correct. |
+| Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
+| Daily-note deterministic id | `createAliasTarget` computes `daily/<workspaceId>/<date>` for date-shaped aliases. Two clients creating concurrently → same id; `tx.create` is idempotent on conflict (existing row wins). |
+| Update `references` field | `tx.update(sourceId, { references: resolvedIds }, { skipMetadata: true })`. `skipMetadata` prevents the bookkeeping write from bumping `updated_at`/`updated_by`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
+| Self-destruct (newly-created alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { createdIds: [...] }, { delayMs: 4000 })`. Cleanup processor checks each id: if no block's `references_json` contains it, delete. |
+| `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
+| `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
-### 7.1 Engine-side alias prefetch
+### 7.3 Undo interaction
 
-To make same-tx alias resolution work without running queries inside the tx, the TxEngine inspects the user's mutator calls before opening the writeTransaction. For calls that affect content (`setContent`, `create`, `splitBlock`, `mergeBlocks`), it parses out alias patterns and calls `aliasLookup` (out-of-tx) to map them to existing alias-target ids. The result map is stashed in the tx's metadata; `parseReferences` reads it via `tx.meta.aliasMap`.
+Because parseReferences is follow-up with `scope: References`:
+- User does `setContent` → undo entry recorded in document scope.
+- parseReferences fires after commit, updates refs in References scope (its own undo stack, but in practice we don't expose References undo to users).
+- User hits undo → setContent reverts → parseReferences fires again on the reverted content → refs converge to the pre-edit state.
 
-This adds extra work to every `setContent`-bearing tx, but keeps tx semantics simple and correct.
+This matches today's behavior. No "two undos to revert one edit" UX issue.
 
-### 7.2 Test coverage required
+### 7.4 Test coverage required
 
-- `setContent` with `[[foo]]` creates an alias-target if none exists; same tx; one undo entry undoes both.
+- `setContent` with `[[foo]]` (alias not yet existing) → after debounce, alias-target exists; source block's `references` includes it.
 - `[[2026-04-28]]` produces deterministic daily-note id; two simultaneous creates resolve to the same row.
 - Typing `[[foo]]` then deleting that text within 4s → orphan removed by cleanup.
-- Typing `[[foo]]`, then linking from another block within 4s → orphan kept.
-- Cleanup processor's debounce cancellation when a new `parseReferences` adds the same id again.
+- Typing `[[foo]]`, then linking from another block within 4s → orphan kept (referenced).
+- Rapid typing inside an existing `[[alias]]` (no alias-set change) → debounce coalesces; at most one processor run per block per debounce window.
+- Undo of `setContent` → `references` converges back to pre-edit state.
 
 ---
 
@@ -596,30 +675,33 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  pre-tx: engine prefetches alias map from setContent args    │
 │  pre-tx: engine preloads opts.reads (and mutator.reads)      │
 │ ─────────────────────────────────────────────────────────── │
 │ db.writeTransaction(async (txDb) => {                        │
-│   1. UPDATE tx_context SET tx_id, user_id, scope, source = …│
+│   1. UPDATE tx_context SET tx_id, user_id, scope, source     │
 │   2. construct Tx (staged write-set; reads via cache + txDb) │
 │   3. user fn(tx) runs:                                       │
-│        tx.update / tx.create / tx.delete / tx.run            │
+│        tx.create/update/delete/setProperty/run/...           │
 │        reads: staged → cache → txDb                          │
 │   4. run same-tx post-commit processors against staged calls │
-│        (refs parsing happens here, may also call afterCommit)│
-│   5. flush staged writes to blocks (txDb)                    │
+│        (none in v1 — parseReferences is follow-up;           │
+│         hook exists for future processors that need atomicity)│
+│   5. engine auto-bumps metadata fields on writes that didn't │
+│        opt out via skipMetadata; codecs already applied for  │
+│        any tx.setProperty calls                              │
+│   6. flush staged writes to blocks (txDb)                    │
 │        triggers fire: row_events rows, upload routing        │
-│   6. INSERT command_event row (txDb)                         │
-│   7. UPDATE tx_context SET tx_id=NULL, source='unknown'      │
+│   7. INSERT command_event row (txDb)                         │
+│   8. UPDATE tx_context SET source = NULL                     │
 │ })   // PowerSync COMMIT or ROLLBACK                         │
 │                                                              │
 │ on success:                                                  │
-│   8. hydrate cache from staged writes                        │
-│   9. walk affected handles, structural-diff, fire            │
-│   10. record undo entry from staged before/after snapshots   │
-│   11. resolve repo.tx promise with user fn's return value    │
-│   12. dispatch tx.afterCommit jobs (own writeTransactions)   │
-│       and watch-matched follow-up processors                 │
+│   9. hydrate cache from staged writes (encoded shape)        │
+│   10. walk affected handles, structural-diff, fire           │
+│   11. record undo entry from staged before/after snapshots   │
+│   12. resolve repo.tx promise with user fn's return value    │
+│   13. dispatch tx.afterCommit jobs (own writeTransactions)   │
+│        and watch-matched follow-up processors                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -721,8 +803,10 @@ ORDER BY order_key, id;
 
 ```ts
 // schema.ts
+import { codecs } from '@/data/api'
+
 export const dueDateProp = defineProperty('tasks:due-date', {
-  codec: z.coerce.date(),
+  codec: codecs.date,                              // bidirectional Codec<Date>, NOT a zod schema
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -730,14 +814,12 @@ export const dueDateProp = defineProperty('tasks:due-date', {
 // mutators.ts
 export const setDueDate = defineMutator({
   name: 'tasks:setDueDate',
-  argsSchema: z.object({ id: z.string(), date: z.date() }),
+  argsSchema: z.object({ id: z.string(), date: z.date() }),     // zod is for arg validation
   scope: ChangeScope.BlockDefault,
   apply: async (tx, { id, date }) => {
-    const block = await tx.get(id)
-    if (!block) throw new BlockNotFoundError(id)
-    tx.update(id, {
-      properties: { ...block.properties, [dueDateProp.name]: date }
-    })
+    // tx.setProperty applies the codec; the engine writes the encoded value
+    // into properties_json. tx.update with raw properties bypasses the codec.
+    tx.setProperty(id, dueDateProp, date)
   }
 })
 
@@ -888,7 +970,7 @@ For each phase:
 
 - **Phase 1**: row CRUD via new schema; trigger writes correct `row_events`; concurrent sibling inserts both persist; UI-state writes don't upload; sync-applied writes don't re-route; `tx.get` falls through to SQL when not cached; mid-tx throw rolls back; multi-block writes are atomic; `tx.afterCommit` jobs run after commit and do not run on rollback.
 - **Phase 2**: `block.data` throws `BlockNotLoadedError` when not loaded; `repo.load` populates; Suspense-driven render in a React test; `Handle<BlockData | null>` distinguishes loading vs. not-found.
-- **Phase 3**: registering a mutator from a contribution makes it callable; duplicate names log warning + last-wins; runtime args validation rejects invalid args; **reference parsing**: full coverage per §7.2, including daily-note determinism under concurrent creation; orphan cleanup with and without retention; cleanup debounce cancellation when content is re-typed.
+- **Phase 3**: registering a mutator from a contribution makes it callable; duplicate names log warning + last-wins; runtime args validation rejects invalid args; **reference parsing**: full coverage per §7.4 (eventual-consistency model — assertions wait for the debounce + processor run before checking `references_json`); daily-note determinism under concurrent creation; orphan cleanup with and without retention.
 - **Phase 4**: identity stability across calls; GC after subscribers detach; structural diffing prevents spurious notifications.
 - **Phase 5**: ancestors/subtree/isDescendantOf return correct results with deterministic order on order_key collisions.
 
@@ -903,13 +985,15 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 3. **UI-state isolation**: UI-state txs set `tx_context.source='local-ephemeral'`; upload trigger excludes; not in undo stack.
 4. **Sync-applied writes**: bypass `repo.tx`; have `tx_context.source='sync'`; produce row_events with `tx_id=NULL`; don't trigger upload-routing.
 5. **Order_key determinism**: `ORDER BY order_key, id` everywhere children are listed. Order_key collisions are possible (concurrent inserts at same position) and resolve via `id` tiebreak.
-6. **Codecs at boundaries only**: descriptor `codec` runs at `block.set`/`block.get`. The on-disk shape is JSON. No codec in the storage layer or cache.
-7. **Tx snapshot**: `repo.tx` runs against the registry snapshot taken at tx start. Mid-tx facet-runtime changes don't affect the running tx.
-8. **Tx queries are limited**: only `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`. Arbitrary cross-row reads happen out-of-tx (engine prefetch or caller passes results via args). Engine merges staged + SQL for these primitives.
-9. **Same-tx processors are deterministic**: writes are atomic with the user's tx. No time, randomness, or external IO.
-10. **`tx.afterCommit` doesn't run on rollback**: scheduled jobs only fire if the parent tx commits.
-11. **`block.data` is sync after load**: after `repo.tx` resolves, any `block.data` read sees the post-tx state — the cache update happens before the promise resolves.
-12. **No `block.data.childIds`**: `BlockData` matches the row shape; `childIds` is computed on `Block` from the cache. Storage source-of-truth is `parent_id + order_key`.
+6. **Codecs at boundaries only**: descriptor `codec.encode`/`codec.decode` runs only at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty`. Storage and cache always hold encoded shape. `tx.update(..., { properties: ... })` bypasses codecs and is opt-in.
+7. **Metadata auto-bump**: engine sets `updated_at` / `updated_by` on writes by default. Same-tx processors and other bookkeeping writes opt out via `{ skipMetadata: true }`.
+8. **Tx snapshot**: `repo.tx` runs against the registry snapshot taken at tx start. Mid-tx facet-runtime changes don't affect the running tx.
+9. **Tx queries are limited**: only `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`. Arbitrary cross-row reads happen out-of-tx (caller awaits a query handle, then passes results via args). Engine merges staged + SQL for the four primitives above.
+10. **Same-tx processors are deterministic**: writes are atomic with the user's tx. No time, randomness, or external IO. (None ship in v1; the hook is reserved.)
+11. **`tx.afterCommit` doesn't run on rollback**: scheduled jobs only fire if the parent tx commits.
+12. **`block.data` is sync after load**: after `repo.tx` resolves, any `block.data` read sees the post-tx state — the cache update happens before the promise resolves.
+13. **No `block.data.childIds`**: `BlockData` matches the row shape; `childIds` is computed on `Block` from the cache. Storage source-of-truth is `parent_id + order_key`.
+14. **Reference parsing is eventually consistent**: `references_json` lags content by the parseReferences debounce window (~100ms typical). Code that reads backlinks accepts this.
 
 ---
 
@@ -921,7 +1005,7 @@ Default to **zod**. Decide at Phase 1 start (used immediately by mutator argsSch
 
 ### 16.2 Same-tx vs follow-up default
 
-Default new processors to `'follow-up'`. Same-tx is opt-in for atomicity.
+Default new processors to `'follow-up'` — including `core.parseReferences` (decided; see §7.1 — keeps typing fast and matches today's UX). Same-tx is opt-in for cases that genuinely need atomicity. v1 ships zero same-tx processors; the hook exists for future use.
 
 ### 16.3 Plugin-owned entity tables
 
@@ -957,7 +1041,7 @@ Today's properties include an `aliases` list; the alias-lookup query reads it. T
 
 ### 16.11 `tx.get` fallthrough cost
 
-Every cache miss inside a mutator does a SQL read inside the writeTransaction. For deep mutators reading dozens of blocks, this can be slow. Mitigations: `mutator.reads(args)` preload hints; engine batches preload reads into a single SQL query before `apply` runs. Implement preload in Phase 1; profile in Phase 3 when reference parsing lands.
+Every cache miss inside a mutator does a SQL read inside the writeTransaction. For deep mutators reading dozens of blocks, this can be slow. Mitigations: `mutator.reads(args)` preload hints; engine batches preload reads into a single SQL query before `apply` runs. Implement preload in Phase 1; profile when complex mutators land.
 
 ### 16.12 Order-key generation choice
 
@@ -1013,7 +1097,7 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 
 - [ ] Reviewer's P0 findings (round 2) addressed: `tx_context` is a regular table not TEMP (§4.2); `tx.query` removed in favor of bounded primitives with explicit overlay (§5.3); Phase 1 acknowledges full break (no `block.change` survival, no `childIds` in `BlockData`, properties flat, tree API rewrite all in Phase 1) (§13.1); order_key uses jittered + `(id)` tiebreak (§4.1, §11, §15).
 - [ ] Reviewer's P1 findings (round 2) addressed: upload trigger preservation with `source` gating (§4.5); property shape consistent — flat from Phase 1 (§13.1); `tx.afterCommit` for processor scheduling (§5.3, §5.7, §7); `Mutator.scope` field (§5.4).
-- [ ] References to other task specs trimmed (this spec stands alone).
+- [ ] Reviewer's round-3 findings addressed: parseReferences is follow-up (typing latency concern resolved by matching today's UX, §7.1); no PowerSync sync-apply wrapper required (`source = NULL` ↔ sync, §4.2/§4.5); separate INSERT/UPDATE/DELETE triggers (§4.5); `TxWriteOpts.skipMetadata` typed on `tx.create`/`tx.update`/`tx.setProperty` (§5.3); `tx.setProperty`/`tx.getProperty` keep codecs at the boundary (§5.3, §5.6); `Codec<T>` is a real bidirectional codec, not a zod schema (§5.6).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
-- [ ] §16.1, §16.2, §16.12 must resolve before Phase 1 starts.
+- [ ] §16.1, §16.12 must resolve before Phase 1 starts.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
