@@ -1,7 +1,7 @@
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useUIStateBlock, getPanelsBlock } from '@/data/globalState.ts'
+import { useUIStateBlock, getPanelsBlock, MAIN_PANEL_NAME } from '@/data/globalState.ts'
 import { use, useEffect } from 'react'
 import { Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
@@ -10,10 +10,8 @@ import { memoize } from 'lodash'
 import { topLevelBlockIdProp, typeProp, fromList, uiChangeScope } from '@/data/properties.ts'
 import { useChildren } from '@/hooks/block.ts'
 
-const mainPanelName = 'main'
-
 const getMainPanelBlock = memoize(
-  (panelsBlock: Block) => panelsBlock.childByContent(mainPanelName, true, {scope: uiChangeScope}),
+  (panelsBlock: Block) => panelsBlock.childByContent(MAIN_PANEL_NAME, true, {scope: uiChangeScope}),
   (panelsBlock) => `${panelsBlock.repo.instanceId}:${panelsBlock.id}`
 )
 
