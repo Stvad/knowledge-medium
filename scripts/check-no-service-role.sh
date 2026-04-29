@@ -16,12 +16,12 @@ set -euo pipefail
 PATTERN='service[_-]?role|SUPABASE_SERVICE_ROLE_KEY'
 PATHS=('.env*' 'src/' 'public/' 'index.html')
 
-# `git grep -l` would be cleaner but produces no output on no-match, so
-# we drive the exit status off the count of matching lines.
-HITS=$(git grep -niE "$PATTERN" -- "${PATHS[@]}" 2>/dev/null || true)
+# Use filename-only output so a mistakenly committed key is not echoed into
+# local terminals or CI logs.
+HITS=$(git grep -lIE "$PATTERN" -- "${PATHS[@]}" 2>/dev/null || true)
 
 if [ -n "$HITS" ]; then
-  echo "❌ service-role reference found in tracked files (would ship in browser bundle):" >&2
+  echo "service-role reference found in tracked files (would ship in browser bundle):" >&2
   echo "$HITS" >&2
   echo >&2
   echo "Remove it. The service-role key must never reach the browser; only" >&2
@@ -29,4 +29,4 @@ if [ -n "$HITS" ]; then
   exit 1
 fi
 
-echo "✓ no service-role references in tracked browser-bundled paths"
+echo "no service-role references in tracked browser-bundled paths"

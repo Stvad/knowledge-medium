@@ -19,12 +19,16 @@ const stringCodec: Codec<string> = {
   },
 }
 
+const requireFiniteNumber = (value: unknown): number => {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new CodecError('finite number', value)
+  }
+  return value
+}
+
 const numberCodec: Codec<number> = {
-  encode: v => v,
-  decode: j => {
-    if (typeof j !== 'number') throw new CodecError('number', j)
-    return j
-  },
+  encode: requireFiniteNumber,
+  decode: requireFiniteNumber,
 }
 
 const booleanCodec: Codec<boolean> = {

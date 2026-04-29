@@ -16,13 +16,19 @@ describe('codecs.string', () => {
 })
 
 describe('codecs.number', () => {
-  it('round-trips finite and NaN', () => {
+  it('round-trips finite numbers', () => {
     expect(codecs.number.decode(codecs.number.encode(0))).toBe(0)
     expect(codecs.number.decode(codecs.number.encode(-3.14))).toBeCloseTo(-3.14)
   })
 
   it('rejects strings even if numeric', () => {
     expect(() => codecs.number.decode('42')).toThrow(CodecError)
+  })
+
+  it('rejects non-finite values before JSON storage can coerce them', () => {
+    expect(() => codecs.number.encode(Number.NaN)).toThrow(CodecError)
+    expect(() => codecs.number.encode(Number.POSITIVE_INFINITY)).toThrow(CodecError)
+    expect(() => codecs.number.decode(Number.NEGATIVE_INFINITY)).toThrow(CodecError)
   })
 })
 

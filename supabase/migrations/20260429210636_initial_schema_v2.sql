@@ -271,6 +271,9 @@ create policy blocks_write on public.blocks
 grant usage on schema public to authenticated;
 grant select, insert, update, delete on public.blocks to authenticated;
 grant select on public.workspaces to authenticated;
+-- Workspace rename is a direct PostgREST UPDATE from the client. Grant only
+-- the columns that path edits; ownership changes stay RPC-only.
+grant update (name, update_time) on public.workspaces to authenticated;
 grant select on public.workspace_members to authenticated;
 grant select on public.workspace_invitations to authenticated;
 
