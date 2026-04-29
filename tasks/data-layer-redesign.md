@@ -11,7 +11,7 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - **`parseReferences` is a follow-up post-commit processor, not same-tx.** Same-tx would add typing latency to a hot path; today's app already accepts the brief stale-backlinks window. Don't "upgrade" to atomic — it's the wrong trade.
 > - **No PowerSync sync-apply wrapper.** Sync writes leave `tx_context.source = NULL`; the COALESCE-to-`'sync'` and `= 'user'` upload-gate pair handles tagging without one. Don't try to hook PowerSync's CRUD-apply path.
 > - **Bidirectional `Codec<T>` separate from zod.** Properties need encode + decode; zod is unidirectional. Codec runs at exactly four boundary call sites; storage and cache hold encoded shape.
-> - **Cycle prevention is two layers + a detection log** (§4.7): local validation in move mutators, depth-100 CTE guards in every recursive query, plus a row_events-tail scan that logs sync-introduced cycles for telemetry. **No automatic repair** — alpha cut, revisit if the log fires in practice.
+> - **Cycle prevention is two layers + a detection log** (§4.7): engine-side `isDescendantOf` check inside `tx.move` (load-bearing — FK/triggers can't catch cycles structurally), depth-100 + visited-id CTE guards in every recursive query, plus a row_events-tail scan that logs sync-introduced cycles for telemetry. **No automatic repair** — alpha cut, revisit if the log fires in practice.
 > - **Workspace invariant enforced server-side** via composite FK `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1). Tree queries can rely on it; no per-query workspace filter needed. Cross-workspace edges can't sync in.
 > - **Bootstrap is staged** (§8). Stage 1 registers kernel + static contributions synchronously at `AppRuntimeProvider` mount; Stage 2 registers dynamic plugins after the discovery query resolves. The Stage 0 → Stage 1 window is one React render.
 > - **In-tx reads are limited** to `tx.get` / `tx.peek` / `tx.childrenOf` / `tx.parentOf`. No arbitrary `tx.query`. Broader information passes via mutator args (loaded outside the tx) or post-commit processors. Same constraint Replicache and Zero accept.
@@ -21,11 +21,12 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - **v4.23: dropped deterministic cycle repair.** No `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`, no `repairCycle` mutator. Cycle protocol is now Layer 1 (engine-side `isDescendantOf` check on `tx.move`, §4.7) + Layer 2 (depth-100 + visited-id CTE guards, §11) + detection-only row_events-tail logging. **Don't re-add auto-repair without telemetry showing it's needed.**
 > - **v4.24: cache deferred to commit; single-workspace-per-tx; trigger count = 7; Phase 5 collapsed.** Cache mutates only on commit walk (snapshots map is the tx-private overlay). Engine pins `meta.workspaceId` from first write. Tree CTEs land in Phase 1 — load-bearing for cycle validation. Local parent-workspace trigger drops "not soft-deleted" to align with server FK.
 > - **v4.25: SQL correctness.** `tx.createOrGet` is SELECT-then-branch (the previous `RETURNING *, excluded.*` form was invalid SQLite). CTE path encoding switched to `!hex/` segments with `!` (0x21) separator — fixes prefix-order-key sort and non-root cycle re-entry detection.
-> - **v4.26: tombstone restore moved out of `tx.createOrGet`.** Primitive throws `DeletedConflictError` on tombstone, `DeterministicIdCrossWorkspaceError` on cross-workspace; v1 deterministic-id callers (`createAliasTargetInline`, Roam import upsert) handle restore via their own refresh policy. **Don't put silent restore back into the primitive.**
+> - **v4.26: tombstone restore moved out of `tx.createOrGet`.** Primitive throws `DeletedConflictError` on tombstone, `DeterministicIdCrossWorkspaceError` on cross-workspace; deterministic-id callers handle restore via their own refresh policy. **Don't put silent restore back into the primitive.** (v4.31 factors the restore boilerplate into a shared `createOrRestoreTargetBlock` primitive — see below.)
 > - **v4.27: split tx.update; typed restore primitive; afterCommit workspace-pin.** `BlockDataPatch` narrowed to `content | references | properties`. `tx.move(id, {parentId, orderKey})` is the only parent_id mutation entry point — closes the cycle-validation bypass at the type level. `tx.restore(id, patch?)` is the typed un-soft-delete primitive (replaces v4.26's uncompileable `tx.update({deleted: false, ...})` sketch). `tx.afterCommit` throws `WorkspaceNotPinnedError` if called before any write — keeps `CommittedEvent.workspaceId: string` honest.
 > - **v4.28: parent-validation extended to fresh inserts; `coarseScope.mutators` dropped.** `tx.create` and `tx.createOrGet`'s fresh-insert path run the same parent-validation as `tx.move` (`ParentNotFoundError` / `WorkspaceMismatchError` / `ParentDeletedError`); cycle check stays `tx.move`-only. `Query.coarseScope.mutators` removed (same v4.20 family — no `Dependency` kind matches mutator names).
 > - **v4.29: deleted-parent rule moved to engine prose; cycle-event payload + Mutator.reads simplified.** `repo.events.cycleDetected` payload reverts to `{ workspaceId, startIds, txIdsInvolved }` — operators enumerate cycle members via direct SQL per the §4.7 runbook (drops the v4.27 JS-side `findCycleMembers` walk). `Mutator.reads` and `RepoTxOptions.reads` dropped (no defined contract; `tx.get` reads SQL via the writeTransaction directly, so cache preload didn't help anyway). The engine-prose-for-deleted-parent change is reverted in v4.30.
 > - **v4.30: drop engine-side parent-validation on fresh inserts; layered enforcement story.** Walking back v4.28 (and v4.29's prose alignment with it). The layered story now: engine validates **cycles** on `tx.move` only — load-bearing because FK/triggers can't structurally catch cycles. **Parent existence + same-workspace** are enforced by the local trigger and the server composite FK at the storage layer (lowest useful layer; covers every write made through `repo.tx`). **Soft-deleted-parent rejection** is a kernel mutator UX rule (`createChild`, `move`, `indent`, etc. throw `ParentDeletedError`) — it's a UX rule, not a storage invariant, so storage accepts soft-deleted parents per v4.24 alignment. `tx.create` / `tx.createOrGet` / `tx.move` are lower-level primitives — they may surface raw or translated `SQLITE_CONSTRAINT` errors when given a bad parent. Direct `repo.tx` callers and plugin mutators that skip the kernel mutator layer trade friendly errors for the freedom to skip it; that's the explicit cost of the lower-level surface. Removed: engine `ParentNotFoundError` / `ParentDeletedError` throws on creates and on `tx.move`'s non-cycle paths, the §10.4 sketch's `validateParentForInsert()` call, the v4.28 prose claiming engine is the load-bearing enforcement on every primitive. Also tightened §4.1.1: the local trigger gates on `tx_context.source IS NOT NULL` and so only protects writes made through `repo.tx`; it is **not** a safety net for raw out-of-band writes — those are forbidden by §4.2's discipline rule.
+> - **v4.31: PropertySchema/UI split; alias-target helper extracted.** Two reviewer-driven shape changes. (a) `PropertySchema<T>` is now data-only (codec, defaultValue, changeScope, kind). React presentation lives on `PropertyUiContribution<T>` and contributes to a separate `propertyUiFacet`, joined to schemas by `name` at render time. Non-React surfaces (server audit, CLI, future non-React UIs) can read property schemas without pulling JSX into scope. The two contributions usually ship together in a plugin's `AppExtension` array; the UI contribution is optional (primitive-typed properties render via kernel default-per-kind editors). (b) The catch-`DeletedConflictError`-then-`tx.restore` boilerplate that was duplicated across `createAliasTargetInline` and the Roam import upsert is factored into one shared helper — `createOrRestoreTargetBlock(tx, args)` — driven by thin per-domain wrappers (`ensureAliasTarget`, `ensureDailyNoteTarget`, `ensureRoamImportTarget`). Each wrapper supplies the deterministic id, `freshContent`, and an optional `onInsertedOrRestored` callback for additional writes. v4.26's "tombstone restore is domain policy, not primitive policy" rule still holds — `createOrRestoreTargetBlock` is helper-layer, not exposed on `Tx`.
 >
 > **Resolved open questions:**
 > - **zod** for argsSchema (v4.10). Bundle weight + React-ecosystem familiarity beat Effect Schema; bidirectional encode/decode handled separately by `Codec<T>`. Valibot is a near-mechanical fallback if bundle pressure shows up later.
@@ -344,8 +345,10 @@ export type BlockDataPatch = Partial<Pick<
 
 /** Allowed shape for tx.create.
  *  - id: optional. If omitted, the engine generates a UUID. If present,
- *    used verbatim — used by deterministic-id mutators like
- *    core.createAliasTarget for daily notes.
+ *    used verbatim — used by deterministic-id helpers (e.g.
+ *    `ensureAliasTarget` / `ensureDailyNoteTarget` for parseReferences,
+ *    `ensureRoamImportTarget` for Roam import; all built on the shared
+ *    `createOrRestoreTargetBlock` primitive — see §7 + §13.1).
  *  - workspaceId: required (a row's workspace is fixed at creation).
  *  - parentId, orderKey: required (every row has a tree position).
  *  - content / properties / references: optional with defaults
@@ -724,11 +727,12 @@ export interface Tx {
    *       `DeletedConflictError`. **Tombstone restore is a domain policy** —
    *       which fields to refresh, whether to overwrite content, what counts
    *       as "the same thing being recreated" — and belongs in the helper that
-   *       owns the deterministic id, not in a generic primitive. The two v1
-   *       callers (`createAliasTargetInline` in §7 and Roam import in §13.1)
-   *       catch this error and call `tx.restore(id, freshPatch)` — typed
-   *       restore primitive (below) — followed by any property writes via
-   *       `tx.setProperty`. See §10.4 for the helper sketch.
+   *       owns the deterministic id, not in a generic primitive. The shared
+   *       `createOrRestoreTargetBlock` primitive (§7 + §13.1, v4.31) factors
+   *       out the catch-and-restore boilerplate; deterministic-id callers
+   *       (`ensureAliasTarget`, `ensureDailyNoteTarget`, `ensureRoamImportTarget`)
+   *       wrap it with their own `freshContent` and `onInsertedOrRestored`
+   *       callback. See §10.4 for the primitive sketch.
    *
    *  Why throw on tombstone instead of restoring: the name `createOrGet` reads
    *  as "create-or-fetch-live"; silent restore-on-conflict is surprising for
@@ -747,11 +751,12 @@ export interface Tx {
    *  captures `(before, after)` with `before.deleted = 1` and `after.deleted = 0`,
    *  and the commit walk diffs handles to the new live shape.
    *
-   *  Used by domain helpers that own deterministic ids (`createAliasTargetInline`,
-   *  Roam import) to recover from `DeletedConflictError` (above). The optional
-   *  patch lets the helper refresh content / references / properties in the same
-   *  write. Property updates that need codec encoding still go through
-   *  `tx.setProperty` after restore. */
+   *  Used by `createOrRestoreTargetBlock` (§7 + §13.1, v4.31) to recover from
+   *  `DeletedConflictError` (above) on behalf of all deterministic-id helpers
+   *  (`ensureAliasTarget`, `ensureDailyNoteTarget`, `ensureRoamImportTarget`,
+   *  any future ones). The optional patch lets the primitive refresh content /
+   *  references / properties in the same write. Property updates that need
+   *  codec encoding still go through `tx.setProperty` after restore. */
   restore(id: string, patch?: BlockDataPatch, opts?: TxWriteOpts): void
 
   // ──── Data-field updates (non-structural) ────
@@ -1067,6 +1072,9 @@ export class CodecError extends Error {
 export type PropertyKind =
   | 'string' | 'number' | 'boolean' | 'list' | 'object' | 'date'
 
+/** Data schema. Pure data-layer — usable from non-React surfaces (server,
+ *  CLI tools, headless tests, future non-React UIs). No JSX, no React types.
+ *  v4.31 split the React-specific UI into `PropertyUiContribution` below. */
 export interface PropertySchema<T> {
   readonly name: string
 
@@ -1076,16 +1084,31 @@ export interface PropertySchema<T> {
   readonly defaultValue: T
   readonly changeScope: ChangeScope
 
-  /** UI hint. The kernel ships a default editor + renderer per kind.
-   *  Plugins with primitive types pick the matching kind and (optionally) override
-   *  Editor/Renderer for richer UX. */
+  /** Storage-shape descriptor. Drives the unknown-schema fallback (§5.6.1):
+   *  when a plugin's schema is absent, the property panel infers a kind from
+   *  the JSON shape and renders via the default editor for that kind. So
+   *  `kind` is also load-bearing for graceful degradation, not just UI hint —
+   *  it stays on `PropertySchema`, not on the UI contribution. */
   readonly kind: PropertyKind
+}
 
-  /** UI metadata. */
-  readonly label?: string                                    // human-readable; defaults to `name`
-  readonly category?: string                                 // for property-editor grouping
+/** UI contribution. React-specific — refers to a registered `PropertySchema`
+ *  by `name` and supplies the editor/renderer/labels. Lives in a separate
+ *  facet (`propertyUiFacet`) so non-React surfaces can consume property
+ *  schemas without dragging in JSX types. v4.31. */
+export interface PropertyUiContribution<T> {
+  /** Must match a registered `PropertySchema.name`. The runtime joins
+   *  contributions to schemas by this key; multiple contributions for the
+   *  same name log a warning + last-wins (same convention as facets §6). */
+  readonly name: string
 
-  /** Optional custom UI. Override the default editor/renderer for this kind. */
+  /** Display name (defaults to `name` when absent). */
+  readonly label?: string
+
+  /** Property-editor grouping. */
+  readonly category?: string
+
+  /** Override the default editor/renderer for this property's kind. */
   readonly Editor?: PropertyEditor<T>
   readonly Renderer?: PropertyRenderer<T>
 }
@@ -1110,13 +1133,16 @@ Storage (`properties_json`) and cache always hold the encoded shape. Codecs do n
 
 The property panel (`BlockProperties.tsx`) iterates over `block.data.properties` (a `Record<string, unknown>` of encoded values) and for each entry:
 
-1. Look up the schema in `propertySchemasFacet`'s registry by `name`.
-2. **If known**: `codec.decode` the stored value; render via `schema.Editor ?? defaultEditorForKind(schema.kind)`.
-3. **If unknown** (no plugin registered the schema, or plugin was uninstalled): infer a `PropertyKind` from the JSON shape (`string` / `number` / `boolean` / `list` / `object`); render via the default editor for that inferred kind. Show a small "schema not registered" indicator so users know edits may not round-trip cleanly through the original plugin's codec.
+1. Look up the schema in `propertySchemasFacet`'s registry by `name` (data layer; codec + default + kind).
+2. Look up the matching UI contribution in `propertyUiFacet`'s registry by the same `name` (React layer; editor + renderer + label + category).
+3. **If schema is known**: `codec.decode` the stored value; render via `(uiContribution?.Editor) ?? defaultEditorForKind(schema.kind)`. The UI contribution is optional — primitive-typed properties without a custom editor render fine via the kernel's default-per-kind editors.
+4. **If schema is unknown** (no plugin registered, or plugin was uninstalled): infer a `PropertyKind` from the JSON shape (`string` / `number` / `boolean` / `list` / `object`); render via the default editor for that inferred kind. Show a small "schema not registered" indicator so users know edits may not round-trip cleanly through the original plugin's codec.
 
-Default editors/renderers per kind ship from the kernel. Custom ones from plugins override per-property. Unknown properties never disappear from the UI — they degrade gracefully to JSON-shape inference. This keeps data discoverable when plugins are absent (after uninstall, before a slow plugin loads, etc.).
+Default editors/renderers per kind ship from the kernel as part of `propertyUiFacet`'s defaults — they're keyed on `kind`, not on a specific property name, so they apply to any property whose schema is registered without a custom UI contribution. Plugin contributions to `propertyUiFacet` override per-property.
 
-The `category` field groups properties in the panel. The `label` field is the display name (defaults to `name`).
+Unknown properties never disappear from the UI — they degrade gracefully to JSON-shape inference. This keeps data discoverable when plugins are absent (after uninstall, before a slow plugin loads, etc.).
+
+`category` groups properties in the panel; `label` is the display name (defaults to `name`). Both live on `PropertyUiContribution` (v4.31 split), since they're presentation concerns. A non-React consumer (CLI, server-side audit, future non-React UI) reading `PropertySchema` alone never needs JSX, never imports React, and can format `name` itself.
 
 The trade we're making by lifting schema out of stored values: gain plugin extension + type safety + single-source-of-truth for descriptor metadata, accept that "schema not registered" is a state the UI must handle. The fallback is straightforward; the benefits compound.
 
@@ -1256,15 +1282,18 @@ Scope semantics matrix:
 ## 6. Facets
 
 ```ts
-mutatorsFacet            : Facet<Mutator,             MutatorRegistry>
-queriesFacet             : Facet<Query,               QueryRegistry>
-propertySchemasFacet     : Facet<PropertySchema,      PropertySchemaRegistry>
-postCommitProcessorsFacet: Facet<PostCommitProcessor, PostCommitDispatcher>
+mutatorsFacet            : Facet<Mutator,               MutatorRegistry>
+queriesFacet             : Facet<Query,                 QueryRegistry>
+propertySchemasFacet     : Facet<PropertySchema,        PropertySchemaRegistry>      // data: codec/default/kind
+propertyUiFacet          : Facet<PropertyUiContribution, PropertyUiRegistry>          // React: Editor/Renderer/labels (v4.31)
+postCommitProcessorsFacet: Facet<PostCommitProcessor,   PostCommitDispatcher>
 ```
 
 Each facet's `combine` builds a registry keyed by `name`; duplicate names log a warning and last-wins.
 
 The kernel registers built-ins as plain contributions. There is no two-tier system — `core.indent` and `tasks:setDueDate` are both contributions, both flow through `setFacetRuntime` (§8), neither is hardcoded in the Repo constructor.
+
+`propertySchemasFacet` and `propertyUiFacet` are joined by `name` at render time. A plugin contributing a property typically contributes to both facets in the same `AppExtension` array — but the data-layer schema is consumable on its own from non-React surfaces (server audit tooling, CLI, future non-React UIs) without pulling React into scope. See §5.6.
 
 Naming convention: kernel uses bare names; plugins prefix with `<plugin-id>:`. Convention only.
 
@@ -1289,10 +1318,10 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: { kind: 'field', table: 'blocks', fields: ['content'] } })`. Field-watching is correctness-critical: any tx that writes `blocks.content` triggers ref parsing, including plugin mutators that bypass the `setContent` kernel mutator. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. (No `mode` field — v4.20 dropped same-tx mode, follow-up is the only behavior; see §16.2.) |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
-| Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<{ id: string; inserted: boolean }>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow. The helper computes the deterministic id, calls `tx.createOrGet({ id, workspaceId, parentId: null, orderKey: rootKey(), content: '' })` (data fields only; aliases live in `properties` per §16.10), then on success calls `tx.setProperty(id, aliasesProp, [alias])` to write the alias list through the property codec (§5.6). **Tombstone restore is the helper's responsibility**: `tx.createOrGet` throws `DeletedConflictError` if the deterministic id resolves to a soft-deleted row (per §10.4 v4.26); the helper catches it and runs `tx.restore(id, { content: '' })` + `tx.setProperty(id, aliasesProp, [alias])` to undelete + refresh the alias-target's "fresh fields" (content, aliases; parent_id / order_key / other properties stay at whatever the prior live state had). The helper returns `{ id, inserted: true }` for both fresh-insert and tombstone-restore paths, and `{ id, inserted: false }` for live-row hits — the `inserted` boolean drives cleanup eligibility (see Self-destruct row). `DeterministicIdCrossWorkspaceError` is not caught — it should never happen for kernel alias-target ids (which include workspaceId by construction) and indicates a bug if it does. |
-| Daily-note deterministic id | `createAliasTargetInline` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true` (insert), the other gets `inserted: false` (live-row hit) and reads the existing live row from SQL. The tombstone-restore path applies to daily notes too: typing `[[2026-04-29]]` after the daily note was previously soft-deleted hits `DeletedConflictError` and the helper restores it via `tx.restore` + `tx.setProperty`. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s, and a restored daily note is also exempted (the date-shape filter applies regardless of how the row became live). |
+| Create missing alias-target | Two-layer helper in `src/data/internals/targets/`. **Layer 1 — `createOrRestoreTargetBlock(tx, args): Promise<{ id: string; inserted: boolean }>`** is the lower-level reusable primitive (v4.31): handles the deterministic-id-with-restore pattern in one place. Args: `{ id, workspaceId, parentId, orderKey, freshContent, onInsertedOrRestored?: (tx, id) => void }`. It calls `tx.createOrGet({ id, workspaceId, parentId, orderKey, content: freshContent })`; on success-and-`inserted` it invokes the optional callback for any additional writes (e.g. property writes). On `DeletedConflictError` it runs `tx.restore(id, { content: freshContent })` + the callback, returning `{ id, inserted: true }`. `DeterministicIdCrossWorkspaceError` is not caught (kernel ids encode workspace; surfacing it loudly catches genuine bugs). The same primitive is also used by Roam import (§13.1, `ensureRoamImportTarget`). **Layer 2 — `ensureAliasTarget(tx, alias, workspaceId)`** and **`ensureDailyNoteTarget(tx, date, workspaceId)`** are policy-specific wrappers used by parseReferences: each computes its own deterministic id, picks `freshContent` (empty string for both v1 callers), and supplies an `onInsertedOrRestored` callback that writes the alias list via `tx.setProperty(id, aliasesProp, [alias])`. **Neither wrapper is a registered Mutator** — registering them via `mutatorsFacet` would expose `repo.mutate.ensureAliasTarget(...)` from any scope, bypassing the parseReferences flow. The Layer 1 primitive isn't a Mutator either; it's a private helper exported only to the small set of callers that own deterministic ids. The wrappers return `{ id, inserted: boolean }` (`inserted: true` covers both fresh-insert and tombstone-restore) — the boolean drives cleanup eligibility (see Self-destruct row). |
+| Daily-note deterministic id | `ensureDailyNoteTarget(tx, date, workspaceId)` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding) and dispatches to `createOrRestoreTargetBlock`. Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true` (insert), the other gets `inserted: false` (live-row hit) and reads the existing live row from SQL. The tombstone-restore path applies to daily notes too: typing `[[2026-04-29]]` after the daily note was previously soft-deleted hits `DeletedConflictError` and `createOrRestoreTargetBlock` runs `tx.restore` + the wrapper's `onInsertedOrRestored`. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s, and a restored daily note is also exempted (the date-shape filter applies regardless of how the row became live). parseReferences distinguishes date vs. non-date aliases at parse time and dispatches to the matching wrapper. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
-| Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds: [...] }, { delayMs: 4000 })`. **`newlyInsertedAliasTargetIds`** is built by filtering `createAliasTargetInline` results: include only ids where `inserted === true` AND the id is non-date-shaped. This is the literal honest meaning — `tx.createOrGet` returns `inserted` directly, so we know at parse time which ids this tx actually wrote vs which ones already existed. The cleanup processor (`watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ newlyInsertedAliasTargetIds: z.array(z.string()) })` so the engine validates at `tx.afterCommit` enqueue. Cleanup runs **one gate**: verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. When the gate passes, `ctx.tx.delete(id)` proceeds. (No row_events insertion check needed — the `inserted` boolean from `tx.createOrGet` already gave us that information at the call site, before we even scheduled cleanup.) |
+| Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds: [...] }, { delayMs: 4000 })`. **`newlyInsertedAliasTargetIds`** is built by filtering `ensureAliasTarget` results (date wrapper results are excluded by routing; only the alias wrapper feeds this list): include only ids where `inserted === true`. This is the literal honest meaning — `tx.createOrGet` returns `inserted` directly through `createOrRestoreTargetBlock`, so we know at parse time which ids this tx actually wrote vs which ones already existed. The cleanup processor (`watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ newlyInsertedAliasTargetIds: z.array(z.string()) })` so the engine validates at `tx.afterCommit` enqueue. Cleanup runs **one gate**: verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. When the gate passes, `ctx.tx.delete(id)` proceeds. (No row_events insertion check needed — the `inserted` boolean already gave us that information at the call site, before we even scheduled cleanup.) |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
 | `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
@@ -1307,41 +1336,42 @@ This matches today's behavior. No "two undos to revert one edit" UX issue.
 
 ### 7.6 Daily-note exemption from cleanup
 
-Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **not adding date-shaped alias-target ids to `newlyInsertedAliasTargetIds`** in the first place — `parseReferences` checks each id returned by `createAliasTargetInline` against the daily-note format and excludes matches.
+Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **routing date-shaped aliases to `ensureDailyNoteTarget` and only feeding `ensureAliasTarget` results into `newlyInsertedAliasTargetIds`** — the date wrapper's results are deliberately not passed to cleanup.
 
 Implementation:
 
 ```ts
-function isDateAliasTargetId(id: string): boolean {
-  // matches the deterministic daily-note id format produced by createAliasTargetInline
-  return /^daily-[a-z0-9]+-\d{4}-\d{2}-\d{2}$/.test(id)
+function isDateAlias(alias: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(alias)
 }
 
 // inside parseReferences:
-//   - For every parsed alias not already resolved by aliasLookup, call
-//     createAliasTargetInline(tx, alias, workspaceId) — a plain helper, NOT a
-//     registered mutator (see §7 mapping). Helper internally does
-//     tx.createOrGet({ id, workspaceId, parentId: null, orderKey, content: '' })
-//     followed by tx.setProperty(id, aliasesProp, [alias]). On
-//     DeletedConflictError it falls back to tx.restore(id, { content: '' })
-//     + tx.setProperty(id, aliasesProp, [alias]) to recover the tombstone
-//     (typed restore primitive per §5.3 v4.27 / §10.4 prose).
-//     Either way it returns { id, inserted: boolean } where inserted: true
-//     covers both fresh-insert and restore.
-//   - Build the cleanup candidates: non-date ids that THIS tx actually
-//     inserted-or-restored.
-const results = await Promise.all(
-  unresolvedAliases.map(alias => createAliasTargetInline(tx, alias, workspaceId))
-)
-const newlyInsertedAliasTargetIds = results
-  .filter(r => r.inserted && !isDateAliasTargetId(r.id))
+//   - For every parsed alias not already resolved by aliasLookup, dispatch
+//     to the matching wrapper. Both wrappers go through
+//     createOrRestoreTargetBlock (§7 mapping table) which handles the
+//     tx.createOrGet -> DeletedConflictError -> tx.restore boilerplate in
+//     one place. Each wrapper returns { id, inserted: boolean } where
+//     inserted: true covers both fresh-insert and tombstone-restore.
+//   - Only ensureAliasTarget results feed cleanup. ensureDailyNoteTarget
+//     results are kept for ref insertion but never enter the cleanup list.
+const aliasResults: Array<{ id: string; inserted: boolean }> = []
+const dateResults:  Array<{ id: string; inserted: boolean }> = []
+for (const alias of unresolvedAliases) {
+  if (isDateAlias(alias)) {
+    dateResults.push(await ensureDailyNoteTarget(tx, alias, workspaceId))
+  } else {
+    aliasResults.push(await ensureAliasTarget(tx, alias, workspaceId))
+  }
+}
+const newlyInsertedAliasTargetIds = aliasResults
+  .filter(r => r.inserted)
   .map(r => r.id)
 if (newlyInsertedAliasTargetIds.length > 0) {
   tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds }, { delayMs: 4000 })
 }
 ```
 
-Two filters: `inserted === true` (this tx wrote the row, not a pre-existing one) and `!isDateAliasTargetId` (skip daily notes). The combination of these two static conditions makes cleanup's job a single check ("any block references this id?") at fire time.
+Two filters: `inserted === true` (this tx wrote the row, not a pre-existing one) and the routing-by-shape that keeps `dateResults` out of the cleanup list (daily notes never self-destruct). The combination of these two static conditions makes cleanup's job a single check ("any block references this id?") at fire time.
 
 ### 7.5 Why cleanup uses `inserted`, not "any block references it"
 
@@ -1349,7 +1379,7 @@ Consider this race:
 
 1. Alice creates page "Inbox" via the create-page UI (NOT via `[[Inbox]]` typing). Alice's Inbox row has no incoming `references_json` entries from any block.
 2. Sync propagates Alice's Inbox to Bob's local DB.
-3. Bob types `[[Inbox]]` somewhere. parseReferences's `createAliasTargetInline` helper resolves the alias to Alice's existing Inbox: `tx.createOrGet({ id, workspaceId, ... })` returns `{ id, inserted: false }` (live-row hit; row already existed). The helper does NOT call `tx.setProperty` because it's not on the insert/restore path.
+3. Bob types `[[Inbox]]` somewhere. parseReferences's `ensureAliasTarget` wrapper dispatches to `createOrRestoreTargetBlock`, which resolves the alias to Alice's existing Inbox: `tx.createOrGet({ id, workspaceId, ... })` returns `{ id, inserted: false }` (live-row hit; row already existed). The `onInsertedOrRestored` callback is NOT invoked because it's not on the insert/restore path.
 4. parseReferences sees `inserted: false` for Inbox's id and **does not add it to `newlyInsertedAliasTargetIds`** — so cleanup never considers it.
 5. Bob deletes the `[[Inbox]]` text within 4s. parseReferences re-runs, removing the reference from Bob's block.
 6. Cleanup runs after 4s. Inbox's id was never on the cleanup list, so Alice's Inbox is safely preserved.
@@ -1363,9 +1393,9 @@ A naive design (cleanup removes any alias-target with no incoming references) wo
 - Typing `[[foo]]` (foo new, non-date) then deleting that text within 4s → orphan removed by cleanup. `tx.createOrGet` returned `inserted: true`; `newlyInsertedAliasTargetIds` includes foo's id; reference check passes (no block references it after deletion); cleanup deletes.
 - Typing `[[foo]]` (foo new), then linking from another block within 4s → orphan kept. Same as above except the reference check fails.
 - **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept**. `tx.createOrGet` returned `inserted: false`; Inbox's id is filtered out of `newlyInsertedAliasTargetIds` at schedule time; cleanup never considers it. §7.5 race; must not regress.
-- **Typing `[[2026-04-28]]` (newly creates the daily note)**, then deleting within 4s → daily note is **kept** (date-shaped target excluded from `newlyInsertedAliasTargetIds` even though `inserted: true`). §7.6 daily-note exemption; must not regress.
+- **Typing `[[2026-04-28]]` (newly creates the daily note)**, then deleting within 4s → daily note is **kept** (`ensureDailyNoteTarget` results never enter `newlyInsertedAliasTargetIds`, even though `inserted: true`). §7.6 daily-note exemption; must not regress.
 - Two clients concurrently typing `[[2026-04-28]]` → deterministic daily-note id; both `tx.createOrGet` calls converge on the same row. One returns `inserted: true`, the other `inserted: false`; either way both clients' `references` arrays end up containing `{id, alias: '2026-04-28'}`.
-- **Re-typing `[[foo]]` after a previous create-and-cleanup cycle** → restored row visible. Sequence: type `[[foo]]` (helper `createAliasTargetInline` returns `inserted: true` from `tx.createOrGet` insert + `tx.setProperty` for aliases); delete the text within 4s (cleanup soft-deletes foo); ≥4s passes; type `[[foo]]` again. The second helper call hits the soft-deleted row: `tx.createOrGet` throws `DeletedConflictError`, the helper catches it and runs `tx.restore(id, { content: '' })` + `tx.setProperty(id, aliasesProp, [alias])` to undelete + refresh, returning `{ id, inserted: true }`. Source block's `references` resolves to a visible alias target; subsequent backlinks queries find it. Tree views render it. Must not return a tombstone or `inserted: false`. (P0 across v4.24/v4.25/v4.26/v4.27 — restore moved from primitive to helper-level via the typed `tx.restore` primitive in v4.27.)
+- **Re-typing `[[foo]]` after a previous create-and-cleanup cycle** → restored row visible. Sequence: type `[[foo]]` (`ensureAliasTarget` returns `inserted: true` via `createOrRestoreTargetBlock`'s `tx.createOrGet` insert + the `onInsertedOrRestored` callback that writes aliases); delete the text within 4s (cleanup soft-deletes foo); ≥4s passes; type `[[foo]]` again. The second call hits the soft-deleted row: `tx.createOrGet` throws `DeletedConflictError`, `createOrRestoreTargetBlock` catches it and runs `tx.restore(id, { content: '' })` + the callback, returning `{ id, inserted: true }`. Source block's `references` resolves to a visible alias target; subsequent backlinks queries find it. Tree views render it. Must not return a tombstone or `inserted: false`. (P0 across v4.24/v4.25/v4.26/v4.27 — restore moved from primitive to helper-level via the typed `tx.restore` primitive in v4.27; v4.31 factored the catch-and-restore boilerplate into a single shared helper.)
 - Rapid typing inside an existing `[[alias]]` (no alias-set change) → debounce coalesces; at most one processor run per block per debounce window.
 - Undo of `setContent` → `references` converges back to pre-edit state.
 
@@ -1655,41 +1685,80 @@ return { id, inserted: false }
 
 **Why no built-in restore** (v4.26): pre-v4.26 `tx.createOrGet` un-soft-deleted on tombstone conflict and returned `inserted: true`, so e.g. typing `[[foo]]` after `[[foo]]` was created-and-cleaned-up "just worked." That convenience came with three problems: misleading name (`createOrGet` reads as "create-or-fetch-live"; silent tombstone resurrection is surprising for plugin authors), hardcoded refresh policy (the pre-v4.26 SQL overwrote a fixed set of fields, but daily notes / alias targets / Roam imports each want different fields refreshed), and only two v1 callers — both already domain helpers, so pushing restore into them is ~5 extra lines.
 
-**Domain helpers handle restore explicitly via `tx.restore`** (v4.27 typed restore primitive — see §5.3):
+**Shared boilerplate, domain-specific policy** (v4.31): the catch-`DeletedConflictError`-then-`tx.restore` pattern is identical across every deterministic-id caller. Factored into one primitive (`createOrRestoreTargetBlock`) used by thin wrappers per use case. Each wrapper supplies the policy: the deterministic id, the parent/orderKey, the `freshContent` to apply on insert *or* restore, and an optional `onInsertedOrRestored` callback for any additional writes (typically property writes that need codec encoding).
 
 ```ts
-// §7 createAliasTargetInline — sketch; full helper in the §7 mapping table.
-// Aliases live in `properties` per §16.10; `aliasesProp` is the property
-// schema (codec.encode applied via tx.setProperty).
-async function createAliasTargetInline(tx: Tx, alias: string, workspaceId: string) {
-  const id = computeAliasTargetId(alias, workspaceId)
-  const data = { id, workspaceId, parentId: null, orderKey: rootKey(), content: '' }
+// Layer 1 — shared primitive (`src/data/internals/targets/createOrRestoreTargetBlock.ts`).
+// Aliases live in `properties` per §16.10; codec-encoded property writes go
+// through tx.setProperty inside the optional callback.
+type CreateOrRestoreArgs = {
+  id: string
+  workspaceId: string
+  parentId: string | null
+  orderKey: string
+  freshContent: string                // applied on both insert and restore
+  onInsertedOrRestored?: (tx: Tx, id: string) => void
+}
+
+async function createOrRestoreTargetBlock(
+  tx: Tx,
+  args: CreateOrRestoreArgs,
+): Promise<{ id: string; inserted: boolean }> {
+  const data = {
+    id: args.id, workspaceId: args.workspaceId,
+    parentId: args.parentId, orderKey: args.orderKey,
+    content: args.freshContent,
+  }
   try {
     const result = await tx.createOrGet(data)
     if (result.inserted) {
-      tx.setProperty(id, aliasesProp, [alias])      // codec-encoded write
+      args.onInsertedOrRestored?.(tx, args.id)
     }
     return result
   } catch (e) {
     if (e instanceof DeletedConflictError) {
-      // Tombstone restore. Undelete + apply alias-target's "fresh fields"
-      // (content). Aliases go through tx.setProperty (codec); parent_id /
-      // order_key / other properties stay at whatever the prior live state
-      // had. Engine bumps updated_at / updated_by automatically.
-      tx.restore(id, { content: '' })
-      tx.setProperty(id, aliasesProp, [alias])
-      return { id, inserted: true }   // honest for §7's cleanup-eligibility filter
+      tx.restore(args.id, { content: args.freshContent })
+      args.onInsertedOrRestored?.(tx, args.id)
+      return { id: args.id, inserted: true }
     }
-    throw e
+    throw e   // DeterministicIdCrossWorkspaceError, etc. — domain bug, surface loudly
   }
 }
+
+// Layer 2 — policy-specific wrappers.
+function ensureAliasTarget(tx: Tx, alias: string, workspaceId: string) {
+  return createOrRestoreTargetBlock(tx, {
+    id: computeAliasTargetId(alias, workspaceId),
+    workspaceId,
+    parentId: null,
+    orderKey: rootKey(),
+    freshContent: '',
+    onInsertedOrRestored: (tx, id) => tx.setProperty(id, aliasesProp, [alias]),
+  })
+}
+
+function ensureDailyNoteTarget(tx: Tx, date: string, workspaceId: string) {
+  return createOrRestoreTargetBlock(tx, {
+    id: computeDailyNoteId(date, workspaceId),
+    workspaceId,
+    parentId: null,
+    orderKey: rootKey(),
+    freshContent: '',
+    onInsertedOrRestored: (tx, id) => tx.setProperty(id, aliasesProp, [date]),
+  })
+}
+
+// Roam import (§13.1) defines its own wrapper:
+//   ensureRoamImportTarget(tx, roamUid, workspaceId, importedContent) — passes
+//   `freshContent: importedContent` so re-imports overwrite content, and any
+//   import-specific properties via the callback. Same Layer-1 primitive.
 ```
 
-The Roam import upsert helper (`src/utils/roamImport/`) wraps `tx.createOrGet` with a similar but possibly different refresh policy — re-imports may want to overwrite content, alias-target restores don't. Each domain decides what to pass to `tx.restore` (or whether to call it at all — could choose to leave the tombstone and report an error to the user instead).
+**Why split** (v4.31): the catch-and-restore boilerplate was duplicated across the parseReferences alias path (§7) and the Roam import upsert (§13.1) with subtle policy differences (alias-targets keep prior content; Roam re-imports overwrite content; daily notes are like alias-targets but with date-shaped ids that route differently in cleanup). Factoring the boilerplate into one primitive while keeping policy in named per-domain wrappers makes both the shared shape and the per-domain choices explicit. v4.26's "tombstone restore is domain policy, not primitive policy" rule still holds — `createOrRestoreTargetBlock` is a *helper-layer* primitive, not exposed on `Tx`; plugin authors writing their own deterministic-id helpers can use it or not.
 
 **Workspace-pin guard stays in the primitive** (not domain policy): a deterministic id that resolves to a row in a different workspace is always a bug, regardless of caller. Embedding the guard centrally guarantees no domain helper accidentally moves a row + its subtree across workspaces.
 
-**Within-tx reads**: `tx.get(id)` after `tx.createOrGet` (or after a domain helper's `tx.restore` + `tx.setProperty` sequence) reads SQL via the writeTransaction — sees the live row whether this tx inserted, restored via the helper, or hit an existing live row. The `inserted` boolean is in the return value, available immediately.
+**Within-tx reads**: `tx.get(id)` after `tx.createOrGet` (or after `createOrRestoreTargetBlock`'s `tx.restore` + callback sequence) reads SQL via the writeTransaction — sees the live row whether this tx inserted, restored, or hit an existing live row. The `inserted` boolean is in the return value, available immediately.
 
 **Why deterministic ids need a tombstone story at all**: a soft-deleted row keeps its id occupied. Without explicit restore handling somewhere, the next "create the same deterministic thing" call would either get a confusing `inserted: false` for a hidden row (silent failure) or a `DeletedConflictError` that propagates to the user (loud failure). v1 picks "loud at the primitive, recoverable at the domain helper." See §7 for the alias flow and §13.1 Phase 1 prose for Roam import.
 
@@ -1786,9 +1855,8 @@ ORDER BY order_key, id;
 ### 12.1 Static plugins (compile-time)
 
 ```ts
-// schema.ts
+// schema.ts — pure data layer, no React imports.
 import { codecs } from '@/data/api'
-import { TaskDueDateEditor } from './editors'
 
 // codecs.optional wraps Codec<Date> → Codec<Date | undefined>, so defaultValue: undefined
 // types correctly. Inferred type: PropertySchema<Date | undefined>.
@@ -1796,10 +1864,17 @@ export const dueDateProp = defineProperty('tasks:due-date', {
   codec: codecs.optional(codecs.date),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'date',                                    // default editor: ISO date input
+  kind: 'date',                                    // drives default editor + unknown-schema fallback
+})
+
+// ui.tsx — React layer, joined to the schema by name.
+import { TaskDueDateEditor } from './editors'
+
+export const dueDateUi = definePropertyUi<Date | undefined>({
+  name: 'tasks:due-date',                          // matches dueDateProp.name
   label: 'Due date',
   category: 'Tasks',
-  Editor: TaskDueDateEditor,                       // optional: custom calendar picker overrides default
+  Editor: TaskDueDateEditor,                       // optional: custom calendar picker overrides default-for-kind
 })
 
 // mutators.ts
@@ -1827,8 +1902,11 @@ declare module '@/data/api' {
 export const tasksPlugin: AppExtension = [
   mutatorsFacet.of(setDueDate, { source: 'tasks' }),
   propertySchemasFacet.of(dueDateProp, { source: 'tasks' }),
+  propertyUiFacet.of(dueDateUi, { source: 'tasks' }),     // optional; default-for-kind suffices if you skip it
 ]
 ```
+
+A plugin that needs no custom UI (a primitive-typed property happy with the kernel's default editor for its `kind`) skips the `propertyUiFacet.of(...)` line entirely. A non-React consumer reading `propertySchemasFacet`'s registry never imports React.
 
 Caller (typed):
 
@@ -1940,10 +2018,10 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 **Scope**:
 - `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
 - Repo lifecycle (`setFacetRuntime`) implemented per §8.
-- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx). **Note:** `createAliasTargetInline` is NOT a registered Mutator — it's a plain helper called from `core.parseReferences`'s `apply` (see §7 mapping table). Registering it would expose it as `repo.mutate.createAliasTarget(...)` from any caller, bypassing the parseReferences flow that the cleanup processor's `inserted`-driven schedule-time filter (§7.5) relies on.
+- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx). **Note:** `createOrRestoreTargetBlock` and its wrappers (`ensureAliasTarget`, `ensureDailyNoteTarget`, `ensureRoamImportTarget`) are NOT registered Mutators — they're plain helpers called from `core.parseReferences`'s `apply` and the Roam import orchestrator (see §7 mapping table, §13.1). Registering any of them would expose them as `repo.mutate.X(...)` from any caller, bypassing the parseReferences flow that the cleanup processor's `inserted`-driven schedule-time filter (§7.5) relies on.
 - Reference parsing migrated to `core.parseReferences` as a follow-up processor per §7 (post-commit; only mode that exists since v4.20). Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. **Until queriesFacet ships in Phase 4**, the processor uses raw SQL via `ctx.db` for: (a) alias-by-name lookup, (b) "any block references this id" scan inside the cleanup processor. Phase 4 wraps the same SQL into the kernel queries `aliasLookup` and `backlinks` (Phase 4 query list, §13.4) — same SQL, queriesFacet wrapper. Call sites switch from `ctx.db.getAll(SQL, ...)` to `repo.query.aliasLookup({...}).load()` and `repo.query.backlinks({...}).load()` with no behavior change. (Insertion-vs-conflict identity comes from `tx.createOrGet`'s `inserted` boolean per v4.20 — no row_events scan needed at any phase.)
 - `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
-- `propertySchemasFacet` for descriptors (still flat in storage; facet just wraps the existing descriptor exports).
+- `propertySchemasFacet` for data-layer descriptors (codec + default + kind; still flat in storage; facet wraps the existing descriptor exports). `propertyUiFacet` for the React-side editor/renderer/label/category contributions (v4.31 split — see §5.6 + §6). Kernel ships the default-per-kind editors via `propertyUiFacet`'s defaults so primitive-typed plugin properties render correctly without a custom contribution.
 
 **Acceptance**:
 - Reference parsing produces identical results to today across all behaviors per §7.2.
@@ -2170,12 +2248,12 @@ Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces t
 The acceptance criteria below describe properties of the **current spec state**. Per-round review-thread bookkeeping (rounds 1–9, plus the v4.18 / v4.21 / v4.23 / v4.24 / v4.25 / v4.26 trajectory) lives in `git log tasks/data-layer-redesign.md` — load-bearing decisions are summarized in the design-notes block at the top of this file.
 
 - [ ] **Schema and triggers**: server schema is just `blocks` (§4.1); client adds `tx_context` / `row_events` / `command_events` plus seven triggers (5 audit/upload + 2 workspace-invariant, §4.5 + §4.1.1, §13.1 acceptance). Sync-applied writes leave `tx_context.source = NULL`; row_events COALESCEs to `'sync'`; upload-routing triggers gate on `= 'user'` so sync writes don't loop. No PowerSync sync-apply wrapper.
-- [ ] **Tx primitives** (§5.3, §10 pipeline): write-through to SQL inline, no staged write-set. Engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Cache is mutated only on commit walk (step 6). `tx.peek` reads snapshots-then-cache. `tx.get` / `tx.childrenOf` / `tx.parentOf` read SQL via the writeTransaction. The Tx surface is split into narrow primitives (v4.27): `tx.update` is data-fields-only (`content` / `references` / `properties`); `tx.move` is the single parent_id mutation entry point; `tx.delete` / `tx.restore` are the lifecycle primitives; `tx.create` / `tx.createOrGet` cover insert. `tx.createOrGet` is SELECT-then-branch with three terminal outcomes (insert / live-hit / throw `DeletedConflictError` or `DeterministicIdCrossWorkspaceError`); restore-on-tombstone is the domain helpers' job via `tx.restore` (`createAliasTargetInline` in §7, Roam import upsert in §13.1).
+- [ ] **Tx primitives** (§5.3, §10 pipeline): write-through to SQL inline, no staged write-set. Engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Cache is mutated only on commit walk (step 6). `tx.peek` reads snapshots-then-cache. `tx.get` / `tx.childrenOf` / `tx.parentOf` read SQL via the writeTransaction. The Tx surface is split into narrow primitives (v4.27): `tx.update` is data-fields-only (`content` / `references` / `properties`); `tx.move` is the single parent_id mutation entry point; `tx.delete` / `tx.restore` are the lifecycle primitives; `tx.create` / `tx.createOrGet` cover insert. `tx.createOrGet` is SELECT-then-branch with three terminal outcomes (insert / live-hit / throw `DeletedConflictError` or `DeterministicIdCrossWorkspaceError`); restore-on-tombstone lives in the shared `createOrRestoreTargetBlock` helper (v4.31), which thin per-domain wrappers (`ensureAliasTarget`, `ensureDailyNoteTarget`, `ensureRoamImportTarget`) drive with their own `freshContent` and `onInsertedOrRestored` callbacks.
 - [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side cycle validation on `tx.move` only (`isDescendantOf` check, throws `CycleError`); FK/triggers can't catch cycles structurally so the engine is load-bearing here. `tx.update`'s patch type doesn't carry `parentId` so it can't bypass; cycle is checked on every parent_id mutation regardless of caller (kernel mutator, plugin mutator, domain helper, or direct `repo.tx`). Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` with `{ workspaceId, startIds, txIdsInvolved }` (operators enumerate members via direct SQL — see §4.7 runbook); no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
 - [ ] **Workspace invariants** (v4.30 layered story): server-side composite FK enforces `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1) — canonical guarantee for sync. Local trigger enforces parent-existence + same-workspace for local writes made through `repo.tx` (gated on `tx_context.source IS NOT NULL`); **does not** filter on `deleted = 0` (aligns with server). The Tx primitives don't re-validate parent-existence/workspace — those land as translated `ParentNotFoundError` / `WorkspaceMismatchError` from the trigger/FK. Soft-deleted-parent rejection (`ParentDeletedError`) lives in kernel mutators only (UX rule, not storage invariant). Engine pins `meta.workspaceId` from first write and throws `WorkspaceMismatchError` on cross-workspace writes inside one tx (§5.3, §15 #11).
 - [ ] **Tree CTEs in Phase 1** (§13.1): `SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL` ship from day one with depth-100 + `!hex/` visited-id guards. Phase 5 shrinks to queriesFacet packaging + a 1000-block benchmark.
 - [ ] **Reactivity** (§9): two-source handle invalidation (TxEngine fast path + row_events tail filtered to `source = 'sync'`); parent-edge dependencies for tree handles; children-completeness markers + `ChildrenNotLoadedError` for the sync `Block` facade (§5.2).
-- [ ] **Reference parsing** (§7): follow-up processor watching `blocks.content` field-writes; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` for the orphan cleanup; cleanup-eligibility filter at schedule time uses the helper's `inserted` boolean (covers fresh-insert AND tombstone-restore via `createAliasTargetInline`'s try/catch). Date-shaped alias-target ids are exempted from cleanup. `[[Inbox]]`-into-existing-page race (§7.5) does not delete pre-existing pages.
+- [ ] **Reference parsing** (§7): follow-up processor watching `blocks.content` field-writes; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` for the orphan cleanup; cleanup-eligibility filter at schedule time uses each wrapper's `inserted` boolean (covers fresh-insert AND tombstone-restore via `createOrRestoreTargetBlock`'s catch-and-restore). Date-shaped aliases are routed to `ensureDailyNoteTarget`, whose results never enter the cleanup list. `[[Inbox]]`-into-existing-page race (§7.5) does not delete pre-existing pages.
 - [ ] **Read-only mode** (§10.3, §15 #1): `repo.tx` rejects `BlockDefault` / `References`; `UiState` always allowed.
 - [ ] **Codecs at boundaries only** (§5.6, §15 #6): `codec.encode` / `codec.decode` runs at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty` — four sites. Storage and cache hold encoded shape.
 - [ ] **Bootstrap** (§8, §12.2): staged `setFacetRuntime` waves; pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites reject unknown mutator names with `MutatorNotRegisteredError`.
