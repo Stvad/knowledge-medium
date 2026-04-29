@@ -73,6 +73,21 @@ const namespacedKey = (key: string): string => {
   return `${NS_PREFIX}:${cleaned}`
 }
 
+// "Simple" Roam inline attribute: a block whose content is exactly
+// `key:: value`, single-line, with key matching `[A-Za-z][\w-]*`.
+// Anything more complex (multi-line bodies, attribute mixed inline with
+// other content, multi-attribute blocks) is intentionally left alone —
+// those need a richer model, which is out of scope for this importer
+// pass.
+const SIMPLE_ATTR_RE = /^([A-Za-z][\w-]*)::\s*(.*)$/
+
+const detectInlineAttribute = (rawContent: string): {key: string, value: string} | null => {
+  if (rawContent.includes('\n')) return null
+  const match = SIMPLE_ATTR_RE.exec(rawContent)
+  if (!match) return null
+  return {key: match[1], value: match[2]}
+}
+
 const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> => {
   const fromBlockProps = (block[':block/props'] ?? block.props ?? {}) as Record<string, unknown>
   return {...fromBlockProps, ...getExtraRoamProps(block)}
@@ -176,6 +191,17 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
   const properties: BlockProperties = {
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
+  }
+
+  // Simple `key::value` blocks land as both content (preserves display)
+  // and a `roam:<key>` string property (queryable). Complex shapes
+  // (multi-line, mixed-with-content, multi-attr) are pass-through.
+  const inlineAttr = detectInlineAttribute(rawString)
+  if (inlineAttr) {
+    const propName = `${NS_PREFIX}:${inlineAttr.key}`
+    if (!properties[propName]) {
+      properties[propName] = stringProperty(propName, inlineAttr.value)
+    }
   }
 
   const data: BlockData = {

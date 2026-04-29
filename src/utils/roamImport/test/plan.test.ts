@@ -138,6 +138,28 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('Another')).toBe(true)
   })
 
+  it('promotes simple inline `key::value` blocks to roam:<key> string properties', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {string: 'URL::https://example.com/foo', uid: 'b1'},
+        {string: 'author:: [[@stvad:matrix.org]]', uid: 'b2'},
+        {string: 'plain bullet, no attr', uid: 'b3'},
+        // Multi-line: not a simple attr — pass through.
+        {string: 'URL::https://example.com\nfollowed by extra notes', uid: 'b4'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
+    expect(byUid('b1')?.properties['roam:URL']?.value).toBe('https://example.com/foo')
+    expect(byUid('b2')?.properties['roam:author']?.value).toBe('[[@stvad:matrix.org]]')
+    expect(byUid('b3')?.properties['roam:URL']).toBeUndefined()
+    expect(byUid('b4')?.properties['roam:URL']).toBeUndefined()
+    // Content preserved verbatim.
+    expect(byUid('b1')?.content).toBe('URL::https://example.com/foo')
+  })
+
   it('promotes Roam attributes (props/:block/props) to namespaced properties', () => {
     // Cast through RoamExport — `:readwise-highlight-id` is a free-form
     // Roam attribute key not declared on the typed RoamBlock interface.
