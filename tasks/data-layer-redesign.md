@@ -10,7 +10,8 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - v3: regular `tx_context` table; bounded tx-read primitives; honest Phase 1 break; jittered order_key + `id` tiebreak; `Mutator.scope`; `tx.afterCommit`; upload triggers preserved.
 > - v4: `parseReferences` is a **follow-up** processor (not same-tx); `tx.aliasLookup` dropped; no sync-apply wrapper required (trigger gates on `source = 'user'`, `row_events.source` COALESCE-defaults to `'sync'`); separate INSERT/UPDATE/DELETE triggers; `tx.update` options typed with `skipMetadata`; `tx.setProperty`/`tx.getProperty` to keep codecs at the boundary; `PropertySchema.codec` is a real bidirectional `Codec<T>`.
 > - v4.1: `PropertySchema` extended with `kind`, optional `label` / `Editor` / `Renderer`; §5.6.1 documents property panel rendering from registry + graceful degradation for unregistered schemas.
-> - v4.2 (this): cleaned up stale phase text contradicting the v4 follow-up decision (Phase 1 no longer instructs implementers to add a sync-apply wrapper or to run parseReferences inside `repo.tx`; Phase 3 says parseReferences becomes a follow-up facet contribution, not same-tx with prefetch); added `block.set` / `block.setContent` / `block.delete` as single-block sugar over the corresponding mutators (resolves the inconsistency between "no mutating methods on Block" and the Phase 1 migration that used `block.set`/`block.update`); built-in primitive codecs (`string`/`number`/`boolean`/`date`) now validate on decode (was unsafe identity); added `codecs.optional(inner)` for `T | undefined` properties; renamed identity to `unsafeIdentity` and reserved it for kernel-internal use.
+> - v4.2: cleaned up stale phase text contradicting the v4 follow-up decision; added `block.set` / `block.setContent` / `block.delete` sugar; built-in primitive codecs validate on decode; added `codecs.optional(inner)`; renamed identity to `unsafeIdentity`.
+> - v4.3 (this): Phase 1 explicitly consolidates Postgres migrations — the seven existing files under `supabase/migrations/` are deleted and replaced by a single `<timestamp>_initial_schema.sql` that creates the full target schema directly. We're in alpha; nothing to migrate from. This makes the schema source-of-truth a single readable file rather than a 7-step evolution.
 
 ---
 
@@ -979,7 +980,8 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - New SQL DDL: `blocks` (with `parent_id + order_key`), `tx_context` (one-row), `row_events`, `command_events`. Drop existing tables.
 - Triggers: separate INSERT/UPDATE/DELETE triggers on `blocks` writing `row_events` rows (`source` column populated via `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` so sync-applied writes are tagged correctly without any wrapper); separate INSERT/UPDATE/DELETE upload-routing triggers gating on `(SELECT source FROM tx_context WHERE id = 1) = 'user'`.
 - **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE in the row_events trigger and the equality test in the upload-routing trigger both handle that natively. Don't try to hook PowerSync's CRUD-apply path.
-- Postgres mirror schema. PowerSync sync-config rewrite.
+- **Postgres migration consolidation.** The seven existing migrations under `supabase/migrations/` (from `20260421130000_create_blocks.sql` through `20260428170207_drop_workspace_root_block_seed.sql`) describe an evolution we no longer need to preserve. Delete all of them and ship a single new migration `<timestamp>_initial_schema.sql` that creates the full target schema directly: `blocks` (with `parent_id + order_key`), `tx_context`, `row_events`, `command_events`, all indexes, all triggers (separate INSERT/UPDATE/DELETE for both row_events and upload routing), and any RPCs the app still needs after the redesign. Treat this as the new "ground zero" — no migration steps, just the canonical end state. Existing Postgres data is dropped on upgrade per the alpha rule.
+- PowerSync sync-config rewrite to match the new `blocks` shape and to declare `tx_context`, `row_events`, `command_events` as local-only (not synced from server).
 - New `repo.tx(fn, opts)` on `db.writeTransaction`. Async `tx.get`. `tx.peek`, `tx.create`, `tx.update`, `tx.delete`, `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
 - `BlockData` type updated: no `childIds` field.
 - `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
@@ -1000,8 +1002,9 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - Multi-block ops wrap one `writeTransaction`. Crash mid-tx leaves no partial state.
 - Sibling concurrent inserts both persist; ordering is deterministic post-sync (via `(order_key, id)` tiebreak).
 - UI-state writes set `source='local-ephemeral'` and don't enter the upload queue.
-- Sync-applied writes set `source='sync'` and don't loop through the upload trigger.
+- Sync-applied writes leave `source=NULL`; row_events COALESCE-tags them as `'sync'`; upload trigger doesn't loop them back.
 - `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
+- `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`); the seven legacy migrations are deleted; a fresh `supabase db reset` produces the target schema directly.
 
 ### Phase 2 — Sync `Block` + Handles + React migration
 
