@@ -22,11 +22,11 @@ import {
 
 export function AppRuntimeProvider({
   children,
-  rootBlock,
+  landingBlock,
   safeMode,
 }: {
   children: ReactNode
-  rootBlock: Block
+  landingBlock: Block
   safeMode: boolean
 }) {
   const repo = useRepo()
@@ -34,18 +34,18 @@ export function AppRuntimeProvider({
 
   // One store per provider instance — survives runtime re-resolutions
   // (so the renderer can show errors from the most recent load) but
-  // re-creates if the workspace's rootBlock changes.
+  // re-creates if the landing block changes (e.g. workspace switch).
   const errorStore = useMemo(
     () => new ExtensionLoadErrorStore(),
-    [rootBlock.id],
+    [landingBlock.id],
   )
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
     repo,
-    rootBlock,
+    landingBlock,
     safeMode,
     generation,
-  }), [generation, repo, rootBlock, safeMode])
+  }), [generation, repo, landingBlock, safeMode])
 
   const baseExtensions: AppExtension[] = useMemo(() => [
     defaultRenderersExtension,
@@ -83,7 +83,7 @@ export function AppRuntimeProvider({
     errorStore.reset()
 
     const workspaceId =
-      rootBlock.dataSync()?.workspaceId ?? repo.activeWorkspaceId
+      landingBlock.dataSync()?.workspaceId ?? repo.activeWorkspaceId
     if (!workspaceId) {
       // Should not happen — getInitialBlock sets activeWorkspaceId
       // before any render. If it does, there's nothing to load.
@@ -116,11 +116,11 @@ export function AppRuntimeProvider({
     return () => {
       cancelled = true
     }
-  }, [baseExtensions, errorStore, repo, rootBlock, runtimeContext, safeMode])
+  }, [baseExtensions, errorStore, repo, landingBlock, runtimeContext, safeMode])
 
   useAgentRuntimeBridge({
     repo,
-    rootBlock,
+    landingBlock,
     runtime,
     safeMode,
   })

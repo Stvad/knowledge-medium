@@ -96,7 +96,7 @@ describe('getApiSurface', () => {
 })
 
 describe('describeRuntime', () => {
-  const fakeRootBlock = {id: 'root-x'} as unknown as Block
+  const fakeLandingBlock = {id: 'landing-x'} as unknown as Block
   const fakeRepo = {currentUser: {id: 'u-1', name: 'Test'}} as unknown as Repo
 
   const makeAction = (id: string, hasBinding: boolean): ActionConfig => ({
@@ -107,14 +107,14 @@ describe('describeRuntime', () => {
     ...(hasBinding ? {defaultBinding: {keys: 'mod+x'}} : {}),
   })
 
-  it('produces a payload with rootBlockId, currentUser, safeMode, actions, renderers, facets, apiSurface', async () => {
+  it('produces a payload with landingBlockId, currentUser, safeMode, actions, renderers, facets, apiSurface', async () => {
     const facet = defineFacet({id: 'desc.full'})
     const runtime = await resolveFacetRuntime([
       facet.of('contribution', {source: 'src-1'}),
     ])
 
     const description = await describeRuntime({
-      rootBlock: fakeRootBlock,
+      landingBlock: fakeLandingBlock,
       repo: fakeRepo,
       runtime,
       safeMode: false,
@@ -125,7 +125,7 @@ describe('describeRuntime', () => {
       renderers: {default: () => null, custom: () => null},
     })
 
-    expect(description.rootBlockId).toBe('root-x')
+    expect(description.landingBlockId).toBe('landing-x')
     expect(description.currentUser).toEqual({id: 'u-1', name: 'Test'})
     expect(description.safeMode).toBe(false)
 
@@ -146,7 +146,7 @@ describe('describeRuntime', () => {
   it('reports safeMode=true when set', async () => {
     const runtime = await resolveFacetRuntime([])
     const description = await describeRuntime({
-      rootBlock: fakeRootBlock,
+      landingBlock: fakeLandingBlock,
       repo: fakeRepo,
       runtime,
       safeMode: true,

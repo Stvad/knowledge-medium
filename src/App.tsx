@@ -1,7 +1,7 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
 import { use, useEffect } from 'react'
-import { getRootBlock, Block } from '@/data/block.ts'
+import { Block } from '@/data/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useHash, useSearchParam } from 'react-use'
 import { Repo } from '@/data/repo'
@@ -186,10 +186,9 @@ const App = () => {
   const safeMode = Boolean(useSearchParam('safeMode'))
 
   const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(hash)
-  const {workspaceId: activeWorkspaceId, block: handle} = use(
+  const {workspaceId: activeWorkspaceId, block: landingBlock} = use(
     getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, hasRemoteSyncConfig),
   )
-  const rootBlock = use(getRootBlock(repo.find(handle.id)))
 
   // Reactive role tracking. The imperative setReadOnly inside
   // resolveWorkspace handles the *initial* render (so the first paint
@@ -204,9 +203,9 @@ const App = () => {
   }, [activeRole, repo])
 
   return (
-    <BlockContextProvider initialValue={{rootBlockId: rootBlock.id, topLevel: true, safeMode}}>
-      <AppRuntimeProvider rootBlock={rootBlock} safeMode={safeMode}>
-        <BlockComponent blockId={handle.id}/>
+    <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
+      <AppRuntimeProvider landingBlock={landingBlock} safeMode={safeMode}>
+        <BlockComponent blockId={landingBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>
   )

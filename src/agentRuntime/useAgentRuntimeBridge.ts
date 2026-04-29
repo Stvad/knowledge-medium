@@ -23,7 +23,7 @@ interface AgentRuntimeCommand {
 interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
-  rootBlock: Block
+  landingBlock: Block
   runtime: FacetRuntime
   safeMode: boolean
   sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
@@ -59,7 +59,7 @@ interface UpdateBlockInput {
 
 interface UseAgentRuntimeBridgeOptions {
   repo: Repo
-  rootBlock: Block
+  landingBlock: Block
   runtime: FacetRuntime
   safeMode: boolean
 }
@@ -312,7 +312,7 @@ const executeArbitraryCode = async (
 const {
   repo,
   db,
-  rootBlock,
+  landingBlock,
   runtime,
   safeMode,
   sql,
@@ -442,14 +442,14 @@ const postJson = async (
 
 export function useAgentRuntimeBridge({
   repo,
-  rootBlock,
+  landingBlock,
   runtime,
   safeMode,
 }: UseAgentRuntimeBridgeOptions) {
   const clientId = useMemo(() => crypto.randomUUID(), [])
   const latestContext = useRef<UseAgentRuntimeBridgeOptions>({
     repo,
-    rootBlock,
+    landingBlock,
     runtime,
     safeMode,
   })
@@ -457,11 +457,11 @@ export function useAgentRuntimeBridge({
   useEffect(() => {
     latestContext.current = {
       repo,
-      rootBlock,
+      landingBlock,
       runtime,
       safeMode,
     }
-  }, [repo, rootBlock, runtime, safeMode])
+  }, [repo, landingBlock, runtime, safeMode])
 
   useEffect(() => {
     const abortController = new AbortController()
@@ -488,7 +488,7 @@ export function useAgentRuntimeBridge({
     const context = (): AgentRuntimeContext => {
       const {
         repo: currentRepo,
-        rootBlock: currentRootBlock,
+        landingBlock: currentLandingBlock,
         runtime: currentRuntime,
         safeMode: currentSafeMode,
       } = latestContext.current
@@ -496,7 +496,7 @@ export function useAgentRuntimeBridge({
       return {
         repo: currentRepo,
         db: currentRepo.db,
-        rootBlock: currentRootBlock,
+        landingBlock: currentLandingBlock,
         runtime: currentRuntime,
         safeMode: currentSafeMode,
         sql: (sql, params, mode) => runSql(currentRepo, sql, params, mode),
@@ -506,7 +506,7 @@ export function useAgentRuntimeBridge({
           return block.data()
         },
         getSubtree: (rootId, includeRoot) =>
-          currentRepo.getSubtreeBlockData(rootId ?? currentRootBlock.id, {includeRoot}),
+          currentRepo.getSubtreeBlockData(rootId ?? currentLandingBlock.id, {includeRoot}),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
         actions: readRuntimeActions(currentRuntime),
@@ -522,12 +522,12 @@ export function useAgentRuntimeBridge({
     const register = () => {
       const {
         repo: currentRepo,
-        rootBlock: currentRootBlock,
+        landingBlock: currentLandingBlock,
         safeMode: currentSafeMode,
       } = latestContext.current
 
       return postJson(`${baseUrl}/runtime/clients/${clientId}`, {
-        rootBlockId: currentRootBlock.id,
+        landingBlockId: currentLandingBlock.id,
         currentUser: currentRepo.currentUser,
         safeMode: currentSafeMode,
         href: window.location.href,
