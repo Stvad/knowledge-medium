@@ -1,0 +1,45 @@
+import type { Schema } from './schema'
+import type { BlockData } from './blockData'
+
+/** A dependency a query declares while resolving. Drives invalidation
+ *  matching (§9.2). Built-in queries declare these from their `resolve`
+ *  bodies (e.g. `parent-edge` for tree handles, `row` for everything
+ *  visited). Plugin queries do the same. */
+export type Dependency =
+  | { kind: 'row'; id: string }
+  | { kind: 'parent-edge'; parentId: string }
+  | { kind: 'workspace'; workspaceId: string }
+  | { kind: 'table'; table: string }
+
+/** Resolver context. `db` is the raw PowerSync handle for committed-state
+ *  reads; writes through `db` are unsupported (use `repo.tx` / `ctx.tx`).
+ *  The actual `PowerSyncDatabase` type is import-only — kept loose here so
+ *  the data-layer api module isn't bound to PowerSync's type surface. */
+export interface QueryCtx {
+  /** Raw SQL reads against committed state. Treat as opaque from the
+   *  api module's perspective; concrete callers narrow to
+   *  `PowerSyncDatabase` at the resolver definition site. */
+  db: unknown
+  repo: unknown
+  hydrateBlocks(rows: ReadonlyArray<Record<string, unknown>>): BlockData[]
+  /** Declare a dependency; engine uses these to invalidate this handle. */
+  depend(dep: Dependency): void
+}
+
+export interface Query<Args, Result> {
+  readonly name: string
+  readonly argsSchema: Schema<Args>
+  readonly resultSchema: Schema<Result>
+  readonly resolve: (args: Args, ctx: QueryCtx) => Promise<Result>
+  /** Coarse pre-filter for the invalidation engine. Optional; without it
+   *  the engine subscribes to all `blocks` / `row_events` changes for
+   *  this handle. Dynamic deps from `resolve` always take precedence for
+   *  precision. v4.28: only `tables` is supported. */
+  readonly coarseScope?: { tables?: string[] }
+}
+
+export interface QueryRegistry { /* augmented per plugin */ }
+
+export const defineQuery = <Args, Result>(
+  query: Query<Args, Result>,
+): Query<Args, Result> => query
