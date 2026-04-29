@@ -57,15 +57,15 @@ streams:
       SELECT
         blocks.id,
         blocks.workspace_id,
+        blocks.parent_id,
+        blocks.order_key,
         blocks.content,
         blocks.properties_json,
-        blocks.child_ids_json,
-        blocks.parent_id,
-        blocks.create_time,
-        blocks.update_time,
-        blocks.created_by_user_id,
-        blocks.updated_by_user_id,
         blocks.references_json,
+        blocks.created_at,
+        blocks.updated_at,
+        blocks.created_by,
+        blocks.updated_by,
         blocks.deleted
       FROM public.blocks
       JOIN public.workspace_members

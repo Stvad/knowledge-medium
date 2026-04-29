@@ -1,0 +1,359 @@
+// @vitest-environment node
+/**
+ * Trigger-firing integration tests for the v2 client schema.
+ *
+ * Uses `node:sqlite` (built into Node ≥22) — same SQLite C library as
+ * wa-sqlite, so trigger semantics are identical to what runs in the
+ * browser via PowerSync. Sync API keeps the tests legible. No extra
+ * dependency added.
+ *
+ * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
+ *   - row_events triggers fire for INSERT / UPDATE / DELETE
+ *   - source COALESCE: NULL → 'sync'; 'user' / 'local-ephemeral' pass through
+ *   - tx_id belt-and-suspenders: NULL when source is NULL, even with a
+ *     stale tx_id left in tx_context
+ *   - soft-delete UPDATE emits kind='soft-delete'
+ *   - upload-routing triggers fire only on source = 'user'
+ *   - workspace-invariant triggers reject cross-workspace + dangling
+ *     parents on local writes; bypass cleanly on sync writes
+ *   - all 7 trigger names exist after running CLIENT_SCHEMA_STATEMENTS
+ *
+ * What this does NOT cover (deferred to later stages):
+ *   - PowerSync's actual outgoing-queue behavior — we only check that the
+ *     trigger writes a row to ps_crud, not that it ever reaches the server
+ *   - Cycle prevention — engine-side, not trigger-side
+ */
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
+import {
+  BLOCK_STORAGE_COLUMNS,
+  CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
+  CREATE_BLOCKS_TABLE_SQL,
+  CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
+} from '@/data/blockSchema'
+import {
+  CLIENT_SCHEMA_STATEMENTS,
+  CLIENT_SCHEMA_TRIGGER_NAMES,
+} from './clientSchema'
+
+interface TestDb {
+  db: DatabaseSync
+  setTxContext: (ctx: { txId?: string | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
+  clearTxContext: () => void
+  insertBlock: (overrides?: Partial<BlockInsert>) => void
+  updateBlock: (id: string, set: Record<string, unknown>) => void
+  deleteBlock: (id: string) => void
+  rowEvents: () => Array<RowEventRow>
+  psCrud: () => Array<{ id: number; data: string }>
+  rowEventCount: () => number
+}
+
+interface RowEventRow {
+  id: number
+  tx_id: string | null
+  block_id: string
+  kind: string
+  before_json: string | null
+  after_json: string | null
+  source: string
+  created_at: number
+}
+
+interface BlockInsert {
+  id: string
+  workspace_id: string
+  parent_id: string | null
+  order_key: string
+  content: string
+  properties_json: string
+  references_json: string
+  created_at: number
+  updated_at: number
+  created_by: string
+  updated_by: string
+  deleted: 0 | 1
+}
+
+const defaultBlock: BlockInsert = {
+  id: 'b1',
+  workspace_id: 'ws1',
+  parent_id: null,
+  order_key: 'a0',
+  content: '',
+  properties_json: '{}',
+  references_json: '[]',
+  created_at: 1700000000000,
+  updated_at: 1700000000000,
+  created_by: 'user-1',
+  updated_by: 'user-1',
+  deleted: 0,
+}
+
+const setupDb = (): TestDb => {
+  const db = new DatabaseSync(':memory:')
+
+  // PowerSync's outgoing queue table (the trigger writes into this).
+  // We approximate it; PowerSync's real schema has more columns, but the
+  // trigger only INSERTs `data`.
+  db.exec(`
+    CREATE TABLE ps_crud (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      data TEXT NOT NULL
+    )
+  `)
+
+  // The blocks table (built from the same column list as production).
+  db.exec(CREATE_BLOCKS_TABLE_SQL)
+  db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+  db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  db.exec(CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL)
+
+  for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
+    db.exec(stmt)
+  }
+
+  const columnNames = BLOCK_STORAGE_COLUMNS.map(c => c.name)
+  const insertStmt = db.prepare(
+    `INSERT INTO blocks (${columnNames.join(',')}) VALUES (${columnNames.map(() => '?').join(',')})`,
+  )
+
+  return {
+    db,
+    setTxContext: ({txId = null, userId = null, scope = null, source = null}) => {
+      db.exec(
+        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)} WHERE id = 1`,
+      )
+    },
+    clearTxContext: () => {
+      db.exec('UPDATE tx_context SET tx_id = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1')
+    },
+    insertBlock: (overrides = {}) => {
+      const row = {...defaultBlock, ...overrides}
+      insertStmt.run(...columnNames.map(c => (row as Record<string, unknown>)[c] as string | number | null))
+    },
+    updateBlock: (id, set) => {
+      const cols = Object.keys(set)
+      const sql = `UPDATE blocks SET ${cols.map(c => `${c} = ?`).join(', ')} WHERE id = ?`
+      db.prepare(sql).run(...cols.map(c => set[c] as string | number | null), id)
+    },
+    deleteBlock: (id) => {
+      db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
+    },
+    rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
+    psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string }[],
+    rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
+  }
+}
+
+const sqlLit = (v: string | null) => (v === null ? 'NULL' : `'${String(v).replace(/'/g, "''")}'`)
+
+let h: TestDb
+beforeEach(() => { h = setupDb() })
+afterEach(() => { h.db.close() })
+
+describe('client schema bootstrap', () => {
+  it('creates exactly seven triggers on `blocks`', () => {
+    const triggers = (h.db
+      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name")
+      .all() as Array<{name: string}>)
+      .map(r => r.name)
+    expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
+    expect(triggers).toHaveLength(7)
+  })
+
+  it('seeds tx_context with one row that starts NULL', () => {
+    const ctx = h.db.prepare('SELECT * FROM tx_context').get() as Record<string, unknown>
+    expect(ctx).toEqual({id: 1, tx_id: null, user_id: null, scope: null, source: null})
+  })
+
+  it('CLIENT_SCHEMA_STATEMENTS is idempotent', () => {
+    for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
+      expect(() => h.db.exec(stmt)).not.toThrow()
+    }
+  })
+})
+
+describe('row_events trigger — INSERT', () => {
+  it("tags source='user' and writes tx_id when local user tx is open", () => {
+    h.setTxContext({txId: 'tx-A', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'b1'})
+    h.clearTxContext()
+    const events = h.rowEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({block_id: 'b1', kind: 'create', source: 'user', tx_id: 'tx-A'})
+    expect(events[0].before_json).toBeNull()
+    expect(events[0].after_json).toContain('"id":"b1"')
+  })
+
+  it("tags source='local-ephemeral' for UI-state writes", () => {
+    h.setTxContext({txId: 'tx-B', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
+    h.insertBlock({id: 'b2'})
+    h.clearTxContext()
+    expect(h.rowEvents()[0]).toMatchObject({source: 'local-ephemeral', tx_id: 'tx-B'})
+  })
+
+  it("COALESCEs NULL source to 'sync' and ZEROES tx_id (sync apply)", () => {
+    // tx_context stays at its post-clear state: source IS NULL
+    h.insertBlock({id: 'b3'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
+  })
+
+  it("belt-and-suspenders: stale tx_id with NULL source still emits tx_id=NULL", () => {
+    // Simulate the failure mode: the engine forgot to clear tx_id but did clear source.
+    h.db.exec("UPDATE tx_context SET tx_id = 'stale', source = NULL WHERE id = 1")
+    h.insertBlock({id: 'b4'})
+    expect(h.rowEvents()[0]).toMatchObject({source: 'sync', tx_id: null})
+  })
+})
+
+describe('row_events trigger — UPDATE', () => {
+  beforeEach(() => {
+    // Seed an existing row via sync so its insert event is tagged 'sync'.
+    h.insertBlock({id: 'b1'})
+  })
+
+  it("emits kind='update' for non-deleted-flip changes", () => {
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'edited', updated_at: 1700000999000})
+    h.clearTxContext()
+    const last = h.rowEvents().at(-1)!
+    expect(last).toMatchObject({block_id: 'b1', kind: 'update', source: 'user', tx_id: 'tx-1'})
+    expect(last.before_json).toContain('"content":""')
+    expect(last.after_json).toContain('"content":"edited"')
+  })
+
+  it("emits kind='soft-delete' for deleted 0→1 transitions", () => {
+    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {deleted: 1})
+    h.clearTxContext()
+    const last = h.rowEvents().at(-1)!
+    expect(last.kind).toBe('soft-delete')
+    expect(last.before_json).toContain('"deleted":false')
+    expect(last.after_json).toContain('"deleted":true')
+  })
+
+  it("emits kind='update' (not 'soft-delete') for already-deleted rows touched again", () => {
+    // Land the soft-delete first.
+    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {deleted: 1})
+    // Now touch the deleted row again — content edit on tombstone, kind stays 'update'.
+    h.updateBlock('b1', {content: 'posthumous'})
+    h.clearTxContext()
+    const last = h.rowEvents().at(-1)!
+    expect(last.kind).toBe('update')
+  })
+})
+
+describe('row_events trigger — DELETE', () => {
+  it("emits kind='delete' on hard delete with before snapshot only", () => {
+    h.insertBlock({id: 'b1'})
+    h.deleteBlock('b1')
+    const events = h.rowEvents()
+    const del = events.at(-1)!
+    expect(del.kind).toBe('delete')
+    expect(del.before_json).toContain('"id":"b1"')
+    expect(del.after_json).toBeNull()
+  })
+})
+
+describe('upload-routing triggers', () => {
+  it("forwards INSERT to ps_crud when source='user'", () => {
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'b1'})
+    h.clearTxContext()
+    expect(h.psCrud()).toHaveLength(1)
+    const env = JSON.parse(h.psCrud()[0].data)
+    expect(env).toMatchObject({op: 'PUT', type: 'blocks', id: 'b1'})
+  })
+
+  it("forwards UPDATE to ps_crud when source='user'", () => {
+    h.insertBlock({id: 'b1'})  // sync insert
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'x'})
+    h.clearTxContext()
+    expect(h.psCrud()).toHaveLength(1)
+    expect(JSON.parse(h.psCrud()[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
+  })
+
+  it("does NOT forward when source='local-ephemeral' (UI-state)", () => {
+    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
+    h.insertBlock({id: 'b2'})
+    h.clearTxContext()
+    expect(h.psCrud()).toHaveLength(0)
+  })
+
+  it("does NOT forward sync-applied writes (source NULL → 'sync' is not 'user')", () => {
+    h.insertBlock({id: 'b1'})  // source is NULL
+    expect(h.psCrud()).toHaveLength(0)
+  })
+
+  it('v1 has no DELETE upload-routing trigger', () => {
+    h.insertBlock({id: 'b1'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.deleteBlock('b1')
+    h.clearTxContext()
+    // The DELETE row_event still fires; ps_crud stays empty.
+    expect(h.psCrud()).toHaveLength(0)
+  })
+})
+
+describe('workspace-invariant triggers', () => {
+  it('rejects local INSERT with dangling parent_id', () => {
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    expect(() => h.insertBlock({id: 'b1', parent_id: 'does-not-exist'})).toThrow(
+      /parent must exist and share workspace_id/,
+    )
+  })
+
+  it('rejects local INSERT with cross-workspace parent', () => {
+    // Sync-seed a parent in ws1.
+    h.insertBlock({id: 'parent', workspace_id: 'ws1'})
+    // Local insert tries to attach a ws2 child to a ws1 parent.
+    h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'block-default', source: 'user'})
+    expect(() =>
+      h.insertBlock({id: 'child', workspace_id: 'ws2', parent_id: 'parent'}),
+    ).toThrow(/parent must exist and share workspace_id/)
+  })
+
+  it('accepts local INSERT under a soft-deleted parent (storage-layer alignment)', () => {
+    // Seed parent + soft-delete it (via local user write so triggers fire).
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'parent', workspace_id: 'ws1'})
+    h.updateBlock('parent', {deleted: 1})
+    // Fresh child under the tombstone — the local trigger does NOT filter
+    // on deleted=0 (v4.24 alignment with server FK). Soft-deleted-parent
+    // rejection is a kernel-mutator UX rule, not a storage invariant.
+    expect(() =>
+      h.insertBlock({id: 'child', workspace_id: 'ws1', parent_id: 'parent'}),
+    ).not.toThrow()
+    h.clearTxContext()
+  })
+
+  it('rejects local UPDATE that re-parents to a dangling id', () => {
+    h.insertBlock({id: 'a', workspace_id: 'ws1'})
+    h.insertBlock({id: 'b', workspace_id: 'ws1'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    expect(() =>
+      h.updateBlock('b', {parent_id: 'ghost'}),
+    ).toThrow(/parent must exist and share workspace_id/)
+  })
+
+  it("DOES NOT fire on sync-applied writes (source IS NULL gate)", () => {
+    // Sync writes leave source = NULL. The trigger gate `source IS NOT NULL`
+    // means a sync apply with a momentarily-dangling parent (e.g. parent
+    // hasn't been hydrated yet under DEFERRABLE FK, server-side validated)
+    // does not abort. Server FK is the canonical guarantee for sync; the
+    // local trigger is for repo.tx writes only.
+    expect(() => h.insertBlock({id: 'orphan', parent_id: 'not-yet-synced'})).not.toThrow()
+  })
+
+  it("DOES NOT fire on UI-state writes either, since UPDATE OF parent_id excludes other-column UI updates", () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
+    // Updating content (not parent_id/workspace_id) should not invoke the workspace-invariant UPDATE trigger.
+    expect(() => h.updateBlock('b1', {content: 'x'})).not.toThrow()
+    h.clearTxContext()
+  })
+})

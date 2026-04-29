@@ -1,21 +1,25 @@
 import type { PendingStatementParameter, RawTableType } from '@powersync/web'
-import type { BlockData, BlockProperties, BlockReference } from '@/types'
+import type { BlockData, BlockReference } from '@/data/api'
 
+/** Storage shape — snake_case columns matching the Postgres schema and the
+ *  local SQLite table. Domain shape (camelCase) lives on `BlockData` in
+ *  `@/data/api`; `parseBlockRow` / `blockToRowParams` are the only places
+ *  either shape leaks into the other. See data-layer-redesign §4.1.1. */
 export interface BlockRow {
   id: string
   workspace_id: string
+  parent_id: string | null
+  order_key: string
   content: string
   properties_json: string
-  child_ids_json: string
-  parent_id: string | null
-  create_time: number
-  update_time: number
-  created_by_user_id: string
-  updated_by_user_id: string
   references_json: string
-  // SQLite has no native boolean — booleans are stored as INTEGER 0/1 and the
-  // wa-sqlite driver hands them back as JS numbers verbatim. Narrow to 0 | 1
-  // so consumers know they're working with the raw integer encoding.
+  created_at: number
+  updated_at: number
+  created_by: string
+  updated_by: string
+  // SQLite has no native boolean — stored as INTEGER 0/1 and the wa-sqlite
+  // driver hands them back as JS numbers verbatim. Postgres column is
+  // boolean; PowerSync hydrates the local row as 0/1.
   deleted: 0 | 1
 }
 
@@ -26,18 +30,22 @@ type BlockStorageColumn = {
   readonly definition: string
 }
 
+/** Local SQLite column definitions. The PowerSync sync rule projects the
+ *  same column names against Postgres (`scripts/gen-sync-config.ts` reads
+ *  this array directly), so client and server stay structurally aligned —
+ *  see feedback_powersync_sync_config_with_schema. */
 export const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
+  {name: 'parent_id', definition: 'parent_id TEXT'},
+  {name: 'order_key', definition: 'order_key TEXT NOT NULL'},
   {name: 'content', definition: "content TEXT NOT NULL DEFAULT ''"},
   {name: 'properties_json', definition: "properties_json TEXT NOT NULL DEFAULT '{}'"},
-  {name: 'child_ids_json', definition: "child_ids_json TEXT NOT NULL DEFAULT '[]'"},
-  {name: 'parent_id', definition: 'parent_id TEXT'},
-  {name: 'create_time', definition: 'create_time INTEGER NOT NULL'},
-  {name: 'update_time', definition: 'update_time INTEGER NOT NULL'},
-  {name: 'created_by_user_id', definition: 'created_by_user_id TEXT NOT NULL'},
-  {name: 'updated_by_user_id', definition: 'updated_by_user_id TEXT NOT NULL'},
   {name: 'references_json', definition: "references_json TEXT NOT NULL DEFAULT '[]'"},
+  {name: 'created_at', definition: 'created_at INTEGER NOT NULL'},
+  {name: 'updated_at', definition: 'updated_at INTEGER NOT NULL'},
+  {name: 'created_by', definition: 'created_by TEXT NOT NULL'},
+  {name: 'updated_by', definition: 'updated_by TEXT NOT NULL'},
   {name: 'deleted', definition: 'deleted INTEGER NOT NULL DEFAULT 0'},
 ] as const satisfies readonly BlockStorageColumn[]
 
@@ -65,9 +73,26 @@ ${formatSqlList(BLOCK_STORAGE_COLUMNS.map(column => column.definition), 6)}
   )
 `
 
-export const CREATE_BLOCKS_PARENT_ID_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_blocks_parent_id
-  ON blocks (parent_id)
+/** Sibling iteration index. Matches the server-side
+ *  `idx_blocks_parent_order` in `supabase/migrations/<...>_initial_schema_v2.sql`.
+ *  `(order_key, id)` tiebreak handles fractional-indexing-jittered key
+ *  collisions for deterministic post-sync ordering. */
+export const CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_parent_order
+  ON blocks (parent_id, order_key, id)
+  WHERE deleted = 0
+`
+
+export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_active
+  ON blocks (workspace_id)
+  WHERE deleted = 0
+`
+
+export const CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references
+  ON blocks (workspace_id)
+  WHERE deleted = 0 AND references_json != '[]'
 `
 
 export const UPSERT_BLOCK_SQL = `
@@ -110,15 +135,15 @@ type BlockSnapshotJsonField = {
 const BLOCK_SNAPSHOT_JSON_FIELDS = [
   {key: 'id', sqlExpression: rowRef => `${rowRef}.id`},
   {key: 'workspaceId', sqlExpression: rowRef => `${rowRef}.workspace_id`},
+  {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
+  {key: 'orderKey', sqlExpression: rowRef => `${rowRef}.order_key`},
   {key: 'content', sqlExpression: rowRef => `${rowRef}.content`},
   {key: 'properties', sqlExpression: rowRef => `json(${rowRef}.properties_json)`},
-  {key: 'childIds', sqlExpression: rowRef => `json(${rowRef}.child_ids_json)`},
-  {key: 'parentId', sqlExpression: rowRef => `${rowRef}.parent_id`},
-  {key: 'createTime', sqlExpression: rowRef => `${rowRef}.create_time`},
-  {key: 'updateTime', sqlExpression: rowRef => `${rowRef}.update_time`},
-  {key: 'createdByUserId', sqlExpression: rowRef => `${rowRef}.created_by_user_id`},
-  {key: 'updatedByUserId', sqlExpression: rowRef => `${rowRef}.updated_by_user_id`},
   {key: 'references', sqlExpression: rowRef => `json(${rowRef}.references_json)`},
+  {key: 'createdAt', sqlExpression: rowRef => `${rowRef}.created_at`},
+  {key: 'updatedAt', sqlExpression: rowRef => `${rowRef}.updated_at`},
+  {key: 'createdBy', sqlExpression: rowRef => `${rowRef}.created_by`},
+  {key: 'updatedBy', sqlExpression: rowRef => `${rowRef}.updated_by`},
   {key: 'deleted', sqlExpression: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`},
 ] as const satisfies readonly BlockSnapshotJsonField[]
 
@@ -145,44 +170,44 @@ export const parseBlockSnapshotJson = (value: string | null | undefined) =>
 export const parseBlockRow = (row: BlockRow): BlockData => ({
   id: row.id,
   workspaceId: row.workspace_id,
+  parentId: row.parent_id,
+  orderKey: row.order_key,
   content: row.content,
-  properties: safeJsonParse<BlockProperties>(row.properties_json, {}),
-  childIds: safeJsonParse<string[]>(row.child_ids_json, []),
-  parentId: row.parent_id ?? undefined,
-  createTime: row.create_time,
-  updateTime: row.update_time,
-  createdByUserId: row.created_by_user_id,
-  updatedByUserId: row.updated_by_user_id,
+  properties: safeJsonParse<Record<string, unknown>>(row.properties_json, {}),
   references: safeJsonParse<BlockReference[]>(row.references_json, []),
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+  createdBy: row.created_by,
+  updatedBy: row.updated_by,
   deleted: Boolean(row.deleted),
 })
 
 type BlockRowParams = [
   id: string,
   workspaceId: string,
+  parentId: string | null,
+  orderKey: string,
   content: string,
   propertiesJson: string,
-  childIdsJson: string,
-  parentId: string | null,
-  createTime: number,
-  updateTime: number,
-  createdByUserId: string,
-  updatedByUserId: string,
   referencesJson: string,
+  createdAt: number,
+  updatedAt: number,
+  createdBy: string,
+  updatedBy: string,
   deleted: 0 | 1,
 ]
 
 export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.id,
   blockData.workspaceId,
+  blockData.parentId,
+  blockData.orderKey,
   blockData.content,
   JSON.stringify(blockData.properties ?? {}),
-  JSON.stringify(blockData.childIds ?? []),
-  blockData.parentId ?? null,
-  blockData.createTime,
-  blockData.updateTime,
-  blockData.createdByUserId,
-  blockData.updatedByUserId,
   JSON.stringify(blockData.references ?? []),
+  blockData.createdAt,
+  blockData.updatedAt,
+  blockData.createdBy,
+  blockData.updatedBy,
   blockData.deleted ? 1 : 0,
 ]

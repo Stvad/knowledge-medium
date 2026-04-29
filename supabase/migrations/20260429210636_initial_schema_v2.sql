@@ -1,19 +1,36 @@
--- Initial schema: workspaces, members, invitations, blocks.
+-- Consolidated initial schema for the v2 data-layer redesign.
 --
--- Drop-and-recreate is expected on first apply; existing data is disposable.
--- The previous global-graph schema is fully replaced.
+-- This migration is the canonical ground-truth state for a fresh Supabase
+-- project. It supersedes the previous seven migrations (deleted in this
+-- branch); the prior project URL is documented in the PR description as a
+-- historical snapshot. Per the data-layer redesign (§4 / §13.1):
 --
--- Key invariants:
---   - Every block belongs to exactly one workspace; workspace_id is immutable.
---   - Workspace access is mediated by workspace_members (synthetic id PK so the
---     row is sync-friendly via PowerSync raw tables).
---   - RLS predicates that subquery a table go through SECURITY DEFINER helpers
---     to avoid Postgres' infinite_recursion (42P17) on self-referencing rules.
+--   - Server schema is just `blocks` (with `workspaces` /
+--     `workspace_members` / `workspace_invitations` for auth + sync
+--     scoping). NO `tx_context` / `row_events` / `command_events` and NO
+--     upload-routing / row_events triggers — those are client-only and
+--     live in `src/data/internals/clientSchema.ts`.
+--
+--   - `blocks` has a NEW shape: `parent_id + order_key` replaces
+--     `child_ids_json`; `(workspace_id, id)` is UNIQUE so a composite FK
+--     `(workspace_id, parent_id) → blocks (workspace_id, id) DEFERRABLE`
+--     enforces the workspace invariant server-side. Tree queries can rely
+--     on `parent_id` chains staying within one workspace by construction.
+--
+--   - Soft-delete-aware indexes match the redesign's expectation that tree
+--     queries filter `deleted = 0`.
+--
+--   - Server enforces NO cycle prevention (FK / triggers can't structurally
+--     catch cycles); cycle validation is engine-side on `tx.move` (§4.7
+--     Layer 1) plus depth-100 + visited-id CTE guards (§4.7 Layer 2).
+--
+-- workspaces / workspace_members / workspace_invitations / RLS / RPCs are
+-- preserved in their post-migration-#7 final shape.
 
 begin;
 
 -- ============================================================================
--- 0. Teardown
+-- 0. Teardown — clean break; alpha, no data preserved.
 -- ============================================================================
 
 drop publication if exists powersync;
@@ -27,10 +44,13 @@ drop function if exists public.remove_workspace_member(text, text) cascade;
 drop function if exists public.update_workspace_member_role(text, text, text) cascade;
 drop function if exists public.delete_workspace(text) cascade;
 drop function if exists public.create_workspace(text) cascade;
+drop function if exists public.create_workspace(text, text) cascade;
 drop function if exists public.ensure_personal_workspace() cascade;
+drop function if exists public.ensure_personal_workspace(text) cascade;
 drop function if exists public.is_workspace_owner(text, text) cascade;
 drop function if exists public.is_workspace_writer(text, text) cascade;
 drop function if exists public.is_workspace_member(text, text) cascade;
+drop function if exists public.blocks_prevent_workspace_change() cascade;
 
 drop table if exists public.workspace_invitations cascade;
 drop table if exists public.blocks cascade;
@@ -44,7 +64,8 @@ drop table if exists public.workspaces cascade;
 create extension if not exists "pgcrypto";
 
 -- ============================================================================
--- 2. Tables
+-- 2. Workspace tables (preserved verbatim from the original schema's
+--    post-migration-#7 final state).
 -- ============================================================================
 
 create table public.workspaces (
@@ -55,8 +76,6 @@ create table public.workspaces (
   update_time bigint not null
 );
 
--- Synthetic id makes this a single-column-PK table, friendly to PowerSync
--- raw tables. Natural unique key is (workspace_id, user_id).
 create table public.workspace_members (
   id text primary key,
   workspace_id text not null references public.workspaces(id) on delete cascade,
@@ -67,9 +86,6 @@ create table public.workspace_members (
 );
 create index idx_workspace_members_user_id on public.workspace_members(user_id);
 
--- Pending email-keyed invitations. Email is stored lowercase for match.
--- Not synced via PowerSync; the client fetches via Supabase REST + RLS so
--- we don't need to thread the email claim into a sync rule.
 create table public.workspace_invitations (
   id text primary key,
   workspace_id text not null references public.workspaces(id) on delete cascade,
@@ -81,24 +97,58 @@ create table public.workspace_invitations (
 );
 create index idx_workspace_invitations_email on public.workspace_invitations(email);
 
+-- ============================================================================
+-- 3. blocks — NEW v2 shape per data-layer-redesign §4.1.
+--    - `parent_id + order_key` replace `child_ids_json`.
+--    - `(workspace_id, id)` UNIQUE backs the composite FK.
+--    - DEFERRABLE FK lets PowerSync sync apply rows in any in-tx order.
+--    - Soft-delete via `deleted` boolean.
+-- ============================================================================
+
 create table public.blocks (
-  id text primary key,
-  workspace_id text not null references public.workspaces(id) on delete cascade,
-  content text not null default '',
+  id              text primary key,
+  workspace_id    text not null references public.workspaces(id) on delete cascade,
+  parent_id       text,
+  order_key       text not null,
+  content         text not null default '',
   properties_json text not null default '{}',
-  child_ids_json text not null default '[]',
-  parent_id text,
-  create_time bigint not null,
-  update_time bigint not null,
-  created_by_user_id text not null,
-  updated_by_user_id text not null,
-  references_json text not null default '[]'
+  references_json text not null default '[]',
+  created_at      bigint not null,
+  updated_at      bigint not null,
+  created_by      text not null,
+  updated_by      text not null,
+  deleted         boolean not null default false,
+
+  -- Backs the composite FK below. (workspace_id, parent_id) → (workspace_id, id).
+  unique (workspace_id, id),
+
+  -- Workspace invariant: a block's parent (if any) must share its workspace.
+  -- DEFERRABLE so sync can apply a parent and its child in the same
+  -- transaction without ordering. parent_id IS NULL trivially satisfies the FK.
+  -- ON DELETE: workspaces are cascade-deleted, so no per-row cascade needed
+  --            (and we don't want orphan-cascade on individual block deletes —
+  --            soft-delete handles tree state at the application level).
+  foreign key (workspace_id, parent_id)
+    references public.blocks (workspace_id, id)
+    deferrable initially deferred
 );
-create index idx_blocks_parent_id on public.blocks(parent_id);
-create index idx_blocks_workspace_id on public.blocks(workspace_id);
+
+-- Sibling iteration: (parent_id, order_key, id) under deleted = 0.
+-- The (id) tiebreak handles fractional-indexing-jittered key collisions for
+-- deterministic post-sync ordering.
+create index idx_blocks_parent_order on public.blocks (parent_id, order_key, id)
+  where deleted = false;
+
+-- Workspace-wide active-row scans (e.g. findBlocksByType).
+create index idx_blocks_workspace_active on public.blocks (workspace_id)
+  where deleted = false;
+
+-- Backlink scans: only blocks with non-empty references_json.
+create index idx_blocks_workspace_with_references on public.blocks (workspace_id)
+  where deleted = false and references_json != '[]';
 
 -- ============================================================================
--- 3. blocks.workspace_id immutability trigger
+-- 4. workspace_id immutability trigger
 -- ============================================================================
 
 create or replace function public.blocks_prevent_workspace_change()
@@ -119,7 +169,7 @@ create trigger blocks_prevent_workspace_change_trg
   for each row execute function public.blocks_prevent_workspace_change();
 
 -- ============================================================================
--- 4. Predicate helpers (SECURITY DEFINER to avoid RLS recursion).
+-- 5. Predicate helpers (SECURITY DEFINER to avoid RLS recursion).
 -- ============================================================================
 
 create or replace function public.is_workspace_member(p_workspace_id text, p_user_id text)
@@ -168,7 +218,7 @@ grant execute on function public.is_workspace_writer(text, text) to authenticate
 grant execute on function public.is_workspace_owner(text, text) to authenticated;
 
 -- ============================================================================
--- 5. Row-level security
+-- 6. Row-level security
 -- ============================================================================
 
 alter table public.workspaces enable row level security;
@@ -176,8 +226,6 @@ alter table public.workspace_members enable row level security;
 alter table public.workspace_invitations enable row level security;
 alter table public.blocks enable row level security;
 
--- workspaces: read by members; rename by writers; delete by owner.
--- Inserts go through create_workspace / ensure_personal_workspace RPCs.
 create policy workspaces_read on public.workspaces
   for select
   using (public.is_workspace_member(id, auth.uid()::text));
@@ -191,9 +239,6 @@ create policy workspaces_delete on public.workspaces
   for delete
   using (owner_user_id = auth.uid()::text);
 
--- workspace_members: read by co-members. Manage by owner only.
--- Self-leave handled via RPC (so we can guard against last-owner removal);
--- no direct DELETE policy for non-owners.
 create policy workspace_members_read on public.workspace_members
   for select
   using (public.is_workspace_member(workspace_id, auth.uid()::text));
@@ -203,8 +248,6 @@ create policy workspace_members_manage on public.workspace_members
   using (public.is_workspace_owner(workspace_id, auth.uid()::text))
   with check (public.is_workspace_owner(workspace_id, auth.uid()::text));
 
--- workspace_invitations: read by invitee (matched on email), and by workspace owner.
--- Mutations only via RPC.
 create policy workspace_invitations_read_by_invitee on public.workspace_invitations
   for select
   using (
@@ -216,7 +259,6 @@ create policy workspace_invitations_read_by_owner on public.workspace_invitation
   for select
   using (public.is_workspace_owner(workspace_id, auth.uid()::text));
 
--- blocks: read by workspace member; write by workspace writer.
 create policy blocks_read on public.blocks
   for select
   using (public.is_workspace_member(workspace_id, auth.uid()::text));
@@ -233,13 +275,11 @@ grant select on public.workspace_members to authenticated;
 grant select on public.workspace_invitations to authenticated;
 
 -- ============================================================================
--- 6. RPCs
+-- 7. RPCs (post-migration-#7 final shape: jsonb returns, no root-block seed)
 -- ============================================================================
 
--- Create a workspace and add the caller as the sole owner. Single round-trip,
--- atomic on success.
-create or replace function public.create_workspace(p_name text)
-returns public.workspaces
+create function public.create_workspace(p_name text)
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
@@ -247,31 +287,34 @@ as $$
 declare
   v_user_id text := auth.uid()::text;
   v_workspace public.workspaces;
+  v_member public.workspace_members;
   v_now bigint := (extract(epoch from now()) * 1000)::bigint;
   v_name text := coalesce(nullif(trim(p_name), ''), 'Workspace');
+  v_workspace_id text := gen_random_uuid()::text;
 begin
   if v_user_id is null then
     raise exception 'Not authenticated';
   end if;
 
   insert into public.workspaces (id, name, owner_user_id, create_time, update_time)
-  values (gen_random_uuid()::text, v_name, v_user_id, v_now, v_now)
+  values (v_workspace_id, v_name, v_user_id, v_now, v_now)
   returning * into v_workspace;
 
   insert into public.workspace_members (id, workspace_id, user_id, role, create_time)
-  values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now);
+  values (gen_random_uuid()::text, v_workspace.id, v_user_id, 'owner', v_now)
+  returning * into v_member;
 
-  return v_workspace;
+  return jsonb_build_object(
+    'workspace', to_jsonb(v_workspace),
+    'member', to_jsonb(v_member)
+  );
 end $$;
 
 grant execute on function public.create_workspace(text) to authenticated;
 
 
--- Idempotent first-bootstrap RPC. Returns the user's first workspace
--- (in create_time order) if any exist, else creates a fresh one.
--- Replaces the racy client-side "wait for sync, then create" pattern.
-create or replace function public.ensure_personal_workspace()
-returns public.workspaces
+create function public.ensure_personal_workspace()
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
@@ -279,8 +322,10 @@ as $$
 declare
   v_user_id text := auth.uid()::text;
   v_workspace public.workspaces;
+  v_member public.workspace_members;
   v_default_name text;
   v_email text;
+  v_create_result jsonb;
 begin
   if v_user_id is null then
     raise exception 'Not authenticated';
@@ -294,7 +339,16 @@ begin
   limit 1;
 
   if found then
-    return v_workspace;
+    select m.* into v_member
+    from public.workspace_members m
+    where m.workspace_id = v_workspace.id and m.user_id = v_user_id
+    limit 1;
+
+    return jsonb_build_object(
+      'workspace', to_jsonb(v_workspace),
+      'member', to_jsonb(v_member),
+      'inserted', false
+    );
   end if;
 
   v_email := nullif(trim(coalesce(auth.email(), '')), '');
@@ -304,13 +358,14 @@ begin
     v_default_name := 'Personal';
   end if;
 
-  return public.create_workspace(v_default_name);
+  v_create_result := public.create_workspace(v_default_name);
+  return v_create_result || jsonb_build_object('inserted', true);
 end $$;
 
 grant execute on function public.ensure_personal_workspace() to authenticated;
 
 
-create or replace function public.delete_workspace(p_workspace_id text)
+create function public.delete_workspace(p_workspace_id text)
 returns void
 language plpgsql
 security definer
@@ -330,7 +385,7 @@ end $$;
 grant execute on function public.delete_workspace(text) to authenticated;
 
 
-create or replace function public.update_workspace_member_role(
+create function public.update_workspace_member_role(
   p_workspace_id text,
   p_user_id text,
   p_role text
@@ -352,7 +407,6 @@ begin
     raise exception 'Invalid role: %', p_role;
   end if;
 
-  -- No self-demotion: ownership transfer is out of scope for v1.
   if p_user_id = v_caller and p_role <> 'owner' then
     raise exception 'Owner cannot demote themselves';
   end if;
@@ -372,7 +426,7 @@ end $$;
 grant execute on function public.update_workspace_member_role(text, text, text) to authenticated;
 
 
-create or replace function public.remove_workspace_member(
+create function public.remove_workspace_member(
   p_workspace_id text,
   p_user_id text
 )
@@ -389,13 +443,10 @@ begin
 
   v_is_owner := public.is_workspace_owner(p_workspace_id, v_caller);
 
-  -- Either the workspace owner or the target user themselves can remove.
-  -- (Self-leave: punted to a follow-up; users who want out today get removed by owner.)
   if not v_is_owner and p_user_id <> v_caller then
     raise exception 'Only the workspace owner or the target user can remove a member';
   end if;
 
-  -- The owner row cannot be removed; delete the workspace instead.
   if exists (
     select 1 from public.workspace_members
     where workspace_id = p_workspace_id
@@ -412,10 +463,7 @@ end $$;
 grant execute on function public.remove_workspace_member(text, text) to authenticated;
 
 
--- Always creates an invitation row (even if the invitee already exists).
--- The recipient sees it via the workspace_invitations_read_by_invitee policy,
--- and accept_invitation converts it into a workspace_members row.
-create or replace function public.invite_member_by_email(
+create function public.invite_member_by_email(
   p_workspace_id text,
   p_email text,
   p_role text
@@ -463,7 +511,7 @@ end $$;
 grant execute on function public.invite_member_by_email(text, text, text) to authenticated;
 
 
-create or replace function public.accept_invitation(p_invitation_id text)
+create function public.accept_invitation(p_invitation_id text)
 returns public.workspace_members
 language plpgsql
 security definer
@@ -513,7 +561,7 @@ end $$;
 grant execute on function public.accept_invitation(text) to authenticated;
 
 
-create or replace function public.decline_invitation(p_invitation_id text)
+create function public.decline_invitation(p_invitation_id text)
 returns void
 language plpgsql
 security definer
@@ -532,7 +580,6 @@ begin
 
   if not found then return; end if;
 
-  -- The invitee or the workspace owner can decline (delete) the invitation.
   if lower(v_invitation.email) <> v_email
      and not public.is_workspace_owner(v_invitation.workspace_id, v_user_id) then
     raise exception 'Cannot decline an invitation for another user';
@@ -544,12 +591,7 @@ end $$;
 grant execute on function public.decline_invitation(text) to authenticated;
 
 
--- Read-only listing RPCs. SECURITY DEFINER so we can join through auth.users
--- and workspaces without granting direct table access.
-
--- Returns workspace members enriched with their email from auth.users. The
--- caller must already be a member of the workspace.
-create or replace function public.list_workspace_members_with_emails(p_workspace_id text)
+create function public.list_workspace_members_with_emails(p_workspace_id text)
 returns table (
   id text,
   workspace_id text,
@@ -580,13 +622,7 @@ $$;
 grant execute on function public.list_workspace_members_with_emails(text) to authenticated;
 
 
--- Returns pending invitations addressed to the caller's email, with the
--- inviting workspace's name pre-joined so the recipient sees a friendly
--- label instead of a UUID. Filters server-side on auth.email() so an
--- inviter (who can read their own workspace's invitations via the
--- workspace_invitations_read_by_owner policy) does NOT see their own
--- outgoing invites in their personal inbox.
-create or replace function public.list_my_pending_invitations()
+create function public.list_my_pending_invitations()
 returns table (
   id text,
   workspace_id text,
@@ -618,9 +654,8 @@ $$;
 
 grant execute on function public.list_my_pending_invitations() to authenticated;
 
-
 -- ============================================================================
--- 7. PowerSync publication
+-- 8. PowerSync publication
 -- ============================================================================
 
 create publication powersync for table

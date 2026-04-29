@@ -15,7 +15,8 @@
     "test:coverage": "vitest run --coverage",
     "gen:sync-config": "vite-node scripts/gen-sync-config.ts",
     "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
-    "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config",
+    "check:no-service-role": "bash scripts/check-no-service-role.sh",
+    "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config && yarn run check:no-service-role",
     "agent:server": "node scripts/agent-runtime-server.mjs",
     "agent": "node scripts/agent-runtime.mjs"
   },

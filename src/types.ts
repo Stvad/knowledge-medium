@@ -1,8 +1,18 @@
 import { FunctionComponent } from 'react'
 import { Block } from '@/data/block.ts'
 
+// BlockData / BlockReference are the canonical domain shape; their definition
+// lives with the rest of the data-layer API in `@/data/api`. Re-exported here
+// for backwards-compatibility with call sites that still import from `@/types`
+// — the call-site sweep in stage 1.6 of the data-layer redesign will move
+// imports onto `@/data/api` directly and this re-export will drop.
+export type { BlockData, BlockReference } from '@/data/api'
+
 export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined | object | null
 
+// Legacy descriptor-shaped property API. Survives stages 1.2–1.5 alongside the
+// new flat `properties: Record<string, unknown>` storage shape; gets fully
+// retired in stage 1.6 when callers migrate to PropertySchema<T> + tx.setProperty.
 export interface BlockProperty {
     name: string
     type: string
@@ -44,35 +54,6 @@ export interface BlockProperties {
     // 'system:showProperties'?: boolean,
 
     [key: string]: BlockProperty | undefined;
-}
-
-// Outgoing reference. For page wikilinks ([[Some Page]]) `alias` is the
-// human-typed text and `id` is the block resolved from it. For block refs
-// (((uuid))) both `alias` and `id` are the target's UUID — the duplication
-// keeps the row shape uniform so backlinks queries don't need to branch.
-export interface BlockReference {
-    id: string;
-    alias: string;
-}
-
-// Each block is stored as a local PowerSync-backed SQLite record
-export interface BlockData {
-    id: string;
-    workspaceId: string;
-    content: string;
-    properties: BlockProperties;
-    childIds: string[];  // URLs of child block documents
-    parentId?: string;   // URL of parent block document
-    createTime: number;
-    updateTime: number;
-    createdByUserId: string;
-    updatedByUserId: string;
-    references: BlockReference[];  // Required, outgoing references to other blocks
-    // Soft-delete flag. Block.delete() sets this true on the block and all its
-    // descendants; the row stays in storage so undo can restore it. Workspace-
-    // wide queries (e.g. findBlocksByType) MUST filter on this.
-    deleted: boolean;
-    // we are doing a lot of searching of my position within parent, plausibly the items should store it's position after all
 }
 
 export type WorkspaceRole = 'owner' | 'editor' | 'viewer'
