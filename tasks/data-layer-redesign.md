@@ -9,7 +9,8 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - v2: event-log split, schema reset accepted, `writeTransaction`, async `tx.get`, reference processor full semantics, Repo lifecycle, Handle nullable.
 > - v3: regular `tx_context` table; bounded tx-read primitives; honest Phase 1 break; jittered order_key + `id` tiebreak; `Mutator.scope`; `tx.afterCommit`; upload triggers preserved.
 > - v4: `parseReferences` is a **follow-up** processor (not same-tx); `tx.aliasLookup` dropped; no sync-apply wrapper required (trigger gates on `source = 'user'`, `row_events.source` COALESCE-defaults to `'sync'`); separate INSERT/UPDATE/DELETE triggers; `tx.update` options typed with `skipMetadata`; `tx.setProperty`/`tx.getProperty` to keep codecs at the boundary; `PropertySchema.codec` is a real bidirectional `Codec<T>`.
-> - v4.1 (this): `PropertySchema` extended with `kind: PropertyKind` (required UI hint), optional `label` / `Editor` / `Renderer` for plugin-defined custom UI. Added §5.6.1 documenting how the property panel renders from the descriptor registry, with graceful degradation when a property's schema is not registered (e.g., plugin uninstalled). Closes the "how does the property UI know how to render now?" gap.
+> - v4.1: `PropertySchema` extended with `kind`, optional `label` / `Editor` / `Renderer`; §5.6.1 documents property panel rendering from registry + graceful degradation for unregistered schemas.
+> - v4.2 (this): cleaned up stale phase text contradicting the v4 follow-up decision (Phase 1 no longer instructs implementers to add a sync-apply wrapper or to run parseReferences inside `repo.tx`; Phase 3 says parseReferences becomes a follow-up facet contribution, not same-tx with prefetch); added `block.set` / `block.setContent` / `block.delete` as single-block sugar over the corresponding mutators (resolves the inconsistency between "no mutating methods on Block" and the Phase 1 migration that used `block.set`/`block.update`); built-in primitive codecs (`string`/`number`/`boolean`/`date`) now validate on decode (was unsafe identity); added `codecs.optional(inner)` for `T | undefined` properties; renamed identity to `unsafeIdentity` and reserved it for kernel-internal use.
 
 ---
 
@@ -335,12 +336,22 @@ export interface Block {
   readonly parent: Block | null
 
   subscribe(listener: (data: BlockData | null) => void): Unsubscribe
+
+  /** Single-block write sugar — each is a 1-mutator tx.
+   *  These exist because `await block.set(prop, value)` reads dramatically better
+   *  than `await repo.mutate.setProperty({ id: block.id, schema: prop, value })`
+   *  at the call sites where we'd write it most. They are NOT a parallel API;
+   *  each method is a thin wrapper around the corresponding kernel mutator,
+   *  and the same write goes through the same tx pipeline. */
+  set<T>(schema: PropertySchema<T>, value: T): Promise<void>     // → setProperty mutator
+  setContent(content: string): Promise<void>                     // → setContent mutator
+  delete(): Promise<void>                                        // → delete mutator
 }
 ```
 
-`Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field. The facade computes children on demand from the in-memory cache, throwing `BlockNotLoadedError` if any child row isn't loaded. (The hydrator preloads sibling ranges as part of `repo.load(id, { descendants: 1 })` etc.)
+`Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field. The facade computes children on demand from the in-memory cache, throwing `BlockNotLoadedError` if any child row isn't loaded.
 
-Mutation goes through `repo.tx` / `repo.mutate.X`. The Block facade has **no** mutating methods — even kernel ops like `indent` are accessed as `repo.mutate.indent({ id: block.id })`, not `block.indent()`.
+The single-block sugar above (`set`, `setContent`, `delete`) is the only mutating surface on `Block`. Composite operations across multiple blocks (indent, outdent, move, split, merge) are not on `Block` — call them via `repo.mutate.indent({ id: block.id })` or `repo.tx`. Rationale: those operations need broader context (UI state for outdent's `topLevel`, etc.) that doesn't fit cleanly on a per-block facade.
 
 ### 5.3 `Tx` (transactional session, async reads, no arbitrary queries)
 
@@ -463,17 +474,57 @@ export interface Codec<T> {
 
 // Built-in helpers shipped from @/data/api:
 export const codecs = {
-  identity: <T>(): Codec<T> => ({ encode: x => x, decode: x => x as T }),
-  string: codecs.identity<string>(),
-  number: codecs.identity<number>(),
-  boolean: codecs.identity<boolean>(),
+  /** Built-in primitive codecs validate on decode (throw CodecError on shape mismatch).
+   *  Cheap typeof checks — runtime cost is negligible, safety is real. */
+  string: {
+    encode: (v: string) => v,
+    decode: (j: unknown) => {
+      if (typeof j !== 'string') throw new CodecError('string', j)
+      return j
+    },
+  } satisfies Codec<string>,
+  number: {
+    encode: (v: number) => v,
+    decode: (j: unknown) => {
+      if (typeof j !== 'number') throw new CodecError('number', j)
+      return j
+    },
+  } satisfies Codec<number>,
+  boolean: {
+    encode: (v: boolean) => v,
+    decode: (j: unknown) => {
+      if (typeof j !== 'boolean') throw new CodecError('boolean', j)
+      return j
+    },
+  } satisfies Codec<boolean>,
   date: {
     encode: (d: Date) => d.toISOString(),
-    decode: (s: unknown) => {
-      if (typeof s !== 'string') throw new Error('date codec expects string')
-      return new Date(s)
+    decode: (j: unknown) => {
+      if (typeof j !== 'string') throw new CodecError('date', j)
+      return new Date(j)
     },
   } satisfies Codec<Date>,
+
+  /** Wraps a codec to allow undefined: stored as JSON null; decode passes null/missing through. */
+  optional<T>(inner: Codec<T>): Codec<T | undefined> {
+    return {
+      encode: v => (v === undefined ? null : inner.encode(v)),
+      decode: j => (j === null || j === undefined ? undefined : inner.decode(j)),
+    }
+  },
+
+  /** Escape hatch — explicitly unsafe cast. Reserved for kernel-internal use where
+   *  the JSON shape is guaranteed by construction. NOT a default for plugin authors. */
+  unsafeIdentity: <T>(): Codec<T> => ({ encode: x => x, decode: x => x as T }),
+
+  /** Compose for arbitrary structural shapes — author writes encode/decode by hand
+   *  with field-level validation. Helper available but not enumerated here. */
+}
+
+export class CodecError extends Error {
+  constructor(expected: string, got: unknown) {
+    super(`expected ${expected}, got ${typeof got} (${JSON.stringify(got)?.slice(0, 80)})`)
+  }
 }
 
 export type PropertyKind =
@@ -843,8 +894,10 @@ ORDER BY order_key, id;
 import { codecs } from '@/data/api'
 import { TaskDueDateEditor } from './editors'
 
+// codecs.optional wraps Codec<Date> → Codec<Date | undefined>, so defaultValue: undefined
+// types correctly. Inferred type: PropertySchema<Date | undefined>.
 export const dueDateProp = defineProperty('tasks:due-date', {
-  codec: codecs.date,                              // bidirectional Codec<Date>, NOT a zod schema
+  codec: codecs.optional(codecs.date),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
   kind: 'date',                                    // default editor: ISO date input
@@ -856,12 +909,12 @@ export const dueDateProp = defineProperty('tasks:due-date', {
 // mutators.ts
 export const setDueDate = defineMutator({
   name: 'tasks:setDueDate',
-  argsSchema: z.object({ id: z.string(), date: z.date() }),     // zod is for arg validation
+  argsSchema: z.object({ id: z.string(), date: z.date().nullable() }),  // zod is for arg validation
   scope: ChangeScope.BlockDefault,
   apply: async (tx, { id, date }) => {
-    // tx.setProperty applies the codec; the engine writes the encoded value
-    // into properties_json. tx.update with raw properties bypasses the codec.
-    tx.setProperty(id, dueDateProp, date)
+    // dueDateProp is PropertySchema<Date | undefined>; null arg → undefined value clears the prop.
+    // tx.setProperty applies codec.encode (Date | undefined → ISO string | null).
+    tx.setProperty(id, dueDateProp, date ?? undefined)
   }
 })
 
@@ -924,18 +977,18 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 
 **Scope**:
 - New SQL DDL: `blocks` (with `parent_id + order_key`), `tx_context` (one-row), `row_events`, `command_events`. Drop existing tables.
-- Triggers: `row_events` insert on `blocks` change; upload-routing trigger preserving today's behavior, rewired to read `tx_context.source`.
-- Sync-apply wrapper that sets `tx_context.source = 'sync'` before PowerSync's CRUD apply runs; clears after.
+- Triggers: separate INSERT/UPDATE/DELETE triggers on `blocks` writing `row_events` rows (`source` column populated via `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` so sync-applied writes are tagged correctly without any wrapper); separate INSERT/UPDATE/DELETE upload-routing triggers gating on `(SELECT source FROM tx_context WHERE id = 1) = 'user'`.
+- **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE in the row_events trigger and the equality test in the upload-routing trigger both handle that natively. Don't try to hook PowerSync's CRUD-apply path.
 - Postgres mirror schema. PowerSync sync-config rewrite.
 - New `repo.tx(fn, opts)` on `db.writeTransaction`. Async `tx.get`. `tx.peek`, `tx.create`, `tx.update`, `tx.delete`, `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
 - `BlockData` type updated: no `childIds` field.
 - `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
 - Properties stored flat: `properties_json` is `Record<string, unknown>`. Property descriptors live as plain `xxxProp` exports for now (facet wrapping in Phase 3).
 - Tree mutations rewritten as kernel functions on `repo` (not on `Block`): `repo.indent(id)`, `repo.outdent(id, opts)`, `repo.move(id, opts)`, `repo.delete(id)`, `repo.createChild(parentId, opts)`, `repo.split(id, at)`, `repo.merge(a, b)`, `repo.insertChildren(parentId, items)`. Each runs inside `repo.tx` and uses `parent_id + order_key` patches.
-- `block.change(callback)` is **deleted**, not wrapped. Call sites that mutated content/properties via callbacks migrate to `block.update({ content })` / `block.set(prop, v)` (which dispatch a 1-block tx) or to the dedicated kernel functions for tree ops.
+- `block.change(callback)` is **deleted**, not wrapped. Call sites that mutated content/properties via callbacks migrate to `block.setContent(content)` / `block.set(prop, v)` (single-block sugar; each is a 1-mutator tx) or to the dedicated kernel functions for multi-block tree ops (`repo.indent(id)` etc.).
 - `applyBlockChange`, `_change`, `_transaction`, `getProperty`/`setProperty` (record-shape), `dataSync`, `requireSnapshot`-style throws — all deleted.
 - `getProperty`/`setProperty` replaced by `block.get(schema)`/`block.set(schema, v)` operating on the new flat shape.
-- Reference parsing remains as today's inline behavior — it still exists, still runs after content changes, but it now runs inside `repo.tx` (synchronously triggered by setContent), not as a fire-and-forget. Move to a proper post-commit processor in Phase 3.
+- Reference parsing keeps its current shape during Phase 1: a fire-and-forget helper invoked by the new content-changing kernel functions (`repo.setContent`, etc.). It does **not** run inside `repo.tx`. The helper is moved into a proper facet-contributed follow-up processor in Phase 3 — but that's a clean lift, not a behavioral change.
 - All call sites updated. (This is mechanical and broad: every shortcut handler, every renderer, every selector touching `block.data.childIds`, `block.data.properties[name].value`, or `block.change(...)`.)
 - `repoInstance.ts` deleted; access via `RepoContext` only.
 
@@ -972,7 +1025,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
 - Repo lifecycle (`setFacetRuntime`) implemented per §8.
 - Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `createAliasTarget`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx).
-- Reference parsing migrated to `core.parseReferences` (mode `'same-tx'`) per §7. Includes the alias prefetch logic, the deterministic daily-note id, the `tx.afterCommit('core.cleanupOrphanAliases', …)` scheduling.
+- Reference parsing migrated to `core.parseReferences` as a **follow-up** (mode `'follow-up'`) processor per §7. Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. No alias-prefetch machinery — the processor runs after commit against committed state via the kernel `aliasLookup` query.
 - `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
 - `propertySchemasFacet` for descriptors (still flat in storage; facet just wraps the existing descriptor exports).
 - ChangeScope type-augmentation hook for plugin scopes.
@@ -1140,6 +1193,8 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's P0 findings (round 2) addressed: `tx_context` is a regular table not TEMP (§4.2); `tx.query` removed in favor of bounded primitives with explicit overlay (§5.3); Phase 1 acknowledges full break (no `block.change` survival, no `childIds` in `BlockData`, properties flat, tree API rewrite all in Phase 1) (§13.1); order_key uses jittered + `(id)` tiebreak (§4.1, §11, §15).
 - [ ] Reviewer's P1 findings (round 2) addressed: upload trigger preservation with `source` gating (§4.5); property shape consistent — flat from Phase 1 (§13.1); `tx.afterCommit` for processor scheduling (§5.3, §5.7, §7); `Mutator.scope` field (§5.4).
 - [ ] Reviewer's round-3 findings addressed: parseReferences is follow-up (typing latency concern resolved by matching today's UX, §7.1); no PowerSync sync-apply wrapper required (`source = NULL` ↔ sync, §4.2/§4.5); separate INSERT/UPDATE/DELETE triggers (§4.5); `TxWriteOpts.skipMetadata` typed on `tx.create`/`tx.update`/`tx.setProperty` (§5.3); `tx.setProperty`/`tx.getProperty` keep codecs at the boundary (§5.3, §5.6); `Codec<T>` is a real bidirectional codec, not a zod schema (§5.6).
+- [ ] Reviewer's round-4 findings addressed: stale Phase 1 sync-apply-wrapper bullet removed (§13.1); Phase 1 parseReferences description aligned with v4 follow-up decision (§13.1); Phase 3 parseReferences description aligned with follow-up (not same-tx with prefetch) (§13.3); `Block` facade gains `block.set` / `block.setContent` / `block.delete` sugar with explicit "thin wrapper over kernel mutator" framing (§5.2); built-in primitive codecs validate on decode, `codecs.optional` added, `codecs.unsafeIdentity` reserved for kernel-internal use (§5.6); plugin example uses `codecs.optional(codecs.date)` for the `Date | undefined` property (§12.1).
+- [ ] Reviewer's round-4 finding "PropertySchema lacks render metadata" — already addressed in v4.1; not a real finding against v4.2.
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
