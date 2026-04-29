@@ -942,7 +942,9 @@ export interface Query<Args, Result> {
 }
 
 interface QueryCtx {
-  db: PowerSyncDatabase                                     // raw SQL escape hatch
+  /** Raw SQL reads only. Writes through ctx.db are outside the supported
+   *  data-layer contract; use repo.tx / ctx.tx for every block write. */
+  db: PowerSyncDatabase
   repo: Repo
   hydrateBlocks(rows: BlockRow[]): BlockData[]
 
@@ -1196,7 +1198,8 @@ interface ProcessorCtx {
   tx: Tx
 
   /** Raw SQL for reads — sees committed state at processor-fire time
-   *  (the originating user tx is already committed by definition). */
+   *  (the originating user tx is already committed by definition). Writes
+   *  through ctx.db are unsupported; processor writes go through ctx.tx. */
   db: PowerSyncDatabase
 
   /** For handle composition or invoking other mutators. */
@@ -1856,7 +1859,7 @@ await repo.run('bookmarks:set', { id, url: 'https://...' })
 
 ### 12.3 Trust model
 
-Static plugins are in the TS module graph and code-reviewed. Dynamic plugins run with kernel authority. Args validate at the boundary for both. Sandboxing is out of scope.
+Static plugins are in the TS module graph and code-reviewed. Dynamic plugins run with kernel authority. Args validate at the boundary for both. Sandboxing is out of scope. Raw SQL writes from plugin code can violate invariants; the supported write path is `repo.tx` / `ctx.tx` only. `ctx.db` exists for committed-state reads.
 
 ---
 
@@ -1891,7 +1894,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - `block.change(callback)` is **deleted**, not wrapped. Call sites that mutated content/properties via callbacks migrate to `block.setContent(content)` / `block.set(prop, v)` (single-block sugar; each is a 1-mutator tx) or to the dedicated kernel functions for multi-block tree ops (`repo.indent(id)` etc.).
 - `applyBlockChange`, `_change`, `_transaction`, `getProperty`/`setProperty` (record-shape), `dataSync`, `requireSnapshot`-style throws — all deleted.
 - `getProperty`/`setProperty` replaced by `block.get(schema)`/`block.set(schema, v)` operating on the new flat shape.
-- Reference parsing keeps its current shape during Phase 1: a fire-and-forget helper invoked by the new content-changing kernel functions (`repo.setContent`, etc.). It does **not** run inside `repo.tx`. The helper is moved into a proper facet-contributed follow-up processor in Phase 3 — but that's a clean lift, not a behavioral change.
+- Reference parsing keeps its current post-commit shape during Phase 1: a fire-and-forget helper invoked after the new content-changing kernel functions (`repo.setContent`, etc.) commit. It does **not** run inside the originating content `repo.tx`; when it writes `references` or alias targets, it opens its own `repo.tx({ scope: ChangeScope.References })`. The helper is moved into a proper facet-contributed follow-up processor in Phase 3 — but that's a clean lift, not a behavioral change.
 - All call sites updated. (This is mechanical and broad: every shortcut handler, every renderer, every selector touching `block.data.childIds`, `block.data.properties[name].value`, or `block.change(...)`.) Notable additional surface area landed since the spec was first drafted: **`src/utils/roamImport/`** (orchestrator + planner that constructs `BlockData` and writes blocks via the existing API). The planner builds `childIds` arrays and the orchestrator uses `block.change`-style writes — both need to migrate to the new `parentId + orderKey` shape and to `repo.tx` / `repo.mutate.X`. No special architectural treatment needed; treat it as one more caller in the migration sweep, with its existing import-end-to-end test (`sampleExport.test.ts`) as the regression gate.
 - `repoInstance.ts` deleted; access via `RepoContext` only.
 
