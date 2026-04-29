@@ -12,7 +12,7 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - v4.1: `PropertySchema` extended with `kind`, optional `label` / `Editor` / `Renderer`; §5.6.1 documents property panel rendering from registry + graceful degradation for unregistered schemas.
 > - v4.2: cleaned up stale phase text contradicting the v4 follow-up decision; added `block.set` / `block.setContent` / `block.delete` sugar; built-in primitive codecs validate on decode; added `codecs.optional(inner)`; renamed identity to `unsafeIdentity`.
 > - v4.3: Phase 1 collapses Postgres migrations to one `_initial_schema.sql`.
-> - v4.4 (this): correctness fixes after a fifth-round review.
+> - v4.4: correctness fixes after a fifth-round review.
 >   - **§4 split server vs client schema**: the Supabase migration creates only the synced `blocks` table (server-side); `tx_context`, `row_events`, `command_events`, and the six triggers are local-only and bootstrap from `src/data/internals/clientSchema.ts`. Postgres has no `powersync_crud` and no business with these tables.
 >   - **§9.3 invalidation has two sources**: TxEngine fast path for local writes; `row_events` tail subscription as the backstop for sync-applied PowerSync writes (which bypass `repo.tx` and have no staged write-set to walk). Without the tail, remote changes wouldn't refresh handles.
 >   - **§5.2 children-completeness markers**: cache tracks per-parent "all children loaded" markers. `block.childIds` requires the marker; without it, throws `ChildrenNotLoadedError`. The cache cannot honestly distinguish "no children" from "not loaded" by sibling-scanning alone. Reactive children access goes through `useHandle(repo.children(id))`.
@@ -20,6 +20,14 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **§5.7 / §7 field-watching for processors**: post-commit processors can watch by field-write (`{ kind: 'field', table, fields }`) in addition to mutator name. `core.parseReferences` watches `blocks.content` so plugin mutators that bypass the named `setContent` mutator still trigger ref parsing. Correctness over convention.
 >   - **§11.2 ancestors `ORDER BY depth`**: SQL CTE recursion order is undefined without explicit ORDER BY. Added `depth` column and ordering. §11.3 added `WHERE deleted = 0` to recursion (was missing).
 >   - **§5.3 / §15 stale sync-source comment fixed**: TxSource and invariant #4 both now say sync-applied writes leave `source = NULL`, COALESCE'd to `'sync'` in row_events.
+> - v4.5 (this): round-6 correctness fixes.
+>   - **§4.7 cycle prevention + repair protocol** (new section): three layers — local validation in move mutators, post-sync deterministic repair scoped to changed parent_ids, defensive `depth < 100` recursion guards in every CTE.
+>   - **§5.5 `Query` API changed**: dynamic dependency declaration via `ctx.depend(dep)` during `resolve` (instead of static `invalidatedBy`). Plugin queries can now declare row / parent-edge / workspace deps as they execute. The old `invalidatedBy` becomes optional `coarseScope` for pre-filtering.
+>   - **§5.3 `tx.create` conflict semantics**: explicit `onConflict: 'throw' | 'ignore'` opt; default `'throw'`. `createAliasTarget` uses `'ignore'` for deterministic ids. No more silent "existing row wins" footgun.
+>   - **§4.3 row_events `kind`** gains `'soft-delete'` value. UPDATE trigger detects `deleted` 0→1 transitions and writes that kind. DELETE triggers reserved for hard purge (out of v1 scope).
+>   - **§9.3 row_events tail filters `source = 'sync'`**: prevents double-invalidation between TxEngine fast-path and the tail; ensures sync-arrival paths and local-write paths don't fight over markers.
+>   - **§11.1 subtree path encoding**: `hex(id)` instead of raw id in the materialized path, so ids containing `/` (e.g., `daily/<workspaceId>/<date>` deterministic ids) sort correctly. Separator changed to `~` for safer lex-ordering. Also added `depth < 100` guard.
+>   - **Repo surface clarified**: `repo.block`, `repo.children`, `repo.subtree`, `repo.ancestors`, `repo.backlinks` listed explicitly; `repo.load(id, opts?)` typed with `{ children?, ancestors?, descendants? }`. Phase 2 acceptance updated.
 
 ---
 
@@ -95,8 +103,12 @@ We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reade
 ┌────────────────────────┴────────────────────────────────────┐
 │ Repo (context-only; no module-singleton)                    │
 │   repo.block(id)        → Handle<BlockData | null>          │
+│   repo.children(id)     → Handle<BlockData[]>               │
 │   repo.subtree(id)      → Handle<BlockData[]>               │
+│   repo.ancestors(id)    → Handle<BlockData[]>               │
+│   repo.backlinks(id)    → Handle<BlockData[]>               │
 │   repo.query.X(args)    → Handle<Result>                    │
+│   repo.load(id, opts?)  → Promise<BlockData | null>         │
 │   repo.tx(fn, opts)     → Promise<TxResult>                 │
 │   repo.mutate.X(args)   → Promise<Result>  // sugar over tx │
 │   repo.run(name, args)  → Promise<unknown> // dynamic       │
@@ -184,7 +196,8 @@ ORDER BY order_key, id
 Concurrency story:
 - Two clients insert different rows under the same parent at the same position → most likely distinct order_keys; if equal, secondary sort by `id` makes the resulting order deterministic post-sync.
 - Two clients move the *same* block concurrently → row-LWW on `parent_id` and `order_key` of that single row.
-- Clients on the same actor running fractional-indexing-jittered always produce monotonically distinct keys for sequential inserts; the collision case is strictly cross-actor concurrent inserts at the same spot.
+- Two clients move *different* blocks concurrently in a way that creates a cycle → can survive sync because each move is a separate row update under LWW. **Cycle prevention has its own protocol** — see §4.7.
+- Clients on the same actor running fractional-indexing-jittered produce distinct keys for sequential inserts; collisions are strictly cross-actor concurrent inserts at the same spot.
 
 A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too long, but is not required for correctness.
 
@@ -216,7 +229,7 @@ CREATE TABLE row_events (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   tx_id           TEXT,                                     -- NULL for sync-applied
   block_id        TEXT NOT NULL,
-  kind            TEXT NOT NULL,                            -- 'create' | 'update' | 'delete'
+  kind            TEXT NOT NULL,                            -- 'create' | 'update' | 'soft-delete' | 'delete'
   before_json     TEXT,
   after_json      TEXT,
   source          TEXT NOT NULL,                            -- COALESCE(tx_context.source, 'sync')
@@ -229,6 +242,10 @@ CREATE INDEX idx_row_events_created ON row_events(created_at DESC);
 ```
 
 Written by SQLite triggers on `blocks` (one per insert/update/delete). Triggers pull `tx_id` and `source` from `tx_context`. The audit + invalidation source-of-truth.
+
+**Soft-delete semantics**: `tx.delete(id)` sets `deleted = 1` (an UPDATE), so it fires the UPDATE trigger, not the DELETE trigger. To distinguish soft-deletes from regular updates, the UPDATE trigger inspects whether the `deleted` column transitioned from 0 to 1 and writes `kind = 'soft-delete'` instead of `'update'`. Consumers (handles, devtools, the cycle-repair scanner) treat soft-delete as a logical removal.
+
+The DELETE trigger is reserved for **hard purges** — physically removing rows from the local DB. v1 ships no purge mechanism; the trigger exists for future use (e.g., a cleanup job that purges soft-deleted rows older than N days). Hard deletes do not sync to other clients (PowerSync sees the row vanish locally, but soft-delete via the synced `deleted` column is what propagates "this row is gone" through sync).
 
 ### 4.4 `command_events` (client only)
 
@@ -291,6 +308,37 @@ The same INSERT/UPDATE/DELETE-split pattern is used for the `row_events` trigger
 `sync-config.yaml` is updated to:
 - Sync `blocks` with the new shape.
 - Not sync `tx_context`, `row_events`, `command_events` (local-only initially; see §16.8).
+
+### 4.7 Cycle prevention and repair
+
+`parent_id + order_key` with row-LWW under sync admits parent cycles in the worst case. Example: client A moves X under Y; client B concurrently moves Y under X. Each is a single-row update; both survive sync; the resulting tree has `X.parent_id = Y` and `Y.parent_id = X` — a cycle. The recursive CTEs in §11 would recurse until SQLite's depth limit and either error or return garbage.
+
+Three layers of defense:
+
+**Layer 1 — Local validation in move mutators.** Every kernel mutator that changes `parent_id` (`move`, `indent`, `outdent`, etc.) checks first that the proposed new parent is not a descendant of the moved node. The check is a single `isDescendantOf` query (§11.3). If it would create a cycle locally, throw `CycleError` before staging the write. Catches every cycle introduced by the *local* user.
+
+**Layer 2 — Post-sync cycle repair.** When the row_events tail (§9.3) sees sync-applied writes that changed `parent_id`, the engine runs a bounded cycle-detection pass scoped to the affected ids:
+
+```sql
+WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
+  SELECT id, id, parent_id, 0 FROM blocks WHERE id IN (:affected_ids) AND deleted = 0
+  UNION ALL
+  SELECT chain.start_id, b.id, b.parent_id, chain.depth + 1
+  FROM chain JOIN blocks b ON b.id = chain.parent_id
+  WHERE b.deleted = 0 AND chain.depth < 100        -- bound recursion defensively
+)
+SELECT DISTINCT start_id FROM chain WHERE depth > 0 AND id = start_id;
+```
+
+Any `start_id` that reappears in its own chain at `depth > 0` is in a cycle.
+
+**Repair**: pick a deterministic loser — the block with the lexicographically smaller `id` among the cycle members has its `parent_id` set to NULL (becomes a workspace root). Idempotent and deterministic — every client running the same repair on the same sync batch picks the same loser, so sync converges.
+
+Repair runs as its own `repo.tx` with a synthetic `core.repairCycle` mutator and `scope: 'block-default:repair'` (separate undo bucket; not in user undo). The mutator writes a `command_events` row tagging the repair for audit.
+
+**Layer 3 — CTE recursion guards.** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries a `depth < 100` defensive guard. Even if cycle repair lags, queries return finite results instead of OOMing.
+
+This is the same pattern Linear / Roam / Logseq use for hierarchical data under last-writer-wins sync. Not free — every move pays a pre-check, every sync-applied parent change pays a post-check — but bounded and mostly cold.
 
 ---
 
@@ -375,7 +423,19 @@ export interface Block {
 
 `Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field.
 
-**Cache loaded-range markers.** The cache tracks per-parent metadata: `{ allChildrenLoaded: boolean }`. `repo.load(id, { children: true })` runs the children SQL, hydrates each child into the cache, and sets the marker for the parent on completion. `repo.subtree(rootId)`'s loader sets the marker for every visited parent. PowerSync sync-applied inserts of new children do **not** invalidate the marker by default — but the row_events tail (§9.3) sees the new row's `parent_id` and clears the marker for that parent (because we now have a child the cache didn't know about, so "all loaded" is no longer true until next refetch). Children handles re-resolve naturally on the same invalidation.
+**Cache loaded-range markers.** The cache tracks per-parent metadata: `{ allChildrenLoaded: boolean }`. `repo.load(id, { children: true })` runs the children SQL, hydrates each child into the cache, and sets the marker for the parent on completion. `repo.subtree(rootId)`'s loader sets the marker for every visited parent. PowerSync sync-applied inserts of new children clear the marker for the affected parent (the row_events tail in §9.3 detects parent_id assignments and clears the corresponding marker). Children handles re-resolve naturally on the same invalidation.
+
+The full `repo.load` signature:
+
+```ts
+repo.load(id: string, opts?: {
+  children?: boolean        // load id's immediate children; sets allChildrenLoaded marker
+  ancestors?: boolean       // load id's full parent chain
+  descendants?: number      // load N levels of descendants (recursive CTE)
+}): Promise<BlockData | null>
+```
+
+`repo.load(id)` with no opts loads just the row itself. The opts are flags telling the loader which neighborhoods to populate alongside.
 
 The facade's sync `childIds` getter checks the marker; if unset, throws `ChildrenNotLoadedError(id)`. This is the only honest contract — the cache cannot distinguish a leaf from "I haven't asked yet." Reactive children access goes through `useHandle(repo.children(id))` instead of the facade.
 
@@ -394,9 +454,9 @@ export interface Tx {
   peek(id: string): BlockData | null
 
   /** Low-level primitives. */
-  create(data: NewBlockData, opts?: TxWriteOpts): string     // returns new id
+  create(data: NewBlockData, opts?: TxCreateOpts): string    // returns the id (newly-created or existing, depending on onConflict)
   update(id: string, patch: Partial<BlockData>, opts?: TxWriteOpts): void
-  delete(id: string): void                                   // soft delete (sets deleted=1)
+  delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
 
   /** Typed property primitives — the only path that runs codecs.
    *  setProperty: codec.encode applied; engine merges into properties_json patch.
@@ -426,6 +486,19 @@ interface TxWriteOpts {
    *  on tx.create). Used by same-tx processors whose writes are bookkeeping, not user
    *  intent. Default false. User-facing mutators should not set this. */
   skipMetadata?: boolean
+}
+
+interface TxCreateOpts extends TxWriteOpts {
+  /** Behavior when a row with the same primary key already exists.
+   *    'throw'  (default): throw DuplicateIdError. The safe default — accidental
+   *                        id collisions surface loudly instead of silently
+   *                        overwriting or merging.
+   *    'ignore':           keep the existing row, do not write. Returns the id
+   *                        unchanged. Use this for deterministic ids where
+   *                        concurrent creates must converge (e.g. daily-note
+   *                        ids; see core.createAliasTarget in §7).
+   *  No 'replace' — replacing on conflict is `tx.update`, semantically. */
+  onConflict?: 'throw' | 'ignore'
 }
 
 type TxSource = 'user' | 'local-ephemeral'                   // sync writes bypass repo.tx; tx_context.source stays NULL for them, COALESCE'd to 'sync' in row_events
@@ -472,23 +545,65 @@ export interface Query<Args, Result> {
   readonly name: string
   readonly argsSchema: Schema<Args>
   readonly resultSchema: Schema<Result>
-  readonly resolve: (args: Args, ctx: QueryCtx) => Promise<Result>
-  readonly invalidatedBy: QueryInvalidation
-}
 
-type QueryInvalidation =
-  | { kind: 'tables'; tables: string[] }
-  | { kind: 'mutators'; names: string[] }
-  | { kind: 'rows'; predicate: (event: RowEvent) => boolean }
+  /** resolve runs the query and declares dependencies via ctx.depend(...).
+   *  Dependencies are dynamic — gathered during execution from the rows the
+   *  resolver actually touched — not declared statically up front. */
+  readonly resolve: (args: Args, ctx: QueryCtx) => Promise<Result>
+
+  /** Optional coarse pre-filter for the invalidation engine.
+   *  If absent, the engine subscribes to all blocks/row_events changes
+   *  for this handle. Set this to limit pre-filtering work; dynamic deps
+   *  from resolve always take precedence for precision. */
+  readonly coarseScope?: { tables?: string[]; mutators?: string[] }
+}
 
 interface QueryCtx {
-  db: PowerSyncDatabase                                     // raw SQL
+  db: PowerSyncDatabase                                     // raw SQL escape hatch
   repo: Repo
   hydrateBlocks(rows: BlockRow[]): BlockData[]
+
+  /** Declare a dependency. Call multiple times during resolve.
+   *  Engine collects all deps and uses them to invalidate this handle. */
+  depend(dep: Dependency): void
 }
+
+type Dependency =
+  | { kind: 'row'; id: string }                              // exact row
+  | { kind: 'parent-edge'; parentId: string }                // any row with parent_id = this
+  | { kind: 'workspace'; workspaceId: string }               // any row in this workspace
+  | { kind: 'table'; table: string }                         // catch-all coarse
 ```
 
-Queries are out-of-tx. Built-in queries (`subtree`, `ancestors`, `backlinks`, `searchByContent`, `byType`, `firstChildByContent`, `firstRootBlock`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`) are kernel facet contributions.
+Queries are out-of-tx. Built-in queries (`subtree`, `ancestors`, `backlinks`, `searchByContent`, `byType`, `firstChildByContent`, `firstRootBlock`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`, `children`) are kernel facet contributions and call `ctx.depend` appropriately. Plugin queries do the same; without dep declarations a query's handle effectively never invalidates (table-coarse fallback handles this safely but inefficiently).
+
+Example dep declarations:
+
+```ts
+// repo.block(id):
+resolve: async ({ id }, ctx) => {
+  ctx.depend({ kind: 'row', id })
+  return ctx.hydrateBlocks(await ctx.db.getAll('SELECT * FROM blocks WHERE id = ?', [id]))[0] ?? null
+}
+
+// repo.children(id):
+resolve: async ({ id }, ctx) => {
+  ctx.depend({ kind: 'parent-edge', parentId: id })
+  return ctx.hydrateBlocks(await ctx.db.getAll(
+    'SELECT * FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [id]
+  ))
+}
+
+// repo.subtree(rootId):
+resolve: async ({ rootId }, ctx) => {
+  const rows = await ctx.db.getAll(SUBTREE_SQL, [rootId])
+  for (const row of rows) {
+    ctx.depend({ kind: 'row', id: row.id })
+    ctx.depend({ kind: 'parent-edge', parentId: row.id })   // any new child invalidates
+  }
+  return ctx.hydrateBlocks(rows)
+}
+```
 
 ### 5.6 `PropertySchema<T>` and `Codec<T>`
 
@@ -707,7 +822,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `tx.get` for known ids, kernel `aliasLookup` query for alias-by-name. The processor runs *after* the user's tx commits, so committed-state queries are correct. |
 | Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
-| Daily-note deterministic id | `createAliasTarget` computes `daily/<workspaceId>/<date>` for date-shaped aliases. Two clients creating concurrently → same id; `tx.create` is idempotent on conflict (existing row wins). |
+| Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. |
 | Update `references` field | `tx.update(sourceId, { references: resolvedIds }, { skipMetadata: true })`. `skipMetadata` prevents the bookkeeping write from bumping `updated_at`/`updated_by`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
 | Self-destruct (newly-created alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { createdIds: [...] }, { delayMs: 4000 })`. Cleanup processor checks each id: if no block's `references_json` contains it, delete. |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
@@ -795,11 +910,13 @@ Invalidation feeds the same handle-walk logic from two places:
 
 1. **TxEngine fast path** (local writes via `repo.tx`): on commit success, the engine has the staged write-set in hand and walks affected handles synchronously. Cheap, immediate, no DB round-trip. This is the primary path for everything the user does in this tab.
 
-2. **`row_events` tail** (sync-applied writes from PowerSync): PowerSync's CRUD apply writes directly to the local SQLite, bypassing `repo.tx`. Those writes leave no staged set for the TxEngine to walk — but they *do* fire the row_events trigger, which appends rows tagged `source = 'sync'`. The Repo subscribes to `row_events` via PowerSync's `db.onChange` and consumes new rows since the last seen `id`, walking the same handle-invalidation logic with the row_events row as the change record. Throttled (default 100ms) to coalesce sync-burst invalidations.
+2. **`row_events` tail** (sync-applied writes from PowerSync): PowerSync's CRUD apply writes directly to the local SQLite, bypassing `repo.tx`. Those writes leave no staged set for the TxEngine to walk — but they *do* fire the row_events trigger, which appends rows tagged (via `COALESCE(tx_context.source, 'sync')`) as `source = 'sync'`. The Repo subscribes to `row_events` via `db.onChange`, **filters to `source = 'sync'`**, consumes new rows since the last seen `id`, and walks the same handle-invalidation logic. Throttled (~100ms; see §16.13) to coalesce sync-burst invalidations.
 
-Both paths converge on `HandleStore.invalidate({ rowId, parentEdge, … })`; handles see one invalidation regardless of source. This means **sync-applied changes propagate to the UI without any additional plumbing in mutators or queries** — the row_events tail is the only thing required to make remote changes visible.
+   **Filter rationale**: `db.onChange` on `row_events` would otherwise fire for every local write too (`source = 'user'` or `'local-ephemeral'`), causing double invalidation (once via TxEngine fast path, once via tail) and risking the tail clearing a marker that the fast path just populated correctly. Filtering to `source = 'sync'` makes the tail handle exactly the cases the fast path can't see, with no overlap. This is correct for both single-tab today and multi-tab in the future (a write from another tab arrives via PowerSync's CRUD-apply on this tab → leaves `tx_context.source = NULL` → COALESCE'd to `'sync'`).
 
-For multi-process invalidation (cross-tab) — out of scope; see §16.7. Note that *if* multi-tab is enabled later, the row_events tail in tab B would already pick up tab A's writes (they go through PowerSync's shared-worker SQLite to row_events). The single-tab design generalizes naturally.
+Both paths converge on `HandleStore.invalidate({ rowId, parentEdge, … })`; handles see one invalidation regardless of source. **Sync-applied changes propagate to the UI without any additional plumbing in mutators or queries** — the row_events tail is the only thing required to make remote changes visible.
+
+For multi-process invalidation (cross-tab) — out of scope; see §16.7. The single-tab design generalizes naturally because the `source = 'sync'` filter already handles both same-device sync and (future) cross-tab as the same case.
 
 ### 9.4 Structural diffing
 
@@ -884,19 +1001,23 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 ```sql
 WITH RECURSIVE subtree AS (
-  SELECT *, '' AS path
+  SELECT *, '' AS path, 0 AS depth
   FROM blocks
   WHERE id = :rootId AND deleted = 0
   UNION ALL
-  SELECT child.*, subtree.path || '/' || child.order_key || ':' || child.id
+  SELECT child.*,
+         subtree.path || '/' || child.order_key || '~' || hex(child.id),
+         subtree.depth + 1
   FROM subtree
   JOIN blocks AS child ON child.parent_id = subtree.id
-  WHERE child.deleted = 0
+  WHERE child.deleted = 0 AND subtree.depth < 100              -- recursion guard, see §4.7
 )
 SELECT * FROM subtree ORDER BY path;
 ```
 
-Path includes `id` after `order_key` to make the sort deterministic on order_key collisions.
+**Path encoding**: each path segment is `<order_key>~hex(<id>)`, joined by `/`. `hex()` is SQLite's built-in hex-encoder (each byte → two hex digits). Hex-encoding the id makes the path lexically safe regardless of id format — block ids may contain `/` (e.g., `daily/<workspaceId>/<date>` deterministic ids) without breaking the sort. The `~` separator between order_key and hex(id) is chosen because `~` (0x7E) is lexicographically greater than every alphanumeric character used in `order_key` strings, so order_key alone determines order until tied (then id-hex tiebreaks).
+
+Path is internal to the CTE; consumers ignore it. The hex-encoded id is decoded back via `parseBlockRow` into the regular text `id` field of `BlockData`.
 
 ### 11.2 Ancestors
 
@@ -1070,17 +1191,22 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 
 **Scope**:
 - `HandleStore` with identity-stable lookup and ref-count GC.
-- `repo.block(id)`, `repo.subtree(id)`, `repo.ancestors(id)`, `repo.backlinks(id)` return handles.
+- Handle factories: `repo.block(id)`, `repo.children(id)`, `repo.subtree(id)`, `repo.ancestors(id)`, `repo.backlinks(id)` return handles. Each calls `ctx.depend(...)` per §5.5 so invalidation works correctly.
+- `repo.load(id, opts?)` with `{ children?, ancestors?, descendants?: number }` populates the cache neighborhood and (for `children: true`) sets the `allChildrenLoaded` marker.
 - `useHandle(handle)` uses `useSyncExternalStore` + Suspense.
-- `useBlockData`, `useSubtree`, `useChildren`, `useBacklinks`, `useParents` rewrite as 1-line sugar.
+- `useBlockData`, `useChildren`, `useSubtree`, `useBacklinks`, `useParents` rewrite as 1-line sugar over `useHandle`.
 - `useDataWithSelector` deleted; `useHandle(handle, { selector })`.
-- All `await block.data()`-style sites become `await repo.load(id)` + sync access.
+- All `await block.data()`-style sites become `await repo.load(id)` + sync access (with appropriate `opts` for the neighborhoods the caller will read).
+- Cache loaded-range markers (`allChildrenLoaded` per parent) — set by `repo.load(id, { children: true })` and `repo.subtree(...)`'s loader; cleared by row_events tail when a sync-applied row's parent_id matches a tracked parent.
 - React component migration: Suspense boundaries placed where loading-states live.
 
 **Acceptance**:
 - No `await block.data()` calls remain.
 - `useBacklinks`, `useParents` etc. no longer use ad-hoc `useEffect` reload.
 - `Handle<BlockData | null>` distinguishes loading vs. not-found via `status()`.
+- `repo.children(id)` returns a handle whose value updates when sync brings in a new child of `id` (verified via test: write a row to local SQLite mimicking sync apply, expect the children handle to fire and re-resolve).
+- `repo.load(id, { children: true })` sets `allChildrenLoaded`; subsequent `block.childIds` is sync without throwing; absent the load, `block.childIds` throws `ChildrenNotLoadedError`.
+- row_events tail filters to `source = 'sync'` only — local writes invalidate via TxEngine fast path, no double-invalidation observable.
 
 ### Phase 3 — Named mutators + post-commit processors as facets
 
@@ -1259,6 +1385,7 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-4 findings addressed: stale Phase 1 sync-apply-wrapper bullet removed (§13.1); Phase 1 parseReferences description aligned with v4 follow-up decision (§13.1); Phase 3 parseReferences description aligned with follow-up (not same-tx with prefetch) (§13.3); `Block` facade gains `block.set` / `block.setContent` / `block.delete` sugar with explicit "thin wrapper over kernel mutator" framing (§5.2); built-in primitive codecs validate on decode, `codecs.optional` added, `codecs.unsafeIdentity` reserved for kernel-internal use (§5.6); plugin example uses `codecs.optional(codecs.date)` for the `Date | undefined` property (§12.1).
 - [ ] Reviewer's round-4 finding "PropertySchema lacks render metadata" — already addressed in v4.1; not a real finding against v4.2.
 - [ ] Reviewer's round-5 findings addressed: server/client schema split (§4 intro, §13.1 Phase 1); two-source handle invalidation (TxEngine + row_events tail) (§9.3); children-completeness markers + `ChildrenNotLoadedError` (§5.2); parent-edge dependencies for tree handles (§9.2); field-write processor watches with `core.parseReferences` watching `blocks.content` (§5.7, §7); ancestors CTE has explicit `depth` ORDER BY (§11.2); stale `tx_context.source='sync'` invariant fixed to `NULL` + COALESCE (§15.4).
+- [ ] Reviewer's round-6 findings addressed: cycle prevention + repair protocol (§4.7); `ctx.depend` for dynamic query dependency declaration (§5.5); `repo.children`, `repo.load(opts)` explicitly listed in Repo surface (§3 architecture diagram, §5.2, §13.2); row_events tail filtered to `source = 'sync'` to avoid TxEngine double-invalidation (§9.3); subtree path uses `hex(id)` to handle `/` in ids (§11.1); `tx.create` has explicit `onConflict: 'throw' | 'ignore'`, default `'throw'` (§5.3); soft-delete is its own row_events `kind`, distinguishable from regular updates (§4.3).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
