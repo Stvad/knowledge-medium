@@ -16,26 +16,12 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - **Bootstrap is staged** (§8). Stage 1 registers kernel + static contributions synchronously at `AppRuntimeProvider` mount; Stage 2 registers dynamic plugins after the discovery query resolves. The Stage 0 → Stage 1 window is one React render.
 > - **In-tx reads are limited** to `tx.get` / `tx.peek` / `tx.childrenOf` / `tx.parentOf`. No arbitrary `tx.query`. Broader information passes via mutator args (loaded outside the tx) or post-commit processors. Same constraint Replicache and Zero accept.
 >
-> **Recent simplification trajectory** (read as guard-rails — multiple rounds led to these and re-adding them is a regression):
-> - **v4.20: four dead-code drops.** `mode: 'same-tx'` processors removed (zero v1 callers; the hypothetical use case was rejected in v4.4 anyway). `watches.kind: 'mutator'` removed (field-watching is the correctness path; mutator-name watches miss plugin mutators that bypass the named one). `tx.create({...}, { onConflict: 'ignore' })` replaced by `tx.createOrGet(data) → { id, inserted: boolean }`. `ChangeScopeRegistry` removed (plugin scopes were behaving as `BlockDefault` anyway).
-> - **v4.21: write-through Tx primitives.** No staged write-set; no flush step. Each `tx.create` / `tx.update` / `tx.delete` / `tx.setProperty` runs INSERT/UPDATE inline against SQL; engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Reads inside a tx see own writes natively (`tx.get` via writeTransaction; `tx.peek` via snapshots-then-cache fallback). Made possible by v4.20 dropping the two consumers of pre-flush state (same-tx processors, createOrGet's reconciliation hook). **The shared cache is updated on commit walk only — see v4.24 below; do NOT re-add inline cache writes during the tx.**
-> - **v4.23: drop deterministic cycle repair entirely.** The old Layer 2 (post-sync deterministic repair via `repairTreeInvariants` + lex-smallest-loser) is removed. The protocol becomes: Layer 1 (local move-mutator validation) + Layer 2 (depth-100 CTE guards, formerly Layer 3) + a row_events-tail detection scan that logs cycles for telemetry. **`ChangeScope.Repair`, `repo.repairTreeInvariants`, `repo.canWrite`, the `repairCycle` kernel mutator, and the per-workspace repair gating prose are all gone.** Rationale: cycles are a narrow concurrent-write window; alpha population is small; the two remaining layers keep queries finite under any cyclic state; revisit auto-repair only if the detection log fires. **Don't re-add this without telemetry showing it's needed** — v4.12 → v4.18 chased per-workspace repair plumbing through several round-trips before v4.23 cut the whole branch.
-> - **v4.25: second-round reviewer fixes against v4.24.** Six items, mostly about getting v4.24's SQL right:
->   1. **`tx.createOrGet` rewritten as SELECT-then-branch** (§5.3, §10.4). The v4.24 attempt to discriminate insert-vs-restore via `RETURNING *, excluded.created_at AS …` was invalid SQLite — `excluded.*` is only legal in `ON CONFLICT DO UPDATE`'s SET/WHERE, not in RETURNING. Engine now SELECTs the existing row first (which it does anyway for `before` capture), then branches: missing → INSERT; cross-workspace → throw `DeterministicIdCrossWorkspaceError`; deleted=1 → UPDATE in place to restore (workspace_id is **not** updated — the row never moves between workspaces); deleted=0 → no write. Folds in the P1 "live conflict cannot refresh cache" finding (no snapshot recorded for deleted=0 hits, no spurious commit-walk reconciliation claim) and the P1 "restore can move a block between workspaces" finding (workspace-pin guard + frozen workspace_id on restore).
->   2. **Path encoding rewritten for §11.1/§11.2/§11.3** (also touched in §4.7). v4.24 had two bugs: (a) the subtree separator `~` (0x7E) sorts *after* every alphanumeric, so prefix order keys (`a` vs `aa`) sorted backwards under `ORDER BY path` for any sibling pair the fractional-indexing alphabet produced in a prefix relationship; (b) the ancestor/isDescendantOf recursive segments were `hex(id)/` instead of `!hex(id)/`, so the visited-guard `INSTR(path, '!hex/')` only matched the root node — a chain entering a non-root cycle (start → A → B → C → B) didn't catch the repeat until the depth-100 cap. Both fixed by switching the in-segment separator to `!` (0x21, less than every alnum + hex char) and using the uniform `!hex/` segment shape across all three CTEs.
->   3. **Cycle truncation is silent in result shape** (§4.7, §11.1). The visited-id guard truncates cleanly, but `Handle<BlockData[]>` has no per-edge "cycle here" metadata and we're not adding one for a rare case. The §4.7 "UI marker" claim is dropped; operators learn cycles happened from the `repo.events.cycleDetected` log only.
->   4. **Zero-write tx still writes a `command_events` row** (§5.3 invariant prose). The pipeline (§10 step 4) inserts unconditionally; §4.4 says one row per `repo.tx`; the previous §5.3 wording suggested zero-write txs skipped this. Reconciled to "uniform: always one row, with `workspace_id = NULL` and `mutator_calls = []` for zero-write txs."
->
-> - **v4.24: reviewer-found correctness fixes.** Seven changes, all addressing real bugs the spec previously hand-waved:
->   1. **`tx.createOrGet` restores soft-deleted rows** in-place (§5.3, §10.4). Previously `[[foo]]` typed → cleaned-up → re-typed would resolve to a hidden tombstone; now it un-soft-deletes via `ON CONFLICT DO UPDATE … WHERE blocks.deleted = 1` and returns `inserted: true`. The "restore = inserted:true" semantic keeps §7's cleanup-eligibility filter correct.
->   2. **Cache update deferred to commit walk** (§5.3, §10). SQL is still write-through inside `db.writeTransaction`; the shared cache is no longer mutated mid-tx. `tx.peek` reads snapshots-then-cache; outside-tx readers see only committed state. Closes the dirty-read window. v4.21's "no staged write-set" intent stands — write-through is just to SQL, the cache update is batched into the commit walk that fires handles.
->   3. **Engine-side cycle validation** on every parent_id-changing write (§4.7 Layer 1). `tx.update` and the restore branch of `tx.createOrGet` now go through the same `isDescendantOf` check that kernel move mutators previously did themselves; bypassing via plugin or direct `repo.tx` body is no longer possible.
->   4. **CTE visited-id guards** via path INSTR (§11.1/.2/.3). Cycles produce cleanly-truncated, dedup'd results — no UNION-ALL duplicate explosion at depth 100.
->   5. **Trigger count corrected to 7** (§4.5, §13.1): 5 audit/upload + 2 workspace-invariant.
->   6. **Local trigger drops "not soft-deleted"** (§4.1.1) — aligns with the server-side composite FK. Mutator-level validation still throws `ParentDeletedError` for fresh local writes (UX layer).
->   7. **Single-workspace per tx** invariant (§5.3, §15 #11). Engine pins `meta.workspaceId` from the first write and throws `WorkspaceMismatchError` on mismatched subsequent writes.
->
->   Plus: **Phase 5 collapsed** (§13) — tree CTEs land in Phase 1 since the engine needs them for cycle validation and tree mutations from day one. **Stale prose swept**: "before staging the write" → "before issuing the write"; `mode: 'follow-up'` dropped from the §7 example (only one mode since v4.20); round-6/-7/-8/-9 acceptance bullets collapsed to prevent accidental resurrection of deleted design.
+> **Recent simplification trajectory** (load-bearing decisions; per-version detail in `git log`):
+> - **v4.20–v4.21: dead-code drops + write-through.** Removed `mode: 'same-tx'` processors, `watches.kind: 'mutator'`, `ChangeScopeRegistry`, the `tx.create({onConflict: 'ignore'})` form, and the staged write-set. Tx primitives now run INSERT/UPDATE inline against SQL; engine captures `(before, after)` per id in a tx-private snapshots map. **Don't re-introduce staging or mutator-name watches.**
+> - **v4.23: dropped deterministic cycle repair.** No `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`, no `repairCycle` mutator. Cycle protocol is now Layer 1 (engine-side `isDescendantOf` check on every parent_id-changing write, §4.7) + Layer 2 (depth-100 + visited-id CTE guards, §11) + detection-only logging via the row_events tail. **Don't re-add auto-repair without telemetry showing it's needed** — v4.12 → v4.18 chased per-workspace repair plumbing through several round-trips before v4.23 cut the whole branch.
+> - **v4.24: cache deferred to commit; engine-side parent-id validation; single-workspace-per-tx; trigger count = 7; Phase 5 collapsed.** Cache is mutated only on commit walk (snapshots map is the tx-private overlay; `tx.peek` reads snapshots-then-cache). Engine validates parent_id writes for cycles centrally so plugin/direct-`repo.tx` callers can't bypass. Engine pins `meta.workspaceId` from first write, throws `WorkspaceMismatchError` on mismatch. Tree CTEs (`SUBTREE`/`ANCESTORS`/`IS_DESCENDANT`/`CHILDREN`) live in Phase 1 — they're load-bearing for cycle validation and tree mutations from day one. Local parent-workspace trigger drops "not soft-deleted" to align with the server-side composite FK.
+> - **v4.25: second-round SQL fixes.** `tx.createOrGet` rewritten as SELECT-then-branch (the previous `RETURNING *, excluded.*` form was invalid SQLite). CTE path encoding switched to `!hex/` segment shape with `!` (0x21) as separator — fixes prefix-order-key sort bug (`~` was 0x7E, sorted *after* alnum) and non-root cycle re-entry detection (recursive segments were missing the leading `!`).
+> - **v4.26: tombstone restore moved out of `tx.createOrGet`.** Generic primitive throws `DeletedConflictError` on tombstone conflict and `DeterministicIdCrossWorkspaceError` on cross-workspace conflict; both v1 deterministic-id callers (`createAliasTargetInline` in §7 and the Roam-import upsert in §13.1) catch the former and call `tx.update(id, {deleted: false, ...freshFields})` with their own refresh policy. **Don't put silent restore back into the primitive** — surprising default for plugin authors, and it forces one refresh policy on all callers.
 >
 > **Resolved open questions:**
 > - **zod** for argsSchema (v4.10). Bundle weight + React-ecosystem familiarity beat Effect Schema; bidirectional encode/decode handled separately by `Codec<T>`. Valibot is a near-mechanical fallback if bundle pressure shows up later.
@@ -479,11 +465,11 @@ Total v1 trigger count on `blocks`: **7** = 5 audit/upload (3 row_events writers
 
 Two layers of defense + one observability hook:
 
-**Layer 1 — Engine-side validation on every parent_id write.** The TxEngine intercepts any primitive that sets `parent_id` on an *existing* row (i.e. `tx.update(id, patch)` or `tx.createOrGet(...)` whose `WHERE blocks.deleted = 1` restore branch fires) and runs a single `isDescendantOf` query (§11.3) before issuing the SQL: would the new parent be a descendant of `id`? If yes, throw `CycleError` and abort the primitive (the writeTransaction will roll back when the user fn propagates the throw, or callers can `try`/`catch` and continue).
+**Layer 1 — Engine-side validation on every parent_id write.** The TxEngine intercepts any `tx.update(id, patch)` whose patch sets `parent_id` and runs a single `isDescendantOf` query (§11.3) before issuing the SQL: would the new parent be a descendant of `id`? If yes, throw `CycleError` and abort the primitive (the writeTransaction will roll back when the user fn propagates the throw, or callers can `try`/`catch` and continue).
 
-Why engine-side, not mutator-side: kernel mutators (`move`, `indent`, `outdent`) could enforce this themselves, but `tx.update(id, { parentId })` is callable directly from any plugin mutator or `repo.tx` body. Putting the check in the engine localizes the rule to one place, guarantees no caller can bypass it, and matches v4.23's "no per-caller workspace plumbing" simplification ethos. Cost: one `isDescendantOf` query per parent_id-changing write (a single recursive CTE bounded by depth-100), which is what kernel move mutators were already doing — the relocation is uniform, not additional.
+Why engine-side, not mutator-side: kernel mutators (`move`, `indent`, `outdent`) could enforce this themselves, but `tx.update(id, { parentId })` is callable directly from any plugin mutator or `repo.tx` body — including domain helpers that restore soft-deleted rows via `tx.update(id, { deleted: false, parentId, ... })`. Putting the check in the engine localizes the rule to one place, guarantees no caller can bypass it, and matches v4.23's "no per-caller workspace plumbing" simplification ethos. Cost: one `isDescendantOf` query per parent_id-changing write (a single recursive CTE bounded by depth-100), which is what kernel move mutators were already doing — the relocation is uniform, not additional.
 
-`tx.create` doesn't need this check: a brand-new id has no descendants, so the proposed parent is trivially not a descendant of it. Same for the fresh-insert branch of `tx.createOrGet`. Only writes against pre-existing rows (`tx.update`, the restore branch of `tx.createOrGet`) carry the check.
+`tx.create` and `tx.createOrGet` don't need this check on a fresh-insert path: a brand-new id has no descendants, so the proposed parent is trivially not a descendant of it. The check fires on `tx.update` only.
 
 **Layer 2 — CTE guards (depth + visited-id).** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries two guards: a `depth < 100` defensive cap, and a visited-id check via path-INSTR (§11.1) that skips any row whose id already appears in the recursion path-so-far. Even if a sync-applied cycle slips through Layer 1, the visited-id guard truncates the cyclic subtree at the cycle entry — each block appears at most once in the result, no UNION-ALL duplicate explosion — and the depth guard is the additional safety net for any pathological non-cycle deep tree (a 200-level deep, non-cyclic tree gets capped, but that's an extreme corner case). The result is a clean, finite tree the UI can render. The truncation itself is silent in the result shape — `Handle<BlockData[]>` does not carry per-edge "cycle here" metadata; surfacing the cycle in-UI would require a parallel result channel that we're not building for this rare case. Operators learn cycles happened from the `repo.events.cycleDetected` log (next paragraph).
 
@@ -646,46 +632,36 @@ export interface Tx {
    *  pre-tx state. This preserves v4.21's "no staged write-set" intent for
    *  SQL while keeping cache consistent with committed state only. */
   create(data: NewBlockData, opts?: TxWriteOpts): string     // throws DuplicateIdError on PK conflict
-  /** Insert OR produce a live row at the deterministic id, with explicit
-   *  insertion status. Required for deterministic-id callers
-   *  (createAliasTargetInline; daily notes).
+  /** Insert OR fetch the live row at a deterministic id. **No tombstone
+   *  resurrection** — this primitive is intentionally narrow.
    *
-   *  Implementation is SELECT-then-branch inside the active writeTransaction
-   *  (full SQL in §10.4). High-level behavior:
+   *  - id and workspaceId are REQUIRED.
+   *  - Engine SELECTs the existing row first (same `before` capture §10 step 3
+   *    runs for any first-touch id), then:
+   *    1. **Missing** → INSERT, returns `{ id, inserted: true }`. Snapshot
+   *       `(null, after)`.
+   *    2. **Exists, different workspace** → throws
+   *       `DeterministicIdCrossWorkspaceError`. Defensive correctness guard,
+   *       not a policy decision (a deterministic id resolving to a row in
+   *       another workspace is always a bug — kernel id encodings include
+   *       workspaceId, plugin ids may not).
+   *    3. **Exists, `deleted = 0`** → returns `{ id, inserted: false }`. No
+   *       write, no snapshot, no cache mutation. Within-tx `tx.get(id)` reads
+   *       SQL; outside-tx cache freshness is the row_events tail's job (§9.3).
+   *    4. **Exists, `deleted = 1`** (soft-deleted) → throws
+   *       `DeletedConflictError`. **Tombstone restore is a domain policy** —
+   *       which fields to refresh, whether to overwrite content, what counts
+   *       as "the same thing being recreated" — and belongs in the helper
+   *       that owns the deterministic id, not in a generic primitive. The two
+   *       v1 callers are `createAliasTargetInline` (§7) and Roam import
+   *       (§13.1); both catch this error and call `tx.update(id, {deleted:
+   *       false, ...freshFields})`. See §10.4 for the rationale and helper
+   *       sketch.
    *
-   *  - id and workspaceId are REQUIRED on the input — without them, conflict
-   *    semantics are undefined.
-   *  - Engine SELECTs the existing row first (this is the same `before` capture
-   *    §10 step 3 does for any first-touch id), then branches:
-   *
-   *    1. **No row exists** → INSERT runs; returns `{ id, inserted: true }`;
-   *       engine captures `(null, after)` in the snapshots map.
-   *    2. **Row exists in a different workspace** → throws
-   *       `DeterministicIdCrossWorkspaceError`. Defensive guard against
-   *       plugin-defined deterministic ids that don't include workspaceId
-   *       (kernel ids — alias targets, daily notes — encode workspaceId by
-   *       construction and never trigger this).
-   *    3. **Row exists, `deleted = 0`** → no write; returns
-   *       `{ id, inserted: false }`. No snapshot, no cache mutation. Cache
-   *       freshness for this id is the row_events tail's job (§9.3); within
-   *       this tx, `tx.get(id)` reads SQL directly.
-   *    4. **Row exists, `deleted = 1`** (soft-deleted) → UPDATEs in place:
-   *       sets `deleted = 0` and overwrites the input fields with the new
-   *       values. **workspace_id is NOT updated** — it stays at the (verified-
-   *       matching) existing value, so a soft-deleted row never moves between
-   *       workspaces. Returns `{ id, inserted: true }`. Engine captures
-   *       `(before-row, after-row)` in the snapshots map.
-   *
-   *  Why restore-on-conflict (not "return inserted:false even when un-soft-
-   *  deleted"): the deterministic-id contract is "two clients writing the same
-   *  id converge to the same live row." If client A typed `[[foo]]`, deleted
-   *  it (soft-delete via cleanup), then later types `[[foo]]` again, the user's
-   *  intent on the second type is "create [[foo]]" — they don't know about the
-   *  soft-deleted tombstone and shouldn't see the alias resolve to a hidden row.
-   *  Restoring is the only behavior that makes typing `[[foo]]` after a delete
-   *  work correctly. `inserted: true` is the honest semantic for the cleanup-
-   *  eligibility filter in §7 — "this tx made a live row exist at this id
-   *  where none did before" — covering both fresh-insert and restore branches. */
+   *  Why throw on tombstone instead of restoring: the name `createOrGet`
+   *  reads as "create-or-fetch-live"; silent restore-on-conflict is
+   *  surprising for plugin authors and embeds one specific refresh policy
+   *  into the primitive. Domains know what they want to refresh. */
   createOrGet(data: NewBlockData & { id: string; workspaceId: string }, opts?: TxWriteOpts): Promise<{ id: string; inserted: boolean }>
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): void
   delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
@@ -1159,8 +1135,8 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: { kind: 'field', table: 'blocks', fields: ['content'] } })`. Field-watching is correctness-critical: any tx that writes `blocks.content` triggers ref parsing, including plugin mutators that bypass the `setContent` kernel mutator. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. (No `mode` field — v4.20 dropped same-tx mode, follow-up is the only behavior; see §16.2.) |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
-| Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<{ id: string; inserted: boolean }>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow. The helper computes the deterministic id, calls `tx.createOrGet({ id, ... })` (per §5.3), and returns both the id and whether *this* tx was the one that inserted. The `inserted` boolean drives cleanup eligibility (see Self-destruct row). |
-| Daily-note deterministic id | `createAliasTargetInline` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true`, the other gets `inserted: false` and reads the existing live row from SQL. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s. |
+| Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<{ id: string; inserted: boolean }>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow. The helper computes the deterministic id and calls `tx.createOrGet({ id, workspaceId, content, aliases: [alias], ... })`. **Tombstone restore is the helper's responsibility**: `tx.createOrGet` throws `DeletedConflictError` if the deterministic id resolves to a soft-deleted row (per §10.4 v4.26); the helper catches it and runs `tx.update(id, { deleted: false, content, aliases })` to undelete + refresh the alias-target's "fresh fields" (content, aliases; `parent_id`/`order_key`/`properties` stay at whatever the prior live state had). The helper returns `{ id, inserted: true }` for both fresh-insert and tombstone-restore paths, and `{ id, inserted: false }` for live-row hits — the `inserted` boolean drives cleanup eligibility (see Self-destruct row). `DeterministicIdCrossWorkspaceError` is not caught — it should never happen for kernel alias-target ids (which include workspaceId by construction) and indicates a bug if it does. |
+| Daily-note deterministic id | `createAliasTargetInline` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true` (insert), the other gets `inserted: false` (live-row hit) and reads the existing live row from SQL. The tombstone-restore path applies to daily notes too: typing `[[2026-04-29]]` after the daily note was previously soft-deleted hits `DeletedConflictError` and the helper restores it via `tx.update`. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s, and a restored daily note is also exempted (the date-shape filter applies regardless of how the row became live). |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
 | Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds: [...] }, { delayMs: 4000 })`. **`newlyInsertedAliasTargetIds`** is built by filtering `createAliasTargetInline` results: include only ids where `inserted === true` AND the id is non-date-shaped. This is the literal honest meaning — `tx.createOrGet` returns `inserted` directly, so we know at parse time which ids this tx actually wrote vs which ones already existed. The cleanup processor (`watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ newlyInsertedAliasTargetIds: z.array(z.string()) })` so the engine validates at `tx.afterCommit` enqueue. Cleanup runs **one gate**: verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. When the gate passes, `ctx.tx.delete(id)` proceeds. (No row_events insertion check needed — the `inserted` boolean from `tx.createOrGet` already gave us that information at the call site, before we even scheduled cleanup.) |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
@@ -1191,9 +1167,13 @@ function isDateAliasTargetId(id: string): boolean {
 //   - For every parsed alias not already resolved by aliasLookup, call
 //     createAliasTargetInline(tx, alias, workspaceId) — a plain helper, NOT a
 //     registered mutator (see §7 mapping). Helper internally does
-//     tx.createOrGet({ id, ..., aliases: [alias] }) and returns
-//     { id, inserted: boolean }.
-//   - Build the cleanup candidates: non-date ids that THIS tx actually inserted.
+//     tx.createOrGet({ id, workspaceId, aliases: [alias], ... }); on
+//     DeletedConflictError it falls back to tx.update(id, { deleted: false,
+//     content, aliases }) to restore the tombstone (per §10.4 v4.26).
+//     Either way it returns { id, inserted: boolean } where inserted: true
+//     covers both fresh-insert and restore.
+//   - Build the cleanup candidates: non-date ids that THIS tx actually
+//     inserted-or-restored.
 const results = await Promise.all(
   unresolvedAliases.map(alias => createAliasTargetInline(tx, alias, workspaceId))
 )
@@ -1231,7 +1211,7 @@ A naive design (cleanup removes any alias-target with no incoming references) wo
 - **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept**. `tx.createOrGet` returned `inserted: false`; Inbox's id is filtered out of `newlyInsertedAliasTargetIds` at schedule time; cleanup never considers it. §7.5 race; must not regress.
 - **Typing `[[2026-04-28]]` (newly creates the daily note)**, then deleting within 4s → daily note is **kept** (date-shaped target excluded from `newlyInsertedAliasTargetIds` even though `inserted: true`). §7.6 daily-note exemption; must not regress.
 - Two clients concurrently typing `[[2026-04-28]]` → deterministic daily-note id; both `tx.createOrGet` calls converge on the same row. One returns `inserted: true`, the other `inserted: false`; either way both clients' `references` arrays end up containing `{id, alias: '2026-04-28'}`.
-- **Re-typing `[[foo]]` after a previous create-and-cleanup cycle** → restored row visible. Sequence: type `[[foo]]` (createOrGet returns `inserted: true`); delete the text within 4s (cleanup soft-deletes foo); ≥4s passes; type `[[foo]]` again. The second `createOrGet` matches the soft-deleted row's id, hits the restore path (`ON CONFLICT DO UPDATE … WHERE blocks.deleted = 1`), returns `inserted: true`, and the restored row's `deleted = 0`. Source block's `references` resolves to a visible alias target; subsequent backlinks queries find it. Tree views render it. Must not return a soft-deleted tombstone or `inserted: false`. (P0 v4.24 — covers the soft-delete-then-recreate flow; without restore semantics, the alias would silently resolve to a hidden row.)
+- **Re-typing `[[foo]]` after a previous create-and-cleanup cycle** → restored row visible. Sequence: type `[[foo]]` (helper `createAliasTargetInline` returns `inserted: true` from primitive insert); delete the text within 4s (cleanup soft-deletes foo); ≥4s passes; type `[[foo]]` again. The second helper call hits the soft-deleted row: `tx.createOrGet` throws `DeletedConflictError` (per §10.4 v4.26), the helper catches it and runs `tx.update(id, { deleted: false, content, aliases })` to undelete + refresh, returning `{ id, inserted: true }`. Source block's `references` resolves to a visible alias target; subsequent backlinks queries find it. Tree views render it. Must not return a tombstone or `inserted: false`. (Original P0 v4.24, primitive-level restore in v4.24/v4.25, helper-level restore in v4.26.)
 - Rapid typing inside an existing `[[alias]]` (no alias-set change) → debounce coalesces; at most one processor run per block per debounce window.
 - Undo of `setContent` → `references` converges back to pre-edit state.
 
@@ -1393,13 +1373,13 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │          Cache is NOT mutated here — the shared cache stays   │
 │          at its pre-tx state until commit walk.                │
 │        - tx.createOrGet: SELECT existing row (= `before`);    │
-│          if missing → INSERT (snapshot null→after);            │
-│          else if workspace mismatch → throw                    │
+│          missing → INSERT (snapshot null→after);               │
+│          workspace mismatch → throw                            │
 │          DeterministicIdCrossWorkspaceError;                   │
-│          else if deleted=1 → UPDATE in place to restore        │
-│          (snapshot before→after); else → no write, no          │
-│          snapshot, return inserted:false. See §10.4 for the   │
-│          full branching SQL.                                   │
+│          deleted=1 → throw DeletedConflictError (domain        │
+│          helper handles restore via tx.update — §10.4);        │
+│          deleted=0 → no write, no snapshot, return             │
+│          inserted:false.                                       │
 │        Reads:                                                 │
 │          - tx.get / tx.childrenOf / tx.parentOf → SQL via     │
 │            txDb; sees own writes natively (read-your-own-     │
@@ -1472,64 +1452,75 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 `tx.create` throws `DuplicateIdError` on PK conflict — the safe default for accidental id collisions.
 
-`tx.createOrGet({ id, workspaceId, ... })` is the deterministic-id path (daily notes, alias targets). Three outcomes — fresh insert, live-row hit, soft-deleted-row restore — resolved by **SELECT-then-branch** inside the active writeTransaction. (The earlier v4.24 attempt to discriminate via `RETURNING *, excluded.*` was invalid SQLite — `excluded.*` is only legal in `ON CONFLICT DO UPDATE`'s `SET` and `WHERE`, not in `RETURNING`. The SELECT-first form is also clearer and lets us enforce the workspace-pin invariant.)
+`tx.createOrGet({ id, workspaceId, ... })` is the deterministic-id path. SELECT-then-branch inside the active writeTransaction; **no tombstone restore** built into the primitive (v4.26 simplification — see "Why no built-in restore" below):
 
 ```ts
-// Step 1: read the existing row, if any. This is the engine's pre-write SELECT
-// — the same one §10 step 3 captures as `before` for any first-touch id.
 const before = await txDb.get('SELECT * FROM blocks WHERE id = ?', [id])
 
 if (before === undefined) {
-  // (a) Fresh insert.
+  // Fresh insert.
   await txDb.run('INSERT INTO blocks (id, workspace_id, ...) VALUES (?, ?, ...)', [...])
   // Snapshot: (null, after-from-input). Cache updated on commit walk.
   return { id, inserted: true }
 }
 
-// Workspace-pin guard: if the existing row belongs to a different workspace,
-// the deterministic-id contract is broken (collision across workspaces). Throw
-// rather than silently moving the row + its subtree. This is defensive — kernel
-// id encodings (alias targets, daily notes) include workspaceId, so collisions
-// shouldn't happen — but plugin-defined deterministic ids could bug.
 if (before.workspace_id !== input.workspaceId) {
+  // Defensive: deterministic id resolves to a row in another workspace.
+  // Kernel id encodings include workspaceId; plugin ids may not. Throw loudly
+  // rather than silently move the row + subtree.
   throw new DeterministicIdCrossWorkspaceError(id, before.workspace_id, input.workspaceId)
 }
 
 if (before.deleted === 1) {
-  // (b) Restore branch: row was soft-deleted; un-soft-delete in place,
-  // overwrite the input fields. Workspace_id stays at `before.workspace_id`
-  // (verified to match input above) — never moves.
-  await txDb.run(
-    `UPDATE blocks SET deleted = 0, parent_id = ?, order_key = ?, content = ?,
-                       properties_json = ?, references_json = ?,
-                       updated_at = ?, updated_by = ?
-     WHERE id = ?`,
-    [...]
-  )
-  // Snapshot: (before-with-deleted=1, after-with-deleted=0-and-fresh-fields).
-  // Cache updated on commit walk; handles diff to the new live shape.
-  return { id, inserted: true }
+  // Tombstone. Restore is a domain policy — refuse here, let the caller
+  // handle it explicitly per their refresh semantics.
+  throw new DeletedConflictError(id)
 }
 
-// (c) Live-row hit: row exists, deleted = 0. No write, no snapshot.
-// Cache is NOT mutated by this primitive. If the cached entry for this id
-// is stale, that's the row_events tail's job (§9.3) — which already runs
-// against sync-applied changes. Within this tx, tx.get(id) reads SQL
-// directly so it sees the up-to-date row regardless.
+// Live-row hit. No write, no snapshot. Cache freshness for this id is the
+// row_events tail's job (§9.3); tx.get(id) reads SQL directly within this tx.
 return { id, inserted: false }
 ```
 
-**Why SELECT-then-branch beats `INSERT … ON CONFLICT DO UPDATE` with discriminator**:
-- SQLite doesn't allow `excluded.*` in `RETURNING`, so the discriminator approach can't run as written.
-- Engine pre-write SELECTs every first-touch id anyway (per §10 step 3, to capture `before`); reusing it here is free.
-- Branching is explicit — implementers can read what each path does.
-- Workspace-pin enforcement (next paragraph) is a natural pre-write check, not an awkward CHECK constraint or post-INSERT validation.
+**Why no built-in restore** (v4.26): pre-v4.26 `tx.createOrGet` un-soft-deleted on tombstone conflict and returned `inserted: true`, so e.g. typing `[[foo]]` after `[[foo]]` was created-and-cleaned-up "just worked." That convenience came with three problems:
+1. **Misleading name.** `createOrGet` reads as "create-or-fetch-live"; silent tombstone resurrection is surprising for plugin authors who wrote `repo.run('myPlugin:foo', ...)` expecting clean PK semantics.
+2. **One refresh policy hardcoded.** The pre-v4.26 SQL overwrote `parent_id`, `order_key`, `content`, `properties_json`, `references_json`, `updated_at`, `updated_by`. That's "all input fields, blow away whatever was there." Daily notes might want different behavior (e.g. preserve content, refresh aliases only); alias targets might want only the bare existence-restore. The primitive shouldn't pick.
+3. **Two callers in v1 only**, both already domain helpers. Pushing restore into them is ~5 extra lines of try/catch + `tx.update`; not a fanout.
 
-**Why workspace-pin is enforced** (P1 v4.25): without it, a deterministic-id collision across workspaces could move a soft-deleted row — and *its subtree*, since the children's `parent_id` would still resolve to this row but in a new workspace_id — into a different workspace, silently violating the §4.1.1 workspace invariant. Throwing `DeterministicIdCrossWorkspaceError` makes this loud. v1 kernel deterministic ids (`daily/<workspaceId>/<date>` for daily notes, alias-target ids that include workspaceId) don't collide across workspaces by construction; the check protects against plugin-defined deterministic ids that may not.
+**Domain helpers handle restore explicitly**:
 
-Within-tx reads: `tx.get(id)` after `tx.createOrGet` reads SQL via the writeTransaction — sees the live row whether this tx inserted, restored, or hit an existing live row. The `inserted` boolean is in the return value, available immediately.
+```ts
+// §7 createAliasTargetInline (sketch — full helper in §7 mapping table):
+async function createAliasTargetInline(tx: Tx, alias: string, workspaceId: string) {
+  const id = computeAliasTargetId(alias, workspaceId)
+  const data = { id, workspaceId, content: '', aliases: [alias], ... }
+  try {
+    return await tx.createOrGet(data)
+  } catch (e) {
+    if (e instanceof DeletedConflictError) {
+      // Tombstone restore: undelete + reapply this domain's "fresh fields."
+      // For alias targets that's content/aliases/metadata bumps;
+      // parent_id/order_key/properties stay as-they-were.
+      await tx.update(id, {
+        deleted: false,
+        content: data.content,
+        aliases: data.aliases,
+        // updatedAt / updatedBy bump automatically (no skipMetadata)
+      })
+      return { id, inserted: true }   // honest for §7's cleanup-eligibility filter
+    }
+    throw e
+  }
+}
+```
 
-**Why the restore path is needed**: §7's cleanup processor uses `tx.delete` (soft-delete) for orphaned alias targets. Without the restore path, typing `[[foo]]` after `[[foo]]` was previously created-and-cleaned-up would resolve to a soft-deleted tombstone — invisible to tree views and backlinks queries — leaving the second `[[foo]]` semantically broken. Restore-on-soft-delete-conflict is the simplest correct behavior; the alternative (cleanup uses hard-delete) would require a separate sync policy decision (see §4.5 — DELETE upload trigger is intentionally absent in v1).
+The Roam import upsert helper (`src/utils/roamImport/`) wraps `tx.createOrGet` with a similar but possibly different refresh policy — re-imports may want to overwrite content, alias-target restores don't. Each domain decides.
+
+**Workspace-pin guard stays in the primitive** (not domain policy): a deterministic id that resolves to a row in a different workspace is always a bug, regardless of caller. Embedding the guard centrally guarantees no domain helper accidentally moves a row + its subtree across workspaces.
+
+**Within-tx reads**: `tx.get(id)` after `tx.createOrGet` (or after a domain helper's restore-via-`tx.update`) reads SQL via the writeTransaction — sees the live row whether this tx inserted, restored via the helper, or hit an existing live row. The `inserted` boolean is in the return value, available immediately.
+
+**Why deterministic ids need a tombstone story at all**: a soft-deleted row keeps its id occupied. Without explicit restore handling somewhere, the next "create the same deterministic thing" call would either get a confusing `inserted: false` for a hidden row (silent failure) or a `DeletedConflictError` that propagates to the user (loud failure). v1 picks "loud at the primitive, recoverable at the domain helper." See §7 for the alias flow and §13.1 Phase 1 prose for Roam import.
 
 ---
 
@@ -2005,31 +1996,17 @@ Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces t
 
 ## 19. Acceptance for the spec itself
 
-- [ ] Reviewer's P0 findings (round 2) addressed: `tx_context` is a regular table not TEMP (§4.2); `tx.query` removed in favor of bounded primitives with explicit overlay (§5.3); Phase 1 acknowledges full break (no `block.change` survival, no `childIds` in `BlockData`, properties flat, tree API rewrite all in Phase 1) (§13.1); order_key uses jittered + `(id)` tiebreak (§4.1, §11, §15).
-- [ ] Reviewer's P1 findings (round 2) addressed: upload trigger preservation with `source` gating (§4.5); property shape consistent — flat from Phase 1 (§13.1); `tx.afterCommit` for processor scheduling (§5.3, §5.7, §7); `Mutator.scope` field (§5.4).
-- [ ] Reviewer's round-3 findings addressed: parseReferences is follow-up (typing latency concern resolved by matching today's UX, §7.1); no PowerSync sync-apply wrapper required (`source = NULL` ↔ sync, §4.2/§4.5); separate INSERT/UPDATE/DELETE triggers (§4.5); `TxWriteOpts.skipMetadata` typed on `tx.create`/`tx.update`/`tx.setProperty` (§5.3); `tx.setProperty`/`tx.getProperty` keep codecs at the boundary (§5.3, §5.6); `Codec<T>` is a real bidirectional codec, not a zod schema (§5.6).
-- [ ] Reviewer's round-4 findings addressed: stale Phase 1 sync-apply-wrapper bullet removed (§13.1); Phase 1 parseReferences description aligned with v4 follow-up decision (§13.1); Phase 3 parseReferences description aligned with follow-up (not same-tx with prefetch) (§13.3); `Block` facade gains `block.set` / `block.setContent` / `block.delete` sugar with explicit "thin wrapper over kernel mutator" framing (§5.2); built-in primitive codecs validate on decode, `codecs.optional` added, `codecs.unsafeIdentity` reserved for kernel-internal use (§5.6); plugin example uses `codecs.optional(codecs.date)` for the `Date | undefined` property (§12.1).
-- [ ] Reviewer's round-4 finding "PropertySchema lacks render metadata" — already addressed in v4.1; not a real finding against v4.2.
-- [ ] Reviewer's round-5 findings addressed: server/client schema split (§4 intro, §13.1 Phase 1); two-source handle invalidation (TxEngine + row_events tail) (§9.3); children-completeness markers + `ChildrenNotLoadedError` (§5.2); parent-edge dependencies for tree handles (§9.2); field-write processor watches with `core.parseReferences` watching `blocks.content` (§5.7, §7); ancestors CTE has explicit `depth` ORDER BY (§11.2); stale `tx_context.source='sync'` invariant fixed to `NULL` + COALESCE (§15.4).
-- [ ] Round-6 through Round-9 review-thread bookkeeping is collapsed (v4.24): the still-valid items from those rounds — `ctx.depend` (§5.5), `hex(id)` path encoding (§11.1), soft-delete row_events `kind` (§4.3), tx_context all-fields clear (§4.3, §10), CTE depth + visited-id guards (§4.7, §11), `BlockData` camelCase + storage mapping (§4.1.1), Stage-2 dynamic-discovery transitional path (§8), §6/§8 facet-runtime unification — are described in their relevant sections. The items those rounds spec'd that have since been deleted — `ChangeScope.Repair`, `repo.repairTreeInvariants`, `repo.canWrite`, `tx.create({onConflict:'ignore'})`, the row_events insertion gate, `repairCycle` mutator, conditional-source-from-isReadOnly — are documented as deletions in the v4.18 / v4.21 / v4.23 / v4.24 trajectory entries (top of doc) and below. **Do not reintroduce the deleted items.** For the round-by-round review history, see git log on this file.
-- [ ] v4.18 → v4.23 trajectory: cycle-repair was workspace-aware (v4.17), then engine-unaware with `repairTreeInvariants` worker (v4.18), then deleted entirely (v4.23). The current spec has no Repair scope, no repair worker, no per-workspace canWrite gating; sync-induced cycles are detected via the row_events tail (§4.7) and logged as `repo.events.cycleDetected`, not repaired. **Don't re-add any of this without telemetry showing it's needed.**
-- [ ] v4.21 write-through reflected throughout: Tx primitives execute their INSERT/UPDATE inline within `db.writeTransaction`; the engine captures `(before, after)` per id in the snapshots map for handle diffing / undo (§5.3, §10 pipeline, §15 #7). Reads inside a tx see own writes natively (`tx.get` via writeTransaction; `tx.peek` via snapshots-then-cache fallback). `tx.createOrGet` is just one more write-through primitive (§10.4). The shared cache is updated on commit walk only — see v4.24 below; do NOT re-add inline cache writes during the tx.
-- [ ] v4.23 cycle-repair drop reflected throughout: Layer 1 = engine-side validation on every parent_id-changing write (§4.7), Layer 2 = CTE depth + visited-id guards (§4.7, §11), plus a detection-only row_events-tail scan that logs cycles for telemetry. **No automatic repair.** `ChangeScope.Repair`, `repo.repairTreeInvariants`, `repo.canWrite`, the `repairCycle` kernel mutator, and §5.8.1 are all removed. Read-only mode (§10.3, §15 #1) collapses to "BlockDefault / References reject; UiState always allowed."
-- [ ] **v4.25 reviewer fixes against v4.24** (this round):
-  - **createOrGet uses SELECT-then-branch** (§5.3, §10.4): the v4.24 `INSERT … ON CONFLICT DO UPDATE … RETURNING *, excluded.created_at AS …` form was invalid SQLite. Engine SELECTs the existing row first, then branches into INSERT / restore-UPDATE / no-write paths. Workspace-pin guard added (`DeterministicIdCrossWorkspaceError` on cross-workspace conflict); restore branch no longer updates `workspace_id`, so soft-deleted rows can never move between workspaces. Live-row conflict no longer claims commit-walk cache reconciliation — there's no snapshot, so step 6 doesn't see this id; the row_events tail handles cache freshness for sync-applied changes.
-  - **Path encoding fixes** (§11.1/§11.2/§11.3, §4.7): separator changed from `~` (0x7E, greater than alnum) to `!` (0x21, less than alnum) so subtree `ORDER BY path` produces correct sibling order for prefix order keys. Recursive segments in ancestors / isDescendantOf now use the uniform `!hex/` shape (pre-v4.25 they used `hex/` without the leading `!`, so the visited-guard only caught returning-to-the-start cycles, not non-root cycle re-entries).
-  - **Cycle truncation is silent** (§4.7, §11.1): dropped the "UI cycle-here marker" claim. `Handle<BlockData[]>` carries no per-edge truncation metadata; operators learn from the `repo.events.cycleDetected` log only.
-  - **Zero-write tx behavior reconciled** (§5.3): always writes a `command_events` row (matches §10 pipeline + §4.4), with `workspace_id = NULL` and `mutator_calls = []` when no writes happened.
-- [ ] **v4.24 reviewer-found correctness fixes reflected throughout**:
-  - **createOrGet restores soft-deleted rows** (§5.3, §10.4): `tx.createOrGet` no longer returns `inserted: false` against a soft-deleted tombstone — it un-soft-deletes in-place and returns `inserted: true`. The cleanup-eligibility filter in §7 stays correct because "restore = inserted:true" is the honest semantic ("this tx made a live row exist where none did before"). Test coverage for the soft-delete-then-recreate path is in §7.4. Closes the P0 finding that `[[foo]]` after a previous create-and-cleanup would silently resolve to a hidden row. (Implementation details further refined in v4.25 above.)
-  - **Cache update deferred to commit walk** (§5.3, §10 pipeline, §10 atomicity-boundary prose, §15 #9): SQL is still write-through inside `db.writeTransaction`; the shared cache is no longer mutated mid-tx. The snapshots map (already kept for handle diffing / undo) is the tx-private overlay; `tx.peek` reads snapshots-then-cache; outside-tx readers see only committed state. Closes the dirty-read window where a render or imperative `block.peek` could observe uncommitted state. v4.21's "no staged write-set" intent stands: write-through to SQL, no overlay arithmetic, no flush step — the cache update is simply batched into the commit walk that fires handles.
-  - **Engine-side cycle validation** (§4.7 Layer 1): every primitive that sets `parent_id` on an existing row (`tx.update`, the restore branch of `tx.createOrGet`) runs `isDescendantOf` and throws `CycleError` on cycle creation. Replaces the per-mutator validation that `tx.update` could bypass.
-  - **CTE visited-id guards** (§11.1, §11.2, §11.3, §4.7): subtree / ancestors / isDescendantOf get visited-id INSTR checks via the path encoding. Cycles produce cleanly-truncated, dedup'd results instead of UNION-ALL-driven duplicates.
-  - **Trigger count corrected to 7** (§4.5, §13.1, top design-notes): 5 audit/upload + 2 workspace-invariant. Phase 1 acceptance check updated.
-  - **Local trigger no longer rejects soft-deleted parents** (§4.1.1): aligns with server-side composite FK behavior. Mutator-level validation throws `ParentDeletedError` for new local children under soft-deleted parents (UX layer); the storage layer accepts whatever sync brings in.
-  - **Single-workspace per tx** (§5.3, §15 #11): engine pins `meta.workspaceId` from the first write and throws `WorkspaceMismatchError` on cross-workspace writes within the same tx. `command_events.workspace_id` and `CommittedEvent.workspaceId` are unambiguous.
-  - **Phase 5 collapsed** (§13): tree CTEs (`SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL`) move into Phase 1 — they're load-bearing for engine-side cycle validation, tree mutations, deletes, imports, and subtree loads from day one. Phase 5 shrinks to the queriesFacet wrapper packaging plus a benchmarking pass.
-  - **Stale prose cleaned**: "before staging the write" replaced with "before issuing the write" (§4.1.1); `mode: 'follow-up'` example dropped (§7 mapping table, Phase 3 prose) — only one mode exists since v4.20; round-6/-7/-8/-9 acceptance bullets collapsed (above) — they had a mix of still-valid and v4.18/v4.23-deleted bookkeeping that risked accidentally resurrecting deleted design.
-- [ ] Each phase ships with a green build and meets acceptance criteria.
-- [ ] §16.1 (zod) and §16.12 (jittered fractional indexing) resolved in v4.10. No remaining gating decisions before Phase 1 — everything else in §16 is intentionally deferred.
-- [ ] Dynamic-plugin lifecycle is constructible at runtime via staged `setFacetRuntime` waves (§8 Bootstrap stages, §12.2). Pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) reject with `MutatorNotRegisteredError` for unknown names.
+The acceptance criteria below describe properties of the **current spec state**. Per-round review-thread bookkeeping (rounds 1–9, plus the v4.18 / v4.21 / v4.23 / v4.24 / v4.25 / v4.26 trajectory) lives in `git log tasks/data-layer-redesign.md` — load-bearing decisions are summarized in the design-notes block at the top of this file.
+
+- [ ] **Schema and triggers**: server schema is just `blocks` (§4.1); client adds `tx_context` / `row_events` / `command_events` plus seven triggers (5 audit/upload + 2 workspace-invariant, §4.5 + §4.1.1, §13.1 acceptance). Sync-applied writes leave `tx_context.source = NULL`; row_events COALESCEs to `'sync'`; upload-routing triggers gate on `= 'user'` so sync writes don't loop. No PowerSync sync-apply wrapper.
+- [ ] **Tx primitives** (§5.3, §10 pipeline): write-through to SQL inline, no staged write-set. Engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Cache is mutated only on commit walk (step 6). `tx.peek` reads snapshots-then-cache. `tx.get` / `tx.childrenOf` / `tx.parentOf` read SQL via the writeTransaction. `tx.createOrGet` is SELECT-then-branch with three terminal outcomes (insert / live-hit / throw); restore-on-tombstone is **not** in the primitive (handled by `createAliasTargetInline` and the Roam import upsert via `DeletedConflictError` + `tx.update`).
+- [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side `isDescendantOf` check on every parent_id-changing `tx.update` (covers kernel mutators, plugin mutators, and direct `repo.tx` bodies uniformly — no caller can bypass). Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` for telemetry only — no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
+- [ ] **Workspace invariants**: server-side composite FK enforces `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1). Local trigger enforces parent-existence + same-workspace for fresh local writes; **does not** filter on `deleted = 0` (aligns with server). Mutator-level validation throws `ParentDeletedError` / `WorkspaceMismatchError` / `ParentNotFoundError` for better UX; storage layer accepts what sync brings in. Engine pins `meta.workspaceId` from first write and throws `WorkspaceMismatchError` on cross-workspace writes inside one tx (§5.3, §15 #11).
+- [ ] **Tree CTEs in Phase 1** (§13.1): `SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL` ship from day one with depth-100 + `!hex/` visited-id guards. Phase 5 shrinks to queriesFacet packaging + a 1000-block benchmark.
+- [ ] **Reactivity** (§9): two-source handle invalidation (TxEngine fast path + row_events tail filtered to `source = 'sync'`); parent-edge dependencies for tree handles; children-completeness markers + `ChildrenNotLoadedError` for the sync `Block` facade (§5.2).
+- [ ] **Reference parsing** (§7): follow-up processor watching `blocks.content` field-writes; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` for the orphan cleanup; cleanup-eligibility filter at schedule time uses the helper's `inserted` boolean (covers fresh-insert AND tombstone-restore via `createAliasTargetInline`'s try/catch). Date-shaped alias-target ids are exempted from cleanup. `[[Inbox]]`-into-existing-page race (§7.5) does not delete pre-existing pages.
+- [ ] **Read-only mode** (§10.3, §15 #1): `repo.tx` rejects `BlockDefault` / `References`; `UiState` always allowed.
+- [ ] **Codecs at boundaries only** (§5.6, §15 #6): `codec.encode` / `codec.decode` runs at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty` — four sites. Storage and cache hold encoded shape.
+- [ ] **Bootstrap** (§8, §12.2): staged `setFacetRuntime` waves; pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites reject unknown mutator names with `MutatorNotRegisteredError`.
+- [ ] **Resolved gating decisions** (§16): zod for argsSchema (§16.1); jittered fractional indexing for order keys (§16.12); follow-up-only processors (§16.2). Everything else in §16 is intentionally deferred.
+- [ ] Each phase ships with a green build and meets phase-specific acceptance criteria (§13).
