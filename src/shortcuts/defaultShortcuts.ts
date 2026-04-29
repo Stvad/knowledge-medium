@@ -51,6 +51,9 @@ import { buildAppHash, writeAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 import { getActivePanelBlock, isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
+import { importRoam } from '@/utils/roamImport/import.ts'
+import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
+import type { RoamExport } from '@/utils/roamImport/types.ts'
 
 const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
   const doc = editorView.state.doc
@@ -78,6 +81,12 @@ const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
+  // Idempotent: surfaces window.__omniliner.roamImport for the agent
+  // runtime / devtools console. Living here ties it to the same lifecycle
+  // as the rest of the default actions — the hook gets installed once
+  // per Repo.
+  ensureRoamImportWindowHook(repo)
+
   const {
     indentBlock,
     outdentBlock,
@@ -236,6 +245,64 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               }
             } catch (err) {
               console.error('Failed to import document:', err)
+            }
+          }
+          reader.readAsText(file)
+        }
+
+        input.click()
+      },
+    },
+    {
+      id: 'import_roam',
+      description: 'Import Roam JSON export',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.accept = '.json,application/json'
+
+        input.onchange = async (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0]
+          if (!file) return
+
+          const reader = new FileReader()
+          reader.onload = async (loadEvent) => {
+            const content = loadEvent.target?.result
+            if (typeof content !== 'string') return
+
+            try {
+              const parsed = JSON.parse(content) as RoamExport
+              if (!Array.isArray(parsed)) {
+                console.error('[roam-import] expected top-level JSON array of pages')
+                return
+              }
+
+              const workspaceId = repo.activeWorkspaceId
+              if (!workspaceId) {
+                console.error('[roam-import] no active workspace')
+                return
+              }
+
+              const summary = await importRoam(parsed, repo, {
+                workspaceId,
+                currentUserId: repo.currentUser.id,
+                onProgress: msg => console.log(`[roam-import] ${msg}`),
+              })
+              console.log('[roam-import] done', summary)
+              window.alert(
+                `Roam import complete:\n` +
+                `  pages created: ${summary.pagesCreated}\n` +
+                `  pages merged: ${summary.pagesMerged}\n` +
+                `  daily notes: ${summary.pagesDaily}\n` +
+                `  blocks written: ${summary.blocksWritten}\n` +
+                `  alias blocks created: ${summary.aliasBlocksCreated}\n` +
+                `  unresolved block uids: ${summary.unresolvedBlockUids.length}\n` +
+                `  duration: ${summary.durationMs} ms`,
+              )
+            } catch (err) {
+              console.error('[roam-import] failed:', err)
+              window.alert(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)
             }
           }
           reader.readAsText(file)
