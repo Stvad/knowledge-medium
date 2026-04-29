@@ -4,13 +4,10 @@ Owner role: architect (this doc) → implementer subagents (per phase)
 Type: architectural rewrite (multi-phase). Includes a **schema reset** — existing data is wiped on upgrade. We're in alpha; no back-compat shims.
 Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extensions/{facet,core}.ts`, every shortcut handler, every component that reads block data. ~50+ files. Plus a SQLite schema reset + PowerSync sync-config update.
 
-> **Recommended ordering vs. other specs:**
-> - `tasks/property-access-refactor.md` — subsumed by Phase 6. If property-access-refactor lands first, Phase 6 inherits its `getPropertyValue`/`setPropertyValue` shape and replaces the property-record split with descriptor-based schemas.
-> - `tasks/actionManager-refactor.md` — orthogonal; can land in either order.
-> - `tasks/plugins-architecture.md` — must land **before** Phase 5 of this spec. Phase 5 adds plugin-contributed data-layer facets, which expects plugins to already be folder-organized.
-> - `tasks/architectural-observations.md` items #2 (sync/async), #3 (schema vs value), #6 (Repo singleton), #7 (changeScope typing), #9 (`any` casts) are subsumed by this spec.
-
-> **Revision history:** v2 reworks event-log ownership (split `row_events` from `command_events`), adopts a clean schema break (drop `child_ids_json` for `parent_id + order_key` fractional indexing), uses PowerSync's `writeTransaction` instead of manual BEGIN/COMMIT under `writeLock`, makes `tx.get` async (queries SQLite within the tx), models reference parsing semantics in full (alias creation, daily notes, self-destruct), addresses the Repo/FacetRuntime lifecycle cycle, and resolves the Handle missing-vs-not-loaded distinction. Cross-tab is now explicitly out of scope.
+> **Revision history:**
+> - v1: initial sketch.
+> - v2: event-log split, schema reset accepted, `writeTransaction`, async `tx.get`, reference processor full semantics, Repo lifecycle, Handle nullable.
+> - v3 (this): trigger context redesigned (regular `tx_context` table, not TEMP); `tx.query` constrained to within-tx primitives that explicitly overlay staged writes; order_key uses jittered fractional indexing with `id` secondary tiebreak (collisions acknowledged, not denied); `Mutator` gains `scope` field; `Tx` gains `afterCommit` for processor follow-ups; Phase 1 absorbs the tree-API rewrite + property-flat storage (no compat shim claims); upload triggers + `source='local-ephemeral'` mechanism preserved.
 
 ---
 
@@ -33,21 +30,20 @@ The current data-access layer accreted from an Automerge-era design and has not 
 | **D9** | Hardcoded post-commit work | Reference parsing is inlined into `change()`. No way for plugins to react to specific mutations. |
 | **D10** | Children stored as JSON array on parent | `child_ids_json` is the source of order, which means sibling inserts/moves take a parent-row LWW conflict surface. |
 
-### 1.2 Constraint that reshapes the design
+### 1.2 Constraint: facet kernel
 
-The codebase has chosen a **kernel + facet** architecture (see `src/extensions/facet.ts`, `tasks/decorator-facet-design.md`, `tasks/plugins-architecture.md`). Every UI-side feature contributes via a facet; the data layer is the only major subsystem that doesn't follow this pattern. **The redesign aligns the data layer with the facet kernel** — mutators, queries, property schemas, and post-commit processors all become facet contributions.
+The codebase has a kernel + facet architecture (`src/extensions/facet.ts`). UI features contribute via facets; the data layer is the only major subsystem that doesn't follow this pattern. **The redesign aligns the data layer with the facet kernel** — mutators, queries, property schemas, and post-commit processors all become facet contributions.
 
 ### 1.3 Constraint: dynamic plugin loading
 
-Plugins are loaded both at compile time (static imports under `src/plugins/`) and at runtime (renderer/extension blocks compiled via Babel, see `src/extensions/dynamicRenderers.ts`). The data-layer API has to:
-
+Plugins are loaded both at compile time (static imports) and at runtime (extension blocks compiled via Babel). The data API has to:
 - Be fully typed for static plugins (module augmentation for `repo.mutate.X` / `repo.query.X`).
-- Accept dynamic plugins that aren't in the TypeScript module graph (string-keyed access, runtime schema validation).
+- Accept dynamic plugins that can't use `declare module` (string-keyed access, runtime schema validation).
 - Expose the **same facet contribution shape** for both — only the typing channel differs.
 
 ### 1.4 Constraint: alpha; data is droppable
 
-We're in alpha and don't need to preserve existing data. Schema breaks are taken cleanly (drop & recreate), no dual-reader logic, no migration scripts. This is a deliberate choice per the project's "no back-compat shims while in alpha" rule.
+We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reader logic, no migration scripts. This is a deliberate choice per the project's no-back-compat-in-alpha rule.
 
 ---
 
@@ -57,21 +53,22 @@ We're in alpha and don't need to preserve existing data. Schema breaks are taken
 2. **Single write primitive: `repo.tx`.** All mutations go through transactional sessions backed by PowerSync's `writeTransaction`. One DB tx, one undo entry, one command-event row, atomic cache update — all per `repo.tx` call.
 3. **Mutators are named, typed, and contributed via facet.** Anonymous callback mutations (`block.change(d => …)`) are removed. `repo.mutate.indent({ id })` is the public surface; typed via module augmentation for static plugins, runtime-validated for dynamic ones.
 4. **Queries are facet contributions.** `findBacklinks` etc. become contributions to `queriesFacet`, alongside plugin queries. `repo.query.<name>` returns a `Handle`.
-5. **Property schemas are facet contributions** (descriptor only; values stored separately). Plugins register their own. Includes runtime codecs for non-JSON values (`Date`, etc.).
-6. **Post-commit work is facet-contributed.** Reference parsing, search indexing, anything else cross-cutting becomes a `postCommitProcessorsFacet` contribution.
-7. **Tree walks push to SQL.** Recursive CTEs over `parent_id` replace JS-side parent-chain and subtree iteration. Sibling order comes from `order_key` (fractional indexing).
+5. **Property schemas are facet contributions** (descriptor only; values stored flat). Plugins register their own. Includes runtime codecs for non-JSON values (`Date`, etc.).
+6. **Post-commit work is facet-contributed.** Reference parsing, search indexing, anything cross-cutting becomes a `postCommitProcessorsFacet` contribution.
+7. **Tree walks push to SQL.** Recursive CTEs over `parent_id` replace JS-side chains. Sibling order from `order_key` (jittered fractional index) with `id` tiebreak.
 8. **`Block` becomes a sync view.** Loading is an explicit boundary (Suspense in React; `await repo.load(…)` in imperative code). Post-load access is sync.
 9. **Event log is split.** `row_events` (trigger-written, audit + invalidation) and `command_events` (tx metadata + mutator calls) — neither tries to do both.
 10. **Schema is redesigned.** New `blocks` shape: `parent_id + order_key`, no `child_ids_json`. Sibling concurrency stops being a parent-row LWW problem.
 
 ### 2.1 Non-goals
 
-- Replacing PowerSync as the storage + sync layer.
+- Replacing PowerSync.
 - Switching to event sourcing (events as truth, rows as projection). Rows remain authoritative; events are the audit/change log.
-- Differential dataflow / IVM for query invalidation. Re-run + structural diff is enough at our query depth.
-- CRDT primitives beyond what PowerSync gives + fractional indexing.
-- Cross-tab invalidation. Today's runtime sets `enableMultiTabs=false, useWebWorker=false` (`src/data/repoInstance.ts`); multi-tab is a separate work item, not part of this redesign. See §13.
+- Differential dataflow / IVM for query invalidation. Re-run + structural diff is enough.
+- CRDT primitives beyond row-LWW + jittered fractional ordering.
+- Cross-tab invalidation. Today's runtime sets `enableMultiTabs=false, useWebWorker=false` (`src/data/repoInstance.ts`); see §16.7.
 - Preserving existing user data.
+- Back-compat shims of any kind.
 
 ---
 
@@ -80,8 +77,7 @@ We're in alpha and don't need to preserve existing data. Schema breaks are taken
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ React UI                                                    │
-│   useHandle(handle)                                         │
-│   <Suspense> boundary catches first-load                    │
+│   useHandle(handle); <Suspense> for first load              │
 └────────────────────────┬────────────────────────────────────┘
                          │
 ┌────────────────────────┴────────────────────────────────────┐
@@ -92,50 +88,45 @@ We're in alpha and don't need to preserve existing data. Schema breaks are taken
 │   repo.tx(fn, opts)     → Promise<TxResult>                 │
 │   repo.mutate.X(args)   → Promise<Result>  // sugar over tx │
 │   repo.run(name, args)  → Promise<unknown> // dynamic       │
-│   repo.setFacetRuntime(rt) // lifecycle                     │
+│   repo.setFacetRuntime(rt)                                  │
 └──────┬──────────────────┬───────────────────────────────────┘
        │                  │
        ▼                  ▼
 ┌──────────────┐  ┌────────────────────────────────────────┐
 │ HandleStore  │  │ Registries (snapshot of FacetRuntime)  │
-│  identity-   │  │  mutators                              │
-│  stable      │  │  queries                               │
-│  GC by ref   │  │  property schemas                      │
-│  count       │  │  post-commit processors                │
+│  identity-   │  │  mutators / queries / property         │
+│  stable      │  │  schemas / post-commit processors      │
 └──────┬───────┘  └─────────────────┬──────────────────────┘
        │                            │
        ▼                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ TxEngine                                                    │
-│   db.writeTransaction(async (txDb) => {                     │
-│     run mutator(s) on staged Tx                             │
-│       reads: staged → cache → SQL via txDb                  │
-│     run same-tx post-commit processors                      │
-│     write rows + append command_event row                   │
-│     row_events written by SQLite triggers                   │
-│   })                                                        │
-│   on success: hydrate cache, diff handles, fire             │
-│   schedule follow-up post-commit processors                 │
-│   record undo entry                                         │
-│   on throw: PowerSync rolls back; cache untouched           │
+│ TxEngine (db.writeTransaction)                              │
+│   set tx_context (tx_id, user_id, scope, source)            │
+│   stage writes; reads = staged → cache → SQL via txDb       │
+│   run same-tx processors (refs, ...)                        │
+│   write blocks rows + command_events row                    │
+│   row_events written by triggers (read tx_context)          │
+│   trigger forwards to powersync_crud unless source=sync|ephem│
+│ on success: hydrate cache, diff handles, fire, undo entry   │
+│              run scheduled tx.afterCommit jobs              │
+│ on throw: full rollback                                      │
 └────────────────────────┬────────────────────────────────────┘
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ PowerSync SQLite                                            │
 │   blocks (id, workspace_id, parent_id, order_key, …)        │
-│   row_events (trigger-written; audit + invalidation)        │
-│   command_events (tx metadata; tx_id, mutator_calls, …)     │
+│   row_events       (audit + invalidation, trigger-written)  │
+│   command_events   (per-tx metadata)                        │
+│   tx_context       (one row, set per tx)                    │
 └─────────────────────────────────────────────────────────────┘
 ```
-
-Two top-level abstractions: `Handle` (reads) and `Tx` (writes). All else either feeds them (facets) or is the storage layer (PowerSync) with a redesigned schema.
 
 ---
 
 ## 4. Schema (clean break)
 
-Existing tables (`blocks` with `child_ids_json`, `block_events` mixing row diffs and tx metadata) are dropped. New schema:
+Existing tables are dropped and recreated. Postgres migration mirrors local. PowerSync sync-config rewritten.
 
 ### 4.1 `blocks`
 
@@ -143,10 +134,10 @@ Existing tables (`blocks` with `child_ids_json`, `block_events` mixing row diffs
 CREATE TABLE blocks (
   id              TEXT PRIMARY KEY,
   workspace_id    TEXT NOT NULL,
-  parent_id       TEXT,                                       -- null for workspace root
-  order_key       TEXT NOT NULL,                              -- fractional index among siblings
+  parent_id       TEXT,                                     -- null for workspace root
+  order_key       TEXT NOT NULL,                            -- jittered fractional index
   content         TEXT NOT NULL DEFAULT '',
-  properties_json TEXT NOT NULL DEFAULT '{}',                 -- flat: {[name]: value}, no descriptor metadata
+  properties_json TEXT NOT NULL DEFAULT '{}',               -- flat: {[name]: T}, no descriptor metadata
   references_json TEXT NOT NULL DEFAULT '[]',
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL,
@@ -156,7 +147,7 @@ CREATE TABLE blocks (
 );
 
 CREATE INDEX idx_blocks_parent_order
-  ON blocks(parent_id, order_key) WHERE deleted = 0;
+  ON blocks(parent_id, order_key, id) WHERE deleted = 0;     -- (id) is the secondary tiebreak
 
 CREATE INDEX idx_blocks_workspace_active
   ON blocks(workspace_id) WHERE deleted = 0;
@@ -165,39 +156,50 @@ CREATE INDEX idx_blocks_workspace_with_references
   ON blocks(workspace_id) WHERE deleted = 0 AND references_json != '[]';
 ```
 
-Ordering is via `order_key` (string, fractional index — see `fractional-indexing` library by @rocicorp). Inserting between siblings A and B means computing a new key between `A.order_key` and `B.order_key`. **This eliminates the parent-row LWW conflict** that `child_ids_json` had: two clients inserting under the same parent both produce distinct row inserts with distinct keys; both succeed and sort correctly. Moving a block updates `parent_id` and `order_key`; concurrent moves of the *same* block are still row-LWW on that single row, which is acceptable.
-
-`properties_json` is now `Record<string, unknown>` — just the value, no descriptor metadata in storage. The descriptor lives in code (kernel + plugin exports).
-
-### 4.2 `command_events`
+**Order strategy**: `order_key` is generated via a jittered fractional index (`fractional-indexing-jittered` or equivalent). Jittering reduces the probability of two clients computing the same key when inserting between the same neighbors, but **does not guarantee uniqueness**. We accept the residual collision and resolve it via a deterministic secondary sort:
 
 ```sql
-CREATE TABLE command_events (
-  tx_id           TEXT PRIMARY KEY,
-  description     TEXT,
-  scope           TEXT NOT NULL,
-  user_id         TEXT NOT NULL,
-  workspace_id    TEXT,
-  mutator_calls   TEXT NOT NULL,                              -- JSON array of {name, args}
-  created_at      INTEGER NOT NULL
-);
-
-CREATE INDEX idx_command_events_created ON command_events(created_at DESC);
-CREATE INDEX idx_command_events_workspace ON command_events(workspace_id, created_at DESC);
+-- canonical sort:
+ORDER BY order_key, id
 ```
 
-One row per `repo.tx` invocation. `mutator_calls` is the ordered list of named mutator calls executed within the tx (a tx can compose multiple mutators via `tx.run`). Used by post-commit processors and the audit-log devtool.
+Concurrency story:
+- Two clients insert different rows under the same parent at the same position → most likely distinct order_keys; if equal, secondary sort by `id` makes the resulting order deterministic post-sync.
+- Two clients move the *same* block concurrently → row-LWW on `parent_id` and `order_key` of that single row.
+- Clients on the same actor running fractional-indexing-jittered always produce monotonically distinct keys for sequential inserts; the collision case is strictly cross-actor concurrent inserts at the same spot.
+
+A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too long, but is not required for correctness.
+
+`properties_json` is `Record<string, unknown>` — just the value, codec-deserialized at read time via the descriptor (§5.6).
+
+### 4.2 `tx_context`
+
+```sql
+CREATE TABLE tx_context (
+  id     INTEGER PRIMARY KEY CHECK (id = 1),                -- single-row table
+  tx_id     TEXT,
+  user_id   TEXT,
+  scope     TEXT,
+  source    TEXT                                            -- 'user' | 'sync' | 'local-ephemeral'
+);
+INSERT OR IGNORE INTO tx_context (id) VALUES (1);
+```
+
+A normal one-row table (mirroring today's `block_event_context` pattern). Triggers read from it via `(SELECT tx_id FROM tx_context WHERE id = 1)`. **Why not a TEMP table**: SQLite triggers in `main` schema cannot reference `temp.X` tables (resolves to `main.X` and fails). This is the existing project pattern and it works.
+
+The TxEngine writes to `tx_context` at the start of `writeTransaction` and clears it at the end. Sync-applied writes (PowerSync's CRUD apply) bypass `repo.tx` entirely; for those, the `tx_context.source` defaults to `'sync'` because it's set that way by a wrapper in PowerSync's CRUD-apply path. (We add this wrapper as part of Phase 1.)
 
 ### 4.3 `row_events`
 
 ```sql
 CREATE TABLE row_events (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  tx_id           TEXT NOT NULL,                              -- FK-ish to command_events.tx_id
+  tx_id           TEXT,                                     -- nullable: NULL for sync-applied
   block_id        TEXT NOT NULL,
-  kind            TEXT NOT NULL,                              -- 'create' | 'update' | 'delete'
-  before_json     TEXT,                                       -- null on 'create'
-  after_json      TEXT,                                       -- null on 'delete'
+  kind            TEXT NOT NULL,                            -- 'create' | 'update' | 'delete'
+  before_json     TEXT,
+  after_json      TEXT,
+  source          TEXT NOT NULL,                            -- copied from tx_context.source
   created_at      INTEGER NOT NULL
 );
 
@@ -206,68 +208,83 @@ CREATE INDEX idx_row_events_block ON row_events(block_id, created_at DESC);
 CREATE INDEX idx_row_events_created ON row_events(created_at DESC);
 ```
 
-Written by SQLite triggers on `blocks` (one trigger per insert/update/delete). Audit + invalidation source. Reading the `before_json` is what enables undo to reconstruct prior states without us having to capture them in JS.
+Written by SQLite triggers on `blocks` (one per insert/update/delete). Triggers pull `tx_id` and `source` from `tx_context`. The audit + invalidation source-of-truth.
 
-The triggers read `tx_id` from a per-connection variable that the TxEngine sets at the start of each `writeTransaction`:
+### 4.4 `command_events`
 
 ```sql
-CREATE TEMP TABLE _ctx (tx_id TEXT, user_id TEXT);
--- TxEngine: INSERT INTO _ctx VALUES (?, ?) at tx start; DELETE FROM _ctx at tx end.
--- Triggers: SELECT tx_id FROM _ctx for the inserted row_events.tx_id.
+CREATE TABLE command_events (
+  tx_id           TEXT PRIMARY KEY,
+  description     TEXT,
+  scope           TEXT NOT NULL,
+  user_id         TEXT NOT NULL,
+  workspace_id    TEXT,
+  mutator_calls   TEXT NOT NULL,                            -- JSON array of {name, args}
+  source          TEXT NOT NULL,                            -- 'user' | 'local-ephemeral'  (sync writes don't produce command_events)
+  created_at      INTEGER NOT NULL
+);
+
+CREATE INDEX idx_command_events_created ON command_events(created_at DESC);
+CREATE INDEX idx_command_events_workspace ON command_events(workspace_id, created_at DESC);
 ```
 
-This replaces the existing `block_event_context` mechanism but with the same idea.
+One row per `repo.tx` invocation. Sync-applied writes don't go through `repo.tx` so they don't produce `command_events`; their row_events have `tx_id = NULL` and `source = 'sync'`.
 
-### 4.4 PowerSync sync-config
+### 4.5 Upload routing trigger
 
-Sync config (`sync-config.yaml`) is updated to:
-- Sync `blocks` (with the new shape).
-- **Not** sync `row_events` / `command_events` from server initially. They start as local-only (events generated on each device). If we later want a server-side audit log, that's a separate decision — see §13.
+Today's app has a custom trigger that forwards local writes into `powersync_crud` (PowerSync's outgoing queue) and excludes writes tagged `source='local-ephemeral'`. We preserve that:
 
-The Postgres schema mirrors the local schema; both get the order_key column. The schema reset is shipped as a single migration on the Postgres side and a clean reset on the local side (drop the local DB on first launch under a new schema version).
+```sql
+CREATE TRIGGER blocks_upload_router
+AFTER INSERT OR UPDATE OR DELETE ON blocks
+WHEN (SELECT source FROM tx_context WHERE id = 1) NOT IN ('sync', 'local-ephemeral')
+BEGIN
+  -- forward to powersync_crud (operation-specific JSON, schema per existing system)
+  …
+END;
+```
+
+The exact body matches the existing trigger; only the `WHEN` clause is updated to read from `tx_context` instead of the existing `block_event_context`. UI-state writes set `source='local-ephemeral'` so they don't upload. Sync-applied writes set `source='sync'` so the trigger doesn't loop them back.
+
+### 4.6 PowerSync sync-config
+
+`sync-config.yaml` is updated to:
+- Sync `blocks` with the new shape.
+- Not sync `tx_context`, `row_events`, `command_events` (local-only initially; see §16.8).
 
 ---
 
 ## 5. Core types
 
-These go in a new `src/data/api/` module, exported as the public data-layer surface. Internals live in `src/data/internals/`.
+In `src/data/api/`. Internals in `src/data/internals/`.
 
 ### 5.1 `Handle<T>`
 
 ```ts
 export interface Handle<T> {
-  /** Stable key — two handles with the same key are === to each other. */
   readonly key: string
 
-  /** Sync read. Returns undefined if not yet loaded. Never throws.
-   *  After a successful load, returns T (which may itself be e.g. null/[]/etc). */
+  /** Sync read. undefined = not yet loaded; never throws. */
   peek(): T | undefined
 
-  /** Ensure loaded; resolve when value is available. Idempotent + deduped. */
+  /** Ensure loaded; idempotent + deduped. */
   load(): Promise<T>
 
   /** Reactive subscription. Listener fires on structural change only. */
   subscribe(listener: (value: T) => void): Unsubscribe
 
-  /** For React/Suspense paths: returns T or throws a Promise if not loaded.
-   *  Used internally by useHandle. */
+  /** For Suspense paths: returns T or throws a Promise if not loaded. */
   read(): T
 
-  /** Status accessor for code that needs to distinguish loading from loaded. */
   status(): 'idle' | 'loading' | 'ready' | 'error'
 }
 ```
 
-Identity rule: `repo.block(id) === repo.block(id)` for the same id. Same for `repo.subtree(rootId)`, `repo.query.X(sameArgs)`. Implementation: `HandleStore` keys handles by `(name, JSON.stringify(args))`, returns existing handle if present, GCs after `gcTime` of zero subscribers + zero in-flight loads.
+Identity rule: same `(name, JSON.stringify(args))` → same handle instance. GC after `gcTime` of zero subscribers + zero in-flight loads.
 
-**Missing vs not-loaded.** For potentially-missing single-row reads, the value type encodes it: `repo.block(id): Handle<BlockData | null>`. After a successful load:
-- `peek()` returns `BlockData | null` (`null` = confirmed not-found).
-- Before any load, `peek()` returns `undefined`.
-- `status()` distinguishes: `'idle'` / `'loading'` / `'ready'` (regardless of value being null) / `'error'`.
+**Missing vs not-loaded**: `repo.block(id): Handle<BlockData | null>`. After load, `null` = confirmed missing; `peek()` returns `BlockData | null` post-load. Before any load, `peek()` returns `undefined`. `status()` distinguishes loading from loaded.
 
-This keeps Suspense semantics clean (suspending only happens on first load, never on "not found") and lets the existing missing-data-renderer UI keep working: `useHandle(repo.block(id))` returns `BlockData | null`; component checks for null.
-
-For multi-result handles (`subtree`, `backlinks`, `query.byType`), the result is always an array — possibly empty, never null.
+For multi-result handles (`subtree`, `backlinks`, query results), the type is `Handle<BlockData[]>` — possibly empty, never null.
 
 ### 5.2 `Block` (sync view)
 
@@ -280,30 +297,28 @@ export interface Block {
   readonly data: BlockData
 
   /** Soft access. */
-  peek(): BlockData | undefined | null         // undefined = not loaded; null = not found
+  peek(): BlockData | undefined | null   // undefined = not loaded; null = not found
   load(): Promise<BlockData | null>
 
-  /** Sync property access via descriptor.
-   *  Returns descriptor.defaultValue if absent. */
-  get<T>(schema: PropertySchema<T>): T
-  /** Sync property access; returns undefined if absent (no default substitution). */
-  peekProperty<T>(schema: PropertySchema<T>): T | undefined
+  /** Sync property access via descriptor. */
+  get<T>(schema: PropertySchema<T>): T                       // returns descriptor.defaultValue if absent
+  peekProperty<T>(schema: PropertySchema<T>): T | undefined  // no default substitution
 
-  /** Sync sibling/parent access — relies on cached parent/children.
-   *  Throws BlockNotLoadedError if the immediate relative isn't cached. */
+  /** Sync relatives. childIds is computed from cache (must be loaded);
+   *  parent and children Block objects are sync facades. */
+  readonly childIds: string[]                                // ordered by (order_key, id), from cache
+  readonly children: Block[]
   readonly parent: Block | null
-  readonly children: Block[]                                  // ordered by order_key
 
-  /** Subscribe to this block's data changes. */
   subscribe(listener: (data: BlockData | null) => void): Unsubscribe
 }
 ```
 
-`Block` is a thin facade over the cached `BlockData`. It carries no `currentUser`, no `undoRedoManager`, no methods that mutate. Mutation goes through `repo.tx` / `repo.mutate.X`.
+`Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field. The facade computes children on demand from the in-memory cache, throwing `BlockNotLoadedError` if any child row isn't loaded. (The hydrator preloads sibling ranges as part of `repo.load(id, { descendants: 1 })` etc.)
 
-`block.parent` / `block.children` access cached siblings synchronously, throwing if any required relative isn't cached. Multi-level walks go through tree queries; immediate-neighbor walks go through these getters.
+Mutation goes through `repo.tx` / `repo.mutate.X`. The Block facade has **no** mutating methods — even kernel ops like `indent` are accessed as `repo.mutate.indent({ id: block.id })`, not `block.indent()`.
 
-### 5.3 `Tx` (transactional session, async reads)
+### 5.3 `Tx` (transactional session, async reads, no arbitrary queries)
 
 ```ts
 export interface Tx {
@@ -312,64 +327,69 @@ export interface Tx {
    *  Returns null if the row doesn't exist. */
   get(id: string): Promise<BlockData | null>
 
-  /** Sync version: requires the row to be already preloaded into cache.
-   *  Throws BlockNotLoadedError otherwise.
-   *  Use only when the mutator has guaranteed preload (e.g. via opts.reads). */
+  /** Sync version: requires the row to be already preloaded into cache or staged. */
   peek(id: string): BlockData | null
 
-  /** Low-level primitives — used inside mutator implementations. */
-  create(data: NewBlockData): string                          // returns new id
+  /** Low-level primitives. */
+  create(data: NewBlockData): string                         // returns new id
   update(id: string, patch: Partial<BlockData>): void
-  delete(id: string): void                                    // soft delete (sets deleted=1)
+  delete(id: string): void                                   // soft delete (sets deleted=1)
 
-  /** Run another mutator inside this tx. Reads see prior staged writes. */
+  /** Compose another mutator. Reads see prior staged writes. */
   run<Args, R>(mutator: Mutator<Args, R>, args: Args): Promise<R>
 
-  /** Within-tx queries — async, transactional. */
-  childrenOf(parentId: string): Promise<BlockData[]>          // ordered by order_key
+  /** Within-tx tree primitives. Engine merges staged writes with SQL results explicitly:
+   *    1. Run SQL to get committed children.
+   *    2. Apply staged creates/updates/deletes that change parent_id or affect membership.
+   *    3. Sort by (order_key, id).
+   *  Engine knows how to overlay these because it owns both staged set and SQL. */
+  childrenOf(parentId: string): Promise<BlockData[]>
   parentOf(childId: string): Promise<BlockData | null>
-  /** Run a registered query within this tx. */
-  query<R>(query: Query<unknown, R>, args: unknown): Promise<R>
+
+  /** Schedule a follow-up post-commit job. Runs in its own writeTransaction
+   *  after this tx commits. Args opaque to the engine; processor receives them. */
+  afterCommit(processorName: string, args: unknown, options?: { delayMs?: number }): void
 
   /** Tx metadata. */
-  readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string }
+  readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string; source: TxSource }
 }
+
+type TxSource = 'user' | 'local-ephemeral'                   // 'sync' is set externally for sync-apply
 ```
 
-**Reads are async** because they must be transactionally consistent — staged-or-cache hits are sync internally, but cache misses fall through to SQLite within the active `writeTransaction`. Making `tx.get` return a Promise hides that fall-through from callers and removes the "did you remember to preload?" footgun.
+**No arbitrary `tx.query`.** Arbitrary queries cannot honestly overlay staged writes (the Query.resolve gets raw SQL, doesn't know about the tx). Within-tx reads are limited to: `tx.get`/`tx.peek` (single block) and `tx.childrenOf`/`tx.parentOf` (immediate relatives). The engine implements these with explicit overlay logic.
 
-The signature of `apply` becomes:
+If a mutator needs broader information (e.g., "all blocks of a type in this workspace"), it should:
+- Call `await query.load()` *before* opening the tx (passing results in via args), or
+- Call `tx.childrenOf` repeatedly to traverse a known structure, or
+- For derived state, use a post-commit processor that reads the committed state.
 
-```ts
-apply: (tx: Tx, args: Args) => Promise<Result>                // always async
-```
-
-For mutators that genuinely read nothing (e.g., `setProperty`), the implementation is still `async` but trivial — fine.
-
-**Optional preload via opts** for callers who want to amortize reads:
-
-```ts
-await repo.tx(fn, { reads: { blockIds: [a, b], subtreeOf: rootId }, … })
-```
-
-The TxEngine preloads these into the staged-read cache before calling `fn`, so subsequent `tx.get(a)` resolves synchronously. Purely an optimization; correctness is independent.
+This is the same constraint Replicache and Zero accept: tx reads are limited to what the engine can overlay. Anything richer happens outside the tx.
 
 ### 5.4 `Mutator<Args, Result>`
 
 ```ts
 export interface Mutator<Args = unknown, Result = void> {
-  readonly name: string                                       // 'indent', 'tasks:setDueDate'
-  readonly argsSchema: Schema<Args>                           // zod (see §13.1)
+  readonly name: string
+  readonly argsSchema: Schema<Args>
   readonly resultSchema?: Schema<Result>
   readonly apply: (tx: Tx, args: Args) => Promise<Result>
   readonly describe?: (args: Args) => string
-  /** Optional: declared loads, preloaded by the engine before apply runs.
-   *  Pure performance hint; correctness is independent of this. */
+
+  /** Scope drives undo behavior + read-only gating + upload routing.
+   *  Function form lets a single mutator run as user vs ui-state based on args. */
+  readonly scope: ChangeScope | ((args: Args) => ChangeScope)
+
+  /** Optional preload hint; engine may preload these into cache before apply. */
   readonly reads?: (args: Args) => ReadHints
 }
 ```
 
-Mutators are **async, transactional, composable**. They read via `tx.get`, run other mutators via `tx.run`, but cannot perform IO outside the tx. Side effects (search index update, references) are post-commit processors, not part of the mutator.
+Scope semantics:
+- `ChangeScope.BlockDefault` (or any document scope): undoable, uploads to server.
+- `ChangeScope.UiState` (`'local-ui'`): not undoable; **`source='local-ephemeral'` set on `tx_context`**, so the upload trigger excludes these writes.
+- Read-only mode: `repo.tx` rejects unless every mutator in the tx has UiState scope.
+- Different mutators in the same tx with different scopes are not allowed (engine throws); a tx is one scope.
 
 ### 5.5 `Query<Args, Result>`
 
@@ -383,214 +403,158 @@ export interface Query<Args, Result> {
 }
 
 type QueryInvalidation =
-  | { kind: 'tables'; tables: string[] }                      // any change to these tables
-  | { kind: 'mutators'; names: string[] }                     // these mutator commits
-  | { kind: 'rows'; predicate: (event: RowEvent) => boolean } // row-level
+  | { kind: 'tables'; tables: string[] }
+  | { kind: 'mutators'; names: string[] }
+  | { kind: 'rows'; predicate: (event: RowEvent) => boolean }
 
 interface QueryCtx {
-  db: PowerSyncDatabase                                       // raw SQL escape hatch
-  repo: Repo                                                  // for handle composition
+  db: PowerSyncDatabase                                     // raw SQL
+  repo: Repo
   hydrateBlocks(rows: BlockRow[]): BlockData[]
 }
 ```
 
-Built-in queries (`subtree`, `ancestors`, `backlinks`, `searchByContent`, `byType`, `firstChildByContent`, `firstRootBlock`, `aliasesInWorkspace`, `aliasMatches`) are kernel contributions to `queriesFacet`. Plugin queries register the same way.
+Queries are out-of-tx. Built-in queries (`subtree`, `ancestors`, `backlinks`, `searchByContent`, `byType`, `firstChildByContent`, `firstRootBlock`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`) are kernel facet contributions.
 
 ### 5.6 `PropertySchema<T>`
 
 ```ts
 export interface PropertySchema<T> {
-  readonly name: string                                       // 'is-collapsed', 'tasks:due-date'
-  readonly codec: Schema<T>                                   // (de)serialization for non-JSON values
+  readonly name: string
+  readonly codec: Schema<T>                                  // (de)serialization for non-JSON values
   readonly defaultValue: T
   readonly changeScope: ChangeScope
-  readonly category?: string                                  // for property-editor grouping
+  readonly category?: string
 }
 ```
 
-`codec` handles non-JSON primitives — `Date` ↔ ISO string, custom objects, etc. The descriptor's codec is invoked at the boundary where stored JSON meets typed code.
+`codec` runs at boundaries: `block.set(prop, v)` encodes `v` to the JSON shape stored in `properties_json`; `block.get(prop)` decodes back to `T`. No codec invocations inside the storage layer or the cache.
 
 ### 5.7 `PostCommitProcessor`
 
 ```ts
 export interface PostCommitProcessor {
   readonly name: string
+
   /** Mutator names whose commits this processor reacts to. */
   readonly watches: string[]
-  /** 'same-tx' runs inside the original tx (atomic);
-   *  'follow-up' runs in a separate small tx after commit. */
+
+  /** 'same-tx' runs inside the user's tx (atomic);
+   *  'follow-up' runs after commit in its own writeTransaction. */
   readonly mode: 'same-tx' | 'follow-up'
+
   readonly apply: (event: CommittedEvent, tx: Tx) => Promise<void>
 }
 
 interface CommittedEvent {
   txId: string
-  matchedCalls: Array<{ name: string; args: unknown }>        // calls matching this processor's `watches`
+  matchedCalls: Array<{ name: string; args: unknown }>
   user: User
   workspaceId: string
+
+  /** Args passed via tx.afterCommit by an earlier processor (when mode='follow-up'
+   *  and the processor was scheduled rather than name-matched). */
+  scheduledArgs?: unknown
 }
 ```
 
-Reference parsing is the canonical example and has its own design section (§7).
+Two scheduling channels:
+1. **Mutator-name match** (`watches`): processor fires when a tx commits and contains any matching mutator call. Args come from the matched call.
+2. **Explicit schedule** (`tx.afterCommit(name, args, opts)`): processor fires after the tx commits with the supplied args via `event.scheduledArgs`. Used by chained processors (e.g. `parseReferences` schedules `cleanupOrphanAliases` with the just-created alias ids).
+
+Same-tx processors should not use `tx.afterCommit` to schedule themselves — only follow-up scheduling makes sense after the current tx commits.
 
 ### 5.8 `ChangeScope` (typed)
 
 ```ts
 export const ChangeScope = {
   BlockDefault: 'block-default',
-  UiState: 'local-ui',                                        // not undoable; ui-only
+  UiState: 'local-ui',
   References: 'block-default:references',
 } as const
 export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
-```
 
-UI-state writes (`isCollapsed`, `isEditing`, focus, selection) use `ChangeScope.UiState` and are not part of the document undo stack.
-
-Plugins extend via module augmentation:
-
-```ts
 declare module '@/data/api' {
-  interface ChangeScopeRegistry {
-    'tasks:agenda': true
-  }
+  interface ChangeScopeRegistry { /* plugin augmentation */ }
 }
 ```
-
-Dynamic-plugin scopes that can't augment at compile time are accepted as plain strings and validated at registration time.
 
 ---
 
 ## 6. Facets
 
-Four new kernel facets contribute to the data layer. Defined in `src/data/api/facets.ts`, read by `Repo` after `setFacetRuntime` is called (see §8).
-
 ```ts
-export const mutatorsFacet            = defineFacet<Mutator,             MutatorRegistry>({...})
-export const queriesFacet             = defineFacet<Query,               QueryRegistry>({...})
-export const propertySchemasFacet     = defineFacet<PropertySchema,      PropertySchemaRegistry>({...})
-export const postCommitProcessorsFacet = defineFacet<PostCommitProcessor, PostCommitDispatcher>({...})
+mutatorsFacet            : Facet<Mutator,             MutatorRegistry>
+queriesFacet             : Facet<Query,               QueryRegistry>
+propertySchemasFacet     : Facet<PropertySchema,      PropertySchemaRegistry>
+postCommitProcessorsFacet: Facet<PostCommitProcessor, PostCommitDispatcher>
 ```
 
-Each facet's `combine` builds a registry keyed by `name`; duplicate names log a warning and last-wins (matching `blockRenderersFacet`).
+Each facet's `combine` builds a registry keyed by `name`; duplicate names log a warning and last-wins.
 
-The kernel registers built-ins as plain contributions. There is **no two-tier system** — `core.indent` and `tasks:setDueDate` are both contributions, distinguishable only by `name` prefix convention.
+The kernel registers built-ins as plain contributions. There is no two-tier system — `core.indent` and `tasks:setDueDate` are both contributions.
 
-### 6.1 Naming convention
-
-- Kernel: bare names — `indent`, `outdent`, `setProperty`, `subtree`, `backlinks`.
-- Plugin: `<plugin-id>:<name>` — `tasks:setDueDate`, `calendar:eventsInRange`.
-
-The colon-prefix rule isn't enforced in code (a contribution could ship a bare-named version). It's a convention in `src/plugins/README.md`; lint follow-up if warranted.
+Naming convention: kernel uses bare names; plugins prefix with `<plugin-id>:`. Convention only.
 
 ---
 
 ## 7. Reference parsing — full design
 
-The current `parseAndUpdateReferences` does materially more than "extract refs from content"; the redesign must preserve every behavior. This section enumerates them and maps each to the new model.
+The current `parseAndUpdateReferences` does materially more than "extract refs from content". The redesign maps every behavior:
 
-### 7.1 What today's code does
-
-1. **Parse references** from `content` (look for `[[alias]]`, links, etc.).
-2. **Resolve aliases**: for each parsed alias, look up an existing block in this workspace whose `aliases` property contains it.
-3. **Create missing alias blocks**: if no existing block matches, create a new block with the alias as a property (call it the *alias-target* block).
-4. **Daily notes**: for date-shaped aliases (e.g. `[[2026-04-28]]`), the alias-target block is a daily-note with a deterministic id (`daily/<workspaceId>/<date>`), so two clients creating it concurrently end up with the same row.
-5. **Update `references` field** on the source block to the resolved id list.
-6. **Self-destruct**: newly-created alias-target blocks that are *not* actually retained (e.g., the user typed `[[foo]]` and immediately deleted it within ~4s) auto-delete. Implemented as a deferred check.
-7. **skipUndo + skipMetadataUpdate flags**: today's helpers run with these set so the parsing isn't a user-visible undoable action and doesn't bump `updated_at`/`updated_by`.
-
-### 7.2 Mapping to the new model
-
-| Concern | New shape |
+| Current behavior | New shape |
 |---|---|
-| Trigger | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: ['setContent', 'create', 'splitBlock', 'mergeBlocks'], mode: 'same-tx', … })` |
-| Parse refs | Inside `apply`, call existing `parseRefs(content)` helper. |
-| Resolve aliases | `tx.query(aliasLookup, { workspaceId, alias })` — a kernel query that joins `properties_json` against the alias property. |
-| Create missing | `tx.run(createAliasTarget, { alias, workspaceId })` — kernel mutator. |
-| Daily notes | `createAliasTarget` checks if the alias is date-shaped; if so, computes deterministic id and uses `INSERT OR IGNORE` semantics (`tx.create({ id: deterministic, … })` returning existing id when already present). |
+| Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: ['setContent', 'create', 'splitBlock', 'mergeBlocks'], mode: 'same-tx', … })` |
+| Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
+| Resolve aliases | `tx.get` on a known id, or use a kernel **mutator** `resolveAlias` (not query — must run in-tx). For unknown aliases, read out-of-tx via the `aliasLookup` query *before* the user's tx (results passed in via mutator args), or accept an extra round trip. **Decision**: parseReferences runs same-tx and uses an in-tx alias-lookup primitive: walk staged-creates first (might match), then call `tx.peek` against a small set of known alias ids passed in by the engine from a pre-tx alias prefetch (engine collects all `[[alias]]` patterns from the user's `setContent`/`create` args before opening the tx, prefetches matching alias targets into cache; processor finds them via `tx.peek`). Unmatched aliases fall through to creation. |
+| Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` — kernel mutator. Generates a regular id (or deterministic id for date-shaped aliases). |
+| Daily-note deterministic id | `createAliasTarget` checks if the alias is date-shaped, computes `daily/<workspaceId>/<date>` deterministically. Two clients creating it concurrently end up with the same id — the second client's `tx.create({ id: deterministic, … })` is idempotent (existing row wins, no clobber). |
 | Update `references` field | `tx.update(sourceId, { references: resolvedIds })`. |
-| Self-destruct | A second processor `core.cleanupOrphanAliases` (mode: `'follow-up'`, debounce ~4s, watches `core.parseReferences` outputs). It looks for created alias-targets that are not referenced from any other block and deletes them. **Won't run if the alias was retained** — i.e., if any block's `references_json` contains the alias-target id. |
-| skipUndo / skipMetadataUpdate | Same-tx processor writes are part of the user's tx (one undo entry overall). The metadata flag is replaced by the convention that processor-driven `update` calls don't bump `updated_at`/`updated_by` — which is enforced by the TxEngine looking at the *tx scope* and the *call origin*: writes from a same-tx processor inherit the original mutator's metadata. The follow-up processor *does* generate a fresh metadata stamp because it's a separate tx (and that's correct — the cleanup is its own action). |
+| Self-destruct (newly created alias-target dropped if not retained within ~4s) | `parseReferences` ends by calling `tx.afterCommit('core.cleanupOrphanAliases', { createdIds: [...] }, { delayMs: 4000 })`. The cleanup processor (mode: `'follow-up'`) checks each id: if no other block's `references_json` contains it, delete. |
+| `skipUndo` | Same-tx processor writes are part of the user's tx → one undo entry covers everything. The flag becomes implicit. |
+| `skipMetadataUpdate` | Convention: the engine recognizes that updates *originating from a same-tx processor* don't bump `updated_at`/`updated_by`. Implementation: the processor uses a flag on `tx.update(id, patch, { metadata: 'inherit' })` (default `'fresh'`). Engine knows. |
 
-### 7.3 Mutators introduced for this
+### 7.1 Engine-side alias prefetch
 
-```ts
-// kernel mutator: create alias-target with deterministic id for date-shaped aliases
-defineMutator({
-  name: 'createAliasTarget',
-  argsSchema: t.object({ alias: t.string(), workspaceId: t.string() }),
-  resultSchema: t.object({ id: t.string(), createdNow: t.boolean() }),
-  apply: async (tx, { alias, workspaceId }) => {
-    const id = isDateAlias(alias)
-      ? deterministicDailyId(workspaceId, parseDate(alias))
-      : generateId()
-    const existing = await tx.get(id)
-    if (existing) return { id, createdNow: false }
-    tx.create({ id, workspaceId, parent_id: ..., aliases: [alias], … })
-    return { id, createdNow: true }
-  }
-})
-```
+To make same-tx alias resolution work without running queries inside the tx, the TxEngine inspects the user's mutator calls before opening the writeTransaction. For calls that affect content (`setContent`, `create`, `splitBlock`, `mergeBlocks`), it parses out alias patterns and calls `aliasLookup` (out-of-tx) to map them to existing alias-target ids. The result map is stashed in the tx's metadata; `parseReferences` reads it via `tx.meta.aliasMap`.
 
-### 7.4 Queries introduced for this
+This adds extra work to every `setContent`-bearing tx, but keeps tx semantics simple and correct.
 
-```ts
-defineQuery({
-  name: 'aliasLookup',
-  argsSchema: t.object({ workspaceId: t.string(), alias: t.string() }),
-  resultSchema: t.array(blockDataSchema),
-  invalidatedBy: { kind: 'mutators', names: ['setProperty', 'create', 'delete'] },
-  resolve: async ({ workspaceId, alias }, { db, hydrateBlocks }) => {
-    const rows = await db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])
-    return hydrateBlocks(rows)
-  }
-})
-```
+### 7.2 Test coverage required
 
-`ALIAS_LOOKUP_SQL` uses `json_each(properties_json -> 'aliases')` to find blocks containing the alias.
-
-### 7.5 Test coverage required (from §11)
-
-- A `setContent` mutator with `[[foo]]` creates an alias-target if none exists; same tx; one undo entry undoes both.
-- Same with `[[2026-04-28]]` produces the deterministic daily-note id; two simultaneous creates resolve to the same row.
-- Typing `[[foo]]` then deleting that text within 4s: `core.cleanupOrphanAliases` removes the orphan.
-- Typing `[[foo]]`, then linking again from another block within 4s: orphan is *kept* (it's now referenced).
+- `setContent` with `[[foo]]` creates an alias-target if none exists; same tx; one undo entry undoes both.
+- `[[2026-04-28]]` produces deterministic daily-note id; two simultaneous creates resolve to the same row.
+- Typing `[[foo]]` then deleting that text within 4s → orphan removed by cleanup.
+- Typing `[[foo]]`, then linking from another block within 4s → orphan kept.
+- Cleanup processor's debounce cancellation when a new `parseReferences` adds the same id again.
 
 ---
 
 ## 8. Repo / FacetRuntime lifecycle
 
-Today's lifecycle has a bootstrap cycle: `Repo` is constructed in `RepoProvider`; `AppRuntimeProvider` builds the FacetRuntime from extensions; some extensions are loaded by querying through Repo. That's a circular dependency.
+Bootstrap cycle today: `Repo` constructed in `RepoProvider`; `AppRuntimeProvider` builds FacetRuntime; some extensions are loaded via Repo. Resolution:
 
-### 8.1 Lifecycle contract
-
-1. **`Repo.constructor`** initializes with **kernel registries only** — built-in mutators/queries/property schemas/post-commit processors hard-coded into the `Repo` constructor's import list. No FacetRuntime needed.
-2. **`AppRuntimeProvider`** reads existing extensions, builds the FacetRuntime, and calls **`repo.setFacetRuntime(runtime)`**. The Repo merges the runtime's facet contributions into its registries. This call may happen multiple times as the runtime rebuilds.
-3. **`repo.tx`** snapshots the registries at tx start. Mid-tx runtime changes do not affect that tx.
-4. **Removed dynamic processors do not fire on already-running follow-up txs** — follow-up processors execute against the registry snapshot from when they were scheduled.
-
-### 8.2 What this means concretely
+1. **`Repo.constructor`** initializes with **kernel registries only** (built-ins hard-coded into the constructor's import list). No FacetRuntime needed.
+2. **`AppRuntimeProvider`** builds the FacetRuntime, calls **`repo.setFacetRuntime(runtime)`**. Repo merges contributions into its registries. Idempotent under multiple calls.
+3. **`repo.tx`** snapshots registries at tx start; mid-tx runtime changes don't affect that tx.
+4. **Removed dynamic processors don't fire on already-running follow-up txs** — follow-up processors execute against the snapshot from when they were scheduled.
 
 ```ts
-// src/data/repo.ts
-export class Repo {
-  private registries: Registries = buildKernelRegistries()    // bootstraps with kernel only
+class Repo {
+  private registries: Registries = buildKernelRegistries()
 
   setFacetRuntime(runtime: FacetRuntime): void {
     const fromFacets = readDataFacets(runtime)
     this.registries = mergeRegistries(buildKernelRegistries(), fromFacets)
-    this.notifyRegistryListeners()                             // for handles tracking facet-defined queries
+    this.notifyRegistryListeners()                            // for handles tracking facet-defined queries
   }
 
   async tx<R>(fn, opts?): Promise<R> {
-    const snapshot = this.registries                            // captured at tx start
+    const snapshot = this.registries
     return runTxWithSnapshot(snapshot, fn, opts)
   }
 }
 ```
-
-### 8.3 Why this resolves the cycle
-
-`Repo` no longer awaits FacetRuntime to start. Components that need data access work as soon as `Repo` is constructed. Plugin-contributed mutators/queries become available after the runtime is built and `setFacetRuntime` is called — that delay is acceptable because dynamic-plugin functionality wasn't usable before that point anyway. Static plugins already have their contributions in the kernel-or-runtime registry.
 
 ---
 
@@ -598,121 +562,97 @@ export class Repo {
 
 ### 9.1 Per-handle subscription
 
-Every `Handle<T>` maintains:
-- `value: T | undefined` — last computed result
-- `listeners: Set<Listener>`
-- `dependencies: Dependencies` — what would invalidate this handle's value
-
-Handle implementations register dependencies during their first `load`. On a tx commit, the `TxEngine` walks the affected dependencies and re-runs handles.
+`Handle<T>` keeps `value`, `listeners`, `dependencies`. Registered with `HandleStore`'s invalidation index on first load. On tx commit, `TxEngine` walks affected dependencies and re-runs handles synchronously.
 
 ### 9.2 What "affected" means
 
-Three sources of invalidation:
-
-1. **Row-level**: a row in `blocks` changed. Handles whose dependencies include that row id re-run. (`repo.block(id)` is the obvious case; `repo.subtree(rootId)` is invalidated if any descendant row changed.)
-2. **Mutator-level**: a query declares `invalidatedBy: { kind: 'mutators', names: ['indent', 'outdent'] }` — re-runs only when those commit.
+1. **Row-level**: a row in `blocks` changed. Handles whose dependencies include that row id re-run.
+2. **Mutator-level**: `invalidatedBy: { kind: 'mutators', names: […] }` re-runs only when those commit.
 3. **Table-level**: catch-all coarse invalidation.
 
-Kernel handles (`block`, `subtree`, `ancestors`, `backlinks`) declare row-level dependencies during their `resolve` (the resolver knows which row ids it touched). Plugin queries can declare any of the three; row-level is opt-in.
+Kernel handles declare row-level deps during `resolve` (the resolver knows which row ids it touched). Plugin queries opt into row-level if they want it.
 
 ### 9.3 Invalidation source
 
-The TxEngine drives invalidation directly from the staged-write set on commit success — it knows exactly which rows changed and what the new values are. `row_events` is the audit/cross-process source-of-truth log, but in-process invalidation does not wait on a `row_events` read; the TxEngine pushes the invalidations synchronously after `writeTransaction` resolves.
+The TxEngine drives invalidation directly from the staged write-set on commit success. `row_events` is the audit / cross-process source-of-truth log; in-process invalidation does **not** wait on `row_events`.
 
-For multi-process invalidation (cross-tab), see §13 — out of scope for v1.
+For multi-process invalidation (cross-tab) — out of scope; see §16.7.
 
 ### 9.4 Structural diffing
 
-After re-running, the new value is compared to the cached one. Default comparator: `lodash.isEqual`. Listeners only fire if the result actually changed. For specific result shapes a faster comparator can be supplied via `useHandle(handle, { eq })`.
+`lodash.isEqual` default. `useHandle(handle, { eq })` for custom comparators.
 
 ### 9.5 React integration
 
-`useHandle(handle)` is the only React adaptor:
-
 ```ts
-export function useHandle<T>(
-  handle: Handle<T>,
-  options?: { selector?: (v: T) => unknown; eq?: EqualityFn }
-): T
+useHandle<T>(handle, options?: { selector?, eq? }): T
 ```
 
-Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; the primitive is `useHandle`.
+Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive is `useHandle`.
 
 ---
 
 ## 10. Transaction commit pipeline
 
-A `repo.tx(fn, opts)` call uses PowerSync's `writeTransaction`:
-
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ 1. db.writeTransaction(async (txDb) => {                     │
-│ 2.   set _ctx (tx_id, user_id) — for triggers                │
-│ 3.   construct Tx (write-set staged in memory; reads use txDb)│
-│ 4.   preload opts.reads (if provided)                        │
-│ 5.   user fn(tx, opts) runs:                                 │
+│  pre-tx: engine prefetches alias map from setContent args    │
+│  pre-tx: engine preloads opts.reads (and mutator.reads)      │
+│ ─────────────────────────────────────────────────────────── │
+│ db.writeTransaction(async (txDb) => {                        │
+│   1. UPDATE tx_context SET tx_id, user_id, scope, source = …│
+│   2. construct Tx (staged write-set; reads via cache + txDb) │
+│   3. user fn(tx) runs:                                       │
 │        tx.update / tx.create / tx.delete / tx.run            │
-│        reads: staged → cache → SQL via txDb                  │
-│ 6.   run same-tx post-commit processors against staged calls │
-│        (refs parsing happens here)                           │
-│ 7.   write all rows to blocks (txDb)                          │
-│ 8.   write command_event row (txDb)                          │
-│        row_events written by triggers                        │
-│ 9.   clear _ctx                                              │
-│ 10. })  // PowerSync COMMIT or ROLLBACK                      │
-│ 11. on success: hydrate cache, walk handles, diff, notify    │
-│ 12. record undo entry from staged before-snapshots           │
-│ 13. resolve repo.tx promise with user fn's return value      │
-│ 14. schedule follow-up post-commit processors (own txs)      │
+│        reads: staged → cache → txDb                          │
+│   4. run same-tx post-commit processors against staged calls │
+│        (refs parsing happens here, may also call afterCommit)│
+│   5. flush staged writes to blocks (txDb)                    │
+│        triggers fire: row_events rows, upload routing        │
+│   6. INSERT command_event row (txDb)                         │
+│   7. UPDATE tx_context SET tx_id=NULL, source='unknown'      │
+│ })   // PowerSync COMMIT or ROLLBACK                         │
+│                                                              │
+│ on success:                                                  │
+│   8. hydrate cache from staged writes                        │
+│   9. walk affected handles, structural-diff, fire            │
+│   10. record undo entry from staged before/after snapshots   │
+│   11. resolve repo.tx promise with user fn's return value    │
+│   12. dispatch tx.afterCommit jobs (own writeTransactions)   │
+│       and watch-matched follow-up processors                 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Steps 1–10 are PowerSync's atomic transaction. Step 11 happens after COMMIT but before `repo.tx` resolves — the cache and undo stack are updated **before** the promise resolves to the caller. Step 14 is fire-and-after, in its own writeTransactions.
+Steps 1–7 are atomic. 8–11 happen synchronously after COMMIT, before `repo.tx` resolves to caller. 12 is fire-and-after.
 
-If step 5 or 6 throws: `writeTransaction` rolls back; cache, command_events, row_events all unchanged; `repo.tx` rejects with the error.
+If 3 or 4 throws → rollback. Cache untouched, no command_event, no row_events, no undo entry. `repo.tx` rejects with the error.
 
-If step 7 or 8 throws (DB-level): same — full rollback, error propagates.
+If 5 or 6 throws (DB-level) → rollback, same.
 
-### 10.1 `repo.mutate.X` is sugar for a 1-mutator tx
+### 10.1 `repo.mutate.X` is a 1-mutator tx
 
 ```ts
 await repo.mutate.indent({ id })
 // ≡
 await repo.tx(async tx => tx.run(indentMutator, { id }), {
   description: indentMutator.describe?.({ id }),
-  scope: ChangeScope.BlockDefault,
+  scope: indentMutator.scope,                                 // taken from the mutator def
 })
 ```
 
-### 10.2 Read-your-own-writes
+### 10.2 Scope unification within a tx
 
-`tx.get(id)` checks the staged write-set first, then the cache, then SQLite via the active `writeTransaction`. The SQL fall-through reads from the same transaction — there is no race window between staged writes and committed state.
+A tx has one `scope`. Mixing scopes inside `tx.run` is rejected at the engine level (sub-mutator's scope must equal the tx scope). This keeps undo / upload semantics coherent.
 
-### 10.3 Same-tx vs follow-up processors
+For UI-state mutations interleaved with document mutations, callers issue separate `repo.tx` calls.
 
-| Mode | When to use | Examples |
-|---|---|---|
-| `'same-tx'` | The processor's output must be atomic with the original write. | `core.parseReferences` (refs must be consistent with content) |
-| `'follow-up'` | Eventual consistency is OK. | search indexing, the orphan-alias cleanup, telemetry |
+### 10.3 Read-only mode
 
-Default for new processors: `'follow-up'`. Same-tx requires the processor be deterministic and fast (must complete before the user's tx commits).
-
-### 10.4 UI-state writes
-
-Mutators can declare `scope: ChangeScope.UiState`. Writes with that scope:
-- Still go through the same tx pipeline.
-- Are **not** added to the document undo stack.
-- May be coalesced (debounced) at the call site (e.g., for selection updates) — coalescing is a caller concern, not a kernel feature.
-
-### 10.5 Read-only mode
-
-`Repo.isReadOnly` (existing flag) gates writes. `repo.tx` rejects with `ReadOnlyError` for any non-`UiState` mutator. UI-state mutations are still allowed (scrolling, selection, etc.). Behavior matches today.
+`repo.tx` rejects with `ReadOnlyError` for any document-scope tx when `repo.isReadOnly`. UI-state txs always allowed.
 
 ---
 
 ## 11. Tree operations — push to SQL
-
-With `parent_id + order_key`, recursive CTEs become straightforward:
 
 ### 11.1 Subtree
 
@@ -722,7 +662,7 @@ WITH RECURSIVE subtree AS (
   FROM blocks
   WHERE id = :rootId AND deleted = 0
   UNION ALL
-  SELECT child.*, subtree.path || '/' || child.order_key AS path
+  SELECT child.*, subtree.path || '/' || child.order_key || ':' || child.id
   FROM subtree
   JOIN blocks AS child ON child.parent_id = subtree.id
   WHERE child.deleted = 0
@@ -730,7 +670,7 @@ WITH RECURSIVE subtree AS (
 SELECT * FROM subtree ORDER BY path;
 ```
 
-No more `json_each` over `child_ids_json`. `path` is the lexicographic concatenation of `order_key`s — sorts correctly without explicit depth tracking.
+Path includes `id` after `order_key` to make the sort deterministic on order_key collisions.
 
 ### 11.2 Ancestors
 
@@ -743,8 +683,10 @@ WITH RECURSIVE chain AS (
   JOIN blocks AS parent ON parent.id = chain.parent_id
   WHERE parent.deleted = 0
 )
-SELECT * FROM chain WHERE id != :id ORDER BY rowid;
+SELECT * FROM chain WHERE id != :id;
 ```
+
+Returned in chain order (leaf to root) by virtue of the recursion order.
 
 ### 11.3 isDescendantOf
 
@@ -757,19 +699,19 @@ WITH RECURSIVE chain AS (
 SELECT 1 FROM chain WHERE id = :potentialAncestor LIMIT 1;
 ```
 
-### 11.4 Children
+### 11.4 Children of one parent
 
 ```sql
 SELECT * FROM blocks
 WHERE parent_id = :id AND deleted = 0
-ORDER BY order_key;
+ORDER BY order_key, id;
 ```
 
 ### 11.5 JS-side helpers gone
 
-`block.parents()`, `block.isDescendantOf()`, `getRootBlock()`: replaced by `repo.query.ancestors({id})` (handle) or `tx.query(ancestors, {id})` (within a tx).
+`block.parents()`, `block.isDescendantOf()`, `getRootBlock()`: replaced by `repo.query.ancestors({ id })` (handle) or `await tx.parentOf(id)` walks within a tx.
 
-`visitBlocks`: `repo.subtree(rootId).load()` once, then in-memory traversal of the array. No per-level fetches.
+`visitBlocks`: load subtree once, walk in memory.
 
 ---
 
@@ -778,37 +720,28 @@ ORDER BY order_key;
 ### 12.1 Static plugins (compile-time)
 
 ```ts
-// src/plugins/tasks/schema.ts
-import { defineProperty, ChangeScope } from '@/data/api'
-import { z } from 'zod'
-
+// schema.ts
 export const dueDateProp = defineProperty('tasks:due-date', {
   codec: z.coerce.date(),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
-// src/plugins/tasks/mutators.ts
-import { defineMutator } from '@/data/api'
-import { dueDateProp } from './schema'
-
+// mutators.ts
 export const setDueDate = defineMutator({
   name: 'tasks:setDueDate',
   argsSchema: z.object({ id: z.string(), date: z.date() }),
+  scope: ChangeScope.BlockDefault,
   apply: async (tx, { id, date }) => {
     const block = await tx.get(id)
-    if (!block) throw new Error(`Block ${id} not found`)
+    if (!block) throw new BlockNotFoundError(id)
     tx.update(id, {
       properties: { ...block.properties, [dueDateProp.name]: date }
     })
   }
 })
 
-// src/plugins/tasks/index.ts
-import { mutatorsFacet, propertySchemasFacet } from '@/data/api'
-import { setDueDate } from './mutators'
-import { dueDateProp } from './schema'
-
+// index.ts
 declare module '@/data/api' {
   interface MutatorRegistry {
     'tasks:setDueDate': typeof setDueDate
@@ -824,7 +757,7 @@ export const tasksPlugin: AppExtension = [
 ]
 ```
 
-Calling site (typed):
+Caller (typed):
 
 ```ts
 await repo.mutate['tasks:setDueDate']({ id, date })
@@ -832,154 +765,120 @@ await repo.mutate['tasks:setDueDate']({ id, date })
 
 ### 12.2 Dynamic plugins (runtime-loaded)
 
-Renderer/extension blocks compiled via Babel use the same API at runtime:
-
 ```js
 const setBookmark = defineMutator({
   name: 'bookmarks:set',
   argsSchema: z.object({ id: z.string(), url: z.string().url() }),
+  scope: ChangeScope.BlockDefault,
   apply: async (tx, { id, url }) => { /* ... */ }
 })
 
 contribute(mutatorsFacet, setBookmark)
 ```
 
-Dynamic plugins can't use `declare module`, so calls go through the runtime registry:
+Calls go through the runtime registry:
 
 ```ts
 await repo.run('bookmarks:set', { id, url: 'https://...' })
 ```
 
-`repo.run` validates the args at call time (the registry has the schema) and returns `Promise<unknown>`. A dynamic plugin can ship a `.d.ts` companion that augments `MutatorRegistry` if it wants typed call sites elsewhere — optional.
+`repo.run` validates args at call time and returns `Promise<unknown>`. Optional `.d.ts` companion can augment `MutatorRegistry` for typed calls.
 
 ### 12.3 Trust model
 
-Static plugins are in the TS module graph and code-reviewed. Dynamic plugins run with kernel authority (no sandbox today). **Mutator args validate at the boundary** for both — even a buggy plugin can't write malformed data, only well-typed unwanted data. Sandboxing is out of scope.
+Static plugins are in the TS module graph and code-reviewed. Dynamic plugins run with kernel authority. Args validate at the boundary for both. Sandboxing is out of scope.
 
 ---
 
 ## 13. Migration phases
 
-Each phase is its own implementer-subagent task. Each phase keeps `yarn tsc -b` and `yarn vitest run` green. Phases land in order; later phases assume earlier ones merged. Cross-tab is explicitly **not** part of any phase here.
+Each phase ships independently; build stays green between them. **No back-compat shims** at any phase boundary.
 
-### Phase 1 — Schema reset
+### Phase 1 — Schema + Tx engine + tree-API rewrite (the big one)
 
-**Goal**: drop & recreate `blocks` (with `parent_id + order_key`); replace single `block_events` with `row_events` + `command_events`; add triggers; update PowerSync sync-config.
+This phase is the clean break. It absorbs everything that's incoherent to land separately.
 
 **Scope**:
-- New SQL DDL per §4.
-- Postgres migration: drop old tables, create new tables with same shape (server-side).
-- Local DB schema version bump → drop & recreate on first launch under new version. No client-side migration of old data.
-- SQLite triggers on `blocks` writing `row_events` rows.
-- `blockSchema.ts` updated to new row shape (snake_case columns); `blockToRowParams` / `parseBlockRow` updated.
-- `blockStorage.ts` adjusted: writes use `parent_id + order_key`; reads via the new schema.
-- All readers/writers of `child_ids_json` updated to query children via `parent_id` ordered by `order_key`. (Kernel only at this phase; mutators that *change* order use the existing change-callback API but compute new order_keys.)
-- Add `fractional-indexing` (or equivalent) library.
-- `sync-config.yaml` updated.
+- New SQL DDL: `blocks` (with `parent_id + order_key`), `tx_context` (one-row), `row_events`, `command_events`. Drop existing tables.
+- Triggers: `row_events` insert on `blocks` change; upload-routing trigger preserving today's behavior, rewired to read `tx_context.source`.
+- Sync-apply wrapper that sets `tx_context.source = 'sync'` before PowerSync's CRUD apply runs; clears after.
+- Postgres mirror schema. PowerSync sync-config rewrite.
+- New `repo.tx(fn, opts)` on `db.writeTransaction`. Async `tx.get`. `tx.peek`, `tx.create`, `tx.update`, `tx.delete`, `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
+- `BlockData` type updated: no `childIds` field.
+- `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
+- Properties stored flat: `properties_json` is `Record<string, unknown>`. Property descriptors live as plain `xxxProp` exports for now (facet wrapping in Phase 3).
+- Tree mutations rewritten as kernel functions on `repo` (not on `Block`): `repo.indent(id)`, `repo.outdent(id, opts)`, `repo.move(id, opts)`, `repo.delete(id)`, `repo.createChild(parentId, opts)`, `repo.split(id, at)`, `repo.merge(a, b)`, `repo.insertChildren(parentId, items)`. Each runs inside `repo.tx` and uses `parent_id + order_key` patches.
+- `block.change(callback)` is **deleted**, not wrapped. Call sites that mutated content/properties via callbacks migrate to `block.update({ content })` / `block.set(prop, v)` (which dispatch a 1-block tx) or to the dedicated kernel functions for tree ops.
+- `applyBlockChange`, `_change`, `_transaction`, `getProperty`/`setProperty` (record-shape), `dataSync`, `requireSnapshot`-style throws — all deleted.
+- `getProperty`/`setProperty` replaced by `block.get(schema)`/`block.set(schema, v)` operating on the new flat shape.
+- Reference parsing remains as today's inline behavior — it still exists, still runs after content changes, but it now runs inside `repo.tx` (synchronously triggered by setContent), not as a fire-and-forget. Move to a proper post-commit processor in Phase 3.
+- All call sites updated. (This is mechanical and broad: every shortcut handler, every renderer, every selector touching `block.data.childIds`, `block.data.properties[name].value`, or `block.change(...)`.)
+- `repoInstance.ts` deleted; access via `RepoContext` only.
 
-**Out of scope this phase**: tx engine, named mutators, handles, facets. The existing `Block` / `Repo` / `block.change()` API still works; only its underlying storage shape changes.
+**Why this phase is large**: with no back-compat, the schema reset and the tree-API rewrite cannot land separately. Either the storage shape changes and we keep the old API (impossible without `child_ids_json`), or we change both at once. Property storage flatness is in the same situation. The phase is large but mechanical.
 
 **Acceptance**:
 - App boots from empty DB.
-- All existing tests pass after row-shape migration in test fixtures.
-- Insert/move operations use `order_key`; concurrent sibling inserts under the same parent both persist.
-- Triggers populate `row_events` correctly.
+- All tests pass after fixture migration to new shapes.
+- Multi-block ops wrap one `writeTransaction`. Crash mid-tx leaves no partial state.
+- Sibling concurrent inserts both persist; ordering is deterministic post-sync (via `(order_key, id)` tiebreak).
+- UI-state writes set `source='local-ephemeral'` and don't enter the upload queue.
+- Sync-applied writes set `source='sync'` and don't loop through the upload trigger.
+- `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
 
-### Phase 2 — Tx engine on `writeTransaction`
-
-**Goal**: introduce `repo.tx(fn, opts)` backed by PowerSync's `writeTransaction`. Route existing `applyBlockChange` through it. Real BEGIN/COMMIT/ROLLBACK. Single undo entry per tx. Async `tx.get` queries SQLite within the tx.
-
-**Scope**:
-- New `Tx` interface with async `get`, sync `peek` (cache-only), `update`, `create`, `delete`, `run`, `query`, `childrenOf`, `parentOf`.
-- `repo.tx` opens `db.writeTransaction`, sets `_ctx`, runs fn, writes staged rows + `command_event`, clears `_ctx`, commits.
-- `applyBlockChange` becomes a thin wrapper that compiles a callback into a 1-block tx with a synthetic mutator name `legacy.applyBlockChange`. **Same call sites, no API breakage** — temporary wrapper deleted in Phase 5.
-- `block.change(d => …)` callback: same wrapping. Existing call sites continue to work.
-- `UndoRedoManager` invoked once per `repo.tx` call (one entry per tx).
-- Repo singleton (`repoInstance.ts`) deleted in this phase per `architectural-observations.md` #6 (clean lifecycle for tx; tests need fresh Repo per case).
-
-**Out of scope**: named mutators, facets, handles, sync-Block migration.
-
-**Acceptance**:
-- Multi-block ops (`indent`, `outdent`, `delete`) wrap a single `writeTransaction`.
-- Crash/abort mid-tx (simulated by throwing in the user fn) leaves DB and cache untouched.
-- Undo entries are 1-per-tx. `block_events`-equivalent rows are split: one `command_event`, multiple `row_events` (trigger-written).
-- Existing tests pass without modification.
-
-### Phase 3 — Sync `Block` + Handles + React migration
-
-**Goal**: replace async-cascading `Block` API with a sync view; introduce `Handle<T>` and `useHandle`; migrate React components.
+### Phase 2 — Sync `Block` + Handles + React migration
 
 **Scope**:
-- `Block.data` becomes a sync getter (throws if not loaded; nullable for not-found).
-- `Block.dataSync` deleted.
-- `Block.parent` / `Block.children` become sync (cached relatives).
-- `repo.load(id, opts)` with `{ ancestors?, descendants?: number }` for explicit preload.
-- New `HandleStore` with identity-stable lookup and ref-count GC.
-- `repo.block(id)` returns `Handle<BlockData | null>`.
-- `repo.subtree(id)` etc. return handles (still using existing repo-internal queries; the queries-as-facet move comes in Phase 5).
+- `HandleStore` with identity-stable lookup and ref-count GC.
+- `repo.block(id)`, `repo.subtree(id)`, `repo.ancestors(id)`, `repo.backlinks(id)` return handles.
 - `useHandle(handle)` uses `useSyncExternalStore` + Suspense.
-- `useBlockData`, `useSubtree`, `useChildren`, `useBacklinks`, `useParents` rewrite as 1-line sugar over `useHandle`.
-- `useDataWithSelector` → `useHandle(handle, { selector })`.
-- All `await block.data()` sites migrate to `await repo.load(id)` + sync access (or `useHandle(...)` in components).
-- Dev-mode wrapper that reports the call stack on `BlockNotLoadedError` (helps catch missing preloads during migration).
+- `useBlockData`, `useSubtree`, `useChildren`, `useBacklinks`, `useParents` rewrite as 1-line sugar.
+- `useDataWithSelector` deleted; `useHandle(handle, { selector })`.
+- All `await block.data()`-style sites become `await repo.load(id)` + sync access.
+- React component migration: Suspense boundaries placed where loading-states live.
 
 **Acceptance**:
-- No `dataSync` references remain.
 - No `await block.data()` calls remain.
-- `useBacklinks` etc. no longer use ad-hoc `useEffect`-based reload logic.
-- Ancestor/descendant preloads in `repo.load(...)` are typed and required at every imperative call site that accesses non-immediate relatives.
+- `useBacklinks`, `useParents` etc. no longer use ad-hoc `useEffect` reload.
+- `Handle<BlockData | null>` distinguishes loading vs. not-found via `status()`.
 
-### Phase 4 — Named mutators + post-commit processors as facets
-
-**Goal**: introduce `mutatorsFacet`, `postCommitProcessorsFacet`. Migrate every kernel mutation to a named mutator. Implement `repo.setFacetRuntime` lifecycle.
-
-**Depends on**: `tasks/plugins-architecture.md` having landed.
+### Phase 3 — Named mutators + post-commit processors as facets
 
 **Scope**:
-- Define `mutatorsFacet` and `postCommitProcessorsFacet` per §6.
-- `Repo` constructor builds kernel registries directly; `repo.setFacetRuntime(rt)` merges facet contributions.
-- Kernel mutators registered: `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `createAliasTarget`. Names finalize during this phase; final list is captured in PR description.
-- Reference parsing migrated to `core.parseReferences` post-commit processor (mode: `'same-tx'`) per §7. Includes alias creation, daily-note deterministic id, and the orphan-cleanup follow-up processor.
-- `repo.mutate.X` / `repo.run('name', args)` accessor surfaces — typed via module augmentation; runtime path validates args.
-- `block.change(d => ...)` and the legacy `applyBlockChange` wrapper deleted.
-- All call sites use `repo.mutate.<name>(args)` or `repo.tx(tx => …)`.
-- ChangeScope typed (`architectural-observations.md` #7); `local-ui` scope wired.
+- `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
+- Repo lifecycle (`setFacetRuntime`) implemented per §8.
+- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `createAliasTarget`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx).
+- Reference parsing migrated to `core.parseReferences` (mode `'same-tx'`) per §7. Includes the alias prefetch logic, the deterministic daily-note id, the `tx.afterCommit('core.cleanupOrphanAliases', …)` scheduling.
+- `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
+- `propertySchemasFacet` for descriptors (still flat in storage; facet just wraps the existing descriptor exports).
+- ChangeScope type-augmentation hook for plugin scopes.
 
 **Acceptance**:
-- `block.change` no longer exists.
-- A new plugin can register a mutator and call site invokes via `repo.mutate['plugin:foo']({...})` with full typing.
-- Reference parsing produces identical results to today's behavior in tests covering: alias resolution, alias creation, daily-note creation under concurrency, orphan cleanup with and without retention.
-- `repo.setFacetRuntime` snapshot semantics hold — a runtime change mid-tx doesn't affect that tx.
+- Reference parsing produces identical results to today across all behaviors per §7.2.
+- A new plugin can register a mutator and call site invokes via `repo.mutate['plugin:foo']({...})` typed.
+- `repo.setFacetRuntime` snapshot semantics hold.
 
-### Phase 5 — Queries facet + property schemas facet
-
-**Goal**: migrate kernel queries and property schemas to facets. Property schema split (descriptor only in code, flat values in storage).
+### Phase 4 — Queries facet
 
 **Scope**:
-- `queriesFacet` defined; kernel queries migrated: `subtree`, `ancestors`, `backlinks`, `byType`, `searchByContent`, `firstChildByContent`, `aliasesInWorkspace`, `aliasMatches`, `firstRootBlock`, `aliasLookup`.
-- `propertySchemasFacet` defined; existing `xxxProp` exports refactored as descriptors with codecs (see §5.6).
-- `properties_json` in storage becomes flat `{[name]: T}` — descriptor metadata removed from storage. (Phase 1 already prepared this — Phase 5 stops emitting the descriptor metadata; the codec (de)serializes typed values.)
-- `block.set(schema, value)` / `block.get(schema)` / `block.peekProperty(schema)` are the ergonomic API.
-- `BlockProperty` union deleted.
+- `queriesFacet` defined.
+- Kernel queries migrated: `subtree`, `ancestors`, `backlinks`, `byType`, `searchByContent`, `firstChildByContent`, `aliasesInWorkspace`, `aliasMatches`, `firstRootBlock`, `aliasLookup`.
+- `repo.query.X(args)` accessor surface (typed via module augmentation) and `repo.runQuery('name', args)`.
 
 **Acceptance**:
-- All `as T` casts on `properties[name].value` removed.
-- All `xxxProp` exports are `PropertySchema` descriptors.
-- A plugin can register a `dueDateProp` with a `Date` codec and the typed `block.get(dueDateProp)` returns `Date | undefined`.
+- Plugin can register a query and call site invokes via `useHandle(repo.query['plugin:foo'](args))` typed.
 
-### Phase 6 — SQL tree helpers
-
-**Goal**: replace JS-side recursion with recursive CTEs.
+### Phase 5 — SQL tree helpers (CTE migration)
 
 **Scope**:
-- `ANCESTORS_SQL`, updated `SUBTREE_SQL` (using `parent_id`), `IS_DESCENDANT_OF_SQL`.
-- Kernel queries `subtree`, `ancestors`, `isDescendantOf` registered at Phase 5 use these CTEs.
-- `visitBlocks` rewritten to load subtree once and walk in memory.
-- `getRootBlock` rewritten as `repo.query.ancestors({id}).load()` + last element.
+- `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, updated `SUBTREE_SQL` per §11.
+- Kernel queries `subtree`, `ancestors`, `isDescendantOf` rewritten to use these CTEs.
+- `visitBlocks` rewritten: load subtree, walk in memory.
+- `getRootBlock` rewritten as `await repo.query.ancestors({id}).load()` + last element.
 
 **Acceptance**:
 - No `await block.parent()` in a loop.
-- Subtree benchmark: 1000 blocks 5 levels deep = 1 SQL query, not N+1.
+- Subtree benchmark: 1000 blocks 5 levels deep = 1 SQL query.
 
 ---
 
@@ -987,28 +886,30 @@ Each phase is its own implementer-subagent task. Each phase keeps `yarn tsc -b` 
 
 For each phase:
 
-- **Phase 1**: row CRUD via new schema; trigger writes correct `row_events`; `order_key` insertion is conflict-free for two simultaneous parent siblings.
-- **Phase 2**: atomicity (mid-tx throw rolls back DB + cache + undo); nested `tx.run`; multi-block writes commit together; `tx.get` falls through to SQL when not cached; `command_event` and `row_events` are coherent (same `tx_id`).
-- **Phase 3**: `block.data` throws `BlockNotLoadedError` when not loaded; `repo.load` populates; Suspense-driven render in a React test; `Handle<BlockData | null>` distinguishes not-loaded from not-found via `status()`.
-- **Phase 4**: registering a mutator from a contribution makes it callable via `repo.mutate`; duplicate names log warning + last-wins; runtime args validation rejects invalid args; **reference parsing**: full coverage per §7.5, including daily-note determinism under concurrent creation.
-- **Phase 5**: identity stability across calls; GC after subscribers detach; structural diffing prevents spurious notifications; descriptor codec round-trips `Date` correctly.
-- **Phase 6**: ancestors/subtree/isDescendantOf return correct results; no per-level fetches in observed network.
+- **Phase 1**: row CRUD via new schema; trigger writes correct `row_events`; concurrent sibling inserts both persist; UI-state writes don't upload; sync-applied writes don't re-route; `tx.get` falls through to SQL when not cached; mid-tx throw rolls back; multi-block writes are atomic; `tx.afterCommit` jobs run after commit and do not run on rollback.
+- **Phase 2**: `block.data` throws `BlockNotLoadedError` when not loaded; `repo.load` populates; Suspense-driven render in a React test; `Handle<BlockData | null>` distinguishes loading vs. not-found.
+- **Phase 3**: registering a mutator from a contribution makes it callable; duplicate names log warning + last-wins; runtime args validation rejects invalid args; **reference parsing**: full coverage per §7.2, including daily-note determinism under concurrent creation; orphan cleanup with and without retention; cleanup debounce cancellation when content is re-typed.
+- **Phase 4**: identity stability across calls; GC after subscribers detach; structural diffing prevents spurious notifications.
+- **Phase 5**: ancestors/subtree/isDescendantOf return correct results with deterministic order on order_key collisions.
 
-A new `src/data/test/factories.ts` (per `architectural-observations.md` #8) provides `createTestRepo({ user?, initialBlocks?, plugins? })` to reduce setup boilerplate.
+A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?, plugins? })`. Comes in Phase 1.
 
 ---
 
 ## 15. Invariants worth nailing
 
-1. **Read-only mode**: `repo.tx` rejects non-`UiState` mutators when `repo.isReadOnly`. UI-state writes always allowed.
-2. **UI-state scope**: `ChangeScope.UiState` writes don't enter the document undo stack. They go through the same tx pipeline (still atomic with whatever else is in the tx).
-3. **Codecs at boundaries only**: descriptor `codec` runs at `block.set`/`block.get`. The on-disk shape is JSON; codec lifts to/from typed values. No codec inside mutators (they take typed args).
-4. **Order-key concurrency**: concurrent inserts under the same parent never conflict (different rows, different keys). Concurrent moves of the *same* block remain row-LWW; document this explicitly.
-5. **Tx snapshot**: `repo.tx` runs against the registry snapshot taken at tx start. Mid-tx facet runtime changes do not affect the running tx.
-6. **Same-tx processors are deterministic**: their writes are part of the user's tx — they must not depend on time, randomness, or external IO. Follow-up processors may be non-deterministic.
-7. **`tx.get` is consistent**: staged → cache → SQL via the active `writeTransaction`. No partial-read window.
-8. **Block.data is sync after load; never returns stale values mid-tx**: the cache update in step 11 of the pipeline (§10) happens before `repo.tx` resolves, so any code that awaits the tx and then reads `block.data` sees the post-tx state.
-9. **Trigger metadata via `_ctx`**: `tx_id` and `user_id` flow into `row_events` only via the `_ctx` temp table set at tx start. Writes outside a `repo.tx` are forbidden by convention; in practice nothing should bypass `repo.tx`.
+1. **Read-only mode**: `repo.tx` rejects document-scope txs when `repo.isReadOnly`. UI-state txs always allowed.
+2. **Scope is per-tx, not per-call**: every mutator call within a tx must share the tx's scope. Mixing throws.
+3. **UI-state isolation**: UI-state txs set `tx_context.source='local-ephemeral'`; upload trigger excludes; not in undo stack.
+4. **Sync-applied writes**: bypass `repo.tx`; have `tx_context.source='sync'`; produce row_events with `tx_id=NULL`; don't trigger upload-routing.
+5. **Order_key determinism**: `ORDER BY order_key, id` everywhere children are listed. Order_key collisions are possible (concurrent inserts at same position) and resolve via `id` tiebreak.
+6. **Codecs at boundaries only**: descriptor `codec` runs at `block.set`/`block.get`. The on-disk shape is JSON. No codec in the storage layer or cache.
+7. **Tx snapshot**: `repo.tx` runs against the registry snapshot taken at tx start. Mid-tx facet-runtime changes don't affect the running tx.
+8. **Tx queries are limited**: only `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`. Arbitrary cross-row reads happen out-of-tx (engine prefetch or caller passes results via args). Engine merges staged + SQL for these primitives.
+9. **Same-tx processors are deterministic**: writes are atomic with the user's tx. No time, randomness, or external IO.
+10. **`tx.afterCommit` doesn't run on rollback**: scheduled jobs only fire if the parent tx commits.
+11. **`block.data` is sync after load**: after `repo.tx` resolves, any `block.data` read sees the post-tx state — the cache update happens before the promise resolves.
+12. **No `block.data.childIds`**: `BlockData` matches the row shape; `childIds` is computed on `Block` from the cache. Storage source-of-truth is `parent_id + order_key`.
 
 ---
 
@@ -1016,48 +917,51 @@ A new `src/data/test/factories.ts` (per `architectural-observations.md` #8) prov
 
 ### 16.1 zod vs Effect Schema
 
-Default to **zod** (smaller bundle, broader React-ecosystem familiarity). Effect Schema is interesting but requires the Effect runtime. **Decide at Phase 4 start.**
+Default to **zod**. Decide at Phase 1 start (used immediately by mutator argsSchema).
 
 ### 16.2 Same-tx vs follow-up default
 
-Default new processors to `'follow-up'`. Same-tx is opt-in. Reference parsing is the rare exception (atomic refs are a correctness need).
+Default new processors to `'follow-up'`. Same-tx is opt-in for atomicity.
 
 ### 16.3 Plugin-owned entity tables
 
-Out of scope for v1. Plugins use properties for everything. Revisit when at least one plugin actually needs its own table.
+Out of scope for v1. Plugins use properties.
 
-### 16.4 Checkpoints for undo coalescing (TinyBase-style)
+### 16.4 Checkpoints for undo coalescing
 
-Defer. Tx-level undo is enough for v1. Add when typing UX demands it.
+Defer.
 
 ### 16.5 Signals vs `useSyncExternalStore`
 
-`useHandle` uses `useSyncExternalStore`. Future: signals (Solid-style) for finer-grained tracking. Defer; revisit if React perf becomes a bottleneck.
+`useHandle` uses `useSyncExternalStore`. Signals deferred.
 
 ### 16.6 Events-derived undo
 
-If we ever want persistent / cross-process undo, `row_events` already has `before_json` — reconstruct undo from it instead of in-memory. Defer; out of scope for this redesign.
+Defer; `row_events.before_json` enables it later.
 
 ### 16.7 Cross-tab invalidation
 
-Out of scope. Today's `enableMultiTabs=false, useWebWorker=false` (`src/data/repoInstance.ts`) is preserved. Multi-tab is a separate work item that requires:
-- Enabling the shared-worker mode in PowerSync.
-- Subscribing to `row_events` in each tab and replaying invalidation through `HandleStore`.
-- Deciding cross-tab undo semantics (probably: each tab has its own undo stack initially).
-
-A follow-up task spec should pick this up after this redesign lands.
+Out of scope. Today's `enableMultiTabs=false, useWebWorker=false` is preserved. Multi-tab is a separate work item.
 
 ### 16.8 Server-side audit log
 
-`row_events` and `command_events` are local-only initially. If we want a server-side audit log, sync them up via PowerSync. Defer.
+`row_events` and `command_events` are local-only initially. Sync-up via PowerSync is a follow-up.
 
 ### 16.9 Order-key rebalancing
 
-Fractional indexing produces ever-longer keys under repeated insert-in-the-same-spot. A periodic rebalance pass that rewrites `order_key`s for a given parent is straightforward but can be deferred until keys actually grow. Defer.
+Defer until keys actually grow.
 
-### 16.10 What to do with `aliases` property
+### 16.10 Aliases storage
 
-Today's properties include an `aliases` list; the alias-lookup query reads it. The new model keeps this. Alternative: separate `block_aliases` table for indexing. Defer unless the JSON-extract query is too slow.
+Today's properties include an `aliases` list; the alias-lookup query reads it. The new model keeps this. Defer separate `block_aliases` table unless JSON-extract is too slow.
+
+### 16.11 `tx.get` fallthrough cost
+
+Every cache miss inside a mutator does a SQL read inside the writeTransaction. For deep mutators reading dozens of blocks, this can be slow. Mitigations: `mutator.reads(args)` preload hints; engine batches preload reads into a single SQL query before `apply` runs. Implement preload in Phase 1; profile in Phase 3 when reference parsing lands.
+
+### 16.12 Order-key generation choice
+
+`fractional-indexing-jittered` vs. plain `fractional-indexing` + `id` tiebreak. **Decision criterion**: pick whichever is cheaper to implement. Both are correct; jittered reduces secondary-tiebreak frequency at no cost to determinism. Default to **jittered** unless the library is too heavy.
 
 ---
 
@@ -1065,59 +969,51 @@ Today's properties include an `aliases` list; the alias-lookup query reads it. T
 
 - Replacing PowerSync.
 - Adopting TanStack DB / Replicache / Zero / LiveStore wholesale.
-- CRDTs beyond row-LWW + fractional ordering.
+- CRDTs beyond row-LWW + jittered fractional indexing.
 - Differential dataflow / IVM.
 - Cross-tab invalidation (see §16.7).
 - Server-side audit log.
 - Sandboxing dynamic plugins.
-- Migration of existing user data (alpha).
+- Migration of existing user data (alpha; data is droppable).
 - Full event sourcing (rows stay authoritative).
 - Plugin-owned entity tables.
+- Back-compat shims of any kind.
 
 ---
 
 ## 18. References
 
 ### Existing code (current state)
-- `src/data/block.ts` — `Block` class (transformed in Phase 3).
-- `src/data/repo.ts` — `Repo` class (re-shaped through phases 2–5).
-- `src/data/repoInstance.ts` — module singleton (deleted in Phase 2).
-- `src/data/blockStorage.ts` — write queue / writeLock (replaced by `writeTransaction` in Phase 2).
-- `src/data/blockQueries.ts` — SQL templates (rewritten Phase 1 + Phase 6).
-- `src/data/blockSchema.ts` — `BlockRow` / `BlockData` shapes (rewritten Phase 1).
-- `src/data/blockCache.ts` — in-memory cache (kept; integrates with handles in Phase 3).
-- `src/data/undoRedo.ts` — kept; entries become 1-per-tx in Phase 2.
-- `src/data/properties.ts` — refactored Phase 5 (descriptors with codecs).
+- `src/data/block.ts` — `Block` class (transformed in Phase 1).
+- `src/data/repo.ts` — `Repo` class (re-shaped Phase 1, then refined).
+- `src/data/repoInstance.ts` — module singleton (deleted in Phase 1).
+- `src/data/blockStorage.ts` — write queue / writeLock (replaced by `writeTransaction` in Phase 1).
+- `src/data/blockQueries.ts` — SQL templates (rewritten Phase 1; CTEs upgraded Phase 5).
+- `src/data/blockSchema.ts` — `BlockRow` / `BlockData` shapes (rewritten Phase 1; `childIds` removed).
+- `src/data/blockCache.ts` — in-memory cache (kept; integrates with handles in Phase 2).
+- `src/data/undoRedo.ts` — kept; entries become 1-per-tx in Phase 1.
+- `src/data/properties.ts` — flat in storage from Phase 1; descriptor-as-facet in Phase 3.
 - `src/extensions/facet.ts` — `defineFacet`, `FacetRuntime` (kernel; reused).
 - `src/extensions/core.ts` — existing facets (sibling to new data-layer facets).
-- `src/hooks/block.ts` — replaced Phase 3.
-- `src/context/repo.tsx` — `RepoProvider` (kept; lifecycle simplified Phase 2).
-
-### Related task specs
-- `tasks/architectural-observations.md` — items #2, #3, #6, #7, #9 subsumed.
-- `tasks/property-access-refactor.md` — subsumed by Phase 5.
-- `tasks/plugins-architecture.md` — must land before Phase 4.
-- `tasks/decorator-facet-design.md` — pattern reference for facet decoration.
-- `tasks/actionManager-refactor.md` — orthogonal.
+- `src/hooks/block.ts` — replaced Phase 2.
+- `src/context/repo.tsx` — `RepoProvider` (kept; lifecycle simplified Phase 1).
 
 ### External design references
 - LiveStore — past-tense events, sync queries, signals reactivity. https://docs.livestore.dev/
-- Replicache — named mutators, server-replay-rebase. https://doc.replicache.dev/
+- Replicache — named mutators, server-replay-rebase, in-tx read constraints. https://doc.replicache.dev/
 - Zero (Rocicorp) — relational query API + IVM. https://zero.rocicorp.dev/
-- TanStack DB w/ PowerSync — closest layerable alternative; declined. https://tanstack.com/db/latest/docs/overview
-- TinyBase — Checkpoints undo pattern (deferred).
-- `fractional-indexing` (Rocicorp) — order_key generation. https://github.com/rocicorp/fractional-indexing
+- TanStack DB w/ PowerSync — closest layerable alternative; declined.
+- TinyBase — Checkpoints undo (deferred).
 - PowerSync `writeTransaction` docs — https://docs.powersync.com/
+- `fractional-indexing-jittered` — https://github.com/rocicorp/fractional-indexing-jittered
 
 ---
 
 ## 19. Acceptance for the spec itself
 
-- [ ] Reviewer's P0 findings addressed: event log split (§4), tx reads no longer cache-fragile (§5.3), reference processor full semantics (§7).
-- [ ] Reviewer's P1 findings addressed: writeTransaction (§10), order_key schema (§4.1), cross-tab out of scope (§16.7), Repo lifecycle (§8).
-- [ ] Reviewer's P2 finding addressed: Handle nullable for not-found (§5.1).
-- [ ] Phase ordering reflects dependencies: schema → tx → handles+sync-Block → mutators+processors → queries+properties → tree.
-- [ ] Each phase ships independently with a green build.
-- [ ] Open questions §16 are tracked; §16.1 and §16.2 must resolve before Phase 4 starts.
-- [ ] Dynamic-plugin lifecycle (§8) is constructible at runtime by code that can't use module augmentation.
-- [ ] Invariants (§15) are referenced in test plans (§14).
+- [ ] Reviewer's P0 findings (round 2) addressed: `tx_context` is a regular table not TEMP (§4.2); `tx.query` removed in favor of bounded primitives with explicit overlay (§5.3); Phase 1 acknowledges full break (no `block.change` survival, no `childIds` in `BlockData`, properties flat, tree API rewrite all in Phase 1) (§13.1); order_key uses jittered + `(id)` tiebreak (§4.1, §11, §15).
+- [ ] Reviewer's P1 findings (round 2) addressed: upload trigger preservation with `source` gating (§4.5); property shape consistent — flat from Phase 1 (§13.1); `tx.afterCommit` for processor scheduling (§5.3, §5.7, §7); `Mutator.scope` field (§5.4).
+- [ ] References to other task specs trimmed (this spec stands alone).
+- [ ] Each phase ships with a green build and meets acceptance criteria.
+- [ ] §16.1, §16.2, §16.12 must resolve before Phase 1 starts.
+- [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
