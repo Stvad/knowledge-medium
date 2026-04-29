@@ -60,13 +60,20 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **§16.8 expanded** — push command_events as-is filtered to `source = 'user'` (this is the high-value audit signal); skip row_events unless we later need full row-history server-side. Translation needs are minimal (timestamp ms→timestamptz, JSON text→jsonb); no structural changes.
 >   - **§16.12 resolved: `fractional-indexing-jittered`** — jittering reduces collisions at no cost; secondary `(order_key, id)` sort handles the residual case for full determinism.
 >   - **§16.13 added** — the row_events tail throttle window referenced in §9.3 now has its own subsection (~100ms starting point, profile during Phase 2).
-> - v4.11 (this): round-10 fixes.
+> - v4.11: round-10 fixes.
 >   - **References preserve `{id, alias}` pairs** (§4.1.1). v4.10's flattening to `string[]` was an unforced error — the wikilink renderer needs the original alias text to display the link as the user typed it (which can differ from the target's name). New `BlockReference` interface, `BlockData.references: BlockReference[]`. Reference parsing examples updated.
 >   - **`PostCommitProcessor.apply` gets a `ProcessorCtx`** (§5.7) with `tx`, `db`, `repo` — closing the gap that left `parseReferences`'s alias-lookup and `cleanupOrphanAliases`'s row_events scan unimplementable as specified. Follow-up processors get free read access to committed state via `ctx.db`; same-tx processors share the user's tx and must use tx primitives for tx-aware reads (`ctx.db` reads pre-this-tx state — documented).
 >   - **Date-shaped alias targets exempt from cleanup** (§7 mapping table + new §7.6). Today's app deliberately persists daily notes regardless of source-text retention; `parseReferences` filters date-shaped ids out of `candidateIds` before scheduling cleanup. Test for this added.
 >   - **`BlockDataPatch` excludes engine-managed metadata** (§4.1.1). v4.10 still let callers patch `updatedAt` / `updatedBy` despite metadata being engine-managed. Tightened to `Omit<BlockData, 'id' | 'workspaceId' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'>` and wired into `Tx.update`'s signature.
 >   - **Field watchers use `keyof BlockData`** (§5.7), not `keyof BlockRow`. Plugin authors watch the public domain shape (`content`, `parentId`, `references`, etc.), not storage columns (`content`, `parent_id`, `references_json`). The storage / domain split (§4.1.1) means plugin code never deals with snake_case keys.
 >   - **Stale "Repair always uploads" wording fixed** in §4.7, §5.4, and §5.8 — all three now correctly point to `repo.canWrite(workspaceId)` per §5.8.1.
+> - v4.12 (this): round-11 fixes.
+>   - **Service role key removed from app env** (§13.1). `.env` and `.env.example` carry only the public `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`. The service role key never reaches the browser — lives only in supabase CLI auth or gitignored secret paths used by ad-hoc admin scripts. Phase 1 verifies via `git grep service_role` returning empty.
+>   - **`RepoTxOptions.source` defined** (§5.3). Repair scope passes `source` explicitly per-tx because workspace permission can't be derived from staged writes (the engine sets `tx_context.source` in pipeline step 1, before the user fn runs). The §4.7 repair example now reads `repo.canWrite(workspaceId)` and passes the result via `opts.source`. Other scopes derive source from scope statically — passing `source` for non-Repair scopes is allowed but unusual and discouraged.
+>   - **Processor scheduled-args validation** (§5.7). Added `scheduledArgsSchema?: Schema<ScheduledArgs>` field; `tx.afterCommit` validates args at enqueue time. `core.cleanupOrphanAliases` declares a zod schema for `{ candidateIds, originatingTxId }`. Plugin processors that take scheduled args MUST declare a schema; without it, `tx.afterCommit` accepts anything (kernel escape hatch).
+>   - **Phase 3 transitional raw-SQL helpers for parseReferences** (§13.3). Phase 3 introduces processors but queriesFacet doesn't ship until Phase 4. parseReferences uses `ctx.db.getAll(SQL, ...)` directly for alias-lookup / row_events scan / references scan; Phase 4 wraps the same SQL into kernel queries and call sites switch to `repo.query.X(...).load()` with no behavior change. Same transitional pattern as §8 Stage 2's `findExtensionBlocksLegacy`.
+>   - **Stage 1 bootstrap clarified per phase** (§8). Pre-Phase-4, Stage 1 has no queriesFacet; kernel queries don't exist as facet contributions. Code that needs queries uses raw SQL via `repo.db`. Phase 4 adds queriesFacet to the Stage 1 registries.
+>   - **Discriminated `ProcessorCtx`** (§5.7). Same-tx processors get `SameTxCtx { tx }` only; follow-up processors get `FollowUpCtx { tx, db, repo }`. Removes the v4.11 footgun where same-tx processors had `ctx.db` exposed with a "don't use" comment. Stronger than docs — TypeScript prevents same-tx processors from reaching for raw db reads at all.
 
 ---
 
@@ -452,8 +459,19 @@ for (const { start_id, cycle_depth } of detected) {
 // repair: lex-smallest in each cycle becomes a workspace root
 for (const members of cycles.values()) {
   const loser = [...members].sort()[0]
+  // Decide source BEFORE opening the writeTransaction — the engine sets
+  // tx_context.source in pipeline step 1, before the user fn runs. We can't
+  // infer workspace from staged writes (those don't exist yet), so the
+  // repair worker passes source explicitly via tx options.
+  const targetWorkspaceId = (await repo.block(loser).load())?.workspaceId
+  const source = (targetWorkspaceId && repo.canWrite(targetWorkspaceId))
+    ? 'user'
+    : 'local-ephemeral'
+
   await repo.tx(async tx => tx.update(loser, { parentId: null }), {
-    scope: ChangeScope.Repair, description: `Cycle repair: ${loser}`,
+    scope: ChangeScope.Repair,
+    source,                                     // explicit per-tx source
+    description: `Cycle repair: ${loser}`,
   })
 }
 ```
@@ -606,6 +624,26 @@ export interface Tx {
 
   /** Tx metadata. */
   readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string; source: TxSource }
+}
+
+export interface RepoTxOptions {
+  /** Required: which scope this tx writes under. Drives undo, upload, read-only gating. */
+  scope: ChangeScope
+
+  /** Optional human-readable description (audit log, undo UI). */
+  description?: string
+
+  /** Optional preload hints for the engine (§16.11). */
+  reads?: { blockIds?: string[]; subtreeOf?: string }
+
+  /** Override the default source-derivation. Engine derives source from scope by default
+   *  (BlockDefault → 'user', UiState → 'local-ephemeral', References → 'user'). The
+   *  Repair scope has NO default — callers MUST pass source explicitly because it
+   *  depends on per-block workspace permission (see §5.8.1). For other scopes,
+   *  passing source is unusual and discouraged.
+   *  Allowed values: 'user' | 'local-ephemeral'.  ('sync' is reserved for sync-applied
+   *  writes that bypass repo.tx entirely; passing it here throws.) */
+  source?: TxSource
 }
 
 interface TxWriteOpts {
@@ -866,54 +904,86 @@ The trade we're making by lifting schema out of stored values: gain plugin exten
 ### 5.7 `PostCommitProcessor`
 
 ```ts
-export interface PostCommitProcessor {
+/** Processors are discriminated by mode. The two variants get different ctx
+ *  shapes — same-tx processors share the user's tx and CANNOT use raw db reads
+ *  (those would see pre-this-tx state, bypassing staged writes). Follow-up
+ *  processors run in their own writeTransaction and have free read access. */
+export type PostCommitProcessor<ScheduledArgs = unknown> =
+  | SameTxProcessor<ScheduledArgs>
+  | FollowUpProcessor<ScheduledArgs>
+
+interface ProcessorBase<ScheduledArgs> {
   readonly name: string
 
   /** What this processor reacts to. Choose ONE of:
    *  - mutator-name match (convenient when you only care about a specific operation)
-   *  - field-write match (robust when ANY code path writing the field should trigger,
-   *    including plugin mutators that bypass a specific named mutator)
+   *  - field-write match (robust when ANY code path writing the field should trigger)
    *  - explicit only (fired only by tx.afterCommit) */
   readonly watches:
     | { kind: 'mutator'; names: string[] }
     | { kind: 'field'; table: 'blocks'; fields: Array<keyof BlockData> }
     | { kind: 'explicit' }
 
-  /** 'same-tx' runs inside the user's tx (atomic);
-   *  'follow-up' runs after commit in its own writeTransaction. */
-  readonly mode: 'same-tx' | 'follow-up'
-
-  readonly apply: (event: CommittedEvent, ctx: ProcessorCtx) => Promise<void>
+  /** Optional zod schema for scheduledArgs. The engine validates args at
+   *  tx.afterCommit() enqueue time; throws if mismatch. Required when watches.kind
+   *  is 'explicit' (the only path that produces scheduledArgs); ignored for
+   *  'mutator' / 'field' watches that don't carry scheduledArgs. */
+  readonly scheduledArgsSchema?: Schema<ScheduledArgs>
 }
 
-interface CommittedEvent {
+interface SameTxProcessor<ScheduledArgs> extends ProcessorBase<ScheduledArgs> {
+  readonly mode: 'same-tx'
+  readonly apply: (event: CommittedEvent<ScheduledArgs>, ctx: SameTxCtx) => Promise<void>
+}
+
+interface FollowUpProcessor<ScheduledArgs> extends ProcessorBase<ScheduledArgs> {
+  readonly mode: 'follow-up'
+  readonly apply: (event: CommittedEvent<ScheduledArgs>, ctx: FollowUpCtx) => Promise<void>
+}
+
+interface CommittedEvent<ScheduledArgs = unknown> {
   txId: string
   matchedCalls: Array<{ name: string; args: unknown }>      // populated for kind='mutator'
   changedRows: Array<{ id: string; before: BlockData | null; after: BlockData | null }> // for kind='field'
   user: User
   workspaceId: string
-  scheduledArgs?: unknown                                    // for tx.afterCommit-driven invocations
+  scheduledArgs?: ScheduledArgs                              // typed; populated for explicit/tx.afterCommit
 }
 
-interface ProcessorCtx {
-  /** Write primitives — the processor's own tx (for follow-up mode) or the
-   *  user's tx (for same-tx mode). Same Tx interface in both cases. */
+interface SameTxCtx {
+  /** The user's tx. Use tx.get / tx.peek / tx.childrenOf / tx.parentOf for
+   *  tx-aware reads (these honor staged writes); use tx.create / tx.update /
+   *  tx.delete / tx.setProperty for writes that commit atomically with the
+   *  user's tx. NO raw db access — the type doesn't expose it because reads
+   *  via raw SQL inside a same-tx processor would silently miss staged writes. */
+  tx: Tx
+}
+
+interface FollowUpCtx {
+  /** The processor's own tx (its own writeTransaction). Writes commit when
+   *  the processor's apply resolves. */
   tx: Tx
 
-  /** Raw SQL for reads (e.g. row_events scans, alias lookups, backlink queries
-   *  that don't fit tx.get/childrenOf/parentOf).
-   *  - Follow-up mode: db reads see the committed state at processor-fire time;
-   *    safe to use freely.
-   *  - Same-tx mode: db reads see committed-PRE-this-tx state, NOT staged
-   *    writes from the user's tx. Same-tx processors needing tx-aware reads
-   *    must use tx.get / tx.peek / tx.childrenOf / tx.parentOf. */
+  /** Raw SQL for reads — sees committed state at processor-fire time
+   *  (the user's originating tx is already committed by definition). */
   db: PowerSyncDatabase
 
-  /** Repo for handle composition or invoking other mutators (`tx.run` is
-   *  preferred for composition; `repo.query.X` returns Handles for cases
-   *  where a kernel/plugin query is the cleanest expression). */
+  /** For handle composition or invoking other mutators. */
   repo: Repo
 }
+```
+
+**On `tx.afterCommit` arg validation**:
+
+```ts
+afterCommit<P extends string>(
+  processorName: P,
+  args: ScheduledArgsFor<P>,             // type narrowed by the registered processor
+  options?: { delayMs?: number }
+): void
+```
+
+The engine looks up the processor by name in the snapshot, applies its `scheduledArgsSchema?.parse(args)` if defined, throws `CodecError` on mismatch. This validation runs **at enqueue time** so a buggy caller fails the originating tx (rolls back) rather than failing silently later when the processor fires. Without a schema, the engine accepts any args (escape hatch for kernel use; plugins should always declare a schema).
 ```
 
 Three scheduling channels:
@@ -958,14 +1028,17 @@ Repair has to behave differently per-block based on whether the local user can a
 
 The `Repo` exposes `repo.canWrite(workspaceId): boolean` — a synchronous query against whatever permission state the app maintains (today: per-workspace role; for v1 frequently just one workspace, so this often degrades to `!repo.isReadOnly`, but the spec is permission-based, not flag-based, so future multi-workspace permission distinctions don't break repair).
 
-Per repair tx (each cycle is one tx affecting one block's workspace):
+**The repair worker decides source per-tx and passes it explicitly via `RepoTxOptions.source`** (§5.3). The engine cannot derive source for Repair-scoped txs from scope alone — there's no general "Repair source" — and it cannot infer workspace from staged writes because `tx_context.source` is set in pipeline step 1, before the user fn runs. Hence the explicit option.
 
-- **User can write to the affected block's workspace** → `tx_context.source = 'user'`. Repair uploads. Peers receive the deterministic fix via sync; LWW makes it idempotent.
-- **User cannot write** → `tx_context.source = 'local-ephemeral'`. Repair fixes the local view only. Trigger doesn't forward; server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (overwrites the local-ephemeral repair with an identical value — convergent).
+Per cycle, the worker:
+1. Reads the loser block's `workspaceId` (cycle detection has already loaded enough to know this).
+2. Computes `source = repo.canWrite(workspaceId) ? 'user' : 'local-ephemeral'`.
+3. Calls `repo.tx(fn, { scope: ChangeScope.Repair, source, description })`.
 
-The TxEngine consults `repo.canWrite(targetWorkspaceId)` per Repair-scoped tx. This is the only scope whose `source` is computed dynamically per tx; every other scope has a static source.
+- **`source = 'user'`** → repair uploads. Peers receive the deterministic fix via sync; LWW makes it idempotent.
+- **`source = 'local-ephemeral'`** → repair fixes the local view only. Trigger doesn't forward; server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (overwrites the local-ephemeral repair with an identical value — convergent).
 
-Note: the repair worker (the engine code that runs cycle detection and demotion after sync apply) runs one `repo.tx` per cycle. The targetWorkspaceId is the workspace of the loser block. Different cycles in different workspaces produce different `source` decisions.
+This is the only scope where `source` is supplied by the caller. Every other scope has its source derived statically by the engine.
 
 Why not "read-only clients don't run repair at all": leaving the local view cyclic means CTE depth guards (§4.7 layer 3) cap results at 100 deep — fine for correctness, but visually misleading. Local-only repair gives the user a correct local view while waiting for a writable peer's authoritative fix.
 
@@ -1012,7 +1085,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
 | Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. **Date alias targets are NEVER added to `candidateIds`** (see Self-destruct row below) — daily notes persist regardless of whether a referencing block is removed within 4s. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
-| Self-destruct (newly-created NON-DATE alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { candidateIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`candidateIds` excludes date-shaped alias-target ids** — daily notes are persistent by convention. Cleanup processor checks each candidate id with **two gates**: (a) verify this tx actually inserted the row (query row_events for `tx_id = originatingTxId AND block_id = id AND kind = 'create'`); skip if not. (b) verify no block's `references` contains the id; skip if any does. Only when both gates pass does cleanup delete. See §7.5 below for the rationale. |
+| Self-destruct (newly-created NON-DATE alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { candidateIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`candidateIds` excludes date-shaped alias-target ids** — daily notes are persistent by convention. The cleanup processor (mode `'follow-up'`, `watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ candidateIds: z.array(z.string()), originatingTxId: z.string() })` so the engine validates at `tx.afterCommit` enqueue. Cleanup checks each candidate with **two gates**: (a) verify this tx actually inserted the row via `ctx.db.getAll('SELECT 1 FROM row_events WHERE tx_id = ? AND block_id = ? AND kind = ? LIMIT 1', [originatingTxId, id, 'create'])`; skip if empty. (b) verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. Only when both gates pass does `ctx.tx.delete(id)` proceed. See §7.5 for the rationale. |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
 | `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
@@ -1100,8 +1173,19 @@ Stage 0  new Repo(db, cache, undoManager, handleStore)
 Stage 1  AppRuntimeProvider mounts (synchronous, same React render)
          → build FacetRuntime from { kernel facets, statically-imported plugins }
          → repo.setFacetRuntime(staticRuntime)
-         registries now contain kernel queries (incl. findExtensionBlocks),
-         kernel mutators, kernel processors, static plugin contributions
+         registries contain whatever facets exist for the current phase:
+           Phases 1-3:  mutatorsFacet (Phase 3+), postCommitProcessorsFacet
+                        (Phase 3+), propertySchemasFacet (Phase 3+).
+                        NO queriesFacet — kernel/plugin queries don't exist
+                        as facet contributions yet. Code that needs queries
+                        (parseReferences's alias lookup, dynamic-plugin
+                        discovery in Stage 2 below) uses transitional raw-SQL
+                        helpers via the Repo's db handle.
+           Phase 4+:    queriesFacet added; the kernel queries
+                        (subtree, ancestors, backlinks, aliasLookup,
+                        findExtensionBlocks, etc.) register in Stage 1.
+                        Existing transitional raw-SQL call sites switch to
+                        repo.query.X(...).load() with no behavior change.
 
 Stage 2  AppRuntimeProvider effect: discover & load dynamic plugins
          Phase 4+ (queriesFacet exists):
@@ -1452,7 +1536,12 @@ Each phase ships independently; build stays green between them. **No back-compat
 This phase is the clean break. It absorbs everything that's incoherent to land separately.
 
 **Scope**:
-- **Server schema (Supabase / Postgres) — new project, clean slate.** The current Supabase project keeps its data and config as a historical snapshot. Phase 1 spins up a **new** Supabase project via the supabase CLI (`supabase projects create …` followed by `supabase link` and a fresh `supabase db push`), with its own URL, anon key, and service role key — wired into `.env` and `.env.example`. The seven existing migrations under `supabase/migrations/` are deleted in this branch; the new project starts from a single `<timestamp>_initial_schema.sql` that creates only what's server-side: the `blocks` table with the new shape (`parent_id + order_key`), its indexes, RLS policies, and any RPCs still in use after the redesign. **No `tx_context` / `row_events` / `command_events` / upload triggers in the Supabase migration** — those are client-only. Treat this migration as the canonical ground-truth state, not a migration from anything. The old project URL is documented in the PR description in case anyone needs to inspect historical state, but it's no longer wired to the running app.
+- **Server schema (Supabase / Postgres) — new project, clean slate.** The current Supabase project keeps its data and config as a historical snapshot. Phase 1 spins up a **new** Supabase project via the supabase CLI (`supabase projects create …` followed by `supabase link` and a fresh `supabase db push`). The seven existing migrations under `supabase/migrations/` are deleted in this branch; the new project starts from a single `<timestamp>_initial_schema.sql` that creates only what's server-side: the `blocks` table with the new shape (`parent_id + order_key`), its indexes, RLS policies, and any RPCs still in use after the redesign. **No `tx_context` / `row_events` / `command_events` / upload triggers in the Supabase migration** — those are client-only. Treat this migration as the canonical ground-truth state, not a migration from anything. The old project URL is documented in the PR description in case anyone needs to inspect historical state, but it's no longer wired to the running app.
+
+- **Secret handling — strict split.** The new Supabase project produces three credentials; they are NOT all the same kind of secret:
+  - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` — **public**, RLS-gated, intentionally exposed to the browser. These go into `.env` (gitignored) and `.env.example` (committed, with placeholder values).
+  - `SUPABASE_SERVICE_ROLE_KEY` — **server-side secret**, bypasses RLS, must never reach the browser. Does NOT go into `.env`, does NOT go into `.env.example`, does NOT appear in any committed file. Lives only in the developer's local supabase CLI auth (`~/.supabase`) or a gitignored secrets path used by ad-hoc admin scripts. If a script needs it, the script reads it from the CLI's auth state, not from the app's env.
+  - The Phase 1 PR explicitly verifies: `git grep` shows no `service_role` token in committed files; `.env.example` contains only the two `VITE_*` placeholders.
 - **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus **five triggers**: three row_events writers (INSERT/UPDATE/DELETE) and two upload-routing triggers (INSERT/UPDATE only — DELETE upload routing is intentionally omitted in v1; see §4.5). The trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
 - PowerSync sync-config matches the new `blocks` shape. `tx_context`, `row_events`, `command_events` are not declared in sync-config (they don't sync; they're local-only).
 - **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE handles tagging and the equality test on `'user'` correctly excludes sync writes from the upload trigger. Don't try to hook PowerSync's CRUD-apply path.
@@ -1478,7 +1567,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - UI-state writes set `source='local-ephemeral'` and don't enter the upload queue.
 - Sync-applied writes leave `source=NULL`; row_events COALESCE-tags them as `'sync'`; upload trigger doesn't loop them back.
 - `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
-- New Supabase project provisioned via `supabase` CLI; `.env` / `.env.example` updated to point at it; old project URL noted in the PR description as the historical snapshot. `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` against the new project produces the target Postgres schema directly.
+- New Supabase project provisioned via `supabase` CLI; `.env` (gitignored) contains the new `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`; `.env.example` (committed) contains placeholder values for those two only; **no `SUPABASE_SERVICE_ROLE_KEY` in any tracked file** (verified via `git grep service_role` returning nothing). Old project URL noted in the PR description as the historical snapshot. `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` against the new project produces the target Postgres schema directly.
 - Client-side DDL lives in `src/data/internals/clientSchema.ts` (or equivalent) and runs at app startup after PowerSync's schema initialization; a fresh local DB has `tx_context` (one row), `row_events`, `command_events`, and exactly five triggers populated (3 row_events writers + 2 upload-routing for INSERT/UPDATE only).
 
 ### Phase 2 — Sync `Block` + Handles + React migration
@@ -1508,7 +1597,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
 - Repo lifecycle (`setFacetRuntime`) implemented per §8.
 - Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `createAliasTarget`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx).
-- Reference parsing migrated to `core.parseReferences` as a **follow-up** (mode `'follow-up'`) processor per §7. Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. No alias-prefetch machinery — the processor runs after commit against committed state via the kernel `aliasLookup` query.
+- Reference parsing migrated to `core.parseReferences` as a **follow-up** (mode `'follow-up'`) processor per §7. Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. **Until queriesFacet ships in Phase 4**, the processor uses raw SQL helpers via `ctx.db` (the alias-by-name lookup, the references-scan, the row_events insertion check) — same SQL it'd use later, just without the queriesFacet wrapping. Phase 4 wraps these into named queries (`aliasLookup`, `backlinksOf`, etc.); the call sites switch from `ctx.db.getAll(SQL, ...)` to `repo.query.aliasLookup({...}).load()` with no behavior change. Pattern matches the Phase 1-3 dynamic-discovery transitional helper (§8 Stage 2).
 - `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
 - `propertySchemasFacet` for descriptors (still flat in storage; facet just wraps the existing descriptor exports).
 - ChangeScope type-augmentation hook for plugin scopes.
