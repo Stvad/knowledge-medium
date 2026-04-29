@@ -13,7 +13,7 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - v4.2: cleaned up stale phase text contradicting the v4 follow-up decision; added `block.set` / `block.setContent` / `block.delete` sugar; built-in primitive codecs validate on decode; added `codecs.optional(inner)`; renamed identity to `unsafeIdentity`.
 > - v4.3: Phase 1 collapses Postgres migrations to one `_initial_schema.sql`.
 > - v4.4: correctness fixes after a fifth-round review.
->   - **§4 split server vs client schema**: the Supabase migration creates only the synced `blocks` table (server-side); `tx_context`, `row_events`, `command_events`, and the six triggers are local-only and bootstrap from `src/data/internals/clientSchema.ts`. Postgres has no `powersync_crud` and no business with these tables.
+>   - **§4 split server vs client schema**: the Supabase migration creates only the synced `blocks` table (server-side); `tx_context`, `row_events`, `command_events`, and the five client triggers are local-only and bootstrap from `src/data/internals/clientSchema.ts`. Postgres has no `powersync_crud` and no business with these tables.
 >   - **§9.3 invalidation has two sources**: TxEngine fast path for local writes; `row_events` tail subscription as the backstop for sync-applied PowerSync writes (which bypass `repo.tx` and have no staged write-set to walk). Without the tail, remote changes wouldn't refresh handles.
 >   - **§5.2 children-completeness markers**: cache tracks per-parent "all children loaded" markers. `block.childIds` requires the marker; without it, throws `ChildrenNotLoadedError`. The cache cannot honestly distinguish "no children" from "not loaded" by sibling-scanning alone. Reactive children access goes through `useHandle(repo.children(id))`.
 >   - **§9.2 parent-edge dependencies**: tree handles declare `{ kind: 'parent-edge', parentId }` deps in addition to row deps, so a new child inserted under a tracked parent invalidates the handle. Pure row-id deps would miss inserts.
@@ -36,11 +36,17 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Empty-result handle deps fixed** (§5.5). All resolver examples declare upfront `ctx.depend(...)` for the things the query is asked about, BEFORE running SQL — so handles for not-yet-existing rows still invalidate when those rows arrive. Universal rule documented.
 >   - **`onConflict: 'ignore'` cache hydration**: §10 pipeline gains step 8a — for `'ignore'` creates that may not have actually inserted, the engine post-SELECTs the live row inside the same writeTransaction and replaces the staged row before cache hydration. Avoids caching a proposed-but-ignored row over the actual existing row. (§10.4 details.)
 >   - **Hard-delete upload routing removed in v1** (§4.5). v1 has no purge mechanism; the DELETE upload trigger would have created an inconsistency between the "hard delete doesn't sync" claim and the trigger's behavior. Resolved by not shipping the DELETE upload trigger at all in v1; future purge work decides its sync policy explicitly.
-> - v4.7 (this): unified bootstrap — kernel built-ins are no longer hardcoded in the Repo constructor.
+> - v4.7: unified bootstrap — kernel built-ins are no longer hardcoded in the Repo constructor.
 >   - **§6 / §8 contradiction resolved.** §6 already claimed "no two-tier system" but §8 had the constructor preloading `buildKernelRegistries()`. Removed the hardcoded path: `Repo.constructor` takes infrastructure only; *all* contributions (kernel, static plugins, dynamic plugins) flow through `setFacetRuntime`.
 >   - **Staged bootstrap formalized.** The dependency `dynamic plugins → findExtensionBlocks query → FacetRuntime` is broken by **incremental** `setFacetRuntime` calls. Stage 1 registers kernel + static synchronously at `AppRuntimeProvider` mount; Stage 2 registers dynamic plugins after the discovery query resolves. Each call passes a cumulative runtime (full snapshot, not delta).
 >   - **Pre-Stage-1 `repo.tx` is callable with empty registries** so Phase 1's direct kernel-method calls (`repo.indent` etc.) work transitionally; only mutator-dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) error on unknown names. The Stage 0 → Stage 1 window is one React render in any case.
 >   - **Follow-up processor snapshot semantics clarified**: scheduled processors run against the registry snapshot from when they were scheduled, not the current registry — so plugin removal between schedule and fire doesn't disrupt in-flight follow-ups.
+> - v4.8 (this): round-8 fixes.
+>   - **Trigger count corrected from 6 to 5** in Phase 1 scope and acceptance (§13.1). v4.6 removed the DELETE upload-routing trigger but two stale "six triggers" mentions survived. The five live triggers are: 3 row_events writers (INSERT/UPDATE/DELETE) + 2 upload-routing triggers (INSERT/UPDATE only).
+>   - **Pipeline ordering reconciled with §10.4** (§10). Conflict-reconciliation SELECT for `onConflict: 'ignore'` moves *inside* the `db.writeTransaction` (renumbered as step 7), where §10.4 already said it lives. The diagram previously placed it post-COMMIT, contradicting itself. tx_context clear (step 9) also stays inside the writeTransaction so a rollback automatically reverts it.
+>   - **Atomicity prose updated** to match: steps 1–9 are atomic (commit-or-rollback together); steps 10–13 happen post-COMMIT but before promise resolution; step 14 is fire-and-after.
+>   - **Repair scope under read-only / RLS** (§5.8.1, new). Repair source is conditional on `repo.isReadOnly`: writable clients upload (`source = 'user'`); read-only clients run local-only (`source = 'local-ephemeral'`). The fix propagates via writable peers; read-only peers eventually receive the authoritative fix via sync, which converges with their local-ephemeral repair (same loser, same value, idempotent). Avoids the rejected-upload loop that pure "Repair always uploads" would create for read-only clients. The Repair row in the scope-semantics matrix changed to "Uploads? conditional — see §5.8.1".
+>   - **`onConflict: 'ignore'` same-tx detection clarified as unavailable** (§10.4). The earlier text suggested checking via `tx.get` after create, but `tx.get` returns the staged row inside a tx, not the live one — same-tx insertion detection is genuinely impossible without a different primitive. Documented the limitation explicitly; recorded `tx.createOrGet` as the future API if a use case ever needs it. `core.createAliasTarget` doesn't need this; v1 ships without it.
 
 ---
 
@@ -853,7 +859,20 @@ Scope semantics matrix:
 | `BlockDefault` | yes (user undo stack) | yes | no |
 | `UiState` | no | no (`source = 'local-ephemeral'`) | yes |
 | `References` | yes (separate ref bucket; not exposed to user undo) | yes | no |
-| `Repair` | no | yes | yes |
+| `Repair` | no | **conditional — see §5.8.1** | yes |
+
+### 5.8.1 Repair scope under read-only / RLS
+
+Repair has to behave differently for writable vs. read-only clients to avoid a rejected-upload loop:
+
+- **Writable client** (`!repo.isReadOnly` and the user has server-side write permission): repair tx runs with `source = 'user'`, uploads to `powersync_crud`, propagates to peers via PowerSync. This is the normal case. The deterministic-loser algorithm (§4.7) means every writable peer that observes the same cyclic state writes the same fix; LWW makes that idempotent.
+- **Read-only client** (`repo.isReadOnly`, or user lacks write permission for the affected workspace): repair tx runs with `source = 'local-ephemeral'`, fixing the local view only. The trigger doesn't forward to `powersync_crud`, so the server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (which then overwrites the local-ephemeral repair with an identical value — convergent).
+
+The TxEngine sets `tx_context.source` for Repair-scoped txs based on `repo.isReadOnly` at tx start: `'user'` if writable, `'local-ephemeral'` if read-only. This is the only scope whose source isn't a static function of the scope itself.
+
+Why not "read-only clients don't run repair at all": leaving the local view in a cyclic state means the CTE depth guards (§4.7 layer 3) cap query results at 100 deep — fine for correctness, but visually misleading (the user sees a partial tree). Local repair gives the read-only user a correct local view while waiting for a writable peer's authoritative fix.
+
+Why not "use a system actor / privileged service": no such service exists in v1, and adding one would couple the data layer to a backend topology we don't have. The eventual-consistency model via writable-peer convergence works without that infrastructure.
 
 ---
 
@@ -1054,26 +1073,34 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │        any tx.setProperty calls                              │
 │   6. flush staged writes to blocks (txDb)                    │
 │        triggers fire: row_events rows, upload routing        │
-│   7. INSERT command_event row (txDb)                         │
-│   8. UPDATE tx_context SET tx_id=NULL, user_id=NULL,         │
+│   7. for each tx.create with onConflict='ignore' that may    │
+│        not have actually inserted (changes() == 0), SELECT   │
+│        the live row from blocks (still inside this txDb) and │
+│        replace the staged row with the live one. See §10.4. │
+│   8. INSERT command_event row (txDb)                         │
+│   9. UPDATE tx_context SET tx_id=NULL, user_id=NULL,         │
 │        scope=NULL, source=NULL  (clear ALL fields together)   │
 │ })   // PowerSync COMMIT or ROLLBACK                         │
 │                                                              │
-│ on success:                                                  │
-│   8a. for each tx.create with onConflict='ignore' that may   │
-│        not have actually inserted, SELECT the live row from  │
-│        blocks (within the same writeTransaction) and replace │
-│        the staged row with the live one — see §10.4         │
-│   9. hydrate cache from staged writes (encoded shape)        │
-│   10. walk affected handles, structural-diff, fire           │
-│   11. record undo entry from staged before/after snapshots   │
-│   12. resolve repo.tx promise with user fn's return value    │
-│   13. dispatch tx.afterCommit jobs (own writeTransactions)   │
-│        and watch-matched follow-up processors                │
+│ on success (post-COMMIT, synchronous before promise resolves):│
+│   10. hydrate cache from staged writes (encoded shape)        │
+│   11. walk affected handles, structural-diff, fire            │
+│   12. record undo entry from staged before/after snapshots    │
+│   13. resolve repo.tx promise with user fn's return value     │
+│                                                               │
+│ post-resolve (fire-and-after):                                │
+│   14. dispatch tx.afterCommit jobs (own writeTransactions)    │
+│        and watch-matched follow-up processors                 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-Steps 1–7 are atomic. 8–11 happen synchronously after COMMIT, before `repo.tx` resolves to caller. 12 is fire-and-after.
+**Atomicity boundary**: steps 1–9 all run inside `db.writeTransaction`, so they commit or roll back together. If anything in those steps throws, PowerSync rolls back the whole writeTransaction — including the conflict-reconciliation SELECT in step 7 and the `tx_context` clear in step 9 (so nothing leaks). Steps 10–13 happen after COMMIT but before `repo.tx`'s promise resolves; the cache and undo stack reflect the committed state by the time the caller sees the resolved promise. Step 14 is async after the promise resolves.
+
+Failure modes:
+- User fn throws in step 3 → rollback. Cache untouched, no `command_event`, no `row_events`, `tx_context` reverts to its pre-tx state automatically.
+- Same-tx processor throws in step 4 → rollback (same as above).
+- DB error in steps 5–9 → rollback.
+- Cache-hydration error in step 10 → tx is already committed; the engine logs the error and re-reads affected ids from SQLite to recover. (Should be impossible in practice — cache hydration is a pure in-memory operation on already-validated rows.)
 
 If 3 or 4 throws → rollback. Cache untouched, no command_event, no row_events, no undo entry. `repo.tx` rejects with the error.
 
@@ -1105,12 +1132,12 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 `tx.create({ id, ... }, { onConflict: 'ignore' })` writes via `INSERT OR IGNORE`. If the row already exists, the staged "would-be-inserted" row is **not** what's in the DB — caching it would clobber the actual row in the cache. The engine handles this:
 
 1. Stage the proposed row in the write-set as usual (so reads-your-own-writes still work for subsequent calls in the tx).
-2. After flushing the create to SQLite, the engine checks `changes()` (or uses `INSERT OR IGNORE ... RETURNING *` if the SQLite version supports it). If the row was *not* actually inserted, do a follow-up `SELECT * FROM blocks WHERE id = ?` (still inside the writeTransaction) to read the live row.
-3. Replace the staged row with the live row before cache hydration in step 9.
+2. After flushing the create to SQLite (pipeline step 6), the engine checks `changes()` (or uses `INSERT OR IGNORE ... RETURNING *` if the SQLite version supports it). If the row was *not* actually inserted, the engine does a follow-up `SELECT * FROM blocks WHERE id = ?` (pipeline step 7, still inside the writeTransaction) to read the live row.
+3. Replace the staged row with the live row before cache hydration (pipeline step 10, post-COMMIT).
 
 This ensures the cache reflects what's actually in SQLite, never the proposed-but-ignored version. Only `'ignore'` conflicts trigger the post-flush SELECT — the common case (no conflict) costs nothing extra.
 
-For the within-tx semantics: `tx.get(id)` after a same-tx `tx.create(id, ..., { onConflict: 'ignore' })` returns the staged row, not the live one — read-your-own-writes wins inside the tx. After commit, the cache reflects the live row. Mutators that need to know "did I actually insert?" should check the live row via `await tx.get(id)` *after* the create call has been live-read; a future enhancement could surface this directly via the create return type, but in practice it's only `createAliasTarget` that cares, and that mutator's behavior is identical regardless (the alias-target id is what matters, not who wrote it).
+**Within-tx visibility limitation.** Same-tx `tx.get(id)` after a `tx.create(id, ..., { onConflict: 'ignore' })` returns the **staged** row (read-your-own-writes), not the reconciled live row. The reconciliation happens in pipeline step 7, after the user fn returns. **Same-tx insertion detection is intentionally unavailable** in the v1 API — a mutator cannot distinguish "I inserted" from "the existing row won" until after commit. This is sufficient for `core.createAliasTarget` (which only needs the id, not the inserter identity) and for any deterministic-id use case where the conflicting rows are intentionally equivalent. If a future use case genuinely needs same-tx inserter identification, add a dedicated `tx.createOrGet(data)` returning `{ id, inserted: boolean }` rather than retrofitting `tx.get` semantics.
 
 ---
 
@@ -1278,7 +1305,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 
 **Scope**:
 - **Server schema (Supabase / Postgres).** The seven existing migrations under `supabase/migrations/` (from `20260421130000_create_blocks.sql` through `20260428170207_drop_workspace_root_block_seed.sql`) describe an evolution we no longer need. Delete them all; ship a single `<timestamp>_initial_schema.sql` that creates only what's server-side: the `blocks` table with the new shape (`parent_id + order_key`), its indexes, RLS policies, and any RPCs still in use after the redesign. **No `tx_context` / `row_events` / `command_events` / upload triggers in the Supabase migration** — those are client-only. Treat this migration as the ground-truth canonical state, not a migration from anything.
-- **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus the six triggers (INSERT/UPDATE/DELETE × {row_events writer, upload-routing into `powersync_crud`}). The trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
+- **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus **five triggers**: three row_events writers (INSERT/UPDATE/DELETE) and two upload-routing triggers (INSERT/UPDATE only — DELETE upload routing is intentionally omitted in v1; see §4.5). The trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
 - PowerSync sync-config matches the new `blocks` shape. `tx_context`, `row_events`, `command_events` are not declared in sync-config (they don't sync; they're local-only).
 - **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE handles tagging and the equality test on `'user'` correctly excludes sync writes from the upload trigger. Don't try to hook PowerSync's CRUD-apply path.
 - New `repo.tx(fn, opts)` on `db.writeTransaction`. Async `tx.get`. `tx.peek`, `tx.create`, `tx.update`, `tx.delete`, `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
@@ -1304,7 +1331,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - Sync-applied writes leave `source=NULL`; row_events COALESCE-tags them as `'sync'`; upload trigger doesn't loop them back.
 - `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
 - `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` produces the target Postgres schema directly.
-- Client-side DDL lives in `src/data/internals/clientSchema.ts` (or equivalent) and runs at app startup after PowerSync's schema initialization; a fresh local DB has `tx_context` (one row), `row_events`, `command_events`, and all six triggers populated.
+- Client-side DDL lives in `src/data/internals/clientSchema.ts` (or equivalent) and runs at app startup after PowerSync's schema initialization; a fresh local DB has `tx_context` (one row), `row_events`, `command_events`, and exactly five triggers populated (3 row_events writers + 2 upload-routing for INSERT/UPDATE only).
 
 ### Phase 2 — Sync `Block` + Handles + React migration
 
@@ -1505,7 +1532,8 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-4 finding "PropertySchema lacks render metadata" — already addressed in v4.1; not a real finding against v4.2.
 - [ ] Reviewer's round-5 findings addressed: server/client schema split (§4 intro, §13.1 Phase 1); two-source handle invalidation (TxEngine + row_events tail) (§9.3); children-completeness markers + `ChildrenNotLoadedError` (§5.2); parent-edge dependencies for tree handles (§9.2); field-write processor watches with `core.parseReferences` watching `blocks.content` (§5.7, §7); ancestors CTE has explicit `depth` ORDER BY (§11.2); stale `tx_context.source='sync'` invariant fixed to `NULL` + COALESCE (§15.4).
 - [ ] Reviewer's round-6 findings addressed: cycle prevention + repair protocol (§4.7); `ctx.depend` for dynamic query dependency declaration (§5.5); `repo.children`, `repo.load(opts)` explicitly listed in Repo surface (§3 architecture diagram, §5.2, §13.2); row_events tail filtered to `source = 'sync'` to avoid TxEngine double-invalidation (§9.3); subtree path uses `hex(id)` to handle `/` in ids (§11.1); `tx.create` has explicit `onConflict: 'throw' | 'ignore'`, default `'throw'` (§5.3); soft-delete is its own row_events `kind`, distinguishable from regular updates (§4.3).
-- [ ] Reviewer's round-7 findings addressed: tx_context cleared all-fields with row_events trigger fallback for sync rows (§4.3, §10 step 8); cycle guards added to ancestors and isDescendantOf CTEs (§11.2, §11.3); repair query materializes cycle members and picks lex-smallest correctly for cycles of any length (§4.7); `ChangeScope.Repair` defined with not-undoable + uploads + read-only-allowed semantics (§5.8, §10.3); empty-result handle deps via upfront `ctx.depend` (§5.5); `onConflict: 'ignore'` post-SELECTs live row before cache hydration (§10 step 8a, §10.4); DELETE upload trigger removed in v1 to align with no-purge-yet policy (§4.5).
+- [ ] Reviewer's round-7 findings addressed: tx_context cleared all-fields with row_events trigger fallback for sync rows (§4.3, §10 step 9); cycle guards added to ancestors and isDescendantOf CTEs (§11.2, §11.3); repair query materializes cycle members and picks lex-smallest correctly for cycles of any length (§4.7); `ChangeScope.Repair` defined (§5.8); empty-result handle deps via upfront `ctx.depend` (§5.5); `onConflict: 'ignore'` post-SELECTs live row before cache hydration (§10 step 7, §10.4); DELETE upload trigger removed in v1 to align with no-purge-yet policy (§4.5).
+- [ ] Reviewer's round-8 findings addressed: Phase 1 trigger count corrected to 5 (§13.1, was stale "six" from before DELETE upload removal); conflict-reconciliation SELECT moved inside the writeTransaction in the pipeline diagram, matching §10.4 (§10); atomicity prose updated (steps 1–9 atomic, 10–13 post-COMMIT pre-resolution, 14 fire-and-after); repair scope under read-only / RLS spelled out — conditional `source = 'user' | 'local-ephemeral'` based on `repo.isReadOnly`, with convergence via writable-peer propagation (§5.8.1); `onConflict: 'ignore'` same-tx insertion detection acknowledged as unavailable (§10.4) with `tx.createOrGet` flagged as the future API if needed.
 - [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
