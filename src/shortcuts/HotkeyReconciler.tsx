@@ -1,8 +1,8 @@
-import { useEffect, useEffectEvent, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import hotkeys from 'hotkeys-js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
+import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
 import { setRunActionDispatcher } from '@/shortcuts/runAction.ts'
 import {
   ActionConfig,
@@ -35,11 +35,19 @@ const defaultEventFilter = (event: KeyboardEvent) =>
  *   down and re-installed. This is uncommon; runtime regenerates only on
  *   dynamic extension reloads.
  * - When active contexts change, bindings are installed/uninstalled per action
- *   based on whether the action's context is active. Handler bodies are
- *   `useEffectEvent`s, so they always see the latest active map / context
- *   configs without forcing the bindings to rebind on every change.
+ *   based on whether the action's context is active. Handlers read deps via
+ *   refs so intra-context dependency changes (e.g. new focused block) don't
+ *   require rebinding.
  * - Also installs `hotkeys.filter` for per-context event filtering and the
  *   module-level `runActionById` dispatcher for external callers.
+ *
+ * NOTE: an earlier pass replaced the latest-ref pattern below with
+ * `useEffectEvent`. That broke shortcut delivery in the browser (likely
+ * because hotkeys-js fires its handlers from a global keydown listener,
+ * not a React-tracked event handler — outside that scope the
+ * effect-event indirection doesn't see the latest closure reliably).
+ * Reverted to the ref pattern; the refs are written in a useLayoutEffect
+ * so we don't trip the new react-hooks/refs rule.
  */
 export function HotkeyReconciler(): null {
   const runtime = useAppRuntime()
@@ -52,89 +60,52 @@ export function HotkeyReconciler(): null {
     [contextConfigs],
   )
 
-  // useEffectEvent gives us functions that:
-  //   - have a stable identity (so installing them once into hotkeys-js /
-  //     the runActionById dispatcher is enough), and
-  //   - always observe the latest `active` and `contextConfigsByType`
-  //     without forcing the install effects to re-run.
-  // This is exactly the role the previous `latestRef.current = …`
-  // assign-during-render pattern played.
-  const eventFilter = useEffectEvent((event: KeyboardEvent) => {
-    for (const type of active.keys()) {
-      const config = contextConfigsByType.get(type)
-      if (config?.eventFilter?.(event)) return true
-    }
-    return defaultEventFilter(event)
-  })
+  // Refs so handler closures always see the latest state without rebinding.
+  // Updated synchronously after each commit via useLayoutEffect, before the
+  // browser fires any user input event.
+  const activeRef = useRef<ActiveContextsMap>(active)
+  const contextConfigsByTypeRef = useRef<ReadonlyMap<ActionContextType, ActionContextConfig>>(contextConfigsByType)
+  useLayoutEffect(() => {
+    activeRef.current = active
+    contextConfigsByTypeRef.current = contextConfigsByType
+  }, [active, contextConfigsByType])
 
-  const dispatchAction = useEffectEvent(
-    (actionId: string, trigger: ActionTrigger) => {
-      const action = actions.find(a => a.id === actionId)
+  // Install the hotkeys-js event filter. It reads activeRef/contextConfigsByTypeRef
+  // so it stays current without needing to re-install. Restore a permissive
+  // default on unmount so stale closures don't remain wired into the global.
+  useEffect(() => {
+    const previousFilter = hotkeys.filter
+    hotkeys.filter = (event) => {
+      for (const type of activeRef.current.keys()) {
+        const config = contextConfigsByTypeRef.current.get(type)
+        if (config?.eventFilter?.(event)) return true
+      }
+      return defaultEventFilter(event)
+    }
+    return () => {
+      hotkeys.filter = previousFilter
+    }
+  }, [])
+
+  // Install the module-level runActionById dispatcher. Reads refs so it's
+  // always current. Torn down on unmount so stray callers fail loudly.
+  useEffect(() => {
+    setRunActionDispatcher((actionId: string, trigger: ActionTrigger) => {
+      const currentActions = runtime.read(actionsFacet)
+      const action = currentActions.find(a => a.id === actionId)
       if (!action) {
         throw new Error(`[HotkeyReconciler] Action with ID "${actionId}" not found.`)
       }
-      const deps = active.get(action.context)
+      const deps = activeRef.current.get(action.context)
       if (!deps) {
         throw new Error(
           `[HotkeyReconciler] Cannot run action "${actionId}". Context "${action.context}" is not active.`,
         )
       }
       return action.handler(deps, trigger)
-    },
-  )
-
-  const runActionForKey = useEffectEvent(
-    (action: ActionConfig, binding: ShortcutBinding, event: KeyboardEvent) => {
-      const deps = active.get(action.context)
-      // Context may have deactivated between the key event and this callback
-      // (or another action shares this key in a different, inactive context).
-      // Returning true lets the event propagate / default-handle.
-      if (!deps) return true
-
-      const contextConfig = contextConfigsByType.get(action.context)
-      const options: EventOptions = {
-        preventDefault: true,
-        stopPropagation: false,
-        ...contextConfig?.defaultEventOptions,
-        ...binding.eventOptions,
-      }
-
-      if (options.stopPropagation) event.stopPropagation()
-      if (options.preventDefault) {
-        console.debug(
-          `[HotkeyReconciler] Preventing default for action: ${action.id}, context: ${action.context}`,
-        )
-        event.preventDefault()
-      }
-
-      try {
-        void Promise.resolve(action.handler(deps, event)).catch(error => {
-          console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
-        })
-      } catch (error) {
-        console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
-      }
-
-      return !options.preventDefault
-    },
-  )
-
-  // Install the hotkeys-js event filter. Restore a permissive default on
-  // unmount so stale closures don't remain wired into the global.
-  useEffect(() => {
-    const previousFilter = hotkeys.filter
-    hotkeys.filter = (event) => eventFilter(event)
-    return () => {
-      hotkeys.filter = previousFilter
-    }
-  }, [])
-
-  // Install the module-level runActionById dispatcher. Torn down on
-  // unmount so stray callers fail loudly.
-  useEffect(() => {
-    setRunActionDispatcher((actionId, trigger) => dispatchAction(actionId, trigger))
+    })
     return () => setRunActionDispatcher(null)
-  }, [])
+  }, [runtime])
 
   // Track which actions currently have hotkeys installed.
   // hotkeys-js supports handler-specific unbinding: `hotkeys.unbind(key, fn)`
@@ -178,7 +149,7 @@ export function HotkeyReconciler(): null {
         action: action.id,
       }
       const keys = normalizeKeys(binding.keys)
-      const handler: HotkeyHandler = (event) => runActionForKey(action, binding, event)
+      const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef)
 
       for (const key of keys) hotkeys(key, handler)
       state.byActionId.set(action.id, {keys, handler})
@@ -188,6 +159,9 @@ export function HotkeyReconciler(): null {
     for (const actionId of Array.from(state.byActionId.keys())) {
       if (!desiredActionIds.has(actionId)) uninstall(actionId)
     }
+    // `contextConfigsByType` is intentionally NOT a dep: handlers read it
+    // through `contextConfigsByTypeRef`, so config changes propagate without
+    // requiring a reinstallation pass.
   }, [actions, active])
 
   // Final teardown on unmount (test cleanup, HMR). Separate effect with
@@ -206,4 +180,45 @@ export function HotkeyReconciler(): null {
   }, [])
 
   return null
+}
+
+const makeHandler = (
+  action: ActionConfig,
+  binding: ShortcutBinding,
+  activeRef: { current: ActiveContextsMap },
+  contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> },
+): HotkeyHandler => {
+  return (event: KeyboardEvent) => {
+    const deps = activeRef.current.get(action.context)
+    // Context may have deactivated between the key event and this callback
+    // (or another action shares this key in a different, inactive context).
+    // Returning true lets the event propagate / default-handle.
+    if (!deps) return true
+
+    const contextConfig = contextConfigsByTypeRef.current.get(action.context)
+    const options: EventOptions = {
+      preventDefault: true,
+      stopPropagation: false,
+      ...contextConfig?.defaultEventOptions,
+      ...binding.eventOptions,
+    }
+
+    if (options.stopPropagation) event.stopPropagation()
+    if (options.preventDefault) {
+      console.debug(
+        `[HotkeyReconciler] Preventing default for action: ${action.id}, context: ${action.context}`,
+      )
+      event.preventDefault()
+    }
+
+    try {
+      void Promise.resolve(action.handler(deps, event)).catch(error => {
+        console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
+      })
+    } catch (error) {
+      console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
+    }
+
+    return !options.preventDefault
+  }
 }
