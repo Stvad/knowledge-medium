@@ -28,7 +28,7 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **§9.3 row_events tail filters `source = 'sync'`**: prevents double-invalidation between TxEngine fast-path and the tail; ensures sync-arrival paths and local-write paths don't fight over markers.
 >   - **§11.1 subtree path encoding**: `hex(id)` instead of raw id in the materialized path, so ids containing `/` (e.g., `daily/<workspaceId>/<date>` deterministic ids) sort correctly. Separator changed to `~` for safer lex-ordering. Also added `depth < 100` guard.
 >   - **Repo surface clarified**: `repo.block`, `repo.children`, `repo.subtree`, `repo.ancestors`, `repo.backlinks` listed explicitly; `repo.load(id, opts?)` typed with `{ children?, ancestors?, descendants? }`. Phase 2 acceptance updated.
-> - v4.6 (this): round-7 fixes — making the new repair and conflict paths *executable*, not just described.
+> - v4.6: round-7 fixes — making the new repair and conflict paths *executable*, not just described.
 >   - **`tx_context` end-of-tx clears all four fields together**, not just `source`. Belt-and-suspenders: row_events triggers also emit `tx_id = NULL` whenever `source IS NULL`, so a stale tx_id can't leak into a sync-applied row_event. (§4.3, §10 step 8.)
 >   - **Cycle CTE guards added to ancestors and isDescendantOf** (§11.2, §11.3). The v4.5 §4.7 claim that "every recursive CTE in §11 carries a depth < 100 guard" was true for subtree but missing for the other two.
 >   - **Cycle repair query upgraded to materialize members** (§4.7). Detection returns `(start_id, cycle_depth)`; a TS post-step walks each chain to collect the member set, dedupes by canonicalized members, picks lex-smallest `id` as the loser, demotes via `repo.tx`. The earlier query returned only start_ids and couldn't pick the loser correctly for cycles longer than 2.
@@ -36,6 +36,11 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Empty-result handle deps fixed** (§5.5). All resolver examples declare upfront `ctx.depend(...)` for the things the query is asked about, BEFORE running SQL — so handles for not-yet-existing rows still invalidate when those rows arrive. Universal rule documented.
 >   - **`onConflict: 'ignore'` cache hydration**: §10 pipeline gains step 8a — for `'ignore'` creates that may not have actually inserted, the engine post-SELECTs the live row inside the same writeTransaction and replaces the staged row before cache hydration. Avoids caching a proposed-but-ignored row over the actual existing row. (§10.4 details.)
 >   - **Hard-delete upload routing removed in v1** (§4.5). v1 has no purge mechanism; the DELETE upload trigger would have created an inconsistency between the "hard delete doesn't sync" claim and the trigger's behavior. Resolved by not shipping the DELETE upload trigger at all in v1; future purge work decides its sync policy explicitly.
+> - v4.7 (this): unified bootstrap — kernel built-ins are no longer hardcoded in the Repo constructor.
+>   - **§6 / §8 contradiction resolved.** §6 already claimed "no two-tier system" but §8 had the constructor preloading `buildKernelRegistries()`. Removed the hardcoded path: `Repo.constructor` takes infrastructure only; *all* contributions (kernel, static plugins, dynamic plugins) flow through `setFacetRuntime`.
+>   - **Staged bootstrap formalized.** The dependency `dynamic plugins → findExtensionBlocks query → FacetRuntime` is broken by **incremental** `setFacetRuntime` calls. Stage 1 registers kernel + static synchronously at `AppRuntimeProvider` mount; Stage 2 registers dynamic plugins after the discovery query resolves. Each call passes a cumulative runtime (full snapshot, not delta).
+>   - **Pre-Stage-1 `repo.tx` is callable with empty registries** so Phase 1's direct kernel-method calls (`repo.indent` etc.) work transitionally; only mutator-dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) error on unknown names. The Stage 0 → Stage 1 window is one React render in any case.
+>   - **Follow-up processor snapshot semantics clarified**: scheduled processors run against the registry snapshot from when they were scheduled, not the current registry — so plugin removal between schedule and fire doesn't disrupt in-flight follow-ups.
 
 ---
 
@@ -863,7 +868,7 @@ postCommitProcessorsFacet: Facet<PostCommitProcessor, PostCommitDispatcher>
 
 Each facet's `combine` builds a registry keyed by `name`; duplicate names log a warning and last-wins.
 
-The kernel registers built-ins as plain contributions. There is no two-tier system — `core.indent` and `tasks:setDueDate` are both contributions.
+The kernel registers built-ins as plain contributions. There is no two-tier system — `core.indent` and `tasks:setDueDate` are both contributions, both flow through `setFacetRuntime` (§8), neither is hardcoded in the Repo constructor.
 
 Naming convention: kernel uses bare names; plugins prefix with `<plugin-id>:`. Convention only.
 
@@ -917,26 +922,56 @@ This matches today's behavior. No "two undos to revert one edit" UX issue.
 
 ## 8. Repo / FacetRuntime lifecycle
 
-Bootstrap cycle today: `Repo` constructed in `RepoProvider`; `AppRuntimeProvider` builds FacetRuntime; some extensions are loaded via Repo. Resolution:
+Bootstrap cycle today: `Repo` is constructed in `RepoProvider`; `AppRuntimeProvider` builds the FacetRuntime; **dynamic plugins are themselves discovered by querying the database** (extension blocks → compile → contributions). The dependency chain — dynamic plugins need a `findExtensionBlocks` query, which is a kernel facet contribution, which lives inside the FacetRuntime — is broken by **incremental, staged** `setFacetRuntime` calls. Kernel and static contributions are loaded first; dynamic ones land in a second wave once the discovery query has resolved.
 
-1. **`Repo.constructor`** initializes with **kernel registries only** (built-ins hard-coded into the constructor's import list). No FacetRuntime needed.
-2. **`AppRuntimeProvider`** builds the FacetRuntime, calls **`repo.setFacetRuntime(runtime)`**. Repo merges contributions into its registries. Idempotent under multiple calls.
+The kernel/static/dynamic distinction is purely *timing*. Every contribution flows through the same `setFacetRuntime` path. Nothing is hardcoded in the Repo constructor.
+
+1. **`Repo.constructor`** takes infrastructure only (`db`, `cache`, `undoManager`, `handleStore`). Registries start empty. `repo.tx(fn, opts)` is callable with empty registries — `fn` may freely use tx primitives (`tx.create`, `tx.update`, `tx.delete`, `tx.setProperty`, `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`); only **dispatch sites** (`tx.run(mutator)`, `repo.mutate.X(...)`, `repo.run('name', ...)`) reject with `MutatorNotRegisteredError` if the named mutator isn't in the snapshot. Handles for not-yet-registered query names sit in `'idle'` until the resolver appears.
+2. **`setFacetRuntime(runtime)`** replaces registries with the merged contributions read from `runtime`. The caller passes a *cumulative* FacetRuntime — kernel + static + whatever dynamic contributions have been discovered so far — so each call is a full snapshot, not a delta. Notifies listeners so handles for newly-resolved (or newly-removed) queries re-run.
 3. **`repo.tx`** snapshots registries at tx start; mid-tx runtime changes don't affect that tx.
-4. **Removed dynamic processors don't fire on already-running follow-up txs** — follow-up processors execute against the snapshot from when they were scheduled.
+4. **Follow-up processors snapshot at schedule time**: a processor scheduled via `tx.afterCommit` (or watch-matched at commit) fires against the registry snapshot from when it was scheduled, not the current one. A plugin removed between schedule and fire doesn't disrupt in-flight follow-ups.
+
+### Bootstrap stages
+
+```
+Stage 0  new Repo(db, cache, undoManager, handleStore)
+         registries = {}
+         repo.tx callable but tx.run / repo.mutate.X throw MutatorNotRegisteredError
+         query handles sit in 'idle' until their resolver registers
+
+Stage 1  AppRuntimeProvider mounts (synchronous, same React render)
+         → build FacetRuntime from { kernel facets, statically-imported plugins }
+         → repo.setFacetRuntime(staticRuntime)
+         registries now contain kernel queries (incl. findExtensionBlocks),
+         kernel mutators, kernel processors, static plugin contributions
+
+Stage 2  AppRuntimeProvider effect: discover & load dynamic plugins
+         → blocks = await repo.query.findExtensionBlocks(...).load()
+         → contribs = await Promise.all(blocks.map(compileExtension))
+         → fullRuntime = mergeFacetRuntimes(staticRuntime, contribs)
+         → repo.setFacetRuntime(fullRuntime)
+         registries now contain dynamic plugin contributions
+
+Stage N  Plugin enabled / disabled / hot-reloaded at runtime
+         → caller rebuilds the cumulative FacetRuntime
+         → repo.setFacetRuntime(newRuntime)
+```
+
+The Stage 0 → Stage 1 window is intentionally tiny — both happen inside the same React render. No user-triggered mutation can land in it. Bootstrap-time logic that needs to mutate (e.g., creating a workspace root on first run) waits for Stage 1 the same way hook-driven code does.
 
 ```ts
 class Repo {
-  private registries: Registries = buildKernelRegistries()
+  private registries: Registries = emptyRegistries()
 
   setFacetRuntime(runtime: FacetRuntime): void {
-    const fromFacets = readDataFacets(runtime)
-    this.registries = mergeRegistries(buildKernelRegistries(), fromFacets)
-    this.notifyRegistryListeners()                            // for handles tracking facet-defined queries
+    const fromFacets = readDataFacets(runtime)               // kernel + plugin contributions, uniform
+    this.registries = buildRegistries(fromFacets)
+    this.notifyRegistryListeners()                            // re-resolves handles for newly-registered queries
   }
 
   async tx<R>(fn, opts?): Promise<R> {
-    const snapshot = this.registries
-    return runTxWithSnapshot(snapshot, fn, opts)
+    const snapshot = this.registries                          // may be empty pre-Stage-1
+    return runTxWithSnapshot(snapshot, fn, opts)              // tx.run / repo.mutate.X enforce registry at dispatch
   }
 }
 ```
@@ -1471,6 +1506,7 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-5 findings addressed: server/client schema split (§4 intro, §13.1 Phase 1); two-source handle invalidation (TxEngine + row_events tail) (§9.3); children-completeness markers + `ChildrenNotLoadedError` (§5.2); parent-edge dependencies for tree handles (§9.2); field-write processor watches with `core.parseReferences` watching `blocks.content` (§5.7, §7); ancestors CTE has explicit `depth` ORDER BY (§11.2); stale `tx_context.source='sync'` invariant fixed to `NULL` + COALESCE (§15.4).
 - [ ] Reviewer's round-6 findings addressed: cycle prevention + repair protocol (§4.7); `ctx.depend` for dynamic query dependency declaration (§5.5); `repo.children`, `repo.load(opts)` explicitly listed in Repo surface (§3 architecture diagram, §5.2, §13.2); row_events tail filtered to `source = 'sync'` to avoid TxEngine double-invalidation (§9.3); subtree path uses `hex(id)` to handle `/` in ids (§11.1); `tx.create` has explicit `onConflict: 'throw' | 'ignore'`, default `'throw'` (§5.3); soft-delete is its own row_events `kind`, distinguishable from regular updates (§4.3).
 - [ ] Reviewer's round-7 findings addressed: tx_context cleared all-fields with row_events trigger fallback for sync rows (§4.3, §10 step 8); cycle guards added to ancestors and isDescendantOf CTEs (§11.2, §11.3); repair query materializes cycle members and picks lex-smallest correctly for cycles of any length (§4.7); `ChangeScope.Repair` defined with not-undoable + uploads + read-only-allowed semantics (§5.8, §10.3); empty-result handle deps via upfront `ctx.depend` (§5.5); `onConflict: 'ignore'` post-SELECTs live row before cache hydration (§10 step 8a, §10.4); DELETE upload trigger removed in v1 to align with no-purge-yet policy (§4.5).
+- [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
-- [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
+- [ ] Dynamic-plugin lifecycle is constructible at runtime via staged `setFacetRuntime` waves (§8 Bootstrap stages, §12.2). Pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) reject with `MutatorNotRegisteredError` for unknown names.
