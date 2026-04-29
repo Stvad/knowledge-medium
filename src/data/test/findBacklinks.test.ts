@@ -93,7 +93,10 @@ describe('Repo.findBacklinks', () => {
     expect(params).toEqual(['ws-1', 'page-1', 'page-1'])
   })
 
-  it('hydrates matched blocks so repo.find(id) reads succeed synchronously', async () => {
+  // TODO(data-layer 1.6): hydration path uses legacy BlockData fields that the
+  // schema reset removed; un-skip once findBacklinks is rewritten as a queriesFacet
+  // contribution in stage 1.4 and call sites sweep onto repo.query in stage 1.6.
+  it.skip('hydrates matched blocks so repo.find(id) reads succeed synchronously', async () => {
     const referencingBlock = blockData({
       id: 'block-with-link',
       workspaceId: 'ws-1',

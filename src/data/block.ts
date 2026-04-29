@@ -360,7 +360,13 @@ export const getAllChildrenBlocks = async (block: Block): Promise<Block[]> => {
 
 const parseAndUpdateReferences = async (block: Block) => {
   const blockData = block.dataSync()
-  if (!blockData) return
+  // TODO(data-layer 1.5): this whole helper moves into a facet-contributed
+  // post-commit processor. Until then, the second `?.content` guard absorbs
+  // a transitional race where the legacy block.change pipeline writes a row
+  // that hasn't yet been re-hydrated under the renamed columns introduced
+  // in stage 1.2 — without it, fire-and-forget parseReferences crashes the
+  // test runner with an unhandled rejection.
+  if (!blockData?.content) return
 
   const aliases = parseReferences(blockData.content).map(ref => ref.alias)
   const pageRefs: BlockReference[] = await Promise.all(aliases.map(async alias => ({

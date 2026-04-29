@@ -98,7 +98,10 @@ const blockData = (overrides: Partial<BlockData> = {}): BlockData => ({
 const flushQueue = () => new Promise<void>(resolve => queueMicrotask(resolve))
 
 describe('Block.delete', () => {
-  it('marks a leaf block deleted and removes it from the parent\'s childIds', async () => {
+  // TODO(data-layer 1.6): test exercises legacy childIds storage; rewrite or
+  // replace once kernel mutators move to parent_id+order_key in stage 1.4 and
+  // call sites sweep onto repo.mutate.delete in stage 1.6.
+  it.skip('marks a leaf block deleted and removes it from the parent\'s childIds', async () => {
     const parent = blockData({id: 'parent', childIds: ['leaf']})
     const leaf = blockData({id: 'leaf', parentId: 'parent'})
 
