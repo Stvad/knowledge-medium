@@ -41,12 +41,18 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Staged bootstrap formalized.** The dependency `dynamic plugins → findExtensionBlocks query → FacetRuntime` is broken by **incremental** `setFacetRuntime` calls. Stage 1 registers kernel + static synchronously at `AppRuntimeProvider` mount; Stage 2 registers dynamic plugins after the discovery query resolves. Each call passes a cumulative runtime (full snapshot, not delta).
 >   - **Pre-Stage-1 `repo.tx` is callable with empty registries** so Phase 1's direct kernel-method calls (`repo.indent` etc.) work transitionally; only mutator-dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) error on unknown names. The Stage 0 → Stage 1 window is one React render in any case.
 >   - **Follow-up processor snapshot semantics clarified**: scheduled processors run against the registry snapshot from when they were scheduled, not the current registry — so plugin removal between schedule and fire doesn't disrupt in-flight follow-ups.
-> - v4.8 (this): round-8 fixes.
+> - v4.8: round-8 fixes.
 >   - **Trigger count corrected from 6 to 5** in Phase 1 scope and acceptance (§13.1). v4.6 removed the DELETE upload-routing trigger but two stale "six triggers" mentions survived. The five live triggers are: 3 row_events writers (INSERT/UPDATE/DELETE) + 2 upload-routing triggers (INSERT/UPDATE only).
 >   - **Pipeline ordering reconciled with §10.4** (§10). Conflict-reconciliation SELECT for `onConflict: 'ignore'` moves *inside* the `db.writeTransaction` (renumbered as step 7), where §10.4 already said it lives. The diagram previously placed it post-COMMIT, contradicting itself. tx_context clear (step 9) also stays inside the writeTransaction so a rollback automatically reverts it.
 >   - **Atomicity prose updated** to match: steps 1–9 are atomic (commit-or-rollback together); steps 10–13 happen post-COMMIT but before promise resolution; step 14 is fire-and-after.
 >   - **Repair scope under read-only / RLS** (§5.8.1, new). Repair source is conditional on `repo.isReadOnly`: writable clients upload (`source = 'user'`); read-only clients run local-only (`source = 'local-ephemeral'`). The fix propagates via writable peers; read-only peers eventually receive the authoritative fix via sync, which converges with their local-ephemeral repair (same loser, same value, idempotent). Avoids the rejected-upload loop that pure "Repair always uploads" would create for read-only clients. The Repair row in the scope-semantics matrix changed to "Uploads? conditional — see §5.8.1".
 >   - **`onConflict: 'ignore'` same-tx detection clarified as unavailable** (§10.4). The earlier text suggested checking via `tx.get` after create, but `tx.get` returns the staged row inside a tx, not the live one — same-tx insertion detection is genuinely impossible without a different primitive. Documented the limitation explicitly; recorded `tx.createOrGet` as the future API if a use case ever needs it. `core.createAliasTarget` doesn't need this; v1 ships without it.
+> - v4.9 (this): round-9 fixes.
+>   - **Alias cleanup gains a row_events insertion gate** (§7 mapping table + new §7.5). v4.8 said same-tx insertion detection is unavailable, but `core.cleanupOrphanAliases` needs to know whether the originating parseReferences tx actually inserted the alias-target row — otherwise a deterministic-id race (concurrent typing of `[[Inbox]]` against an existing Inbox page) lets cleanup delete an unrelated existing page when the user removes their text within 4s. Resolved by querying `row_events` post-commit: cleanup checks `tx_id = originatingTxId AND block_id = id AND kind = 'create'` before deleting. The "no references" check is also retained as the second gate. Test coverage requires both the new-alias and pre-existing-page paths.
+>   - **Repair source per-workspace, not blanket `isReadOnly`** (§5.8.1). The TxEngine consults `repo.canWrite(workspaceId)` per Repair-scoped tx (the workspace of the loser block); upload IFF writable, local-only otherwise. For multi-workspace permission setups, repair won't try to upload to workspaces the user can't write — avoiding the rejected-upload loop. v1's single-workspace common case still degrades cleanly to `!repo.isReadOnly`. The scope-semantics matrix Repair row updated to reference `repo.canWrite(workspaceId)`.
+>   - **Stage 2 dynamic discovery has a transitional path for Phases 1-3** (§8). `findExtensionBlocks` is a Phase-4 query (registered to `queriesFacet`), but dynamic plugins exist before Phase 4. Stage 2 calls a `findExtensionBlocksLegacy(repo)` helper using today's existing dynamic-renderer SQL discovery; Phase 4 wraps the same SQL into a queriesFacet contribution. No behavior change at the switchover.
+>   - **`BlockData` shape standardized to camelCase** (new §4.1.1). Examples mixed `parent_id`/`parentId`, `properties_json`/`properties`, `references_json`/`references`. Defined the public TS shape (camelCase) versus storage shape (snake_case JSON columns) explicitly, and which boundary translates between them (`parseBlockRow` / `blockToRow` in `src/data/blockSchema.ts`). All TS examples in the spec now use camelCase domain shape (cycle repair: `{ parentId: null }`; reference parsing: `{ references: ids }`). Storage-shape language reserved for SQL DDL, triggers, and internal storage descriptions.
+>   - **§4.5 trigger prose aligned with v1 trigger set**: 2 upload-routing triggers (INSERT/UPDATE) + 3 row_events writers (INSERT/UPDATE/DELETE) = 5 total. The old "INSERT/UPDATE-split pattern is used for the row_events triggers" wording was wrong — row_events has all three; only upload-routing skips DELETE.
 
 ---
 
@@ -222,6 +228,39 @@ A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too lo
 
 `properties_json` is `Record<string, unknown>` — just the value, codec-deserialized at read time via the descriptor (§5.6).
 
+### 4.1.1 `BlockData` (TS domain shape) — public, camelCase
+
+The SQL columns above are the **storage shape** (snake_case). The **public TypeScript shape** is camelCase and is what every API in this spec exposes — `tx.update`, handle results, mutator args, post-commit processor `changedRows`, undo snapshots, all of it.
+
+```ts
+export interface BlockData {
+  id: string
+  workspaceId: string
+  parentId: string | null
+  orderKey: string
+  content: string
+  properties: Record<string, unknown>           // codec-encoded values; not "properties_json"
+  references: string[]                          // not "references_json"
+  createdAt: number
+  updatedAt: number
+  createdBy: string
+  updatedBy: string
+  deleted: boolean                              // hydrated from 0/1
+}
+
+// Allowed patch shape for tx.update:
+type BlockDataPatch = Partial<Omit<BlockData, 'id' | 'workspaceId' | 'createdAt' | 'createdBy'>>
+// id and workspaceId are immutable post-create; metadata is engine-managed.
+```
+
+**Storage ↔ domain mapping** lives in two functions in `src/data/blockSchema.ts`:
+- `parseBlockRow(row: BlockRow): BlockData` — snake_case + JSON strings → camelCase + parsed JSON.
+- `blockToRow(data: BlockData): BlockRow` — the inverse.
+
+The mapping is the only place either shape leaks into the other. Triggers, raw SQL, and PowerSync's CRUD apply use the storage shape (snake_case). Mutators, queries, processors, handles, and React all use the domain shape (camelCase). Examples throughout this spec use the domain shape — `tx.update(id, { parentId: null })`, not `{ parent_id: null }`; `tx.update(id, { references: ids })`, not `{ references_json: '[...]' }`.
+
+This boundary is identical to today's `BlockRow` / `BlockData` split; the redesign keeps it.
+
 ### 4.2 `tx_context` (client only)
 
 ```sql
@@ -288,7 +327,7 @@ One row per `repo.tx` invocation. Sync-applied writes don't go through `repo.tx`
 
 ### 4.5 Upload routing triggers (client only)
 
-SQLite doesn't allow `INSERT OR UPDATE OR DELETE` in a single trigger — three separate triggers, gated identically on `source = 'user'`:
+Two upload-routing triggers in v1: one for INSERT, one for UPDATE. SQLite doesn't allow combined-event triggers, and DELETE is intentionally absent (see end of section).
 
 ```sql
 -- Forward LOCAL USER writes to powersync_crud (PowerSync's outgoing queue).
@@ -313,13 +352,15 @@ END;
 
 -- v1: NO upload-routing trigger for DELETE. Hard-delete (physical removal) is
 -- not a v1 operation and would require a separate purge-semantics decision —
--- see §4.4 row_events. Soft-deletes go through tx.delete → UPDATE deleted = 1
+-- see §4.3 row_events. Soft-deletes go through tx.delete → UPDATE deleted = 1
 -- → fires the UPDATE trigger above, which forwards correctly.
 -- A future hard-purge mechanism can add this trigger when its sync policy
 -- (sync hard-deletes vs. local-only purge) is decided.
 ```
 
-The same INSERT/UPDATE-split pattern is used for the `row_events` triggers (each with its own `INSERT INTO row_events SELECT … COALESCE((SELECT source FROM tx_context …), 'sync') …`). The DELETE row_events trigger *does* exist for audit purposes (record what was hard-purged, when v1 is over) — it just doesn't forward to powersync_crud.
+`row_events` writers are a **separate set of three triggers** (INSERT/UPDATE/DELETE), each appending a row to `row_events` with `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`. The DELETE row_events writer exists for audit (recording any future hard-purge) — it does not forward to `powersync_crud`.
+
+Total v1 trigger count on `blocks`: **5** = 3 row_events writers + 2 upload-routing.
 
 ### 4.6 PowerSync sync-config
 
@@ -383,7 +424,7 @@ for (const { start_id, cycle_depth } of detected) {
 // repair: lex-smallest in each cycle becomes a workspace root
 for (const members of cycles.values()) {
   const loser = [...members].sort()[0]
-  await repo.tx(async tx => tx.update(loser, { parent_id: null }), {
+  await repo.tx(async tx => tx.update(loser, { parentId: null }), {
     scope: ChangeScope.Repair, description: `Cycle repair: ${loser}`,
   })
 }
@@ -516,10 +557,11 @@ export interface Tx {
   delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
 
   /** Typed property primitives — the only path that runs codecs.
-   *  setProperty: codec.encode applied; engine merges into properties_json patch.
+   *  setProperty: codec.encode applied; engine merges into the staged BlockData.properties.
    *  getProperty: codec.decode applied to the staged-or-cache-or-DB value.
-   *  Direct properties manipulation via tx.update(...) bypasses codecs and is
-   *  reserved for cases where the caller is intentionally working at the JSON level. */
+   *  Direct properties manipulation via tx.update(id, { properties: ... }) writes raw
+   *  encoded values and bypasses codecs — reserved for cases where the caller is
+   *  intentionally working at the encoded-JSON level. */
   setProperty<T>(id: string, schema: PropertySchema<T>, value: T, opts?: TxWriteOpts): void
   getProperty<T>(id: string, schema: PropertySchema<T>): Promise<T | undefined>
 
@@ -859,20 +901,26 @@ Scope semantics matrix:
 | `BlockDefault` | yes (user undo stack) | yes | no |
 | `UiState` | no | no (`source = 'local-ephemeral'`) | yes |
 | `References` | yes (separate ref bucket; not exposed to user undo) | yes | no |
-| `Repair` | no | **conditional — see §5.8.1** | yes |
+| `Repair` | no | yes IFF `repo.canWrite(workspaceId)` for the affected block (see §5.8.1) | yes |
 
-### 5.8.1 Repair scope under read-only / RLS
+### 5.8.1 Repair scope under workspace permission / RLS
 
-Repair has to behave differently for writable vs. read-only clients to avoid a rejected-upload loop:
+Repair has to behave differently per-block based on whether the local user can actually write to that block's workspace, otherwise the upload would hit RLS rejection on the server and PowerSync would loop.
 
-- **Writable client** (`!repo.isReadOnly` and the user has server-side write permission): repair tx runs with `source = 'user'`, uploads to `powersync_crud`, propagates to peers via PowerSync. This is the normal case. The deterministic-loser algorithm (§4.7) means every writable peer that observes the same cyclic state writes the same fix; LWW makes that idempotent.
-- **Read-only client** (`repo.isReadOnly`, or user lacks write permission for the affected workspace): repair tx runs with `source = 'local-ephemeral'`, fixing the local view only. The trigger doesn't forward to `powersync_crud`, so the server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (which then overwrites the local-ephemeral repair with an identical value — convergent).
+The `Repo` exposes `repo.canWrite(workspaceId): boolean` — a synchronous query against whatever permission state the app maintains (today: per-workspace role; for v1 frequently just one workspace, so this often degrades to `!repo.isReadOnly`, but the spec is permission-based, not flag-based, so future multi-workspace permission distinctions don't break repair).
 
-The TxEngine sets `tx_context.source` for Repair-scoped txs based on `repo.isReadOnly` at tx start: `'user'` if writable, `'local-ephemeral'` if read-only. This is the only scope whose source isn't a static function of the scope itself.
+Per repair tx (each cycle is one tx affecting one block's workspace):
 
-Why not "read-only clients don't run repair at all": leaving the local view in a cyclic state means the CTE depth guards (§4.7 layer 3) cap query results at 100 deep — fine for correctness, but visually misleading (the user sees a partial tree). Local repair gives the read-only user a correct local view while waiting for a writable peer's authoritative fix.
+- **User can write to the affected block's workspace** → `tx_context.source = 'user'`. Repair uploads. Peers receive the deterministic fix via sync; LWW makes it idempotent.
+- **User cannot write** → `tx_context.source = 'local-ephemeral'`. Repair fixes the local view only. Trigger doesn't forward; server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (overwrites the local-ephemeral repair with an identical value — convergent).
 
-Why not "use a system actor / privileged service": no such service exists in v1, and adding one would couple the data layer to a backend topology we don't have. The eventual-consistency model via writable-peer convergence works without that infrastructure.
+The TxEngine consults `repo.canWrite(targetWorkspaceId)` per Repair-scoped tx. This is the only scope whose `source` is computed dynamically per tx; every other scope has a static source.
+
+Note: the repair worker (the engine code that runs cycle detection and demotion after sync apply) runs one `repo.tx` per cycle. The targetWorkspaceId is the workspace of the loser block. Different cycles in different workspaces produce different `source` decisions.
+
+Why not "read-only clients don't run repair at all": leaving the local view cyclic means CTE depth guards (§4.7 layer 3) cap results at 100 deep — fine for correctness, but visually misleading. Local-only repair gives the user a correct local view while waiting for a writable peer's authoritative fix.
+
+Why not "use a system actor / privileged service": no such service in v1, and adding one would couple the data layer to a backend topology we don't have. Eventual consistency via writable-peer convergence works without it.
 
 ---
 
@@ -915,7 +963,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
 | Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. |
 | Update `references` field | `tx.update(sourceId, { references: resolvedIds }, { skipMetadata: true })`. `skipMetadata` prevents the bookkeeping write from bumping `updated_at`/`updated_by`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
-| Self-destruct (newly-created alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { createdIds: [...] }, { delayMs: 4000 })`. Cleanup processor checks each id: if no block's `references_json` contains it, delete. |
+| Self-destruct (newly-created alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { candidateIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. Cleanup processor checks each candidate id with **two gates**: (a) verify this tx actually inserted the row (query row_events for `tx_id = originatingTxId AND block_id = id AND kind = 'create'`); skip if not. (b) verify no block's `references_json` contains the id; skip if any does. Only when both gates pass does cleanup delete. See §7.5 below for the rationale. |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
 | `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
@@ -928,12 +976,32 @@ Because parseReferences is follow-up with `scope: References`:
 
 This matches today's behavior. No "two undos to revert one edit" UX issue.
 
+### 7.5 Why cleanup needs the row_events insertion check
+
+The "no references" check alone is insufficient. Consider this race:
+
+1. Alice creates page "Inbox" via the create-page UI (NOT via `[[Inbox]]` typing). Alice's `Inbox` alias-target row has no incoming `references_json` entries from any block.
+2. Sync propagates Alice's Inbox row to Bob's local DB.
+3. Bob types `[[Inbox]]` somewhere. parseReferences runs `aliasLookup`, finds Alice's existing Inbox, calls `createAliasTarget` with `onConflict: 'ignore'`. The create is a no-op (row exists); `createAliasTarget` returns the id.
+4. parseReferences adds the id to `candidateIds` and schedules cleanup with delay 4s.
+5. Bob deletes the `[[Inbox]]` text within 4s. parseReferences re-runs, removing the reference from Bob's block.
+6. Cleanup runs after 4s. Without the insertion check, it sees:
+   - No block's `references_json` contains Inbox's id.
+   - **Deletes Alice's Inbox.** Wrong.
+
+The insertion gate prevents this: cleanup queries `row_events` and finds no `kind = 'create'` row for Inbox's id with the originating tx_id (parseReferences's tx) — because the tx didn't actually create the row, just looked it up. Cleanup skips.
+
+For genuinely new aliases (the originating tx _did_ insert the row), the row_events table has the matching create row, and cleanup proceeds to gate (b) — the existing reference check.
+
+The insertion check is implementable because `row_events` is the authoritative ledger of what each tx physically wrote. `tx.create({ id, ... }, { onConflict: 'ignore' })` that hits a conflict produces no INSERT trigger fire and therefore no row_events row with `kind = 'create'`. (Recall §10.4: same-tx insertion detection is unavailable inside the user fn, but post-commit detection via row_events is straightforward.)
+
 ### 7.4 Test coverage required
 
 - `setContent` with `[[foo]]` (alias not yet existing) → after debounce, alias-target exists; source block's `references` includes it.
 - `[[2026-04-28]]` produces deterministic daily-note id; two simultaneous creates resolve to the same row.
-- Typing `[[foo]]` then deleting that text within 4s → orphan removed by cleanup.
-- Typing `[[foo]]`, then linking from another block within 4s → orphan kept (referenced).
+- Typing `[[foo]]` (foo new) then deleting that text within 4s → orphan removed by cleanup (row_events check passes — this tx created the row; reference check passes — no block references it).
+- Typing `[[foo]]` (foo new), then linking from another block within 4s → orphan kept (reference check fails — another block references it).
+- **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept** (row_events check fails — this tx didn't create the row; cleanup skips). This is the §7.5 race; it must not regress.
 - Rapid typing inside an existing `[[alias]]` (no alias-set change) → debounce coalesces; at most one processor run per block per debounce window.
 - Undo of `setContent` → `references` converges back to pre-edit state.
 
@@ -965,7 +1033,16 @@ Stage 1  AppRuntimeProvider mounts (synchronous, same React render)
          kernel mutators, kernel processors, static plugin contributions
 
 Stage 2  AppRuntimeProvider effect: discover & load dynamic plugins
-         → blocks = await repo.query.findExtensionBlocks(...).load()
+         Phase 4+ (queriesFacet exists):
+           → blocks = await repo.query.findExtensionBlocks(...).load()
+         Phases 1-3 (queriesFacet not yet introduced; see §13):
+           → blocks = await findExtensionBlocksLegacy(repo)
+             — a transitional helper that calls today's existing
+             dynamic-renderer discovery code path (raw SQL via PowerSync,
+             no facet wrapping). Phase 4 wraps this same SQL into a
+             queriesFacet contribution and the discovery call switches
+             to repo.query.findExtensionBlocks. No behavior change at
+             the switchover; this is a packaging migration.
          → contribs = await Promise.all(blocks.map(compileExtension))
          → fullRuntime = mergeFacetRuntimes(staticRuntime, contribs)
          → repo.setFacetRuntime(fullRuntime)
@@ -1311,8 +1388,8 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - New `repo.tx(fn, opts)` on `db.writeTransaction`. Async `tx.get`. `tx.peek`, `tx.create`, `tx.update`, `tx.delete`, `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
 - `BlockData` type updated: no `childIds` field.
 - `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
-- Properties stored flat: `properties_json` is `Record<string, unknown>`. Property descriptors live as plain `xxxProp` exports for now (facet wrapping in Phase 3).
-- Tree mutations rewritten as kernel functions on `repo` (not on `Block`): `repo.indent(id)`, `repo.outdent(id, opts)`, `repo.move(id, opts)`, `repo.delete(id)`, `repo.createChild(parentId, opts)`, `repo.split(id, at)`, `repo.merge(a, b)`, `repo.insertChildren(parentId, items)`. Each runs inside `repo.tx` and uses `parent_id + order_key` patches.
+- Properties stored flat: domain `BlockData.properties` is `Record<string, unknown>` (codec-encoded values), corresponding to the `properties_json` column. Property descriptors live as plain `xxxProp` exports for now (facet wrapping in Phase 3).
+- Tree mutations rewritten as kernel functions on `repo` (not on `Block`): `repo.indent(id)`, `repo.outdent(id, opts)`, `repo.move(id, opts)`, `repo.delete(id)`, `repo.createChild(parentId, opts)`, `repo.split(id, at)`, `repo.merge(a, b)`, `repo.insertChildren(parentId, items)`. Each runs inside `repo.tx` and uses `{ parentId, orderKey }` patches (camelCase domain shape per §4.1.1).
 - `block.change(callback)` is **deleted**, not wrapped. Call sites that mutated content/properties via callbacks migrate to `block.setContent(content)` / `block.set(prop, v)` (single-block sugar; each is a 1-mutator tx) or to the dedicated kernel functions for multi-block tree ops (`repo.indent(id)` etc.).
 - `applyBlockChange`, `_change`, `_transaction`, `getProperty`/`setProperty` (record-shape), `dataSync`, `requireSnapshot`-style throws — all deleted.
 - `getProperty`/`setProperty` replaced by `block.get(schema)`/`block.set(schema, v)` operating on the new flat shape.
@@ -1534,6 +1611,7 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-6 findings addressed: cycle prevention + repair protocol (§4.7); `ctx.depend` for dynamic query dependency declaration (§5.5); `repo.children`, `repo.load(opts)` explicitly listed in Repo surface (§3 architecture diagram, §5.2, §13.2); row_events tail filtered to `source = 'sync'` to avoid TxEngine double-invalidation (§9.3); subtree path uses `hex(id)` to handle `/` in ids (§11.1); `tx.create` has explicit `onConflict: 'throw' | 'ignore'`, default `'throw'` (§5.3); soft-delete is its own row_events `kind`, distinguishable from regular updates (§4.3).
 - [ ] Reviewer's round-7 findings addressed: tx_context cleared all-fields with row_events trigger fallback for sync rows (§4.3, §10 step 9); cycle guards added to ancestors and isDescendantOf CTEs (§11.2, §11.3); repair query materializes cycle members and picks lex-smallest correctly for cycles of any length (§4.7); `ChangeScope.Repair` defined (§5.8); empty-result handle deps via upfront `ctx.depend` (§5.5); `onConflict: 'ignore'` post-SELECTs live row before cache hydration (§10 step 7, §10.4); DELETE upload trigger removed in v1 to align with no-purge-yet policy (§4.5).
 - [ ] Reviewer's round-8 findings addressed: Phase 1 trigger count corrected to 5 (§13.1, was stale "six" from before DELETE upload removal); conflict-reconciliation SELECT moved inside the writeTransaction in the pipeline diagram, matching §10.4 (§10); atomicity prose updated (steps 1–9 atomic, 10–13 post-COMMIT pre-resolution, 14 fire-and-after); repair scope under read-only / RLS spelled out — conditional `source = 'user' | 'local-ephemeral'` based on `repo.isReadOnly`, with convergence via writable-peer propagation (§5.8.1); `onConflict: 'ignore'` same-tx insertion detection acknowledged as unavailable (§10.4) with `tx.createOrGet` flagged as the future API if needed.
+- [ ] Reviewer's round-9 findings addressed: alias cleanup row_events insertion gate (§7 mapping + new §7.5) prevents deletion of pre-existing pages on `[[Inbox]]`-into-existing-page race; Repair source uses `repo.canWrite(workspaceId)` per affected workspace, not blanket `isReadOnly` (§5.8.1); Stage 2 dynamic discovery has a transitional non-facet path for Phases 1-3 (§8); `BlockData` shape standardized as camelCase domain with explicit storage-mapping in §4.1.1, and stale `parent_id` / `properties_json` references in TS examples fixed; §4.5 trigger prose aligned with the actual v1 set (5 triggers).
 - [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
