@@ -297,7 +297,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
                 `  daily notes: ${summary.pagesDaily}\n` +
                 `  blocks written: ${summary.blocksWritten}\n` +
                 `  alias blocks created: ${summary.aliasBlocksCreated}\n` +
-                `  unresolved block uids: ${summary.unresolvedBlockUids.length}\n` +
+                `  placeholder blocks: ${summary.placeholdersCreated}\n` +
                 `  duration: ${summary.durationMs} ms`,
               )
             } catch (err) {

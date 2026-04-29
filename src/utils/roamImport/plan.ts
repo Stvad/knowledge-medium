@@ -1,12 +1,7 @@
-import { BlockData, BlockProperties, NumberBlockProperty, StringBlockProperty } from '@/types'
-
-// Inline alias of BlockData['references'][number] — `BlockReference` is
-// exported from a sibling branch (pedantic-murdock-11fc9b) but not yet on
-// master, so we mirror the shape here to stay buildable until that lands.
-type BlockReference = {id: string, alias: string}
+import { BlockData, BlockProperties, BlockReference, NumberBlockProperty, StringBlockProperty } from '@/types'
 import { aliasProp, fromList, numberProperty, stringProperty, typeProp } from '@/data/properties'
 import { parseReferences } from '@/utils/referenceParser'
-import { applyHeading, rewriteRoamContent } from './content'
+import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
 import { resolveDailyPage, roamBlockId } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
 
@@ -35,16 +30,28 @@ export interface PreparedBlock {
   roamUid: string
 }
 
+export interface PreparedPlaceholder {
+  /** Our deterministic id for the placeholder block. */
+  blockId: string
+  /** The Roam uid this stands in for. */
+  roamUid: string
+}
+
 export interface RoamImportPlan {
   pages: PreparedPage[]
   /** Non-page blocks, in post-order — leaves before parents within each page. */
   descendants: PreparedBlock[]
-  /** Roam-uid → our-uuid map (covers pages and blocks). */
+  /**
+   * Empty stand-in blocks for `((uid))` references whose target wasn't in
+   * this export. Created by the orchestrator so block-refs in imported
+   * content resolve immediately, and so a future import that brings in
+   * the real blocks upserts onto the same deterministic id.
+   */
+  placeholders: PreparedPlaceholder[]
+  /** Roam-uid → our-uuid map (covers pages, blocks, and placeholders). */
   uidMap: Map<string, string>
   /** Aliases referenced from content (plain `[[alias]]`). Page-by-name lookup target. */
   aliasesUsed: Set<string>
-  /** Block uids used in content but absent from this export. */
-  unresolvedBlockUids: Set<string>
   /** Per-page diagnostic notes for the summary. */
   diagnostics: string[]
 }
@@ -225,11 +232,17 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
 const buildUidMap = (
   pages: RoamExport,
   workspaceId: string,
-): {uidMap: Map<string, string>, dailyByUid: Map<string, {iso: string, blockId: string}>} => {
+): {
+  uidMap: Map<string, string>,
+  dailyByUid: Map<string, {iso: string, blockId: string}>,
+  knownUids: Set<string>,
+} => {
   const uidMap = new Map<string, string>()
   const dailyByUid = new Map<string, {iso: string, blockId: string}>()
+  const knownUids = new Set<string>()
 
   const visit = (block: RoamBlock) => {
+    knownUids.add(block.uid)
     if (!uidMap.has(block.uid)) {
       uidMap.set(block.uid, roamBlockId(workspaceId, block.uid))
     }
@@ -237,6 +250,7 @@ const buildUidMap = (
   }
 
   for (const page of pages) {
+    knownUids.add(page.uid)
     const daily = resolveDailyPage(workspaceId, page)
     if (daily) {
       dailyByUid.set(page.uid, daily)
@@ -247,11 +261,40 @@ const buildUidMap = (
     for (const child of page.children ?? []) visit(child)
   }
 
-  return {uidMap, dailyByUid}
+  return {uidMap, dailyByUid, knownUids}
+}
+
+// Walk all `string` fields in the export and surface every `((uid))` /
+// embed reference. The planner registers any uid that wasn't already in
+// the export's block tree as a placeholder so content rewrites resolve
+// against deterministic ids and a later, more-complete import upserts
+// onto the same rows.
+const collectPlaceholderUids = (
+  pages: RoamExport,
+  knownUids: Set<string>,
+): string[] => {
+  const out = new Set<string>()
+  const visit = (block: RoamBlock) => {
+    for (const uid of collectContentRefUids(block.string)) {
+      if (!knownUids.has(uid)) out.add(uid)
+    }
+    for (const child of block.children ?? []) visit(child)
+  }
+  for (const page of pages) {
+    for (const child of page.children ?? []) visit(child)
+  }
+  return [...out]
 }
 
 export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportPlan => {
-  const {uidMap, dailyByUid} = buildUidMap(pages, options.workspaceId)
+  const {uidMap, dailyByUid, knownUids} = buildUidMap(pages, options.workspaceId)
+
+  const placeholderUids = collectPlaceholderUids(pages, knownUids)
+  const placeholders: PreparedPlaceholder[] = placeholderUids.map(roamUid => {
+    const blockId = roamBlockId(options.workspaceId, roamUid)
+    uidMap.set(roamUid, blockId)
+    return {blockId, roamUid}
+  })
 
   const ctx: BuildContext = {
     options,
@@ -316,18 +359,26 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     })
   }
 
+  if (placeholders.length > 0) {
+    diagnostics.push(
+      `${placeholders.length} block-ref uid(s) not present in this export — created as empty placeholder blocks; a future import that includes them will upsert onto the same deterministic ids.`,
+    )
+  }
+
+  // Defense-in-depth: every uid in content should now resolve via uidMap.
+  // If anything still leaks through it's a planner bug — surface it loudly.
   if (ctx.unresolvedBlockUids.size > 0) {
     diagnostics.push(
-      `${ctx.unresolvedBlockUids.size} block-ref uid(s) not present in this export — left literal in content.`,
+      `[bug] ${ctx.unresolvedBlockUids.size} content uid(s) leaked past placeholder registration: ${[...ctx.unresolvedBlockUids].slice(0, 5).join(', ')}`,
     )
   }
 
   return {
     pages: preparedPages,
     descendants,
+    placeholders,
     uidMap,
     aliasesUsed: ctx.aliasesUsed,
-    unresolvedBlockUids: ctx.unresolvedBlockUids,
     diagnostics,
   }
 }

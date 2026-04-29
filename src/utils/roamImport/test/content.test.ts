@@ -36,6 +36,25 @@ describe('rewriteRoamContent', () => {
     )
   })
 
+  it('does not re-resolve mapped UUIDs introduced by an earlier rewrite step', () => {
+    // Regression: when EMBED/ALIASED rewrites ran before a sequential
+    // BLOCK_REF_RE replace, the UUID emitted by the earlier rewrite got
+    // matched by the bare `((uid))` regex on the next pass and reported
+    // as `unresolved`. Now the three rewrites resolve from the *source*
+    // in a single position-based pass.
+    const {content, unresolvedBlockUids} = rewriteRoamContent(
+      '{{embed: ((vgkFNA64b))}} and [click](((3iAWxE3r8))) and ((vgkFNA64b))',
+      uidMap,
+    )
+    expect(content).toBe(
+      '!((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee)) and ' +
+      '[click] ((11111111-2222-4333-8444-555555555555)) and ' +
+      '((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee))',
+    )
+    // No "leaked" uids — every roam uid was in the map.
+    expect(unresolvedBlockUids).toEqual([])
+  })
+
   it('records and preserves unresolved block uids', () => {
     const {content, unresolvedBlockUids} = rewriteRoamContent(
       '((nope_unknown)) and ((vgkFNA64b))',

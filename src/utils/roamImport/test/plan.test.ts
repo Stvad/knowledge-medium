@@ -110,7 +110,7 @@ describe('planImport', () => {
     ])
   })
 
-  it('records unresolved block uids', () => {
+  it('registers placeholders for `((uid))` refs to blocks not in the export', () => {
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
@@ -120,8 +120,31 @@ describe('planImport', () => {
       }],
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 
-    expect([...plan.unresolvedBlockUids]).toEqual(['unknownUid'])
-    expect(plan.diagnostics.some(d => d.includes('unknownUid') || d.includes('1'))).toBe(true)
+    expect(plan.placeholders).toEqual([
+      {roamUid: 'unknownUid', blockId: roamBlockId(WORKSPACE, 'unknownUid')},
+    ])
+
+    // Content rewrites against the placeholder's deterministic id so a
+    // later import that includes the real block upserts onto the same row.
+    const block = plan.descendants.find(d => d.roamUid === 'b')
+    expect(block?.data.content).toBe(
+      `((${roamBlockId(WORKSPACE, 'unknownUid')}))`,
+    )
+
+    expect(plan.diagnostics.some(d => d.includes('placeholder'))).toBe(true)
+  })
+
+  it('does not register placeholders for refs whose target IS in the export', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {string: 'parent with ((leaf))', uid: 'b1'},
+        {string: 'leaf', uid: 'leaf'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.placeholders).toEqual([])
   })
 
   it('records aliases referenced from content', () => {

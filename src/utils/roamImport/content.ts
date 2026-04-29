@@ -44,6 +44,79 @@ export interface ContentRewriteResult {
   unresolvedBlockUids: string[]
 }
 
+// Surface every Roam uid the content uses as a `((uid))` block-ref or
+// `{{embed: ((uid))}}` embed. Used by the planner to register a
+// deterministic id for refs whose target isn't a block elsewhere in the
+// export — so the orchestrator can mint an empty placeholder block,
+// `((uid))` in content gets rewritten to the placeholder uuid, and a
+// later import that brings in the real block upserts onto that row.
+export const collectContentRefUids = (content: string): string[] => {
+  const out = new Set<string>()
+  const matchAllAt = (re: RegExp, captureIndex: number) => {
+    re.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(content)) !== null) out.add(m[captureIndex])
+  }
+  matchAllAt(EMBED_RE, 1)
+  // ALIASED_BLOCK_REF_RE: [label](((uid))) — group 1 is label, group 2 is uid.
+  matchAllAt(ALIASED_BLOCK_REF_RE, 2)
+  matchAllAt(BLOCK_REF_RE, 1)
+  return [...out]
+}
+
+interface BlockRefMatch {
+  start: number
+  end: number
+  replacement: string
+}
+
+// Resolve all `((uid))` / `{{embed: ((uid))}}` / `[label](((uid)))`
+// occurrences against the *source* string in a single pass, so the
+// resolved-UUID output of one rewrite isn't fed back into the next
+// rewrite (which would treat it as a fresh uid to look up). Returns
+// the rewrites as positioned slices the caller can stitch.
+const collectBlockRefRewrites = (
+  raw: string,
+  resolve: (roamUid: string) => string,
+): BlockRefMatch[] => {
+  const found: BlockRefMatch[] = []
+  const consumed: Array<[number, number]> = []
+
+  const overlapsConsumed = (start: number, end: number) =>
+    consumed.some(([s, e]) => start < e && end > s)
+
+  const collect = (re: RegExp, makeMatch: (m: RegExpExecArray) => BlockRefMatch) => {
+    re.lastIndex = 0
+    let m: RegExpExecArray | null
+    while ((m = re.exec(raw)) !== null) {
+      const match = makeMatch(m)
+      if (overlapsConsumed(match.start, match.end)) continue
+      found.push(match)
+      consumed.push([match.start, match.end])
+    }
+  }
+
+  // Embeds first — the most-specific shape wins so the inner `((uid))`
+  // isn't double-counted.
+  collect(EMBED_RE, m => ({
+    start: m.index,
+    end: m.index + m[0].length,
+    replacement: `!((${resolve(m[1])}))`,
+  }))
+  collect(ALIASED_BLOCK_REF_RE, m => ({
+    start: m.index,
+    end: m.index + m[0].length,
+    replacement: `[${m[1]}] ((${resolve(m[2])}))`,
+  }))
+  collect(BLOCK_REF_RE, m => ({
+    start: m.index,
+    end: m.index + m[0].length,
+    replacement: `((${resolve(m[1])}))`,
+  }))
+
+  return found.sort((a, b) => a.start - b.start)
+}
+
 export const rewriteRoamContent = (
   raw: string,
   uidMap: ReadonlyMap<string, string>,
@@ -57,24 +130,20 @@ export const rewriteRoamContent = (
     return roamUid
   }
 
-  let out = raw
+  // Stitch the block-ref rewrites in one pass over the source so each
+  // `((uid))` is resolved exactly once.
+  const rewrites = collectBlockRefRewrites(raw, resolve)
+  let out = ''
+  let cursor = 0
+  for (const r of rewrites) {
+    out += raw.slice(cursor, r.start) + r.replacement
+    cursor = r.end
+  }
+  out += raw.slice(cursor)
 
-  // 1. Embeds (must run before bare block refs)
-  out = out.replace(EMBED_RE, (_, roamUid: string) => `!((${resolve(roamUid)}))`)
-
-  // 2. Aliased block refs `[label](((uid)))`
-  out = out.replace(
-    ALIASED_BLOCK_REF_RE,
-    (_, label: string, roamUid: string) => `[${label}] ((${resolve(roamUid)}))`,
-  )
-
-  // 3. Bare block refs `((uid))`
-  out = out.replace(BLOCK_REF_RE, (_, roamUid: string) => `((${resolve(roamUid)}))`)
-
-  // 4. `#[[multi word]]` → `[[multi word]]`
+  // Tag rewrites operate on the post-block-ref string. They don't share
+  // syntax with the block-ref forms, so plain sequential replace is safe.
   out = out.replace(HASH_PAGE_RE, (_, lead: string, label: string) => `${lead}[[${label}]]`)
-
-  // 5. `#word` → `[[word]]` (URL-safe by lookbehind)
   out = out.replace(HASH_TAG_RE, (_, lead: string, label: string) => `${lead}[[${label}]]`)
 
   return {content: out, unresolvedBlockUids: [...unresolved]}

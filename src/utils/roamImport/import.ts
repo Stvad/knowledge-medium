@@ -48,7 +48,12 @@ export interface RoamImportSummary {
   blocksWritten: number
   aliasesResolved: number
   aliasBlocksCreated: number
-  unresolvedBlockUids: string[]
+  /**
+   * Empty stand-in blocks created for `((uid))` references whose target
+   * wasn't in this export. A future import that brings in the real
+   * blocks will upsert onto the same ids and replace the placeholder.
+   */
+  placeholdersCreated: number
   diagnostics: string[]
   durationMs: number
   dryRun: boolean
@@ -100,14 +105,30 @@ export const importRoam = async (
       blocksWritten: plan.descendants.length,
       aliasesResolved: aliasResolution.aliasIdMap.size,
       aliasBlocksCreated: aliasResolution.aliasBlocksCreated,
-      unresolvedBlockUids: [...plan.unresolvedBlockUids],
+      placeholdersCreated: plan.placeholders.length,
       diagnostics: plan.diagnostics,
       durationMs: Date.now() - start,
       dryRun: true,
     }
   }
 
-  // 4. Write descendants. Reparent direct children of merging pages.
+  // 4. Write placeholder stand-ins for content uids whose target isn't
+  //    in this export. Idempotent under deterministic ids — re-running
+  //    is a no-op, and a future import that contains the real block
+  //    upserts onto the same row.
+  for (const placeholder of plan.placeholders) {
+    if (await repo.exists(placeholder.blockId)) continue
+    repo.create({
+      id: placeholder.blockId,
+      workspaceId: options.workspaceId,
+      content: '',
+    })
+  }
+  if (plan.placeholders.length > 0) {
+    log(`Wrote ${plan.placeholders.length} placeholder blocks for unresolved refs`)
+  }
+
+  // 5. Write descendants. Reparent direct children of merging pages.
   for (const desc of plan.descendants) {
     const data = applyReparent(desc.data, reparentMap)
     repo.create(data)
@@ -146,7 +167,7 @@ export const importRoam = async (
     blocksWritten: plan.descendants.length,
     aliasesResolved: aliasResolution.aliasIdMap.size,
     aliasBlocksCreated: aliasResolution.aliasBlocksCreated,
-    unresolvedBlockUids: [...plan.unresolvedBlockUids],
+    placeholdersCreated: plan.placeholders.length,
     diagnostics: plan.diagnostics,
     durationMs: Date.now() - start,
     dryRun: false,
