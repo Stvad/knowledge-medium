@@ -24,7 +24,8 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - **v4.26: tombstone restore moved out of `tx.createOrGet`.** Primitive throws `DeletedConflictError` on tombstone, `DeterministicIdCrossWorkspaceError` on cross-workspace; v1 deterministic-id callers (`createAliasTargetInline`, Roam import upsert) handle restore via their own refresh policy. **Don't put silent restore back into the primitive.**
 > - **v4.27: split tx.update; typed restore primitive; afterCommit workspace-pin.** `BlockDataPatch` narrowed to `content | references | properties`. `tx.move(id, {parentId, orderKey})` is the only parent_id mutation entry point — closes the cycle-validation bypass at the type level. `tx.restore(id, patch?)` is the typed un-soft-delete primitive (replaces v4.26's uncompileable `tx.update({deleted: false, ...})` sketch). `tx.afterCommit` throws `WorkspaceNotPinnedError` if called before any write — keeps `CommittedEvent.workspaceId: string` honest.
 > - **v4.28: parent-validation extended to fresh inserts; `coarseScope.mutators` dropped.** `tx.create` and `tx.createOrGet`'s fresh-insert path run the same parent-validation as `tx.move` (`ParentNotFoundError` / `WorkspaceMismatchError` / `ParentDeletedError`); cycle check stays `tx.move`-only. `Query.coarseScope.mutators` removed (same v4.20 family — no `Dependency` kind matches mutator names).
-> - **v4.29: deleted-parent rule moved to engine prose; cycle-event payload + Mutator.reads simplified.** §4.1.1 prose now says the engine enforces `ParentDeletedError` on every primitive that takes a `parentId`; mutators may preflight for nicer errors. `repo.events.cycleDetected` payload reverts to `{ workspaceId, startIds, txIdsInvolved }` — operators enumerate cycle members via direct SQL per the §4.7 runbook (drops the v4.27 JS-side `findCycleMembers` walk; ~30 lines + per-step SELECTs we don't need for an event we already said we wouldn't auto-fix). `Mutator.reads` and `RepoTxOptions.reads` dropped (no defined contract; `tx.get` reads SQL via the writeTransaction directly, so cache preload didn't help anyway).
+> - **v4.29: deleted-parent rule moved to engine prose; cycle-event payload + Mutator.reads simplified.** `repo.events.cycleDetected` payload reverts to `{ workspaceId, startIds, txIdsInvolved }` — operators enumerate cycle members via direct SQL per the §4.7 runbook (drops the v4.27 JS-side `findCycleMembers` walk). `Mutator.reads` and `RepoTxOptions.reads` dropped (no defined contract; `tx.get` reads SQL via the writeTransaction directly, so cache preload didn't help anyway). The engine-prose-for-deleted-parent change is reverted in v4.30.
+> - **v4.30: drop engine-side parent-validation on fresh inserts; layered enforcement story.** Walking back v4.28 (and v4.29's prose alignment with it). The layered story now: engine validates **cycles** on `tx.move` only — load-bearing because FK/triggers can't structurally catch cycles. **Parent existence + same-workspace** are enforced by the local trigger and the server composite FK at the storage layer (lowest useful layer; covers every write made through `repo.tx`). **Soft-deleted-parent rejection** is a kernel mutator UX rule (`createChild`, `move`, `indent`, etc. throw `ParentDeletedError`) — it's a UX rule, not a storage invariant, so storage accepts soft-deleted parents per v4.24 alignment. `tx.create` / `tx.createOrGet` / `tx.move` are lower-level primitives — they may surface raw or translated `SQLITE_CONSTRAINT` errors when given a bad parent. Direct `repo.tx` callers and plugin mutators that skip the kernel mutator layer trade friendly errors for the freedom to skip it; that's the explicit cost of the lower-level surface. Removed: engine `ParentNotFoundError` / `ParentDeletedError` throws on creates and on `tx.move`'s non-cycle paths, the §10.4 sketch's `validateParentForInsert()` call, the v4.28 prose claiming engine is the load-bearing enforcement on every primitive. Also tightened §4.1.1: the local trigger gates on `tx_context.source IS NOT NULL` and so only protects writes made through `repo.tx`; it is **not** a safety net for raw out-of-band writes — those are forbidden by §4.2's discipline rule.
 >
 > **Resolved open questions:**
 > - **zod** for argsSchema (v4.10). Bundle weight + React-ecosystem familiarity beat Effect Schema; bidirectional encode/decode handled separately by `Codec<T>`. Valibot is a near-mechanical fallback if bundle pressure shows up later.
@@ -251,9 +252,9 @@ END;
 
 The `NOT EXISTS` predicate catches two failure modes in one check: dangling parent (id pointing to nothing) and cross-workspace parent. **It does NOT filter on `deleted = 0`** — the local trigger and the server-side composite FK both accept soft-deleted parents (v4.24 alignment). The previous version (v4.17) used `(SELECT workspace_id ...) IS NOT NULL AND != NEW.workspace_id`, which silently accepted dangling parents — the predicate evaluated to NULL and didn't ABORT. The `NOT EXISTS` form catches both.
 
-**Soft-deleted parents are accepted at the storage layer.** Tree queries filter `deleted = 0` so a child whose parent is soft-deleted is unreachable in tree views (its subtree doesn't render under the deleted parent), but the row exists. This is intentional: if a parent gets soft-deleted *after* its children exist, retroactively rejecting them would be worse than orphaning them. The "don't create new children under a soft-deleted parent" rule is enforced **in the TxEngine** at every primitive that takes a `parentId` (`tx.move`, `tx.create`, `tx.createOrGet`'s fresh-insert branch — see §4.7 Layer 1 v4.28), throwing `ParentDeletedError`. Kernel mutators (`createChild`, `move`, `indent`, etc.) may preflight the same check for nicer error messages, but the engine is the load-bearing enforcement point so plugin mutators and direct `repo.tx` bodies can't bypass it.
+**Soft-deleted parents are accepted at the storage layer.** Tree queries filter `deleted = 0` so a child whose parent is soft-deleted is unreachable in tree views (its subtree doesn't render under the deleted parent), but the row exists. This is intentional: if a parent gets soft-deleted *after* its children exist, retroactively rejecting them would be worse than orphaning them. The "don't create new children under a soft-deleted parent" rule lives at the **kernel mutator layer** — `createChild`, `move`, `indent`, `outdent`, `insertChildren`, etc. preflight the parent's `deleted` flag and throw `ParentDeletedError`. The Tx primitives themselves don't enforce it: `tx.create` / `tx.createOrGet` / `tx.move` are lower-level surfaces, and a direct `repo.tx` body or plugin mutator that bypasses the kernel layer accepts the looser contract that goes with it. This is a UX rule, not a storage invariant — the storage layer (local trigger + server FK) accepts soft-deleted parents.
 
-**Why client/server alignment matters here**: pre-v4.24, the local trigger had `AND deleted = 0` while the server FK didn't, so a server-accepted child whose parent had been soft-deleted (race: client A creates child while client B soft-deletes parent; both writes survive sync) would land locally — bypassing the local trigger via the `source IS NOT NULL` gate — and disagree with what fresh local writes were allowed. Dropping the local rule keeps local and remote state-acceptance consistent; v4.28 then moved the user-experience rule into the engine primitives so the same protection now applies to all callers, not just kernel mutators.
+**Why client/server alignment matters here**: pre-v4.24, the local trigger had `AND deleted = 0` while the server FK didn't, so a server-accepted child whose parent had been soft-deleted (race: client A creates child while client B soft-deletes parent; both writes survive sync) would land locally — bypassing the local trigger via the `source IS NOT NULL` gate — and disagree with what fresh local writes were allowed. Dropping the local rule keeps local and remote state-acceptance consistent. The user-experience rule (no fresh children under tombstones) lives in kernel mutators; the storage layer is uniform across both code paths.
 
 **The `source IS NOT NULL` gate is load-bearing**: sync-applied writes leave `tx_context.source = NULL` (no `repo.tx` is open during PowerSync's CRUD apply, per §4.2). Without the gate, the local trigger would abort sync-applied cross-workspace edges before row_events could record them, leaving PowerSync stuck retrying valid syncs. With the gate, sync writes land locally as the server already validated them (see Postgres enforcement below).
 
@@ -270,9 +271,15 @@ CREATE TABLE blocks (
 );
 ```
 
-The composite FK guarantees both that `parent_id` exists *and* that the parent shares `workspace_id` — `parent_id IS NULL` satisfies the FK trivially. This is the load-bearing guarantee: a malicious or buggy client cannot produce cross-workspace edges that survive sync. Soft-delete (parent's `deleted = 1`) is allowed by the FK *and by the local trigger* (v4.24 alignment); the "don't create new children under a soft-deleted parent" rule lives in mutator-level validation only — better error messages there, and the storage layer doesn't care.
+The composite FK guarantees both that `parent_id` exists *and* that the parent shares `workspace_id` — `parent_id IS NULL` satisfies the FK trivially. This is the load-bearing guarantee: a malicious or buggy client cannot produce cross-workspace edges that survive sync. Soft-delete (parent's `deleted = 1`) is allowed by the FK *and by the local trigger* (v4.24 alignment); the "don't create new children under a soft-deleted parent" rule lives at the kernel mutator layer.
 
-**Mutator-level preflight** is the better-error-message layer: kernel mutators may preflight the engine's parent-validation rules to surface `ParentNotFoundError` / `WorkspaceMismatchError` / `ParentDeletedError` with caller-friendly context before the engine throws them. The engine's checks (§4.7 Layer 1, v4.28) are the load-bearing enforcement: every primitive that takes a `parentId` runs them, regardless of whether the caller is a kernel mutator, a plugin mutator, a domain helper, or a direct `repo.tx` body. The local trigger is the workspace/existence safety net for raw SQL paths the engine can't intercept. Cycle validation lives in the engine on `tx.move`.
+**Layered enforcement** (v4.30):
+
+- **Engine**: cycle validation on `tx.move` only (load-bearing — FK/triggers can't structurally catch cycles).
+- **Storage triggers + server FK**: parent existence + same-workspace, on every local write made through `repo.tx`. Lowest useful layer — fires uniformly across `tx.create`, `tx.createOrGet`, `tx.move`, regardless of whether the caller is a kernel mutator, plugin mutator, domain helper, or direct `repo.tx` body. A bad parent surfaces as a translated `ParentNotFoundError` / `WorkspaceMismatchError` (engine catches the constraint failure and rethrows the typed error) or a raw `SQLITE_CONSTRAINT` if the engine doesn't translate.
+- **Kernel mutators**: friendly error messages and the soft-deleted-parent UX rule. Mutators preflight existence + workspace + not-soft-deleted before issuing the write so users get `ParentNotFoundError` / `WorkspaceMismatchError` / `ParentDeletedError` with caller-friendly context. **Plugin mutators and direct `repo.tx` bodies that skip the kernel layer don't get the soft-deleted-parent rule** — that's the explicit cost of using the lower-level surface.
+
+**The local trigger is not a safety net for raw out-of-band writes.** It gates on `tx_context.source IS NOT NULL`, so it only fires for writes made through `repo.tx` (which sets the source). Sync-applied writes intentionally bypass it (server FK already validated them). Anything else — a stray direct `db.execute` outside `repo.tx`, for instance — leaves `source = NULL`, is treated by the trigger like a sync apply, and bypasses the existence/workspace check. v1's discipline rule (§4.2) forbids this third write path; if it ever becomes necessary, the helper that introduces it must set/clear `tx_context` itself.
 
 **No sync-time workspace repair.** v4.17 had the row_events tail detecting cross-workspace edges and demoting them via a repair pattern. With the server-side composite FK, cross-workspace edges cannot survive sync — they're rejected at the server boundary. The depth-100 CTE guards (§4.7 Layer 2) keep queries finite if this assumption ever breaks (e.g. a server-side migration drops the FK accidentally), but the recovery path is "fix the server constraint," not "client-side repair."
 
@@ -466,7 +473,7 @@ END;
 
 `row_events` writers are a **separate set of three triggers** (INSERT/UPDATE/DELETE), each appending a row to `row_events` with `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`. The DELETE row_events writer exists for audit (recording any future hard-purge) — it does not forward to `powersync_crud`.
 
-Total v1 trigger count on `blocks`: **7** = 5 audit/upload (3 row_events writers + 2 upload-routing) + 2 workspace-invariant (BEFORE INSERT and BEFORE UPDATE OF parent_id, workspace_id; defined in §4.1.1). The audit/upload triggers are AFTER, gate on `tx_context.source`, and run for both local and sync writes (the sync case COALESCEs to 'sync'). The workspace-invariant triggers are BEFORE, gate on `source IS NOT NULL` (local writes only), and serve as the safety net for the §4.1.1 client-side rule.
+Total v1 trigger count on `blocks`: **7** = 5 audit/upload (3 row_events writers + 2 upload-routing) + 2 workspace-invariant (BEFORE INSERT and BEFORE UPDATE OF parent_id, workspace_id; defined in §4.1.1). The audit/upload triggers are AFTER, gate on `tx_context.source`, and run for both local and sync writes (the sync case COALESCEs to 'sync'). The workspace-invariant triggers are BEFORE, gate on `source IS NOT NULL` (local writes only), and are the storage-layer enforcement of parent-existence + same-workspace on writes made through `repo.tx` (§4.1.1, §4.7 Layer 1 v4.30).
 
 ### 4.6 PowerSync sync-config
 
@@ -480,16 +487,16 @@ Total v1 trigger count on `blocks`: **7** = 5 audit/upload (3 row_events writers
 
 Two layers of defense + one observability hook:
 
-**Layer 1 — Engine-side validation on every primitive that takes a `parentId`.** v4.27 narrows the public Tx surface so `tx.update`'s patch type can no longer carry `parentId` or `orderKey` (they're not in `BlockDataPatch`). All structural moves go through `tx.move(id, { parentId, orderKey })`. Fresh inserts (`tx.create`, `tx.createOrGet`) take `parentId` as part of the input. The engine runs the **same parent-validation rules** uniformly on all three primitive paths so no caller can bypass them, regardless of whether they go through a kernel mutator, a plugin mutator, a domain helper, or a direct `repo.tx` body:
+**Layer 1 — Engine-side cycle validation on `tx.move`.** v4.27 narrows the public Tx surface so `tx.update`'s patch type can no longer carry `parentId` or `orderKey`. All structural moves go through `tx.move(id, { parentId, orderKey })`. Inside `tx.move`, the engine runs `isDescendantOf(target.parentId, id)` (§11.3) before issuing the UPDATE — would the new parent be a descendant of `id`? If yes, throw `CycleError`. This is the only check the engine runs at the primitive level on parent_id mutation; FK and triggers can't structurally catch cycles, so the engine is load-bearing here.
 
-- **Parent existence**: `parentId` (when non-null) must point to an existing row; throw `ParentNotFoundError`.
-- **Workspace consistency**: parent's `workspace_id` must match the row's `workspace_id` (for `tx.move`, the row being moved; for `tx.create` / `tx.createOrGet`, the input `data.workspaceId`); throw `WorkspaceMismatchError`.
-- **Soft-deleted parent**: throw `ParentDeletedError` if `parentId` points to a soft-deleted row (UX layer — storage accepts it per §4.1.1 alignment, but the engine refuses to *create* state under a tombstone since that would orphan the new row in tree views).
-- **Cycle validation** (`tx.move` only): `isDescendantOf(target.parentId, id)` query (§11.3) — would the new parent be a descendant of `id`? If yes, throw `CycleError`. Fresh inserts skip this check because a brand-new id has no descendants — the proposed parent is trivially not a descendant of it.
+**Other parent-validation lives outside the engine, by deliberate layering** (v4.30):
 
-Why engine-side and uniform across primitives (v4.28): kernel mutators (`move`, `indent`, `outdent`, `createChild`, `insertChildren`) could enforce these themselves, but the only way to *guarantee* no plugin mutator or direct `repo.tx` body bypasses them is to make the engine the enforcement point at every primitive that accepts a `parentId`. Pre-v4.28 the engine ran these checks only on `tx.move`, so `tx.create({ parentId: someDeletedId, ... })` from a plugin or direct `repo.tx` body would land a fresh live row under a tombstone — bypassing the same protection `tx.move` centralizes. v4.28 closes that hole: the existence + workspace + soft-deleted-parent checks fire identically for `tx.create`, `tx.createOrGet`'s fresh-insert branch, and `tx.move`. Cycle validation is the only one that's structurally `tx.move`-only.
+- **Parent existence + same-workspace**: storage layer. The local trigger (`BEFORE INSERT` / `BEFORE UPDATE OF parent_id, workspace_id`, gated on `tx_context.source IS NOT NULL`) and the server composite FK on `(workspace_id, parent_id) → blocks (workspace_id, id)` enforce both invariants. Both fire for `tx.move`, `tx.create`, and `tx.createOrGet` writes made through `repo.tx`; the server FK is the canonical guarantee for sync. Lowest useful layer.
+- **Soft-deleted-parent rejection**: kernel mutator UX rule. `createChild`, `move`, `indent`, `outdent`, `insertChildren` preflight the parent's `deleted` flag and throw `ParentDeletedError`. The storage layer accepts soft-deleted parents per §4.1.1 alignment — this is intentional; soft-deleted-parent is a UX rule, not a storage invariant.
+- **Plugin mutators and direct `repo.tx` bodies that skip the kernel layer** trade the friendly errors and the soft-deleted-parent check for the freedom to skip them. That's the explicit cost of using the lower-level surface.
+- **Fresh inserts skip cycle validation by construction** — a brand-new id has no descendants, so the proposed parent is trivially not a descendant of it.
 
-The `tx.restore(id, patch?)` primitive (v4.27) doesn't accept `parentId` — its patch is the same `BlockDataPatch` (data fields only). Domain helpers that need to restore-and-move call `tx.restore(id)` + `tx.move(id, target)` as separate primitive calls in the same tx; the move's checks fire there.
+The `tx.restore(id, patch?)` primitive (v4.27) doesn't accept `parentId` — its patch is the same `BlockDataPatch` (data fields only). Domain helpers that need to restore-and-move call `tx.restore(id)` + `tx.move(id, target)` as separate primitive calls in the same tx; cycle validation fires on the move.
 
 **Layer 2 — CTE guards (depth + visited-id).** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries two guards: a `depth < 100` defensive cap, and a visited-id check via path-INSTR (§11.1) that skips any row whose id already appears in the recursion path-so-far. Even if a sync-applied cycle slips through Layer 1, the visited-id guard truncates the cyclic subtree at the cycle entry — each block appears at most once in the result, no UNION-ALL duplicate explosion — and the depth guard is the additional safety net for any pathological non-cycle deep tree (a 200-level deep, non-cyclic tree gets capped, but that's an extreme corner case). The result is a clean, finite tree the UI can render. The truncation itself is silent in the result shape — `Handle<BlockData[]>` does not carry per-edge "cycle here" metadata; surfacing the cycle in-UI would require a parallel result channel that we're not building for this rare case. Operators learn cycles happened from the `repo.events.cycleDetected` log (next paragraph).
 
@@ -686,11 +693,13 @@ export interface Tx {
   // ──── Lifecycle ────
   /** Insert a new block. Throws `DuplicateIdError` on PK conflict.
    *
-   *  When `data.parentId` is non-null, engine runs the same parent-validation
-   *  rules as `tx.move` (see §4.7 Layer 1) — `ParentNotFoundError` if the parent
-   *  doesn't exist, `WorkspaceMismatchError` if it's in a different workspace,
-   *  `ParentDeletedError` if it's soft-deleted. (Cycle validation skipped: the
-   *  new id has no descendants, so the proposed parent is trivially not one.) */
+   *  Parent validation is layered (see §4.7 Layer 1 v4.30): parent existence
+   *  and same-workspace are enforced at the storage layer (local trigger +
+   *  server FK) and surface as a translated `ParentNotFoundError` /
+   *  `WorkspaceMismatchError` (or a raw `SQLITE_CONSTRAINT` if untranslated);
+   *  soft-deleted-parent rejection is a kernel mutator UX rule and does NOT
+   *  fire on raw `tx.create` calls; cycle validation is skipped by
+   *  construction (a fresh id has no descendants). */
   create(data: NewBlockData, opts?: TxWriteOpts): string
 
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
@@ -700,9 +709,9 @@ export interface Tx {
    *  - Engine SELECTs the existing row first (same `before` capture §10 step 3
    *    runs for any first-touch id), then:
    *    1. **Missing** → INSERT, returns `{ id, inserted: true }`. Snapshot
-   *       `(null, after)`. Same parent-validation rules as `tx.create` apply on
-   *       the fresh-insert path (`ParentNotFoundError` / `WorkspaceMismatchError`
-   *       / `ParentDeletedError` per §4.7 Layer 1).
+   *       `(null, after)`. Parent validation comes from the storage layer +
+   *       kernel mutators per §4.7 Layer 1 v4.30; the primitive itself doesn't
+   *       validate `parentId`.
    *    2. **Exists, different workspace** → throws
    *       `DeterministicIdCrossWorkspaceError`. Defensive correctness guard,
    *       not a policy decision (a deterministic id resolving to a row in
@@ -760,19 +769,19 @@ export interface Tx {
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): void
 
   // ──── Tree moves (structural) ────
-  /** Move a row to a new (parentId, orderKey) target. Engine runs all the
-   *  checks in one place:
-   *  - **Cycle validation**: throws `CycleError` if target.parentId is a
-   *    descendant of `id` (§4.7 Layer 1). v4.27 makes this the single entry
-   *    point for parent_id mutation, so plugin/direct-`repo.tx` callers
-   *    can't bypass.
-   *  - **Workspace consistency**: throws `WorkspaceMismatchError` if
-   *    target.parentId points to a row in a different workspace_id.
-   *  - **Parent existence**: throws `ParentNotFoundError` if target.parentId
-   *    is non-null and the row doesn't exist.
-   *  - **Soft-deleted parent**: throws `ParentDeletedError` if target.parentId
-   *    points to a soft-deleted row (UX layer; storage layer accepts it per
-   *    v4.24 alignment).
+  /** Move a row to a new (parentId, orderKey) target. The engine runs **cycle
+   *  validation here and only here**: `isDescendantOf(target.parentId, id)`
+   *  throws `CycleError` if the new parent would be a descendant of `id`
+   *  (§4.7 Layer 1). FK and triggers can't structurally catch cycles, so the
+   *  engine is load-bearing for this check. v4.27 makes `tx.move` the single
+   *  entry point for parent_id mutation, so callers can't bypass cycle checks.
+   *
+   *  Other parent-validation comes from elsewhere by deliberate layering
+   *  (v4.30): existence + same-workspace are enforced by the storage layer
+   *  (local trigger + server FK; constraint failures surface as translated
+   *  `ParentNotFoundError` / `WorkspaceMismatchError`); soft-deleted-parent
+   *  rejection (`ParentDeletedError`) is a kernel mutator UX rule and does
+   *  NOT fire on raw `tx.move` calls.
    *
    *  `target.parentId = null` re-roots the row (workspace root). The engine
    *  bumps updated_at / updated_by automatically unless `opts.skipMetadata`. */
@@ -1523,11 +1532,13 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │          inserted:false.                                       │
 │        - tx.move: SELECT existing row (= `before`); run        │
 │          isDescendantOf(target.parentId, id) — throw           │
-│          CycleError if positive (§4.7 Layer 1); validate       │
-│          parent exists / shares workspace / not soft-deleted   │
-│          (UX); UPDATE parent_id, order_key; snapshot           │
-│          before→after; emits row_events with old+new           │
-│          parent_id (parent-edge invalidation, §9.2).           │
+│          CycleError if positive (§4.7 Layer 1; cycle is the    │
+│          only engine-enforced check on parent_id mutation —    │
+│          existence + workspace come from storage triggers/FK,  │
+│          soft-deleted-parent is a kernel-mutator UX rule).     │
+│          UPDATE parent_id, order_key; snapshot before→after;   │
+│          emits row_events with old+new parent_id (parent-edge  │
+│          invalidation, §9.2).                                  │
 │        - tx.restore: SELECT existing row; throw                │
 │          BlockNotFoundError if missing or NotDeletedError if   │
 │          already live (deleted=0); UPDATE deleted=0 + apply    │
@@ -1611,10 +1622,11 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 const before = await txDb.get('SELECT * FROM blocks WHERE id = ?', [id])
 
 if (before === undefined) {
-  // Fresh insert. Run the same parent-validation as tx.create / tx.move
-  // (§4.7 Layer 1 v4.28): existence + workspace + not-soft-deleted. Cycle
-  // validation skipped — a fresh id has no descendants.
-  await validateParentForInsert(txDb, input.parentId, input.workspaceId)
+  // Fresh insert. The primitive itself does not parent-validate (§4.7 Layer 1
+  // v4.30); the local trigger + server FK enforce existence + same-workspace,
+  // surfacing as a translated ParentNotFoundError / WorkspaceMismatchError if
+  // the INSERT violates either. Soft-deleted-parent is a kernel mutator UX
+  // rule and does not fire here.
   await txDb.run('INSERT INTO blocks (id, workspace_id, ...) VALUES (?, ?, ...)', [...])
   // Snapshot: (null, after-from-input). Cache updated on commit walk.
   return { id, inserted: true }
@@ -1867,8 +1879,8 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus **seven triggers**: 5 audit/upload (3 row_events writers for INSERT/UPDATE/DELETE + 2 upload-routing for INSERT/UPDATE only — DELETE upload routing is intentionally omitted in v1; see §4.5) and 2 workspace-invariant (BEFORE INSERT and BEFORE UPDATE OF parent_id, workspace_id; defined in §4.1.1; gate on local writes via `source IS NOT NULL`). The audit/upload trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
 - PowerSync sync-config matches the new `blocks` shape. `tx_context`, `row_events`, `command_events` are not declared in sync-config (they don't sync; they're local-only).
 - **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE handles tagging and the equality test on `'user'` correctly excludes sync writes from the upload trigger. Don't try to hook PowerSync's CRUD-apply path.
-- New `repo.tx(fn, opts)` on `db.writeTransaction`. Tx primitives per §5.3 v4.27: `tx.get` (async), `tx.peek` (sync), `tx.create`, `tx.createOrGet` (throws `DeletedConflictError` / `DeterministicIdCrossWorkspaceError` per §10.4), `tx.update` (data fields only — no parentId/orderKey/workspaceId/deleted), `tx.delete` (soft-delete), `tx.restore` (typed un-soft-delete + optional patch), `tx.move` (the only entry point for parent_id mutation; runs cycle/workspace/parent checks centrally), `tx.setProperty` / `tx.getProperty` (codec'd), `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
-- Engine enforces v4.27 / v4.28 invariants at the primitive level: cycle validation in `tx.move` (§4.7 Layer 1, throws `CycleError`); parent-validation on every primitive that takes a `parentId` (`tx.move`, `tx.create`, `tx.createOrGet` fresh path) — `ParentNotFoundError` / `WorkspaceMismatchError` / `ParentDeletedError` (§4.7 v4.28); single-workspace per tx (§5.3, throws `WorkspaceMismatchError`); workspace-pin guard in `tx.createOrGet`'s conflict branch (throws `DeterministicIdCrossWorkspaceError`); `tx.afterCommit` requires a workspace to be pinned by a prior write (throws `WorkspaceNotPinnedError` otherwise).
+- New `repo.tx(fn, opts)` on `db.writeTransaction`. Tx primitives per §5.3 v4.27: `tx.get` (async), `tx.peek` (sync), `tx.create`, `tx.createOrGet` (throws `DeletedConflictError` / `DeterministicIdCrossWorkspaceError` per §10.4), `tx.update` (data fields only — no parentId/orderKey/workspaceId/deleted), `tx.delete` (soft-delete), `tx.restore` (typed un-soft-delete + optional patch), `tx.move` (the only entry point for parent_id mutation; runs the engine cycle check), `tx.setProperty` / `tx.getProperty` (codec'd), `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
+- Engine enforces v4.27 / v4.30 invariants at the primitive level: cycle validation in `tx.move` (§4.7 Layer 1, throws `CycleError`); single-workspace per tx (§5.3, throws `WorkspaceMismatchError`); workspace-pin guard in `tx.createOrGet`'s conflict branch (throws `DeterministicIdCrossWorkspaceError`); `tx.afterCommit` requires a workspace to be pinned by a prior write (throws `WorkspaceNotPinnedError` otherwise). Parent existence + same-workspace are storage-layer (local trigger + server FK; §4.1.1); soft-deleted-parent rejection is a kernel mutator UX rule (§4.7 Layer 1 v4.30).
 - `BlockData` type updated: no `childIds` field.
 - `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
 - Properties stored flat: domain `BlockData.properties` is `Record<string, unknown>` (codec-encoded values), corresponding to the `properties_json` column. Property descriptors live as plain `xxxProp` exports for now (facet wrapping in Phase 3).
@@ -2156,8 +2168,8 @@ The acceptance criteria below describe properties of the **current spec state**.
 
 - [ ] **Schema and triggers**: server schema is just `blocks` (§4.1); client adds `tx_context` / `row_events` / `command_events` plus seven triggers (5 audit/upload + 2 workspace-invariant, §4.5 + §4.1.1, §13.1 acceptance). Sync-applied writes leave `tx_context.source = NULL`; row_events COALESCEs to `'sync'`; upload-routing triggers gate on `= 'user'` so sync writes don't loop. No PowerSync sync-apply wrapper.
 - [ ] **Tx primitives** (§5.3, §10 pipeline): write-through to SQL inline, no staged write-set. Engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Cache is mutated only on commit walk (step 6). `tx.peek` reads snapshots-then-cache. `tx.get` / `tx.childrenOf` / `tx.parentOf` read SQL via the writeTransaction. The Tx surface is split into narrow primitives (v4.27): `tx.update` is data-fields-only (`content` / `references` / `properties`); `tx.move` is the single parent_id mutation entry point; `tx.delete` / `tx.restore` are the lifecycle primitives; `tx.create` / `tx.createOrGet` cover insert. `tx.createOrGet` is SELECT-then-branch with three terminal outcomes (insert / live-hit / throw `DeletedConflictError` or `DeterministicIdCrossWorkspaceError`); restore-on-tombstone is the domain helpers' job via `tx.restore` (`createAliasTargetInline` in §7, Roam import upsert in §13.1).
-- [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side parent-validation on every primitive that takes a `parentId` (`tx.move`, `tx.create`, `tx.createOrGet`'s fresh-insert branch — see §4.7, v4.28 update). Cycle check (`isDescendantOf`) fires on `tx.move` only; existence + workspace + soft-deleted-parent checks fire uniformly across all three. `tx.update`'s patch type doesn't carry `parentId` so it can't bypass; covers kernel mutators, plugin mutators, domain helpers, and direct `repo.tx` bodies the same way. Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` with `{ workspaceId, startIds, txIdsInvolved }` (operators enumerate members via direct SQL — see §4.7 runbook); no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
-- [ ] **Workspace invariants**: server-side composite FK enforces `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1). Local trigger enforces parent-existence + same-workspace for fresh local writes; **does not** filter on `deleted = 0` (aligns with server). TxEngine runs `ParentNotFoundError` / `WorkspaceMismatchError` / `ParentDeletedError` checks on every primitive that takes a `parentId` (`tx.move`, `tx.create`, `tx.createOrGet` fresh path) — load-bearing across all callers, kernel mutators may preflight for nicer errors. Engine pins `meta.workspaceId` from first write and throws `WorkspaceMismatchError` on cross-workspace writes inside one tx (§5.3, §15 #11).
+- [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side cycle validation on `tx.move` only (`isDescendantOf` check, throws `CycleError`); FK/triggers can't catch cycles structurally so the engine is load-bearing here. `tx.update`'s patch type doesn't carry `parentId` so it can't bypass; cycle is checked on every parent_id mutation regardless of caller (kernel mutator, plugin mutator, domain helper, or direct `repo.tx`). Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` with `{ workspaceId, startIds, txIdsInvolved }` (operators enumerate members via direct SQL — see §4.7 runbook); no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
+- [ ] **Workspace invariants** (v4.30 layered story): server-side composite FK enforces `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1) — canonical guarantee for sync. Local trigger enforces parent-existence + same-workspace for local writes made through `repo.tx` (gated on `tx_context.source IS NOT NULL`); **does not** filter on `deleted = 0` (aligns with server). The Tx primitives don't re-validate parent-existence/workspace — those land as translated `ParentNotFoundError` / `WorkspaceMismatchError` from the trigger/FK. Soft-deleted-parent rejection (`ParentDeletedError`) lives in kernel mutators only (UX rule, not storage invariant). Engine pins `meta.workspaceId` from first write and throws `WorkspaceMismatchError` on cross-workspace writes inside one tx (§5.3, §15 #11).
 - [ ] **Tree CTEs in Phase 1** (§13.1): `SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL` ship from day one with depth-100 + `!hex/` visited-id guards. Phase 5 shrinks to queriesFacet packaging + a 1000-block benchmark.
 - [ ] **Reactivity** (§9): two-source handle invalidation (TxEngine fast path + row_events tail filtered to `source = 'sync'`); parent-edge dependencies for tree handles; children-completeness markers + `ChildrenNotLoadedError` for the sync `Block` facade (§5.2).
 - [ ] **Reference parsing** (§7): follow-up processor watching `blocks.content` field-writes; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` for the orphan cleanup; cleanup-eligibility filter at schedule time uses the helper's `inserted` boolean (covers fresh-insert AND tombstone-restore via `createAliasTargetInline`'s try/catch). Date-shaped alias-target ids are exempted from cleanup. `[[Inbox]]`-into-existing-page race (§7.5) does not delete pre-existing pages.
