@@ -1,8 +1,13 @@
 import { Extension } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorView, keymap } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
-import { createBacklinkAutocomplete } from './backlinkAutocomplete'
+import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
+import { backlinkCompletionSource } from './backlinkAutocomplete'
+import {
+  blockrefCompletionSource,
+  type BlockSearchHit,
+} from './blockrefAutocomplete'
 
 const mdNoQuoteClose = markdownLanguage.data.of({
   closeBrackets: {
@@ -11,9 +16,14 @@ const mdNoQuoteClose = markdownLanguage.data.of({
   }
 });
 
-export const createMinimalMarkdownConfig = (backlinkOptions?: {
+export interface AutocompleteOptions {
   getAliases: (filter: string) => Promise<string[]>
-}): Extension[] => {
+  searchBlocks: (filter: string) => Promise<BlockSearchHit[]>
+}
+
+export const createMinimalMarkdownConfig = (
+  autocompleteOptions?: AutocompleteOptions,
+): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
     mdNoQuoteClose,
@@ -42,9 +52,20 @@ export const createMinimalMarkdownConfig = (backlinkOptions?: {
     EditorView.lineWrapping,
   ]
 
-  // Add backlink autocomplete if options provided
-  if (backlinkOptions) {
-    extensions.push(createBacklinkAutocomplete(backlinkOptions))
+  // Wikilink-by-alias and block-ref-by-content share one autocompletion
+  // instance — the sources are mutually exclusive in practice (`[[` vs `((`)
+  // so the runtime picks whichever matches the cursor position.
+  if (autocompleteOptions) {
+    extensions.push(
+      autocompletion({
+        override: [
+          backlinkCompletionSource({getAliases: autocompleteOptions.getAliases}),
+          blockrefCompletionSource({searchBlocks: autocompleteOptions.searchBlocks}),
+        ],
+        defaultKeymap: false,
+      }),
+      keymap.of(completionKeymap.map(it => ({...it, stopPropagation: true}))),
+    )
   }
 
   return extensions

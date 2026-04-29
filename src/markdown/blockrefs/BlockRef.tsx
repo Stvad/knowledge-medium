@@ -1,5 +1,6 @@
-import { MouseEvent } from 'react'
+import { Fragment, MouseEvent, ReactNode } from 'react'
 import Markdown from 'react-markdown'
+import type { Components } from 'react-markdown'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
 import { useContent, useData } from '@/hooks/block'
@@ -7,6 +8,14 @@ import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
 import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
+
+// Force the inner Markdown render to stay inline — block-level elements
+// (paragraph, lists, headings) inside a ref span would break flow with the
+// surrounding text. Block-level wrappers collapse to fragments; their
+// children still get the configured remark/components treatment.
+const inlineComponents: Components = {
+  p: ({children}: {children?: ReactNode}) => <Fragment>{children}</Fragment>,
+}
 
 export function BlockRef({blockId}: {blockId: string}) {
   const repo = useRepo()
@@ -39,11 +48,20 @@ export function BlockRef({blockId}: {blockId: string}) {
   }
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
-  const markdownConfig = resolveMarkdownConfig({block: target, blockContext: {panelId}})
+  const baseConfig = resolveMarkdownConfig({block: target, blockContext: {panelId}})
+  const markdownConfig = {
+    ...baseConfig,
+    components: {...baseConfig.components, ...inlineComponents},
+  }
 
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
-      <a href={href} className="blockref" data-block-id={blockId} onClick={onClick}>
+      <a
+        href={href}
+        className="blockref text-inherit no-underline cursor-pointer rounded-sm px-0.5 hover:bg-muted/60"
+        data-block-id={blockId}
+        onClick={onClick}
+      >
         <Markdown
           remarkPlugins={markdownConfig.remarkPlugins}
           components={markdownConfig.components}

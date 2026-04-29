@@ -35,9 +35,25 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
     }
   }, [repo])
 
+  const searchBlocksForAutocomplete = useMemo(() => {
+    return async (filter: string) => {
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId) return []
+      // Cap at 12 — autocompletion popovers stop being useful after that and
+      // a wider scan just hurts perceived latency on every keystroke.
+      const blocks = await repo.searchBlocksByContent(workspaceId, filter, 12)
+      const hits = await Promise.all(blocks.map(async b => {
+        const data = await b.data()
+        return data ? {id: data.id, content: data.content} : null
+      }))
+      return hits.filter((h): h is {id: string, content: string} => h !== null)
+    }
+  }, [repo])
+
   const extensions = useMemo(() => createMinimalMarkdownConfig({
-    getAliases: getAliasesForAutocomplete
-  }), [getAliasesForAutocomplete])
+    getAliases: getAliasesForAutocomplete,
+    searchBlocks: searchBlocksForAutocomplete,
+  }), [getAliasesForAutocomplete, searchBlocksForAutocomplete])
 
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
 
