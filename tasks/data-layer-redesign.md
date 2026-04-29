@@ -47,12 +47,19 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Atomicity prose updated** to match: steps 1–9 are atomic (commit-or-rollback together); steps 10–13 happen post-COMMIT but before promise resolution; step 14 is fire-and-after.
 >   - **Repair scope under read-only / RLS** (§5.8.1, new). Repair source is conditional on `repo.isReadOnly`: writable clients upload (`source = 'user'`); read-only clients run local-only (`source = 'local-ephemeral'`). The fix propagates via writable peers; read-only peers eventually receive the authoritative fix via sync, which converges with their local-ephemeral repair (same loser, same value, idempotent). Avoids the rejected-upload loop that pure "Repair always uploads" would create for read-only clients. The Repair row in the scope-semantics matrix changed to "Uploads? conditional — see §5.8.1".
 >   - **`onConflict: 'ignore'` same-tx detection clarified as unavailable** (§10.4). The earlier text suggested checking via `tx.get` after create, but `tx.get` returns the staged row inside a tx, not the live one — same-tx insertion detection is genuinely impossible without a different primitive. Documented the limitation explicitly; recorded `tx.createOrGet` as the future API if a use case ever needs it. `core.createAliasTarget` doesn't need this; v1 ships without it.
-> - v4.9 (this): round-9 fixes.
+> - v4.9: round-9 fixes.
 >   - **Alias cleanup gains a row_events insertion gate** (§7 mapping table + new §7.5). v4.8 said same-tx insertion detection is unavailable, but `core.cleanupOrphanAliases` needs to know whether the originating parseReferences tx actually inserted the alias-target row — otherwise a deterministic-id race (concurrent typing of `[[Inbox]]` against an existing Inbox page) lets cleanup delete an unrelated existing page when the user removes their text within 4s. Resolved by querying `row_events` post-commit: cleanup checks `tx_id = originatingTxId AND block_id = id AND kind = 'create'` before deleting. The "no references" check is also retained as the second gate. Test coverage requires both the new-alias and pre-existing-page paths.
 >   - **Repair source per-workspace, not blanket `isReadOnly`** (§5.8.1). The TxEngine consults `repo.canWrite(workspaceId)` per Repair-scoped tx (the workspace of the loser block); upload IFF writable, local-only otherwise. For multi-workspace permission setups, repair won't try to upload to workspaces the user can't write — avoiding the rejected-upload loop. v1's single-workspace common case still degrades cleanly to `!repo.isReadOnly`. The scope-semantics matrix Repair row updated to reference `repo.canWrite(workspaceId)`.
 >   - **Stage 2 dynamic discovery has a transitional path for Phases 1-3** (§8). `findExtensionBlocks` is a Phase-4 query (registered to `queriesFacet`), but dynamic plugins exist before Phase 4. Stage 2 calls a `findExtensionBlocksLegacy(repo)` helper using today's existing dynamic-renderer SQL discovery; Phase 4 wraps the same SQL into a queriesFacet contribution. No behavior change at the switchover.
 >   - **`BlockData` shape standardized to camelCase** (new §4.1.1). Examples mixed `parent_id`/`parentId`, `properties_json`/`properties`, `references_json`/`references`. Defined the public TS shape (camelCase) versus storage shape (snake_case JSON columns) explicitly, and which boundary translates between them (`parseBlockRow` / `blockToRow` in `src/data/blockSchema.ts`). All TS examples in the spec now use camelCase domain shape (cycle repair: `{ parentId: null }`; reference parsing: `{ references: ids }`). Storage-shape language reserved for SQL DDL, triggers, and internal storage descriptions.
 >   - **§4.5 trigger prose aligned with v1 trigger set**: 2 upload-routing triggers (INSERT/UPDATE) + 3 row_events writers (INSERT/UPDATE/DELETE) = 5 total. The old "INSERT/UPDATE-split pattern is used for the row_events triggers" wording was wrong — row_events has all three; only upload-routing skips DELETE.
+> - v4.10 (this): user feedback round.
+>   - **Phase 1 spins up a new Supabase project** via `supabase` CLI, leaving the existing project as a historical snapshot. `.env` and `.env.example` are wired to the new URL/keys; old project URL noted in PR description.
+>   - **§16.1 resolved: zod** — schema validators are used at the mutator/query/processor argsSchema boundary (most importantly for dynamic plugins that bypass TS checks); zod wins on bundle weight and React-ecosystem familiarity over Effect Schema. Tradeoffs table added; Codec<T> stays separate (it needs bidirectional encode/decode that validators don't provide). Valibot flagged as a near-mechanical fallback if bundle pressure shows up later.
+>   - **§16.4 explained** — checkpoints are TinyBase/VS-Code-style undo grouping, needed once per-keystroke writes are routed through `repo.tx`. Today's CodeMirror-internal-undo-during-edit-mode pattern keeps writes coarse-grained, so v1 is fine without checkpoints. Added implementation-cost-when-needed note.
+>   - **§16.8 expanded** — push command_events as-is filtered to `source = 'user'` (this is the high-value audit signal); skip row_events unless we later need full row-history server-side. Translation needs are minimal (timestamp ms→timestamptz, JSON text→jsonb); no structural changes.
+>   - **§16.12 resolved: `fractional-indexing-jittered`** — jittering reduces collisions at no cost; secondary `(order_key, id)` sort handles the residual case for full determinism.
+>   - **§16.13 added** — the row_events tail throttle window referenced in §9.3 now has its own subsection (~100ms starting point, profile during Phase 2).
 
 ---
 
@@ -1381,7 +1388,7 @@ Each phase ships independently; build stays green between them. **No back-compat
 This phase is the clean break. It absorbs everything that's incoherent to land separately.
 
 **Scope**:
-- **Server schema (Supabase / Postgres).** The seven existing migrations under `supabase/migrations/` (from `20260421130000_create_blocks.sql` through `20260428170207_drop_workspace_root_block_seed.sql`) describe an evolution we no longer need. Delete them all; ship a single `<timestamp>_initial_schema.sql` that creates only what's server-side: the `blocks` table with the new shape (`parent_id + order_key`), its indexes, RLS policies, and any RPCs still in use after the redesign. **No `tx_context` / `row_events` / `command_events` / upload triggers in the Supabase migration** — those are client-only. Treat this migration as the ground-truth canonical state, not a migration from anything.
+- **Server schema (Supabase / Postgres) — new project, clean slate.** The current Supabase project keeps its data and config as a historical snapshot. Phase 1 spins up a **new** Supabase project via the supabase CLI (`supabase projects create …` followed by `supabase link` and a fresh `supabase db push`), with its own URL, anon key, and service role key — wired into `.env` and `.env.example`. The seven existing migrations under `supabase/migrations/` are deleted in this branch; the new project starts from a single `<timestamp>_initial_schema.sql` that creates only what's server-side: the `blocks` table with the new shape (`parent_id + order_key`), its indexes, RLS policies, and any RPCs still in use after the redesign. **No `tx_context` / `row_events` / `command_events` / upload triggers in the Supabase migration** — those are client-only. Treat this migration as the canonical ground-truth state, not a migration from anything. The old project URL is documented in the PR description in case anyone needs to inspect historical state, but it's no longer wired to the running app.
 - **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus **five triggers**: three row_events writers (INSERT/UPDATE/DELETE) and two upload-routing triggers (INSERT/UPDATE only — DELETE upload routing is intentionally omitted in v1; see §4.5). The trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
 - PowerSync sync-config matches the new `blocks` shape. `tx_context`, `row_events`, `command_events` are not declared in sync-config (they don't sync; they're local-only).
 - **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE handles tagging and the equality test on `'user'` correctly excludes sync writes from the upload trigger. Don't try to hook PowerSync's CRUD-apply path.
@@ -1407,7 +1414,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - UI-state writes set `source='local-ephemeral'` and don't enter the upload queue.
 - Sync-applied writes leave `source=NULL`; row_events COALESCE-tags them as `'sync'`; upload trigger doesn't loop them back.
 - `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
-- `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` produces the target Postgres schema directly.
+- New Supabase project provisioned via `supabase` CLI; `.env` / `.env.example` updated to point at it; old project URL noted in the PR description as the historical snapshot. `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` against the new project produces the target Postgres schema directly.
 - Client-side DDL lives in `src/data/internals/clientSchema.ts` (or equivalent) and runs at app startup after PowerSync's schema initialization; a fresh local DB has `tx_context` (one row), `row_events`, `command_events`, and exactly five triggers populated (3 row_events writers + 2 upload-routing for INSERT/UPDATE only).
 
 ### Phase 2 — Sync `Block` + Handles + React migration
@@ -1506,9 +1513,27 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 
 ## 16. Open questions / decide during implementation
 
-### 16.1 zod vs Effect Schema
+### 16.1 zod vs Effect Schema (vs Valibot) — RESOLVED: zod
 
-Default to **zod**. Decide at Phase 1 start (used immediately by mutator argsSchema).
+**What this is used for.** The `argsSchema` field on `Mutator`, `Query`, and `PostCommitProcessor` definitions (and `resultSchema` where it appears). Runtime validation of args at the boundary — most importantly for **dynamic plugins** (compiled-at-runtime extension blocks that bypass TypeScript's compile-time checks). Static plugins get the same validation but it rarely fires there because TS already catches type mismatches.
+
+**What it is NOT used for.** Property storage codecs. Those are a separate `Codec<T>` interface (§5.6) because we need bidirectional encode/decode and these schema validators are typically unidirectional.
+
+**Tradeoffs:**
+
+| | zod | Effect Schema | Valibot |
+|---|---|---|---|
+| Bundle size | ~10–14 KB gz | ~30–50 KB gz (Effect runtime included) | ~3–5 KB gz |
+| Bidirectional | no (validation only) | yes | no (transform-based, limited) |
+| React-ecosystem familiarity | very high | growing | moderate |
+| API ergonomics | excellent | excellent | very close to zod |
+| Downstream risk | mature, stable | younger; tied to Effect | younger but zod-compatible API |
+
+**Decision: zod.**
+- We don't need bidirectional schemas here (codecs handle that role separately).
+- zod's bundle is modest; nothing in the spec benefits from Effect's heavier runtime.
+- Plugin authors are likely to know zod already from React work.
+- If bundle size becomes a measured concern later, swapping to Valibot is near-mechanical (compatible API).
 
 ### 16.2 Same-tx vs follow-up default
 
@@ -1520,7 +1545,21 @@ Out of scope for v1. Plugins use properties.
 
 ### 16.4 Checkpoints for undo coalescing
 
-Defer.
+**What this is.** v1's undo granularity is one entry per `repo.tx`. That's correct for explicit operations (indent, move, delete, paste — each is one tx, one undo entry). It's **wrong for typing**: every coalesced setContent commit becomes its own undo entry, so cmd-Z reverts a few characters at a time instead of a sentence/word.
+
+**Pattern (TinyBase / VS Code / most editors).** Wrap a sequence of txs in a "checkpoint group":
+
+```ts
+const cp = repo.openCheckpoint({ description: 'Edit content' })
+// ...txs run inside this group; engine tags each tx with cp.id
+cp.close()                                  // groups them into one undo entry
+```
+
+Triggering rules belong to the UI: on focus → open; on blur / idle / explicit-save → close. Until close, all txs land in the same group. Undo reverts the whole group.
+
+**Why deferred.** Tx-level undo is enough until typing is wired up to `repo.tx`. Today's BlockEditor uses CodeMirror's internal undo for content during edit-mode and only commits to the document on explicit save / blur — meaning today's content writes are already coarse-grained. The fine-typing-undo pain only surfaces if/when we route per-keystroke writes through `repo.tx`. When that happens, add the checkpoint API; until then, YAGNI.
+
+**Implementation cost when needed.** Small: add a `checkpointId` field to undo entries; `undo` pops entries until checkpoint boundary. The TxEngine already records one undo entry per tx, so the only new code is the grouping/popping logic.
 
 ### 16.5 Signals vs `useSyncExternalStore`
 
@@ -1536,7 +1575,27 @@ Out of scope. Today's `enableMultiTabs=false, useWebWorker=false` is preserved. 
 
 ### 16.8 Server-side audit log
 
-`row_events` and `command_events` are local-only initially. Sync-up via PowerSync is a follow-up.
+`row_events` and `command_events` are local-only in v1. If we eventually want a server-side audit, the answer differs per table:
+
+**`command_events`** — push as-is, with one filter:
+- Filter to `source = 'user'` only (skip `local-ephemeral` — they're UI-state, not document changes; skip `sync` — those originated on other clients and have already been logged from there).
+- Each row maps cleanly to a Postgres row of the same shape: `tx_id`, `description`, `scope`, `user_id`, `workspace_id`, `mutator_calls` (JSON), `created_at`, `source`.
+- Volume is low (~one row per `repo.tx`, on the order of dozens-to-hundreds per active user per day) so streaming as-is is fine.
+- This gives you "who ran what mutator with what args, when" — the high-value audit signal.
+
+**`row_events`** — probably *don't* push, unless we later need a row-level audit:
+- Volume is much higher (one row per row-write; multi-block ops produce many).
+- `before_json` / `after_json` are full row snapshots, so storage cost is meaningful.
+- Most "what's the current state" questions are answerable from `blocks` directly.
+- Most "what changed and when" questions are answerable from `command_events` + the snapshot at any point reconstructable by replaying from initial state — though we don't keep that today.
+- If we ever need full row-level history server-side, push with the same `source = 'user'` filter and timestamp normalization (ISO strings instead of integer ms).
+
+**Translation needed?** Minimal:
+- Timestamps: client uses `INTEGER NOT NULL` (epoch ms); Postgres usually wants `timestamptz`. Either store as bigint and do app-side conversion, or push as `to_timestamp(ms / 1000)`. Either works; the upload step does the conversion.
+- JSON columns: client `TEXT` is already JSON-shaped; Postgres `jsonb` accepts it. Trivial cast.
+- No structural shape change.
+
+**Do later.** If/when we want this, add a separate per-table sync rule in `sync-config.yaml` for `command_events` (server-bound only, filtered by source); the existing PowerSync upload trigger pattern can be extended.
 
 ### 16.9 Order-key rebalancing
 
@@ -1550,9 +1609,13 @@ Today's properties include an `aliases` list; the alias-lookup query reads it. T
 
 Every cache miss inside a mutator does a SQL read inside the writeTransaction. For deep mutators reading dozens of blocks, this can be slow. Mitigations: `mutator.reads(args)` preload hints; engine batches preload reads into a single SQL query before `apply` runs. Implement preload in Phase 1; profile when complex mutators land.
 
-### 16.12 Order-key generation choice
+### 16.13 row_events tail throttle window
 
-`fractional-indexing-jittered` vs. plain `fractional-indexing` + `id` tiebreak. **Decision criterion**: pick whichever is cheaper to implement. Both are correct; jittered reduces secondary-tiebreak frequency at no cost to determinism. Default to **jittered** unless the library is too heavy.
+The tail subscription throttles invalidation runs by ~100ms (§9.3) to coalesce sync-burst events. Validate the window during Phase 2 with realistic sync bursts (e.g., a peer doing `repo.subtree(...)` move ops). Too short = redundant re-resolves; too long = laggy UI. 100ms is a reasonable starting point but treat as tunable. Defer until profiling.
+
+### 16.12 Order-key generation choice — RESOLVED: jittered
+
+Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces the probability of distinct clients computing the same key when inserting between the same neighbors; the `(order_key, id)` secondary sort still handles the residual collision case for full determinism. This is strictly better than plain `fractional-indexing` at no measurable cost.
 
 ---
 
@@ -1614,5 +1677,5 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-9 findings addressed: alias cleanup row_events insertion gate (§7 mapping + new §7.5) prevents deletion of pre-existing pages on `[[Inbox]]`-into-existing-page race; Repair source uses `repo.canWrite(workspaceId)` per affected workspace, not blanket `isReadOnly` (§5.8.1); Stage 2 dynamic discovery has a transitional non-facet path for Phases 1-3 (§8); `BlockData` shape standardized as camelCase domain with explicit storage-mapping in §4.1.1, and stale `parent_id` / `properties_json` references in TS examples fixed; §4.5 trigger prose aligned with the actual v1 set (5 triggers).
 - [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
-- [ ] §16.1, §16.12 must resolve before Phase 1 starts.
+- [ ] §16.1 (zod) and §16.12 (jittered fractional indexing) resolved in v4.10. No remaining gating decisions before Phase 1 — everything else in §16 is intentionally deferred.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime via staged `setFacetRuntime` waves (§8 Bootstrap stages, §12.2). Pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) reject with `MutatorNotRegisteredError` for unknown names.
