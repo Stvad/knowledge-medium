@@ -75,13 +75,19 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Stage 1 bootstrap clarified per phase** (§8). Pre-Phase-4, Stage 1 has no queriesFacet; kernel queries don't exist as facet contributions. Code that needs queries uses raw SQL via `repo.db`. Phase 4 adds queriesFacet to the Stage 1 registries.
 >   - **Discriminated `ProcessorCtx`** (§5.7). Same-tx processors get `SameTxCtx { tx }` only; follow-up processors get `FollowUpCtx { tx, db, repo }`. Removes the v4.11 footgun where same-tx processors had `ctx.db` exposed with a "don't use" comment. Stronger than docs — TypeScript prevents same-tx processors from reaching for raw db reads at all.
 > - v4.13: note `src/utils/roamImport/` as additional Phase 1 call-site surface (planner builds `childIds` arrays; orchestrator uses callback-style writes — both migrate alongside the rest of the codebase). No architectural impact; just more places for the implementer to grep through. The existing `sampleExport.test.ts` is the regression gate.
-> - v4.14 (this): round-12 fixes — tightening the v4.12 contracts so callers can't bypass them.
+> - v4.14: round-12 fixes — tightening the v4.12 contracts so callers can't bypass them.
 >   - **`RepoTxOptions` discriminated by scope** (§5.3). Repair scope requires explicit `source`; all other scopes have `source` absent from the option type so callers can't bypass the scope→upload contract (e.g. tag a doc edit as `'local-ephemeral'` to skip uploads). Type-level enforcement instead of v4.12's "discouraged" prose.
 >   - **Explicit-watch processors require `scheduledArgsSchema`** (§5.7). The processor type is now discriminated on `watches.kind`: `kind: 'explicit'` makes `scheduledArgsSchema` non-optional; `kind: 'mutator'` and `kind: 'field'` make it `?: never`. Closes the v4.12 gap where prose said "required" but the type marked it optional. No kernel escape hatch — even built-ins must declare a schema.
 >   - **§7 reference parsing aligned with Phase 3 raw-SQL bridge** — explicit phrasing throughout that alias-by-name lookup uses `ctx.db` raw SQL in Phase 3 and switches to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). Phase 4's exact kernel query names listed: `aliasLookup`, `backlinks` (not `backlinksOf`), etc. row_events scan stays raw `ctx.db` (low-volume cleanup-internal detail; not promoted to a kernel query).
 >   - **Service-role grep check scoped properly** (§4 + §13.1 acceptance). The check is `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'`, not the whole repo — this spec discusses the term but doesn't bundle into the app, so it's intentionally excluded.
 >   - **Stray closing code fence removed** in §5.7 prose. Was breaking markdown rendering of the section between the afterCommit type and the scheduling-channels list.
 >   - **Read-only invariant updated** (§15 #1) to permit `Repair` scope alongside `UiState`. v4.12 fixed §5.4 and §10.3 but left invariant #1 saying "UI-state txs always allowed" without the Repair carve-out.
+> - v4.15 (this): round-13 fixes — type-contract cleanup.
+>   - **`source?: never` on non-Repair `RepoTxOptions` branches** (§5.3). v4.14's "omit the field" approach only blocked excess properties on fresh literals; variables like `{ scope: BlockDefault, source: 'local-ephemeral' }` were still structurally assignable. `source?: never` makes the rejection type-level for both literal and variable callers.
+>   - **`Tx.afterCommit` typed via `ScheduledArgsFor<P>`** (§5.3, §5.7). v4.14 prose claimed the args were narrowed but the Tx interface still had `args: unknown`. Now both agree: `afterCommit<P extends string>(name: P, args: ScheduledArgsFor<P>, opts?)`. Backed by a `PostCommitProcessorRegistry` plugins augment per processor (mirrors `MutatorRegistry`); built-ins (e.g. `core.cleanupOrphanAliases`) are augmented in §5.7.
+>   - **`repo.mutate.X` resolves `Mutator.scope` from args** (§10.1). v4.14 forwarded `mutator.scope` directly to `repo.tx`, which fails when `scope` is a function `(args) => ChangeScope`. Wrapper now resolves to a concrete scope before opening the tx (and resolves Repair source from `repo.canWrite(workspaceId)` if applicable). The engine needs concrete values pre-user-fn for read-only gating and `tx_context.source` setting.
+>   - **`ChangeScope` type wired through `ChangeScopeRegistry`** (§5.8). v4.14 declared the registry but `ChangeScope` was defined only over the const built-ins, so plugin augmentations didn't actually flow into the public type. Now: `ChangeScope = (built-in values) | keyof ChangeScopeRegistry`. Plugin scopes default to `BlockDefault` semantics; metadata-shaped registry entries deferred to a future revision.
+>   - **`NewBlockData` defined** (§4.1.1). `tx.create` referenced this type but it wasn't defined. Added next to `BlockDataPatch`: `id` optional (engine generates UUID if absent; deterministic-id mutators pass an explicit id), `workspaceId` / `parentId` / `orderKey` required, defaults documented, engine-managed fields (`createdAt`, etc.) and `deleted` rejected at the type level.
 
 ---
 
@@ -294,6 +300,29 @@ export type BlockDataPatch = Partial<Omit<
   BlockData,
   'id' | 'workspaceId' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'
 >>
+
+/** Allowed shape for tx.create.
+ *  - id: optional. If omitted, the engine generates a UUID. If present,
+ *    used verbatim — used by deterministic-id mutators like
+ *    core.createAliasTarget for daily notes.
+ *  - workspaceId: required (a row's workspace is fixed at creation).
+ *  - parentId, orderKey: required (every row has a tree position).
+ *  - content / properties / references: optional with defaults
+ *    ('', {}, [] respectively).
+ *  - createdAt, createdBy, updatedAt, updatedBy: NOT accepted —
+ *    engine sets all four from tx_context at flush time. Passing
+ *    them is a compile error.
+ *  - deleted: NOT accepted — newly-created blocks default to false;
+ *    soft-delete goes through tx.delete, not tx.create. */
+export type NewBlockData = {
+  id?: string
+  workspaceId: string
+  parentId: string | null
+  orderKey: string
+  content?: string
+  properties?: Record<string, unknown>
+  references?: BlockReference[]
+}
 ```
 
 **Storage ↔ domain mapping** lives in two functions in `src/data/blockSchema.ts`:
@@ -627,8 +656,18 @@ export interface Tx {
   parentOf(childId: string): Promise<BlockData | null>
 
   /** Schedule a follow-up post-commit job. Runs in its own writeTransaction
-   *  after this tx commits. Does NOT run if the tx rolls back. */
-  afterCommit(processorName: string, args: unknown, options?: { delayMs?: number }): void
+   *  after this tx commits. Does NOT run if the tx rolls back.
+   *
+   *  Args are typed via the `PostCommitProcessorRegistry` (augmented per
+   *  processor like `MutatorRegistry` is for mutators). Statically-known
+   *  processors get full type inference; unknown names (e.g. dynamic-plugin
+   *  processors not yet in the registry) get `args: unknown` and rely on
+   *  runtime `scheduledArgsSchema.parse()` validation at enqueue time. */
+  afterCommit<P extends string>(
+    processorName: P,
+    args: ScheduledArgsFor<P>,
+    options?: { delayMs?: number },
+  ): void
 
   /** Tx metadata. */
   readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string; source: TxSource }
@@ -650,13 +689,17 @@ export interface Tx {
 
 export type RepoTxOptions =
   | (RepoTxOptionsBase & { scope: typeof ChangeScope.Repair; source: TxSource })
-  | (RepoTxOptionsBase & { scope: Exclude<ChangeScope, typeof ChangeScope.Repair> })   // no `source`
+  | (RepoTxOptionsBase & { scope: Exclude<ChangeScope, typeof ChangeScope.Repair>; source?: never })
 
 interface RepoTxOptionsBase {
   description?: string
   reads?: { blockIds?: string[]; subtreeOf?: string }
 }
+```
 
+`source?: never` (rather than just omitting the field) is load-bearing: TypeScript's excess-property checks only fire on fresh object literals, so a variable like `{ scope: ChangeScope.BlockDefault, source: 'local-ephemeral' }` would otherwise be structurally assignable to the non-Repair branch. With `source?: never`, that variable is rejected at compile time.
+
+```ts
 interface TxWriteOpts {
   /** When true, engine does NOT auto-bump updated_at/updated_by (or created_at/created_by
    *  on tx.create). Used by same-tx processors whose writes are bookkeeping, not user
@@ -937,6 +980,21 @@ type ProcessorWatches<ScheduledArgs> =
   | { watches: { kind: 'field';    table: 'blocks'; fields: Array<keyof BlockData> }; scheduledArgsSchema?: never }
   | { watches: { kind: 'explicit' };                                                 scheduledArgsSchema:  Schema<ScheduledArgs> }   // REQUIRED
 
+/** Plugin-augmentable type registry for processor scheduled args. Mirrors
+ *  MutatorRegistry's role for mutators. Built-ins augment this for their own
+ *  scheduled args (e.g. core.cleanupOrphanAliases below); plugins do the same. */
+export interface PostCommitProcessorRegistry { /* augmented via declare module */ }
+
+export type ScheduledArgsFor<P extends string> =
+  P extends keyof PostCommitProcessorRegistry ? PostCommitProcessorRegistry[P] : unknown
+
+// Built-in registration (kernel):
+declare module '@/data/api' {
+  interface PostCommitProcessorRegistry {
+    'core.cleanupOrphanAliases': { candidateIds: string[]; originatingTxId: string }
+  }
+}
+
 
 interface CommittedEvent<ScheduledArgs = unknown> {
   txId: string
@@ -1006,12 +1064,23 @@ export const ChangeScope = {
                                            // upload conditional on repo.canWrite(workspaceId)
                                            // — see §5.8.1; permitted in read-only mode
 } as const
-export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 
-declare module '@/data/api' {
-  interface ChangeScopeRegistry { /* plugin augmentation */ }
-}
+/** Plugin-augmentable map of scope-name → metadata. Built-in scopes are NOT in
+ *  this registry (they're enumerated above with hard-coded engine semantics).
+ *  Plugin scopes inherit `BlockDefault` semantics (undoable, uploads, rejected
+ *  in read-only) unless we add per-scope metadata in a future revision. */
+export interface ChangeScopeRegistry { /* plugin augmentation: 'plugin:scope-name': true */ }
+
+/** Public ChangeScope type: the union of built-in string values plus any
+ *  plugin-augmented keys. RepoTxOptions accepts either. */
+export type ChangeScope =
+  | (typeof ChangeScope)[keyof typeof ChangeScope]
+  | keyof ChangeScopeRegistry
 ```
+
+**Plugin scope semantics** (v1): a plugin that augments `ChangeScopeRegistry` with `'tasks:agenda': true` gets a scope that behaves like `BlockDefault` — undoable, uploads via `source = 'user'`, rejected in read-only mode. If a plugin needs different semantics (non-undoable, local-only, etc.), it should pick one of the four built-in scopes instead of inventing a new one. A future revision can add a metadata-shaped registry (`'tasks:agenda': { undoable: false, source: 'local-ephemeral', allowedInReadOnly: true }`) if real plugin needs justify it; for v1, keeping the registry as a string-key marker keeps the engine logic simple.
+
+The `Exclude<ChangeScope, typeof ChangeScope.Repair>` in §5.3's `RepoTxOptions` therefore correctly excludes only the literal `'core:repair'` string — built-in non-Repair scopes and all plugin scopes flow into the no-`source` branch.
 
 Scope semantics matrix:
 
@@ -1340,14 +1409,29 @@ If 5 or 6 throws (DB-level) → rollback, same.
 
 ### 10.1 `repo.mutate.X` is a 1-mutator tx
 
+`Mutator.scope` may be a function of args (`scope: ChangeScope | ((args) => ChangeScope)`). The wrapper resolves it to a concrete scope **before** opening the tx — the engine needs a concrete scope to set `tx_context.source` (pipeline step 1) and to enforce read-only gating, both of which happen pre-user-fn. For `Repair`-scoped mutators, the wrapper similarly computes `source` from `repo.canWrite(workspaceId)` before opening.
+
 ```ts
 await repo.mutate.indent({ id })
 // ≡
-await repo.tx(async tx => tx.run(indentMutator, { id }), {
-  description: indentMutator.describe?.({ id }),
-  scope: indentMutator.scope,                                 // taken from the mutator def
-})
+{
+  // 1. Resolve scope from args (mutator may declare scope as a function).
+  const scope = typeof indentMutator.scope === 'function'
+    ? indentMutator.scope({ id })
+    : indentMutator.scope
+
+  // 2. For Repair scope: also resolve source per workspace permission.
+  //    For non-Repair scopes: source is derived statically by the engine.
+  const opts: RepoTxOptions = scope === ChangeScope.Repair
+    ? { scope, source: /* repo.canWrite(workspaceId) ? 'user' : 'local-ephemeral' */, description: indentMutator.describe?.({ id }) }
+    : { scope, description: indentMutator.describe?.({ id }) }
+
+  // 3. Open tx with concrete scope/source.
+  await repo.tx(async tx => tx.run(indentMutator, { id }), opts)
+}
 ```
+
+Mutators with arg-dependent scopes are rare in v1 (none in the kernel mutator list), but the API permits them and the wrapper handles them correctly. Most mutators have a static scope and the resolution is a no-op.
 
 ### 10.2 Scope unification within a tx
 
