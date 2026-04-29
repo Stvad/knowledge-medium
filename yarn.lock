@@ -2948,10 +2948,10 @@ hls.js@^1.6.5, hls.js@~1.6.15:
   resolved "https://registry.yarnpkg.com/hls.js/-/hls.js-1.6.16.tgz#e2e7e79b68357cb3f8aa82dec0a36c9c2701f5c0"
   integrity sha512-VSIRpLfRwlAAdGL4wiTucx2ScRipo0ed1FBatWkyt832jC4CReKstga6yIhYVwGu9LOBjuX9wzmRMeQdBJtzEA==
 
-hotkeys-js@^4.0.3:
-  version "4.0.3"
-  resolved "https://registry.yarnpkg.com/hotkeys-js/-/hotkeys-js-4.0.3.tgz#3a6d2baedc5fa81bf7585a1afdfc2e513697207f"
-  integrity sha512-adK3E0KGXiIm8rcRhn2JHEvCVzgg54UtHtufxHVWM0I95hakyxn80aX6ez0nxVEdbzzgrb9g2lMJIThFSyTSFQ==
+hotkeys-js@^3.13.9:
+  version "3.13.15"
+  resolved "https://registry.yarnpkg.com/hotkeys-js/-/hotkeys-js-3.13.15.tgz#2d394bd6bd78857d4b24dc86bdba2fa1cf7012fc"
+  integrity sha512-gHh8a/cPTCpanraePpjRxyIlxDFrIhYqjuh01UHWEwDpglJKCnvLW8kqSx5gQtOuSsJogNZXLhOdbSExpgUiqg==
 
 html-encoding-sniffer@^6.0.0:
   version "6.0.0"
