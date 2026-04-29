@@ -11,7 +11,15 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - v4: `parseReferences` is a **follow-up** processor (not same-tx); `tx.aliasLookup` dropped; no sync-apply wrapper required (trigger gates on `source = 'user'`, `row_events.source` COALESCE-defaults to `'sync'`); separate INSERT/UPDATE/DELETE triggers; `tx.update` options typed with `skipMetadata`; `tx.setProperty`/`tx.getProperty` to keep codecs at the boundary; `PropertySchema.codec` is a real bidirectional `Codec<T>`.
 > - v4.1: `PropertySchema` extended with `kind`, optional `label` / `Editor` / `Renderer`; §5.6.1 documents property panel rendering from registry + graceful degradation for unregistered schemas.
 > - v4.2: cleaned up stale phase text contradicting the v4 follow-up decision; added `block.set` / `block.setContent` / `block.delete` sugar; built-in primitive codecs validate on decode; added `codecs.optional(inner)`; renamed identity to `unsafeIdentity`.
-> - v4.3 (this): Phase 1 explicitly consolidates Postgres migrations — the seven existing files under `supabase/migrations/` are deleted and replaced by a single `<timestamp>_initial_schema.sql` that creates the full target schema directly. We're in alpha; nothing to migrate from. This makes the schema source-of-truth a single readable file rather than a 7-step evolution.
+> - v4.3: Phase 1 collapses Postgres migrations to one `_initial_schema.sql`.
+> - v4.4 (this): correctness fixes after a fifth-round review.
+>   - **§4 split server vs client schema**: the Supabase migration creates only the synced `blocks` table (server-side); `tx_context`, `row_events`, `command_events`, and the six triggers are local-only and bootstrap from `src/data/internals/clientSchema.ts`. Postgres has no `powersync_crud` and no business with these tables.
+>   - **§9.3 invalidation has two sources**: TxEngine fast path for local writes; `row_events` tail subscription as the backstop for sync-applied PowerSync writes (which bypass `repo.tx` and have no staged write-set to walk). Without the tail, remote changes wouldn't refresh handles.
+>   - **§5.2 children-completeness markers**: cache tracks per-parent "all children loaded" markers. `block.childIds` requires the marker; without it, throws `ChildrenNotLoadedError`. The cache cannot honestly distinguish "no children" from "not loaded" by sibling-scanning alone. Reactive children access goes through `useHandle(repo.children(id))`.
+>   - **§9.2 parent-edge dependencies**: tree handles declare `{ kind: 'parent-edge', parentId }` deps in addition to row deps, so a new child inserted under a tracked parent invalidates the handle. Pure row-id deps would miss inserts.
+>   - **§5.7 / §7 field-watching for processors**: post-commit processors can watch by field-write (`{ kind: 'field', table, fields }`) in addition to mutator name. `core.parseReferences` watches `blocks.content` so plugin mutators that bypass the named `setContent` mutator still trigger ref parsing. Correctness over convention.
+>   - **§11.2 ancestors `ORDER BY depth`**: SQL CTE recursion order is undefined without explicit ORDER BY. Added `depth` column and ordering. §11.3 added `WHERE deleted = 0` to recursion (was missing).
+>   - **§5.3 / §15 stale sync-source comment fixed**: TxSource and invariant #4 both now say sync-applied writes leave `source = NULL`, COALESCE'd to `'sync'` in row_events.
 
 ---
 
@@ -130,9 +138,15 @@ We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reade
 
 ## 4. Schema (clean break)
 
-Existing tables are dropped and recreated. Postgres migration mirrors local. PowerSync sync-config rewritten.
+Schema lives in two places: **Postgres (server, synced)** and **local SQLite (client, bootstrapped at app startup)**. Each has different concerns:
 
-### 4.1 `blocks`
+- Postgres holds only the synced row-shaped data. `blocks` is the only synced table.
+- Local SQLite holds the synced `blocks` (managed by PowerSync) plus client-only auxiliary tables: `tx_context`, `row_events`, `command_events`. None of these are synced — they're the local mechanism for tx context, audit, and invalidation.
+- Triggers (row_events writes, upload routing into `powersync_crud`) live on the **client only** — Postgres has no `powersync_crud` and no need for these triggers.
+
+Existing tables are dropped and recreated on both sides.
+
+### 4.1 `blocks` (server + client)
 
 ```sql
 CREATE TABLE blocks (
@@ -176,7 +190,7 @@ A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too lo
 
 `properties_json` is `Record<string, unknown>` — just the value, codec-deserialized at read time via the descriptor (§5.6).
 
-### 4.2 `tx_context`
+### 4.2 `tx_context` (client only)
 
 ```sql
 CREATE TABLE tx_context (
@@ -195,7 +209,7 @@ The TxEngine sets `tx_context` at the start of `writeTransaction` (source = `'us
 
 The discipline this requires: every write to `blocks` either goes through `repo.tx` (which sets source) or is a PowerSync sync-apply (which doesn't). No third path. The codebase already follows this — the new `Repo` enforces it by removing every other write path.
 
-### 4.3 `row_events`
+### 4.3 `row_events` (client only)
 
 ```sql
 CREATE TABLE row_events (
@@ -216,7 +230,7 @@ CREATE INDEX idx_row_events_created ON row_events(created_at DESC);
 
 Written by SQLite triggers on `blocks` (one per insert/update/delete). Triggers pull `tx_id` and `source` from `tx_context`. The audit + invalidation source-of-truth.
 
-### 4.4 `command_events`
+### 4.4 `command_events` (client only)
 
 ```sql
 CREATE TABLE command_events (
@@ -236,7 +250,7 @@ CREATE INDEX idx_command_events_workspace ON command_events(workspace_id, create
 
 One row per `repo.tx` invocation. Sync-applied writes don't go through `repo.tx` so they don't produce `command_events`; their row_events have `tx_id = NULL` and `source = 'sync'`.
 
-### 4.5 Upload routing triggers
+### 4.5 Upload routing triggers (client only)
 
 SQLite doesn't allow `INSERT OR UPDATE OR DELETE` in a single trigger — three separate triggers, gated identically on `source = 'user'`:
 
@@ -330,9 +344,18 @@ export interface Block {
   get<T>(schema: PropertySchema<T>): T                       // returns descriptor.defaultValue if absent
   peekProperty<T>(schema: PropertySchema<T>): T | undefined  // no default substitution
 
-  /** Sync relatives. childIds is computed from cache (must be loaded);
-   *  parent and children Block objects are sync facades. */
-  readonly childIds: string[]                                // ordered by (order_key, id), from cache
+  /** Sync relatives. Require that the relevant set has been preloaded:
+   *  - childIds / children: requires `repo.load(id, { children: true })` previously
+   *    succeeded for this id (cache marks "all children loaded" on completion).
+   *    Throws ChildrenNotLoadedError if the marker isn't set. The cache CANNOT
+   *    distinguish "no children" from "children not loaded" by sibling-scanning
+   *    alone — a parent with zero loaded children might be a leaf, or might
+   *    just have unloaded children. The marker is the only honest signal.
+   *  - parent: requires the parent row to be in cache (preloaded via
+   *    `repo.load(id, { ancestors: true })` or natural neighborhood loads).
+   *  Components that need reactive children should use useHandle(repo.children(id))
+   *  instead — that's a Handle<BlockData[]> with first-class load + subscribe. */
+  readonly childIds: string[]                                // ordered by (order_key, id)
   readonly children: Block[]
   readonly parent: Block | null
 
@@ -350,7 +373,11 @@ export interface Block {
 }
 ```
 
-`Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field. The facade computes children on demand from the in-memory cache, throwing `BlockNotLoadedError` if any child row isn't loaded.
+`Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field.
+
+**Cache loaded-range markers.** The cache tracks per-parent metadata: `{ allChildrenLoaded: boolean }`. `repo.load(id, { children: true })` runs the children SQL, hydrates each child into the cache, and sets the marker for the parent on completion. `repo.subtree(rootId)`'s loader sets the marker for every visited parent. PowerSync sync-applied inserts of new children do **not** invalidate the marker by default — but the row_events tail (§9.3) sees the new row's `parent_id` and clears the marker for that parent (because we now have a child the cache didn't know about, so "all loaded" is no longer true until next refetch). Children handles re-resolve naturally on the same invalidation.
+
+The facade's sync `childIds` getter checks the marker; if unset, throws `ChildrenNotLoadedError(id)`. This is the only honest contract — the cache cannot distinguish a leaf from "I haven't asked yet." Reactive children access goes through `useHandle(repo.children(id))` instead of the facade.
 
 The single-block sugar above (`set`, `setContent`, `delete`) is the only mutating surface on `Block`. Composite operations across multiple blocks (indent, outdent, move, split, merge) are not on `Block` — call them via `repo.mutate.indent({ id: block.id })` or `repo.tx`. Rationale: those operations need broader context (UI state for outdent's `topLevel`, etc.) that doesn't fit cleanly on a per-block facade.
 
@@ -401,7 +428,7 @@ interface TxWriteOpts {
   skipMetadata?: boolean
 }
 
-type TxSource = 'user' | 'local-ephemeral'                   // 'sync' is set externally for sync-apply
+type TxSource = 'user' | 'local-ephemeral'                   // sync writes bypass repo.tx; tx_context.source stays NULL for them, COALESCE'd to 'sync' in row_events
 ```
 
 **No arbitrary `tx.query`.** Arbitrary queries cannot honestly overlay staged writes (the Query.resolve gets raw SQL, doesn't know about the tx). Within-tx reads are limited to: `tx.get`/`tx.peek` (single block) and `tx.childrenOf`/`tx.parentOf` (immediate relatives). The engine implements these with explicit overlay logic.
@@ -590,8 +617,15 @@ The trade we're making by lifting schema out of stored values: gain plugin exten
 export interface PostCommitProcessor {
   readonly name: string
 
-  /** Mutator names whose commits this processor reacts to. */
-  readonly watches: string[]
+  /** What this processor reacts to. Choose ONE of:
+   *  - mutator-name match (convenient when you only care about a specific operation)
+   *  - field-write match (robust when ANY code path writing the field should trigger,
+   *    including plugin mutators that bypass a specific named mutator)
+   *  - explicit only (fired only by tx.afterCommit) */
+  readonly watches:
+    | { kind: 'mutator'; names: string[] }
+    | { kind: 'field'; table: 'blocks'; fields: Array<keyof BlockRow> }
+    | { kind: 'explicit' }
 
   /** 'same-tx' runs inside the user's tx (atomic);
    *  'follow-up' runs after commit in its own writeTransaction. */
@@ -602,19 +636,20 @@ export interface PostCommitProcessor {
 
 interface CommittedEvent {
   txId: string
-  matchedCalls: Array<{ name: string; args: unknown }>
+  matchedCalls: Array<{ name: string; args: unknown }>      // populated for kind='mutator'
+  changedRows: Array<{ id: string; before: BlockData | null; after: BlockData | null }> // for kind='field'
   user: User
   workspaceId: string
-
-  /** Args passed via tx.afterCommit by an earlier processor (when mode='follow-up'
-   *  and the processor was scheduled rather than name-matched). */
-  scheduledArgs?: unknown
+  scheduledArgs?: unknown                                    // for tx.afterCommit-driven invocations
 }
 ```
 
-Two scheduling channels:
-1. **Mutator-name match** (`watches`): processor fires when a tx commits and contains any matching mutator call. Args come from the matched call.
-2. **Explicit schedule** (`tx.afterCommit(name, args, opts)`): processor fires after the tx commits with the supplied args via `event.scheduledArgs`. Used by chained processors (e.g. `parseReferences` schedules `cleanupOrphanAliases` with the just-created alias ids).
+Three scheduling channels:
+1. **Mutator-name match** (`watches: { kind: 'mutator', names }`): processor fires when a tx commits and contains any matching mutator call. Args come from `event.matchedCalls`.
+2. **Field-write match** (`watches: { kind: 'field', table, fields }`): processor fires when the tx wrote to any of the specified fields on the table — regardless of which mutator did the write. Args come from `event.changedRows`. **Use this when correctness depends on the field changing, not on a specific mutator running.**
+3. **Explicit schedule** (`tx.afterCommit(name, args, opts)`): processor fires after the tx commits with supplied args via `event.scheduledArgs`. Used by chained processors. The processor's `watches` should be `{ kind: 'explicit' }` if it's only triggered this way.
+
+`core.parseReferences` watches `{ kind: 'field', table: 'blocks', fields: ['content'] }` — that's the only correct choice. A plugin mutator that does `tx.update(id, { content: '...' })` directly (without going through the kernel's `setContent` mutator) will still trigger reference parsing. This is a correctness-critical detail: reference parsing must not be bypassable.
 
 Same-tx processors should not use `tx.afterCommit` to schedule themselves — only follow-up scheduling makes sense after the current tx commits.
 
@@ -668,7 +703,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 
 | Current behavior | New shape |
 |---|---|
-| Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: ['setContent', 'create', 'splitBlock', 'mergeBlocks'], mode: 'follow-up' })`. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. |
+| Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: { kind: 'field', table: 'blocks', fields: ['content'] }, mode: 'follow-up' })`. Field-watching is correctness-critical: any tx that writes `blocks.content` triggers ref parsing, including plugin mutators that bypass the `setContent` kernel mutator. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `tx.get` for known ids, kernel `aliasLookup` query for alias-by-name. The processor runs *after* the user's tx commits, so committed-state queries are correct. |
 | Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
@@ -734,17 +769,37 @@ class Repo {
 
 ### 9.2 What "affected" means
 
-1. **Row-level**: a row in `blocks` changed. Handles whose dependencies include that row id re-run.
-2. **Mutator-level**: `invalidatedBy: { kind: 'mutators', names: […] }` re-runs only when those commit.
-3. **Table-level**: catch-all coarse invalidation.
+Handles declare dependencies. The invalidation engine matches dependencies against changes:
 
-Kernel handles declare row-level deps during `resolve` (the resolver knows which row ids it touched). Plugin queries opt into row-level if they want it.
+```ts
+type Dependency =
+  | { kind: 'row'; id: string }                          // exact row id
+  | { kind: 'parent-edge'; parentId: string }            // any row whose parent_id = parentId
+  | { kind: 'workspace'; workspaceId: string }           // any row in this workspace
+  | { kind: 'table'; table: string }                     // catch-all coarse
 
-### 9.3 Invalidation source
+type Invalidation =
+  | { kind: 'mutators'; names: string[] }                // re-run when matching mutator commits
+  | { kind: 'rows'; predicate: (event: RowEvent) => boolean }
+```
 
-The TxEngine drives invalidation directly from the staged write-set on commit success. `row_events` is the audit / cross-process source-of-truth log; in-process invalidation does **not** wait on `row_events`.
+**Why parent-edge and not just row-level for tree queries**: a query like `subtree(root)` declared row-level deps on the descendants it observed. If a *new* row appears with a `parent_id` pointing into the subtree, that row's id was never in the dependency set — pure row-level invalidation misses it. Parent-edge dependencies fix this: `subtree(root)` declares parent-edge deps on every visited node id; any row write whose `parent_id` (before *or* after the change) matches one of those parentIds invalidates the handle.
 
-For multi-process invalidation (cross-tab) — out of scope; see §16.7.
+Kernel handles declare these deps automatically during `resolve` — the resolver tracks visited row ids (for row-level) and visited parent ids (for parent-edge). Plugin queries opt into whichever is correct for their shape.
+
+For changes that affect the parent-edge itself (a row's `parent_id` changes), the invalidation engine fires for *both* the old and new parent ids — both subtrees that include or exclude the moved row need re-resolution.
+
+### 9.3 Invalidation has two sources
+
+Invalidation feeds the same handle-walk logic from two places:
+
+1. **TxEngine fast path** (local writes via `repo.tx`): on commit success, the engine has the staged write-set in hand and walks affected handles synchronously. Cheap, immediate, no DB round-trip. This is the primary path for everything the user does in this tab.
+
+2. **`row_events` tail** (sync-applied writes from PowerSync): PowerSync's CRUD apply writes directly to the local SQLite, bypassing `repo.tx`. Those writes leave no staged set for the TxEngine to walk — but they *do* fire the row_events trigger, which appends rows tagged `source = 'sync'`. The Repo subscribes to `row_events` via PowerSync's `db.onChange` and consumes new rows since the last seen `id`, walking the same handle-invalidation logic with the row_events row as the change record. Throttled (default 100ms) to coalesce sync-burst invalidations.
+
+Both paths converge on `HandleStore.invalidate({ rowId, parentEdge, … })`; handles see one invalidation regardless of source. This means **sync-applied changes propagate to the UI without any additional plumbing in mutators or queries** — the row_events tail is the only thing required to make remote changes visible.
+
+For multi-process invalidation (cross-tab) — out of scope; see §16.7. Note that *if* multi-tab is enabled later, the row_events tail in tab B would already pick up tab A's writes (they go through PowerSync's shared-worker SQLite to row_events). The single-tab design generalizes naturally.
 
 ### 9.4 Structural diffing
 
@@ -847,28 +902,33 @@ Path includes `id` after `order_key` to make the sort deterministic on order_key
 
 ```sql
 WITH RECURSIVE chain AS (
-  SELECT * FROM blocks WHERE id = :id AND deleted = 0
+  SELECT *, 0 AS depth FROM blocks WHERE id = :id AND deleted = 0
   UNION ALL
-  SELECT parent.*
+  SELECT parent.*, chain.depth + 1
   FROM chain
   JOIN blocks AS parent ON parent.id = chain.parent_id
   WHERE parent.deleted = 0
 )
-SELECT * FROM chain WHERE id != :id;
+SELECT * FROM chain WHERE id != :id ORDER BY depth ASC;
 ```
 
-Returned in chain order (leaf to root) by virtue of the recursion order.
+`depth` is computed in the CTE and used for explicit ordering — SQL doesn't guarantee CTE recursion order without an `ORDER BY`. Result is leaf-to-root.
 
 ### 11.3 isDescendantOf
 
 ```sql
 WITH RECURSIVE chain AS (
-  SELECT id, parent_id FROM blocks WHERE id = :id
+  SELECT id, parent_id FROM blocks WHERE id = :id AND deleted = 0
   UNION ALL
-  SELECT b.id, b.parent_id FROM blocks AS b JOIN chain ON chain.parent_id = b.id
+  SELECT b.id, b.parent_id
+  FROM blocks AS b
+  JOIN chain ON chain.parent_id = b.id
+  WHERE b.deleted = 0
 )
 SELECT 1 FROM chain WHERE id = :potentialAncestor LIMIT 1;
 ```
+
+Order is irrelevant here (we only need existence), so no `ORDER BY` needed.
 
 ### 11.4 Children of one parent
 
@@ -977,11 +1037,10 @@ Each phase ships independently; build stays green between them. **No back-compat
 This phase is the clean break. It absorbs everything that's incoherent to land separately.
 
 **Scope**:
-- New SQL DDL: `blocks` (with `parent_id + order_key`), `tx_context` (one-row), `row_events`, `command_events`. Drop existing tables.
-- Triggers: separate INSERT/UPDATE/DELETE triggers on `blocks` writing `row_events` rows (`source` column populated via `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` so sync-applied writes are tagged correctly without any wrapper); separate INSERT/UPDATE/DELETE upload-routing triggers gating on `(SELECT source FROM tx_context WHERE id = 1) = 'user'`.
-- **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE in the row_events trigger and the equality test in the upload-routing trigger both handle that natively. Don't try to hook PowerSync's CRUD-apply path.
-- **Postgres migration consolidation.** The seven existing migrations under `supabase/migrations/` (from `20260421130000_create_blocks.sql` through `20260428170207_drop_workspace_root_block_seed.sql`) describe an evolution we no longer need to preserve. Delete all of them and ship a single new migration `<timestamp>_initial_schema.sql` that creates the full target schema directly: `blocks` (with `parent_id + order_key`), `tx_context`, `row_events`, `command_events`, all indexes, all triggers (separate INSERT/UPDATE/DELETE for both row_events and upload routing), and any RPCs the app still needs after the redesign. Treat this as the new "ground zero" — no migration steps, just the canonical end state. Existing Postgres data is dropped on upgrade per the alpha rule.
-- PowerSync sync-config rewrite to match the new `blocks` shape and to declare `tx_context`, `row_events`, `command_events` as local-only (not synced from server).
+- **Server schema (Supabase / Postgres).** The seven existing migrations under `supabase/migrations/` (from `20260421130000_create_blocks.sql` through `20260428170207_drop_workspace_root_block_seed.sql`) describe an evolution we no longer need. Delete them all; ship a single `<timestamp>_initial_schema.sql` that creates only what's server-side: the `blocks` table with the new shape (`parent_id + order_key`), its indexes, RLS policies, and any RPCs still in use after the redesign. **No `tx_context` / `row_events` / `command_events` / upload triggers in the Supabase migration** — those are client-only. Treat this migration as the ground-truth canonical state, not a migration from anything.
+- **Client schema (local SQLite via PowerSync).** New file (`src/data/internals/clientSchema.ts` or similar) exporting the DDL run at app startup, after PowerSync's own schema initialization: `tx_context` (one-row), `row_events`, `command_events`, plus the six triggers (INSERT/UPDATE/DELETE × {row_events writer, upload-routing into `powersync_crud`}). The trigger source-gate is `(SELECT source FROM tx_context WHERE id = 1) = 'user'` for upload routing; row_events triggers `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')` to tag sync-applied writes correctly without needing a sync-apply wrapper.
+- PowerSync sync-config matches the new `blocks` shape. `tx_context`, `row_events`, `command_events` are not declared in sync-config (they don't sync; they're local-only).
+- **No PowerSync sync-apply wrapper.** Sync-applied writes leave `tx_context.source = NULL` because they bypass `repo.tx`; the COALESCE handles tagging and the equality test on `'user'` correctly excludes sync writes from the upload trigger. Don't try to hook PowerSync's CRUD-apply path.
 - New `repo.tx(fn, opts)` on `db.writeTransaction`. Async `tx.get`. `tx.peek`, `tx.create`, `tx.update`, `tx.delete`, `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
 - `BlockData` type updated: no `childIds` field.
 - `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
@@ -1004,7 +1063,8 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - UI-state writes set `source='local-ephemeral'` and don't enter the upload queue.
 - Sync-applied writes leave `source=NULL`; row_events COALESCE-tags them as `'sync'`; upload trigger doesn't loop them back.
 - `block.change`, `dataSync`, `applyBlockChange`, callback-mutation API: all gone.
-- `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`); the seven legacy migrations are deleted; a fresh `supabase db reset` produces the target schema directly.
+- `supabase/migrations/` contains exactly one file (the new `<timestamp>_initial_schema.sql`, server-side only); the seven legacy migrations are deleted; `supabase db reset` produces the target Postgres schema directly.
+- Client-side DDL lives in `src/data/internals/clientSchema.ts` (or equivalent) and runs at app startup after PowerSync's schema initialization; a fresh local DB has `tx_context` (one row), `row_events`, `command_events`, and all six triggers populated.
 
 ### Phase 2 — Sync `Block` + Handles + React migration
 
@@ -1081,7 +1141,7 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 1. **Read-only mode**: `repo.tx` rejects document-scope txs when `repo.isReadOnly`. UI-state txs always allowed.
 2. **Scope is per-tx, not per-call**: every mutator call within a tx must share the tx's scope. Mixing throws.
 3. **UI-state isolation**: UI-state txs set `tx_context.source='local-ephemeral'`; upload trigger excludes; not in undo stack.
-4. **Sync-applied writes**: bypass `repo.tx`; have `tx_context.source='sync'`; produce row_events with `tx_id=NULL`; don't trigger upload-routing.
+4. **Sync-applied writes**: bypass `repo.tx` entirely. `tx_context.source` stays `NULL` (no `repo.tx` is open to set it). row_events triggers `COALESCE(tx_context.source, 'sync')` to tag them; upload-routing triggers gate on `= 'user'` so sync writes don't loop back into `powersync_crud`. row_events have `tx_id = NULL` (no tx). **No PowerSync sync-apply wrapper exists or should be added** — the COALESCE + equality-test pair handles this without one.
 5. **Order_key determinism**: `ORDER BY order_key, id` everywhere children are listed. Order_key collisions are possible (concurrent inserts at same position) and resolve via `id` tiebreak.
 6. **Codecs at boundaries only**: descriptor `codec.encode`/`codec.decode` runs only at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty`. Storage and cache always hold encoded shape. `tx.update(..., { properties: ... })` bypasses codecs and is opt-in.
 7. **Metadata auto-bump**: engine sets `updated_at` / `updated_by` on writes by default. Same-tx processors and other bookkeeping writes opt out via `{ skipMetadata: true }`.
@@ -1198,6 +1258,7 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-3 findings addressed: parseReferences is follow-up (typing latency concern resolved by matching today's UX, §7.1); no PowerSync sync-apply wrapper required (`source = NULL` ↔ sync, §4.2/§4.5); separate INSERT/UPDATE/DELETE triggers (§4.5); `TxWriteOpts.skipMetadata` typed on `tx.create`/`tx.update`/`tx.setProperty` (§5.3); `tx.setProperty`/`tx.getProperty` keep codecs at the boundary (§5.3, §5.6); `Codec<T>` is a real bidirectional codec, not a zod schema (§5.6).
 - [ ] Reviewer's round-4 findings addressed: stale Phase 1 sync-apply-wrapper bullet removed (§13.1); Phase 1 parseReferences description aligned with v4 follow-up decision (§13.1); Phase 3 parseReferences description aligned with follow-up (not same-tx with prefetch) (§13.3); `Block` facade gains `block.set` / `block.setContent` / `block.delete` sugar with explicit "thin wrapper over kernel mutator" framing (§5.2); built-in primitive codecs validate on decode, `codecs.optional` added, `codecs.unsafeIdentity` reserved for kernel-internal use (§5.6); plugin example uses `codecs.optional(codecs.date)` for the `Date | undefined` property (§12.1).
 - [ ] Reviewer's round-4 finding "PropertySchema lacks render metadata" — already addressed in v4.1; not a real finding against v4.2.
+- [ ] Reviewer's round-5 findings addressed: server/client schema split (§4 intro, §13.1 Phase 1); two-source handle invalidation (TxEngine + row_events tail) (§9.3); children-completeness markers + `ChildrenNotLoadedError` (§5.2); parent-edge dependencies for tree handles (§9.2); field-write processor watches with `core.parseReferences` watching `blocks.content` (§5.7, §7); ancestors CTE has explicit `depth` ORDER BY (§11.2); stale `tx_context.source='sync'` invariant fixed to `NULL` + COALESCE (§15.4).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
