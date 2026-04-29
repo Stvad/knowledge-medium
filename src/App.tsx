@@ -18,20 +18,19 @@ import {
 } from '@/data/workspaces.ts'
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
-import { seedDailyPage, seedTutorial } from '@/initData.ts'
+import { seedTutorial } from '@/initData.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 
-// Resolved-workspace bundle. `seedRootBlockId` is non-null only when this
-// run inserted a brand-new workspace via ensure_personal_workspace; the
-// caller uses it to install the starter tutorial into the empty seed root
-// the RPC created server-side. Any path that returned an existing
-// workspace (URL nav, remembered, RPC returned an already-existing row)
-// leaves it null — those workspaces' blocks are arriving via PowerSync
-// and we must not pre-empt them with a local seed.
+// Resolved-workspace bundle. `freshlyCreated` is true only when this run
+// inserted a brand-new personal workspace via ensure_personal_workspace;
+// the caller uses it to install the starter tutorial alongside today's
+// daily note. Any path that returned an existing workspace (URL nav,
+// remembered, RPC returned an already-existing row) leaves it false —
+// those workspaces already have whatever pages the user has built up.
 interface ResolvedWorkspace {
   id: string
-  seedRootBlockId: string | null
+  freshlyCreated: boolean
 }
 
 const resolveWorkspace = async (
@@ -43,7 +42,7 @@ const resolveWorkspace = async (
     // Fast path: if PowerSync has already replicated this workspace into
     // our local DB, RLS allowed it — we have access, trust the URL.
     const localWs = await getLocalWorkspace(repo, requestedWorkspaceId)
-    if (localWs) return {id: localWs.id, seedRootBlockId: null}
+    if (localWs) return {id: localWs.id, freshlyCreated: false}
 
     // Slow path: not local. This could be either "we don't have access"
     // or "we have access but sync hasn't replicated yet". Ask the server
@@ -56,7 +55,7 @@ const resolveWorkspace = async (
       if (access.kind === 'allowed') {
         // Server confirms access; getInitialBlock will poll for the blocks
         // to land via sync.
-        return {id: requestedWorkspaceId, seedRootBlockId: null}
+        return {id: requestedWorkspaceId, freshlyCreated: false}
       }
       if (access.kind === 'unknown') {
         // Transport-level failure (offline, 5xx, JWT mid-refresh). We don't
@@ -70,7 +69,7 @@ const resolveWorkspace = async (
           `canAccessRemoteWorkspace failed for ${requestedWorkspaceId}; trusting URL workspace and proceeding`,
           access.error,
         )
-        return {id: requestedWorkspaceId, seedRootBlockId: null}
+        return {id: requestedWorkspaceId, freshlyCreated: false}
       }
       console.warn(
         `Workspace ${requestedWorkspaceId} from URL is not accessible; falling back to default workspace.`,
@@ -83,7 +82,7 @@ const resolveWorkspace = async (
   const remembered = recallRememberedWorkspace()
   if (remembered) {
     const ws = await getLocalWorkspace(repo, remembered)
-    if (ws) return {id: ws.id, seedRootBlockId: null}
+    if (ws) return {id: ws.id, freshlyCreated: false}
   }
 
   if (useRemoteSync) {
@@ -93,14 +92,11 @@ const resolveWorkspace = async (
     // leave two membership rows in local sqlite, since the raw table has
     // no (workspace_id, user_id) UNIQUE constraint.
     await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
-    return {
-      id: result.workspace.id,
-      seedRootBlockId: result.inserted ? result.rootBlockId : null,
-    }
+    return {id: result.workspace.id, freshlyCreated: result.inserted}
   }
 
   const locals = await listLocalWorkspaces(repo)
-  if (locals.length > 0) return {id: locals[0].id, seedRootBlockId: null}
+  if (locals.length > 0) return {id: locals[0].id, freshlyCreated: false}
 
   throw new Error('No workspace available and remote sync is disabled')
 }
@@ -112,7 +108,7 @@ const getInitialBlock = memoize(
     requestedBlockId: string | undefined,
     useRemoteSync: boolean,
   ): Promise<{workspaceId: string, block: Block}> => {
-    const {id: workspaceId, seedRootBlockId} = await resolveWorkspace(
+    const {id: workspaceId, freshlyCreated} = await resolveWorkspace(
       repo,
       requestedWorkspaceId,
       useRemoteSync,
@@ -140,32 +136,35 @@ const getInitialBlock = memoize(
       }
     }
 
-    // Freshly inserted personal workspace: the RPC seeded an empty root
-    // block at the deterministic daily-note id. Populate it as today's
-    // daily note AND install the tutorial as a separate parent-less
-    // page. The daily page gets a `[[Tutorial]]` bullet at the top so
-    // first-run users can find it from the home view without us
-    // hijacking the landing page. Returning users land on the empty
-    // typing bullet below it as usual.
-    if (seedRootBlockId) {
+    // Freshly inserted personal workspace: install the starter tutorial
+    // as its own parent-less page. The [[Tutorial]] bullet on today's
+    // daily note (added below) makes it discoverable from the landing
+    // page without hijacking it.
+    if (freshlyCreated) {
       seedTutorial(repo, workspaceId)
-      seedDailyPage(repo, seedRootBlockId, workspaceId, ['[[Tutorial]]'])
-      await repo.flush()
-      writeAppHash(workspaceId, seedRootBlockId)
-      return {workspaceId, block: repo.find(seedRootBlockId)}
     }
 
-    // No requested block — land on today's daily note. getOrCreateDailyNote
-    // is idempotent under deterministic UUIDs: two clients booting offline
-    // converge on the same row on first sync. If a workspace seeder already
-    // created today's page under a server-supplied id, the alias-first
-    // lookup inside getOrCreateDailyNote reuses that row instead of
-    // creating a duplicate.
-    //
-    // We don't wait for any pre-existing blocks to land via sync — today's
-    // note is fine to create locally even on a fresh client; the upsert
-    // resolves cleanly when sync catches up.
+    // Land on today's daily note. getOrCreateDailyNote is idempotent
+    // under deterministic UUIDs: two clients booting offline converge
+    // on the same row when they later sync. We don't wait for sync to
+    // deliver any pre-existing blocks — today's note is fine to create
+    // locally even on a fresh client.
     const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+
+    // First-run discoverability: prepend a [[Tutorial]] bullet on the
+    // freshly-created daily note so the welcome content is one click
+    // away from the landing page.
+    if (freshlyCreated) {
+      const tutorialBullet = repo.create({
+        workspaceId,
+        parentId: dailyNote.id,
+        content: '[[Tutorial]]',
+      })
+      dailyNote.change((doc) => {
+        doc.childIds.unshift(tutorialBullet.id)
+      })
+    }
+
     await repo.flush()
     writeAppHash(workspaceId, dailyNote.id)
     return {workspaceId, block: dailyNote}

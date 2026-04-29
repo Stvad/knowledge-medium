@@ -115,11 +115,6 @@ export interface RendererRegistry {
     [key: string]: BlockRenderer;
 }
 
-// Temporary interface during migration - will be removed later
-export interface RootDoc {
-    rootBlockIds: string[];  // URLs of root-level blocks
-}
-
 export interface EditorSelectionState {
     blockId: string
     start?: number
@@ -132,7 +127,6 @@ export interface EditorSelectionState {
 export interface BlockContextType {
     topLevel?: boolean
     safeMode?: boolean
-    rootBlockId?: string
     user?: {
         id: string
         name: string

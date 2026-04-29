@@ -40,15 +40,6 @@ const SELECT_BLOCK_EXISTS_SQL = `
   SELECT id FROM blocks WHERE id = ? LIMIT 1
 `
 
-const SELECT_FIRST_ROOT_BLOCK_ID_SQL = `
-  SELECT id
-  FROM blocks
-  WHERE parent_id IS NULL
-    AND workspace_id = ?
-  ORDER BY create_time ASC, id ASC
-  LIMIT 1
-`
-
 const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
 
 const INSERT_EVENT_CONTEXT_SQL = `
@@ -88,14 +79,6 @@ export class BlockStorage {
       includeRoot ? [rootId] : [rootId, rootId],
     )
     return rows.map(parseBlockRow)
-  }
-
-  async findFirstRootId(workspaceId: string): Promise<string | undefined> {
-    const row = await this.db.getOptional<{id: string}>(
-      SELECT_FIRST_ROOT_BLOCK_ID_SQL,
-      [workspaceId],
-    )
-    return row?.id
   }
 
   async existsBlock(id: string): Promise<boolean> {

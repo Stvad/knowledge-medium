@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { PowerSyncDatabase } from '@powersync/web'
 import { Repo } from '@/data/repo'
 import { UndoRedoManager } from '@/data/undoRedo'
-import { seedDailyPage, seedTutorial } from '@/initData'
+import { seedTutorial } from '@/initData'
 
 const makeStubDb = (): PowerSyncDatabase =>
   ({
@@ -14,38 +14,8 @@ const makeStubDb = (): PowerSyncDatabase =>
     execute: async () => undefined,
   }) as unknown as PowerSyncDatabase
 
-describe('seedDailyPage', () => {
-  it('seeds a date-aliased root with a single empty child', () => {
-    const repo = new Repo(makeStubDb(), new UndoRedoManager(), {id: 'u', name: 'Test'})
-    const rootId = 'root-2'
-
-    seedDailyPage(repo, rootId, 'ws-1')
-
-    const root = repo.getCachedBlockData(rootId)!
-    expect(root.childIds).toHaveLength(1)
-    const aliasValue = root.properties.alias?.value
-    expect(Array.isArray(aliasValue)).toBe(true)
-    expect((aliasValue as string[]).length).toBe(2)
-
-    const child = repo.getCachedBlockData(root.childIds[0])
-    expect(child?.content).toBe('')
-  })
-
-  it('places preface bullets above the empty typing bullet', () => {
-    const repo = new Repo(makeStubDb(), new UndoRedoManager(), {id: 'u', name: 'Test'})
-    const rootId = 'root-3'
-
-    seedDailyPage(repo, rootId, 'ws-1', ['[[Tutorial]]'])
-
-    const root = repo.getCachedBlockData(rootId)!
-    expect(root.childIds).toHaveLength(2)
-    expect(repo.getCachedBlockData(root.childIds[0])?.content).toBe('[[Tutorial]]')
-    expect(repo.getCachedBlockData(root.childIds[1])?.content).toBe('')
-  })
-})
-
 describe('seedTutorial', () => {
-  it('creates a parent-less Tutorial root, separate from any caller-supplied id', () => {
+  it('creates a parent-less Tutorial page', () => {
     const repo = new Repo(makeStubDb(), new UndoRedoManager(), {id: 'u', name: 'Test'})
 
     const tutorialRootId = seedTutorial(repo, 'ws-1')
@@ -57,19 +27,6 @@ describe('seedTutorial', () => {
     expect(root!.workspaceId).toBe('ws-1')
     expect(root!.properties.alias?.value).toEqual(['Tutorial'])
     expect(root!.childIds).toHaveLength(3)
-  })
-
-  it('does not touch the daily-note seed root id (so getOrCreateDailyNote still finds an empty seed there)', () => {
-    const repo = new Repo(makeStubDb(), new UndoRedoManager(), {id: 'u', name: 'Test'})
-
-    const dailySeedId = 'daily-seed-uuid'
-    repo.create({id: dailySeedId, workspaceId: 'ws-1', content: ''})
-
-    seedTutorial(repo, 'ws-1')
-
-    const seed = repo.getCachedBlockData(dailySeedId)
-    expect(seed?.content).toBe('')
-    expect(seed?.childIds).toEqual([])
   })
 
   it('creates four extension blocks under a parent labeled "extensions"', () => {
