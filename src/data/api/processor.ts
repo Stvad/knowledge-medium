@@ -6,7 +6,9 @@ import type { User } from './user'
 /** Plugin-augmentable type registry for processor scheduled args.
  *  Static processors augment via `declare module '@/data/api'`; dynamic
  *  processors fall back to `unknown` and rely on runtime
- *  `scheduledArgsSchema.parse(args)` validation at enqueue. */
+ *  `scheduledArgsSchema.parse(args)` validation at enqueue.
+ *  Empty body is intentional — declaration merging requires interface. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PostCommitProcessorRegistry { /* augmented per processor */ }
 
 export type ScheduledArgsFor<P extends string> =

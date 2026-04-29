@@ -38,6 +38,9 @@ export interface Query<Args, Result> {
   readonly coarseScope?: { tables?: string[] }
 }
 
+/** Plugin-augmentable type registry. Empty by design so plugin authors
+ *  can layer in members from their own module via declaration merging. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface QueryRegistry { /* augmented per plugin */ }
 
 export const defineQuery = <Args, Result>(

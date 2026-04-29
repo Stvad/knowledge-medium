@@ -20,12 +20,21 @@
 /** Single-row table. Triggers read it via
  *  `(SELECT … FROM tx_context WHERE id = 1)`. Why not a TEMP table:
  *  triggers in `main` schema cannot reference `temp.X` tables. The
- *  TxEngine sets all four fields at the start of `writeTransaction`
- *  and clears them (back to NULL) at the end. */
+ *  TxEngine sets all five fields at the start of `writeTransaction`
+ *  and clears them (back to NULL) at the end.
+ *
+ *  `tx_seq` is the integer tx-grouping key the upload-routing triggers
+ *  copy into `ps_crud.tx_id`. PowerSync's `getNextCrudTransaction()`
+ *  groups CRUD entries by `ps_crud.tx_id`; without it, a multi-row
+ *  `repo.tx` uploads as N separate server-side transactions. The text
+ *  `tx_id` (above) is what `row_events` records — distinct because
+ *  audit doesn't need integer grouping and the text form is friendlier
+ *  for log inspection. */
 export const CREATE_TX_CONTEXT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tx_context (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     tx_id   TEXT,
+    tx_seq  INTEGER,
     user_id TEXT,
     scope   TEXT,
     source  TEXT
@@ -239,12 +248,20 @@ const blockUploadJsonSql = (rowRef: 'NEW' | 'OLD') => `
       )
 `.trim()
 
+// tx_id on ps_crud is what PowerSync's `getNextCrudTransaction()` groups
+// by, so a multi-row repo.tx uploads as a single server-side transaction.
+// Read it from `tx_context.tx_seq` (a non-null INTEGER set by the engine
+// at tx start). Without this, every row in a multi-write tx ships as its
+// own CrudTransaction and atomicity intent is lost on the server.
+const triggerTxSeqSql = `(SELECT tx_seq FROM tx_context WHERE id = 1)`
+
 export const CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_upload_insert
   AFTER INSERT ON blocks
   WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
   BEGIN
-    INSERT INTO ps_crud (data) VALUES (
+    INSERT INTO ps_crud (tx_id, data) VALUES (
+      ${triggerTxSeqSql},
       json_object(
         'op', 'PUT',
         'type', 'blocks',
@@ -260,7 +277,8 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
   AFTER UPDATE ON blocks
   WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
   BEGIN
-    INSERT INTO ps_crud (data) VALUES (
+    INSERT INTO ps_crud (tx_id, data) VALUES (
+      ${triggerTxSeqSql},
       json_object(
         'op', 'PATCH',
         'type', 'blocks',

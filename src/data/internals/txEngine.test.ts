@@ -32,9 +32,7 @@ import {
   codecs,
   defineMutator,
   defineProperty,
-  type BlockData,
   type Mutator,
-  type PropertySchema,
   type Schema,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -214,6 +212,41 @@ describe('tx.createOrGet', () => {
       tx => tx.createOrGet({id: 'det-4', workspaceId: 'ws-B', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+  })
+
+  it('does NOT pin workspace on a live-row hit, so tx.afterCommit still throws WorkspaceNotPinnedError', async () => {
+    // Pre-seed a row.
+    await env.repo.tx(
+      tx => tx.create({id: 'det-livehit', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // A tx whose only effect is a createOrGet live-hit must NOT pin
+    // workspace — afterCommit should refuse because no row_events /
+    // command_events row claims this workspace.
+    await expect(env.repo.tx(async tx => {
+      const r = await tx.createOrGet({id: 'det-livehit', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      expect(r).toEqual({id: 'det-livehit', inserted: false})
+      expect(tx.meta.workspaceId).toBeNull()
+      tx.afterCommit('core.parseReferences', {fromBlockId: 'det-livehit'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(WorkspaceNotPinnedError)
+  })
+
+  it('a tx that adds a real write after a live-hit pins from the write, not from the live-hit', async () => {
+    // Pre-seed a row in ws-1.
+    await env.repo.tx(
+      tx => tx.create({id: 'det-mixed', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    // The createOrGet live-hits ws-1's row; the create then writes to
+    // ws-2. Because live-hit doesn't pin, the write-side pin to ws-2
+    // wins — no WorkspaceMismatchError is raised. (This is the explicit
+    // tradeoff for the no-live-hit-pin rule; in practice
+    // deterministic-id callers thread the same workspaceId throughout.)
+    await env.repo.tx(async tx => {
+      await tx.createOrGet({id: 'det-mixed', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'det-mixed-2', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
+      expect(tx.meta.workspaceId).toBe('ws-2')
+    }, {scope: ChangeScope.BlockDefault})
   })
 })
 
@@ -580,5 +613,37 @@ describe('commit pipeline bookkeeping', () => {
     // Upload trigger gates on source = 'user'; UiState writes don't enqueue.
     const crud = await env.psCrud()
     expect(crud).toEqual([])
+  })
+
+  it('multi-create tx ships as one CrudTransaction (ps_crud.tx_id groups across rows)', async () => {
+    // Two creates inside one repo.tx must share ps_crud.tx_id so
+    // PowerSync's getNextCrudTransaction() emits them as one
+    // CrudTransaction. NULL tx_id (or distinct per-row tx_id) would
+    // ship them as separate server-side txs — atomicity intent lost.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'gx-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'gx-2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const crud = await env.h.db.getAll<{id: number; tx_id: number | null; data: string}>(
+      'SELECT id, tx_id, data FROM ps_crud ORDER BY id',
+    )
+    expect(crud).toHaveLength(2)
+    // Both rows non-null tx_id and matching.
+    expect(crud[0].tx_id).not.toBeNull()
+    expect(crud[1].tx_id).toBe(crud[0].tx_id)
+    // Distinct envelopes.
+    expect(new Set(crud.map(r => JSON.parse(r.data).id))).toEqual(new Set(['gx-1', 'gx-2']))
+
+    // Run a second tx — its rows must get a different tx_id (so the
+    // server treats them as a separate CrudTransaction).
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'gx-3', workspaceId: 'ws-1', parentId: null, orderKey: 'a2'})
+    }, {scope: ChangeScope.BlockDefault})
+    const allCrud = await env.h.db.getAll<{tx_id: number | null}>(
+      'SELECT tx_id FROM ps_crud ORDER BY id',
+    )
+    expect(allCrud[2].tx_id).not.toBeNull()
+    expect(allCrud[2].tx_id).not.toBe(crud[0].tx_id)
   })
 })

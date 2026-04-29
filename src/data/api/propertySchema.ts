@@ -62,8 +62,12 @@ export type PropertyRenderer<T> = (props: PropertyRendererProps<T>) => JSX.Eleme
 /** Plugin-augmentable type registry for property schemas — mirrors
  *  `MutatorRegistry` and `QueryRegistry`. Static plugins augment via
  *  `declare module '@/data/api'`; dynamic plugins use string-keyed access. */
+/** Plugin-augmentable type registry. Empty body is intentional —
+ *  declaration merging requires interface. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PropertySchemaRegistry { /* augmented per plugin */ }
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface PropertyUiRegistry { /* augmented per plugin */ }
 
 /** Helper for plugin authors to define a schema with full type inference

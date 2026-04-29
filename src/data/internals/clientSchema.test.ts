@@ -40,13 +40,13 @@ import {
 
 interface TestDb {
   db: DatabaseSync
-  setTxContext: (ctx: { txId?: string | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
+  setTxContext: (ctx: { txId?: string | null; txSeq?: number | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
   clearTxContext: () => void
   insertBlock: (overrides?: Partial<BlockInsert>) => void
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
   rowEvents: () => Array<RowEventRow>
-  psCrud: () => Array<{ id: number; data: string }>
+  psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
   rowEventCount: () => number
 }
 
@@ -94,13 +94,17 @@ const defaultBlock: BlockInsert = {
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
 
-  // PowerSync's outgoing queue table (the trigger writes into this).
-  // We approximate it; PowerSync's real schema has more columns, but the
-  // trigger only INSERTs `data`.
+  // PowerSync's outgoing queue table. Real schema is
+  // `(id INTEGER PK AUTOINCREMENT, data TEXT, tx_id INTEGER)`; the
+  // upload-routing triggers populate (tx_id, data). PowerSync's
+  // `getNextCrudTransaction()` groups CRUD entries by tx_id, so a
+  // multi-row repo.tx must stamp every row with the same non-null
+  // tx_id or atomicity intent is lost on the server.
   db.exec(`
     CREATE TABLE ps_crud (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL
+      data TEXT NOT NULL,
+      tx_id INTEGER
     )
   `)
 
@@ -121,13 +125,13 @@ const setupDb = (): TestDb => {
 
   return {
     db,
-    setTxContext: ({txId = null, userId = null, scope = null, source = null}) => {
+    setTxContext: ({txId = null, txSeq = null, userId = null, scope = null, source = null}) => {
       db.exec(
-        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)} WHERE id = 1`,
+        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, tx_seq = ${txSeq === null ? 'NULL' : String(txSeq)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)} WHERE id = 1`,
       )
     },
     clearTxContext: () => {
-      db.exec('UPDATE tx_context SET tx_id = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1')
+      db.exec('UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1')
     },
     insertBlock: (overrides = {}) => {
       const row = {...defaultBlock, ...overrides}
@@ -142,7 +146,7 @@ const setupDb = (): TestDb => {
       db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
     },
     rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
-    psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string }[],
+    psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null }[],
     rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
   }
 }
@@ -163,9 +167,9 @@ describe('client schema bootstrap', () => {
     expect(triggers).toHaveLength(7)
   })
 
-  it('seeds tx_context with one row that starts NULL', () => {
+  it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
     const ctx = h.db.prepare('SELECT * FROM tx_context').get() as Record<string, unknown>
-    expect(ctx).toEqual({id: 1, tx_id: null, user_id: null, scope: null, source: null})
+    expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
   })
 
   it('CLIENT_SCHEMA_STATEMENTS is idempotent', () => {
@@ -259,22 +263,58 @@ describe('row_events trigger — DELETE', () => {
 })
 
 describe('upload-routing triggers', () => {
-  it("forwards INSERT to ps_crud when source='user'", () => {
-    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+  it("forwards INSERT to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
+    h.setTxContext({txId: 'tx-1', txSeq: 4242, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.insertBlock({id: 'b1'})
     h.clearTxContext()
-    expect(h.psCrud()).toHaveLength(1)
-    const env = JSON.parse(h.psCrud()[0].data)
-    expect(env).toMatchObject({op: 'PUT', type: 'blocks', id: 'b1'})
+    const crud = h.psCrud()
+    expect(crud).toHaveLength(1)
+    expect(crud[0].tx_id).toBe(4242)
+    expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id: 'b1'})
   })
 
-  it("forwards UPDATE to ps_crud when source='user'", () => {
+  it("forwards UPDATE to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
     h.insertBlock({id: 'b1'})  // sync insert
-    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.updateBlock('b1', {content: 'x'})
     h.clearTxContext()
-    expect(h.psCrud()).toHaveLength(1)
-    expect(JSON.parse(h.psCrud()[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
+    const crud = h.psCrud()
+    expect(crud).toHaveLength(1)
+    expect(crud[0].tx_id).toBe(5151)
+    expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
+  })
+
+  it('groups all writes from one tx under the same ps_crud.tx_id', () => {
+    // Multi-row repo.tx — emulates two creates inside one writeTransaction
+    // by holding tx_context constant across two inserts. PowerSync's
+    // getNextCrudTransaction() depends on this tx_id grouping; without
+    // it, atomicity intent is lost on the upload side.
+    h.setTxContext({txId: 'tx-multi', txSeq: 7777, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'mb-1'})
+    h.insertBlock({id: 'mb-2'})
+    h.clearTxContext()
+
+    const crud = h.psCrud()
+    expect(crud).toHaveLength(2)
+    // Both rows share the tx_id stamped from tx_seq.
+    expect(new Set(crud.map(r => r.tx_id))).toEqual(new Set([7777]))
+    // Distinct envelopes per row.
+    const ids = crud.map(r => JSON.parse(r.data).id).sort()
+    expect(ids).toEqual(['mb-1', 'mb-2'])
+  })
+
+  it('two distinct repo.tx invocations get distinct ps_crud.tx_id', () => {
+    h.setTxContext({txId: 'tx-a', txSeq: 100, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'tx-a-block'})
+    h.clearTxContext()
+    h.setTxContext({txId: 'tx-b', txSeq: 101, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'tx-b-block'})
+    h.clearTxContext()
+
+    const crud = h.psCrud()
+    expect(crud).toHaveLength(2)
+    // Each tx has its own grouping key.
+    expect(new Set(crud.map(r => r.tx_id))).toEqual(new Set([100, 101]))
   })
 
   it("does NOT forward when source='local-ephemeral' (UI-state)", () => {

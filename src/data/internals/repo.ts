@@ -39,6 +39,12 @@ export interface RepoOptions {
   /** UUID provider — default `crypto.randomUUID`. Injected for tests
    *  that want deterministic ids. */
   newId?: () => string
+  /** Monotonic INTEGER tx-grouping key provider, written into
+   *  `tx_context.tx_seq` and copied to `ps_crud.tx_id` by the upload
+   *  triggers. Default: a counter seeded from `Date.now()` so values
+   *  never collide with anything from a prior run. Tests can inject a
+   *  deterministic counter. */
+  newTxSeq?: () => number
 }
 
 export class Repo {
@@ -49,6 +55,7 @@ export class Repo {
 
   private readonly now: () => number
   private readonly newId: () => string
+  private readonly newTxSeq: () => number
   private mutators: Map<string, Mutator<unknown, unknown>> = new Map()
 
   constructor(opts: RepoOptions) {
@@ -58,6 +65,16 @@ export class Repo {
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
     this.newId = opts.newId ?? randomUUID
+    // Default tx-seq provider: monotonic counter seeded above any
+    // value a prior Repo instance could have written. Date.now() in
+    // milliseconds is plenty of headroom (Number.MAX_SAFE_INTEGER /
+    // ms-per-day ~= a few hundred thousand years).
+    if (opts.newTxSeq) {
+      this.newTxSeq = opts.newTxSeq
+    } else {
+      let seq = Date.now()
+      this.newTxSeq = () => ++seq
+    }
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -73,6 +90,7 @@ export class Repo {
       user: this.user,
       isReadOnly: this.isReadOnly,
       newTxId: this.newId,
+      newTxSeq: this.newTxSeq,
       newId: this.newId,
       now: this.now,
       mutators: this.mutators,

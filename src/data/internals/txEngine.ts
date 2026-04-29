@@ -180,10 +180,16 @@ export class TxImpl implements Tx {
       throw new DeletedConflictError(data.id)
     }
 
-    // Live-row hit. No write, no snapshot, no cache mutation. The
-    // workspace pin still applies if this is the first primitive in the
-    // tx (we validated workspace alignment above).
-    this.pinWorkspace(data.workspaceId)
+    // Live-row hit. No write, no snapshot, no cache mutation, **and no
+    // workspace pin** — the spec says `meta.workspaceId` is read from
+    // the first WRITE's row (§5.3), and `tx.afterCommit` requires that
+    // pin (§5.3 / §5.7). A live-hit alone is not a write: no row_events
+    // are emitted, no command_events row claims this workspace. Pinning
+    // here would let `tx.afterCommit` fire after a tx whose only effect
+    // was a deterministic-id cache lookup, leaving CommittedEvent's
+    // `workspaceId: string` contract honest only by accident. We did
+    // already validate the live row's workspace_id matches `data.workspaceId`
+    // above (cross-workspace throw); that's the defensive check, not a pin.
     return {id: data.id, inserted: false}
   }
 

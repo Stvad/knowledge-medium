@@ -57,6 +57,13 @@ export interface RunTxParams<R> {
   user: User
   isReadOnly: boolean
   newTxId: () => string
+  /** Monotonically increasing INTEGER per `repo.tx`. Written into
+   *  `tx_context.tx_seq` so the upload-routing triggers can stamp
+   *  `ps_crud.tx_id` and PowerSync's `getNextCrudTransaction()` groups
+   *  multi-row writes correctly. Required to be strictly increasing
+   *  across calls within a single `Repo`; the default Repo provider
+   *  uses a counter seeded from `Date.now()`. */
+  newTxSeq: () => number
   newId: () => string
   now: () => number
   mutators: ReadonlyMap<string, Mutator<unknown, unknown>>
@@ -71,7 +78,7 @@ export interface TxResult<R> {
 }
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
-  const {db, cache, fn, opts, user, isReadOnly, newTxId, newId, now, mutators} = params
+  const {db, cache, fn, opts, user, isReadOnly, newTxId, newTxSeq, newId, now, mutators} = params
   const {scope, description} = opts
 
   // §10.3 read-only gate. UiState is always allowed (local chrome state).
@@ -80,6 +87,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   }
 
   const txId = newTxId()
+  const txSeq = newTxSeq()
   const source = sourceForScope(scope)
   const snapshots: SnapshotsMap = newSnapshotsMap()
   const afterCommitJobs: AfterCommitJob[] = []
@@ -89,10 +97,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const value = await db.writeTransaction(async (txDb): Promise<R> => {
     // Step 1: set tx_context — triggers read this for source-tagging
     // row_events + gating upload routing + gating workspace-invariant
-    // checks (§4.1.1, §4.3, §4.5).
+    // checks (§4.1.1, §4.3, §4.5). tx_seq is the integer key the
+    // upload triggers stamp into ps_crud.tx_id so PowerSync's
+    // getNextCrudTransaction() groups multi-row writes correctly.
     await txDb.execute(
-      `UPDATE tx_context SET tx_id = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`,
-      [txId, user.id, scope, source],
+      `UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`,
+      [txId, txSeq, user.id, scope, source],
     )
 
     // Step 2: construct Tx + snapshots map + run user fn.
@@ -133,11 +143,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
 
     // Step 5: clear tx_context. Doing this inside the writeTransaction
     // means rollback restores the pre-tx state atomically — no risk of
-    // a stale tx_id leaking into a sync-applied row_event after a
-    // crashed local tx (the trigger CASE on `source IS NULL` is the
-    // belt-and-suspenders backup; this clear is the primary).
+    // a stale tx_id / tx_seq leaking into a sync-applied row_event or
+    // ps_crud row after a crashed local tx (the trigger CASE on
+    // `source IS NULL` is the belt-and-suspenders backup for row_events;
+    // this clear is the primary).
     await txDb.execute(
-      `UPDATE tx_context SET tx_id = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
+      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
     )
 
     return result

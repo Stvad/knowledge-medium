@@ -18,7 +18,11 @@ export interface Mutator<Args = unknown, Result = void> {
 
 /** Plugin-augmentable type registry. Static plugins augment via
  *  `declare module '@/data/api'`; dynamic plugins use string-keyed
- *  access via `repo.run('name', args)`. See §12. */
+ *  access via `repo.run('name', args)`. See §12.
+ *  The empty body is the whole point — `interface` lets plugins layer
+ *  in members from outside this module via declaration merging, which
+ *  `type` and `Record<string, ...>` can't. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface MutatorRegistry { /* augmented per plugin */ }
 
 /** Helper for plugin authors. Returns the mutator unchanged but
