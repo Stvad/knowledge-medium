@@ -94,7 +94,13 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Repair-scoped mutators forbidden through `repo.mutate.X`** (§10.1). The generic dispatch wrapper has no way to compute `repairWorkspaceId` from arbitrary mutator args. Repair-scoped writes go through `repo.tx` directly with the worker computing the workspace from cycle-detection state. The wrapper throws if a mutator's resolved scope is `Repair`, with a message pointing to §5.8.1.
 >   - **Cleanup arg renamed `attemptedAliasTargetIds`** (§7 + §7.6 + §7.5). v4.15 called this `candidateIds` / `newlyCreatedIds`, both of which implied same-tx insertion knowledge that §10.4 says is unavailable. The list is every non-date id returned by `createAliasTarget`, regardless of insert/conflict outcome; the row_events gate (§7.5) sorts genuinely-inserted from pre-existing post-commit. Schema in `PostCommitProcessorRegistry` updated to match.
 >   - **Service-role grep claim split** (§4 + §13.1 acceptance). `git grep` only sees tracked files, so it cannot validate a gitignored local `.env`. Now: tracked-file/browser-bundle guard via `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` (mechanical, CI-runnable) PLUS a separate filename-only local-`.env` check (`grep -lE '^SUPABASE_SERVICE_ROLE_KEY' .env || echo OK`) that doesn't print secret values. PR docs reviewers to run the local check.
-> - v4.17 (this): round-15 fixes.
+> - v4.18 (this): repair simplification — drop local-only repair on non-writable workspaces.
+>   - **Repair scope is no longer workspace-aware in the engine** (§4.7, §5.3, §5.8, §5.8.1, §10.1, §10.3, §15). The repair worker is the gate: it reads each cycle loser's workspace, checks `repo.canWrite(workspaceId)`, and skips non-writable workspaces before opening a tx. Read-only / non-writable-workspace clients let the cycle stay visible (bounded by the depth-100 CTE guards in §11) until a writable peer's authoritative fix syncs down via LWW.
+>   - **Removed plumbing**: `repairTargetId` (and the prior `repairWorkspaceId`) from `RepoTxOptions`; the discriminated union with `source?: never` / `repairTargetId?: never` constraints; per-tx engine-side source derivation; the workspace-row read at tx open; the §5.8.1 source-decision algorithm; the "Repair forbidden through `repo.mutate.X`" rule (its only justification was that the wrapper couldn't compute `repairWorkspaceId` from generic args).
+>   - **Repair is now a plain "uploads, not undoable" scope.** `RepoTxOptions` collapses to a single non-discriminated interface. The engine rejects Repair under `repo.isReadOnly` like any other write scope (defense-in-depth: even a buggy worker can't trigger an upload from a read-only client). `repo.canWrite(workspaceId)` stays as a `Repo` API, but only the worker calls it.
+>   - **Tradeoff acknowledged**: a read-only viewer that races ahead of any writable peer's repair sees a tree truncated at depth 100 in the cyclic subtree until the authoritative fix arrives. Cycles are rare and self-healing via writable-peer convergence; the marginal UX win of local-only repair wasn't worth the engine surface it cost.
+>   - `local-ephemeral` as a `TxSource` value is unchanged — it's still used by `UiState` scope; only its application to Repair is removed.
+> - v4.17: round-15 fixes.
 >   - **Workspace invariant on parent edges** (§4.1, P0). Schema didn't enforce that a child and its parent share `workspace_id`. Triggers (client + server) now enforce `parent_id IS NULL OR parent.workspace_id = child.workspace_id`; mutators throw `WorkspaceMismatchError` with a friendlier message; the cycle/repair worker also detects cross-workspace edges and demotes affected blocks via the same deterministic-loser pattern. Tree queries can rely on the invariant — no per-query workspace filter needed.
 >   - **Repair branch takes `repairTargetId`, not `repairWorkspaceId`** (§5.3, §5.8.1, §4.7). v4.16 trusted callers to pass a correct workspace, but a buggy caller could pass a writable workspace id while updating a non-writable block. Now the engine reads the target row's workspace itself before deciding source. The caller supplies only the id; the engine controls everything downstream of it. `repo.tx` for Repair fits the single-target pattern; multi-row repair is out of scope for v1.
 >   - **`createAliasTarget` declares `scope: ChangeScope.References`** (§7 mapping). v4.16 left the scope unspecified; default of `BlockDefault` would have made `tx.run(createAliasTarget, …)` throw under §10.2's same-scope rule when called from parseReferences's References-scoped tx. Now compose-able with parseReferences as designed.
@@ -273,7 +279,7 @@ Concurrency story:
 
 A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too long, but is not required for correctness.
 
-**Workspace invariant**: a block's parent (if any) must be in the same workspace. Otherwise tree queries crossing `parent_id` would silently leak rows from one workspace into another's subtree, and per-workspace permission decisions (repair source derivation, upload routing, RLS) become ambiguous.
+**Workspace invariant**: a block's parent (if any) must be in the same workspace. Otherwise tree queries crossing `parent_id` would silently leak rows from one workspace into another's subtree, and per-workspace permission decisions (repair worker's `canWrite()` gate, upload routing, RLS) become ambiguous.
 
 ```sql
 -- enforced both client-side (SQLite) and server-side (Postgres):
@@ -551,20 +557,26 @@ for (const { start_id, cycle_depth } of detected) {
 // repair: lex-smallest in each cycle becomes a workspace root
 for (const members of cycles.values()) {
   const loser = [...members].sort()[0]
-  // The caller passes only the target id. The engine reads the row's
-  // workspace itself at tx-open time and derives source from canWrite() —
-  // caller can't lie about either.
+  const target = await repo.block(loser).load()
+  if (!target) continue                             // block missing; skip this loser
+
+  // The worker is the gate: skip non-writable workspaces entirely. The local
+  // view stays cyclic (capped by the depth-100 CTE guards in §11), and the
+  // authoritative fix arrives later via sync from a writable peer running its
+  // own repair pass. No local-only repair, no rejected-upload loop, no
+  // workspace-aware engine logic.
+  if (!repo.canWrite(target.workspaceId)) continue
+
   await repo.tx(async tx => tx.update(loser, { parentId: null }), {
     scope: ChangeScope.Repair,
-    repairTargetId: loser,                          // engine reads workspace, derives source
     description: `Cycle repair: ${loser}`,
   })
 }
 ```
 
-This is deterministic across clients: every client that observes the same cyclic state picks the same loser, so the repair converges via sync (each client writes the same `parent_id = NULL` for the same row; LWW is a no-op).
+This is deterministic across writable clients: every client that observes the same cyclic state and can write the affected workspace picks the same loser, so the repair converges via sync (each writable client writes the same `parent_id = NULL` for the same row; LWW is a no-op). Read-only or workspace-non-writable clients skip the repair locally; their view of the affected subtree is bounded but visually truncated until a writable peer's fix syncs down.
 
-Repair runs with `scope: ChangeScope.Repair` (defined in §5.8). Source is decided per-tx by `repo.canWrite(workspaceId)` for the affected block (see §5.8.1): writable → `'user'` (uploads, propagates to peers via sync); not-writable → `'local-ephemeral'` (local view fixed, no upload, eventual convergence via writable-peer sync). Repair is permitted regardless of `repo.isReadOnly` (it's system-driven, not user-driven). The mutator writes a `command_events` row tagging the repair for audit.
+Repair runs with `scope: ChangeScope.Repair` (defined in §5.8): a normal "uploads, not undoable" scope. The engine rejects Repair under `repo.isReadOnly` (same gate as `BlockDefault`/`References`); the per-workspace `canWrite()` check above is the worker's responsibility, not the engine's. The mutator writes a `command_events` row tagging the repair for audit.
 
 **Layer 3 — CTE recursion guards.** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries a `depth < 100` defensive guard. Even if cycle repair lags, queries return finite results instead of OOMing.
 
@@ -722,35 +734,23 @@ export interface Tx {
   readonly meta: { description?: string; scope: ChangeScope; user: User; txId: string; source: TxSource }
 }
 
-/** RepoTxOptions is discriminated on `scope` so source/permission contracts
- *  are enforceable at the type level:
- *
- *  - Repair scope:  caller passes `repairTargetId` (the id of the affected
- *    block — typically the cycle loser). The engine reads that block's
- *    workspace itself, then derives source via `repo.canWrite(workspaceId)`
- *    per §5.8.1. The caller never supplies the workspace OR the source
- *    directly: a buggy caller could otherwise pass a writable workspace id
- *    while updating a non-writable block, re-introducing the rejected-upload
- *    loop in a different shape. Reading the workspace from the target row
- *    keeps source decisions tied to the rows actually being written.
- *  - All other scopes: source is derived statically from scope
- *    (BlockDefault / References → 'user', UiState → 'local-ephemeral').
- *    `source` and `repairTargetId` are both absent from these branches.
- *
+/** Source is derived from scope alone — callers never pass it:
+ *  - BlockDefault / References / Repair → 'user' (uploads)
+ *  - UiState                            → 'local-ephemeral' (no upload)
  *  ('sync' is reserved for sync-applied writes that bypass repo.tx entirely;
- *  it is not assignable from anywhere in this API.) */
+ *  it is not assignable from anywhere in this API.)
+ *
+ *  Repair has no special workspace-aware engine logic. The repair worker
+ *  (§4.7) is the only caller, and it gates on `repo.canWrite(workspaceId)`
+ *  itself — non-writable workspaces are skipped before the tx is opened, so
+ *  the engine never sees a Repair tx for a workspace the user can't write. */
 
-export type RepoTxOptions =
-  | (RepoTxOptionsBase & { scope: typeof ChangeScope.Repair; repairTargetId: string; source?: never })
-  | (RepoTxOptionsBase & { scope: Exclude<ChangeScope, typeof ChangeScope.Repair>; source?: never; repairTargetId?: never })
-
-interface RepoTxOptionsBase {
+export interface RepoTxOptions {
+  scope: ChangeScope
   description?: string
   reads?: { blockIds?: string[]; subtreeOf?: string }
 }
 ```
-
-`source?: never` and `repairTargetId?: never` (rather than just omitting fields from the off-branch) are load-bearing: TypeScript's excess-property checks only fire on fresh object literals, so without them, a variable like `{ scope: BlockDefault, source: 'local-ephemeral' }` would still be structurally assignable to the non-Repair branch. The `?: never` declarations make the rejection type-level for both literal and variable callers — and crucially make `source` impossible for Repair callers too, so the engine's `canWrite` decision (after reading the target's workspace) is the only path.
 
 ```ts
 interface TxWriteOpts {
@@ -808,7 +808,7 @@ export interface Mutator<Args = unknown, Result = void> {
 Scope semantics:
 - `ChangeScope.BlockDefault` (or any document scope): undoable, uploads to server.
 - `ChangeScope.UiState` (`'local-ui'`): not undoable; **`source='local-ephemeral'` set on `tx_context`**, so the upload trigger excludes these writes.
-- Read-only mode: `repo.tx` rejects unless every mutator in the tx has `UiState` or `Repair` scope. Repair is system-driven and runs even under read-only (see §5.8.1; its `source` becomes `'local-ephemeral'` so it doesn't try to upload).
+- Read-only mode: `repo.tx` rejects unless every mutator in the tx has `UiState` scope. `BlockDefault`, `References`, and `Repair` are all rejected (Repair is system-driven, but the worker gates per-workspace via `canWrite()` and only invokes Repair on writable workspaces; the engine's coarse `isReadOnly` rejection is defense-in-depth — see §4.7).
 - Different mutators in the same tx with different scopes are not allowed (engine throws); a tx is one scope.
 
 ### 5.5 `Query<Args, Result>`
@@ -1114,8 +1114,9 @@ export const ChangeScope = {
   UiState: 'local-ui',                     // selection/focus/etc; not undoable; never uploads
   References: 'block-default:references',  // ref-parsing bookkeeping; separate undo bucket; uploads
   Repair: 'core:repair',                   // cycle/consistency repair; not undoable;
-                                           // upload conditional on repo.canWrite(workspaceId)
-                                           // — see §5.8.1; permitted in read-only mode
+                                           // uploads (worker pre-gates on canWrite —
+                                           // see §4.7); rejected under repo.isReadOnly
+                                           // like any other write scope
 } as const
 
 /** Plugin-augmentable map of scope-name → metadata. Built-in scopes are NOT in
@@ -1133,8 +1134,6 @@ export type ChangeScope =
 
 **Plugin scope semantics** (v1): a plugin that augments `ChangeScopeRegistry` with `'tasks:agenda': true` gets a scope that behaves like `BlockDefault` — undoable, uploads via `source = 'user'`, rejected in read-only mode. If a plugin needs different semantics (non-undoable, local-only, etc.), it should pick one of the four built-in scopes instead of inventing a new one. A future revision can add a metadata-shaped registry (`'tasks:agenda': { undoable: false, source: 'local-ephemeral', allowedInReadOnly: true }`) if real plugin needs justify it; for v1, keeping the registry as a string-key marker keeps the engine logic simple.
 
-The `Exclude<ChangeScope, typeof ChangeScope.Repair>` in §5.3's `RepoTxOptions` therefore correctly excludes only the literal `'core:repair'` string — built-in non-Repair scopes and all plugin scopes flow into the no-`source` branch.
-
 Scope semantics matrix:
 
 | Scope | Undoable? | Uploads? | Allowed in read-only? |
@@ -1142,30 +1141,21 @@ Scope semantics matrix:
 | `BlockDefault` | yes (user undo stack) | yes | no |
 | `UiState` | no | no (`source = 'local-ephemeral'`) | yes |
 | `References` | yes (separate ref bucket; not exposed to user undo) | yes | no |
-| `Repair` | no | yes IFF `repo.canWrite(workspaceId)` for the affected block (see §5.8.1) | yes |
+| `Repair` | no | yes (`source = 'user'`; worker pre-gates on `canWrite()` — see §4.7) | no |
 
-### 5.8.1 Repair scope under workspace permission / RLS
+### 5.8.1 Repair under workspace permission / RLS
 
-Repair has to behave differently per-block based on whether the local user can actually write to that block's workspace, otherwise the upload would hit RLS rejection on the server and PowerSync would loop.
+Repair always uploads. The repair worker is responsible for not invoking it on a workspace the local user can't write to, otherwise the upload would hit RLS rejection on the server and PowerSync would loop.
 
 The `Repo` exposes `repo.canWrite(workspaceId): boolean` — a synchronous query against whatever permission state the app maintains (today: per-workspace role; for v1 frequently just one workspace, so this often degrades to `!repo.isReadOnly`, but the spec is permission-based, not flag-based, so future multi-workspace permission distinctions don't break repair).
 
-**The repair worker passes `repairTargetId` (not `source`, not workspaceId) via `RepoTxOptions`** (§5.3). The engine reads that block's workspace from the local row at tx-open time (pipeline step 1, before user fn), consults `repo.canWrite(workspaceId)`, and sets `tx_context.source` itself. The caller can't pass `source` or `workspaceId` directly: a buggy caller could otherwise pass a writable workspace id while updating a non-writable block, re-introducing the rejected-upload loop in a different shape. Reading the workspace from the target row ties the source decision to the row actually being written.
+**The worker is the gate** (§4.7): for each cycle's loser, the worker reads the loser's workspace, calls `repo.canWrite(workspaceId)`, and skips the repair if the workspace is not writable. No tx is opened in that case — no local-ephemeral fallback, no engine-side workspace logic. The cycle stays visible in the local DB (bounded by the depth-100 CTE guards in §11) until a writable peer runs its own deterministic repair and the fix syncs down via LWW.
 
-Per cycle, the worker:
-1. Identifies the loser block id (deterministic loser per §4.7).
-2. Calls `repo.tx(fn, { scope: ChangeScope.Repair, repairTargetId: loser, description })`.
+This trades a brief visual artifact on read-only / non-writable-workspace clients (a tree truncated at depth 100 in the cyclic subtree) for a much smaller engine surface: no `repairTargetId` / `repairWorkspaceId` plumbing on `RepoTxOptions`, no per-tx source derivation, no discriminated union, no special read-only carve-out. Because cycles only arise from concurrent moves by writable peers, *some* writable peer will repair and propagate; the read-only client just waits.
 
-The engine then:
-- Reads `targetWorkspace = (SELECT workspace_id FROM blocks WHERE id = repairTargetId)`. If the row is missing (race against a sync delete) → repair tx is a no-op; abort.
-- If `repo.canWrite(targetWorkspace)` → `tx_context.source = 'user'`. Repair uploads. Peers receive the deterministic fix via sync; LWW makes it idempotent.
-- Else → `tx_context.source = 'local-ephemeral'`. Repair fixes the local view only. Trigger doesn't forward; server isn't asked to accept a write the user couldn't have made. The fix arrives later via a writable peer's repair syncing down (overwrites the local-ephemeral repair with an identical value — convergent).
+The engine treats Repair like any other write scope under read-only mode (rejected when `repo.isReadOnly`), as defense-in-depth: even if the worker had a bug and tried to invoke Repair on a fully read-only client, the engine would still reject the tx instead of letting an upload reach the server.
 
-This is the only scope whose `source` is computed dynamically per tx; every other scope has a static source derived from scope alone. Because the engine reads the target row's workspace itself (caller-supplied id, engine-derived everything else), the safety rule is enforced — no caller path forces an upload to a non-writable workspace.
-
-**Constraint**: a Repair tx writes to exactly one block (the `repairTargetId`). If a future repair operation needs to update multiple rows atomically, the API will need a per-row source decision; for v1 the cycle-repair pattern is single-target.
-
-Why not "read-only clients don't run repair at all": leaving the local view cyclic means CTE depth guards (§4.7 layer 3) cap results at 100 deep — fine for correctness, but visually misleading. Local-only repair gives the user a correct local view while waiting for a writable peer's authoritative fix.
+Why not local-only repair on non-writable workspaces: the complexity (per-tx source derivation, workspace-aware engine logic, type-level discriminated options) wasn't worth a marginal UX win on a rare-and-self-healing scenario. The depth-100 CTE guards keep the local view *correct*, just visually capped, until the authoritative fix arrives.
 
 Why not "use a system actor / privileged service": no such service in v1, and adding one would couple the data layer to a backend topology we don't have. Eventual consistency via writable-peer convergence works without it.
 
@@ -1481,17 +1471,9 @@ await repo.mutate.indent({ id })
     ? indentMutator.scope({ id })
     : indentMutator.scope
 
-  // 2. Repair scope is forbidden through generic mutator dispatch — see below.
-  if (scope === ChangeScope.Repair) {
-    throw new Error(
-      `Mutator '${indentMutator.name}' resolved to Repair scope, which is not ` +
-      `dispatchable via repo.mutate.X. Repair-scoped writes must go through ` +
-      `repo.tx directly with { scope: Repair, repairTargetId } so the ` +
-      `engine can derive source from canWrite(workspaceId). See §5.8.1.`,
-    )
-  }
-
-  // 3. Open tx with concrete scope.
+  // 2. Open tx with concrete scope. Repair scope works here too; the repair
+  //    worker is the only intended caller (it pre-gates on canWrite — §4.7),
+  //    but the engine doesn't enforce that.
   await repo.tx(async tx => tx.run(indentMutator, { id }), {
     scope,
     description: indentMutator.describe?.({ id }),
@@ -1499,9 +1481,7 @@ await repo.mutate.indent({ id })
 }
 ```
 
-**Why Repair is forbidden through `repo.mutate.X`**: Repair scope requires a `repairTargetId` so the engine can read the target's workspace and derive source via `canWrite` (§5.3 / §5.8.1). `Mutator` has no standard way to identify the target id from arbitrary args — the args shape is mutator-specific. Adding a per-mutator `repairTargetId(args)` hook would bloat every Mutator definition for a feature only Repair needs. Cleaner to constrain Repair to a direct-`repo.tx` path: the cycle-repair worker calls `repo.tx(async tx => tx.run(repairCycleMutator, args), { scope: Repair, repairTargetId })` itself, where the worker knows the target id from cycle detection. v1's only Repair-scoped mutator is `core.repairCycle`, and only the worker invokes it.
-
-Mutators with arg-dependent scopes are rare in v1 (none in the kernel list), but the API permits them and the wrapper handles them correctly for non-Repair scopes. Most mutators have a static scope and the resolution is a no-op.
+Mutators with arg-dependent scopes are rare in v1 (none in the kernel list), but the API permits them and the wrapper handles them correctly. Most mutators have a static scope and the resolution is a no-op.
 
 ### 10.2 Scope unification within a tx
 
@@ -1511,7 +1491,9 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 ### 10.3 Read-only mode
 
-`repo.tx` rejects with `ReadOnlyError` for `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` and `Repair` scopes always allowed (UiState is local-only chrome state; Repair is system-driven and must run regardless of user permissions).
+`repo.tx` rejects with `ReadOnlyError` for `BlockDefault`, `References`, and `Repair` scopes when `repo.isReadOnly`. `UiState` is always allowed (local-only chrome state).
+
+Repair is a normal write scope as far as the engine is concerned — it uploads, so it's gated by the same `isReadOnly` check. The cycle-repair worker (§4.7) pre-gates per-workspace via `repo.canWrite(workspaceId)` and skips non-writable workspaces before opening a tx, so under partial-permission setups (e.g. user is writable in W1 but read-only in W2, with `repo.isReadOnly = false` overall) repair only runs against W1. The engine's coarse `isReadOnly` rejection catches the fully-read-only client as defense-in-depth — even a buggy worker can't trigger an upload from a read-only client.
 
 ### 10.4 `onConflict: 'ignore'` cache coherence
 
@@ -1805,7 +1787,7 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 
 ## 15. Invariants worth nailing
 
-1. **Read-only mode**: `repo.tx` rejects `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` and `Repair` scopes always allowed (UiState is local chrome state; Repair is system-driven and becomes `source='local-ephemeral'` for non-writable workspaces per §5.8.1).
+1. **Read-only mode**: `repo.tx` rejects `BlockDefault`, `References`, and `Repair` scopes when `repo.isReadOnly`. `UiState` always allowed (local chrome state). The cycle-repair worker pre-gates per-workspace via `canWrite()` and only invokes Repair on writable workspaces (§4.7); the engine's coarse `isReadOnly` rejection is defense-in-depth.
 2. **Scope is per-tx, not per-call**: every mutator call within a tx must share the tx's scope. Mixing throws.
 3. **UI-state isolation**: UI-state txs set `tx_context.source='local-ephemeral'`; upload trigger excludes; not in undo stack.
 4. **Sync-applied writes**: bypass `repo.tx` entirely. `tx_context.source` stays `NULL` (no `repo.tx` is open to set it). row_events triggers `COALESCE(tx_context.source, 'sync')` to tag them; upload-routing triggers gate on `= 'user'` so sync writes don't loop back into `powersync_crud`. row_events have `tx_id = NULL` (no tx). **No PowerSync sync-apply wrapper exists or should be added** — the COALESCE + equality-test pair handles this without one.
@@ -1987,6 +1969,7 @@ Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces t
 - [ ] Reviewer's round-8 findings addressed: Phase 1 trigger count corrected to 5 (§13.1, was stale "six" from before DELETE upload removal); conflict-reconciliation SELECT moved inside the writeTransaction in the pipeline diagram, matching §10.4 (§10); atomicity prose updated (steps 1–9 atomic, 10–13 post-COMMIT pre-resolution, 14 fire-and-after); repair scope under read-only / RLS spelled out — conditional `source = 'user' | 'local-ephemeral'` based on `repo.isReadOnly`, with convergence via writable-peer propagation (§5.8.1); `onConflict: 'ignore'` same-tx insertion detection acknowledged as unavailable (§10.4) with `tx.createOrGet` flagged as the future API if needed.
 - [ ] Reviewer's round-9 findings addressed: alias cleanup row_events insertion gate (§7 mapping + new §7.5) prevents deletion of pre-existing pages on `[[Inbox]]`-into-existing-page race; Repair source uses `repo.canWrite(workspaceId)` per affected workspace, not blanket `isReadOnly` (§5.8.1); Stage 2 dynamic discovery has a transitional non-facet path for Phases 1-3 (§8); `BlockData` shape standardized as camelCase domain with explicit storage-mapping in §4.1.1, and stale `parent_id` / `properties_json` references in TS examples fixed; §4.5 trigger prose aligned with the actual v1 set (5 triggers).
 - [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
+- [ ] v4.18 simplification reflected throughout: Repair scope is workspace-unaware in the engine; the cycle-repair worker pre-gates per-workspace via `repo.canWrite(workspaceId)` and skips non-writable workspaces (§4.7); `RepoTxOptions` is a single non-discriminated interface (§5.3); §5.8.1 documents the worker-as-gate model and the visual-truncation tradeoff for read-only viewers; Repair is rejected under `repo.isReadOnly` like any other write scope (§10.3, §15 #1); `repo.mutate.X` no longer special-cases Repair (§10.1). Supersedes round-8's conditional-source approach and round-9's per-tx engine-side `canWrite` derivation (those entries above describe interim designs, not the current spec state).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1 (zod) and §16.12 (jittered fractional indexing) resolved in v4.10. No remaining gating decisions before Phase 1 — everything else in §16 is intentionally deferred.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime via staged `setFacetRuntime` waves (§8 Bootstrap stages, §12.2). Pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) reject with `MutatorNotRegisteredError` for unknown names.
