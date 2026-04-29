@@ -11,15 +11,15 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 > - **`parseReferences` is a follow-up post-commit processor, not same-tx.** Same-tx would add typing latency to a hot path; today's app already accepts the brief stale-backlinks window. Don't "upgrade" to atomic — it's the wrong trade.
 > - **No PowerSync sync-apply wrapper.** Sync writes leave `tx_context.source = NULL`; the COALESCE-to-`'sync'` and `= 'user'` upload-gate pair handles tagging without one. Don't try to hook PowerSync's CRUD-apply path.
 > - **Bidirectional `Codec<T>` separate from zod.** Properties need encode + decode; zod is unidirectional. Codec runs at exactly four boundary call sites; storage and cache hold encoded shape.
-> - **Cycle prevention is three layers** (§4.7): local validation in move mutators, post-sync deterministic repair (lex-smallest loser), depth-100 CTE guards in every recursive query. The last is the load-bearing safety net.
+> - **Cycle prevention is two layers + a detection log** (§4.7): local validation in move mutators, depth-100 CTE guards in every recursive query, plus a row_events-tail scan that logs sync-introduced cycles for telemetry. **No automatic repair** — alpha cut, revisit if the log fires in practice.
 > - **Workspace invariant enforced server-side** via composite FK `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1). Tree queries can rely on it; no per-query workspace filter needed. Cross-workspace edges can't sync in.
 > - **Bootstrap is staged** (§8). Stage 1 registers kernel + static contributions synchronously at `AppRuntimeProvider` mount; Stage 2 registers dynamic plugins after the discovery query resolves. The Stage 0 → Stage 1 window is one React render.
 > - **In-tx reads are limited** to `tx.get` / `tx.peek` / `tx.childrenOf` / `tx.parentOf`. No arbitrary `tx.query`. Broader information passes via mutator args (loaded outside the tx) or post-commit processors. Same constraint Replicache and Zero accept.
 >
 > **Recent simplification trajectory** (read as guard-rails — multiple rounds led to these and re-adding them is a regression):
-> - **v4.18 + v4.19: repair is engine-unaware of workspaces.** `repo.repairTreeInvariants(targetId, fix)` is the canonical worker entry; it gates on `canWrite(workspaceId)` and skips non-writable workspaces. The local view stays cyclic (capped by depth-100 guards) until a writable peer's fix syncs down. The engine treats Repair as a normal write scope (rejected under `isReadOnly` like any other). **Don't re-add per-tx workspace plumbing on `RepoTxOptions`** — rounds v4.12 → v4.16 led there; v4.18 ripped it out for good reason.
 > - **v4.20: four dead-code drops.** `mode: 'same-tx'` processors removed (zero v1 callers; the hypothetical use case was rejected in v4.4 anyway). `watches.kind: 'mutator'` removed (field-watching is the correctness path; mutator-name watches miss plugin mutators that bypass the named one). `tx.create({...}, { onConflict: 'ignore' })` replaced by `tx.createOrGet(data) → { id, inserted: boolean }`. `ChangeScopeRegistry` removed (plugin scopes were behaving as `BlockDefault` anyway).
 > - **v4.21: write-through Tx primitives.** No staged write-set; no flush step. Each `tx.create` / `tx.update` / `tx.delete` / `tx.setProperty` runs INSERT/UPDATE inline; engine captures `(before, after)` per id at the write site for cache hydration / undo / handle diffing. Reads inside a tx are plain SQL/cache lookups (own writes already in SQL). Made possible by v4.20 dropping the two consumers of pre-flush state (same-tx processors, createOrGet's reconciliation hook).
+> - **v4.23: drop deterministic cycle repair entirely.** The old Layer 2 (post-sync deterministic repair via `repairTreeInvariants` + lex-smallest-loser) is removed. The protocol becomes: Layer 1 (local move-mutator validation) + Layer 2 (depth-100 CTE guards, formerly Layer 3) + a row_events-tail detection scan that logs cycles for telemetry. **`ChangeScope.Repair`, `repo.repairTreeInvariants`, `repo.canWrite`, the `repairCycle` kernel mutator, and the per-workspace repair gating prose are all gone.** Rationale: cycles are a narrow concurrent-write window; alpha population is small; the two remaining layers keep queries finite under any cyclic state; revisit auto-repair only if the detection log fires. **Don't re-add this without telemetry showing it's needed** — v4.12 → v4.18 chased per-workspace repair plumbing through several round-trips before v4.23 cut the whole branch.
 >
 > **Resolved open questions:**
 > - **zod** for argsSchema (v4.10). Bundle weight + React-ecosystem familiarity beat Effect Schema; bidirectional encode/decode handled separately by `Codec<T>`. Valibot is a near-mechanical fallback if bundle pressure shows up later.
@@ -109,9 +109,6 @@ We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reade
 │   repo.tx(fn, opts)     → Promise<TxResult>                 │
 │   repo.mutate.X(args)   → Promise<Result>  // sugar over tx │
 │   repo.run(name, args)  → Promise<unknown> // dynamic       │
-│   repo.repairTreeInvariants(targetId, fix, desc?)           │
-│                         → Promise<void>     // worker entry │
-│   repo.canWrite(workspaceId) → boolean                      │
 │   repo.setFacetRuntime(rt)                                  │
 └──────┬──────────────────┬───────────────────────────────────┘
        │                  │
@@ -206,7 +203,7 @@ Concurrency story:
 
 A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too long, but is not required for correctness.
 
-**Workspace invariant**: a block's parent (if any) must be in the same workspace. Otherwise tree queries crossing `parent_id` would silently leak rows from one workspace into another's subtree, and per-workspace permission decisions (repair worker's `canWrite()` gate, upload routing, RLS) become ambiguous.
+**Workspace invariant**: a block's parent (if any) must be in the same workspace. Otherwise tree queries crossing `parent_id` would silently leak rows from one workspace into another's subtree, and per-workspace permission decisions (upload routing, RLS) become ambiguous.
 
 ```sql
 -- enforced both client-side (SQLite) and server-side (Postgres):
@@ -267,7 +264,7 @@ The composite FK guarantees both that `parent_id` exists *and* that the parent s
 
 **Mutator-level validation** is the better-error-message layer: `move`, `indent`, `outdent`, `createChild`, `insertChildren`, etc. validate the same invariant client-side before staging the write and throw `WorkspaceMismatchError` / `ParentNotFoundError` / `ParentDeletedError`. The trigger is the safety net.
 
-**No sync-time workspace repair.** v4.17 had the row_events tail detecting cross-workspace edges and demoting them via the cycle-repair pattern. With the server-side composite FK, cross-workspace edges cannot survive sync — they're rejected at the server boundary. The cycle-repair worker (§4.7) handles cycles only. If this assumption ever breaks (e.g. a server-side migration drops the FK accidentally), the depth-100 CTE guards still keep queries finite — but the recovery path is "fix the server constraint," not "client-side repair."
+**No sync-time workspace repair.** v4.17 had the row_events tail detecting cross-workspace edges and demoting them via a repair pattern. With the server-side composite FK, cross-workspace edges cannot survive sync — they're rejected at the server boundary. The depth-100 CTE guards (§4.7 Layer 2) keep queries finite if this assumption ever breaks (e.g. a server-side migration drops the FK accidentally), but the recovery path is "fix the server constraint," not "client-side repair."
 
 Tree queries in §11 do not need a workspace predicate when the invariant holds — `parent_id` chains stay within one workspace by construction. The queries filter by `deleted = 0`; adding a `workspace_id = ?` filter would be harmless but redundant.
 
@@ -388,7 +385,7 @@ CREATE INDEX idx_row_events_created ON row_events(created_at DESC);
 
 Written by SQLite triggers on `blocks` (one per insert/update/delete). Triggers pull `tx_id` and `source` from `tx_context`. **Belt-and-suspenders for the sync case**: triggers compute `tx_id` as `CASE WHEN ctx.source IS NULL THEN NULL ELSE ctx.tx_id END` so a sync-applied write always emits `tx_id = NULL`, regardless of any stale tx_id left in `tx_context` from the previous local tx. The TxEngine clears all four fields at end-of-tx (§10), but the trigger logic is the load-bearing correctness check.
 
-**Soft-delete semantics**: `tx.delete(id)` sets `deleted = 1` (an UPDATE), so it fires the UPDATE trigger, not the DELETE trigger. To distinguish soft-deletes from regular updates, the UPDATE trigger inspects whether the `deleted` column transitioned from 0 to 1 and writes `kind = 'soft-delete'` instead of `'update'`. Consumers (handles, devtools, the cycle-repair scanner) treat soft-delete as a logical removal.
+**Soft-delete semantics**: `tx.delete(id)` sets `deleted = 1` (an UPDATE), so it fires the UPDATE trigger, not the DELETE trigger. To distinguish soft-deletes from regular updates, the UPDATE trigger inspects whether the `deleted` column transitioned from 0 to 1 and writes `kind = 'soft-delete'` instead of `'update'`. Consumers (handles, devtools, the cycle detector) treat soft-delete as a logical removal.
 
 The DELETE trigger is reserved for **hard purges** — physically removing rows from the local DB. v1 ships no purge mechanism; the trigger exists for future use (e.g., a cleanup job that purges soft-deleted rows older than N days). Hard deletes do not sync to other clients (PowerSync sees the row vanish locally, but soft-delete via the synced `deleted` column is what propagates "this row is gone" through sync).
 
@@ -455,17 +452,17 @@ Total v1 trigger count on `blocks`: **5** = 3 row_events writers + 2 upload-rout
 - Sync `blocks` with the new shape.
 - Not sync `tx_context`, `row_events`, `command_events` (local-only initially; see §16.8).
 
-### 4.7 Cycle prevention and repair
+### 4.7 Cycle prevention
 
-`parent_id + order_key` with row-LWW under sync admits parent cycles in the worst case. Example: client A moves X under Y; client B concurrently moves Y under X. Each is a single-row update; both survive sync; the resulting tree has `X.parent_id = Y` and `Y.parent_id = X` — a cycle. The recursive CTEs in §11 would recurse until SQLite's depth limit and either error or return garbage.
+`parent_id + order_key` with row-LWW under sync admits parent cycles in the worst case. Example: client A moves X under Y; client B concurrently moves Y under X. Each is a single-row update; both survive sync; the resulting tree has `X.parent_id = Y` and `Y.parent_id = X` — a cycle. The recursive CTEs in §11 would recurse until SQLite's depth limit and either error or return garbage if unguarded.
 
-Three layers of defense:
+Two layers of defense + one observability hook:
 
 **Layer 1 — Local validation in move mutators.** Every kernel mutator that changes `parent_id` (`move`, `indent`, `outdent`, etc.) checks first that the proposed new parent is not a descendant of the moved node. The check is a single `isDescendantOf` query (§11.3). If it would create a cycle locally, throw `CycleError` before staging the write. Catches every cycle introduced by the *local* user.
 
-**Layer 2 — Post-sync cycle repair.** When the row_events tail (§9.3) sees sync-applied writes that changed `parent_id`, the engine runs a bounded two-step pass scoped to the affected ids:
+**Layer 2 — CTE recursion guards.** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries a `depth < 100` defensive guard. Even if a sync-applied cycle slips through Layer 1, queries return finite results — the cyclic subtree is visually truncated at depth 100 — instead of recursing to SQLite's limit.
 
-**Step 2a — detect cycle starts.** Find the affected ids that close back on themselves:
+**Detection-only telemetry.** When the row_events tail (§9.3) sees sync-applied writes that changed `parent_id`, the engine runs a bounded scan scoped to the affected ids:
 
 ```sql
 WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
@@ -481,58 +478,13 @@ WHERE depth > 0 AND id = start_id
 GROUP BY start_id;
 ```
 
-Each row gives `(start_id, cycle_depth)` — the start_id is in a cycle of length `cycle_depth`.
+Each result row gives `(start_id, cycle_depth)`. When the result set is non-empty, the engine emits a single warning log (`console.warn` + a `repo.events.cycleDetected` event with `{ startIds, workspaceId, txIdsInvolved }`) so the team finds out *that* a cycle happened in the wild. **No automatic repair.** The cycle stays in the data; queries truncate at depth 100; one of the cycle members has to be moved by a user (any move that breaks the loop works) or by manual operator intervention before the affected subtree renders in full.
 
-**Step 2b — materialize cycle members and pick the loser.** For each detected cycle start, walk the parent chain in JS (or one more bounded SQL query) up to `cycle_depth - 1` steps, collecting every visited id. That's the cycle member set. Different start_ids may belong to the same cycle — dedupe by member-set equality. For each unique cycle, the **loser** is the lexicographically smallest id among its members.
+This is a deliberate alpha cut. Cycles only arise from concurrent moves on overlapping subtrees by writable peers in the same workspace — a narrow window in a small alpha population. Layers 1 + 2 keep the local view *correct* (just visually capped) under any cyclic state syncs in. The detection log gives us the data to revisit deterministic auto-repair (lex-smallest-loser, per-workspace-canWrite-gating) in a later round if it becomes a real problem; until then, none of that machinery exists in the engine, on `Repo`, or in the type system.
 
-In TS:
+Operational runbook on a logged cycle: identify the cycle members from the log payload, decide which edge to break (typically the most recent move), and have the relevant user perform a move that takes one of the members out of the loop. The depth-100 truncation means the cyclic subtree is reachable for inspection — every member appears in some other tree query at depth ≤ 100 — so the UI can still show the operator what to act on.
 
-```ts
-async function findCycleMembers(start: string, cycleDepth: number): Promise<Set<string>> {
-  const members = new Set<string>([start])
-  let cur = start
-  for (let i = 0; i < cycleDepth; i++) {
-    const parent = await getParentId(cur)            // single SELECT per step; bounded by cycleDepth
-    if (!parent || members.has(parent)) break
-    members.add(parent)
-    cur = parent
-  }
-  return members
-}
-
-// dedupe cycles by canonicalizing members:
-const cycles = new Map<string, Set<string>>()         // sorted-comma-key → members
-for (const { start_id, cycle_depth } of detected) {
-  const members = await findCycleMembers(start_id, cycle_depth)
-  const key = [...members].sort().join(',')
-  if (!cycles.has(key)) cycles.set(key, members)
-}
-
-// repair: lex-smallest in each cycle becomes a workspace root.
-// The worker calls repo.repairTreeInvariants(targetId, fix), which:
-//   1. Loads the target and reads its workspaceId.
-//   2. Skips silently if the target is missing OR canWrite(workspaceId) is false
-//      — non-writable workspaces let the cycle stay visible (bounded by the
-//      depth-100 CTE guards in §11) until a writable peer's fix syncs down via LWW.
-//   3. Otherwise opens a Repair-scoped repo.tx and runs `fix(tx)`.
-// The canWrite gate lives in repairTreeInvariants — workers don't repeat it.
-for (const members of cycles.values()) {
-  const loser = [...members].sort()[0]
-  await repo.repairTreeInvariants(
-    loser,
-    async tx => tx.update(loser, { parentId: null }),
-    `Cycle repair: ${loser}`,
-  )
-}
-```
-
-This is deterministic across writable clients: every client that observes the same cyclic state and can write the affected workspace picks the same loser, so the repair converges via sync (each writable client writes the same `parent_id = NULL` for the same row; LWW is a no-op). Read-only or workspace-non-writable clients skip the repair locally; their view of the affected subtree is bounded but visually truncated until a writable peer's fix syncs down.
-
-Repair runs with `scope: ChangeScope.Repair` (defined in §5.8): a normal "uploads, not undoable" scope. The engine rejects Repair under `repo.isReadOnly` (same gate as `BlockDefault`/`References`); the per-workspace `canWrite()` check above is the worker's responsibility, not the engine's. The mutator writes a `command_events` row tagging the repair for audit.
-
-**Layer 3 — CTE recursion guards.** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries a `depth < 100` defensive guard. Even if cycle repair lags, queries return finite results instead of OOMing.
-
-This is the same pattern Linear / Roam / Logseq use for hierarchical data under last-writer-wins sync. Not free — every move pays a pre-check, every sync-applied parent change pays a post-check — but bounded and mostly cold.
+This is roughly the pattern Linear / Roam / Logseq use for hierarchical data under last-writer-wins sync, minus the auto-repair step we're not yet adding.
 
 ---
 
@@ -707,15 +659,10 @@ export interface Tx {
 }
 
 /** Source is derived from scope alone — callers never pass it:
- *  - BlockDefault / References / Repair → 'user' (uploads)
- *  - UiState                            → 'local-ephemeral' (no upload)
+ *  - BlockDefault / References → 'user' (uploads)
+ *  - UiState                   → 'local-ephemeral' (no upload)
  *  ('sync' is reserved for sync-applied writes that bypass repo.tx entirely;
- *  it is not assignable from anywhere in this API.)
- *
- *  Repair has no special workspace-aware engine logic. The repair worker
- *  (§4.7) is the only caller, and it gates on `repo.canWrite(workspaceId)`
- *  itself — non-writable workspaces are skipped before the tx is opened, so
- *  the engine never sees a Repair tx for a workspace the user can't write. */
+ *  it is not assignable from anywhere in this API.) */
 
 export interface RepoTxOptions {
   scope: ChangeScope
@@ -767,7 +714,7 @@ export interface Mutator<Args = unknown, Result = void> {
 Scope semantics:
 - `ChangeScope.BlockDefault` (or any document scope): undoable, uploads to server.
 - `ChangeScope.UiState` (`'local-ui'`): not undoable; **`source='local-ephemeral'` set on `tx_context`**, so the upload trigger excludes these writes.
-- Read-only mode: `repo.tx` rejects unless every mutator in the tx has `UiState` scope. `BlockDefault`, `References`, and `Repair` are all rejected (Repair is system-driven, but the worker gates per-workspace via `canWrite()` and only invokes Repair on writable workspaces; the engine's coarse `isReadOnly` rejection is defense-in-depth — see §4.7).
+- Read-only mode: `repo.tx` rejects unless every mutator in the tx has `UiState` scope. `BlockDefault` and `References` are both rejected.
 - Different mutators in the same tx with different scopes are not allowed (engine throws); a tx is one scope.
 
 ### 5.5 `Query<Args, Result>`
@@ -1061,16 +1008,12 @@ export const ChangeScope = {
   BlockDefault: 'block-default',           // user document edits; undoable; uploads
   UiState: 'local-ui',                     // selection/focus/etc; not undoable; never uploads
   References: 'block-default:references',  // ref-parsing bookkeeping; separate undo bucket; uploads
-  Repair: 'core:repair',                   // cycle/consistency repair; not undoable;
-                                           // uploads (worker pre-gates on canWrite —
-                                           // see §4.7); rejected under repo.isReadOnly
-                                           // like any other write scope
 } as const
 
 export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 ```
 
-**Plugin scopes** (v1): there is no plugin-extensible scope registry. Plugins use one of the four built-in scopes — pick the one whose engine semantics (undoable / uploads / read-only-allowed) match your need. If a plugin genuinely needs a custom scope (its own undo bucket separate from BlockDefault, or a different upload semantic), we'll add a metadata-shaped registry then; for v1, the registry was ceremonious for what it bought (plugin scopes inherited BlockDefault semantics anyway, so they were functionally identical to using BlockDefault directly).
+**Plugin scopes** (v1): there is no plugin-extensible scope registry. Plugins use one of the three built-in scopes — pick the one whose engine semantics (undoable / uploads / read-only-allowed) match your need. If a plugin genuinely needs a custom scope (its own undo bucket separate from BlockDefault, or a different upload semantic), we'll add a metadata-shaped registry then; for v1, the registry was ceremonious for what it bought (plugin scopes inherited BlockDefault semantics anyway, so they were functionally identical to using BlockDefault directly).
 
 Scope semantics matrix:
 
@@ -1079,58 +1022,6 @@ Scope semantics matrix:
 | `BlockDefault` | yes (user undo stack) | yes | no |
 | `UiState` | no | no (`source = 'local-ephemeral'`) | yes |
 | `References` | yes (separate ref bucket; not exposed to user undo) | yes | no |
-| `Repair` | no | yes (`source = 'user'`; worker pre-gates on `canWrite()` — see §4.7) | no |
-
-### 5.8.1 Repair under workspace permission / RLS
-
-Repair always uploads. The repair worker is responsible for not invoking it on a workspace the local user can't write to, otherwise the upload would hit RLS rejection on the server and PowerSync would loop.
-
-The `Repo` exposes `repo.canWrite(workspaceId): boolean` — a synchronous query against whatever permission state the app maintains (today: per-workspace role; for v1 frequently just one workspace, so this often degrades to `!repo.isReadOnly`, but the spec is permission-based, not flag-based, so future multi-workspace permission distinctions don't break repair).
-
-**The canonical worker entry point is `repo.repairTreeInvariants`** — a small wrapper that encapsulates the canWrite gate so the worker doesn't repeat it at every call site:
-
-```ts
-class Repo {
-  /** Open a Repair-scoped tx for a single block, gated on workspace writability.
-   *
-   *  Behavior:
-   *  - Loads `targetId`. If the row doesn't exist, returns silently (race against
-   *    a sync-applied delete; nothing to repair).
-   *  - Reads target.workspaceId and calls `repo.canWrite(workspaceId)`.
-   *  - If not writable: returns silently. The cycle / invariant violation stays
-   *    visible locally (bounded by the depth-100 CTE guards in §11) until a
-   *    writable peer's deterministic repair syncs down via LWW.
-   *  - Otherwise: opens repo.tx with { scope: Repair, description } and runs fix(tx).
-   *
-   *  This is the only intended caller of `scope: ChangeScope.Repair`. Direct
-   *  `repo.tx({ scope: Repair })` works engine-side (the engine treats Repair
-   *  as a normal write scope, gated by isReadOnly), but bypasses the canWrite
-   *  gate this method provides — DON'T do that from non-worker code. */
-  async repairTreeInvariants(
-    targetId: string,
-    fix: (tx: Tx) => Promise<void>,
-    description?: string,
-  ): Promise<void> {
-    const target = await this.block(targetId).load()
-    if (!target) return
-    if (!this.canWrite(target.workspaceId)) return
-    await this.tx(fix, {
-      scope: ChangeScope.Repair,
-      description: description ?? `Repair: ${targetId}`,
-    })
-  }
-}
-```
-
-This trades a brief visual artifact on read-only / non-writable-workspace clients (a tree truncated at depth 100 in the cyclic subtree) for a much smaller engine surface: no `repairTargetId` / `repairWorkspaceId` plumbing on `RepoTxOptions`, no per-tx source derivation, no discriminated union, no special read-only carve-out, no engine-side `Repair` carve-out at all. Because cycles only arise from concurrent moves by writable peers, *some* writable peer will repair and propagate; the read-only client just waits.
-
-**Why a method instead of just engine-side enforcement**: a method DRYs the canWrite gate (one place, not duplicated at every worker call site) and provides a clear "official" entry point reviewers can spot. It does NOT re-introduce the v4.17 engine machinery — there's no per-tx workspace derivation, no discriminated options type, no source-decision algorithm. The method is ~10 lines and its only logic is "read the row, check canWrite, delegate to repo.tx." The engine remains workspace-unaware for Repair.
-
-**Defense-in-depth**: the engine still rejects Repair under `repo.isReadOnly` (§10.3) like any other write scope — so even if a non-worker code path opens `repo.tx({ scope: Repair })` directly on a fully read-only client, the upload won't fire. Partial-permission clients (writable in W1, read-only in W2) rely on `repairTreeInvariants`'s per-workspace canWrite gate; non-worker code that bypasses the method on a partial-permission client is an unfixed correctness gap, mitigated only by code review and the limited blast radius (Repair scope is only used by `core.repairCycle`-shaped operations in v1).
-
-Why not "use a system actor / privileged service": no such service in v1, and adding one would couple the data layer to a backend topology we don't have. Eventual consistency via writable-peer convergence works without it.
-
-Why not local-only repair on non-writable workspaces: the complexity (per-tx source derivation, workspace-aware engine logic, type-level discriminated options) wasn't worth a marginal UX win on a rare-and-self-healing scenario. The depth-100 CTE guards keep the local view *correct*, just visually capped, until the authoritative fix arrives.
 
 ---
 
@@ -1343,9 +1234,10 @@ type Dependency =
   | { kind: 'table'; table: string }                     // catch-all coarse
 
 type Invalidation =
-  | { kind: 'mutators'; names: string[] }                // re-run when matching mutator commits
   | { kind: 'rows'; predicate: (event: RowEvent) => boolean }
 ```
+
+(The mutator-name match channel was dropped in v4.20 alongside `watches.kind: 'mutator'` — the same rationale applies: no `Dependency` kind matches mutator names, no plugin used it, and field/row-shaped invalidation is the correctness path.)
 
 **Why parent-edge and not just row-level for tree queries**: a query like `subtree(root)` declared row-level deps on the descendants it observed. If a *new* row appears with a `parent_id` pointing into the subtree, that row's id was never in the dependency set — pure row-level invalidation misses it. Parent-edge dependencies fix this: `subtree(root)` declares parent-edge deps on every visited node id; any row write whose `parent_id` (before *or* after the change) matches one of those parentIds invalidates the handle.
 
@@ -1441,9 +1333,7 @@ await repo.mutate.indent({ id })
     ? indentMutator.scope({ id })
     : indentMutator.scope
 
-  // 2. Open tx with concrete scope. Repair scope works here too; the repair
-  //    worker is the only intended caller (it pre-gates on canWrite — §4.7),
-  //    but the engine doesn't enforce that.
+  // 2. Open tx with concrete scope.
   await repo.tx(async tx => tx.run(indentMutator, { id }), {
     scope,
     description: indentMutator.describe?.({ id }),
@@ -1461,9 +1351,7 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 ### 10.3 Read-only mode
 
-`repo.tx` rejects with `ReadOnlyError` for `BlockDefault`, `References`, and `Repair` scopes when `repo.isReadOnly`. `UiState` is always allowed (local-only chrome state).
-
-Repair is a normal write scope as far as the engine is concerned — it uploads, so it's gated by the same `isReadOnly` check. The cycle-repair worker (§4.7) pre-gates per-workspace via `repo.canWrite(workspaceId)` and skips non-writable workspaces before opening a tx, so under partial-permission setups (e.g. user is writable in W1 but read-only in W2, with `repo.isReadOnly = false` overall) repair only runs against W1. The engine's coarse `isReadOnly` rejection catches the fully-read-only client as defense-in-depth — even a buggy worker can't trigger an upload from a read-only client.
+`repo.tx` rejects with `ReadOnlyError` for `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` is always allowed (local-only chrome state).
 
 ### 10.4 `tx.createOrGet` semantics
 
@@ -1706,11 +1594,10 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 **Scope**:
 - `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
 - Repo lifecycle (`setFacetRuntime`) implemented per §8.
-- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `repairCycle`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx). **Note:** `createAliasTargetInline` is NOT a registered Mutator — it's a plain helper called from `core.parseReferences`'s `apply` (see §7 mapping table). Registering it would expose it as `repo.mutate.createAliasTarget(...)` from any caller, bypassing the parseReferences flow that the cleanup processor's row_events gate (§7.5) relies on.
-- Reference parsing migrated to `core.parseReferences` as a **follow-up** (mode `'follow-up'`) processor per §7. Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. **Until queriesFacet ships in Phase 4**, the processor uses raw SQL via `ctx.db` for: (a) alias-by-name lookup, (b) row_events insertion check, (c) "any block references this id" scan. Phase 4 wraps the same SQL into the kernel queries `aliasLookup` and `backlinks` (Phase 4 query list, §13.4) — same SQL, queriesFacet wrapper. Call sites switch from `ctx.db.getAll(SQL, ...)` to `repo.query.aliasLookup({...}).load()` and `repo.query.backlinks({...}).load()` with no behavior change. The row_events scan stays as raw `ctx.db` because `row_events` doesn't get a kernel query in Phase 4 — it's a low-volume implementation detail of the cleanup processor itself.
+- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx). **Note:** `createAliasTargetInline` is NOT a registered Mutator — it's a plain helper called from `core.parseReferences`'s `apply` (see §7 mapping table). Registering it would expose it as `repo.mutate.createAliasTarget(...)` from any caller, bypassing the parseReferences flow that the cleanup processor's `inserted`-driven schedule-time filter (§7.5) relies on.
+- Reference parsing migrated to `core.parseReferences` as a **follow-up** (mode `'follow-up'`) processor per §7. Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. **Until queriesFacet ships in Phase 4**, the processor uses raw SQL via `ctx.db` for: (a) alias-by-name lookup, (b) "any block references this id" scan inside the cleanup processor. Phase 4 wraps the same SQL into the kernel queries `aliasLookup` and `backlinks` (Phase 4 query list, §13.4) — same SQL, queriesFacet wrapper. Call sites switch from `ctx.db.getAll(SQL, ...)` to `repo.query.aliasLookup({...}).load()` and `repo.query.backlinks({...}).load()` with no behavior change. (Insertion-vs-conflict identity comes from `tx.createOrGet`'s `inserted` boolean per v4.20 — no row_events scan needed at any phase.)
 - `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
 - `propertySchemasFacet` for descriptors (still flat in storage; facet just wraps the existing descriptor exports).
-- ChangeScope type-augmentation hook for plugin scopes.
 
 **Acceptance**:
 - Reference parsing produces identical results to today across all behaviors per §7.2.
@@ -1757,7 +1644,7 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 
 ## 15. Invariants worth nailing
 
-1. **Read-only mode**: `repo.tx` rejects `BlockDefault`, `References`, and `Repair` scopes when `repo.isReadOnly`. `UiState` always allowed (local chrome state). The cycle-repair worker pre-gates per-workspace via `canWrite()` and only invokes Repair on writable workspaces (§4.7); the engine's coarse `isReadOnly` rejection is defense-in-depth.
+1. **Read-only mode**: `repo.tx` rejects `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` always allowed (local chrome state).
 2. **Scope is per-tx, not per-call**: every mutator call within a tx must share the tx's scope. Mixing throws.
 3. **UI-state isolation**: UI-state txs set `tx_context.source='local-ephemeral'`; upload trigger excludes; not in undo stack.
 4. **Sync-applied writes**: bypass `repo.tx` entirely. `tx_context.source` stays `NULL` (no `repo.tx` is open to set it). row_events triggers `COALESCE(tx_context.source, 'sync')` to tag them; upload-routing triggers gate on `= 'user'` so sync writes don't loop back into `powersync_crud`. row_events have `tx_id = NULL` (no tx). **No PowerSync sync-apply wrapper exists or should be added** — the COALESCE + equality-test pair handles this without one.
@@ -1943,6 +1830,7 @@ Decision: use **`fractional-indexing-jittered`** (Rocicorp). Jittering reduces t
 - [ ] Round-8 / v4.7 fix addressed: §6 / §8 unified — kernel built-ins are not hardcoded in the constructor; `setFacetRuntime` is the single registration path for kernel + static + dynamic contributions; staged bootstrap (Stage 0/1/2) breaks the `dynamic plugins → discovery query → FacetRuntime` cycle without circularity (§8).
 - [ ] v4.18 simplification reflected throughout: Repair scope is workspace-unaware in the engine; the cycle-repair worker pre-gates per-workspace via `repo.canWrite(workspaceId)` and skips non-writable workspaces (§4.7); `RepoTxOptions` is a single non-discriminated interface (§5.3); §5.8.1 documents the worker-as-gate model and the visual-truncation tradeoff for read-only viewers; Repair is rejected under `repo.isReadOnly` like any other write scope (§10.3, §15 #1); `repo.mutate.X` no longer special-cases Repair (§10.1). Supersedes round-8's conditional-source approach and round-9's per-tx engine-side `canWrite` derivation (those entries above describe interim designs, not the current spec state).
 - [ ] v4.21 write-through reflected throughout: Tx primitives execute their INSERT/UPDATE inline within `db.writeTransaction`; the engine captures `(before, after)` per id at the write site for cache hydration, handle diffing, and undo (§5.3, §10 pipeline, §15 #7). Reads inside a tx are plain SQL/cache lookups — no staged-write overlay (§5.3 footer prose, §15 #9). `tx.createOrGet` is no longer a "special case" relative to the rest of the Tx surface — it's just one more write-through primitive (§10.4 collapsed). Supersedes v4.20's pipeline-step-7 mention (the staged-flush model is gone entirely; that step had already been deleted in v4.20, and v4.21 deletes the staging concept itself).
+- [ ] v4.23 cycle-repair drop reflected throughout: the old Layer 2 (deterministic post-sync repair) is gone. Cycle protocol is now Layer 1 (move-mutator validation) + Layer 2 (depth-100 CTE guards, formerly Layer 3) + a detection-only row_events-tail scan that logs `repo.events.cycleDetected` and never repairs (§4.7). `ChangeScope.Repair` removed from §5.8 (matrix collapsed to three scopes); §5.8.1 deleted entirely; `repo.repairTreeInvariants` and `repo.canWrite` removed from the §3 architecture diagram and `Repo` surface; `repairCycle` removed from the Phase 3 kernel mutators list (§13). Read-only mode (§10.3, §15 #1) and the Tx interface comment (§5.3) collapse to "BlockDefault / References reject; UiState always allowed." Supersedes v4.18's worker-as-gate model and the round-7/-8/-9 entries above that describe `ChangeScope.Repair`, `repo.canWrite`-driven source derivation, and the row_events insertion gate — those describe deleted design state, not the current spec. Phase 3 stale leftovers cleaned up alongside (Phase 3 no longer mentions `repairCycle`, `ChangeScope` type-augmentation hook, or row_events insertion check; the cleanup processor's identity check uses `tx.createOrGet().inserted` per v4.20).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1 (zod) and §16.12 (jittered fractional indexing) resolved in v4.10. No remaining gating decisions before Phase 1 — everything else in §16 is intentionally deferred.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime via staged `setFacetRuntime` waves (§8 Bootstrap stages, §12.2). Pre-Stage-1, `repo.tx` runs with empty registries; dispatch sites (`tx.run`, `repo.mutate.X`, `repo.run`) reject with `MutatorNotRegisteredError` for unknown names.
