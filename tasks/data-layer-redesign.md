@@ -94,7 +94,11 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Repair-scoped mutators forbidden through `repo.mutate.X`** (§10.1). The generic dispatch wrapper has no way to compute `repairWorkspaceId` from arbitrary mutator args. Repair-scoped writes go through `repo.tx` directly with the worker computing the workspace from cycle-detection state. The wrapper throws if a mutator's resolved scope is `Repair`, with a message pointing to §5.8.1.
 >   - **Cleanup arg renamed `attemptedAliasTargetIds`** (§7 + §7.6 + §7.5). v4.15 called this `candidateIds` / `newlyCreatedIds`, both of which implied same-tx insertion knowledge that §10.4 says is unavailable. The list is every non-date id returned by `createAliasTarget`, regardless of insert/conflict outcome; the row_events gate (§7.5) sorts genuinely-inserted from pre-existing post-commit. Schema in `PostCommitProcessorRegistry` updated to match.
 >   - **Service-role grep claim split** (§4 + §13.1 acceptance). `git grep` only sees tracked files, so it cannot validate a gitignored local `.env`. Now: tracked-file/browser-bundle guard via `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` (mechanical, CI-runnable) PLUS a separate filename-only local-`.env` check (`grep -lE '^SUPABASE_SERVICE_ROLE_KEY' .env || echo OK`) that doesn't print secret values. PR docs reviewers to run the local check.
-> - v4.18 (this): repair simplification — drop local-only repair on non-writable workspaces.
+> - v4.19 (this): round-16 fixes — closing real gaps from v4.18 without re-adding the v4.17 engine machinery.
+>   - **Workspace-trigger conflict resolved** (§4.1.1). v4.18's local trigger had two bugs: it silently accepted dangling parents (the `IS NOT NULL AND !=` predicate evaluated to NULL on missing parent rows, no ABORT), and it would have aborted sync-applied cross-workspace edges before row_events could record them, contradicting the spec's repair-via-sync-tail story. Now: server-side composite FK is the canonical enforcement (`FOREIGN KEY (workspace_id, parent_id) REFERENCES blocks (workspace_id, id)`); client-side triggers gate on `tx_context.source IS NOT NULL` (local writes only) and use `NOT EXISTS` to catch dangling-parent / cross-workspace / soft-deleted-parent in one check. v4.17's "row_events tail demotes cross-workspace edges" path is dropped — the server-side FK makes such edges impossible to sync in the first place. Cycle repair handles cycles only.
+>   - **`repo.repairTreeInvariants(targetId, fix, description?)` added** as the canonical repair worker entry point (§5.8.1, §3 architecture diagram). v4.18 had `ChangeScope.Repair` publicly accepted by `repo.tx`, with the canWrite gate as a worker-discipline rule — any plugin/kernel bug could open `scope: Repair` against a non-writable workspace and trigger a rejected-upload loop. The new method DRYs the canWrite gate (one place instead of every worker call site) and provides a clear "official" entry point. ~10 lines of code; the engine remains workspace-unaware for Repair (no per-tx workspace derivation, no discriminated options type — none of the v4.17 machinery comes back). Defense-in-depth via `isReadOnly` rejection (§10.3) is preserved.
+>   - **`createAliasTarget` reduced to a plain helper, not a registered Mutator** (§7 mapping, §13.3 Phase 3 mutator list). v4.18 had it in the kernel mutator list, which would have made it `repo.mutate.createAliasTarget(...)` callable from any caller — bypassing the parseReferences flow that the cleanup processor's row_events gate assumes. Now it's `createAliasTargetInline(tx, alias, workspaceId)`, a private helper called only from `core.parseReferences.apply`. No public API surface; no scope-rule confusion (it inherits parseReferences's tx scope automatically); no registration in `mutatorsFacet`.
+> - v4.18: repair simplification — drop local-only repair on non-writable workspaces.
 >   - **Repair scope is no longer workspace-aware in the engine** (§4.7, §5.3, §5.8, §5.8.1, §10.1, §10.3, §15). The repair worker is the gate: it reads each cycle loser's workspace, checks `repo.canWrite(workspaceId)`, and skips non-writable workspaces before opening a tx. Read-only / non-writable-workspace clients let the cycle stay visible (bounded by the depth-100 CTE guards in §11) until a writable peer's authoritative fix syncs down via LWW.
 >   - **Removed plumbing**: `repairTargetId` (and the prior `repairWorkspaceId`) from `RepoTxOptions`; the discriminated union with `source?: never` / `repairTargetId?: never` constraints; per-tx engine-side source derivation; the workspace-row read at tx open; the §5.8.1 source-decision algorithm; the "Repair forbidden through `repo.mutate.X`" rule (its only justification was that the wrapper couldn't compute `repairWorkspaceId` from generic args).
 >   - **Repair is now a plain "uploads, not undoable" scope.** `RepoTxOptions` collapses to a single non-discriminated interface. The engine rejects Repair under `repo.isReadOnly` like any other write scope (defense-in-depth: even a buggy worker can't trigger an upload from a read-only client). `repo.canWrite(workspaceId)` stays as a `Repo` API, but only the worker calls it.
@@ -190,6 +194,9 @@ We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reade
 │   repo.tx(fn, opts)     → Promise<TxResult>                 │
 │   repo.mutate.X(args)   → Promise<Result>  // sugar over tx │
 │   repo.run(name, args)  → Promise<unknown> // dynamic       │
+│   repo.repairTreeInvariants(targetId, fix, desc?)           │
+│                         → Promise<void>     // worker entry │
+│   repo.canWrite(workspaceId) → boolean                      │
 │   repo.setFacetRuntime(rt)                                  │
 └──────┬──────────────────┬───────────────────────────────────┘
        │                  │
@@ -293,29 +300,56 @@ SQLite enforcement (per-statement triggers, since SQLite CHECK constraints can't
 CREATE TRIGGER blocks_parent_workspace_check_insert
 BEFORE INSERT ON blocks
 WHEN NEW.parent_id IS NOT NULL
+  AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL    -- LOCAL writes only
 BEGIN
-  SELECT RAISE(ABORT, 'parent and child must be in the same workspace')
-  WHERE (SELECT workspace_id FROM blocks WHERE id = NEW.parent_id) IS NOT NULL
-    AND (SELECT workspace_id FROM blocks WHERE id = NEW.parent_id) != NEW.workspace_id;
+  SELECT RAISE(ABORT, 'parent must exist, share workspace_id, and not be soft-deleted')
+  WHERE NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE id = NEW.parent_id
+      AND workspace_id = NEW.workspace_id
+      AND deleted = 0
+  );
 END;
 
 CREATE TRIGGER blocks_parent_workspace_check_update
 BEFORE UPDATE OF parent_id, workspace_id ON blocks
 WHEN NEW.parent_id IS NOT NULL
+  AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL    -- LOCAL writes only
 BEGIN
-  SELECT RAISE(ABORT, 'parent and child must be in the same workspace')
-  WHERE (SELECT workspace_id FROM blocks WHERE id = NEW.parent_id) IS NOT NULL
-    AND (SELECT workspace_id FROM blocks WHERE id = NEW.parent_id) != NEW.workspace_id;
+  SELECT RAISE(ABORT, 'parent must exist, share workspace_id, and not be soft-deleted')
+  WHERE NOT EXISTS (
+    SELECT 1 FROM blocks
+    WHERE id = NEW.parent_id
+      AND workspace_id = NEW.workspace_id
+      AND deleted = 0
+  );
 END;
 ```
 
-Postgres enforcement is the same shape, expressed as a `CHECK` against a function or as an equivalent trigger. Server side is the load-bearing guarantee — clients trust the server, and a buggy/malicious client can't sneak cross-workspace edges past it.
+The `NOT EXISTS` predicate catches three failure modes in one check: dangling parent (id pointing to nothing), cross-workspace parent, and soft-deleted parent. The previous version (v4.17) used `(SELECT workspace_id ...) IS NOT NULL AND != NEW.workspace_id`, which **silently accepted dangling parents** — the predicate evaluated to NULL and didn't ABORT. The `NOT EXISTS` form catches all three.
 
-**Mutator-level enforcement** is the better-error-message layer: `move`, `indent`, `outdent`, `createChild`, `insertChildren`, etc. validate the same invariant client-side before staging the write and throw `WorkspaceMismatchError` (which is friendlier than the trigger's generic `RAISE(ABORT, …)` after a flush failure). The trigger is the safety net.
+**The `source IS NOT NULL` gate is load-bearing**: sync-applied writes leave `tx_context.source = NULL` (no `repo.tx` is open during PowerSync's CRUD apply, per §4.2). Without the gate, the local trigger would abort sync-applied cross-workspace edges before row_events could record them, leaving PowerSync stuck retrying valid syncs. With the gate, sync writes land locally as the server already validated them (see Postgres enforcement below).
 
-**Sync/repair validation**: when the row_events tail (§9.3) sees a sync-applied parent_id change, it includes a workspace-cross-check in the same scan as cycle detection. If a sync somehow produces a cross-workspace edge (it shouldn't, given server-side enforcement, but defense in depth), the repair worker demotes the affected block to a workspace root (`parent_id = null`) using the same deterministic-loser pattern as cycles. List both kinds of corruption in `core.repairCycle`'s scope (it's really `core.repairTreeInvariants` — see §4.7).
+**Server-side (Postgres) — canonical enforcement via composite FK.** The cleanest declarative shape:
 
-Tree queries in §11 do not need a workspace predicate when the invariant holds — `parent_id` chains stay within one workspace by construction. The queries do filter by `deleted = 0`; adding a `workspace_id = ?` filter is harmless but redundant if the invariant is enforced.
+```sql
+CREATE TABLE blocks (
+  id            TEXT NOT NULL PRIMARY KEY,
+  workspace_id  TEXT NOT NULL,
+  parent_id     TEXT,
+  ...
+  UNIQUE (workspace_id, id),                                  -- enables composite FK reference
+  FOREIGN KEY (workspace_id, parent_id) REFERENCES blocks (workspace_id, id) DEFERRABLE
+);
+```
+
+The composite FK guarantees both that `parent_id` exists *and* that the parent shares `workspace_id` — `parent_id IS NULL` satisfies the FK trivially. This is the load-bearing guarantee: a malicious or buggy client cannot produce cross-workspace edges that survive sync. Soft-delete (parent's `deleted = 1`) is allowed by the FK; the client trigger above adds the "not soft-deleted" rule for fresh local writes only, since soft-deleted parents shouldn't accept new children but existing children of a parent that gets soft-deleted shouldn't retroactively fail.
+
+**Mutator-level validation** is the better-error-message layer: `move`, `indent`, `outdent`, `createChild`, `insertChildren`, etc. validate the same invariant client-side before staging the write and throw `WorkspaceMismatchError` / `ParentNotFoundError` / `ParentDeletedError`. The trigger is the safety net.
+
+**No sync-time workspace repair.** v4.17 had the row_events tail detecting cross-workspace edges and demoting them via the cycle-repair pattern. With the server-side composite FK, cross-workspace edges cannot survive sync — they're rejected at the server boundary. The cycle-repair worker (§4.7) handles cycles only. If this assumption ever breaks (e.g. a server-side migration drops the FK accidentally), the depth-100 CTE guards still keep queries finite — but the recovery path is "fix the server constraint," not "client-side repair."
+
+Tree queries in §11 do not need a workspace predicate when the invariant holds — `parent_id` chains stay within one workspace by construction. The queries filter by `deleted = 0`; adding a `workspace_id = ?` filter would be harmless but redundant.
 
 `properties_json` is `Record<string, unknown>` — just the value, codec-deserialized at read time via the descriptor (§5.6).
 
@@ -554,23 +588,21 @@ for (const { start_id, cycle_depth } of detected) {
   if (!cycles.has(key)) cycles.set(key, members)
 }
 
-// repair: lex-smallest in each cycle becomes a workspace root
+// repair: lex-smallest in each cycle becomes a workspace root.
+// The worker calls repo.repairTreeInvariants(targetId, fix), which:
+//   1. Loads the target and reads its workspaceId.
+//   2. Skips silently if the target is missing OR canWrite(workspaceId) is false
+//      — non-writable workspaces let the cycle stay visible (bounded by the
+//      depth-100 CTE guards in §11) until a writable peer's fix syncs down via LWW.
+//   3. Otherwise opens a Repair-scoped repo.tx and runs `fix(tx)`.
+// The canWrite gate lives in repairTreeInvariants — workers don't repeat it.
 for (const members of cycles.values()) {
   const loser = [...members].sort()[0]
-  const target = await repo.block(loser).load()
-  if (!target) continue                             // block missing; skip this loser
-
-  // The worker is the gate: skip non-writable workspaces entirely. The local
-  // view stays cyclic (capped by the depth-100 CTE guards in §11), and the
-  // authoritative fix arrives later via sync from a writable peer running its
-  // own repair pass. No local-only repair, no rejected-upload loop, no
-  // workspace-aware engine logic.
-  if (!repo.canWrite(target.workspaceId)) continue
-
-  await repo.tx(async tx => tx.update(loser, { parentId: null }), {
-    scope: ChangeScope.Repair,
-    description: `Cycle repair: ${loser}`,
-  })
+  await repo.repairTreeInvariants(
+    loser,
+    async tx => tx.update(loser, { parentId: null }),
+    `Cycle repair: ${loser}`,
+  )
 }
 ```
 
@@ -1149,15 +1181,50 @@ Repair always uploads. The repair worker is responsible for not invoking it on a
 
 The `Repo` exposes `repo.canWrite(workspaceId): boolean` — a synchronous query against whatever permission state the app maintains (today: per-workspace role; for v1 frequently just one workspace, so this often degrades to `!repo.isReadOnly`, but the spec is permission-based, not flag-based, so future multi-workspace permission distinctions don't break repair).
 
-**The worker is the gate** (§4.7): for each cycle's loser, the worker reads the loser's workspace, calls `repo.canWrite(workspaceId)`, and skips the repair if the workspace is not writable. No tx is opened in that case — no local-ephemeral fallback, no engine-side workspace logic. The cycle stays visible in the local DB (bounded by the depth-100 CTE guards in §11) until a writable peer runs its own deterministic repair and the fix syncs down via LWW.
+**The canonical worker entry point is `repo.repairTreeInvariants`** — a small wrapper that encapsulates the canWrite gate so the worker doesn't repeat it at every call site:
 
-This trades a brief visual artifact on read-only / non-writable-workspace clients (a tree truncated at depth 100 in the cyclic subtree) for a much smaller engine surface: no `repairTargetId` / `repairWorkspaceId` plumbing on `RepoTxOptions`, no per-tx source derivation, no discriminated union, no special read-only carve-out. Because cycles only arise from concurrent moves by writable peers, *some* writable peer will repair and propagate; the read-only client just waits.
+```ts
+class Repo {
+  /** Open a Repair-scoped tx for a single block, gated on workspace writability.
+   *
+   *  Behavior:
+   *  - Loads `targetId`. If the row doesn't exist, returns silently (race against
+   *    a sync-applied delete; nothing to repair).
+   *  - Reads target.workspaceId and calls `repo.canWrite(workspaceId)`.
+   *  - If not writable: returns silently. The cycle / invariant violation stays
+   *    visible locally (bounded by the depth-100 CTE guards in §11) until a
+   *    writable peer's deterministic repair syncs down via LWW.
+   *  - Otherwise: opens repo.tx with { scope: Repair, description } and runs fix(tx).
+   *
+   *  This is the only intended caller of `scope: ChangeScope.Repair`. Direct
+   *  `repo.tx({ scope: Repair })` works engine-side (the engine treats Repair
+   *  as a normal write scope, gated by isReadOnly), but bypasses the canWrite
+   *  gate this method provides — DON'T do that from non-worker code. */
+  async repairTreeInvariants(
+    targetId: string,
+    fix: (tx: Tx) => Promise<void>,
+    description?: string,
+  ): Promise<void> {
+    const target = await this.block(targetId).load()
+    if (!target) return
+    if (!this.canWrite(target.workspaceId)) return
+    await this.tx(fix, {
+      scope: ChangeScope.Repair,
+      description: description ?? `Repair: ${targetId}`,
+    })
+  }
+}
+```
 
-The engine treats Repair like any other write scope under read-only mode (rejected when `repo.isReadOnly`), as defense-in-depth: even if the worker had a bug and tried to invoke Repair on a fully read-only client, the engine would still reject the tx instead of letting an upload reach the server.
+This trades a brief visual artifact on read-only / non-writable-workspace clients (a tree truncated at depth 100 in the cyclic subtree) for a much smaller engine surface: no `repairTargetId` / `repairWorkspaceId` plumbing on `RepoTxOptions`, no per-tx source derivation, no discriminated union, no special read-only carve-out, no engine-side `Repair` carve-out at all. Because cycles only arise from concurrent moves by writable peers, *some* writable peer will repair and propagate; the read-only client just waits.
 
-Why not local-only repair on non-writable workspaces: the complexity (per-tx source derivation, workspace-aware engine logic, type-level discriminated options) wasn't worth a marginal UX win on a rare-and-self-healing scenario. The depth-100 CTE guards keep the local view *correct*, just visually capped, until the authoritative fix arrives.
+**Why a method instead of just engine-side enforcement**: a method DRYs the canWrite gate (one place, not duplicated at every worker call site) and provides a clear "official" entry point reviewers can spot. It does NOT re-introduce the v4.17 engine machinery — there's no per-tx workspace derivation, no discriminated options type, no source-decision algorithm. The method is ~10 lines and its only logic is "read the row, check canWrite, delegate to repo.tx." The engine remains workspace-unaware for Repair.
+
+**Defense-in-depth**: the engine still rejects Repair under `repo.isReadOnly` (§10.3) like any other write scope — so even if a non-worker code path opens `repo.tx({ scope: Repair })` directly on a fully read-only client, the upload won't fire. Partial-permission clients (writable in W1, read-only in W2) rely on `repairTreeInvariants`'s per-workspace canWrite gate; non-worker code that bypasses the method on a partial-permission client is an unfixed correctness gap, mitigated only by code review and the limited blast radius (Repair scope is only used by `core.repairCycle`-shaped operations in v1).
 
 Why not "use a system actor / privileged service": no such service in v1, and adding one would couple the data layer to a backend topology we don't have. Eventual consistency via writable-peer convergence works without it.
+
+Why not local-only repair on non-writable workspaces: the complexity (per-tx source derivation, workspace-aware engine logic, type-level discriminated options) wasn't worth a marginal UX win on a rare-and-self-healing scenario. The depth-100 CTE guards keep the local view *correct*, just visually capped, until the authoritative fix arrives.
 
 ---
 
@@ -1197,7 +1264,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: { kind: 'field', table: 'blocks', fields: ['content'] }, mode: 'follow-up' })`. Field-watching is correctness-critical: any tx that writes `blocks.content` triggers ref parsing, including plugin mutators that bypass the `setContent` kernel mutator. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
-| Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. **`createAliasTarget` declares `scope: ChangeScope.References`** so it composes with parseReferences's References-scoped tx (per §10.2's "every nested mutator must share the tx scope" rule). It is not callable from BlockDefault-scoped txs; if user-facing code ever wants to create alias-targets directly, that's a separate mutator with appropriate scope, not this internal helper. |
+| Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<string>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow that the cleanup processor's row_events gate (§7.5) assumes. As a plain helper it inherits the calling tx's scope (References) automatically and has no public API surface to misuse. The helper computes the deterministic id (date-shaped or generated UUID), calls `tx.create({ id, ... }, { onConflict: 'ignore' })`, and returns the id. |
 | Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. **Date alias targets are NEVER added to `attemptedAliasTargetIds`** (see Self-destruct row below) — daily notes persist regardless of whether a referencing block is removed within 4s. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
 | Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { attemptedAliasTargetIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`attemptedAliasTargetIds` is every non-date id returned by `createAliasTarget` calls in this tx, regardless of whether each one hit a conflict or actually inserted** — same-tx insertion detection is unavailable (§7.5, §10.4); the row_events gate sorts inserted from existing post-commit. Date-shaped ids are excluded at this list-build step (daily notes are persistent — see §7.6). The cleanup processor (mode `'follow-up'`, `watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ attemptedAliasTargetIds: z.array(z.string()), originatingTxId: z.string() })` so the engine validates at `tx.afterCommit` enqueue. Cleanup checks each attempted id with **two gates**: (a) verify this tx actually inserted the row via `ctx.db.getAll('SELECT 1 FROM row_events WHERE tx_id = ? AND block_id = ? AND kind = ? LIMIT 1', [originatingTxId, id, 'create'])`; skip if empty (the row pre-existed). (b) verify no block's `references` contains the id (`ctx.db` query against `references_json`); skip if any does (someone references it). Only when both gates pass does `ctx.tx.delete(id)` proceed. See §7.5 for why this layered approach is necessary. |
@@ -1227,9 +1294,11 @@ function isDateAliasTargetId(id: string): boolean {
 
 // inside parseReferences:
 //   - For every parsed alias not already resolved by aliasLookup,
-//     run tx.run(createAliasTarget, { alias, workspaceId }) to get the id.
-//     The returned id may be newly inserted OR pre-existing (deterministic-id
-//     race; same-tx insertion detection is unavailable).
+//     call createAliasTargetInline(tx, alias, workspaceId) — a plain helper,
+//     NOT a registered mutator (see §7 mapping). Helper internally does
+//     tx.create({ id, ..., aliases: [alias] }, { onConflict: 'ignore' }) and
+//     returns the id. The returned id may be newly inserted OR pre-existing
+//     (deterministic-id race; same-tx insertion detection is unavailable).
 //   - Collect ALL non-date ids returned, regardless of insert/conflict outcome:
 const attemptedAliasTargetIds = idsReturnedByCreateAliasTarget
   .filter(id => !isDateAliasTargetId(id))
@@ -1736,7 +1805,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 **Scope**:
 - `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
 - Repo lifecycle (`setFacetRuntime`) implemented per §8.
-- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `createAliasTarget`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx).
+- Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`, `repairCycle`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx). **Note:** `createAliasTargetInline` is NOT a registered Mutator — it's a plain helper called from `core.parseReferences`'s `apply` (see §7 mapping table). Registering it would expose it as `repo.mutate.createAliasTarget(...)` from any caller, bypassing the parseReferences flow that the cleanup processor's row_events gate (§7.5) relies on.
 - Reference parsing migrated to `core.parseReferences` as a **follow-up** (mode `'follow-up'`) processor per §7. Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. **Until queriesFacet ships in Phase 4**, the processor uses raw SQL via `ctx.db` for: (a) alias-by-name lookup, (b) row_events insertion check, (c) "any block references this id" scan. Phase 4 wraps the same SQL into the kernel queries `aliasLookup` and `backlinks` (Phase 4 query list, §13.4) — same SQL, queriesFacet wrapper. Call sites switch from `ctx.db.getAll(SQL, ...)` to `repo.query.aliasLookup({...}).load()` and `repo.query.backlinks({...}).load()` with no behavior change. The row_events scan stays as raw `ctx.db` because `row_events` doesn't get a kernel query in Phase 4 — it's a low-volume implementation detail of the cleanup processor itself.
 - `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
 - `propertySchemasFacet` for descriptors (still flat in storage; facet just wraps the existing descriptor exports).
