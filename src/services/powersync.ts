@@ -42,7 +42,6 @@ const applyBlockCrudEntry = async (entry: CrudEntry) => {
       id: entry.id,
     }
 
-    // eslint-disable-next-line no-console
     console.debug('[powersync] PUT', entry.id, Object.keys(upsertPayload))
     const {error} = await client
       .from('blocks')
@@ -55,7 +54,6 @@ const applyBlockCrudEntry = async (entry: CrudEntry) => {
   }
 
   if (entry.op === UpdateType.PATCH) {
-    // eslint-disable-next-line no-console
     console.debug('[powersync] PATCH', entry.id, Object.keys(payload))
     const {error} = await client
       .from('blocks')
@@ -88,7 +86,6 @@ const uploadData = async (database: AbstractPowerSyncDatabase) => {
       } catch (err) {
         // Surface upload errors loudly — silent failures here look like
         // "sync isn't working" with no explanation in the UI.
-        // eslint-disable-next-line no-console
         console.error('[powersync] upload failed', {op: entry.op, id: entry.id}, err)
         throw err
       }

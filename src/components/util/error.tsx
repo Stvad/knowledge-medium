@@ -1,8 +1,12 @@
 import { Button } from '@/components/ui/button'
 import { useSignOut } from '@/components/Login.tsx'
+import type { FallbackProps } from 'react-error-boundary'
 
-export function FallbackComponent({error}: { error: Error }) {
-  return <div>Something went wrong: {error.message}</div>
+const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error)
+
+export function FallbackComponent({error}: FallbackProps) {
+  return <div>Something went wrong: {errorMessage(error)}</div>
 }
 
 // Top-level error fallback for bootstrap / app-shell failures. Anything that
@@ -16,7 +20,7 @@ export function FallbackComponent({error}: { error: Error }) {
 // falls through cleanly when the remembered id no longer resolves locally,
 // and PowerSync removes rows the user lost access to, so localStorage is
 // almost always self-healing.
-export function BootstrapErrorFallback({error}: { error: Error }) {
+export function BootstrapErrorFallback({error}: FallbackProps) {
   const signOut = useSignOut()
 
   const handleSignOut = async () => {
@@ -39,7 +43,7 @@ export function BootstrapErrorFallback({error}: { error: Error }) {
           </p>
         </div>
         <pre className="max-h-32 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">
-          {error.message}
+          {errorMessage(error)}
         </pre>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button onClick={() => window.location.reload()} className="flex-1">

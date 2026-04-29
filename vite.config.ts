@@ -1,6 +1,7 @@
 import {defineConfig, ViteDevServer} from 'vite'
 import path from "path"
-import react from '@vitejs/plugin-react'
+import react, {reactCompilerPreset} from '@vitejs/plugin-react'
+import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
 // import noBundlePlugin from 'vite-plugin-no-bundle';
@@ -13,13 +14,8 @@ export default defineConfig(({command}) => {
     return ({
         base,
         plugins: [
-            react({
-                babel: {
-                    plugins: [
-                        "babel-plugin-react-compiler",
-                    ],
-                },
-            }),
+            react(),
+            babel({presets: [reactCompilerPreset()]}),
             wasm(),
             externalize({
                 externals: [

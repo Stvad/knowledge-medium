@@ -12,7 +12,6 @@ export const refreshRendererRegistry = async () => {
 }
 
 export const useRenderer = ({block, context}: BlockRendererProps) => {
-  /* eslint-disable-next-line react-compiler/react-compiler */
   'use no memo'
   useData(block)
   /**

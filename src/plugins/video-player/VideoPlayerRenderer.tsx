@@ -13,14 +13,21 @@ declare global {
 
 const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const blockData = useData(block)
-  const player = useRef<ReactPlayer>(null)
+  const player = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+
+  const focusPlayer = () => {
+    if (containerRef.current) {
+      containerRef.current.scrollTo()
+      // containerRef.current.focus() // todo doesn't actually transfer controls to the player =\
+    }
+  }
 
   useEffect(() => {
     const handleSeekTo = (event: CustomEvent<SeekToEventDetail>) => {
       if (event.detail.blockId === block.id && player.current) {
-        player.current.seekTo(event.detail.seconds)
+        player.current.currentTime = event.detail.seconds
 
         focusPlayer()
         setIsPlaying(true)
@@ -32,20 +39,13 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     return () => window.removeEventListener(seekToEventName, handleSeekTo as EventListener)
   }, [block.id])
 
-  const focusPlayer = () => {
-    if (containerRef.current) {
-      containerRef.current.scrollTo()
-      // containerRef.current.focus() // todo doesn't actually transfer controls to the player =\
-    }
-  }
-
   if (!blockData) return null
 
   return (
     <div ref={containerRef} className="aspect-video">
       <ReactPlayer
         ref={player}
-        url={blockData.content}
+        src={blockData.content}
         playing={isPlaying}
         controls
         width="100%"
@@ -66,7 +66,7 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
 VideoPlayerRenderer.canRender = ({block}: BlockRendererProps) =>
 {
   const blockData = block.dataSync()
-  return !!(blockData && ReactPlayer.canPlay(blockData.content))
+  return !!(blockData && ReactPlayer.canPlay?.(blockData.content))
 }
 
 VideoPlayerRenderer.priority = () => 5
