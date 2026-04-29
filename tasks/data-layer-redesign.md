@@ -28,6 +28,10 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   3. **`tx.restore(id, patch?)`** is the typed un-soft-delete primitive (§5.3, §10.4). v4.26 prescribed `tx.update(id, { deleted: false, ... })` as the helper's restore path — but `BlockDataPatch` excludes `deleted` (§4.1.1) and `BlockData` has no top-level `aliases` field, so the v4.26 sketch didn't compile. Helpers now do `tx.restore(id, { content })` + `tx.setProperty(id, aliasesProp, [alias])` (or whatever fresh fields the domain wants).
 >   4. **`repo.events.cycleDetected` payload includes cycle members** (§4.7). Pre-v4.27 the payload was `{ startIds, workspaceId, txIdsInvolved }` — but the runbook claimed operators could read every cycle member from the log, which the payload didn't carry. Engine now materializes member sets via a bounded parent-chain walk (the v4.7 step-2b walk that v4.23 dropped, kept here for telemetry only — cheap, no repair).
 >   5. **`tx.afterCommit` requires workspace-pin** (§5.3 invariant, §5.7 CommittedEvent). Throws `WorkspaceNotPinnedError` if called before any write. Keeps `CommittedEvent.workspaceId: string` honest — zero-write txs still write a `command_events` audit row with `workspace_id = NULL`, but produce no CommittedEvents.
+> - **v4.28: parent-validation extended to fresh inserts; coarseScope.mutators dropped; §19 acceptance aligned.** Three follow-up fixes against v4.27's primitive split:
+>   1. **`tx.create` and `tx.createOrGet`'s fresh-insert path now run the same parent-validation as `tx.move`** (§4.7 Layer 1, §5.3) — `ParentNotFoundError`, `WorkspaceMismatchError`, `ParentDeletedError`. v4.27 only validated on `tx.move`, so `tx.create({parentId: someTombstoneId, ...})` from a plugin mutator or direct `repo.tx` body would land a fresh live row under a soft-deleted parent. Cycle validation stays `tx.move`-only (a fresh id has no descendants by construction).
+>   2. **`Query.coarseScope.mutators` dropped** (§5.5). Same v4.20 family as `watches.kind: 'mutator'` and `Invalidation.kind: 'mutators'`: no `Dependency` kind matches mutator names, so the filter had no consumer. coarseScope is now just `{ tables?: string[] }`.
+>   3. **§19 acceptance prose updated**: cycle Layer 1 is on every primitive that takes a `parentId` (tx.move + the create primitives), not just `tx.update` — the v4.27 split moved this and the acceptance text lagged.
 >
 > **Resolved open questions:**
 > - **zod** for argsSchema (v4.10). Bundle weight + React-ecosystem familiarity beat Effect Schema; bidirectional encode/decode handled separately by `Codec<T>`. Valibot is a near-mechanical fallback if bundle pressure shows up later.
@@ -483,18 +487,16 @@ Total v1 trigger count on `blocks`: **7** = 5 audit/upload (3 row_events writers
 
 Two layers of defense + one observability hook:
 
-**Layer 1 — Engine-side validation in `tx.move`.** v4.27 narrows the public Tx surface so `tx.update`'s patch type can no longer carry `parentId` or `orderKey` (they're not in `BlockDataPatch`). All structural moves go through `tx.move(id, { parentId, orderKey })`, which is the single entry point for parent_id mutation. The engine runs all the structural checks there in one place:
+**Layer 1 — Engine-side validation on every primitive that takes a `parentId`.** v4.27 narrows the public Tx surface so `tx.update`'s patch type can no longer carry `parentId` or `orderKey` (they're not in `BlockDataPatch`). All structural moves go through `tx.move(id, { parentId, orderKey })`. Fresh inserts (`tx.create`, `tx.createOrGet`) take `parentId` as part of the input. The engine runs the **same parent-validation rules** uniformly on all three primitive paths so no caller can bypass them, regardless of whether they go through a kernel mutator, a plugin mutator, a domain helper, or a direct `repo.tx` body:
 
-- **Cycle validation**: `isDescendantOf(target.parentId, id)` query (§11.3) — would the new parent be a descendant of `id`? If yes, throw `CycleError`. Single recursive CTE bounded by depth-100; same query kernel mutators ran themselves pre-v4.27.
-- **Workspace consistency**: `target.parentId`'s workspace_id must match `id`'s workspace_id; throw `WorkspaceMismatchError` otherwise.
-- **Parent existence**: `target.parentId` (when non-null) must point to an existing row; throw `ParentNotFoundError`.
-- **Soft-deleted parent**: throw `ParentDeletedError` if `target.parentId` is soft-deleted (UX layer; storage accepts it per §4.1.1 alignment).
+- **Parent existence**: `parentId` (when non-null) must point to an existing row; throw `ParentNotFoundError`.
+- **Workspace consistency**: parent's `workspace_id` must match the row's `workspace_id` (for `tx.move`, the row being moved; for `tx.create` / `tx.createOrGet`, the input `data.workspaceId`); throw `WorkspaceMismatchError`.
+- **Soft-deleted parent**: throw `ParentDeletedError` if `parentId` points to a soft-deleted row (UX layer — storage accepts it per §4.1.1 alignment, but the engine refuses to *create* state under a tombstone since that would orphan the new row in tree views).
+- **Cycle validation** (`tx.move` only): `isDescendantOf(target.parentId, id)` query (§11.3) — would the new parent be a descendant of `id`? If yes, throw `CycleError`. Fresh inserts skip this check because a brand-new id has no descendants — the proposed parent is trivially not a descendant of it.
 
-Why engine-side, not mutator-side: kernel mutators (`move`, `indent`, `outdent`) could enforce these themselves, but the only way to *guarantee* no plugin mutator or direct `repo.tx` body bypasses them is to make the structural primitive the only path. Pre-v4.27 the spec said the engine intercepted "any `tx.update` with `parentId` in the patch," but that's defensive after-the-fact; a bug in the interceptor could still let a write slip through. Removing `parentId` from `tx.update`'s patch type at the type system level closes the hole: the *only* way to mutate `parent_id` is `tx.move`, which always runs the checks.
+Why engine-side and uniform across primitives (v4.28): kernel mutators (`move`, `indent`, `outdent`, `createChild`, `insertChildren`) could enforce these themselves, but the only way to *guarantee* no plugin mutator or direct `repo.tx` body bypasses them is to make the engine the enforcement point at every primitive that accepts a `parentId`. Pre-v4.28 the engine ran these checks only on `tx.move`, so `tx.create({ parentId: someDeletedId, ... })` from a plugin or direct `repo.tx` body would land a fresh live row under a tombstone — bypassing the same protection `tx.move` centralizes. v4.28 closes that hole: the existence + workspace + soft-deleted-parent checks fire identically for `tx.create`, `tx.createOrGet`'s fresh-insert branch, and `tx.move`. Cycle validation is the only one that's structurally `tx.move`-only.
 
-`tx.create` and `tx.createOrGet` don't need cycle validation on a fresh-insert path: a brand-new id has no descendants, so the proposed parent is trivially not a descendant of it. (Workspace-consistency + parent-existence checks DO apply to fresh inserts; those are enforced in the create primitives directly + as triggers/FKs in §4.1.1.) The cycle check fires on `tx.move` only.
-
-The `tx.restore(id, patch?)` primitive (v4.27) doesn't accept `parentId` either — its patch is the same `BlockDataPatch` (data fields only). Domain helpers that need to restore-and-move call `tx.restore(id)` + `tx.move(id, target)` as separate primitive calls in the same tx.
+The `tx.restore(id, patch?)` primitive (v4.27) doesn't accept `parentId` — its patch is the same `BlockDataPatch` (data fields only). Domain helpers that need to restore-and-move call `tx.restore(id)` + `tx.move(id, target)` as separate primitive calls in the same tx; the move's checks fire there.
 
 **Layer 2 — CTE guards (depth + visited-id).** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries two guards: a `depth < 100` defensive cap, and a visited-id check via path-INSTR (§11.1) that skips any row whose id already appears in the recursion path-so-far. Even if a sync-applied cycle slips through Layer 1, the visited-id guard truncates the cyclic subtree at the cycle entry — each block appears at most once in the result, no UNION-ALL duplicate explosion — and the depth guard is the additional safety net for any pathological non-cycle deep tree (a 200-level deep, non-cyclic tree gets capped, but that's an extreme corner case). The result is a clean, finite tree the UI can render. The truncation itself is silent in the result shape — `Handle<BlockData[]>` does not carry per-edge "cycle here" metadata; surfacing the cycle in-UI would require a parallel result channel that we're not building for this rare case. Operators learn cycles happened from the `repo.events.cycleDetected` log (next paragraph).
 
@@ -702,7 +704,14 @@ export interface Tx {
    *  to make the structural primitive explicit. */
 
   // ──── Lifecycle ────
-  create(data: NewBlockData, opts?: TxWriteOpts): string     // throws DuplicateIdError on PK conflict
+  /** Insert a new block. Throws `DuplicateIdError` on PK conflict.
+   *
+   *  When `data.parentId` is non-null, engine runs the same parent-validation
+   *  rules as `tx.move` (see §4.7 Layer 1) — `ParentNotFoundError` if the parent
+   *  doesn't exist, `WorkspaceMismatchError` if it's in a different workspace,
+   *  `ParentDeletedError` if it's soft-deleted. (Cycle validation skipped: the
+   *  new id has no descendants, so the proposed parent is trivially not one.) */
+  create(data: NewBlockData, opts?: TxWriteOpts): string
 
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
    *  resurrection** — this primitive is intentionally narrow.
@@ -711,7 +720,9 @@ export interface Tx {
    *  - Engine SELECTs the existing row first (same `before` capture §10 step 3
    *    runs for any first-touch id), then:
    *    1. **Missing** → INSERT, returns `{ id, inserted: true }`. Snapshot
-   *       `(null, after)`.
+   *       `(null, after)`. Same parent-validation rules as `tx.create` apply on
+   *       the fresh-insert path (`ParentNotFoundError` / `WorkspaceMismatchError`
+   *       / `ParentDeletedError` per §4.7 Layer 1).
    *    2. **Exists, different workspace** → throws
    *       `DeterministicIdCrossWorkspaceError`. Defensive correctness guard,
    *       not a policy decision (a deterministic id resolving to a row in
@@ -933,8 +944,16 @@ export interface Query<Args, Result> {
   /** Optional coarse pre-filter for the invalidation engine.
    *  If absent, the engine subscribes to all blocks/row_events changes
    *  for this handle. Set this to limit pre-filtering work; dynamic deps
-   *  from resolve always take precedence for precision. */
-  readonly coarseScope?: { tables?: string[]; mutators?: string[] }
+   *  from resolve always take precedence for precision.
+   *
+   *  Only `tables` is supported (v4.28). Pre-v4.28 the type also exposed
+   *  `mutators?: string[]` as a filter, but that channel went stale when
+   *  v4.20 removed mutator-name invalidation — no `Dependency` kind matches
+   *  mutator names anywhere in the spec, so the filter had no consumer.
+   *  Field/row-shaped invalidation via `ctx.depend({kind: 'row' | 'parent-edge'
+   *  | 'workspace' | 'table'})` is the correctness path; coarseScope.tables is
+   *  the only coarse filter that pairs with it. */
+  readonly coarseScope?: { tables?: string[] }
 }
 
 interface QueryCtx {
@@ -2161,7 +2180,7 @@ The acceptance criteria below describe properties of the **current spec state**.
 
 - [ ] **Schema and triggers**: server schema is just `blocks` (§4.1); client adds `tx_context` / `row_events` / `command_events` plus seven triggers (5 audit/upload + 2 workspace-invariant, §4.5 + §4.1.1, §13.1 acceptance). Sync-applied writes leave `tx_context.source = NULL`; row_events COALESCEs to `'sync'`; upload-routing triggers gate on `= 'user'` so sync writes don't loop. No PowerSync sync-apply wrapper.
 - [ ] **Tx primitives** (§5.3, §10 pipeline): write-through to SQL inline, no staged write-set. Engine captures `(before, after)` per id in a tx-private snapshots map for handle diffing / undo. Cache is mutated only on commit walk (step 6). `tx.peek` reads snapshots-then-cache. `tx.get` / `tx.childrenOf` / `tx.parentOf` read SQL via the writeTransaction. The Tx surface is split into narrow primitives (v4.27): `tx.update` is data-fields-only (`content` / `references` / `properties`); `tx.move` is the single parent_id mutation entry point; `tx.delete` / `tx.restore` are the lifecycle primitives; `tx.create` / `tx.createOrGet` cover insert. `tx.createOrGet` is SELECT-then-branch with three terminal outcomes (insert / live-hit / throw `DeletedConflictError` or `DeterministicIdCrossWorkspaceError`); restore-on-tombstone is the domain helpers' job via `tx.restore` (`createAliasTargetInline` in §7, Roam import upsert in §13.1).
-- [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side `isDescendantOf` check on every parent_id-changing `tx.update` (covers kernel mutators, plugin mutators, and direct `repo.tx` bodies uniformly — no caller can bypass). Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` for telemetry only — no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
+- [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side parent-validation on every primitive that takes a `parentId` (`tx.move`, `tx.create`, `tx.createOrGet`'s fresh-insert branch — see §4.7, v4.28 update). Cycle check (`isDescendantOf`) fires on `tx.move` only; existence + workspace + soft-deleted-parent checks fire uniformly across all three. `tx.update`'s patch type doesn't carry `parentId` so it can't bypass; covers kernel mutators, plugin mutators, domain helpers, and direct `repo.tx` bodies the same way. Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` (with `cycles[].members`) for telemetry only — no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
 - [ ] **Workspace invariants**: server-side composite FK enforces `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1). Local trigger enforces parent-existence + same-workspace for fresh local writes; **does not** filter on `deleted = 0` (aligns with server). Mutator-level validation throws `ParentDeletedError` / `WorkspaceMismatchError` / `ParentNotFoundError` for better UX; storage layer accepts what sync brings in. Engine pins `meta.workspaceId` from first write and throws `WorkspaceMismatchError` on cross-workspace writes inside one tx (§5.3, §15 #11).
 - [ ] **Tree CTEs in Phase 1** (§13.1): `SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL` ship from day one with depth-100 + `!hex/` visited-id guards. Phase 5 shrinks to queriesFacet packaging + a 1000-block benchmark.
 - [ ] **Reactivity** (§9): two-source handle invalidation (TxEngine fast path + row_events tail filtered to `source = 'sync'`); parent-edge dependencies for tree handles; children-completeness markers + `ChildrenNotLoadedError` for the sync `Block` facade (§5.2).
