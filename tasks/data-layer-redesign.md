@@ -53,13 +53,20 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Stage 2 dynamic discovery has a transitional path for Phases 1-3** (§8). `findExtensionBlocks` is a Phase-4 query (registered to `queriesFacet`), but dynamic plugins exist before Phase 4. Stage 2 calls a `findExtensionBlocksLegacy(repo)` helper using today's existing dynamic-renderer SQL discovery; Phase 4 wraps the same SQL into a queriesFacet contribution. No behavior change at the switchover.
 >   - **`BlockData` shape standardized to camelCase** (new §4.1.1). Examples mixed `parent_id`/`parentId`, `properties_json`/`properties`, `references_json`/`references`. Defined the public TS shape (camelCase) versus storage shape (snake_case JSON columns) explicitly, and which boundary translates between them (`parseBlockRow` / `blockToRow` in `src/data/blockSchema.ts`). All TS examples in the spec now use camelCase domain shape (cycle repair: `{ parentId: null }`; reference parsing: `{ references: ids }`). Storage-shape language reserved for SQL DDL, triggers, and internal storage descriptions.
 >   - **§4.5 trigger prose aligned with v1 trigger set**: 2 upload-routing triggers (INSERT/UPDATE) + 3 row_events writers (INSERT/UPDATE/DELETE) = 5 total. The old "INSERT/UPDATE-split pattern is used for the row_events triggers" wording was wrong — row_events has all three; only upload-routing skips DELETE.
-> - v4.10 (this): user feedback round.
+> - v4.10: user feedback round.
 >   - **Phase 1 spins up a new Supabase project** via `supabase` CLI, leaving the existing project as a historical snapshot. `.env` and `.env.example` are wired to the new URL/keys; old project URL noted in PR description.
 >   - **§16.1 resolved: zod** — schema validators are used at the mutator/query/processor argsSchema boundary (most importantly for dynamic plugins that bypass TS checks); zod wins on bundle weight and React-ecosystem familiarity over Effect Schema. Tradeoffs table added; Codec<T> stays separate (it needs bidirectional encode/decode that validators don't provide). Valibot flagged as a near-mechanical fallback if bundle pressure shows up later.
 >   - **§16.4 explained** — checkpoints are TinyBase/VS-Code-style undo grouping, needed once per-keystroke writes are routed through `repo.tx`. Today's CodeMirror-internal-undo-during-edit-mode pattern keeps writes coarse-grained, so v1 is fine without checkpoints. Added implementation-cost-when-needed note.
 >   - **§16.8 expanded** — push command_events as-is filtered to `source = 'user'` (this is the high-value audit signal); skip row_events unless we later need full row-history server-side. Translation needs are minimal (timestamp ms→timestamptz, JSON text→jsonb); no structural changes.
 >   - **§16.12 resolved: `fractional-indexing-jittered`** — jittering reduces collisions at no cost; secondary `(order_key, id)` sort handles the residual case for full determinism.
 >   - **§16.13 added** — the row_events tail throttle window referenced in §9.3 now has its own subsection (~100ms starting point, profile during Phase 2).
+> - v4.11 (this): round-10 fixes.
+>   - **References preserve `{id, alias}` pairs** (§4.1.1). v4.10's flattening to `string[]` was an unforced error — the wikilink renderer needs the original alias text to display the link as the user typed it (which can differ from the target's name). New `BlockReference` interface, `BlockData.references: BlockReference[]`. Reference parsing examples updated.
+>   - **`PostCommitProcessor.apply` gets a `ProcessorCtx`** (§5.7) with `tx`, `db`, `repo` — closing the gap that left `parseReferences`'s alias-lookup and `cleanupOrphanAliases`'s row_events scan unimplementable as specified. Follow-up processors get free read access to committed state via `ctx.db`; same-tx processors share the user's tx and must use tx primitives for tx-aware reads (`ctx.db` reads pre-this-tx state — documented).
+>   - **Date-shaped alias targets exempt from cleanup** (§7 mapping table + new §7.6). Today's app deliberately persists daily notes regardless of source-text retention; `parseReferences` filters date-shaped ids out of `candidateIds` before scheduling cleanup. Test for this added.
+>   - **`BlockDataPatch` excludes engine-managed metadata** (§4.1.1). v4.10 still let callers patch `updatedAt` / `updatedBy` despite metadata being engine-managed. Tightened to `Omit<BlockData, 'id' | 'workspaceId' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'>` and wired into `Tx.update`'s signature.
+>   - **Field watchers use `keyof BlockData`** (§5.7), not `keyof BlockRow`. Plugin authors watch the public domain shape (`content`, `parentId`, `references`, etc.), not storage columns (`content`, `parent_id`, `references_json`). The storage / domain split (§4.1.1) means plugin code never deals with snake_case keys.
+>   - **Stale "Repair always uploads" wording fixed** in §4.7, §5.4, and §5.8 — all three now correctly point to `repo.canWrite(workspaceId)` per §5.8.1.
 
 ---
 
@@ -240,6 +247,15 @@ A periodic rebalance pass (defer; §16.9) can rewrite keys when they grow too lo
 The SQL columns above are the **storage shape** (snake_case). The **public TypeScript shape** is camelCase and is what every API in this spec exposes — `tx.update`, handle results, mutator args, post-commit processor `changedRows`, undo snapshots, all of it.
 
 ```ts
+export interface BlockReference {
+  /** Resolved target block id. */
+  id: string
+  /** Original alias text from the source content (e.g. the body of `[[Inbox]]`).
+   *  Preserved so wikilink rendering can show the alias text the user typed,
+   *  which may differ from the target block's current name/aliases. */
+  alias: string
+}
+
 export interface BlockData {
   id: string
   workspaceId: string
@@ -247,7 +263,7 @@ export interface BlockData {
   orderKey: string
   content: string
   properties: Record<string, unknown>           // codec-encoded values; not "properties_json"
-  references: string[]                          // not "references_json"
+  references: BlockReference[]                  // {id, alias} pairs; not "references_json"
   createdAt: number
   updatedAt: number
   createdBy: string
@@ -255,9 +271,14 @@ export interface BlockData {
   deleted: boolean                              // hydrated from 0/1
 }
 
-// Allowed patch shape for tx.update:
-type BlockDataPatch = Partial<Omit<BlockData, 'id' | 'workspaceId' | 'createdAt' | 'createdBy'>>
-// id and workspaceId are immutable post-create; metadata is engine-managed.
+/** Allowed patch shape for tx.update — excludes immutable fields (id,
+ *  workspaceId) AND engine-managed metadata (createdAt, createdBy,
+ *  updatedAt, updatedBy). Tx.update accepts this type and rejects
+ *  patches that include disallowed keys at compile time. */
+export type BlockDataPatch = Partial<Omit<
+  BlockData,
+  'id' | 'workspaceId' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'
+>>
 ```
 
 **Storage ↔ domain mapping** lives in two functions in `src/data/blockSchema.ts`:
@@ -439,7 +460,7 @@ for (const members of cycles.values()) {
 
 This is deterministic across clients: every client that observes the same cyclic state picks the same loser, so the repair converges via sync (each client writes the same `parent_id = NULL` for the same row; LWW is a no-op).
 
-Repair runs with `scope: ChangeScope.Repair` (defined in §5.8). That scope: not in the document undo stack; uploads to server (so other clients receive the repair); allowed even when `repo.isReadOnly` (repair is system-driven, not user-driven). The mutator writes a `command_events` row tagging the repair for audit.
+Repair runs with `scope: ChangeScope.Repair` (defined in §5.8). Source is decided per-tx by `repo.canWrite(workspaceId)` for the affected block (see §5.8.1): writable → `'user'` (uploads, propagates to peers via sync); not-writable → `'local-ephemeral'` (local view fixed, no upload, eventual convergence via writable-peer sync). Repair is permitted regardless of `repo.isReadOnly` (it's system-driven, not user-driven). The mutator writes a `command_events` row tagging the repair for audit.
 
 **Layer 3 — CTE recursion guards.** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries a `depth < 100` defensive guard. Even if cycle repair lags, queries return finite results instead of OOMing.
 
@@ -560,7 +581,7 @@ export interface Tx {
 
   /** Low-level primitives. */
   create(data: NewBlockData, opts?: TxCreateOpts): string    // returns the id (newly-created or existing, depending on onConflict)
-  update(id: string, patch: Partial<BlockData>, opts?: TxWriteOpts): void
+  update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): void
   delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
 
   /** Typed property primitives — the only path that runs codecs.
@@ -642,7 +663,7 @@ export interface Mutator<Args = unknown, Result = void> {
 Scope semantics:
 - `ChangeScope.BlockDefault` (or any document scope): undoable, uploads to server.
 - `ChangeScope.UiState` (`'local-ui'`): not undoable; **`source='local-ephemeral'` set on `tx_context`**, so the upload trigger excludes these writes.
-- Read-only mode: `repo.tx` rejects unless every mutator in the tx has UiState scope.
+- Read-only mode: `repo.tx` rejects unless every mutator in the tx has `UiState` or `Repair` scope. Repair is system-driven and runs even under read-only (see §5.8.1; its `source` becomes `'local-ephemeral'` so it doesn't try to upload).
 - Different mutators in the same tx with different scopes are not allowed (engine throws); a tx is one scope.
 
 ### 5.5 `Query<Args, Result>`
@@ -855,14 +876,14 @@ export interface PostCommitProcessor {
    *  - explicit only (fired only by tx.afterCommit) */
   readonly watches:
     | { kind: 'mutator'; names: string[] }
-    | { kind: 'field'; table: 'blocks'; fields: Array<keyof BlockRow> }
+    | { kind: 'field'; table: 'blocks'; fields: Array<keyof BlockData> }
     | { kind: 'explicit' }
 
   /** 'same-tx' runs inside the user's tx (atomic);
    *  'follow-up' runs after commit in its own writeTransaction. */
   readonly mode: 'same-tx' | 'follow-up'
 
-  readonly apply: (event: CommittedEvent, tx: Tx) => Promise<void>
+  readonly apply: (event: CommittedEvent, ctx: ProcessorCtx) => Promise<void>
 }
 
 interface CommittedEvent {
@@ -872,6 +893,26 @@ interface CommittedEvent {
   user: User
   workspaceId: string
   scheduledArgs?: unknown                                    // for tx.afterCommit-driven invocations
+}
+
+interface ProcessorCtx {
+  /** Write primitives — the processor's own tx (for follow-up mode) or the
+   *  user's tx (for same-tx mode). Same Tx interface in both cases. */
+  tx: Tx
+
+  /** Raw SQL for reads (e.g. row_events scans, alias lookups, backlink queries
+   *  that don't fit tx.get/childrenOf/parentOf).
+   *  - Follow-up mode: db reads see the committed state at processor-fire time;
+   *    safe to use freely.
+   *  - Same-tx mode: db reads see committed-PRE-this-tx state, NOT staged
+   *    writes from the user's tx. Same-tx processors needing tx-aware reads
+   *    must use tx.get / tx.peek / tx.childrenOf / tx.parentOf. */
+  db: PowerSyncDatabase
+
+  /** Repo for handle composition or invoking other mutators (`tx.run` is
+   *  preferred for composition; `repo.query.X` returns Handles for cases
+   *  where a kernel/plugin query is the cleanest expression). */
+  repo: Repo
 }
 ```
 
@@ -891,8 +932,9 @@ export const ChangeScope = {
   BlockDefault: 'block-default',           // user document edits; undoable; uploads
   UiState: 'local-ui',                     // selection/focus/etc; not undoable; never uploads
   References: 'block-default:references',  // ref-parsing bookkeeping; separate undo bucket; uploads
-  Repair: 'core:repair',                   // cycle/consistency repair; not undoable; uploads;
-                                           // permitted in read-only mode (system-driven, not user)
+  Repair: 'core:repair',                   // cycle/consistency repair; not undoable;
+                                           // upload conditional on repo.canWrite(workspaceId)
+                                           // — see §5.8.1; permitted in read-only mode
 } as const
 export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 
@@ -968,9 +1010,9 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `tx.get` for known ids, kernel `aliasLookup` query for alias-by-name. The processor runs *after* the user's tx commits, so committed-state queries are correct. |
 | Create missing alias-target | `tx.run(createAliasTarget, { alias, workspaceId })` inside the processor's own tx. |
-| Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. |
-| Update `references` field | `tx.update(sourceId, { references: resolvedIds }, { skipMetadata: true })`. `skipMetadata` prevents the bookkeeping write from bumping `updated_at`/`updated_by`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
-| Self-destruct (newly-created alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { candidateIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. Cleanup processor checks each candidate id with **two gates**: (a) verify this tx actually inserted the row (query row_events for `tx_id = originatingTxId AND block_id = id AND kind = 'create'`); skip if not. (b) verify no block's `references_json` contains the id; skip if any does. Only when both gates pass does cleanup delete. See §7.5 below for the rationale. |
+| Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. **Date alias targets are NEVER added to `candidateIds`** (see Self-destruct row below) — daily notes persist regardless of whether a referencing block is removed within 4s. |
+| Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
+| Self-destruct (newly-created NON-DATE alias-target dropped if not retained within ~4s) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { candidateIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`candidateIds` excludes date-shaped alias-target ids** — daily notes are persistent by convention. Cleanup processor checks each candidate id with **two gates**: (a) verify this tx actually inserted the row (query row_events for `tx_id = originatingTxId AND block_id = id AND kind = 'create'`); skip if not. (b) verify no block's `references` contains the id; skip if any does. Only when both gates pass does cleanup delete. See §7.5 below for the rationale. |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
 | `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
@@ -982,6 +1024,26 @@ Because parseReferences is follow-up with `scope: References`:
 - User hits undo → setContent reverts → parseReferences fires again on the reverted content → refs converge to the pre-edit state.
 
 This matches today's behavior. No "two undos to revert one edit" UX issue.
+
+### 7.6 Daily-note exemption from cleanup
+
+Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a newly-created daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **not adding date-shaped alias-target ids to `candidateIds`** in the first place — `parseReferences` checks each freshly-created alias's id against the daily-note id format and excludes matches.
+
+Implementation:
+
+```ts
+function isDateAliasTargetId(id: string): boolean {
+  // matches the deterministic daily-note id format produced by createAliasTarget
+  return /^daily-[a-z0-9]+-\d{4}-\d{2}-\d{2}$/.test(id)
+}
+
+// inside parseReferences, after createAliasTarget:
+const newlyCreatedIds = …
+const candidateIds = newlyCreatedIds.filter(id => !isDateAliasTargetId(id))
+tx.afterCommit('core.cleanupOrphanAliases', { candidateIds, originatingTxId: tx.meta.txId }, { delayMs: 4000 })
+```
+
+This is filter-at-schedule-time, not gate-at-cleanup-time, so cleanup never even sees the daily-note ids. (We could double-gate at cleanup for defense in depth, but it's not needed if the format check is reliable.)
 
 ### 7.5 Why cleanup needs the row_events insertion check
 
@@ -1006,9 +1068,11 @@ The insertion check is implementable because `row_events` is the authoritative l
 
 - `setContent` with `[[foo]]` (alias not yet existing) → after debounce, alias-target exists; source block's `references` includes it.
 - `[[2026-04-28]]` produces deterministic daily-note id; two simultaneous creates resolve to the same row.
-- Typing `[[foo]]` (foo new) then deleting that text within 4s → orphan removed by cleanup (row_events check passes — this tx created the row; reference check passes — no block references it).
-- Typing `[[foo]]` (foo new), then linking from another block within 4s → orphan kept (reference check fails — another block references it).
-- **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept** (row_events check fails — this tx didn't create the row; cleanup skips). This is the §7.5 race; it must not regress.
+- Typing `[[foo]]` (foo new, non-date) then deleting that text within 4s → orphan removed by cleanup (row_events check passes; reference check passes).
+- Typing `[[foo]]` (foo new), then linking from another block within 4s → orphan kept (reference check fails).
+- **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept** (row_events check fails; this tx didn't create the row). §7.5 race; must not regress.
+- **Typing `[[2026-04-28]]` (newly creates the daily note)**, then deleting within 4s → daily note is **kept** (date-shaped target not added to `candidateIds`). §7.6 daily-note exemption; must not regress.
+- Two clients concurrently typing `[[2026-04-28]]` → deterministic daily-note id; both `tx.create` calls converge on the same row via `onConflict: 'ignore'`; both clients' `references` arrays end up containing `{id, alias: '2026-04-28'}` (after their respective parseReferences runs).
 - Rapid typing inside an existing `[[alias]]` (no alias-set change) → debounce coalesces; at most one processor run per block per debounce window.
 - Undo of `setContent` → `references` converges back to pre-edit state.
 
