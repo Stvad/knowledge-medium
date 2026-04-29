@@ -64,6 +64,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@powersync/node": "^0.18.4",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/postcss": "^4.2.4",
     "@testing-library/dom": "^10.4.1",
@@ -71,6 +72,7 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/babel__standalone": "^7.1.9",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/lodash": "^4.17.24",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
@@ -78,6 +80,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "autoprefixer": "^10.5.0",
     "babel-plugin-react-compiler": "^19.0.0-beta-e993439-20250405",
+    "better-sqlite3": "^12.9.0",
     "eslint": "^10.2.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
