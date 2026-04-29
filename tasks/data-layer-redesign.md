@@ -94,10 +94,16 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **Repair-scoped mutators forbidden through `repo.mutate.X`** (§10.1). The generic dispatch wrapper has no way to compute `repairWorkspaceId` from arbitrary mutator args. Repair-scoped writes go through `repo.tx` directly with the worker computing the workspace from cycle-detection state. The wrapper throws if a mutator's resolved scope is `Repair`, with a message pointing to §5.8.1.
 >   - **Cleanup arg renamed `attemptedAliasTargetIds`** (§7 + §7.6 + §7.5). v4.15 called this `candidateIds` / `newlyCreatedIds`, both of which implied same-tx insertion knowledge that §10.4 says is unavailable. The list is every non-date id returned by `createAliasTarget`, regardless of insert/conflict outcome; the row_events gate (§7.5) sorts genuinely-inserted from pre-existing post-commit. Schema in `PostCommitProcessorRegistry` updated to match.
 >   - **Service-role grep claim split** (§4 + §13.1 acceptance). `git grep` only sees tracked files, so it cannot validate a gitignored local `.env`. Now: tracked-file/browser-bundle guard via `git grep -nI 'service_role' -- '.env*' 'src/' 'public/' 'index.html'` (mechanical, CI-runnable) PLUS a separate filename-only local-`.env` check (`grep -lE '^SUPABASE_SERVICE_ROLE_KEY' .env || echo OK`) that doesn't print secret values. PR docs reviewers to run the local check.
-> - v4.19 (this): round-16 fixes — closing real gaps from v4.18 without re-adding the v4.17 engine machinery.
+> - v4.19: round-16 fixes — closing real gaps from v4.18 without re-adding the v4.17 engine machinery.
 >   - **Workspace-trigger conflict resolved** (§4.1.1). v4.18's local trigger had two bugs: it silently accepted dangling parents (the `IS NOT NULL AND !=` predicate evaluated to NULL on missing parent rows, no ABORT), and it would have aborted sync-applied cross-workspace edges before row_events could record them, contradicting the spec's repair-via-sync-tail story. Now: server-side composite FK is the canonical enforcement (`FOREIGN KEY (workspace_id, parent_id) REFERENCES blocks (workspace_id, id)`); client-side triggers gate on `tx_context.source IS NOT NULL` (local writes only) and use `NOT EXISTS` to catch dangling-parent / cross-workspace / soft-deleted-parent in one check. v4.17's "row_events tail demotes cross-workspace edges" path is dropped — the server-side FK makes such edges impossible to sync in the first place. Cycle repair handles cycles only.
 >   - **`repo.repairTreeInvariants(targetId, fix, description?)` added** as the canonical repair worker entry point (§5.8.1, §3 architecture diagram). v4.18 had `ChangeScope.Repair` publicly accepted by `repo.tx`, with the canWrite gate as a worker-discipline rule — any plugin/kernel bug could open `scope: Repair` against a non-writable workspace and trigger a rejected-upload loop. The new method DRYs the canWrite gate (one place instead of every worker call site) and provides a clear "official" entry point. ~10 lines of code; the engine remains workspace-unaware for Repair (no per-tx workspace derivation, no discriminated options type — none of the v4.17 machinery comes back). Defense-in-depth via `isReadOnly` rejection (§10.3) is preserved.
 >   - **`createAliasTarget` reduced to a plain helper, not a registered Mutator** (§7 mapping, §13.3 Phase 3 mutator list). v4.18 had it in the kernel mutator list, which would have made it `repo.mutate.createAliasTarget(...)` callable from any caller — bypassing the parseReferences flow that the cleanup processor's row_events gate assumes. Now it's `createAliasTargetInline(tx, alias, workspaceId)`, a private helper called only from `core.parseReferences.apply`. No public API surface; no scope-rule confusion (it inherits parseReferences's tx scope automatically); no registration in `mutatorsFacet`.
+> - v4.20 (this): four simplifications — pure dead-code removal except for #3 which is a substitution.
+>   - **Dropped `mode: 'same-tx'` processors** (§5.7, §10 pipeline, §15 invariant #10, §16.2). v1 shipped zero same-tx processors and the only hypothetical use case (atomic backlinks) was already rejected in v4.4. Discriminated PostCommitProcessor union → flat shape; `SameTxCtx` deleted; pipeline step 4 deleted; atomicity prose simplified. Re-add the mode if a real use case ever appears.
+>   - **Dropped `watches.kind: 'mutator'`** (§5.7, §16.2). Zero v1 callers; the design itself argued for `field`-watching whenever correctness matters (mutator-name watches don't catch plugin mutators bypassing the named one). Discriminated union 3 → 2 variants (`field` + `explicit`). `CommittedEvent.matchedCalls` deleted.
+>   - **Replaced `tx.create({...}, { onConflict: 'ignore' })` with `tx.createOrGet(data)` returning `{ id, inserted: boolean }`** (§5.3, §7 mapping, §7.5, §7.6, §10 pipeline, §10.4). The "same-tx insertion detection unavailable" caveat goes away because `inserted` is a return value. The post-flush conflict-reconciliation SELECT (old pipeline step 7) goes away because the primitive does the SELECT inline on conflict — the staged write set is correct as soon as the user fn returns. The §7.5 row_events insertion gate goes away because parseReferences filters at schedule time using `inserted` directly. The cleanup arg renames `attemptedAliasTargetIds` → `newlyInsertedAliasTargetIds` (now a literally-honest name). `tx.create` simplifies back to "throws on conflict" only — `TxCreateOpts` deleted.
+>   - **Dropped `ChangeScopeRegistry`** (§5.8). Plugin-extensible scope registry was declared but plugin scopes inherited `BlockDefault` semantics anyway, so they were functionally identical to using `BlockDefault` directly. `ChangeScope` is now just the union of the four built-in literal values. Plugins that genuinely need a custom scope (separate undo bucket, different upload semantics) wait for a future revision that adds metadata-shaped registry entries.
+>   - Net spec savings: roughly −150 lines, three removed/collapsed sections (§7.5 shrunk, §10.4 rewritten, §16.2 condensed), one fewer pipeline step, one fewer invariant, one fewer type registry. Engine surface for processors / conflict / scope all simpler.
 > - v4.18: repair simplification — drop local-only repair on non-writable workspaces.
 >   - **Repair scope is no longer workspace-aware in the engine** (§4.7, §5.3, §5.8, §5.8.1, §10.1, §10.3, §15). The repair worker is the gate: it reads each cycle loser's workspace, checks `repo.canWrite(workspaceId)`, and skips non-writable workspaces before opening a tx. Read-only / non-writable-workspace clients let the cycle stay visible (bounded by the depth-100 CTE guards in §11) until a writable peer's authoritative fix syncs down via LWW.
 >   - **Removed plumbing**: `repairTargetId` (and the prior `repairWorkspaceId`) from `RepoTxOptions`; the discriminated union with `source?: never` / `repairTargetId?: never` constraints; per-tx engine-side source derivation; the workspace-row read at tx open; the §5.8.1 source-decision algorithm; the "Repair forbidden through `repo.mutate.X`" rule (its only justification was that the wrapper couldn't compute `repairWorkspaceId` from generic args).
@@ -212,12 +218,13 @@ We're in alpha. Schema breaks are taken cleanly (drop & recreate), no dual-reade
 │ TxEngine (db.writeTransaction)                              │
 │   set tx_context (tx_id, user_id, scope, source)            │
 │   stage writes; reads = staged → cache → SQL via txDb       │
-│   run same-tx processors (refs, ...)                        │
+│   tx.createOrGet runs INSERT…ON CONFLICT inline             │
 │   write blocks rows + command_events row                    │
 │   row_events written by triggers (read tx_context)          │
 │   trigger forwards to powersync_crud unless source=sync|ephem│
 │ on success: hydrate cache, diff handles, fire, undo entry   │
-│              run scheduled tx.afterCommit jobs              │
+│              run scheduled tx.afterCommit + field-watch     │
+│              follow-up processors                           │
 │ on throw: full rollback                                      │
 └────────────────────────┬────────────────────────────────────┘
                          │
@@ -728,7 +735,18 @@ export interface Tx {
   peek(id: string): BlockData | null
 
   /** Low-level primitives. */
-  create(data: NewBlockData, opts?: TxCreateOpts): string    // returns the id (newly-created or existing, depending on onConflict)
+  create(data: NewBlockData, opts?: TxWriteOpts): string     // throws DuplicateIdError on PK conflict
+  /** Insert OR return the existing row, with explicit insertion status.
+   *  Required for deterministic-id callers (createAliasTargetInline; daily notes).
+   *  - id is REQUIRED on the input — without an id, conflict semantics are undefined.
+   *  - On insert: stages the new row, returns { id, inserted: true }.
+   *  - On conflict: SELECTs the live row inside the same writeTransaction, stages
+   *    the live row (so subsequent tx.get returns it), returns { id, inserted: false }.
+   *  - Within-tx tx.get(id) sees the staged row (inserted or live) — no caveat.
+   *  Implementation note: `INSERT INTO blocks(...) VALUES(...) ON CONFLICT(id) DO NOTHING
+   *  RETURNING *` returns nothing on conflict in SQLite; the engine follows up with
+   *  a SELECT. Same-statement on Postgres if the server ever runs this directly. */
+  createOrGet(data: NewBlockData & { id: string }, opts?: TxWriteOpts): Promise<{ id: string; inserted: boolean }>
   update(id: string, patch: BlockDataPatch, opts?: TxWriteOpts): void
   delete(id: string): void                                   // soft delete (sets deleted=1; fires UPDATE triggers — see §4.5 row_events kind)
 
@@ -787,23 +805,10 @@ export interface RepoTxOptions {
 ```ts
 interface TxWriteOpts {
   /** When true, engine does NOT auto-bump updated_at/updated_by (or created_at/created_by
-   *  on tx.create). Used by same-tx processors whose writes are bookkeeping, not user
-   *  intent. Default false. User-facing mutators should not set this. */
+   *  on tx.create). Used for bookkeeping writes whose state isn't user intent —
+   *  e.g. parseReferences updating the `references` field. Default false.
+   *  User-facing mutators should not set this. */
   skipMetadata?: boolean
-}
-
-interface TxCreateOpts extends TxWriteOpts {
-  /** Behavior when a row with the same primary key already exists.
-   *    'throw'  (default): throw DuplicateIdError. The safe default — accidental
-   *                        id collisions surface loudly instead of silently
-   *                        overwriting or merging.
-   *    'ignore':           keep the existing row, do not write. Returns the id
-   *                        unchanged. Engine post-processes: see "Cache
-   *                        coherence note" below. Use for deterministic ids
-   *                        where concurrent creates must converge (e.g.
-   *                        daily-note ids; see core.createAliasTarget in §7).
-   *  No 'replace' — replacing on conflict is `tx.update`, semantically. */
-  onConflict?: 'throw' | 'ignore'
 }
 
 type TxSource = 'user' | 'local-ephemeral'                   // sync writes bypass repo.tx; tx_context.source stays NULL for them, COALESCE'd to 'sync' in row_events
@@ -1043,27 +1048,30 @@ The trade we're making by lifting schema out of stored values: gain plugin exten
 ### 5.7 `PostCommitProcessor`
 
 ```ts
-/** Processors are discriminated on TWO axes:
- *  - mode (same-tx | follow-up): determines ctx shape. Same-tx processors
- *    share the user's tx and CANNOT use raw db reads (those would see
- *    pre-this-tx state, bypassing staged writes). Follow-up processors run
- *    in their own writeTransaction and have free read access.
- *  - watches.kind (mutator | field | explicit): determines whether
- *    scheduledArgs/scheduledArgsSchema are present. 'explicit' processors
- *    REQUIRE a schema (the only channel feeding scheduledArgs is
- *    tx.afterCommit, which validates at enqueue time); 'mutator' / 'field'
- *    processors never see scheduledArgs. */
-
-export type PostCommitProcessor<ScheduledArgs = unknown> =
-  | { mode: 'same-tx';   apply: (e: CommittedEvent<ScheduledArgs>, ctx: SameTxCtx)   => Promise<void> } & ProcessorMeta<ScheduledArgs>
-  | { mode: 'follow-up'; apply: (e: CommittedEvent<ScheduledArgs>, ctx: FollowUpCtx) => Promise<void> } & ProcessorMeta<ScheduledArgs>
-
-type ProcessorMeta<ScheduledArgs> = { name: string } & ProcessorWatches<ScheduledArgs>
+/** All processors run as follow-ups in their own writeTransaction, after the
+ *  originating user tx commits. (v4.20 dropped the same-tx mode — see §16.2.)
+ *
+ *  Discriminated on watches.kind:
+ *  - 'field':    fires when the originating tx wrote any of the named fields
+ *                on `blocks`. The robust correctness path — catches every
+ *                code path that touches the field, including plugin mutators
+ *                that bypass a specific named mutator. scheduledArgs is undefined.
+ *  - 'explicit': fires only when a previous tx called tx.afterCommit with this
+ *                processor's name and supplied args. Used by chained processors
+ *                (e.g. cleanupOrphanAliases scheduled by parseReferences).
+ *                scheduledArgsSchema is REQUIRED (engine validates at enqueue).
+ *
+ *  v4.20 also dropped watches.kind: 'mutator' — the mutator-name match channel
+ *  shipped zero v1 processors and the design itself argued for `field` whenever
+ *  correctness matters. See §16.2. */
+export type PostCommitProcessor<ScheduledArgs = unknown> = {
+  name: string
+  apply: (event: CommittedEvent<ScheduledArgs>, ctx: ProcessorCtx) => Promise<void>
+} & ProcessorWatches<ScheduledArgs>
 
 type ProcessorWatches<ScheduledArgs> =
-  | { watches: { kind: 'mutator';  names: string[] };                                scheduledArgsSchema?: never }
   | { watches: { kind: 'field';    table: 'blocks'; fields: Array<keyof BlockData> }; scheduledArgsSchema?: never }
-  | { watches: { kind: 'explicit' };                                                 scheduledArgsSchema:  Schema<ScheduledArgs> }   // REQUIRED
+  | { watches: { kind: 'explicit' };                                                  scheduledArgsSchema:  Schema<ScheduledArgs> }   // REQUIRED
 
 /** Plugin-augmentable type registry for processor scheduled args. Mirrors
  *  MutatorRegistry's role for mutators. Built-ins augment this for their own
@@ -1076,36 +1084,25 @@ export type ScheduledArgsFor<P extends string> =
 // Built-in registration (kernel):
 declare module '@/data/api' {
   interface PostCommitProcessorRegistry {
-    'core.cleanupOrphanAliases': { attemptedAliasTargetIds: string[]; originatingTxId: string }
+    'core.cleanupOrphanAliases': { newlyInsertedAliasTargetIds: string[] }
   }
 }
 
-
 interface CommittedEvent<ScheduledArgs = unknown> {
-  txId: string
-  matchedCalls: Array<{ name: string; args: unknown }>      // populated for kind='mutator'
-  changedRows: Array<{ id: string; before: BlockData | null; after: BlockData | null }> // for kind='field'
+  txId: string                                                           // originating tx
+  changedRows: Array<{ id: string; before: BlockData | null; after: BlockData | null }>  // populated for kind='field'
   user: User
   workspaceId: string
-  scheduledArgs?: ScheduledArgs                              // typed; populated for explicit/tx.afterCommit
+  scheduledArgs?: ScheduledArgs                                          // typed; populated for kind='explicit'
 }
 
-interface SameTxCtx {
-  /** The user's tx. Use tx.get / tx.peek / tx.childrenOf / tx.parentOf for
-   *  tx-aware reads (these honor staged writes); use tx.create / tx.update /
-   *  tx.delete / tx.setProperty for writes that commit atomically with the
-   *  user's tx. NO raw db access — the type doesn't expose it because reads
-   *  via raw SQL inside a same-tx processor would silently miss staged writes. */
-  tx: Tx
-}
-
-interface FollowUpCtx {
+interface ProcessorCtx {
   /** The processor's own tx (its own writeTransaction). Writes commit when
    *  the processor's apply resolves. */
   tx: Tx
 
   /** Raw SQL for reads — sees committed state at processor-fire time
-   *  (the user's originating tx is already committed by definition). */
+   *  (the originating user tx is already committed by definition). */
   db: PowerSyncDatabase
 
   /** For handle composition or invoking other mutators. */
@@ -1125,18 +1122,15 @@ afterCommit<P extends string>(
 
 The engine looks up the processor by name in the snapshot, applies its `scheduledArgsSchema.parse(args)`, and throws `CodecError` on mismatch. Validation runs **at enqueue time** so a buggy caller fails the originating tx (clean rollback) rather than failing silently later when the processor fires.
 
-**Schema is required for `watches.kind: 'explicit'` processors** — enforced at the type level via the discriminated union above (`ExplicitProcessor.scheduledArgsSchema` is non-optional). There's no kernel escape hatch; even built-in processors must declare a schema. This closes the dynamic-plugin bypass that an "optional + comment-required" shape allowed.
+**Schema is required for `watches.kind: 'explicit'` processors** — enforced at the type level (`scheduledArgsSchema: Schema<ScheduledArgs>` is non-optional on that variant of the union). No kernel escape hatch; even built-ins must declare a schema. This closes the dynamic-plugin bypass that an "optional + comment-required" shape allowed.
 
-For `kind: 'mutator'` and `kind: 'field'` processors, scheduledArgs is undefined (those processors fire on commit conditions, not on `tx.afterCommit` calls), so no schema applies. The discriminated union encodes this via `scheduledArgsSchema?: never` on those variants.
+For `kind: 'field'` processors, scheduledArgs is undefined (they fire on commit conditions, not on `tx.afterCommit` calls), so no schema applies. The discriminated union encodes this via `scheduledArgsSchema?: never` on that variant.
 
-Three scheduling channels:
-1. **Mutator-name match** (`watches: { kind: 'mutator', names }`): processor fires when a tx commits and contains any matching mutator call. Args come from `event.matchedCalls`.
-2. **Field-write match** (`watches: { kind: 'field', table, fields }`): processor fires when the tx wrote to any of the specified fields on the table — regardless of which mutator did the write. Args come from `event.changedRows`. **Use this when correctness depends on the field changing, not on a specific mutator running.**
-3. **Explicit schedule** (`tx.afterCommit(name, args, opts)`): processor fires after the tx commits with supplied args via `event.scheduledArgs`. Used by chained processors. The processor's `watches` should be `{ kind: 'explicit' }` if it's only triggered this way.
+Two scheduling channels:
+1. **Field-write match** (`watches: { kind: 'field', table, fields }`): processor fires when the tx wrote to any of the specified fields on the table — regardless of which mutator did the write. Args come from `event.changedRows`.
+2. **Explicit schedule** (`tx.afterCommit(name, args, opts)`): processor fires after the tx commits with supplied args via `event.scheduledArgs`. Used by chained processors. The processor's `watches` is `{ kind: 'explicit' }`.
 
-`core.parseReferences` watches `{ kind: 'field', table: 'blocks', fields: ['content'] }` — that's the only correct choice. A plugin mutator that does `tx.update(id, { content: '...' })` directly (without going through the kernel's `setContent` mutator) will still trigger reference parsing. This is a correctness-critical detail: reference parsing must not be bypassable.
-
-Same-tx processors should not use `tx.afterCommit` to schedule themselves — only follow-up scheduling makes sense after the current tx commits.
+`core.parseReferences` uses field-watching: `{ kind: 'field', table: 'blocks', fields: ['content'] }`. A plugin mutator that does `tx.update(id, { content: '...' })` directly (without going through the kernel's `setContent` mutator) will still trigger reference parsing. This is correctness-critical: reference parsing must not be bypassable. Field-watching is the only mechanism that guarantees that property — which is why v4.20 dropped mutator-name watching as a redundant footgun (see §16.2).
 
 ### 5.8 `ChangeScope` (typed)
 
@@ -1151,20 +1145,10 @@ export const ChangeScope = {
                                            // like any other write scope
 } as const
 
-/** Plugin-augmentable map of scope-name → metadata. Built-in scopes are NOT in
- *  this registry (they're enumerated above with hard-coded engine semantics).
- *  Plugin scopes inherit `BlockDefault` semantics (undoable, uploads, rejected
- *  in read-only) unless we add per-scope metadata in a future revision. */
-export interface ChangeScopeRegistry { /* plugin augmentation: 'plugin:scope-name': true */ }
-
-/** Public ChangeScope type: the union of built-in string values plus any
- *  plugin-augmented keys. RepoTxOptions accepts either. */
-export type ChangeScope =
-  | (typeof ChangeScope)[keyof typeof ChangeScope]
-  | keyof ChangeScopeRegistry
+export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 ```
 
-**Plugin scope semantics** (v1): a plugin that augments `ChangeScopeRegistry` with `'tasks:agenda': true` gets a scope that behaves like `BlockDefault` — undoable, uploads via `source = 'user'`, rejected in read-only mode. If a plugin needs different semantics (non-undoable, local-only, etc.), it should pick one of the four built-in scopes instead of inventing a new one. A future revision can add a metadata-shaped registry (`'tasks:agenda': { undoable: false, source: 'local-ephemeral', allowedInReadOnly: true }`) if real plugin needs justify it; for v1, keeping the registry as a string-key marker keeps the engine logic simple.
+**Plugin scopes** (v1): there is no plugin-extensible scope registry. Plugins use one of the four built-in scopes — pick the one whose engine semantics (undoable / uploads / read-only-allowed) match your need. If a plugin genuinely needs a custom scope (its own undo bucket separate from BlockDefault, or a different upload semantic), we'll add a metadata-shaped registry then; for v1, the registry was ceremonious for what it bought (plugin scopes inherited BlockDefault semantics anyway, so they were functionally identical to using BlockDefault directly).
 
 Scope semantics matrix:
 
@@ -1264,10 +1248,10 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 | Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: { kind: 'field', table: 'blocks', fields: ['content'] }, mode: 'follow-up' })`. Field-watching is correctness-critical: any tx that writes `blocks.content` triggers ref parsing, including plugin mutators that bypass the `setContent` kernel mutator. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
 | Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
-| Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<string>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow that the cleanup processor's row_events gate (§7.5) assumes. As a plain helper it inherits the calling tx's scope (References) automatically and has no public API surface to misuse. The helper computes the deterministic id (date-shaped or generated UUID), calls `tx.create({ id, ... }, { onConflict: 'ignore' })`, and returns the id. |
-| Daily-note deterministic id | `createAliasTarget` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `createAliasTarget` calls `tx.create({ id, … }, { onConflict: 'ignore' })` so the second client's create is a no-op and returns the existing id. **Date alias targets are NEVER added to `attemptedAliasTargetIds`** (see Self-destruct row below) — daily notes persist regardless of whether a referencing block is removed within 4s. |
+| Create missing alias-target | Plain helper function `createAliasTargetInline(tx, alias, workspaceId): Promise<{ id: string; inserted: boolean }>` called inside the processor's apply. **NOT a registered Mutator** — registering it via `mutatorsFacet` would make it callable as `repo.mutate.createAliasTarget(...)` from any scope, bypassing the parseReferences flow. The helper computes the deterministic id, calls `tx.createOrGet({ id, ... })` (per §5.3), and returns both the id and whether *this* tx was the one that inserted. The `inserted` boolean drives cleanup eligibility (see Self-destruct row). |
+| Daily-note deterministic id | `createAliasTargetInline` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding). Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true`, the other gets `inserted: false` plus the existing live row staged. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
-| Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { attemptedAliasTargetIds: [...], originatingTxId: tx.meta.txId }, { delayMs: 4000 })`. **`attemptedAliasTargetIds` is every non-date id returned by `createAliasTarget` calls in this tx, regardless of whether each one hit a conflict or actually inserted** — same-tx insertion detection is unavailable (§7.5, §10.4); the row_events gate sorts inserted from existing post-commit. Date-shaped ids are excluded at this list-build step (daily notes are persistent — see §7.6). The cleanup processor (mode `'follow-up'`, `watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ attemptedAliasTargetIds: z.array(z.string()), originatingTxId: z.string() })` so the engine validates at `tx.afterCommit` enqueue. Cleanup checks each attempted id with **two gates**: (a) verify this tx actually inserted the row via `ctx.db.getAll('SELECT 1 FROM row_events WHERE tx_id = ? AND block_id = ? AND kind = ? LIMIT 1', [originatingTxId, id, 'create'])`; skip if empty (the row pre-existed). (b) verify no block's `references` contains the id (`ctx.db` query against `references_json`); skip if any does (someone references it). Only when both gates pass does `ctx.tx.delete(id)` proceed. See §7.5 for why this layered approach is necessary. |
+| Self-destruct (NON-DATE alias-target dropped if not retained within ~4s AND inserted by this tx) | `parseReferences` schedules `tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds: [...] }, { delayMs: 4000 })`. **`newlyInsertedAliasTargetIds`** is built by filtering `createAliasTargetInline` results: include only ids where `inserted === true` AND the id is non-date-shaped. This is the literal honest meaning — `tx.createOrGet` returns `inserted` directly, so we know at parse time which ids this tx actually wrote vs which ones already existed. The cleanup processor (`watches.kind: 'explicit'`) declares `scheduledArgsSchema = z.object({ newlyInsertedAliasTargetIds: z.array(z.string()) })` so the engine validates at `tx.afterCommit` enqueue. Cleanup runs **one gate**: verify no block's `references` contains the id (a `ctx.db` query against `references_json`); skip if any does. When the gate passes, `ctx.tx.delete(id)` proceeds. (No row_events insertion check needed — the `inserted` boolean from `tx.createOrGet` already gave us that information at the call site, before we even scheduled cleanup.) |
 | `skipUndo` (today) | Replaced by the processor's tx using `scope: ChangeScope.References` (separate undo stack — invisible to document undo). |
 | `skipMetadataUpdate` (today) | Replaced by `tx.update(..., { skipMetadata: true })`. |
 
@@ -1282,59 +1266,60 @@ This matches today's behavior. No "two undos to revert one edit" UX issue.
 
 ### 7.6 Daily-note exemption from cleanup
 
-Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **not adding date-shaped alias-target ids to `attemptedAliasTargetIds`** in the first place — `parseReferences` checks each id returned by `createAliasTarget` against the daily-note format and excludes matches.
+Today's app deliberately exempts date-shaped alias targets from the self-destruct mechanism: a daily note like `[[2026-04-28]]` persists even if the typing user removes the text within 4s. Rationale: daily notes are anchors users navigate to throughout the day; their existence is independent of any one referencing block. The redesign preserves this by **not adding date-shaped alias-target ids to `newlyInsertedAliasTargetIds`** in the first place — `parseReferences` checks each id returned by `createAliasTargetInline` against the daily-note format and excludes matches.
 
 Implementation:
 
 ```ts
 function isDateAliasTargetId(id: string): boolean {
-  // matches the deterministic daily-note id format produced by createAliasTarget
+  // matches the deterministic daily-note id format produced by createAliasTargetInline
   return /^daily-[a-z0-9]+-\d{4}-\d{2}-\d{2}$/.test(id)
 }
 
 // inside parseReferences:
-//   - For every parsed alias not already resolved by aliasLookup,
-//     call createAliasTargetInline(tx, alias, workspaceId) — a plain helper,
-//     NOT a registered mutator (see §7 mapping). Helper internally does
-//     tx.create({ id, ..., aliases: [alias] }, { onConflict: 'ignore' }) and
-//     returns the id. The returned id may be newly inserted OR pre-existing
-//     (deterministic-id race; same-tx insertion detection is unavailable).
-//   - Collect ALL non-date ids returned, regardless of insert/conflict outcome:
-const attemptedAliasTargetIds = idsReturnedByCreateAliasTarget
-  .filter(id => !isDateAliasTargetId(id))
-tx.afterCommit('core.cleanupOrphanAliases', { attemptedAliasTargetIds, originatingTxId: tx.meta.txId }, { delayMs: 4000 })
+//   - For every parsed alias not already resolved by aliasLookup, call
+//     createAliasTargetInline(tx, alias, workspaceId) — a plain helper, NOT a
+//     registered mutator (see §7 mapping). Helper internally does
+//     tx.createOrGet({ id, ..., aliases: [alias] }) and returns
+//     { id, inserted: boolean }.
+//   - Build the cleanup candidates: non-date ids that THIS tx actually inserted.
+const results = await Promise.all(
+  unresolvedAliases.map(alias => createAliasTargetInline(tx, alias, workspaceId))
+)
+const newlyInsertedAliasTargetIds = results
+  .filter(r => r.inserted && !isDateAliasTargetId(r.id))
+  .map(r => r.id)
+if (newlyInsertedAliasTargetIds.length > 0) {
+  tx.afterCommit('core.cleanupOrphanAliases', { newlyInsertedAliasTargetIds }, { delayMs: 4000 })
+}
 ```
 
-The filter excludes date-shaped ids at schedule-time, so cleanup never sees them. The cleanup processor's row_events gate (§7.5) then sorts genuinely-inserted from pre-existing among the remaining attempted ids.
+Two filters: `inserted === true` (this tx wrote the row, not a pre-existing one) and `!isDateAliasTargetId` (skip daily notes). The combination of these two static conditions makes cleanup's job a single check ("any block references this id?") at fire time.
 
-### 7.5 Why cleanup needs the row_events insertion check
+### 7.5 Why cleanup uses `inserted`, not "any block references it"
 
-The "no references" check alone is insufficient. Consider this race:
+Consider this race:
 
-1. Alice creates page "Inbox" via the create-page UI (NOT via `[[Inbox]]` typing). Alice's `Inbox` alias-target row has no incoming `references_json` entries from any block.
-2. Sync propagates Alice's Inbox row to Bob's local DB.
-3. Bob types `[[Inbox]]` somewhere. parseReferences runs the alias-by-name lookup (raw SQL in Phase 3 / `repo.query.aliasLookup` in Phase 4 — same SQL either way), finds Alice's existing Inbox, calls `createAliasTarget` with `onConflict: 'ignore'`. The create is a no-op (row exists); `createAliasTarget` returns the id.
-4. parseReferences adds the id to `attemptedAliasTargetIds` (the list of ids returned by `createAliasTarget` calls in this tx, regardless of whether each one inserted or hit a conflict — same-tx insertion detection is unavailable per §10.4) and schedules cleanup with delay 4s.
+1. Alice creates page "Inbox" via the create-page UI (NOT via `[[Inbox]]` typing). Alice's Inbox row has no incoming `references_json` entries from any block.
+2. Sync propagates Alice's Inbox to Bob's local DB.
+3. Bob types `[[Inbox]]` somewhere. parseReferences resolves the alias to Alice's existing Inbox via `tx.createOrGet({ id: ..., aliases: ['Inbox'], ... })`, which returns `{ id, inserted: false }` (row already existed).
+4. parseReferences sees `inserted: false` for Inbox's id and **does not add it to `newlyInsertedAliasTargetIds`** — so cleanup never considers it.
 5. Bob deletes the `[[Inbox]]` text within 4s. parseReferences re-runs, removing the reference from Bob's block.
-6. Cleanup runs after 4s. Without the insertion check, it sees:
-   - No block's `references_json` contains Inbox's id.
-   - **Deletes Alice's Inbox.** Wrong.
+6. Cleanup runs after 4s. Inbox's id was never on the cleanup list, so Alice's Inbox is safely preserved.
 
-The insertion gate prevents this: cleanup queries `row_events` and finds no `kind = 'create'` row for Inbox's id with the originating tx_id (parseReferences's tx) — because the tx didn't actually create the row, just looked it up. Cleanup skips.
+A naive design (cleanup removes any alias-target with no incoming references) would delete Alice's Inbox. The fix isn't a row_events gate — it's filtering at schedule time by the `inserted` boolean that `tx.createOrGet` returns directly. The "no references" check is the *only* runtime gate cleanup needs; the "did this tx insert?" question is answered statically at the `createOrGet` call site, before the cleanup is even scheduled.
 
-For genuinely new aliases (the originating tx _did_ insert the row), the row_events table has the matching create row, and cleanup proceeds to gate (b) — the existing reference check.
-
-The insertion check is implementable because `row_events` is the authoritative ledger of what each tx physically wrote. `tx.create({ id, ... }, { onConflict: 'ignore' })` that hits a conflict produces no INSERT trigger fire and therefore no row_events row with `kind = 'create'`. (Recall §10.4: same-tx insertion detection is unavailable inside the user fn, but post-commit detection via row_events is straightforward.)
+(Pre-v4.20 designs queried `row_events` post-commit to recover insertion identity, because the earlier `tx.create({...}, { onConflict: 'ignore' })` primitive didn't return it. v4.20's `tx.createOrGet` makes the boolean a return value, eliminating the post-commit query.)
 
 ### 7.4 Test coverage required
 
 - `setContent` with `[[foo]]` (alias not yet existing) → after debounce, alias-target exists; source block's `references` includes it.
 - `[[2026-04-28]]` produces deterministic daily-note id; two simultaneous creates resolve to the same row.
-- Typing `[[foo]]` (foo new, non-date) then deleting that text within 4s → orphan removed by cleanup (row_events check passes; reference check passes).
-- Typing `[[foo]]` (foo new), then linking from another block within 4s → orphan kept (reference check fails).
-- **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept** (row_events check fails; this tx didn't create the row). §7.5 race; must not regress.
-- **Typing `[[2026-04-28]]` (newly creates the daily note)**, then deleting within 4s → daily note is **kept** (date-shaped target not added to `attemptedAliasTargetIds`). §7.6 daily-note exemption; must not regress.
-- Two clients concurrently typing `[[2026-04-28]]` → deterministic daily-note id; both `tx.create` calls converge on the same row via `onConflict: 'ignore'`; both clients' `references` arrays end up containing `{id, alias: '2026-04-28'}` (after their respective parseReferences runs).
+- Typing `[[foo]]` (foo new, non-date) then deleting that text within 4s → orphan removed by cleanup. `tx.createOrGet` returned `inserted: true`; `newlyInsertedAliasTargetIds` includes foo's id; reference check passes (no block references it after deletion); cleanup deletes.
+- Typing `[[foo]]` (foo new), then linking from another block within 4s → orphan kept. Same as above except the reference check fails.
+- **Typing `[[Inbox]]` where Inbox already existed before this user typed it**, then deleting within 4s → existing Inbox is **kept**. `tx.createOrGet` returned `inserted: false`; Inbox's id is filtered out of `newlyInsertedAliasTargetIds` at schedule time; cleanup never considers it. §7.5 race; must not regress.
+- **Typing `[[2026-04-28]]` (newly creates the daily note)**, then deleting within 4s → daily note is **kept** (date-shaped target excluded from `newlyInsertedAliasTargetIds` even though `inserted: true`). §7.6 daily-note exemption; must not regress.
+- Two clients concurrently typing `[[2026-04-28]]` → deterministic daily-note id; both `tx.createOrGet` calls converge on the same row. One returns `inserted: true`, the other `inserted: false`; either way both clients' `references` arrays end up containing `{id, alias: '2026-04-28'}`.
 - Rapid typing inside an existing `[[alias]]` (no alias-set change) → debounce coalesces; at most one processor run per block per debounce window.
 - Undo of `setContent` → `references` converges back to pre-edit state.
 
@@ -1484,48 +1469,42 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │   1. UPDATE tx_context SET tx_id, user_id, scope, source     │
 │   2. construct Tx (staged write-set; reads via cache + txDb) │
 │   3. user fn(tx) runs:                                       │
-│        tx.create/update/delete/setProperty/run/...           │
+│        tx.create / tx.createOrGet / tx.update / tx.delete /  │
+│        tx.setProperty / tx.run / ...                         │
 │        reads: staged → cache → txDb                          │
-│   4. run same-tx post-commit processors against staged calls │
-│        (none in v1 — parseReferences is follow-up;           │
-│         hook exists for future processors that need atomicity)│
-│   5. engine auto-bumps metadata fields on writes that didn't │
+│        (tx.createOrGet runs INSERT…ON CONFLICT DO NOTHING    │
+│         RETURNING immediately; on conflict, follow-up SELECT │
+│         inside the same txDb. Caller learns inserted: bool.) │
+│   4. engine auto-bumps metadata fields on writes that didn't │
 │        opt out via skipMetadata; codecs already applied for  │
 │        any tx.setProperty calls                              │
-│   6. flush staged writes to blocks (txDb)                    │
+│   5. flush staged writes to blocks (txDb)                    │
 │        triggers fire: row_events rows, upload routing        │
-│   7. for each tx.create with onConflict='ignore' that may    │
-│        not have actually inserted (changes() == 0), SELECT   │
-│        the live row from blocks (still inside this txDb) and │
-│        replace the staged row with the live one. See §10.4. │
-│   8. INSERT command_event row (txDb)                         │
-│   9. UPDATE tx_context SET tx_id=NULL, user_id=NULL,         │
+│   6. INSERT command_event row (txDb)                         │
+│   7. UPDATE tx_context SET tx_id=NULL, user_id=NULL,         │
 │        scope=NULL, source=NULL  (clear ALL fields together)   │
 │ })   // PowerSync COMMIT or ROLLBACK                         │
 │                                                              │
 │ on success (post-COMMIT, synchronous before promise resolves):│
-│   10. hydrate cache from staged writes (encoded shape)        │
-│   11. walk affected handles, structural-diff, fire            │
-│   12. record undo entry from staged before/after snapshots    │
-│   13. resolve repo.tx promise with user fn's return value     │
+│   8. hydrate cache from staged writes (encoded shape)         │
+│   9. walk affected handles, structural-diff, fire             │
+│   10. record undo entry from staged before/after snapshots    │
+│   11. resolve repo.tx promise with user fn's return value     │
 │                                                               │
 │ post-resolve (fire-and-after):                                │
-│   14. dispatch tx.afterCommit jobs (own writeTransactions)    │
-│        and watch-matched follow-up processors                 │
+│   12. dispatch tx.afterCommit jobs (own writeTransactions)    │
+│        and field-watch follow-up processors                   │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Atomicity boundary**: steps 1–9 all run inside `db.writeTransaction`, so they commit or roll back together. If anything in those steps throws, PowerSync rolls back the whole writeTransaction — including the conflict-reconciliation SELECT in step 7 and the `tx_context` clear in step 9 (so nothing leaks). Steps 10–13 happen after COMMIT but before `repo.tx`'s promise resolves; the cache and undo stack reflect the committed state by the time the caller sees the resolved promise. Step 14 is async after the promise resolves.
+**Atomicity boundary**: steps 1–7 all run inside `db.writeTransaction`, so they commit or roll back together. If anything throws, PowerSync rolls back the whole writeTransaction — including any `tx.createOrGet` follow-up SELECTs (step 3) and the `tx_context` clear (step 7), so nothing leaks. Steps 8–11 happen after COMMIT but before `repo.tx`'s promise resolves; the cache and undo stack reflect the committed state by the time the caller sees the resolved promise. Step 12 is async after the promise resolves.
 
 Failure modes:
 - User fn throws in step 3 → rollback. Cache untouched, no `command_event`, no `row_events`, `tx_context` reverts to its pre-tx state automatically.
-- Same-tx processor throws in step 4 → rollback (same as above).
-- DB error in steps 5–9 → rollback.
-- Cache-hydration error in step 10 → tx is already committed; the engine logs the error and re-reads affected ids from SQLite to recover. (Should be impossible in practice — cache hydration is a pure in-memory operation on already-validated rows.)
+- DB error in steps 4–7 → rollback.
+- Cache-hydration error in step 8 → tx is already committed; the engine logs the error and re-reads affected ids from SQLite to recover. (Should be impossible in practice — cache hydration is a pure in-memory operation on already-validated rows.)
 
-If 3 or 4 throws → rollback. Cache untouched, no command_event, no row_events, no undo entry. `repo.tx` rejects with the error.
-
-If 5 or 6 throws (DB-level) → rollback, same.
+(v4.20 dropped what used to be steps 4 and 7. The same-tx-processor step is gone because v1 ships zero same-tx processors and we don't keep an unused hook. The post-flush conflict-reconciliation SELECT is gone because `tx.createOrGet` does the SELECT inline on conflict — staged rows are correct as soon as the user fn returns.)
 
 ### 10.1 `repo.mutate.X` is a 1-mutator tx
 
@@ -1564,17 +1543,21 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 Repair is a normal write scope as far as the engine is concerned — it uploads, so it's gated by the same `isReadOnly` check. The cycle-repair worker (§4.7) pre-gates per-workspace via `repo.canWrite(workspaceId)` and skips non-writable workspaces before opening a tx, so under partial-permission setups (e.g. user is writable in W1 but read-only in W2, with `repo.isReadOnly = false` overall) repair only runs against W1. The engine's coarse `isReadOnly` rejection catches the fully-read-only client as defense-in-depth — even a buggy worker can't trigger an upload from a read-only client.
 
-### 10.4 `onConflict: 'ignore'` cache coherence
+### 10.4 `tx.createOrGet` semantics
 
-`tx.create({ id, ... }, { onConflict: 'ignore' })` writes via `INSERT OR IGNORE`. If the row already exists, the staged "would-be-inserted" row is **not** what's in the DB — caching it would clobber the actual row in the cache. The engine handles this:
+`tx.create` (the plain primitive) throws `DuplicateIdError` on PK conflict — the safe default for accidental id collisions.
 
-1. Stage the proposed row in the write-set as usual (so reads-your-own-writes still work for subsequent calls in the tx).
-2. After flushing the create to SQLite (pipeline step 6), the engine checks `changes()` (or uses `INSERT OR IGNORE ... RETURNING *` if the SQLite version supports it). If the row was *not* actually inserted, the engine does a follow-up `SELECT * FROM blocks WHERE id = ?` (pipeline step 7, still inside the writeTransaction) to read the live row.
-3. Replace the staged row with the live row before cache hydration (pipeline step 10, post-COMMIT).
+`tx.createOrGet({ id, ... })` is the deterministic-id path (daily notes, alias targets). Implementation, all inside the active writeTransaction:
 
-This ensures the cache reflects what's actually in SQLite, never the proposed-but-ignored version. Only `'ignore'` conflicts trigger the post-flush SELECT — the common case (no conflict) costs nothing extra.
+1. Run `INSERT INTO blocks(...) VALUES(...) ON CONFLICT(id) DO NOTHING RETURNING *`. (SQLite 3.35+; PowerSync ships modern SQLite.)
+2. If the RETURNING result is non-empty: the row was inserted. Stage the new row (so subsequent `tx.get(id)` returns it). Return `{ id, inserted: true }`.
+3. If RETURNING is empty (conflict): the row already existed. Run `SELECT * FROM blocks WHERE id = ?` inside the same writeTransaction; stage the live row (so subsequent `tx.get(id)` returns the existing version, not the proposed one). Return `{ id, inserted: false }`.
 
-**Within-tx visibility limitation.** Same-tx `tx.get(id)` after a `tx.create(id, ..., { onConflict: 'ignore' })` returns the **staged** row (read-your-own-writes), not the reconciled live row. The reconciliation happens in pipeline step 7, after the user fn returns. **Same-tx insertion detection is intentionally unavailable** in the v1 API — a mutator cannot distinguish "I inserted" from "the existing row won" until after commit. This is sufficient for `core.createAliasTarget` (which only needs the id, not the inserter identity) and for any deterministic-id use case where the conflicting rows are intentionally equivalent. If a future use case genuinely needs same-tx inserter identification, add a dedicated `tx.createOrGet(data)` returning `{ id, inserted: boolean }` rather than retrofitting `tx.get` semantics.
+The follow-up SELECT in step 3 is the only extra cost over the plain `tx.create` path — and it only fires on conflict (the rare case for deterministic ids). The common case (no conflict) is one statement.
+
+Cache coherence: by the time the user fn returns, the staged write-set already reflects what's actually in SQLite. Pipeline step 8 (cache hydration) hydrates from staged → live state. No post-flush reconciliation step needed; v4.20 dropped the old pipeline step 7.
+
+Within-tx semantics: `tx.get(id)` after `tx.createOrGet` returns the staged row, which is the live row whether this tx inserted or not. There's no "intentionally unavailable" caveat — the `inserted` boolean is in the return value, available immediately.
 
 ---
 
@@ -1862,10 +1845,10 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 4. **Sync-applied writes**: bypass `repo.tx` entirely. `tx_context.source` stays `NULL` (no `repo.tx` is open to set it). row_events triggers `COALESCE(tx_context.source, 'sync')` to tag them; upload-routing triggers gate on `= 'user'` so sync writes don't loop back into `powersync_crud`. row_events have `tx_id = NULL` (no tx). **No PowerSync sync-apply wrapper exists or should be added** — the COALESCE + equality-test pair handles this without one.
 5. **Order_key determinism**: `ORDER BY order_key, id` everywhere children are listed. Order_key collisions are possible (concurrent inserts at same position) and resolve via `id` tiebreak.
 6. **Codecs at boundaries only**: descriptor `codec.encode`/`codec.decode` runs only at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty`. Storage and cache always hold encoded shape. `tx.update(..., { properties: ... })` bypasses codecs and is opt-in.
-7. **Metadata auto-bump**: engine sets `updated_at` / `updated_by` on writes by default. Same-tx processors and other bookkeeping writes opt out via `{ skipMetadata: true }`.
+7. **Metadata auto-bump**: engine sets `updated_at` / `updated_by` on writes by default. Bookkeeping writes (e.g. parseReferences updating `references`) opt out via `{ skipMetadata: true }`.
 8. **Tx snapshot**: `repo.tx` runs against the registry snapshot taken at tx start. Mid-tx facet-runtime changes don't affect the running tx.
 9. **Tx queries are limited**: only `tx.get`, `tx.peek`, `tx.childrenOf`, `tx.parentOf`. Arbitrary cross-row reads happen out-of-tx (caller awaits a query handle, then passes results via args). Engine merges staged + SQL for the four primitives above.
-10. **Same-tx processors are deterministic**: writes are atomic with the user's tx. No time, randomness, or external IO. (None ship in v1; the hook is reserved.)
+10. **All processors are follow-up**: post-commit processors run in their own writeTransaction after the originating user tx commits. (v4.20 dropped same-tx mode.)
 11. **`tx.afterCommit` doesn't run on rollback**: scheduled jobs only fire if the parent tx commits.
 12. **`block.data` is sync after load**: after `repo.tx` resolves, any `block.data` read sees the post-tx state — the cache update happens before the promise resolves.
 13. **No `block.data.childIds`**: `BlockData` matches the row shape; `childIds` is computed on `Block` from the cache. Storage source-of-truth is `parent_id + order_key`.
@@ -1897,9 +1880,11 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 - Plugin authors are likely to know zod already from React work.
 - If bundle size becomes a measured concern later, swapping to Valibot is near-mechanical (compatible API).
 
-### 16.2 Same-tx vs follow-up default
+### 16.2 Processor mode — RESOLVED: follow-up only (v4.20)
 
-Default new processors to `'follow-up'` — including `core.parseReferences` (decided; see §7.1 — keeps typing fast and matches today's UX). Same-tx is opt-in for cases that genuinely need atomicity. v1 ships zero same-tx processors; the hook exists for future use.
+All processors are follow-up. v4.20 dropped the `same-tx` mode entirely. v1 shipped zero same-tx processors and the only hypothetical use case (atomic backlinks via parseReferences) was already rejected in v4.4 — going same-tx for parseReferences would have added typing latency to a hot path. Same-tx processor wiring (discriminator, `SameTxCtx`, dedicated pipeline step, atomicity prose) was complexity for a feature with no callers. Re-add the mode if a real same-tx use case ever appears; until then, dead weight removed.
+
+The mutator-name watch channel (`watches.kind: 'mutator'`) was also dropped in v4.20 — also zero v1 callers, also actively discouraged by the design itself ("use `field` when correctness depends on the field changing"). Field watches catch bypassing mutators; mutator-name watches don't, and we couldn't find a use case where that distinction was useful.
 
 ### 16.3 Plugin-owned entity tables
 
