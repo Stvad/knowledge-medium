@@ -20,7 +20,7 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **§5.7 / §7 field-watching for processors**: post-commit processors can watch by field-write (`{ kind: 'field', table, fields }`) in addition to mutator name. `core.parseReferences` watches `blocks.content` so plugin mutators that bypass the named `setContent` mutator still trigger ref parsing. Correctness over convention.
 >   - **§11.2 ancestors `ORDER BY depth`**: SQL CTE recursion order is undefined without explicit ORDER BY. Added `depth` column and ordering. §11.3 added `WHERE deleted = 0` to recursion (was missing).
 >   - **§5.3 / §15 stale sync-source comment fixed**: TxSource and invariant #4 both now say sync-applied writes leave `source = NULL`, COALESCE'd to `'sync'` in row_events.
-> - v4.5 (this): round-6 correctness fixes.
+> - v4.5: round-6 correctness fixes.
 >   - **§4.7 cycle prevention + repair protocol** (new section): three layers — local validation in move mutators, post-sync deterministic repair scoped to changed parent_ids, defensive `depth < 100` recursion guards in every CTE.
 >   - **§5.5 `Query` API changed**: dynamic dependency declaration via `ctx.depend(dep)` during `resolve` (instead of static `invalidatedBy`). Plugin queries can now declare row / parent-edge / workspace deps as they execute. The old `invalidatedBy` becomes optional `coarseScope` for pre-filtering.
 >   - **§5.3 `tx.create` conflict semantics**: explicit `onConflict: 'throw' | 'ignore'` opt; default `'throw'`. `createAliasTarget` uses `'ignore'` for deterministic ids. No more silent "existing row wins" footgun.
@@ -28,6 +28,14 @@ Estimated scope: large. Touches `src/data/**`, `src/hooks/block.ts`, `src/extens
 >   - **§9.3 row_events tail filters `source = 'sync'`**: prevents double-invalidation between TxEngine fast-path and the tail; ensures sync-arrival paths and local-write paths don't fight over markers.
 >   - **§11.1 subtree path encoding**: `hex(id)` instead of raw id in the materialized path, so ids containing `/` (e.g., `daily/<workspaceId>/<date>` deterministic ids) sort correctly. Separator changed to `~` for safer lex-ordering. Also added `depth < 100` guard.
 >   - **Repo surface clarified**: `repo.block`, `repo.children`, `repo.subtree`, `repo.ancestors`, `repo.backlinks` listed explicitly; `repo.load(id, opts?)` typed with `{ children?, ancestors?, descendants? }`. Phase 2 acceptance updated.
+> - v4.6 (this): round-7 fixes — making the new repair and conflict paths *executable*, not just described.
+>   - **`tx_context` end-of-tx clears all four fields together**, not just `source`. Belt-and-suspenders: row_events triggers also emit `tx_id = NULL` whenever `source IS NULL`, so a stale tx_id can't leak into a sync-applied row_event. (§4.3, §10 step 8.)
+>   - **Cycle CTE guards added to ancestors and isDescendantOf** (§11.2, §11.3). The v4.5 §4.7 claim that "every recursive CTE in §11 carries a depth < 100 guard" was true for subtree but missing for the other two.
+>   - **Cycle repair query upgraded to materialize members** (§4.7). Detection returns `(start_id, cycle_depth)`; a TS post-step walks each chain to collect the member set, dedupes by canonicalized members, picks lex-smallest `id` as the loser, demotes via `repo.tx`. The earlier query returned only start_ids and couldn't pick the loser correctly for cycles longer than 2.
+>   - **`ChangeScope.Repair` defined** (§5.8). Scope semantics matrix added: not undoable, uploads, allowed in read-only mode (system-driven, not user-driven). Repair-scope txs are explicitly permitted by §10.3.
+>   - **Empty-result handle deps fixed** (§5.5). All resolver examples declare upfront `ctx.depend(...)` for the things the query is asked about, BEFORE running SQL — so handles for not-yet-existing rows still invalidate when those rows arrive. Universal rule documented.
+>   - **`onConflict: 'ignore'` cache hydration**: §10 pipeline gains step 8a — for `'ignore'` creates that may not have actually inserted, the engine post-SELECTs the live row inside the same writeTransaction and replaces the staged row before cache hydration. Avoids caching a proposed-but-ignored row over the actual existing row. (§10.4 details.)
+>   - **Hard-delete upload routing removed in v1** (§4.5). v1 has no purge mechanism; the DELETE upload trigger would have created an inconsistency between the "hard delete doesn't sync" claim and the trigger's behavior. Resolved by not shipping the DELETE upload trigger at all in v1; future purge work decides its sync policy explicitly.
 
 ---
 
@@ -241,7 +249,7 @@ CREATE INDEX idx_row_events_block ON row_events(block_id, created_at DESC);
 CREATE INDEX idx_row_events_created ON row_events(created_at DESC);
 ```
 
-Written by SQLite triggers on `blocks` (one per insert/update/delete). Triggers pull `tx_id` and `source` from `tx_context`. The audit + invalidation source-of-truth.
+Written by SQLite triggers on `blocks` (one per insert/update/delete). Triggers pull `tx_id` and `source` from `tx_context`. **Belt-and-suspenders for the sync case**: triggers compute `tx_id` as `CASE WHEN ctx.source IS NULL THEN NULL ELSE ctx.tx_id END` so a sync-applied write always emits `tx_id = NULL`, regardless of any stale tx_id left in `tx_context` from the previous local tx. The TxEngine clears all four fields at end-of-tx (§10), but the trigger logic is the load-bearing correctness check.
 
 **Soft-delete semantics**: `tx.delete(id)` sets `deleted = 1` (an UPDATE), so it fires the UPDATE trigger, not the DELETE trigger. To distinguish soft-deletes from regular updates, the UPDATE trigger inspects whether the `deleted` column transitioned from 0 to 1 and writes `kind = 'soft-delete'` instead of `'update'`. Consumers (handles, devtools, the cycle-repair scanner) treat soft-delete as a logical removal.
 
@@ -292,16 +300,15 @@ BEGIN
   …
 END;
 
-CREATE TRIGGER blocks_upload_delete
-AFTER DELETE ON blocks
-WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
-BEGIN
-  -- forward DELETE to powersync_crud
-  …
-END;
+-- v1: NO upload-routing trigger for DELETE. Hard-delete (physical removal) is
+-- not a v1 operation and would require a separate purge-semantics decision —
+-- see §4.4 row_events. Soft-deletes go through tx.delete → UPDATE deleted = 1
+-- → fires the UPDATE trigger above, which forwards correctly.
+-- A future hard-purge mechanism can add this trigger when its sync policy
+-- (sync hard-deletes vs. local-only purge) is decided.
 ```
 
-The same INSERT/UPDATE/DELETE-split pattern is used for the `row_events` triggers (each with its own `INSERT INTO row_events SELECT … COALESCE((SELECT source FROM tx_context …), 'sync') …`).
+The same INSERT/UPDATE-split pattern is used for the `row_events` triggers (each with its own `INSERT INTO row_events SELECT … COALESCE((SELECT source FROM tx_context …), 'sync') …`). The DELETE row_events trigger *does* exist for audit purposes (record what was hard-purged, when v1 is over) — it just doesn't forward to powersync_crud.
 
 ### 4.6 PowerSync sync-config
 
@@ -317,7 +324,9 @@ Three layers of defense:
 
 **Layer 1 — Local validation in move mutators.** Every kernel mutator that changes `parent_id` (`move`, `indent`, `outdent`, etc.) checks first that the proposed new parent is not a descendant of the moved node. The check is a single `isDescendantOf` query (§11.3). If it would create a cycle locally, throw `CycleError` before staging the write. Catches every cycle introduced by the *local* user.
 
-**Layer 2 — Post-sync cycle repair.** When the row_events tail (§9.3) sees sync-applied writes that changed `parent_id`, the engine runs a bounded cycle-detection pass scoped to the affected ids:
+**Layer 2 — Post-sync cycle repair.** When the row_events tail (§9.3) sees sync-applied writes that changed `parent_id`, the engine runs a bounded two-step pass scoped to the affected ids:
+
+**Step 2a — detect cycle starts.** Find the affected ids that close back on themselves:
 
 ```sql
 WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
@@ -325,16 +334,53 @@ WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
   UNION ALL
   SELECT chain.start_id, b.id, b.parent_id, chain.depth + 1
   FROM chain JOIN blocks b ON b.id = chain.parent_id
-  WHERE b.deleted = 0 AND chain.depth < 100        -- bound recursion defensively
+  WHERE b.deleted = 0 AND chain.depth < 100        -- defensive
 )
-SELECT DISTINCT start_id FROM chain WHERE depth > 0 AND id = start_id;
+SELECT DISTINCT start_id, MIN(depth) AS cycle_depth
+FROM chain
+WHERE depth > 0 AND id = start_id
+GROUP BY start_id;
 ```
 
-Any `start_id` that reappears in its own chain at `depth > 0` is in a cycle.
+Each row gives `(start_id, cycle_depth)` — the start_id is in a cycle of length `cycle_depth`.
 
-**Repair**: pick a deterministic loser — the block with the lexicographically smaller `id` among the cycle members has its `parent_id` set to NULL (becomes a workspace root). Idempotent and deterministic — every client running the same repair on the same sync batch picks the same loser, so sync converges.
+**Step 2b — materialize cycle members and pick the loser.** For each detected cycle start, walk the parent chain in JS (or one more bounded SQL query) up to `cycle_depth - 1` steps, collecting every visited id. That's the cycle member set. Different start_ids may belong to the same cycle — dedupe by member-set equality. For each unique cycle, the **loser** is the lexicographically smallest id among its members.
 
-Repair runs as its own `repo.tx` with a synthetic `core.repairCycle` mutator and `scope: 'block-default:repair'` (separate undo bucket; not in user undo). The mutator writes a `command_events` row tagging the repair for audit.
+In TS:
+
+```ts
+async function findCycleMembers(start: string, cycleDepth: number): Promise<Set<string>> {
+  const members = new Set<string>([start])
+  let cur = start
+  for (let i = 0; i < cycleDepth; i++) {
+    const parent = await getParentId(cur)            // single SELECT per step; bounded by cycleDepth
+    if (!parent || members.has(parent)) break
+    members.add(parent)
+    cur = parent
+  }
+  return members
+}
+
+// dedupe cycles by canonicalizing members:
+const cycles = new Map<string, Set<string>>()         // sorted-comma-key → members
+for (const { start_id, cycle_depth } of detected) {
+  const members = await findCycleMembers(start_id, cycle_depth)
+  const key = [...members].sort().join(',')
+  if (!cycles.has(key)) cycles.set(key, members)
+}
+
+// repair: lex-smallest in each cycle becomes a workspace root
+for (const members of cycles.values()) {
+  const loser = [...members].sort()[0]
+  await repo.tx(async tx => tx.update(loser, { parent_id: null }), {
+    scope: ChangeScope.Repair, description: `Cycle repair: ${loser}`,
+  })
+}
+```
+
+This is deterministic across clients: every client that observes the same cyclic state picks the same loser, so the repair converges via sync (each client writes the same `parent_id = NULL` for the same row; LWW is a no-op).
+
+Repair runs with `scope: ChangeScope.Repair` (defined in §5.8). That scope: not in the document undo stack; uploads to server (so other clients receive the repair); allowed even when `repo.isReadOnly` (repair is system-driven, not user-driven). The mutator writes a `command_events` row tagging the repair for audit.
 
 **Layer 3 — CTE recursion guards.** Every recursive CTE in §11 (subtree, ancestors, isDescendantOf) carries a `depth < 100` defensive guard. Even if cycle repair lags, queries return finite results instead of OOMing.
 
@@ -494,9 +540,10 @@ interface TxCreateOpts extends TxWriteOpts {
    *                        id collisions surface loudly instead of silently
    *                        overwriting or merging.
    *    'ignore':           keep the existing row, do not write. Returns the id
-   *                        unchanged. Use this for deterministic ids where
-   *                        concurrent creates must converge (e.g. daily-note
-   *                        ids; see core.createAliasTarget in §7).
+   *                        unchanged. Engine post-processes: see "Cache
+   *                        coherence note" below. Use for deterministic ids
+   *                        where concurrent creates must converge (e.g.
+   *                        daily-note ids; see core.createAliasTarget in §7).
    *  No 'replace' — replacing on conflict is `tx.update`, semantically. */
   onConflict?: 'throw' | 'ignore'
 }
@@ -577,6 +624,8 @@ type Dependency =
 
 Queries are out-of-tx. Built-in queries (`subtree`, `ancestors`, `backlinks`, `searchByContent`, `byType`, `firstChildByContent`, `firstRootBlock`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`, `children`) are kernel facet contributions and call `ctx.depend` appropriately. Plugin queries do the same; without dep declarations a query's handle effectively never invalidates (table-coarse fallback handles this safely but inefficiently).
 
+**Universal rule for resolvers**: declare deps for "things this query is asked about" **before** running the SQL. If the query result is empty (e.g., the requested id doesn't exist yet), only the upfront deps remain — and those need to cover the case where the missing thing is later created. After the SQL, fine-grained deps for visited rows / parent edges add precision.
+
 Example dep declarations:
 
 ```ts
@@ -588,7 +637,7 @@ resolve: async ({ id }, ctx) => {
 
 // repo.children(id):
 resolve: async ({ id }, ctx) => {
-  ctx.depend({ kind: 'parent-edge', parentId: id })
+  ctx.depend({ kind: 'parent-edge', parentId: id })       // upfront — covers empty-result case
   return ctx.hydrateBlocks(await ctx.db.getAll(
     'SELECT * FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id', [id]
   ))
@@ -596,6 +645,13 @@ resolve: async ({ id }, ctx) => {
 
 // repo.subtree(rootId):
 resolve: async ({ rootId }, ctx) => {
+  // Declare deps for "things this query asks about" BEFORE running, not after.
+  // If rootId doesn't exist, the SQL returns empty and the for-loop below adds
+  // nothing — without these upfront deps, the handle would never invalidate
+  // when rootId is later created.
+  ctx.depend({ kind: 'row', id: rootId })
+  ctx.depend({ kind: 'parent-edge', parentId: rootId })
+
   const rows = await ctx.db.getAll(SUBTREE_SQL, [rootId])
   for (const row of rows) {
     ctx.depend({ kind: 'row', id: row.id })
@@ -772,9 +828,11 @@ Same-tx processors should not use `tx.afterCommit` to schedule themselves — on
 
 ```ts
 export const ChangeScope = {
-  BlockDefault: 'block-default',
-  UiState: 'local-ui',
-  References: 'block-default:references',
+  BlockDefault: 'block-default',           // user document edits; undoable; uploads
+  UiState: 'local-ui',                     // selection/focus/etc; not undoable; never uploads
+  References: 'block-default:references',  // ref-parsing bookkeeping; separate undo bucket; uploads
+  Repair: 'core:repair',                   // cycle/consistency repair; not undoable; uploads;
+                                           // permitted in read-only mode (system-driven, not user)
 } as const
 export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 
@@ -782,6 +840,15 @@ declare module '@/data/api' {
   interface ChangeScopeRegistry { /* plugin augmentation */ }
 }
 ```
+
+Scope semantics matrix:
+
+| Scope | Undoable? | Uploads? | Allowed in read-only? |
+|---|---|---|---|
+| `BlockDefault` | yes (user undo stack) | yes | no |
+| `UiState` | no | no (`source = 'local-ephemeral'`) | yes |
+| `References` | yes (separate ref bucket; not exposed to user undo) | yes | no |
+| `Repair` | no | yes | yes |
 
 ---
 
@@ -953,10 +1020,15 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │   6. flush staged writes to blocks (txDb)                    │
 │        triggers fire: row_events rows, upload routing        │
 │   7. INSERT command_event row (txDb)                         │
-│   8. UPDATE tx_context SET source = NULL                     │
+│   8. UPDATE tx_context SET tx_id=NULL, user_id=NULL,         │
+│        scope=NULL, source=NULL  (clear ALL fields together)   │
 │ })   // PowerSync COMMIT or ROLLBACK                         │
 │                                                              │
 │ on success:                                                  │
+│   8a. for each tx.create with onConflict='ignore' that may   │
+│        not have actually inserted, SELECT the live row from  │
+│        blocks (within the same writeTransaction) and replace │
+│        the staged row with the live one — see §10.4         │
 │   9. hydrate cache from staged writes (encoded shape)        │
 │   10. walk affected handles, structural-diff, fire           │
 │   11. record undo entry from staged before/after snapshots   │
@@ -991,7 +1063,19 @@ For UI-state mutations interleaved with document mutations, callers issue separa
 
 ### 10.3 Read-only mode
 
-`repo.tx` rejects with `ReadOnlyError` for any document-scope tx when `repo.isReadOnly`. UI-state txs always allowed.
+`repo.tx` rejects with `ReadOnlyError` for `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` and `Repair` scopes always allowed (UiState is local-only chrome state; Repair is system-driven and must run regardless of user permissions).
+
+### 10.4 `onConflict: 'ignore'` cache coherence
+
+`tx.create({ id, ... }, { onConflict: 'ignore' })` writes via `INSERT OR IGNORE`. If the row already exists, the staged "would-be-inserted" row is **not** what's in the DB — caching it would clobber the actual row in the cache. The engine handles this:
+
+1. Stage the proposed row in the write-set as usual (so reads-your-own-writes still work for subsequent calls in the tx).
+2. After flushing the create to SQLite, the engine checks `changes()` (or uses `INSERT OR IGNORE ... RETURNING *` if the SQLite version supports it). If the row was *not* actually inserted, do a follow-up `SELECT * FROM blocks WHERE id = ?` (still inside the writeTransaction) to read the live row.
+3. Replace the staged row with the live row before cache hydration in step 9.
+
+This ensures the cache reflects what's actually in SQLite, never the proposed-but-ignored version. Only `'ignore'` conflicts trigger the post-flush SELECT — the common case (no conflict) costs nothing extra.
+
+For the within-tx semantics: `tx.get(id)` after a same-tx `tx.create(id, ..., { onConflict: 'ignore' })` returns the staged row, not the live one — read-your-own-writes wins inside the tx. After commit, the cache reflects the live row. Mutators that need to know "did I actually insert?" should check the live row via `await tx.get(id)` *after* the create call has been live-read; a future enhancement could surface this directly via the create return type, but in practice it's only `createAliasTarget` that cares, and that mutator's behavior is identical regardless (the alias-target id is what matters, not who wrote it).
 
 ---
 
@@ -1028,28 +1112,28 @@ WITH RECURSIVE chain AS (
   SELECT parent.*, chain.depth + 1
   FROM chain
   JOIN blocks AS parent ON parent.id = chain.parent_id
-  WHERE parent.deleted = 0
+  WHERE parent.deleted = 0 AND chain.depth < 100              -- recursion guard, see §4.7
 )
 SELECT * FROM chain WHERE id != :id ORDER BY depth ASC;
 ```
 
-`depth` is computed in the CTE and used for explicit ordering — SQL doesn't guarantee CTE recursion order without an `ORDER BY`. Result is leaf-to-root.
+`depth` is computed in the CTE for explicit `ORDER BY` (SQL doesn't guarantee CTE recursion order without it) and as the recursion guard. Result is leaf-to-root.
 
 ### 11.3 isDescendantOf
 
 ```sql
 WITH RECURSIVE chain AS (
-  SELECT id, parent_id FROM blocks WHERE id = :id AND deleted = 0
+  SELECT id, parent_id, 0 AS depth FROM blocks WHERE id = :id AND deleted = 0
   UNION ALL
-  SELECT b.id, b.parent_id
+  SELECT b.id, b.parent_id, chain.depth + 1
   FROM blocks AS b
   JOIN chain ON chain.parent_id = b.id
-  WHERE b.deleted = 0
+  WHERE b.deleted = 0 AND chain.depth < 100                   -- recursion guard, see §4.7
 )
 SELECT 1 FROM chain WHERE id = :potentialAncestor LIMIT 1;
 ```
 
-Order is irrelevant here (we only need existence), so no `ORDER BY` needed.
+Order is irrelevant here (we only need existence), so no `ORDER BY` needed. `depth` is solely the recursion guard.
 
 ### 11.4 Children of one parent
 
@@ -1386,6 +1470,7 @@ Every cache miss inside a mutator does a SQL read inside the writeTransaction. F
 - [ ] Reviewer's round-4 finding "PropertySchema lacks render metadata" — already addressed in v4.1; not a real finding against v4.2.
 - [ ] Reviewer's round-5 findings addressed: server/client schema split (§4 intro, §13.1 Phase 1); two-source handle invalidation (TxEngine + row_events tail) (§9.3); children-completeness markers + `ChildrenNotLoadedError` (§5.2); parent-edge dependencies for tree handles (§9.2); field-write processor watches with `core.parseReferences` watching `blocks.content` (§5.7, §7); ancestors CTE has explicit `depth` ORDER BY (§11.2); stale `tx_context.source='sync'` invariant fixed to `NULL` + COALESCE (§15.4).
 - [ ] Reviewer's round-6 findings addressed: cycle prevention + repair protocol (§4.7); `ctx.depend` for dynamic query dependency declaration (§5.5); `repo.children`, `repo.load(opts)` explicitly listed in Repo surface (§3 architecture diagram, §5.2, §13.2); row_events tail filtered to `source = 'sync'` to avoid TxEngine double-invalidation (§9.3); subtree path uses `hex(id)` to handle `/` in ids (§11.1); `tx.create` has explicit `onConflict: 'throw' | 'ignore'`, default `'throw'` (§5.3); soft-delete is its own row_events `kind`, distinguishable from regular updates (§4.3).
+- [ ] Reviewer's round-7 findings addressed: tx_context cleared all-fields with row_events trigger fallback for sync rows (§4.3, §10 step 8); cycle guards added to ancestors and isDescendantOf CTEs (§11.2, §11.3); repair query materializes cycle members and picks lex-smallest correctly for cycles of any length (§4.7); `ChangeScope.Repair` defined with not-undoable + uploads + read-only-allowed semantics (§5.8, §10.3); empty-result handle deps via upfront `ctx.depend` (§5.5); `onConflict: 'ignore'` post-SELECTs live row before cache hydration (§10 step 8a, §10.4); DELETE upload trigger removed in v1 to align with no-purge-yet policy (§4.5).
 - [ ] Each phase ships with a green build and meets acceptance criteria.
 - [ ] §16.1, §16.12 must resolve before Phase 1 starts.
 - [ ] Dynamic-plugin lifecycle is constructible at runtime (§8, §12.2).
