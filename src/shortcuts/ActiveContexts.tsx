@@ -3,6 +3,7 @@ import {
   PropsWithChildren,
   useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -38,11 +39,17 @@ const ActiveContextsDispatchCtx = createContext<ActiveContextsDispatch | null>(n
 
 export function ActiveContextsProvider({children}: PropsWithChildren) {
   const runtime = useAppRuntime()
-  // Ref so the stable activate() callback can read the latest context configs
-  // without being re-created (and thereby invalidating every consuming effect)
-  // when the runtime regenerates.
+  // We want `activate` to stay reference-stable so consumers via the
+  // dispatch context don't re-render when the runtime regenerates, but
+  // also to read the *latest* runtime when called. useEffectEvent would
+  // fit the bill but cannot cross component boundaries (and we expose
+  // activate through context). useLayoutEffect refreshes the ref
+  // synchronously after each commit, so by the time any user event /
+  // effect calls activate, runtimeRef.current is up to date.
   const runtimeRef = useRef(runtime)
-  runtimeRef.current = runtime
+  useLayoutEffect(() => {
+    runtimeRef.current = runtime
+  }, [runtime])
 
   const [active, setActive] = useState<ActiveContextsMap>(() => new Map())
 

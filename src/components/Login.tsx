@@ -131,7 +131,6 @@ function SupabaseLogin({children}: { children: ReactNode }) {
     const signOut = async () => {
       const {error: err} = await client.auth.signOut()
       if (err) {
-        // eslint-disable-next-line no-console
         console.error('Sign-out failed', err)
       }
       // We DON'T wipe the local PowerSync database. Per-user databases

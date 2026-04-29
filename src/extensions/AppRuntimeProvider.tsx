@@ -35,10 +35,9 @@ export function AppRuntimeProvider({
   // One store per provider instance — survives runtime re-resolutions
   // (so the renderer can show errors from the most recent load) but
   // re-creates if the landing block changes (e.g. workspace switch).
-  const errorStore = useMemo(
-    () => new ExtensionLoadErrorStore(),
-    [landingBlock.id],
-  )
+  // landingBlock.id is the recreation key, not read inside the body.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const errorStore = useMemo(() => new ExtensionLoadErrorStore(), [landingBlock.id])
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
     repo,

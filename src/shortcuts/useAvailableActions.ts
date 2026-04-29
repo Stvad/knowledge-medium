@@ -75,7 +75,5 @@ export function useAvailableActions(): AvailableActionsResult {
     )
 
     return {actions, activeContexts, bindingsFor}
-    // contextConfigsByType & bindingsFor are derived from runtime and change
-    // only when runtime changes, so listing runtime is sufficient.
-  }, [runtime, active])
+  }, [runtime, active, contextConfigsByType, bindingsFor])
 }

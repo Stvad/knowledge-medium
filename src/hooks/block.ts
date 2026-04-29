@@ -48,9 +48,21 @@ export const useDataWithSelector =
     isSelectionEqual: (left: T, right: T) => boolean = areSelectedValuesEqual,
   ) => {
     const repo = useRepo()
+    // Latest-selector / latest-equality pattern: keep the subscribe and
+    // getSnapshot identities stable for useSyncExternalStore (so the store
+    // doesn't tear down on every render when callers pass inline lambdas),
+    // while still consulting the freshest selector during render. We
+    // can't use useLayoutEffect here — getSnapshot runs during render, so
+    // a one-commit-old ref would return stale data when the selector
+    // changes on the same render that re-reads the store. Mutating the ref
+    // during render is the standard idiom for this pattern; the suggested
+    // useEffectEvent replacement doesn't fit because getSnapshot is a
+    // render-time call site.
     const selectorRef = useRef(selector)
     const equalityRef = useRef(isSelectionEqual)
+    // eslint-disable-next-line react-hooks/refs
     selectorRef.current = selector
+    // eslint-disable-next-line react-hooks/refs
     equalityRef.current = isSelectionEqual
 
     useEnsureBlockLoaded(block)

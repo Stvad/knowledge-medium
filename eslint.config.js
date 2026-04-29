@@ -27,20 +27,13 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
-      // The React Compiler rules folded into react-hooks v7 (refs,
-      // immutability, purity, set-state-in-effect/render, etc.) flag real
-      // patterns worth migrating, but doing so for the whole codebase is
-      // out of scope for this dependency bump. Keep them on as warnings
-      // so they're visible but don't block the build.
-      'react-hooks/refs': 'warn',
-      'react-hooks/immutability': 'warn',
-      'react-hooks/purity': 'warn',
+      // The React Compiler rules folded into react-hooks v7. Most are
+      // clean and treated as errors. `set-state-in-effect` stays as a
+      // warning: the codebase has a handful of legitimate sync-to-prop
+      // and async-load patterns that would each need a small refactor
+      // (useState-with-key, derived-state, useSyncExternalStore) to
+      // resolve cleanly.
       'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/set-state-in-render': 'warn',
-      'react-hooks/error-boundaries': 'warn',
-      'react-hooks/preserve-manual-memoization': 'warn',
-      'react-hooks/static-components': 'warn',
-      'react-hooks/use-memo': 'warn',
     },
   },
 )

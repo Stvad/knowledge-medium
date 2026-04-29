@@ -341,6 +341,11 @@ export function DefaultBlockRenderer(
             >
               <ErrorBoundary FallbackComponent={FallbackComponent}>
                 <BlockInteractionProvider context={blockInteractionContext}>
+                  {/* ContentRenderer comes from the registry-driven
+                      decorate(blockContentDecoratorsFacet) memo above —
+                      stable identity per blockInteractionContext, not a
+                      fresh component each render. */}
+                  {/* eslint-disable-next-line react-hooks/static-components */}
                   <ContentRenderer block={block}/>
                 </BlockInteractionProvider>
               </ErrorBoundary>

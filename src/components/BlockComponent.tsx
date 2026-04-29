@@ -20,6 +20,10 @@ export function BlockComponent({blockId}: BlockComponentProps) {
 
   return <ErrorBoundary FallbackComponent={FallbackComponent}>
     <Suspense fallback={<SuspenseFallback/>}>
+      {/* Renderer is selected from the runtime registry, not constructed
+          here — its identity is stable across renders for a given key.
+          The static-components rule can't see through the lookup. */}
+      {/* eslint-disable-next-line react-hooks/static-components */}
       <Renderer block={block} context={context}/>
     </Suspense>
   </ErrorBoundary>
