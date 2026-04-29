@@ -8,7 +8,7 @@ import {
   isEditingProp,
   editorFocusRequestProp,
 } from '@/data/properties.ts'
-import { useRef, useEffect, useCallback, useMemo, forwardRef, useState } from 'react'
+import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'react'
 import { useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
@@ -17,14 +17,16 @@ import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 import { EditorView } from '@codemirror/view'
 import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
 
-interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur'> {
+interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
+  ref?: Ref<ReactCodeMirrorRef>
 }
 
-export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
+export const BlockEditor = ({
   block,
+  ref,
   ...codeMirrorProps
-}, ref) => {
+}: BlockEditorProps) => {
   const blockData = useData(block)
   const pendingLocalEdits = useRef(false)
   const pendingCommittedContent = useRef<string | null>(null)
@@ -48,7 +50,12 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
     doc => (doc?.properties[editorFocusRequestProp.name]?.value as number | undefined) ?? 0,
   )
 
+  // useRef-wrapped debounce is the per-component-instance idiom; its
+  // body runs on debounce-fire (not during render), so the ref writes
+  // inside are safe even though the new react-hooks rule flags the
+  // closure-construction itself.
   const pushChange = useRef(
+    // eslint-disable-next-line react-hooks/refs
     debounce((value: string) => {
       pendingCommittedContent.current = value
       block.change(b => {
@@ -145,6 +152,11 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
         setEditorView(value?.view ?? null)
         forwardRefValue(value)
       }}
+      // CodeMirror is uncontrolled here — we feed the *first-render*
+      // content via initialContent and apply later updates by dispatching
+      // changes (see the useEffect above). Reading the ref during render
+      // is the deliberate uncontrolled-init pattern.
+      // eslint-disable-next-line react-hooks/refs
       value={initialContent.current}
       onChange={(value) => {
         pendingLocalEdits.current = true
@@ -167,6 +179,6 @@ export const BlockEditor = forwardRef<ReactCodeMirrorRef, BlockEditorProps>(({
       {...codeMirrorProps}
     />
   )
-})
+}
 
 BlockEditor.displayName = 'BlockEditor'
