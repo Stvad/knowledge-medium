@@ -25,12 +25,13 @@
  *   - DB error inside the writeTransaction → same rollback path.
  */
 
-import type { ChangeScope, RepoTxOptions, Tx, User, Mutator } from '@/data/api'
+import type { AnyMutator, ChangeScope, RepoTxOptions, Tx, User } from '@/data/api'
 import { ReadOnlyError, ChangeScope as ChangeScopeConst } from '@/data/api'
 import {
   newTxMeta,
   TxImpl,
   type AfterCommitJob,
+  type MutatorCallRecord,
   type TxDb,
 } from './txEngine'
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
@@ -72,7 +73,7 @@ export interface RunTxParams<R> {
   newTxSeq: () => number
   newId: () => string
   now: () => number
-  mutators: ReadonlyMap<string, Mutator<unknown, unknown>>
+  mutators: ReadonlyMap<string, AnyMutator>
 }
 
 export interface TxResult<R> {
@@ -97,6 +98,11 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const source = sourceForScope(scope)
   const snapshots: SnapshotsMap = newSnapshotsMap()
   const afterCommitJobs: AfterCommitJob[] = []
+  // `tx.run` pushes onto this list each time a mutator runs (including
+  // the outer call from `repo.mutate.X` / `repo.run` since those open
+  // the tx with `fn = tx => tx.run(m, args)`). Pipeline serializes
+  // the list at commit time into command_events.mutator_calls.
+  const mutatorCalls: MutatorCallRecord[] = []
   const meta = newTxMeta({txId, scope, source, user, description})
 
   // Run inside writeTransaction. Steps 1-5 commit or roll back atomically.
@@ -118,10 +124,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       cache,
       meta,
       afterCommitJobs,
+      mutatorCalls,
       mutators,
       now,
       newId,
     })
+    // Important: any tx.run calls in the user fn push onto
+    // `mutatorCalls` after the dispatch wrapper's initial entry. We
+    // capture the running list (mutating closure) rather than passing
+    // a snapshot so the command_events row written in step 4 reflects
+    // every mutator the tx actually ran.
     const result = await fn(tx)
 
     // Step 4: write command_events row — one per repo.tx invocation
@@ -138,10 +150,11 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
         scope,
         user.id,
         meta.workspaceId,
-        // Mutator-call list lands when registries populate in stage
-        // 1.4. For now record an empty array — uniform shape, callable
-        // from raw repo.tx with no mutators required.
-        '[]',
+        // mutatorCalls is mutated in place during the user fn (each
+        // tx.run pushes a record). Serialized at commit time so audit
+        // sees every mutator this tx invoked. Raw `repo.tx(fn, opts)`
+        // calls with no tx.run produce '[]' — same as zero-write txs.
+        JSON.stringify(mutatorCalls),
         source,
         now(),
       ],

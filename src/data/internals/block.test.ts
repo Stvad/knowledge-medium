@@ -11,6 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  BlockNotFoundError,
   BlockNotLoadedError,
   ChildrenNotLoadedError,
   ChangeScope,
@@ -75,6 +76,35 @@ describe('Block.data / peek (sync)', () => {
   it('peek returns undefined before any load; null is reserved for repo.load missing-row signal', () => {
     const b = new Block(env.repo, 'missing')
     expect(b.peek()).toBeUndefined()
+  })
+
+  it('after repo.load returns null, peek surfaces null and data throws BlockNotFoundError', async () => {
+    // Pre-condition: no row.
+    const b = new Block(env.repo, 'no-such')
+    expect(b.peek()).toBeUndefined()
+    expect(() => b.data).toThrow(BlockNotLoadedError)
+
+    // load returns null and marks the id as confirmed-missing.
+    const loaded = await env.repo.load('no-such')
+    expect(loaded).toBeNull()
+
+    // Now peek says null (not undefined), data throws BlockNotFoundError.
+    expect(b.peek()).toBeNull()
+    expect(() => b.data).toThrow(BlockNotFoundError)
+  })
+
+  it('the missing marker clears once a snapshot lands (sync-applied insert)', async () => {
+    const b = new Block(env.repo, 'late-arrival')
+    await env.repo.load('late-arrival')
+    expect(b.peek()).toBeNull()
+
+    // Simulate a sync-applied insert by writing through the repo.
+    await env.repo.tx(
+      tx => tx.create({id: 'late-arrival', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    expect(b.peek()).not.toBeNull()
+    expect(b.data.id).toBe('late-arrival')
   })
 })
 
@@ -250,5 +280,26 @@ describe('repo.load', () => {
     const got = await env.repo.load('does-not-exist')
     expect(got).toBeNull()
     expect(env.cache.getSnapshot('does-not-exist')).toBeUndefined()
+  })
+
+  it('concurrent load(id) + load(id, {children: true}) BOTH end with children loaded + marker set', async () => {
+    // Regression for a prior bug: `dedupLoad(id, ...)` keyed only by id
+    // could merge the two calls into one promise driven by whichever
+    // started first. The plain loader didn't fetch children, so the
+    // children-requesting caller's expectation was silently dropped:
+    // after both promises resolved, the cache had the row but no
+    // children, and allChildrenLoaded was false. The fix is to NOT use
+    // the id-keyed dedupLoad path in repo.load (each call does its own
+    // work; cache.setSnapshot is idempotent so we don't double-fire).
+    const [r1, r2] = await Promise.all([
+      env.repo.load('p'),
+      env.repo.load('p', {children: true}),
+    ])
+    expect(r1?.id).toBe('p')
+    expect(r2?.id).toBe('p')
+    // The children-requesting caller's neighborhood DID land.
+    expect(env.cache.getSnapshot('c1')).toBeDefined()
+    expect(env.cache.getSnapshot('c2')).toBeDefined()
+    expect(env.cache.areChildrenLoaded('p')).toBe(true)
   })
 })

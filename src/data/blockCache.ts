@@ -24,6 +24,12 @@ export class BlockCache {
    *  signal. `repo.load(id, {children: true})` sets it; the row_events
    *  tail clears it when a new child arrives via sync. */
   private readonly allChildrenLoaded = new Set<string>()
+  /** Confirmed-missing markers — ids the loader looked up and the row
+   *  did not exist (or was soft-deleted). Lets the Block facade
+   *  distinguish "not loaded yet" (peek → undefined) from "confirmed
+   *  missing" (peek → null) per spec §5.2. Cleared on setSnapshot
+   *  (the row exists now). */
+  private readonly missingIds = new Set<string>()
 
   getSnapshot(id: string): BlockData | undefined {
     return this.snapshots.get(id)
@@ -49,6 +55,8 @@ export class BlockCache {
     }
 
     this.snapshots.set(snapshot.id, deepFreeze(snapshot))
+    // Row is now known-present — clear any prior confirmed-missing state.
+    this.missingIds.delete(snapshot.id)
     this.notify(snapshot.id)
     return true
   }
@@ -144,6 +152,28 @@ export class BlockCache {
    *  `ChildrenNotLoadedError`. */
   areChildrenLoaded(parentId: string): boolean {
     return this.allChildrenLoaded.has(parentId)
+  }
+
+  // ──── Confirmed-missing markers ────
+
+  /** Mark `id` as confirmed-missing — `repo.load` looked it up and the
+   *  row didn't exist (or was soft-deleted). Block.peek will return
+   *  null instead of undefined; Block.data will throw
+   *  BlockNotFoundError instead of BlockNotLoadedError. */
+  markMissing(id: string): void {
+    this.missingIds.add(id)
+  }
+
+  /** True iff `id` was previously confirmed-missing AND no snapshot
+   *  has since arrived. */
+  isMissing(id: string): boolean {
+    return this.missingIds.has(id)
+  }
+
+  /** Clear the confirmed-missing marker — used by tests or by the
+   *  row_events tail when a sync-applied insert means we should re-check. */
+  clearMissing(id: string): void {
+    this.missingIds.delete(id)
   }
 
   /** Children of `parentId` from the cache, ordered by `(orderKey, id)`,

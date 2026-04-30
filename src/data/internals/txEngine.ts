@@ -24,6 +24,7 @@
  */
 
 import type {
+  AnyMutator,
   BlockData,
   BlockDataPatch,
   ChangeScope,
@@ -77,6 +78,15 @@ export interface AfterCommitJob {
    *  saved here so the dispatcher doesn't have to re-parse. */
 }
 
+/** A single mutator call captured during the tx — pushed by `tx.run`
+ *  (spec §4.4 / §13.3). Written into `command_events.mutator_calls`
+ *  as JSON at commit time so audit and undo can see what each tx did
+ *  in mutator-grain terms, not just the row-grain row_events log. */
+export interface MutatorCallRecord {
+  name: string
+  args: unknown
+}
+
 /** Construction context for `TxImpl`. The pipeline assembles this and
  *  hands it off; primitives use the fields directly. */
 export interface TxImplContext {
@@ -85,12 +95,17 @@ export interface TxImplContext {
   cache: BlockCache
   meta: TxMeta
   afterCommitJobs: AfterCommitJob[]
+  /** Mutable list of mutator calls captured during the tx. Pushed by
+   *  `tx.run`; the pipeline pre-populates with the outermost call from
+   *  `repo.mutate.X` / `repo.run`. JSON-serialized into
+   *  `command_events.mutator_calls` at commit time. */
+  mutatorCalls: MutatorCallRecord[]
   /** Now provider — injected for testability (deterministic timestamps). */
   now: () => number
   /** Mutator registry snapshot (taken at tx start). For stage 1.3 the
    *  registry is empty in v1; tx.run with an unregistered mutator
    *  throws MutatorNotRegisteredError. */
-  mutators: ReadonlyMap<string, Mutator<unknown, unknown>>
+  mutators: ReadonlyMap<string, AnyMutator>
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -102,6 +117,15 @@ const COLUMN_PLACEHOLDERS = COLUMN_NAMES.map(() => '?').join(', ')
 const SELECT_BY_ID_SQL = `SELECT ${COLUMN_LIST} FROM blocks WHERE id = ?`
 const SELECT_CHILDREN_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id`
+/** Root-level siblings (parent_id IS NULL). When a tx has pinned a
+ *  workspace, scope to that workspace so `tx.childrenOf(null)` doesn't
+ *  spill across workspaces — important for single-workspace-per-tx
+ *  invariants and for sibling-position helpers like createSiblingAbove
+ *  on root blocks. */
+const SELECT_ROOT_SIBLINGS_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
+const SELECT_ROOT_SIBLINGS_NO_WS_SQL =
+  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 ORDER BY order_key, id`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
@@ -358,6 +382,11 @@ export class TxImpl implements Tx {
         `tx.run scope mismatch: tx is "${this.meta.scope}", mutator "${mutator.name}" requires "${subScope}"`,
       )
     }
+    // Record the call BEFORE running so even a throwing mutator's
+    // call appears in command_events.mutator_calls — the pipeline
+    // discards mutatorCalls on rollback alongside snapshots/afterCommit
+    // jobs, so this is only audited on commit anyway.
+    this.ctx.mutatorCalls.push({name: mutator.name, args})
     // Execute against the same Tx — sub-mutator's writes go through
     // immediately and are visible to subsequent reads via SQL.
     return await registered.apply(this, args as never) as R
@@ -365,7 +394,18 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(parentId: string): Promise<BlockData[]> {
+  async childrenOf(parentId: string | null): Promise<BlockData[]> {
+    if (parentId === null) {
+      // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
+      // the pinned workspace when available so root-level siblings of
+      // one workspace don't leak into another's tx.
+      const sql = this.workspacePinned
+        ? SELECT_ROOT_SIBLINGS_SQL
+        : SELECT_ROOT_SIBLINGS_NO_WS_SQL
+      const params = this.workspacePinned ? [this.meta.workspaceId] : []
+      const rows = await this.ctx.txDb.getAll<BlockRow>(sql, params)
+      return rows.map(parseBlockRow)
+    }
     const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])
     return rows.map(parseBlockRow)
   }

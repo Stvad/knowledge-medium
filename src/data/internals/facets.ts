@@ -10,7 +10,7 @@
 
 import { defineFacet } from '@/extensions/facet'
 import type {
-  Mutator,
+  AnyMutator,
   PostCommitProcessor,
   PropertySchema,
   PropertyUiContribution,
@@ -18,11 +18,14 @@ import type {
 } from '@/data/api'
 
 /** Key the registry by `Mutator.name`; duplicates log a warning and
- *  last-wins (per §6 convention). */
-export const mutatorsFacet = defineFacet<Mutator<unknown, unknown>, ReadonlyMap<string, Mutator<unknown, unknown>>>({
+ *  last-wins (per §6 convention). Mutators with heterogeneous
+ *  Args/Result types share the registry slot via `AnyMutator` (variance
+ *  escape); call-site dispatch (`repo.mutate.X`, `tx.run(m, args)`)
+ *  recovers precise types via the `MutatorRegistry` augmentation. */
+export const mutatorsFacet = defineFacet<AnyMutator, ReadonlyMap<string, AnyMutator>>({
   id: 'data.mutators',
   combine: (values) => {
-    const out = new Map<string, Mutator<unknown, unknown>>()
+    const out = new Map<string, AnyMutator>()
     for (const m of values) {
       if (out.has(m.name)) {
         console.warn(

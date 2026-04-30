@@ -162,6 +162,25 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
     const id = await env.repo.mutate.createSiblingBelow({siblingId: 'C', id: 'X'}) as string
     expect(await env.childIds('root')).toEqual(['A', 'B', 'C', id])
   })
+
+  it('createSiblingAbove works on a workspace-root block (parentId = null)', async () => {
+    // Two root-level blocks; create a third before r2.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'r2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'r2', id: 'r-above'}) as string
+    expect(await env.childIds(null)).toEqual(['r1', id, 'r2'])
+  })
+
+  it('createSiblingBelow works on a workspace-root block (parentId = null)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'r2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'r1', id: 'r-below'}) as string
+    expect(await env.childIds(null)).toEqual(['r1', id, 'r2'])
+  })
 })
 
 // ──── insertChildren ────
@@ -244,6 +263,17 @@ describe('core.move', () => {
     await env.repo.mutate.delete({id: 'A'})
     await expect(env.repo.mutate.move({id: 'B', parentId: 'A', position: {kind: 'last'}}))
       .rejects.toThrow(ParentDeletedError)
+  })
+
+  it('moves a block to root level positioned before an existing root sibling', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'r2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'r1', id: 'c1'})
+    // Move c1 to root, positioned before r2.
+    await env.repo.mutate.move({id: 'c1', parentId: null, position: {kind: 'before', siblingId: 'r2'}})
+    expect(await env.childIds(null)).toEqual(['r1', 'c1', 'r2'])
   })
 })
 
@@ -413,5 +443,79 @@ describe('repo.mutate / repo.run dispatch', () => {
     await expect(
       env.repo.mutate.setContent({id: 1, content: 'x'} as unknown as {id: string; content: string}),
     ).rejects.toThrow()
+  })
+
+  it('repo.mutate.<name> records the call into command_events.mutator_calls', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'mc1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.setContent({id: 'mc1', content: 'recorded'})
+
+    const calls = await env.h.db.getAll<{mutator_calls: string; description: string | null}>(
+      "SELECT mutator_calls, description FROM command_events ORDER BY created_at DESC LIMIT 1",
+    )
+    const parsed = JSON.parse(calls[0].mutator_calls) as Array<{name: string; args: unknown}>
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]).toEqual({name: 'core.setContent', args: {id: 'mc1', content: 'recorded'}})
+    // describe also lands in command_events.description.
+    expect(calls[0].description).toBe('set content on mc1')
+  })
+
+  it('a composed mutator (mutator-runs-mutator via tx.run) records every step in mutator_calls', async () => {
+    // delete recursively walks the subtree and calls tx.delete via
+    // softDeleteSubtree, but those are tx primitives — not mutator
+    // calls. So delete itself is one entry. setContent is one entry.
+    // To verify composition we need a mutator that calls tx.run.
+    // Easier: do two top-level mutator calls in one repo.tx via a raw
+    // call — the dispatch wrapper opens its own tx so composition has
+    // to happen inside a single tx.run boundary. We test composition
+    // by calling raw `repo.tx` with two `tx.run`s.
+    await env.repo.tx(
+      tx => tx.create({id: 'mc2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.tx(async tx => {
+      // Simulate a composed scenario: two mutator runs in one tx.
+      const setContentMutator = (
+        env.repo as unknown as {mutators: Map<string, {apply: (tx: unknown, args: unknown) => Promise<unknown>; name: string; argsSchema: unknown; scope: unknown}>}
+      ).mutators.get('core.setContent')!
+      // The exposed `tx.run` accepts the registered mutator object.
+      await tx.run(setContentMutator as never, {id: 'mc2', content: 'first'})
+      await tx.run(setContentMutator as never, {id: 'mc2', content: 'second'})
+    }, {scope: ChangeScope.BlockDefault})
+
+    const last = await env.h.db.getAll<{mutator_calls: string}>(
+      "SELECT mutator_calls FROM command_events ORDER BY created_at DESC LIMIT 1",
+    )
+    const parsed = JSON.parse(last[0].mutator_calls) as Array<{name: string; args: unknown}>
+    expect(parsed).toHaveLength(2)
+    expect(parsed.map(c => c.name)).toEqual(['core.setContent', 'core.setContent'])
+    expect((parsed[0].args as {content: string}).content).toBe('first')
+    expect((parsed[1].args as {content: string}).content).toBe('second')
+  })
+
+  it('raw repo.tx with no tx.run records mutator_calls = []', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'mc3', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault, description: 'raw create'},
+    )
+    const last = await env.h.db.getAll<{mutator_calls: string; description: string | null}>(
+      "SELECT mutator_calls, description FROM command_events ORDER BY created_at DESC LIMIT 1",
+    )
+    expect(JSON.parse(last[0].mutator_calls)).toEqual([])
+    expect(last[0].description).toBe('raw create')
+  })
+
+  it('rollback discards mutator_calls — no command_events row written', async () => {
+    const before = await env.h.db.getAll('SELECT tx_id FROM command_events')
+    await expect(env.repo.tx(async tx => {
+      const m = (
+        env.repo as unknown as {mutators: Map<string, {apply: (tx: unknown, args: unknown) => Promise<unknown>; name: string; argsSchema: unknown; scope: unknown}>}
+      ).mutators.get('core.setContent')!
+      await tx.run(m as never, {id: 'no-such', content: 'x'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow()
+    const after = await env.h.db.getAll('SELECT tx_id FROM command_events')
+    expect(after.length).toBe(before.length)
   })
 })

@@ -17,8 +17,8 @@
 import {randomUUID} from 'node:crypto'
 import type { FacetRuntime } from '@/extensions/facet'
 import type {
+  AnyMutator,
   BlockData,
-  Mutator,
   RepoTxOptions,
   Tx,
   User,
@@ -66,7 +66,7 @@ export class Repo {
   private readonly now: () => number
   private readonly newId: () => string
   private readonly newTxSeq: () => number
-  private mutators: Map<string, Mutator<unknown, unknown>> = new Map()
+  private mutators: Map<string, AnyMutator> = new Map()
 
   /** Typed-dispatch sugar. `repo.mutate.indent({id})` opens a 1-mutator
    *  tx with the mutator's scope and runs it. Lookup tries kernel-short
@@ -113,8 +113,6 @@ export class Repo {
   }
 
   /** Load a row + (optionally) a neighborhood into the cache. Spec §5.2.
-   *  Idempotent + dedup'd: concurrent loads for the same id share a
-   *  pending promise via `BlockCache.dedupLoad`.
    *
    *    repo.load(id)                          → just the row
    *    repo.load(id, {children: true})        → row + immediate children;
@@ -124,56 +122,62 @@ export class Repo {
    *    repo.load(id, {descendants: N})        → row + subtree clipped at
    *                                              depth N (or whole tree
    *                                              if N is omitted/falsy
-   *                                              for descendants:true) */
+   *                                              for descendants:true)
+   *
+   *  Concurrency note: this method does NOT use `BlockCache.dedupLoad`.
+   *  That helper keys by id only, which silently merged a plain
+   *  `repo.load(id)` with a concurrent `repo.load(id, {children: true})`
+   *  — the second caller would see the plain promise resolve and miss
+   *  the children + the allChildrenLoaded marker. Inlining the load
+   *  costs at most one extra row read per concurrent caller; the
+   *  cache's `setSnapshot` is fingerprint-deduplicated so listeners
+   *  don't fire twice. */
   async load(
     id: string,
     opts?: { children?: boolean; ancestors?: boolean; descendants?: boolean | number },
   ): Promise<BlockData | null> {
-    // dedupLoad's loader returns BlockData | undefined; normalize the
-    // missing-row case (`undefined`) to `null` at the public boundary.
-    const got = await this.cache.dedupLoad(id, async () => {
-      // Fetch the row itself.
-      const row = await this.db.getOptional<BlockRow>(
-        'SELECT * FROM blocks WHERE id = ? AND deleted = 0', [id],
-      )
-      if (row === null) return undefined
-      const data = parseBlockRow(row)
-      this.cache.setSnapshot(data)
+    const row = await this.db.getOptional<BlockRow>(
+      'SELECT * FROM blocks WHERE id = ? AND deleted = 0', [id],
+    )
+    if (row === null) {
+      this.cache.markMissing(id)
+      return null
+    }
+    const data = parseBlockRow(row)
+    this.cache.setSnapshot(data)
 
-      if (opts?.children) {
-        const childRows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-        for (const r of childRows) this.cache.setSnapshot(parseBlockRow(r))
-        this.cache.markChildrenLoaded(id)
+    if (opts?.children) {
+      const childRows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+      for (const r of childRows) this.cache.setSnapshot(parseBlockRow(r))
+      this.cache.markChildrenLoaded(id)
+    }
+
+    if (opts?.ancestors) {
+      // Pass id twice — ANCESTORS_SQL uses it as both start and skip.
+      const ancestorRows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
+      for (const r of ancestorRows) this.cache.setSnapshot(parseBlockRow(r))
+    }
+
+    if (opts?.descendants) {
+      const subtreeRows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+      const maxDepth = typeof opts.descendants === 'number' ? opts.descendants : Infinity
+      // Track which parents we hydrate completely so we can mark
+      // their children-loaded state.
+      const fullyHydrated = new Set<string>()
+      for (const r of subtreeRows) {
+        if (r.depth > maxDepth) continue
+        this.cache.setSnapshot(parseBlockRow(r))
       }
-
-      if (opts?.ancestors) {
-        // Pass id twice — ANCESTORS_SQL uses it as both start and skip.
-        const ancestorRows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
-        for (const r of ancestorRows) this.cache.setSnapshot(parseBlockRow(r))
+      // Every visited row at depth < maxDepth has its children fully
+      // hydrated by the same query (children are in the result set
+      // unless they exceed maxDepth). Mark accordingly.
+      for (const r of subtreeRows) {
+        if (r.depth < maxDepth) fullyHydrated.add(r.id)
       }
+      for (const pid of fullyHydrated) this.cache.markChildrenLoaded(pid)
+    }
 
-      if (opts?.descendants) {
-        const subtreeRows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
-        const maxDepth = typeof opts.descendants === 'number' ? opts.descendants : Infinity
-        // Track which parents we hydrate completely so we can mark
-        // their children-loaded state.
-        const fullyHydrated = new Set<string>()
-        for (const r of subtreeRows) {
-          if (r.depth > maxDepth) continue
-          this.cache.setSnapshot(parseBlockRow(r))
-        }
-        // Every visited row at depth < maxDepth has its children fully
-        // hydrated by the same query (children are in the result set
-        // unless they exceed maxDepth). Mark accordingly.
-        for (const r of subtreeRows) {
-          if (r.depth < maxDepth) fullyHydrated.add(r.id)
-        }
-        for (const pid of fullyHydrated) this.cache.markChildrenLoaded(pid)
-      }
-
-      return data
-    })
-    return got ?? null
+    return data
   }
 
   /** Run a transactional session. Spec §3, §10. */
@@ -242,7 +246,7 @@ export class Repo {
 
   /** Internal: register an array of mutators into the registry by name.
    *  Used by the constructor's `registerKernel: true` path. */
-  private registerMutators(mutators: ReadonlyArray<Mutator<unknown, unknown>>): void {
+  private registerMutators(mutators: ReadonlyArray<AnyMutator>): void {
     for (const m of mutators) this.mutators.set(m.name, m)
   }
 
@@ -250,7 +254,7 @@ export class Repo {
    *  that wired specific mutator sets without a FacetRuntime. New
    *  tests should prefer `setFacetRuntime` or the
    *  `registerKernel: false` constructor flag plus `setFacetRuntime`. */
-  __setMutatorsForTesting(mutators: ReadonlyArray<Mutator<unknown, unknown>>): void {
+  __setMutatorsForTesting(mutators: ReadonlyArray<AnyMutator>): void {
     this.mutators = new Map(mutators.map(m => [m.name, m]))
   }
 }

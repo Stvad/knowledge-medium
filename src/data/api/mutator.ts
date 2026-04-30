@@ -25,6 +25,21 @@ export interface Mutator<Args = unknown, Result = void> {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface MutatorRegistry { /* augmented per plugin */ }
 
+/** Variance-erased mutator type for storage in heterogeneous collections
+ *  (the engine's mutator registry, `mutatorsFacet`'s contributions, etc).
+ *
+ *  `Mutator<unknown, unknown>` doesn't work because `Args` is contravariant:
+ *  a `Mutator<{x: number}, void>` can NOT be safely stored as a
+ *  `Mutator<unknown, unknown>` (the latter could be called with any
+ *  unknown, but the former only accepts `{x: number}`). The conventional
+ *  TypeScript escape for this case is `any` — it opts out of variance
+ *  checking for the registry slot while keeping the per-mutator types
+ *  intact at definition sites. Concrete callers (`repo.mutate.X`,
+ *  `tx.run(mutator, args)`) work against the precise types via the
+ *  `MutatorRegistry` augmentation channel. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyMutator = Mutator<any, any>
+
 /** Helper for plugin authors. Returns the mutator unchanged but
  *  type-narrows `Args` / `Result` from `argsSchema` / `resultSchema`
  *  inferred types. */

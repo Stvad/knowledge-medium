@@ -35,24 +35,27 @@ export class Block {
 
   // ──── Reads ────
 
-  /** Sync read; throws if the row isn't loaded. */
+  /** Sync read; throws BlockNotLoadedError if the row isn't loaded,
+   *  BlockNotFoundError if `repo.load` previously confirmed the row
+   *  doesn't exist (§5.2). A soft-deleted row counts as loaded — the
+   *  facade exposes it with `deleted: true` so undo flows / devtools
+   *  can inspect it; consumers that want only-live filter themselves. */
   get data(): BlockData {
     const snap = this.repo.cache.getSnapshot(this.id)
-    if (snap === undefined) throw new BlockNotLoadedError(this.id)
-    if (snap.deleted) {
-      // §5.2: data is the "as-loaded" view. A soft-deleted row is still
-      // a row and callers may want to inspect it (undo flows, devtools).
-      // `deleted` is on BlockData; consumers that want only-live filter
-      // themselves.
-    }
-    return snap
+    if (snap !== undefined) return snap
+    if (this.repo.cache.isMissing(this.id)) throw new BlockNotFoundError(this.id)
+    throw new BlockNotLoadedError(this.id)
   }
 
-  /** Soft access: undefined = not loaded, null = confirmed missing,
-   *  else BlockData. */
+  /** Soft access (§5.2):
+   *    undefined → not loaded yet
+   *    null      → confirmed missing (load returned null)
+   *    BlockData → loaded (possibly soft-deleted) */
   peek(): BlockData | undefined | null {
     const snap = this.repo.cache.getSnapshot(this.id)
-    return snap === undefined ? undefined : snap
+    if (snap !== undefined) return snap
+    if (this.repo.cache.isMissing(this.id)) return null
+    return undefined
   }
 
   /** Ensure loaded. Idempotent + dedup'd via the cache's pendingLoads

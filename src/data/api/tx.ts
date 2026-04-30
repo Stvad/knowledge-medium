@@ -128,8 +128,13 @@ export interface Tx {
   // ──── Within-tx tree primitives ────
 
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
-   *  `deleted = 0`. Reads SQL via the writeTransaction. */
-  childrenOf(parentId: string): Promise<BlockData[]>
+   *  `deleted = 0`. Reads SQL via the writeTransaction.
+   *  Pass `null` to enumerate workspace-root rows (rows with
+   *  `parent_id IS NULL`); within a single-workspace tx the result is
+   *  scoped to the pinned workspace_id when one exists, otherwise
+   *  spans all root rows the cache can see (rare; only relevant for
+   *  the very first write of a tx that re-roots). */
+  childrenOf(parentId: string | null): Promise<BlockData[]>
 
   /** Parent of `childId`, or null if `childId` has no parent or doesn't
    *  exist. Reads SQL via the writeTransaction. */

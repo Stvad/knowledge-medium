@@ -19,8 +19,8 @@ import { z } from 'zod'
 import {
   ChangeScope,
   defineMutator,
+  type AnyMutator,
   type BlockReference,
-  type Mutator,
   type PropertySchema,
   type Tx,
 } from '@/data/api'
@@ -39,7 +39,10 @@ const requireBlock = async (tx: Tx, id: string) => {
 
 /** Compute the order_key for inserting under `parentId` at a given
  *  `position`. Reads sibling list from SQL (tx.childrenOf is sorted by
- *  (order_key, id) per §11.4). */
+ *  (order_key, id) per §11.4). `parentId === null` enumerates
+ *  workspace-root siblings (scoped to the tx's pinned workspace), so
+ *  createSiblingAbove / createSiblingBelow / move work on root-level
+ *  blocks. */
 const orderKeyForInsert = async (
   tx: Tx,
   parentId: string | null,
@@ -49,7 +52,7 @@ const orderKeyForInsert = async (
     | { kind: 'after'; siblingId: string }
     | { kind: 'before'; siblingId: string },
 ): Promise<string> => {
-  const siblings = parentId === null ? [] : await tx.childrenOf(parentId)
+  const siblings = await tx.childrenOf(parentId)
 
   if (position.kind === 'first') {
     return keyAtStart(siblings[0]?.orderKey ?? null)
@@ -427,35 +430,20 @@ export const outdent = defineMutator<{id: string}, void>({
     if (self.parentId === null) return  // already at root
     const parent = await requireBlock(tx, self.parentId)
     // Move under grandparent, positioned right after current parent.
+    // tx.childrenOf(null) enumerates root-level siblings of the pinned
+    // workspace, so the same logic works for both nested and root
+    // outdents — no root-level approximation needed.
     const grandparent = parent.parentId
     await requireLiveParent(tx, grandparent)
-    const grandSiblings = grandparent === null
-      ? []  // root level — null parentId means we sit at workspace root with no orderKey constraints from a "parent's children" list; positioning is by order_key alone
-      : await tx.childrenOf(grandparent)
+    const grandSiblings = await tx.childrenOf(grandparent)
+    const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
     let orderKey: string
-    if (grandparent === null) {
-      // Root level: no childrenOf available (parentId is null). The
-      // outdented row goes immediately after `parent`. We need parent's
-      // own orderKey and the next root's orderKey. Read root rows via
-      // tx.childrenOf is not callable for null; fall back to a direct
-      // sibling computation: position after parent at the workspace
-      // root requires knowing the next root sibling. Without a
-      // childrenOf(null) primitive we approximate by using
-      // parent.orderKey as lower bound and null as upper. That places
-      // the outdented child after the parent and after any other root
-      // rows whose order_key happens to fall between — acceptable for
-      // the common case (single-page roots) and matches legacy outdent
-      // behavior of "land at end of root level."
-      orderKey = keyAtEnd(parent.orderKey)
+    if (parentIx < 0) {
+      // Stale read — fall back to last position under grandparent.
+      orderKey = keyAtEnd(grandSiblings.at(-1)?.orderKey ?? null)
     } else {
-      const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
-      if (parentIx < 0) {
-        // Stale read — fall back to last position under grandparent.
-        orderKey = keyAtEnd(grandSiblings.at(-1)?.orderKey ?? null)
-      } else {
-        const next = grandSiblings[parentIx + 1]
-        orderKey = keyBetween(parent.orderKey, next?.orderKey ?? null)
-      }
+      const next = grandSiblings[parentIx + 1]
+      orderKey = keyBetween(parent.orderKey, next?.orderKey ?? null)
     }
     await tx.move(id, {parentId: grandparent, orderKey})
   },
@@ -481,17 +469,13 @@ export const split = defineMutator<SplitArgs, string>({
     const prefix = self.content.slice(0, at)
     const suffix = self.content.slice(at)
     await tx.update(id, {content: prefix})
-    // Compute order_key for the new sibling — between self and its next sibling.
-    let orderKey: string
-    if (self.parentId === null) {
-      // Root level — no childrenOf(null). Same approximation as outdent.
-      orderKey = keyAtEnd(self.orderKey)
-    } else {
-      const siblings = await tx.childrenOf(self.parentId)
-      const ix = siblings.findIndex(s => s.id === id)
-      const next = ix >= 0 ? siblings[ix + 1] : undefined
-      orderKey = keyBetween(self.orderKey, next?.orderKey ?? null)
-    }
+    // Compute order_key for the new sibling — between self and its next
+    // sibling. tx.childrenOf(null) handles root-level siblings now, so
+    // the same path works whether self is nested or at the workspace root.
+    const siblings = await tx.childrenOf(self.parentId)
+    const ix = siblings.findIndex(s => s.id === id)
+    const next = ix >= 0 ? siblings[ix + 1] : undefined
+    const orderKey = keyBetween(self.orderKey, next?.orderKey ?? null)
     return tx.create({
       workspaceId: self.workspaceId,
       parentId: self.parentId,
@@ -539,19 +523,22 @@ export const merge = defineMutator<MergeArgs, void>({
 
 /** All kernel mutators in one array — registered with `Repo` by
  *  `repo.setFacetRuntime` (or the bootstrapping helper that supplies
- *  the facet runtime). */
-export const KERNEL_MUTATORS: ReadonlyArray<Mutator<unknown, unknown>> = [
-  setContent as Mutator,
-  setProperty as Mutator,
-  deleteBlock as Mutator,
-  createChild as Mutator,
-  createSiblingAbove as Mutator,
-  createSiblingBelow as Mutator,
-  insertChildren as Mutator,
-  move as Mutator,
-  setOrderKey as Mutator,
-  indent as Mutator,
-  outdent as Mutator,
-  split as Mutator,
-  merge as Mutator,
+ *  the facet runtime). Typed as `AnyMutator[]` because the mutators
+ *  have heterogeneous `Args`/`Result` shapes; precise types stay at
+ *  the per-mutator definition sites and reach callers through the
+ *  `MutatorRegistry` augmentation. */
+export const KERNEL_MUTATORS: ReadonlyArray<AnyMutator> = [
+  setContent,
+  setProperty,
+  deleteBlock,
+  createChild,
+  createSiblingAbove,
+  createSiblingBelow,
+  insertChildren,
+  move,
+  setOrderKey,
+  indent,
+  outdent,
+  split,
+  merge,
 ]
