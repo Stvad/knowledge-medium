@@ -1,7 +1,17 @@
-import { BlockData } from '@/types'
 import { v4 as uuidv4 } from 'uuid'
 
-export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
+/** Lightweight intermediate shape produced by the markdown parser.
+ *  Holds only the fields the importer actually needs — id, content,
+ *  parentId, orderKey. Workspace + the rest of BlockData come from
+ *  the importer's context. */
+export interface ParsedBlock {
+  id: string
+  parentId?: string
+  orderKey: string
+  content: string
+}
+
+export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
   const lines = text.split('\n');
   const parsedBlocks: { content: string; level: number; id: string }[] = [];
   let baseIndent = -1;
@@ -97,53 +107,35 @@ export function parseMarkdownToBlocks(text: string): Partial<BlockData>[] {
     });
   }
 
-  // Second pass: convert to BlockData[] with proper parent/child relationships
-  const blocks: Partial<BlockData>[] = [];
-
-  // Stack to keep track of parent blocks at each level
-  const parentStack: Array<Partial<BlockData> | undefined> = [];
+  // Second pass: convert to ParsedBlock[] with parentId + orderKey.
+  // The new tree shape stores parent_id+order_key as the source of
+  // truth — no childIds array. Each parent tracks how many children
+  // it's seen so we can synth a deterministic order key per sibling.
+  const blocks: ParsedBlock[] = []
+  const parentStack: Array<{id: string; childCount: number} | undefined> = []
 
   for (const parsed of parsedBlocks) {
-    const blockData: Partial<BlockData> = {
-      childIds: [],
-      id: uuidv4(),
-      content: parsed.content,
-      // numChildren and isRoot will be set by the test helper or consuming code if needed.
-      // The parser's primary job is content, parentId, and childIds based on level.
-    };
+    const id = uuidv4()
 
     // Pop stack until we find the parent at the right level.
-    // The stack should contain the direct parent at parentStack[parsed.level - 1]
-    // if parsed.level > 0.
     while (parentStack.length > parsed.level) {
-      parentStack.pop();
+      parentStack.pop()
     }
-    
-    // Set parent relationship
+
+    let parentId: string | undefined
+    let orderKey = 'a0'  // root-level siblings: caller decides
     if (parsed.level > 0 && parentStack.length === parsed.level && parentStack[parsed.level - 1]) {
-      const parent = parentStack[parsed.level - 1];
-      if (parent) { // Ensure parent exists
-        blockData.parentId = parent.id;
-        parent.childIds = parent.childIds || []; // Initialize if undefined
-        parent.childIds.push(blockData.id!);
-      }
-    } else if (parsed.level > 0) {
-        // This case implies a jump in level without a direct parent in the stack at the expected position.
-        // This can happen if levels are not contiguous or parsing logic leads to unexpected level calculations.
-        // For robustness, one might search backwards in the stack for the closest valid parent.
-        // However, with the current level calculation logic, parentStack[parsed.level - 1] should be the target.
-        // If it's not there, it might indicate an issue with level calculation or stack management.
-        // For now, we stick to the direct expectation.
+      const parent = parentStack[parsed.level - 1]!
+      parentId = parent.id
+      orderKey = `a${parent.childCount}`
+      parent.childCount++
     }
 
-
-    // Add current block to the stack at its level.
-    // If parentStack is shorter than parsed.level, fill with undefined/null up to parsed.level -1
     while (parentStack.length < parsed.level) {
-        parentStack.push(undefined); // Should ideally be null or a specific placeholder
+      parentStack.push(undefined)
     }
-    parentStack[parsed.level] = blockData;
-    blocks.push(blockData);
+    parentStack[parsed.level] = {id, childCount: 0}
+    blocks.push({id, parentId, orderKey, content: parsed.content})
   }
 
   return blocks;

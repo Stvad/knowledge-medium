@@ -1,6 +1,6 @@
-import { Block } from '../data/block'
+import { Block } from '@/data/internals/block'
 import { ClipboardData, BlockData } from '../types'
-import { Repo } from '../data/repo'
+import type { Repo } from '@/data/internals/repo'
 import { selectionStateProp } from '@/data/properties.ts'
 
 const createIndentedContent = (content: string, depth: number): string => {
@@ -9,36 +9,40 @@ const createIndentedContent = (content: string, depth: number): string => {
   return `${indentation}- ${content.split('\n').join('\n' + indentation + indentBy)}`
 }
 
-const processBlockRecursively = async (
+/** Walk the subtree rooted at `block` and produce an indented
+ *  markdown serialization + the BlockData[] in document order. The
+ *  walk reads from cache exclusively (callers must `repo.load(id,
+ *  {descendants: true})` first); each level descends via
+ *  `block.children` (sync, gated on `areChildrenLoaded`). */
+const processBlockRecursively = (
   block: Block,
   depth: number,
-): Promise<{ blocks: BlockData[]; markdown: string[] }> => {
-  const blockData = await block.data()
-  if (!blockData) {
-    return {blocks: [], markdown: []}
+): { blocks: BlockData[]; markdown: string[] } => {
+  const data = block.peek()
+  if (!data) return {blocks: [], markdown: []}
+
+  const markdown = [createIndentedContent(data.content, depth)]
+  const blocks: BlockData[] = [data]
+
+  // children getter throws if children not loaded; we caught loading
+  // upstream in serializeBlock.
+  for (const child of block.children) {
+    const sub = processBlockRecursively(child, depth + 1)
+    blocks.push(...sub.blocks)
+    markdown.push(...sub.markdown)
   }
 
-  const markdown = [createIndentedContent(blockData.content, depth)]
-  const blocks = [blockData]
-
-  const children = await block.children()
-  const childResults = await Promise.all(
-    children.map(child => processBlockRecursively(child, depth + 1)),
-  )
-
-  return {
-    blocks: blocks.concat(...childResults.map(r => r.blocks)),
-    markdown: markdown.concat(...childResults.map(r => r.markdown)),
-  }
+  return {blocks, markdown}
 }
 
 export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
-  const initialData = await block.data()
-  if (!initialData) {
+  // Hydrate the entire subtree before the sync walk.
+  const data = await block.repo.load(block.id, {descendants: true})
+  if (!data) {
     throw new Error(`Failed to retrieve data for block with id ${block.id}`)
   }
 
-  const {blocks, markdown} = await processBlockRecursively(block, 0)
+  const {blocks, markdown} = processBlockRecursively(block, 0)
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
@@ -62,8 +66,8 @@ const writeToClipboard = async (data: ClipboardData): Promise<void> =>
 export const copyBlockToClipboard = async (block: Block): Promise<void> =>
   writeToClipboard(await serializeBlock(block))
 
-const getSelectionState = async (uiStateBlock: Block) =>
-  (await uiStateBlock.getProperty(selectionStateProp))?.value
+const getSelectionState = (uiStateBlock: Block) =>
+  uiStateBlock.peekProperty(selectionStateProp)
 
 export const serializeSelectedBlocks = async (
   blockIds: string[],
@@ -71,8 +75,7 @@ export const serializeSelectedBlocks = async (
 ): Promise<ClipboardData> => {
   const blockResults = await Promise.all(
     blockIds
-      .map(id => repo.find(id))
-      .filter((block): block is Block => block !== null)
+      .map(id => repo.block(id))
       .map(async block => {
         try {
           return await serializeBlock(block)
@@ -84,7 +87,7 @@ export const serializeSelectedBlocks = async (
   )
 
   const validResults = blockResults.filter((result): result is ClipboardData => result !== null)
-  
+
   if (validResults.length === 0) {
     throw new Error('No block data could be serialized for copying')
   }
@@ -101,7 +104,7 @@ export const copySelectedBlocksToClipboard = async (
 ): Promise<void> => {
   if (!uiStateBlock || !repo) return
 
-  const selectionState = await getSelectionState(uiStateBlock)
+  const selectionState = getSelectionState(uiStateBlock)
   if (!selectionState?.selectedBlockIds?.length) {
     console.log('No blocks selected to copy')
     return
