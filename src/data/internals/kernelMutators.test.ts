@@ -408,7 +408,8 @@ describe('core.outdent', () => {
     await seedABC()
     const a1 = await env.repo.mutate.createChild({parentId: 'A', id: 'A1'}) as string
     expect(env.read(a1)!.parentId).toBe('A')
-    await env.repo.mutate.outdent({id: 'A1'})
+    const moved = await env.repo.mutate.outdent({id: 'A1'})
+    expect(moved).toBe(true)
     expect(env.read('A1')!.parentId).toBe('root')
     // A1 lands between A and B (post-outdent the order should be A, A1, B, C).
     expect(await env.childIds('root')).toEqual(['A', 'A1', 'B', 'C'])
@@ -419,36 +420,76 @@ describe('core.outdent', () => {
       tx => tx.create({id: 'r', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    await env.repo.mutate.outdent({id: 'r'})
+    const moved = await env.repo.mutate.outdent({id: 'r'})
+    expect(moved).toBe(false)
     expect(env.read('r')!.parentId).toBeNull()
+  })
+
+  it('refuses to outdent past topLevelBlockId — direct child stays put', async () => {
+    // Without the boundary, A1 (a direct child of A) would normally
+    // outdent to root. Passing topLevelBlockId=A keeps A1 inside.
+    await seedABC()
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'}) as string
+    const moved = await env.repo.mutate.outdent({id: 'A1', topLevelBlockId: 'A'})
+    expect(moved).toBe(false)
+    expect(env.read('A1')!.parentId).toBe('A')
+  })
+
+  it('still outdents a deeper descendant when topLevelBlockId is set', async () => {
+    // A → A1 → A1a; passing topLevelBlockId=A allows outdent of A1a
+    // (since its parent A1 ≠ topLevelBlockId).
+    await seedABC()
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'}) as string
+    await env.repo.mutate.createChild({parentId: 'A1', id: 'A1a'}) as string
+    const moved = await env.repo.mutate.outdent({id: 'A1a', topLevelBlockId: 'A'})
+    expect(moved).toBe(true)
+    expect(env.read('A1a')!.parentId).toBe('A')
   })
 })
 
 // ──── split ────
 
 describe('core.split', () => {
-  it('keeps prefix on the original; suffix lives on a new sibling-after', async () => {
+  it('keeps before-text on the original; after-text lives on a new sibling-after', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
     const orig = await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'helloworld'}) as string
     void orig
-    const newId = await env.repo.mutate.split({id: 'orig', at: 5}) as string
+    const newId = await env.repo.mutate.split({id: 'orig', before: 'hello', after: 'world'}) as string
     expect(env.read('orig')!.content).toBe('hello')
     expect(env.read(newId)!.content).toBe('world')
     expect(await env.childIds('p')).toEqual(['orig', newId])
   })
 
-  it('split at 0 leaves the original empty and full content goes to the new sibling', async () => {
+  it('empty before leaves the original empty and full content goes to the new sibling', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
     await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'abc'})
-    const newId = await env.repo.mutate.split({id: 'orig', at: 0}) as string
+    const newId = await env.repo.mutate.split({id: 'orig', before: '', after: 'abc'}) as string
     expect(env.read('orig')!.content).toBe('')
     expect(env.read(newId)!.content).toBe('abc')
+  })
+
+  it('uses caller-supplied text — does not re-slice persisted content', async () => {
+    // Ensures the mutator does NOT read self.content for the split. A
+    // debounced editor could leave SQL stale; the caller's live before/
+    // after is what should land.
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'stale'})
+    const newId = await env.repo.mutate.split({
+      id: 'orig',
+      before: 'live-prefix',
+      after: 'live-suffix',
+    }) as string
+    expect(env.read('orig')!.content).toBe('live-prefix')
+    expect(env.read(newId)!.content).toBe('live-suffix')
   })
 })
 

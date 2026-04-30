@@ -433,14 +433,32 @@ export const indent = defineMutator<{id: string}, void>({
 
 // ──── outdent ────
 
-export const outdent = defineMutator<{id: string}, void>({
+interface OutdentArgs {
+  id: string
+  /** Optional view boundary. If `self.parentId === topLevelBlockId`,
+   *  outdent is a no-op — the block is a direct child of the current
+   *  view's root and outdenting would move it outside the visible
+   *  zoom scope (or to the workspace root for root-level views).
+   *  Returns `false` in that case so callers can fall back. */
+  topLevelBlockId?: string
+}
+
+export const outdent = defineMutator<OutdentArgs, boolean>({
   name: 'core.outdent',
-  argsSchema: z.object({id: z.string()}),
+  argsSchema: z.object({
+    id: z.string(),
+    topLevelBlockId: z.string().optional(),
+  }),
+  resultSchema: z.boolean(),
   scope: ChangeScope.BlockDefault,
   describe: ({id}) => `outdent ${id}`,
-  apply: async (tx, {id}) => {
+  apply: async (tx, {id, topLevelBlockId}) => {
     const self = await requireBlock(tx, id)
-    if (self.parentId === null) return  // already at root
+    if (self.parentId === null) return false  // already at root
+    // Refuse to outdent past the current view boundary — a direct
+    // child of `topLevelBlockId` would otherwise pop out to the
+    // grandparent (or workspace root), exiting the user's zoom scope.
+    if (topLevelBlockId !== undefined && self.parentId === topLevelBlockId) return false
     const parent = await requireBlock(tx, self.parentId)
     // Move under grandparent, positioned right after current parent.
     // tx.childrenOf(null) enumerates root-level siblings of the pinned
@@ -461,6 +479,7 @@ export const outdent = defineMutator<{id: string}, void>({
       orderKey = keyBetween(parent.orderKey, next?.orderKey ?? null)
     }
     await tx.move(id, {parentId: grandparent, orderKey})
+    return true
   },
 })
 
@@ -468,22 +487,30 @@ export const outdent = defineMutator<{id: string}, void>({
 
 interface SplitArgs {
   id: string
-  /** Character offset within the block's content. The original block
-   *  retains content[0..at]; a new sibling-after gets content[at..]. */
-  at: number
+  /** New content for the original block (the prefix). */
+  before: string
+  /** Content for the new sibling-after (the suffix). */
+  after: string
 }
 
 export const split = defineMutator<SplitArgs, string>({
   name: 'core.split',
-  argsSchema: z.object({id: z.string(), at: z.number().int().nonnegative()}),
+  argsSchema: z.object({
+    id: z.string(),
+    before: z.string(),
+    after: z.string(),
+  }),
   resultSchema: z.string(),
   scope: ChangeScope.BlockDefault,
-  describe: ({id, at}) => `split ${id} @ ${at}`,
-  apply: async (tx, {id, at}) => {
+  describe: ({id}) => `split ${id}`,
+  // Callers pass the live `before`/`after` strings (e.g. from CodeMirror's
+  // current doc, sliced at the cursor). The mutator does NOT slice
+  // self.content — debounced editors can leave SQL stale, and slicing
+  // there would split the wrong text and lose the live edits. See
+  // §13.3 / phase-1 review feedback.
+  apply: async (tx, {id, before, after}) => {
     const self = await requireBlock(tx, id)
-    const prefix = self.content.slice(0, at)
-    const suffix = self.content.slice(at)
-    await tx.update(id, {content: prefix})
+    await tx.update(id, {content: before})
     // Compute order_key for the new sibling — between self and its next
     // sibling. Pass self.workspaceId for the null-parent case so the
     // root-sibling lookup is workspace-scoped (the pinned-meta would
@@ -497,7 +524,7 @@ export const split = defineMutator<SplitArgs, string>({
       workspaceId: self.workspaceId,
       parentId: self.parentId,
       orderKey,
-      content: suffix,
+      content: after,
     })
   },
 })
