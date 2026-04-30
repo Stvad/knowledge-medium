@@ -55,12 +55,28 @@ const scopeUploadsToServer = (scope: ChangeScope) =>
  *  `PowerSyncDatabase` that satisfies this; production passes the
  *  same. Both `writeTransaction` (for tx primitives) and the read
  *  surface (`getAll` / `getOptional` / `get` for `repo.load`) are
- *  needed. */
+ *  needed. `onChange` is the table-change subscription used by hooks
+ *  (`useBacklinks`, `useChildIds`) until the row_events tail in
+ *  Phase 2 ships a typed invalidation surface. */
+export interface PowerSyncDbChangeHandler {
+  onChange: () => void | Promise<void>
+  onError?: (error: unknown) => void
+}
+
+export interface PowerSyncDbChangeOptions {
+  tables?: readonly string[]
+  throttleMs?: number
+}
+
 export interface PowerSyncDb {
   writeTransaction<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
+  onChange(
+    handler: PowerSyncDbChangeHandler,
+    options?: PowerSyncDbChangeOptions,
+  ): () => void
 }
 
 export interface RunTxParams<R> {
