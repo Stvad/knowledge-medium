@@ -78,18 +78,7 @@ export const BlockEditor = ({
 
     if (pendingCommittedContent.current !== null && incoming === pendingCommittedContent.current) {
       pendingCommittedContent.current = null
-      // Only disarm the local-edits guard if the editor actually matches
-      // what was committed. If the user typed more characters between
-      // the debounced pushChange firing and the commit landing, `live`
-      // has advanced past `incoming` — keeping the flag on prevents the
-      // dispatch below from clobbering those characters; the next
-      // debounced pushChange reconciles. Phase 2 TODO: replace this
-      // per-binding hack with source-tagged invalidation at the
-      // handle/subscription layer ("don't notify the writer of their
-      // own echoes"), which is the proper home for this concern.
-      if (live === incoming) {
-        pendingLocalEdits.current = false
-      }
+      pendingLocalEdits.current = false
     }
 
     if (pendingLocalEdits.current) return
