@@ -116,6 +116,11 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
   // at 11+ siblings (a10 < a2).
   const blocks: ParsedBlock[] = []
   const parentStack: Array<{id: string; lastOrderKey: string | null} | undefined> = []
+  // Sentinel for root-level siblings — there's no real parent at
+  // level 0, but we still need a per-position cursor so root keys
+  // form an ordered sequence (the caller overwrites them, but tests
+  // and direct consumers rely on the sort matching markdown order).
+  let rootLastKey: string | null = null
 
   for (const parsed of parsedBlocks) {
     const id = uuidv4()
@@ -126,12 +131,15 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
     }
 
     let parentId: string | undefined
-    let orderKey = keyAtEnd(null)  // root-level siblings: caller may overwrite
+    let orderKey: string
     if (parsed.level > 0 && parentStack.length === parsed.level && parentStack[parsed.level - 1]) {
       const parent = parentStack[parsed.level - 1]!
       parentId = parent.id
       orderKey = keyAtEnd(parent.lastOrderKey)
       parent.lastOrderKey = orderKey
+    } else {
+      orderKey = keyAtEnd(rootLastKey)
+      rootLastKey = orderKey
     }
 
     while (parentStack.length < parsed.level) {

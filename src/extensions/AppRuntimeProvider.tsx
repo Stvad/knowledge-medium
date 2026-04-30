@@ -15,6 +15,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
+import { kernelDataExtension } from '@/data/internals/kernelDataExtension.ts'
 import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
@@ -47,6 +48,13 @@ export function AppRuntimeProvider({
   }), [generation, repo, landingBlock, safeMode])
 
   const baseExtensions: AppExtension[] = useMemo(() => [
+    // kernelDataExtension contributes KERNEL_MUTATORS and
+    // KERNEL_PROCESSORS to mutatorsFacet / postCommitProcessorsFacet.
+    // setFacetRuntime REPLACES the registries, so without this the
+    // kernel mutators (registered in the Repo constructor) would be
+    // dropped the first time the runtime resolves and any
+    // repo.mutate.<kernel> call would throw MutatorNotRegisteredError.
+    kernelDataExtension,
     defaultRenderersExtension,
     defaultEditorInteractionExtension,
     defaultActionsExtension({repo}),
@@ -73,7 +81,12 @@ export function AppRuntimeProvider({
 
   useEffect(() => {
     setRuntime(baseRuntime)
-  }, [baseRuntime])
+    // Push the synchronous (kernel + static plugins) runtime into the
+    // Repo registries. The async effect below will replace it once
+    // dynamic plugins resolve, but the sync runtime keeps kernel +
+    // static plugin mutators / processors live during that gap.
+    repo.setFacetRuntime(baseRuntime)
+  }, [baseRuntime, repo])
 
   useEffect(() => {
     let cancelled = false
@@ -106,6 +119,13 @@ export function AppRuntimeProvider({
 
         if (!cancelled) {
           setRuntime(nextRuntime)
+          // Sync the merged runtime (kernel + static + dynamic) into
+          // Repo so plugin-contributed mutators and post-commit
+          // processors land in the registries. Without this call,
+          // dynamic-plugin facet contributions would only flow through
+          // the FacetRuntime to UI consumers, never reaching the data
+          // layer's dispatch / processor surfaces.
+          repo.setFacetRuntime(nextRuntime)
         }
       } catch (error) {
         console.error('Failed to resolve app runtime', error)
