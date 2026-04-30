@@ -85,6 +85,7 @@ export const startRowEventsTail = (args: {
   let lastId = 0
   let disposed = false
   let unsubscribe: (() => void) | null = null
+  let initComplete = false
 
   /** Inner drain — reads + processes rows with id > lastId. Used by
    *  both the init-time catch-up read AND the subscription's onChange
@@ -165,86 +166,74 @@ export const startRowEventsTail = (args: {
     handleStore.invalidate(notification)
   }
 
-  /** Set true once init completes; until then, the subscription's
-   *  onChange handler buffers (sets `firedDuringInit`) instead of
-   *  calling processOnce, because processOnce awaits `ready` which
-   *  hasn't resolved yet. */
-  let initComplete = false
-  /** True if the subscription fired between subscribe-time and
-   *  init-completion. When set, init's catch-up drain widens its
-   *  watermark to cover any in-flight events MAX(id) may or may not
-   *  have observed (the SQLite snapshot of MAX races with events
-   *  committing during the query). */
-  let firedDuringInit = false
-
-  // Init flow that closes the row_events tail gap (spec §9.3, §16.13):
+  // Init flow that closes the row_events tail gap (spec §9.3, §16.13;
+  // reviewer P2 — PowerSync's onChange is trailing-throttled, so a row
+  // that lands while a post-subscription MAX query is in flight can be
+  // both included in the MAX result AND not yet delivered to the
+  // throttled callback; lastId would skip past it and the eventual
+  // callback would also drain id > lastId and find nothing):
   //
-  //   1. SUBSCRIBE first with a buffering handler that just sets
-  //      `firedDuringInit = true`. Any sync write committed from this
-  //      point on triggers the handler; we don't care about its id
-  //      yet, only that one happened.
-  //   2. READ MAX(id) → M. Because step 1 already subscribed, any
-  //      event committed BETWEEN subscribe-time and the MAX query
-  //      flips `firedDuringInit`. SQLite's snapshot isolation may
-  //      still race here — an event committed during the MAX query
-  //      can be (a) included in M but already past subscribe-time
-  //      (subscription got it → flipped flag), or (b) not included
-  //      and not seen yet by the subscription (will fire later).
-  //      Either way, we have a signal.
-  //   3. SET lastId = M (the optimistic high-watermark).
-  //   4. CATCH-UP DRAIN. If `firedDuringInit`, we don't trust M's
-  //      tightness — drain from initialLastId (typically 0) to catch
-  //      anything subscription-saw-but-MAX-included AND vice-versa.
-  //      Idempotent processing makes the redundant historical scan
-  //      correct (cache.setSnapshot fingerprint-dedups; handle
-  //      invalidation is idempotent).
-  //      If NOT firedDuringInit, the optimistic M is correct — drain
-  //      `id > M` returns zero rows in the common case.
+  //   1. READ MAX(id) → M (pre-subscription watermark). Captures every
+  //      row that exists before the subscription is in place.
+  //   2. SET lastId = M.
+  //   3. SUBSCRIBE. From this point, future commits fire the
+  //      trailing-throttled onChange callback.
+  //   4. DRAIN id > M. Catches rows committed between (1) and (3) —
+  //      they're in the DB, but the subscription wouldn't deliver an
+  //      event for a row that committed before it was registered — and
+  //      rows committed between (3) and the drain itself (the throttled
+  //      callback would fire later anyway; draining now just picks them
+  //      up early, and drain is idempotent because lastId is monotonic).
   //   5. FLIP initComplete so subsequent onChange events route to
-  //      the normal processOnce path.
-  const initialFloor = options?.initialLastId ?? 0
-  lastId = initialFloor
-  unsubscribe = db.onChange(
-    {
-      onChange: () => {
-        if (!initComplete) {
-          firedDuringInit = true
-          return
-        }
-        void processOnce().catch((err) => onError(err))
-      },
-      onError: (err) => onError(err),
-    },
-    { tables: ['row_events'], throttleMs },
-  )
+  //      processOnce.
+  lastId = options?.initialLastId ?? 0
 
-  const ready = (async () => {
-    if (disposed) return
-    if (options?.initialLastId === undefined) {
-      const row = await db.getOptional<{ maxId: number | null }>(
-        `SELECT MAX(id) AS maxId FROM row_events`,
-      )
-      if (disposed) return
-      // If the subscription fired during the MAX query, the optimistic
-      // high-watermark may exclude in-flight events that fall on
-      // either side of the snapshot boundary. Stay at the conservative
-      // floor and drain everything; subsequent reruns advance lastId
-      // correctly.
-      if (!firedDuringInit) {
-        lastId = row?.maxId ?? 0
-      }
-    }
-    if (disposed) return
-    await drain()
-    initComplete = true
-  })().catch((err) => { onError(err) })
-
+  // `processOnce` and `ready` reference each other lazily: processOnce
+  // awaits `ready` inside its body, and the onChange callback in
+  // `ready`'s IIFE calls processOnce. Both references resolve at call
+  // time (after init completes — see `initComplete` gate), by which
+  // point both bindings are initialized.
   const processOnce = async (): Promise<void> => {
     if (disposed) return
     await ready
     if (disposed) return
     await drain()
   }
+
+  const ready = (async (): Promise<void> => {
+    if (disposed) return
+    if (options?.initialLastId === undefined) {
+      const row = await db.getOptional<{ maxId: number | null }>(
+        `SELECT MAX(id) AS maxId FROM row_events`,
+      )
+      if (disposed) return
+      lastId = row?.maxId ?? 0
+    }
+    if (disposed) return
+    unsubscribe = db.onChange(
+      {
+        onChange: () => {
+          if (!initComplete) {
+            // The post-subscribe drain below will pick up any row that
+            // committed in this window, so we drop these events on the
+            // floor — the subsequent throttled callback (after init)
+            // will re-drain anything that arrived later.
+            return
+          }
+          void processOnce().catch((err) => onError(err))
+        },
+        onError: (err) => onError(err),
+      },
+      { tables: ['row_events'], throttleMs },
+    )
+    if (disposed) {
+      unsubscribe?.()
+      unsubscribe = null
+      return
+    }
+    await drain()
+    initComplete = true
+  })().catch((err) => { onError(err) })
 
   return {
     dispose() {

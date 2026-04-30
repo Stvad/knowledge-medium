@@ -106,12 +106,22 @@ ${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = exclu
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
   columnName === 'id' ? 'Id' : {Column: columnName}
 
+// PowerSync's CRUD-apply path runs this `put` for both inserts and updates of
+// a synced row. INSERT OR REPLACE would fire SQLite's DELETE+INSERT trigger
+// pair on an update, so the `row_events` audit trigger sees the change as
+// kind='insert' with before_json=NULL — and `rowEventsTail` then treats a
+// pure content/property edit as a child-membership change and clears the
+// parent's child-loaded marker. ON CONFLICT(id) DO UPDATE preserves the
+// UPDATE shape (OLD/NEW visible to triggers), keeping before_json populated
+// so the membership-vs-content classification in `rowEventsTail` is correct.
 export const BLOCKS_RAW_TABLE = {
   put: {
     sql: `
-      INSERT OR REPLACE INTO blocks (
+      INSERT INTO blocks (
 ${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
       ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
+      ON CONFLICT(id) DO UPDATE SET
+${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`), 8)}
     `,
     params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
   },

@@ -32,18 +32,13 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useState,
+  useRef,
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema } from '@/data/api'
 import { Block } from '@/data/internals/block'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
-
-/** Sentinel used by the snapshot-identity memo to distinguish "no source
- *  has been observed yet" from `undefined` (a valid first source). */
-const SELECTOR_NEVER_SET = Symbol('useHandle.selectorNeverSet')
-type SelectorNeverSet = typeof SELECTOR_NEVER_SET
 
 const areSelectedValuesEqual = <T,>(left: T, right: T): boolean => {
   if (Object.is(left, right)) return true
@@ -72,18 +67,9 @@ export interface UseHandleOptions<T, S> {
   eq?: (a: S, b: S) => boolean
 }
 
-interface UseHandleState<T, S> {
-  selector: (v: T | undefined) => S
-  equality: (a: S, b: S) => boolean
-  /** Last source observed by `getSelection`. SELECTOR_NEVER_SET on the
-   *  first call (sentinel for "no source seen yet"). */
-  lastSource: T | undefined | SelectorNeverSet
-  /** Selection produced by the latest `selector(lastSource)` call. */
-  lastSelection: S | undefined
-  /** Selector identity at the time `lastSelection` was computed. Used
-   *  to invalidate the memo when the selector reference changes (a new
-   *  selector with the same source must re-run). */
-  lastSelector: ((v: T | undefined) => S) | undefined
+interface CommittedSelection<S> {
+  hasValue: boolean
+  value: S
 }
 
 /** React→Handle bridge. Subscribes to `handle.subscribe(...)`,
@@ -105,69 +91,73 @@ export function useHandle<T, S = T | undefined>(
   const selector = (opts?.selector ?? identitySelector) as (v: T | undefined) => S
   const equality = opts?.eq ?? areSelectedValuesEqual
 
-  // Latest-state pattern via useState — React Compiler / React 19 lock
-  // down useRef objects against `.current` mutation during render, so
-  // we store the mutable bag inside a useState slot instead. The
-  // initialState factory runs once; we then mutate FIELDS of the
-  // returned plain object, which is permitted because the object
-  // itself isn't sealed by the runtime. Identity stays stable across
-  // renders, so closures that close over `state` always read the
-  // freshest selector / equality / memo state without re-subscribing.
-  const [state] = useState<UseHandleState<T, S>>(() => ({
-    selector,
-    equality,
-    lastSource: SELECTOR_NEVER_SET,
-    lastSelection: undefined,
-    lastSelector: undefined,
-  }))
-  // Field-level mutation of the state object during render is the
-  // explicit intent here — see comment block above. The
-  // `react-hooks/immutability` rule flags this conservatively because
-  // it can't tell that `state` is a deliberate mutable bag, not a
-  // hook return value the compiler optimizes against.
-  // eslint-disable-next-line react-hooks/immutability
-  state.selector = selector
-  // eslint-disable-next-line react-hooks/immutability
-  state.equality = equality
+  // Last value React actually committed for this hook instance. Read by
+  // `getSelection` for cross-render reference stability; only ever
+  // written by the post-commit useEffect below — so an abandoned render
+  // (concurrent mode) can never pollute it. This is the structural
+  // replacement for the previous useState-bag-mutated-during-render
+  // shape (reviewer P3).
+  const committedRef = useRef<CommittedSelection<S>>({
+    hasValue: false,
+    value: undefined as S,
+  })
 
-  const getSelection = useCallback((): S => {
-    const source = handle.peek()
-    const firstCall = state.lastSource === SELECTOR_NEVER_SET
-    const sourceUnchanged = !firstCall && Object.is(source, state.lastSource)
-    const selectorUnchanged = state.lastSelector === state.selector
-
-    // Fast path: source AND selector identity unchanged → return the
-    // cached selection. Common case across re-renders that don't
-    // touch the underlying handle.
-    if (sourceUnchanged && selectorUnchanged) {
-      return state.lastSelection as S
+  // getSelection is recreated per `useMemo` invalidation key change
+  // ([handle, selector, equality]) and carries closure-local memo state
+  // that is keyed by source identity. Required by `useSyncExternalStore`,
+  // which expects getSnapshot to return a stable reference for the same
+  // observed state — selectors that allocate (e.g. `data => data.map(…)`)
+  // would otherwise return a new array on each call.
+  //
+  // Why this is safe under concurrent mode (reviewer P3): the `let`
+  // bindings are scoped to the closure useMemo returned. They never
+  // appear on a shared object — an abandoned render that calls
+  // getSelection only mutates locals on that render's closure (and only
+  // when the closure is reused via stable deps; even then, mutations
+  // are source-keyed memos, not selector identity, so the worst an
+  // abandoned render can do is prime the memo with a now-superseded
+  // (source, value) pair, which is harmless cache state). `committedRef`
+  // — written ONLY in commit phase — provides the cross-render
+  // reference-stability path, so an uncommitted render can never
+  // poison what the committed subscription observes.
+  /* eslint-disable react-hooks/immutability */
+  const getSelection = useMemo(() => {
+    let hasMemo = false
+    let memoizedSource: T | undefined
+    let memoizedSelection: S
+    return (): S => {
+      const source = handle.peek()
+      if (hasMemo && Object.is(source, memoizedSource)) {
+        return memoizedSelection
+      }
+      const next = selector(source)
+      if (hasMemo && equality(memoizedSelection, next)) {
+        memoizedSource = source
+        return memoizedSelection
+      }
+      // Cross-render reference stability: when the latest committed
+      // value is structurally equal, hand back its reference. Inline-
+      // lambda selectors that decode/allocate fresh objects each render
+      // (e.g. `useProperty(recentBlockIdsProp)`) would otherwise produce
+      // a new !== reference per render even when the value is unchanged,
+      // retriggering `useEffect` deps that close over the selection
+      // (e.g. QuickFind's recents-load effect).
+      if (
+        committedRef.current.hasValue &&
+        equality(committedRef.current.value, next)
+      ) {
+        hasMemo = true
+        memoizedSource = source
+        memoizedSelection = committedRef.current.value
+        return memoizedSelection
+      }
+      hasMemo = true
+      memoizedSource = source
+      memoizedSelection = next
+      return next
     }
-
-    const next = state.selector(source)
-    /* eslint-disable react-hooks/immutability */
-    state.lastSource = source
-    state.lastSelector = state.selector
-
-    // Reference-stability path (reviewer P3): when the source or
-    // selector identity changed but the resulting value is structurally
-    // equal to the previous selection, keep the OLD reference.
-    // Inline-lambda selectors that decode/allocate fresh objects each
-    // render (e.g. `useProperty(recentBlockIdsProp)`) would otherwise
-    // produce a new !== reference per render even though the value is
-    // unchanged — which retriggers `useEffect` deps that close over
-    // the selection (e.g. QuickFind's recents-load effect). Returning
-    // the prior reference when `equality` says "same" prevents the
-    // spurious bounce.
-    if (!firstCall && state.equality(state.lastSelection as S, next)) {
-      // Update lastSource (different identity) but keep lastSelection
-      // pointing at the old structurally-equal value.
-      return state.lastSelection as S
-    }
-
-    state.lastSelection = next
-    /* eslint-enable react-hooks/immutability */
-    return next
-  }, [handle, state])
+  }, [handle, selector, equality])
+  /* eslint-enable react-hooks/immutability */
 
   // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
   // Block both dedup their inflight load promise). The status() check
@@ -178,23 +168,28 @@ export function useHandle<T, S = T | undefined>(
     }
   }, [handle])
 
-  return useSyncExternalStore(
-    useCallback(
-      (listener: () => void) => {
-        let currentSelection = getSelection()
-        const unsubscribe = handle.subscribe(() => {
-          const nextSelection = getSelection()
-          if (state.equality(currentSelection, nextSelection)) return
-          currentSelection = nextSelection
-          listener()
-        })
-        return unsubscribe
-      },
-      [handle, getSelection, state],
-    ),
-    getSelection,
-    getSelection,
+  // Stable subscribe — only changes when the handle changes, so we
+  // don't tear down handle.subscribe on every render that produces a
+  // new selector. A listener firing for a value that didn't actually
+  // change is bailed out by useSyncExternalStore: it re-checks
+  // getSelection, finds the stable reference held by committedRef, and
+  // skips the re-render.
+  const subscribe = useCallback(
+    (listener: () => void) => handle.subscribe(listener),
+    [handle],
   )
+
+  const value = useSyncExternalStore(subscribe, getSelection, getSelection)
+
+  // Commit-phase update of the committed-value ref. React only runs
+  // this for the render that actually committed; abandoned renders
+  // skip it, which is what makes `committedRef` immune to the
+  // concurrent-mode hazard the reviewer flagged.
+  useEffect(() => {
+    committedRef.current = {hasValue: true, value}
+  }, [value])
+
+  return value
 }
 
 // ════════════════════════════════════════════════════════════════════
