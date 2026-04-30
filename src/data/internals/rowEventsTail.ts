@@ -165,39 +165,78 @@ export const startRowEventsTail = (args: {
     handleStore.invalidate(notification)
   }
 
-  // Init: ESTABLISH the watermark BEFORE subscribing, then SUBSCRIBE,
-  // then drain any rows that landed between the watermark query and
-  // the subscription registration. Without this ordering, a sync row
-  // landing in that gap could be:
-  //   (a) included in MAX(id) → bumps watermark above it,
-  //   (b) but the subscription wasn't yet registered to fire,
-  //   (c) so processOnce never re-reads it (id > watermark filters out).
-  // The catch-up drain after subscribe closes the gap: anything in
-  // the gap satisfies id > options-supplied initialLastId (or the
-  // pre-subscribe MAX(id)) and gets consumed.
+  /** Set true once init completes; until then, the subscription's
+   *  onChange handler buffers (sets `firedDuringInit`) instead of
+   *  calling processOnce, because processOnce awaits `ready` which
+   *  hasn't resolved yet. */
+  let initComplete = false
+  /** True if the subscription fired between subscribe-time and
+   *  init-completion. When set, init's catch-up drain widens its
+   *  watermark to cover any in-flight events MAX(id) may or may not
+   *  have observed (the SQLite snapshot of MAX races with events
+   *  committing during the query). */
+  let firedDuringInit = false
+
+  // Init flow that closes the row_events tail gap (spec §9.3, §16.13):
+  //
+  //   1. SUBSCRIBE first with a buffering handler that just sets
+  //      `firedDuringInit = true`. Any sync write committed from this
+  //      point on triggers the handler; we don't care about its id
+  //      yet, only that one happened.
+  //   2. READ MAX(id) → M. Because step 1 already subscribed, any
+  //      event committed BETWEEN subscribe-time and the MAX query
+  //      flips `firedDuringInit`. SQLite's snapshot isolation may
+  //      still race here — an event committed during the MAX query
+  //      can be (a) included in M but already past subscribe-time
+  //      (subscription got it → flipped flag), or (b) not included
+  //      and not seen yet by the subscription (will fire later).
+  //      Either way, we have a signal.
+  //   3. SET lastId = M (the optimistic high-watermark).
+  //   4. CATCH-UP DRAIN. If `firedDuringInit`, we don't trust M's
+  //      tightness — drain from initialLastId (typically 0) to catch
+  //      anything subscription-saw-but-MAX-included AND vice-versa.
+  //      Idempotent processing makes the redundant historical scan
+  //      correct (cache.setSnapshot fingerprint-dedups; handle
+  //      invalidation is idempotent).
+  //      If NOT firedDuringInit, the optimistic M is correct — drain
+  //      `id > M` returns zero rows in the common case.
+  //   5. FLIP initComplete so subsequent onChange events route to
+  //      the normal processOnce path.
+  const initialFloor = options?.initialLastId ?? 0
+  lastId = initialFloor
+  unsubscribe = db.onChange(
+    {
+      onChange: () => {
+        if (!initComplete) {
+          firedDuringInit = true
+          return
+        }
+        void processOnce().catch((err) => onError(err))
+      },
+      onError: (err) => onError(err),
+    },
+    { tables: ['row_events'], throttleMs },
+  )
+
   const ready = (async () => {
-    if (options?.initialLastId !== undefined) {
-      lastId = options.initialLastId
-    } else {
+    if (disposed) return
+    if (options?.initialLastId === undefined) {
       const row = await db.getOptional<{ maxId: number | null }>(
         `SELECT MAX(id) AS maxId FROM row_events`,
       )
-      lastId = row?.maxId ?? 0
+      if (disposed) return
+      // If the subscription fired during the MAX query, the optimistic
+      // high-watermark may exclude in-flight events that fall on
+      // either side of the snapshot boundary. Stay at the conservative
+      // floor and drain everything; subsequent reruns advance lastId
+      // correctly.
+      if (!firedDuringInit) {
+        lastId = row?.maxId ?? 0
+      }
     }
     if (disposed) return
-    unsubscribe = db.onChange(
-      {
-        onChange: () => {
-          void processOnce().catch((err) => onError(err))
-        },
-        onError: (err) => onError(err),
-      },
-      { tables: ['row_events'], throttleMs },
-    )
-    // Catch-up: any row that landed between the watermark query and
-    // the subscription registration above. Subscription is now active,
-    // so further rows trigger onChange normally.
     await drain()
+    initComplete = true
   })().catch((err) => { onError(err) })
 
   const processOnce = async (): Promise<void> => {

@@ -132,15 +132,38 @@ export function useHandle<T, S = T | undefined>(
 
   const getSelection = useCallback((): S => {
     const source = handle.peek()
-    const cached =
-      state.lastSource !== SELECTOR_NEVER_SET &&
-      Object.is(source, state.lastSource) &&
-      state.lastSelector === state.selector
-    if (cached) return state.lastSelection as S
+    const firstCall = state.lastSource === SELECTOR_NEVER_SET
+    const sourceUnchanged = !firstCall && Object.is(source, state.lastSource)
+    const selectorUnchanged = state.lastSelector === state.selector
+
+    // Fast path: source AND selector identity unchanged → return the
+    // cached selection. Common case across re-renders that don't
+    // touch the underlying handle.
+    if (sourceUnchanged && selectorUnchanged) {
+      return state.lastSelection as S
+    }
+
     const next = state.selector(source)
     /* eslint-disable react-hooks/immutability */
     state.lastSource = source
     state.lastSelector = state.selector
+
+    // Reference-stability path (reviewer P3): when the source or
+    // selector identity changed but the resulting value is structurally
+    // equal to the previous selection, keep the OLD reference.
+    // Inline-lambda selectors that decode/allocate fresh objects each
+    // render (e.g. `useProperty(recentBlockIdsProp)`) would otherwise
+    // produce a new !== reference per render even though the value is
+    // unchanged — which retriggers `useEffect` deps that close over
+    // the selection (e.g. QuickFind's recents-load effect). Returning
+    // the prior reference when `equality` says "same" prevents the
+    // spurious bounce.
+    if (!firstCall && state.equality(state.lastSelection as S, next)) {
+      // Update lastSource (different identity) but keep lastSelection
+      // pointing at the old structurally-equal value.
+      return state.lastSelection as S
+    }
+
     state.lastSelection = next
     /* eslint-enable react-hooks/immutability */
     return next
