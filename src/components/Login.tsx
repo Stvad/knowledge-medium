@@ -4,12 +4,19 @@ import { Button } from '@/components/ui/button'
 import { useLocalStorage } from 'react-use'
 import { User } from '@/types.ts'
 import { hasSupabaseAuthConfig, sessionUserToAppUser, supabase } from '@/services/supabase.ts'
+import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { Session } from '@supabase/supabase-js'
 
 interface UserContextType {
   user: User
   setUser: (user?: User) => void
   signOut: () => Promise<void>
+  // True when this session is running without remote sync — either because
+  // VITE_SUPABASE_*/VITE_POWERSYNC_URL aren't configured (LocalLogin is the
+  // only path), or because the user explicitly chose "Use without sync" on
+  // the Supabase login screen. Consumers gate Supabase-dependent UI/RPCs on
+  // this so they don't blow up when the client isn't reachable.
+  localOnly: boolean
 }
 
 const UserContext = createContext<UserContextType | undefined>(undefined)
@@ -26,24 +33,77 @@ export const useSignOut = () => {
   return context.signOut
 }
 
-export function Login({children}: { children: ReactNode }) {
-  if (hasSupabaseAuthConfig && supabase) {
-    return <SupabaseLogin>{children}</SupabaseLogin>
-  }
-
-  return <LocalLogin>{children}</LocalLogin>
+/** True when the active session has remote sync disabled. Use this to gate
+ *  Supabase RPC calls and UI that only makes sense with a remote backend
+ *  (member management, invitations, etc.). */
+export const useIsLocalOnly = () => {
+  const context = useContext(UserContext)
+  if (!context) throw new Error('useIsLocalOnly must be used within a Login component')
+  return context.localOnly
 }
 
-function LocalLogin({children}: { children: ReactNode }) {
+const LOCAL_ONLY_STORAGE_KEY = 'ftm.localOnly'
+
+const clearLocalOnlyOptIn = () => {
+  try {
+    window.localStorage.removeItem(LOCAL_ONLY_STORAGE_KEY)
+  } catch {
+    // ignore (incognito, quota, etc.)
+  }
+}
+
+export function Login({children}: { children: ReactNode }) {
+  const [localOnlyOptIn, setLocalOnlyOptIn] = useLocalStorage<boolean>(
+    LOCAL_ONLY_STORAGE_KEY,
+    false,
+  )
+  const supabaseAvailable = hasSupabaseAuthConfig && supabase
+
+  if (supabaseAvailable && !localOnlyOptIn) {
+    return (
+      <SupabaseLogin onContinueLocally={() => setLocalOnlyOptIn(true)}>
+        {children}
+      </SupabaseLogin>
+    )
+  }
+
+  return (
+    <LocalLogin
+      // When Supabase is configured but the user opted into local-only,
+      // sign-out should drop the opt-in so they land back on the email
+      // login on their next render — not stay locked in local-only forever.
+      clearLocalOnlyOnSignOut={Boolean(supabaseAvailable)}
+    >
+      {children}
+    </LocalLogin>
+  )
+}
+
+interface LocalLoginProps {
+  children: ReactNode
+  // True when Supabase is wired up but the user opted into local-only.
+  // Drives sign-out behavior (also clear the opt-in + reload) and the
+  // "Back to sign in" escape hatch on the name-entry screen.
+  clearLocalOnlyOnSignOut?: boolean
+}
+
+function LocalLogin({children, clearLocalOnlyOnSignOut}: LocalLoginProps) {
   const [user, setUser] = useLocalStorage<User | undefined>('ftm.user', undefined)
   const [name, setName] = useState('')
 
   if (user) {
     const signOut = async () => {
       setUser(undefined)
+      if (clearLocalOnlyOnSignOut) {
+        clearLocalOnlyOptIn()
+        // Reload so the top-level Login re-reads localStorage and falls back
+        // to SupabaseLogin. Without the reload, useLocalStorage's in-memory
+        // copy stays at `true` for this tab.
+        window.location.reload()
+      }
     }
     return (
-      <UserContext value={{user, setUser, signOut}}>
+      <UserContext value={{user, setUser, signOut, localOnly: true}}>
         {children}
       </UserContext>
     )
@@ -56,10 +116,22 @@ function LocalLogin({children}: { children: ReactNode }) {
       setUser({id: userName, name: userName})
     }
   }
+
+  const cancelLocalOnly = () => {
+    clearLocalOnlyOptIn()
+    window.location.reload()
+  }
+
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen">
+    <div className="flex flex-col items-center justify-center min-h-screen px-6">
       <div className="w-full max-w-sm space-y-4">
         <h1 className="text-2xl font-bold text-center">Thought Medium</h1>
+        {clearLocalOnlyOnSignOut && (
+          <p className="text-xs text-muted-foreground text-center">
+            Local-only mode — your data stays on this device and isn&apos;t
+            synced to the cloud.
+          </p>
+        )}
         <div className="space-y-2">
           <Input
             placeholder="Enter your name"
@@ -75,6 +147,15 @@ function LocalLogin({children}: { children: ReactNode }) {
           >
             Enter
           </Button>
+          {clearLocalOnlyOnSignOut && (
+            <Button
+              variant="ghost"
+              className="w-full"
+              onClick={cancelLocalOnly}
+            >
+              Back to sign in
+            </Button>
+          )}
         </div>
       </div>
     </div>
@@ -83,7 +164,12 @@ function LocalLogin({children}: { children: ReactNode }) {
 
 type Stage = 'enter-email' | 'enter-code'
 
-function SupabaseLogin({children}: { children: ReactNode }) {
+interface SupabaseLoginProps {
+  children: ReactNode
+  onContinueLocally: () => void
+}
+
+function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
   const client = supabase!
   const [session, setSession] = useState<Session | null>(null)
   const [initializing, setInitializing] = useState(true)
@@ -140,8 +226,13 @@ function SupabaseLogin({children}: { children: ReactNode }) {
       // different user signs into a fresh database.
       window.location.reload()
     }
+    // Even with a Supabase session, the runtime can still be in local-only
+    // mode if VITE_POWERSYNC_URL is missing — `hasRemoteSyncConfig` covers
+    // both env-var holes; consumers should gate on it.
     return (
-      <UserContext value={{user, setUser: () => {}, signOut}}>
+      <UserContext
+        value={{user, setUser: () => {}, signOut, localOnly: !hasRemoteSyncConfig}}
+      >
         {children}
       </UserContext>
     )
@@ -287,6 +378,18 @@ function SupabaseLogin({children}: { children: ReactNode }) {
           </Button>
           <p className="text-xs text-muted-foreground text-center">
             Anonymous sessions are per-device. Sign in with email to invite collaborators.
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            className="w-full"
+            onClick={onContinueLocally}
+            disabled={submitting}
+          >
+            Use without sync (local-only)
+          </Button>
+          <p className="text-xs text-muted-foreground text-center">
+            Skip auth entirely. Data stays on this device and never leaves it.
           </p>
         </div>
       </div>

@@ -7,6 +7,7 @@ import { useHash, useSearchParam } from 'react-use'
 import type { Repo } from '@/data/internals/repo'
 import { memoize } from 'lodash'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { useIsLocalOnly } from '@/components/Login.tsx'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 import {
   canAccessRemoteWorkspace,
@@ -189,10 +190,15 @@ const App = () => {
   // updates the hash and React re-resolves through getInitialBlock.
   const [hash] = useHash()
   const safeMode = Boolean(useSearchParam('safeMode'))
+  // hasRemoteSyncConfig is the build-time signal; localOnly is the runtime
+  // override (the user clicked "Use without sync" on the login screen).
+  // Both close the door on Supabase RPCs, so AND them together once here.
+  const localOnly = useIsLocalOnly()
+  const useRemoteSync = hasRemoteSyncConfig && !localOnly
 
   const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(hash)
   const {workspaceId: activeWorkspaceId, block: landingBlock} = use(
-    getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, hasRemoteSyncConfig),
+    getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, useRemoteSync),
   )
 
   // Reactive role tracking. The imperative setReadOnly inside

@@ -12,8 +12,18 @@ import { usePendingInvitations } from '@/hooks/usePendingInvitations'
 import { acceptInvitation, declineInvitation } from '@/data/workspaces'
 import { buildAppHash } from '@/utils/routing'
 import { useHash } from 'react-use'
+import { useIsLocalOnly } from '@/components/Login'
 
 export function PendingInvitations() {
+  // Pending invitations are a Supabase RPC; in local-only mode the call
+  // throws "Supabase is not configured". Skip rendering (and thus the
+  // eager fetch on mount) entirely.
+  const localOnly = useIsLocalOnly()
+  if (localOnly) return null
+  return <PendingInvitationsInner />
+}
+
+function PendingInvitationsInner() {
   const {invitations, refresh} = usePendingInvitations()
   const [, setHash] = useHash()
   const [busyId, setBusyId] = useState<string | null>(null)

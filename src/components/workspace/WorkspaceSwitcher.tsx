@@ -15,6 +15,7 @@ import { buildAppHash, parseAppHash } from '@/utils/routing'
 import { forgetRememberedWorkspace } from '@/utils/lastWorkspace'
 import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog'
 import { WorkspaceSettingsDialog } from '@/components/workspace/WorkspaceSettingsDialog'
+import { useIsLocalOnly } from '@/components/Login'
 import type { Workspace } from '@/types'
 
 export function WorkspaceSwitcher() {
@@ -25,6 +26,7 @@ export function WorkspaceSwitcher() {
   const [hash, setHash] = useHash()
   const {workspaces} = useWorkspaces()
   const {rolesByWorkspaceId} = useMyWorkspaceRoles()
+  const localOnly = useIsLocalOnly()
   const [createOpen, setCreateOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
 
@@ -102,17 +104,19 @@ export function WorkspaceSwitcher() {
             )
           })}
           <DropdownMenuSeparator />
-          <DropdownMenuItem
-            // Defer opening the dialog by a tick. Radix DropdownMenu's
-            // close-cleanup (releases body inert + pointer-events) and
-            // Dialog's mount-setup (re-acquires them) collide if both run
-            // synchronously, leaving `pointer-events: none` stuck on body
-            // after the dialog closes.
-            onSelect={() => { setTimeout(() => setCreateOpen(true), 0) }}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>New workspace</span>
-          </DropdownMenuItem>
+          {!localOnly && (
+            <DropdownMenuItem
+              // Defer opening the dialog by a tick. Radix DropdownMenu's
+              // close-cleanup (releases body inert + pointer-events) and
+              // Dialog's mount-setup (re-acquires them) collide if both run
+              // synchronously, leaving `pointer-events: none` stuck on body
+              // after the dialog closes.
+              onSelect={() => { setTimeout(() => setCreateOpen(true), 0) }}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              <span>New workspace</span>
+            </DropdownMenuItem>
+          )}
           {activeWorkspace && (
             <DropdownMenuItem
               onSelect={() => { setTimeout(() => setSettingsOpen(true), 0) }}

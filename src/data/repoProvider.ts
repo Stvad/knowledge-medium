@@ -90,7 +90,15 @@ export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   return db
 }
 
-export const ensurePowerSyncReady = async (userId: string) => {
+// `useRemoteSync` is the runtime gate (defaults to the build-time
+// `hasRemoteSyncConfig`). Callers pass `false` when the user opted into
+// local-only mode at login — in that case we still init the local DB +
+// triggers but skip `db.connect()` so we never make a Supabase auth or
+// PowerSync sync request from this session.
+export const ensurePowerSyncReady = async (
+  userId: string,
+  useRemoteSync: boolean = hasRemoteSyncConfig,
+) => {
   const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
@@ -100,7 +108,7 @@ export const ensurePowerSyncReady = async (userId: string) => {
   }
   await initPromise
 
-  if (!hasRemoteSyncConfig) {
+  if (!useRemoteSync) {
     return
   }
 
