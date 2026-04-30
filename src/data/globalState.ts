@@ -314,24 +314,5 @@ export const useInEditMode = (blockId: string): boolean => {
   return focusedBlockId === blockId && isEditing
 }
 
-// ──── Internal: stable-ish identity for memoization keys ────
-
-/** Memoization keys for the bootstrap helpers need to invalidate
- *  whenever the Repo instance changes (test isolation, sign-out /
- *  sign-in cycle). The new Repo has no `instanceId` field; we lazily
- *  attach one via a private symbol so existing memo keys keep
- *  collision-free identities without touching the public surface. */
-const repoIdentitySymbol = Symbol('globalState.repoIdentity')
-let nextRepoIdentity = 1
-
-interface RepoWithIdentity {
-  [repoIdentitySymbol]?: number
-}
-
-const repoIdentity = (repo: Repo): number => {
-  const carrier = repo as Repo & RepoWithIdentity
-  if (carrier[repoIdentitySymbol] === undefined) {
-    carrier[repoIdentitySymbol] = nextRepoIdentity++
-  }
-  return carrier[repoIdentitySymbol]!
-}
+// ──── Internal: shorthand for instance-scoped memo keys ────
+const repoIdentity = (repo: Repo): number => repo.instanceId

@@ -210,12 +210,12 @@ const UpdateIndicator = ({block}: { block: Block }) => {
 
   if (!blockData) return null
 
-  const updatedByOtherUser = blockData?.updatedByUserId !== block.currentUser.id && blockData.updateTime > previousLoadTime!
+  const updatedByOtherUser = blockData?.updatedBy !== block.repo.user.id && blockData.updatedAt > (previousLoadTime ?? 0)
   const shouldShowUpdateIndicator = updatedByOtherUser && !seen
 
   return shouldShowUpdateIndicator && (
     <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
-         title={`Updated by ${blockData.updatedByUserId} on ${new Date(blockData.updateTime).toLocaleString()}`}/>
+         title={`Updated by ${blockData.updatedBy} on ${new Date(blockData.updatedAt).toLocaleString()}`}/>
   )
 }
 

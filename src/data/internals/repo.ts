@@ -104,6 +104,11 @@ export class Repo {
   private readonly blockFacades = new Map<string, Block>()
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
+  /** Instance discriminator for memoization keys that need to vary
+   *  across Repo instances (e.g. lodash.memoize calls in the panel /
+   *  user-page bootstrap). Auto-incremented per construction. */
+  private static nextInstanceId = 1
+  readonly instanceId: number = Repo.nextInstanceId++
 
   /** Hydrate a list of `BlockRow`s into the cache + return parsed
    *  BlockData[]. Internal helper for the kernel queries. */

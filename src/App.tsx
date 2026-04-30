@@ -170,22 +170,8 @@ const getInitialBlock = memoize(
     return {workspaceId, block: dailyNote}
   },
   (repo, workspaceId, blockId, useRemoteSync) =>
-    `${repoIdentity(repo)}:${workspaceId ?? '__no_ws__'}:${blockId ?? '__no_block__'}:${useRemoteSync ? 'remote' : 'local'}`,
+    `${repo.instanceId}:${workspaceId ?? '__no_ws__'}:${blockId ?? '__no_block__'}:${useRemoteSync ? 'remote' : 'local'}`,
 )
-
-// Same Symbol-attached numeric identity helper as `globalState.ts` —
-// the new Repo doesn't carry an `instanceId` field. Kept local so the
-// memoize key stays unique per Repo instance without touching Repo's
-// public surface.
-const REPO_IDENTITY = Symbol('App.repoIdentity')
-let nextRepoIdentity = 1
-const repoIdentity = (repo: Repo): number => {
-  const carrier = repo as Repo & {[REPO_IDENTITY]?: number}
-  if (carrier[REPO_IDENTITY] === undefined) {
-    carrier[REPO_IDENTITY] = nextRepoIdentity++
-  }
-  return carrier[REPO_IDENTITY]!
-}
 
 const App = () => {
   const repo = useRepo()

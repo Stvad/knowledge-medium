@@ -7,20 +7,21 @@ import { QuickFind } from '@/components/QuickFind.tsx'
 import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
+import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/internals/block'
 import { useUserBlock } from '@/data/globalState.ts'
-import { previousLoadTimeProp, currentLoadTimeProp, uiChangeScope } from '@/data/properties.ts'
+import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
 
-// todo this is kind of a random place for this, I think a more principled way to do this is to have
-// on-load hook and fire this there
-// on the other hand it makes things harder to override? e.g. user can redefine top-level renderer
-// how do they override the behavior in case of event based approach?
+// todo this is kind of a random place for this, I think a more principled
+// way to do this is to have on-load hook and fire this there.
+// Memoized per Block instance — fires once per render (memoize() with
+// constant key returns the same Promise).
 const updateLoadTimes = memoize((block: Block) => {
-  block.change(doc => {
-    const currentLoadTime = doc.properties.currentLoadTime?.value as number?? 0
-    doc.properties.previousLoadTime = {...previousLoadTimeProp, value: currentLoadTime}
-    doc.properties.currentLoadTime = {...currentLoadTimeProp, value: Date.now()}
-  }, {scope: uiChangeScope})
+  void block.repo.tx(async tx => {
+    const previous = block.peekProperty(currentLoadTimeProp) ?? 0
+    await tx.setProperty(block.id, previousLoadTimeProp, previous)
+    await tx.setProperty(block.id, currentLoadTimeProp, Date.now())
+  }, {scope: ChangeScope.UiState, description: 'update load times'})
 }, () => true)
 
 /**

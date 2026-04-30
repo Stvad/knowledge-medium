@@ -24,8 +24,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
     if (!selectionState.selectedBlockIds.length) return null;
 
     return {
-      selectedBlocks: selectionState.selectedBlockIds.map(id => repo.find(id)),
-      anchorBlock: selectionState.anchorBlockId ? repo.find(selectionState.anchorBlockId) : null,
+      selectedBlocks: selectionState.selectedBlockIds.map(id => repo.block(id)),
+      anchorBlock: selectionState.anchorBlockId ? repo.block(selectionState.anchorBlockId) : null,
       uiStateBlock: block,
     };
   }, [selectionState, block, repo]);
@@ -38,7 +38,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
   );
 
   const handleClose = () => {
-    block.delete()
+    void block.delete()
   }
 
   if (!topLevelBlockId) {

@@ -42,11 +42,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       // Cap at 12 — autocompletion popovers stop being useful after that and
       // a wider scan just hurts perceived latency on every keystroke.
       const blocks = await repo.searchBlocksByContent(workspaceId, filter, 12)
-      const hits = await Promise.all(blocks.map(async b => {
-        const data = await b.data()
-        return data ? {id: data.id, content: data.content} : null
-      }))
-      return hits.filter((h): h is {id: string, content: string} => h !== null)
+      return blocks.map(b => ({id: b.id, content: b.content}))
     }
   }, [repo])
 

@@ -16,12 +16,13 @@ import {
 import { Kbd } from '@/components/ui/kbd'
 import { useRepo } from '@/context/repo.tsx'
 import { useUIStateBlock, useUIStateProperty } from '@/data/globalState.ts'
+import { ChangeScope } from '@/data/api'
 import {
-  aliasProp,
-  fromList,
+  aliasesProp,
   pushRecentBlockId,
   recentBlockIdsProp,
 } from '@/data/properties.ts'
+import { v4 as uuidv4 } from 'uuid'
 import { writeAppHash } from '@/utils/routing.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
@@ -99,8 +100,7 @@ export function QuickFind() {
       const blockMatches: BlockMatch[] = []
       for (const block of blockRows) {
         if (aliasBlockIds.has(block.id)) continue
-        const data = block.dataSync()
-        blockMatches.push({blockId: block.id, content: data?.content ?? ''})
+        blockMatches.push({blockId: block.id, content: block.content})
       }
 
       setAliases(aliasRows)
@@ -116,13 +116,13 @@ export function QuickFind() {
   useEffect(() => {
     if (!open) return
     let cancelled = false
-    const ids = (recentIds as string[] | undefined) ?? []
+    const ids = recentIds ?? []
     const load = async () => {
       const items: RecentItem[] = []
       for (const id of ids) {
-        const data = await repo.find(id).data()
+        const data = await repo.load(id)
         if (!data) continue
-        const blockAliases = (data.properties[aliasProp().name]?.value as string[] | undefined) ?? []
+        const blockAliases = (data.properties[aliasesProp.name] as string[] | undefined) ?? []
         items.push({blockId: id, label: blockAliases[0] ?? data.content ?? id})
       }
       if (!cancelled) setRecents(items)
@@ -159,12 +159,18 @@ export function QuickFind() {
       return
     }
 
-    const newBlock = repo.create({
-      workspaceId,
-      content: trimmed,
-      properties: fromList(aliasProp([trimmed])),
-    })
-    jumpToBlock(newBlock.id)
+    const newId = uuidv4()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: newId,
+        workspaceId,
+        parentId: null,
+        orderKey: 'a0',
+        content: trimmed,
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode([trimmed])},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create page from QuickFind'})
+    jumpToBlock(newId)
   }
 
   const openDailyNote = async (iso: string) => {

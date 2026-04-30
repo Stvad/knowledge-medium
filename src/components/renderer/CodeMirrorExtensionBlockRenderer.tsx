@@ -79,5 +79,5 @@ export const CodeMirrorExtensionBlockRenderer: BlockRenderer = (props: BlockRend
   />
 
 CodeMirrorExtensionBlockRenderer.canRender = ({block}: BlockRendererProps) =>
-  block.dataSync()?.properties.type?.value === 'extension'
+  block.peek()?.properties.type === 'extension'
 CodeMirrorExtensionBlockRenderer.priority = () => 5

@@ -18,7 +18,7 @@ interface WikilinkComponentProps {
 }
 
 export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
-  const data = block.dataSync()
+  const data = block.peek()
   if (!data) return null
 
   // Block refs store alias === id (both the target UUID); page refs store the
