@@ -93,6 +93,20 @@ describe('Block.data / peek (sync)', () => {
     expect(() => b.data).toThrow(BlockNotFoundError)
   })
 
+  it('subscribe fires on transition into confirmed-missing (markMissing notifies)', async () => {
+    const b = new Block(env.repo, 'sub-missing')
+    const seen: Array<unknown> = []
+    const unsub = b.subscribe(d => seen.push(d))
+    try {
+      await env.repo.load('sub-missing')
+      expect(b.peek()).toBeNull()
+      // Listener fired once with the new state (null = confirmed missing).
+      expect(seen).toEqual([null])
+    } finally {
+      unsub()
+    }
+  })
+
   it('the missing marker clears once a snapshot lands (sync-applied insert)', async () => {
     const b = new Block(env.repo, 'late-arrival')
     await env.repo.load('late-arrival')

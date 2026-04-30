@@ -159,9 +159,16 @@ export class BlockCache {
   /** Mark `id` as confirmed-missing — `repo.load` looked it up and the
    *  row didn't exist (or was soft-deleted). Block.peek will return
    *  null instead of undefined; Block.data will throw
-   *  BlockNotFoundError instead of BlockNotLoadedError. */
-  markMissing(id: string): void {
+   *  BlockNotFoundError instead of BlockNotLoadedError.
+   *  Notifies subscribers on the first transition into missing — a
+   *  subscribed Block facade re-renders when its row is confirmed
+   *  gone. Repeat calls (already missing) are no-ops to avoid
+   *  spurious re-renders. */
+  markMissing(id: string): boolean {
+    if (this.missingIds.has(id)) return false
     this.missingIds.add(id)
+    this.notify(id)
+    return true
   }
 
   /** True iff `id` was previously confirmed-missing AND no snapshot
@@ -171,9 +178,15 @@ export class BlockCache {
   }
 
   /** Clear the confirmed-missing marker — used by tests or by the
-   *  row_events tail when a sync-applied insert means we should re-check. */
-  clearMissing(id: string): void {
-    this.missingIds.delete(id)
+   *  row_events tail when a sync-applied insert means we should re-check.
+   *  Notifies subscribers if the marker was actually cleared so the
+   *  facade exits the "confirmed-missing" branch on its next read.
+   *  (setSnapshot also clears the marker, but it always notifies
+   *  on its own as part of the snapshot-update path.) */
+  clearMissing(id: string): boolean {
+    if (!this.missingIds.delete(id)) return false
+    this.notify(id)
+    return true
   }
 
   /** Children of `parentId` from the cache, ordered by `(orderKey, id)`,

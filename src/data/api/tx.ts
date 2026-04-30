@@ -130,11 +130,18 @@ export interface Tx {
   /** Children of `parentId`, ordered `(order_key, id)`, filtered
    *  `deleted = 0`. Reads SQL via the writeTransaction.
    *  Pass `null` to enumerate workspace-root rows (rows with
-   *  `parent_id IS NULL`); within a single-workspace tx the result is
-   *  scoped to the pinned workspace_id when one exists, otherwise
-   *  spans all root rows the cache can see (rare; only relevant for
-   *  the very first write of a tx that re-roots). */
-  childrenOf(parentId: string | null): Promise<BlockData[]>
+   *  `parent_id IS NULL`); the result is scoped to a workspace by
+   *  one of three sources, in priority order:
+   *    1. explicit `workspaceId` argument (use this when the tx
+   *       hasn't pinned a workspace yet and you know the right one
+   *       from a sibling/parent row you already read);
+   *    2. the tx's pinned workspace (`tx.meta.workspaceId`) when set;
+   *    3. throws `WorkspaceNotPinnedError` otherwise — returning
+   *       cross-workspace rows is never safe for sibling-position
+   *       computation.
+   *  When `parentId !== null`, `workspaceId` is ignored — the parent
+   *  row already constrains the query. */
+  childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]>
 
   /** Parent of `childId`, or null if `childId` has no parent or doesn't
    *  exist. Reads SQL via the writeTransaction. */

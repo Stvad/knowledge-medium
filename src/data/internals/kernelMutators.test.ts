@@ -186,6 +186,34 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
     const id = await env.repo.mutate.createSiblingBelow({siblingId: 'r1', id: 'r-below'}) as string
     expect(await env.childIds(null)).toEqual(['r1', id, 'r2'])
   })
+
+  it('createSiblingAbove on a root block scopes the sibling lookup to the sibling\'s workspace (no cross-workspace leak)', async () => {
+    // ws-1 has r1 at order_key 'a0'.
+    // ws-2 has unrelated root rows at order_keys that would otherwise
+    // interleave with ws-1's order_key space if the lookup spilled.
+    // Pre-fix, the new sibling under ws-1 would be positioned against
+    // ws-2's roots, producing an order_key that doesn't sort correctly
+    // among ws-1's siblings.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a5'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      // Block before r1 in lex order, but in a DIFFERENT workspace.
+      await tx.create({id: 'ws2-root-a', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ws2-root-b', workspaceId: 'ws-2', parentId: null, orderKey: 'a9'})
+    }, {scope: ChangeScope.BlockDefault})
+    // createSiblingAbove({siblingId:'r1'}) should ONLY see ws-1's
+    // siblings — meaning it positions the new row at start of ws-1's
+    // root-sibling list (only r1 is there). It must not consider
+    // ws-2's rows (which would inject ordering noise).
+    const newId = await env.repo.mutate.createSiblingAbove({siblingId: 'r1', id: 'r-above'}) as string
+    // ws-1 root rows: new sibling first, then r1.
+    const ws1Roots = (await env.h.db.getAll<{id: string}>(
+      "SELECT id FROM blocks WHERE workspace_id = ? AND parent_id IS NULL AND deleted = 0 ORDER BY order_key, id",
+      ['ws-1'],
+    )).map(r => r.id)
+    expect(ws1Roots).toEqual([newId, 'r1'])
+  })
 })
 
 // ──── insertChildren ────

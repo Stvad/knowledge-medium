@@ -131,8 +131,6 @@ const SELECT_CHILDREN_SQL =
  *  on root blocks. */
 const SELECT_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
-const SELECT_ROOT_SIBLINGS_NO_WS_SQL =
-  `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 ORDER BY order_key, id`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
@@ -401,16 +399,23 @@ export class TxImpl implements Tx {
 
   // ──── Within-tx tree primitives ────
 
-  async childrenOf(parentId: string | null): Promise<BlockData[]> {
+  async childrenOf(parentId: string | null, workspaceId?: string): Promise<BlockData[]> {
     if (parentId === null) {
       // SQL `parent_id = NULL` never matches; use `IS NULL`. Scope to
-      // the pinned workspace when available so root-level siblings of
-      // one workspace don't leak into another's tx.
-      const sql = this.workspacePinned
-        ? SELECT_ROOT_SIBLINGS_SQL
-        : SELECT_ROOT_SIBLINGS_NO_WS_SQL
-      const params = this.workspacePinned ? [this.meta.workspaceId] : []
-      const rows = await this.ctx.txDb.getAll<BlockRow>(sql, params)
+      // a workspace by one of: explicit arg → pinned meta → throw.
+      // Cross-workspace root listings would let kernel-mutator
+      // sibling-position helpers compute order against rows from
+      // another workspace (and `move({parentId: null, position:
+      // {before, siblingId}})` could even target a different
+      // workspace's sibling) — never safe, so we refuse rather than
+      // fall back to "all roots." Callers that read a sibling/parent
+      // first know the right workspace and pass it explicitly; the
+      // pinned-meta fallback covers post-first-write callers.
+      const ws = workspaceId ?? (this.workspacePinned ? this.meta.workspaceId : null)
+      if (ws === null) {
+        throw new WorkspaceNotPinnedError()
+      }
+      const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_ROOT_SIBLINGS_SQL, [ws])
       return rows.map(parseBlockRow)
     }
     const rows = await this.ctx.txDb.getAll<BlockRow>(SELECT_CHILDREN_SQL, [parentId])

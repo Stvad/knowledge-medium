@@ -40,19 +40,21 @@ const requireBlock = async (tx: Tx, id: string) => {
 /** Compute the order_key for inserting under `parentId` at a given
  *  `position`. Reads sibling list from SQL (tx.childrenOf is sorted by
  *  (order_key, id) per §11.4). `parentId === null` enumerates
- *  workspace-root siblings (scoped to the tx's pinned workspace), so
- *  createSiblingAbove / createSiblingBelow / move work on root-level
- *  blocks. */
+ *  workspace-root siblings; the caller passes `workspaceId` explicitly
+ *  so the lookup is scoped correctly even before the tx has pinned a
+ *  workspace via a write (kernel mutators read the sibling/parent row
+ *  first and have the workspace in hand at that point). */
 const orderKeyForInsert = async (
   tx: Tx,
   parentId: string | null,
+  workspaceId: string,
   position:
     | { kind: 'first' }
     | { kind: 'last' }
     | { kind: 'after'; siblingId: string }
     | { kind: 'before'; siblingId: string },
 ): Promise<string> => {
-  const siblings = await tx.childrenOf(parentId)
+  const siblings = await tx.childrenOf(parentId, workspaceId)
 
   if (position.kind === 'first') {
     return keyAtStart(siblings[0]?.orderKey ?? null)
@@ -201,7 +203,7 @@ export const createChild = defineMutator<CreateChildArgs, string>({
   apply: async (tx, args) => {
     const parent = await requireBlock(tx, args.parentId)
     if (parent.deleted) throw new ParentDeletedError(args.parentId)
-    const orderKey = await orderKeyForInsert(tx, args.parentId, args.position ?? {kind: 'last'})
+    const orderKey = await orderKeyForInsert(tx, args.parentId, parent.workspaceId, args.position ?? {kind: 'last'})
     return tx.create({
       id: args.id,
       workspaceId: parent.workspaceId,
@@ -241,7 +243,7 @@ export const createSiblingAbove = defineMutator<SiblingArgs, string>({
   apply: async (tx, args) => {
     const sibling = await requireBlock(tx, args.siblingId)
     await requireLiveParent(tx, sibling.parentId)
-    const orderKey = await orderKeyForInsert(tx, sibling.parentId, {
+    const orderKey = await orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
       kind: 'before',
       siblingId: args.siblingId,
     })
@@ -266,7 +268,7 @@ export const createSiblingBelow = defineMutator<SiblingArgs, string>({
   apply: async (tx, args) => {
     const sibling = await requireBlock(tx, args.siblingId)
     await requireLiveParent(tx, sibling.parentId)
-    const orderKey = await orderKeyForInsert(tx, sibling.parentId, {
+    const orderKey = await orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
       kind: 'after',
       siblingId: args.siblingId,
     })
@@ -375,8 +377,13 @@ export const move = defineMutator<MoveArgs, void>({
   scope: ChangeScope.BlockDefault,
   describe: ({id, parentId}) => `move ${id} → ${parentId ?? 'root'}`,
   apply: async (tx, args) => {
+    // Read the moving block first so we know which workspace's root
+    // siblings to enumerate when args.parentId is null. The block's
+    // workspace_id is immutable (server-side trigger enforces it), so
+    // it's also the destination workspace.
+    const self = await requireBlock(tx, args.id)
     await requireLiveParent(tx, args.parentId)
-    const orderKey = await orderKeyForInsert(tx, args.parentId, args.position)
+    const orderKey = await orderKeyForInsert(tx, args.parentId, self.workspaceId, args.position)
     await tx.move(args.id, {parentId: args.parentId, orderKey})
   },
 })
@@ -435,7 +442,9 @@ export const outdent = defineMutator<{id: string}, void>({
     // outdents — no root-level approximation needed.
     const grandparent = parent.parentId
     await requireLiveParent(tx, grandparent)
-    const grandSiblings = await tx.childrenOf(grandparent)
+    // Pass self.workspaceId so the null-grandparent case scopes
+    // correctly even before this tx pins a workspace.
+    const grandSiblings = await tx.childrenOf(grandparent, self.workspaceId)
     const parentIx = grandSiblings.findIndex(s => s.id === parent.id)
     let orderKey: string
     if (parentIx < 0) {
@@ -470,9 +479,11 @@ export const split = defineMutator<SplitArgs, string>({
     const suffix = self.content.slice(at)
     await tx.update(id, {content: prefix})
     // Compute order_key for the new sibling — between self and its next
-    // sibling. tx.childrenOf(null) handles root-level siblings now, so
-    // the same path works whether self is nested or at the workspace root.
-    const siblings = await tx.childrenOf(self.parentId)
+    // sibling. Pass self.workspaceId for the null-parent case so the
+    // root-sibling lookup is workspace-scoped (the pinned-meta would
+    // also work here since tx.update above already pinned, but the
+    // explicit pass is clearer and less brittle).
+    const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
     const ix = siblings.findIndex(s => s.id === id)
     const next = ix >= 0 ? siblings[ix + 1] : undefined
     const orderKey = keyBetween(self.orderKey, next?.orderKey ?? null)
