@@ -3,7 +3,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
-import { ChangeScope, type BlockData } from '@/data/api'
+import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { describeRuntime } from '@/agentRuntime/describeRuntime.ts'
@@ -179,13 +179,23 @@ const createRuntimeBlock = async (
 ): Promise<BlockData | null> => {
   const content = input.content ?? (input.data?.content as string | undefined) ?? ''
   const properties = input.properties ?? (input.data?.properties as Record<string, unknown> | undefined)
+  // Forward the agent's optional `data.id` / `data.references` to the
+  // mutator. Without these, deterministic-id callers and pre-populated
+  // reference rows can't be created through the runtime — agents had
+  // to reach for the eval channel to do anything beyond plain content
+  // + properties, which breaks tooling that uses createBlock as the
+  // canonical surface.
+  const explicitId = input.data?.id as string | undefined
+  const references = input.data?.references as BlockReference[] | undefined
 
   if (input.parentId) {
     const id = await repo.mutate.createChild({
       parentId: input.parentId,
       content,
       properties,
+      references,
       position: mapPosition(input.position),
+      id: explicitId,
     }) as string
     return repo.load(id)
   }
@@ -197,7 +207,7 @@ const createRuntimeBlock = async (
   if (!workspaceId) {
     throw new Error('createBlock with no parentId requires an active workspace')
   }
-  const id = (input.data?.id as string | undefined) ?? crypto.randomUUID()
+  const id = explicitId ?? crypto.randomUUID()
   await repo.tx(async tx => {
     await tx.create({
       id,
@@ -206,6 +216,7 @@ const createRuntimeBlock = async (
       orderKey: (input.data?.orderKey as string | undefined) ?? 'a0',
       content,
       properties,
+      references,
     })
   }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
   return repo.load(id)
