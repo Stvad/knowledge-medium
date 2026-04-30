@@ -82,6 +82,13 @@ export class Repo {
   readonly db: PowerSyncDb
   readonly cache: BlockCache
   user: User
+  /** Read-only mode disables `BlockDefault` / `References` writes;
+   *  UI-state writes still pass through (they route to local-ephemeral
+   *  source unconditionally per spec §5.8 / §10). Mutate via
+   *  `repo.setReadOnly(value)` rather than direct field assignment so
+   *  callers from inside React hooks don't trip
+   *  `react-hooks/immutability` lint (the mutation should travel
+   *  through a method, not a property write). */
   isReadOnly: boolean
 
   private readonly now: () => number
@@ -401,6 +408,16 @@ export class Repo {
 
   setActiveWorkspaceId(workspaceId: string | null): void {
     this._activeWorkspaceId = workspaceId
+  }
+
+  /** Toggle read-only mode. Wrapping the field write in a method
+   *  keeps call sites that come from inside React hooks lint-clean
+   *  (`react-hooks/immutability` flags direct property writes on
+   *  hook outputs). UI-state writes still pass through regardless of
+   *  this flag — only `BlockDefault` / `References` scopes are
+   *  blocked (per spec §10.3). */
+  setReadOnly(value: boolean): void {
+    this.isReadOnly = value
   }
 
   /** Run a transactional session. Spec §3, §10. */

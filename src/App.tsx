@@ -123,7 +123,7 @@ const getInitialBlock = memoize(
     // edits attempted in the meantime would be RLS-rejected server-side
     // anyway.
     const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
-    repo.isReadOnly = role === 'viewer'
+    repo.setReadOnly(role === 'viewer')
 
     rememberWorkspace(workspaceId)
 
@@ -138,9 +138,13 @@ const getInitialBlock = memoize(
     // Freshly inserted personal workspace: install the starter tutorial
     // as its own parent-less page. The [[Tutorial]] bullet on today's
     // daily note (added below) makes it discoverable from the landing
-    // page without hijacking it.
+    // page without hijacking it. AWAIT the seed tx so the Tutorial
+    // alias row exists before parseReferences (post-commit processor)
+    // runs against the wiki-link bullet — otherwise parseReferences
+    // creates a fresh empty alias target for "Tutorial" and the
+    // bullet points at that orphan instead of the real seeded page.
     if (freshlyCreated) {
-      void seedTutorial(repo, workspaceId)
+      await seedTutorial(repo, workspaceId)
     }
 
     // Land on today's daily note. getOrCreateDailyNote is idempotent
@@ -208,7 +212,7 @@ const App = () => {
   const activeRole = rolesByWorkspaceId.get(activeWorkspaceId)
   useEffect(() => {
     if (!activeRole) return
-    repo.isReadOnly = activeRole === 'viewer'
+    repo.setReadOnly(activeRole === 'viewer')
   }, [activeRole, repo])
 
   return (

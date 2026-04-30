@@ -27,6 +27,14 @@ import type { Repo } from '@/data/internals/repo'
 const EMPTY_CHILD_IDS: string[] = []
 const EMPTY_BACKLINK_IDS: string[] = []
 
+/** Module-level sentinel for "first-call, no source yet" in the
+ *  selector memo. Module-level (not a useRef) so we don't read .current
+ *  during render (`react-hooks/refs` lint), and Symbol so the value is
+ *  unambiguously distinct from `undefined` (which is a legitimate
+ *  source snapshot for an unloaded block). */
+const SELECTOR_NEVER_SET = Symbol('useDataWithSelector.neverSet')
+type SelectorNeverSet = typeof SELECTOR_NEVER_SET
+
 const areSelectedValuesEqual = <T,>(left: T, right: T) => {
   if (Object.is(left, right)) return true
   if (
@@ -100,13 +108,12 @@ export const useDataWithSelector = <T,>(
   // eslint-disable-next-line react-hooks/refs
   equalityRef.current = isSelectionEqual
 
-  // Snapshot-identity memo for getSnapshot stability. SOURCE_NEVER_SET
-  // is the sentinel for "first call" — we can't use undefined because
-  // the source snapshot can legitimately be undefined (block not
-  // loaded yet) and we'd then refuse to seed the cache.
-  const SOURCE_NEVER_SET = useRef<BlockData | undefined>(undefined).current
-  const lastSourceRef = useRef<BlockData | undefined | typeof SOURCE_NEVER_SET>(
-    SOURCE_NEVER_SET,
+  // Snapshot-identity memo for getSnapshot stability. The first call
+  // initializes from SELECTOR_NEVER_SET (module-level Symbol); every
+  // subsequent call compares the source snapshot identity + selector
+  // identity to decide whether to recompute or return the cached value.
+  const lastSourceRef = useRef<BlockData | undefined | SelectorNeverSet>(
+    SELECTOR_NEVER_SET,
   )
   const lastSelectionRef = useRef<T | undefined>(undefined)
   const lastSelectorRef = useRef<typeof selector | undefined>(undefined)
@@ -117,7 +124,7 @@ export const useDataWithSelector = <T,>(
     (): T => {
       const source = repo.cache.getSnapshot(block.id)
       const cached =
-        lastSourceRef.current !== SOURCE_NEVER_SET &&
+        lastSourceRef.current !== SELECTOR_NEVER_SET &&
         Object.is(source, lastSourceRef.current) &&
         lastSelectorRef.current === selectorRef.current
       if (cached) return lastSelectionRef.current as T
@@ -127,7 +134,7 @@ export const useDataWithSelector = <T,>(
       lastSelectionRef.current = next
       return next
     },
-    [repo, block.id, SOURCE_NEVER_SET],
+    [repo, block.id],
   )
 
   return useSyncExternalStore(
