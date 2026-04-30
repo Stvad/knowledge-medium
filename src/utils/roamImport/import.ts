@@ -144,11 +144,23 @@ export const importRoam = async (
       })
     }
 
-    // 5b. Descendants. Each PreparedBlock carries its own parentId from
-    //     the planner; if its parentId points at a planned page that
-    //     reconciled to an existing block, swap to the final id.
-    for (const desc of plan.descendants) {
-      const data = applyReparent(desc.data, reparentMap)
+    // 5b. Non-daily pages. Pages must land BEFORE descendants — the
+    //     workspace-invariant trigger requires parent rows to exist
+    //     at insert time, and descendants are emitted leaves-first
+    //     (post-order) so their parents (intermediate blocks + the
+    //     page row) need to be in place. Daily pages were already
+    //     created in step 4. Merging pages get an alias union via
+    //     mergeIntoExistingPage; non-merging pages create the row.
+    for (const recon of reconciliations) {
+      if (recon.page.isDaily) continue
+      if (recon.merging) {
+        pagesMerged += 1
+        await mergeIntoExistingPage(tx, recon)
+        continue
+      }
+      pagesCreated += 1
+      if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
+      const data = recon.page.data
       await tx.createOrGet({
         id: data.id,
         workspaceId: data.workspaceId,
@@ -160,19 +172,14 @@ export const importRoam = async (
       })
     }
 
-    // 5c. Non-daily pages. Merging pages get an alias union + re-parent
-    //     of the planned children's referenced parent (already handled
-    //     above via reparentMap). Non-merging pages create the page row.
-    for (const recon of reconciliations) {
-      if (recon.page.isDaily) continue
-      if (recon.merging) {
-        pagesMerged += 1
-        await mergeIntoExistingPage(tx, recon)
-        continue
-      }
-      pagesCreated += 1
-      if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
-      const data = recon.page.data
+    // 5c. Descendants. The planner emits them in post-order (leaves
+    //     before parents); we iterate in reverse so each descendant's
+    //     parent is already in the table when its insert fires the
+    //     workspace-invariant trigger. Page ancestors were written
+    //     in 5b; intermediate descendants come from this loop.
+    for (let i = plan.descendants.length - 1; i >= 0; i--) {
+      const desc = plan.descendants[i]
+      const data = applyReparent(desc.data, reparentMap)
       await tx.createOrGet({
         id: data.id,
         workspaceId: data.workspaceId,
