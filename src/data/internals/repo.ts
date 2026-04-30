@@ -33,6 +33,8 @@ import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
 import { mutatorsFacet, postCommitProcessorsFacet } from './facets'
 import { ProcessorRunner } from './processorRunner'
 import { Block } from './block'
+import { UndoManager, type UndoEntry } from './undoManager'
+import type { TxImpl } from './txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
 import {
   SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
@@ -97,6 +99,10 @@ export class Repo {
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private readonly processorRunner: ProcessorRunner
+  /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
+   *  `repo.tx` records every undoable commit here; `repo.undo` /
+   *  `repo.redo` pop entries and replay them via `TxImpl.applyRaw`. */
+  readonly undoManager: UndoManager
   /** Identity-stable Block facades, keyed by id. Stage-2 of Phase 1
    *  upgrades these into ref-counted handles; for now they're plain
    *  facades cached so repeat `repo.block(id)` calls return the same
@@ -166,6 +172,7 @@ export class Repo {
     // baked into TxResult — we don't sync a registry into the runner
     // here.
     this.processorRunner = new ProcessorRunner(this, opts.db)
+    this.undoManager = new UndoManager()
     // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
     // need to alias `this` to a local. Each name lookup returns a
     // fresh dispatcher closure; that's fine, the underlying registry
@@ -430,6 +437,63 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
+    const result = await this._runAndDispatch(fn, opts)
+    // Step 7 of the §10 pipeline — record undo entry. UiState scope
+    // and zero-write txs are filtered inside `record`. Replays go
+    // through `_replay`, not here, so they don't add new history.
+    this.undoManager.record({
+      scope: opts.scope,
+      txId: result.txId,
+      snapshots: result.snapshots,
+      description: opts.description,
+    })
+    return result.value
+  }
+
+  /** Undo the most recent committed `repo.tx` for `scope`. Default
+   *  scope is `BlockDefault` (the cmd-Z target). Resolves to true if
+   *  an entry was popped + replayed, false if the stack was empty.
+   *  Replay opens its own `repo.tx` with `source = 'user'` so the
+   *  inverse syncs upstream just like the original write did (per the
+   *  spec's §7.3 + the follow-ups doc's "undo of a content edit
+   *  should sync the un-edit"). Throws `ReadOnlyError` in read-only
+   *  mode for non-UiState scopes — matches normal `repo.tx` gating. */
+  async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    const entry = this.undoManager.popUndo(scope)
+    if (entry === null) return false
+    try {
+      await this._replay(entry, 'before')
+      this.undoManager.pushRedo(scope, entry)
+      return true
+    } catch (err) {
+      // Replay failed — push the entry back so the user can retry
+      // (e.g. after toggling read-only off, fixing a missing parent).
+      this.undoManager.pushUndo(scope, entry)
+      throw err
+    }
+  }
+
+  /** Redo the most recently undone tx for `scope`. Same default + same
+   *  semantics as `undo`, mirrored. */
+  async redo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
+    const entry = this.undoManager.popRedo(scope)
+    if (entry === null) return false
+    try {
+      await this._replay(entry, 'after')
+      this.undoManager.pushUndo(scope, entry)
+      return true
+    } catch (err) {
+      this.undoManager.pushRedo(scope, entry)
+      throw err
+    }
+  }
+
+  /** Shared `runTx` + processor-dispatch path. Used by both `tx`
+   *  (records on undo stack) and `_replay` (does not). */
+  private async _runAndDispatch<R>(
+    fn: (tx: Tx) => Promise<R>,
+    opts: RepoTxOptions,
+  ) {
     const result = await runTx({
       db: this.db,
       cache: this.cache,
@@ -458,7 +522,29 @@ export class Repo {
       afterCommitJobs: result.afterCommitJobs,
       processors: result.processors,
     })
-    return result.value
+    return result
+  }
+
+  /** Replay an undo / redo entry. Opens a tx in the entry's scope and
+   *  raw-applies each (id → snap.before) (undo) or (id → snap.after)
+   *  (redo) via the engine-internal `applyRaw` primitive. Replays do
+   *  NOT push themselves onto the undo stack — the caller manages
+   *  stack motion (manager.pushRedo / manager.pushUndo) so the same
+   *  entry shuttles symmetrically between stacks. */
+  private async _replay(
+    entry: UndoEntry,
+    direction: 'before' | 'after',
+  ): Promise<void> {
+    const action = direction === 'before' ? 'undo' : 'redo'
+    const description = entry.description
+      ? `${action}: ${entry.description}`
+      : action
+    await this._runAndDispatch(async (tx) => {
+      const txImpl = tx as TxImpl
+      for (const [id, snap] of entry.snapshots) {
+        await txImpl.applyRaw(id, snap[direction])
+      }
+    }, {scope: entry.scope, description})
   }
 
   /** Dynamic dispatch — used by runtime-loaded plugins where the

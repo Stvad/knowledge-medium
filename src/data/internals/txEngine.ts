@@ -468,6 +468,98 @@ export class TxImpl implements Tx {
     })
   }
 
+  // ──── Engine-internal raw row applier (UndoManager only) ────
+
+  /** Drive the row at `id` to exactly `target` (or soft-delete if target
+   *  is null). Bypasses the public primitives — intentionally — because
+   *  undo replay restores arbitrary snapshot state that the narrow patch
+   *  shape of `tx.update` can't express (e.g. `parent_id` + `order_key`
+   *  + `deleted` flipping in one write). Spec §10 step 7 + the
+   *  BlockDataPatch comment in `api/blockData.ts`.
+   *
+   *  Cycle / parent-deleted UX checks are skipped: the snapshot was
+   *  captured from a previously-committed tx, so the target state is
+   *  known to be valid (the engine validated it then). The
+   *  workspace-invariant trigger still fires on UPDATE-of-parent_id, so
+   *  the storage-level guarantee holds. `updatedAt` / `updatedBy` are
+   *  stamped to the replay tx's user + now() — a redo at 10:01 by user
+   *  B is correctly attributed to B@10:01, not the original write.
+   *
+   *  Captures `(currentRow, applied)` into the snapshots map so the
+   *  pipeline's commit-walk updates the cache and fires handles for the
+   *  rolled-back row. */
+  async applyRaw(id: string, target: BlockData | null): Promise<void> {
+    const beforeRow = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
+    const beforeData = beforeRow === null ? null : parseBlockRow(beforeRow)
+    const now = this.ctx.now()
+    const userId = this.meta.user.id
+
+    if (target === null) {
+      // Inverse of a `create`: original tx wrote a new row; undo
+      // soft-deletes it. If the row vanished out from under us (v1
+      // doesn't hard-delete, so this is mostly defensive) or was
+      // already tombstoned, nothing to do.
+      if (beforeData === null || beforeData.deleted) return
+      const after: BlockData = {
+        ...beforeData,
+        deleted: true,
+        updatedAt: now,
+        updatedBy: userId,
+      }
+      await this.ctx.txDb.execute(
+        `UPDATE blocks SET deleted = 1, updated_at = ?, updated_by = ? WHERE id = ?`,
+        [now, userId, id],
+      )
+      this.pinWorkspace(beforeData.workspaceId)
+      recordWrite(this.ctx.snapshots, id, beforeData, after)
+      return
+    }
+
+    if (beforeData === null) {
+      // Row missing — re-INSERT to restore it. v1 has no hard-delete
+      // primitive, so reaching here means the row was purged through
+      // some non-tx path; we still try to restore. Engine fields
+      // (createdAt/createdBy/updatedAt/updatedBy) come from the
+      // captured target.
+      const inserted: BlockData = {
+        ...target,
+        updatedAt: now,
+        updatedBy: userId,
+      }
+      await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(inserted))
+      this.pinWorkspace(target.workspaceId)
+      recordWrite(this.ctx.snapshots, id, null, inserted)
+      return
+    }
+
+    // Row exists; UPDATE all non-immutable fields to match target.
+    // workspace_id, id, created_at, created_by are immutable by
+    // contract (§4.1.1) and the snapshot's values for these match
+    // the row's current values when the original tx pre-existed the
+    // row. updated_at / updated_by stamp the replay action.
+    const after: BlockData = {
+      ...target,
+      updatedAt: now,
+      updatedBy: userId,
+    }
+    await this.ctx.txDb.execute(
+      `UPDATE blocks SET parent_id = ?, order_key = ?, content = ?, properties_json = ?, references_json = ?, deleted = ?, updated_at = ?, updated_by = ? WHERE id = ?`,
+      [
+        target.parentId,
+        target.orderKey,
+        target.content,
+        JSON.stringify(target.properties),
+        JSON.stringify(target.references),
+        target.deleted ? 1 : 0,
+        now,
+        userId,
+        id,
+      ],
+    )
+    this.pinWorkspace(beforeData.workspaceId)
+    recordWrite(this.ctx.snapshots, id, beforeData, after)
+  }
+
   // ──── Internal helpers ────
 
   /** Validate that a write to `workspaceId` is allowed in this tx.
