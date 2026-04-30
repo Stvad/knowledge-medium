@@ -3,14 +3,14 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "yarn",
-      "runtimeArgs": ["dev"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec yarn dev"],
       "port": 5173
     },
     {
       "name": "agent-server",
-      "runtimeExecutable": "yarn",
-      "runtimeArgs": ["agent:server"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec yarn agent:server"],
       "port": 8787
     }
   ]
