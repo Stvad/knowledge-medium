@@ -1,13 +1,30 @@
 /**
- * React adapters over the new data-layer surface (Block facade +
- * BlockCache + Repo). Each hook is a thin `useSyncExternalStore`
- * wrapper around `cache.subscribe(id, listener)` + `cache.getSnapshot`,
- * with the same external signatures the legacy hooks exposed so the
- * call-site sweep stays mechanical.
+ * React adapters over the data-layer surface (spec §5.1, §9.5).
  *
- * Phase 2 (HandleStore + useHandle) replaces these with handle-based
- * implementations as a packaging refactor — same `useSyncExternalStore`
- * underneath, formal Handle<T> at the call site.
+ * Phase 2.D: every hook below is a thin wrapper over `useHandle(...)`,
+ * which is the React→Handle bridge:
+ *
+ *   - `useHandle(handle)` — `useSyncExternalStore` over `handle.peek()`
+ *     + `handle.subscribe()`. Optional `{selector, eq}` for derived
+ *     selections with snapshot-identity memoization (so selectors that
+ *     allocate, e.g. `doc => doc.children.map(...)`, don't violate
+ *     React's "getSnapshot must return a stable reference" rule).
+ *
+ * Behavior contract per hook:
+ *   - useData / useContent / useProperty: row-grain reactivity via
+ *     Block (which implements Handle<BlockData|null>).
+ *   - useChildIds / useChildren / useHasChildren: collection reactivity
+ *     via `repo.children(id)`. The HandleStore + TxEngine fast path +
+ *     row_events tail (Phase 2.C) drive invalidation; the per-hook
+ *     `db.onChange({tables: ['blocks']})` polling that the old shape
+ *     used is gone.
+ *   - useBacklinks: handle via `repo.backlinks(id)`. Same story —
+ *     no more ad-hoc throttled re-query, the engine handles it.
+ *   - useParents: handle via `repo.ancestors(id)`.
+ *   - useSubtree: handle via `repo.subtree(id)` (new in Phase 2.D).
+ *
+ * The legacy `useDataWithSelector` is gone — selectors move to the
+ * `useHandle(handle, {selector})` option.
  */
 
 import { isEqual } from 'lodash'
@@ -15,27 +32,20 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
 } from 'react'
-import type { BlockData, PropertySchema } from '@/data/api'
-import { useRepo } from '@/context/repo.tsx'
+import type { BlockData, Handle, PropertySchema } from '@/data/api'
 import { Block } from '@/data/internals/block'
-import type { Repo } from '@/data/internals/repo'
 
-const EMPTY_CHILD_IDS: string[] = []
-const EMPTY_BACKLINK_IDS: string[] = []
+const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
-/** Module-level sentinel for "first-call, no source yet" in the
- *  selector memo. Module-level (not a useRef) so we don't read .current
- *  during render (`react-hooks/refs` lint), and Symbol so the value is
- *  unambiguously distinct from `undefined` (which is a legitimate
- *  source snapshot for an unloaded block). */
-const SELECTOR_NEVER_SET = Symbol('useDataWithSelector.neverSet')
+/** Sentinel used by the snapshot-identity memo to distinguish "no source
+ *  has been observed yet" from `undefined` (a valid first source). */
+const SELECTOR_NEVER_SET = Symbol('useHandle.selectorNeverSet')
 type SelectorNeverSet = typeof SELECTOR_NEVER_SET
 
-const areSelectedValuesEqual = <T,>(left: T, right: T) => {
+const areSelectedValuesEqual = <T,>(left: T, right: T): boolean => {
   if (Object.is(left, right)) return true
   if (
     left === null ||
@@ -48,118 +58,130 @@ const areSelectedValuesEqual = <T,>(left: T, right: T) => {
   return isEqual(left, right)
 }
 
-/** Side-effect-only hook: kicks off `repo.load(block.id)` when the
- *  block changes. Idempotent — `repo.load` is internally dedup'd. */
-const useEnsureBlockLoaded = (block: Block) => {
-  const repo = useRepo()
-  useEffect(() => {
-    void repo.load(block.id)
-  }, [repo, block.id])
+const identitySelector = <V,>(v: V): V => v
+
+export interface UseHandleOptions<T, S> {
+  /** Project the handle's value before returning. The hook applies
+   *  snapshot-identity memoization so a selector that allocates (e.g.
+   *  `data => data.map(d => d.id)`) only re-runs when the underlying
+   *  value actually changes — required for `useSyncExternalStore` to
+   *  not loop. */
+  selector?: (value: T | undefined) => S
+  /** Custom equality test for the selected value. Default:
+   *  Object.is + lodash.isEqual deep fallback for objects/arrays. */
+  eq?: (a: S, b: S) => boolean
 }
 
-/** Reactive read of the block's BlockData snapshot. Returns
- *  `undefined` until the row is loaded; subsequent updates fire as
- *  the cache snapshot changes. */
-export const useData = (block: Block): BlockData | undefined => {
-  const repo = useRepo()
-  useEnsureBlockLoaded(block)
-
-  const subscribe = useCallback(
-    (listener: () => void) => repo.cache.subscribe(block.id, listener),
-    [repo, block.id],
-  )
-  const getSnapshot = useCallback(
-    () => repo.cache.getSnapshot(block.id),
-    [repo, block.id],
-  )
-
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+interface UseHandleState<T, S> {
+  selector: (v: T | undefined) => S
+  equality: (a: S, b: S) => boolean
+  /** Last source observed by `getSelection`. SELECTOR_NEVER_SET on the
+   *  first call (sentinel for "no source seen yet"). */
+  lastSource: T | undefined | SelectorNeverSet
+  /** Selection produced by the latest `selector(lastSource)` call. */
+  lastSelection: S | undefined
+  /** Selector identity at the time `lastSelection` was computed. Used
+   *  to invalidate the memo when the selector reference changes (a new
+   *  selector with the same source must re-run). */
+  lastSelector: ((v: T | undefined) => S) | undefined
 }
 
-/** Reactive read with a selector applied to the BlockData. The
- *  selector + equality fns may be inline lambdas; latest-ref pattern
- *  keeps `useSyncExternalStore`'s subscribe/getSnapshot identities
- *  stable across renders.
+/** React→Handle bridge. Subscribes to `handle.subscribe(...)`,
+ *  reads `handle.peek()` for the current value, and (best-effort) kicks
+ *  off `handle.load()` on mount when the handle is idle.
  *
- *  `getSnapshot` MUST return a stable reference while the underlying
- *  cache snapshot is unchanged — otherwise React may either cycle
- *  ("Cached snapshot inside store mutated") or warn about a render
- *  loop. Selectors that allocate (codec.list decode → fresh array,
- *  object spread, etc.) violate this if we naively re-call them on
- *  every getSnapshot. We memoize against the source snapshot
- *  identity: BlockCache reuses the deepFrozen snapshot reference
- *  until it actually changes, so `Object.is(prev, next)` is the
- *  correct "no underlying change" test. */
-export const useDataWithSelector = <T,>(
-  block: Block,
-  selector: (doc: BlockData | undefined) => T,
-  isSelectionEqual: (left: T, right: T) => boolean = areSelectedValuesEqual,
-): T => {
-  const repo = useRepo()
-  // Latest-ref pattern: capture the freshest selector / equality fns
-  // for getSnapshot to read during render. Mutating refs in render
-  // is the standard idiom for this useSyncExternalStore shape — a
-  // useLayoutEffect copy lags by one commit and would return stale
-  // selections on the same render that re-reads the store.
-  const selectorRef = useRef(selector)
-  const equalityRef = useRef(isSelectionEqual)
-  // eslint-disable-next-line react-hooks/refs
-  selectorRef.current = selector
-  // eslint-disable-next-line react-hooks/refs
-  equalityRef.current = isSelectionEqual
+ *  Without a selector, returns the handle's value (`T | undefined`).
+ *  With a selector, returns the selected value `S`. */
+export function useHandle<T>(handle: Handle<T>): T | undefined
+export function useHandle<T, S>(
+  handle: Handle<T>,
+  opts: UseHandleOptions<T, S> & { selector: (value: T | undefined) => S },
+): S
 
-  // Snapshot-identity memo for getSnapshot stability. The first call
-  // initializes from SELECTOR_NEVER_SET (module-level Symbol); every
-  // subsequent call compares the source snapshot identity + selector
-  // identity to decide whether to recompute or return the cached value.
-  const lastSourceRef = useRef<BlockData | undefined | SelectorNeverSet>(
-    SELECTOR_NEVER_SET,
-  )
-  const lastSelectionRef = useRef<T | undefined>(undefined)
-  const lastSelectorRef = useRef<typeof selector | undefined>(undefined)
+export function useHandle<T, S = T | undefined>(
+  handle: Handle<T>,
+  opts?: UseHandleOptions<T, S>,
+): S {
+  const selector = (opts?.selector ?? identitySelector) as (v: T | undefined) => S
+  const equality = opts?.eq ?? areSelectedValuesEqual
 
-  useEnsureBlockLoaded(block)
+  // Latest-state pattern via useState — React Compiler / React 19 lock
+  // down useRef objects against `.current` mutation during render, so
+  // we store the mutable bag inside a useState slot instead. The
+  // initialState factory runs once; we then mutate FIELDS of the
+  // returned plain object, which is permitted because the object
+  // itself isn't sealed by the runtime. Identity stays stable across
+  // renders, so closures that close over `state` always read the
+  // freshest selector / equality / memo state without re-subscribing.
+  const [state] = useState<UseHandleState<T, S>>(() => ({
+    selector,
+    equality,
+    lastSource: SELECTOR_NEVER_SET,
+    lastSelection: undefined,
+    lastSelector: undefined,
+  }))
+  state.selector = selector
+  state.equality = equality
 
-  const getSelection = useCallback(
-    (): T => {
-      const source = repo.cache.getSnapshot(block.id)
-      const cached =
-        lastSourceRef.current !== SELECTOR_NEVER_SET &&
-        Object.is(source, lastSourceRef.current) &&
-        lastSelectorRef.current === selectorRef.current
-      if (cached) return lastSelectionRef.current as T
-      const next = selectorRef.current(source)
-      lastSourceRef.current = source
-      lastSelectorRef.current = selectorRef.current
-      lastSelectionRef.current = next
-      return next
-    },
-    [repo, block.id],
-  )
+  const getSelection = useCallback((): S => {
+    const source = handle.peek()
+    const cached =
+      state.lastSource !== SELECTOR_NEVER_SET &&
+      Object.is(source, state.lastSource) &&
+      state.lastSelector === state.selector
+    if (cached) return state.lastSelection as S
+    const next = state.selector(source)
+    state.lastSource = source
+    state.lastSelector = state.selector
+    state.lastSelection = next
+    return next
+  }, [handle, state])
+
+  // Ensure-load: fire-and-forget on mount. Idempotent (LoaderHandle and
+  // Block both dedup their inflight load promise). The status() check
+  // prevents an unnecessary roundtrip when the handle is already ready.
+  useEffect(() => {
+    if (handle.status() === 'idle') {
+      void handle.load().catch(() => {/* error stored on the handle */})
+    }
+  }, [handle])
 
   return useSyncExternalStore(
     useCallback(
       (listener: () => void) => {
         let currentSelection = getSelection()
-        const unsubscribe = repo.cache.subscribe(block.id, () => {
+        const unsubscribe = handle.subscribe(() => {
           const nextSelection = getSelection()
-          if (equalityRef.current(currentSelection, nextSelection)) return
+          if (state.equality(currentSelection, nextSelection)) return
           currentSelection = nextSelection
           listener()
         })
-        // Best-effort kickoff load on subscribe (cheap if already cached).
-        void repo.load(block.id)
         return unsubscribe
       },
-      [repo, block.id, getSelection],
+      [handle, getSelection, state],
     ),
     getSelection,
     getSelection,
   )
 }
 
-/** Reactive typed property read + setter. The setter opens its own
- *  tx via `repo.mutate.setProperty` (whose scope derives from
+// ════════════════════════════════════════════════════════════════════
+// Row-grain hooks (Block-as-Handle)
+// ════════════════════════════════════════════════════════════════════
+
+/** Reactive read of the block's BlockData snapshot. `undefined` until
+ *  the row is loaded or when confirmed-missing — callers that need the
+ *  loading-vs-missing distinction read `block.status()` / `block.peek()`
+ *  directly. */
+export const useData = (block: Block): BlockData | undefined =>
+  useHandle(block, {selector: doc => doc ?? undefined})
+
+/** Reactive content read. `''` when not loaded. */
+export const useContent = (block: Block): string =>
+  useHandle(block, {selector: doc => doc?.content ?? ''})
+
+/** Reactive typed property read + setter. The setter opens its own tx
+ *  via `repo.mutate.setProperty` (whose scope derives from
  *  `schema.changeScope` — UiState writes go local-ephemeral, content
  *  writes upload). Returns `[value, setValue]` where value falls back
  *  to `schema.defaultValue` when the property isn't present. */
@@ -167,224 +189,86 @@ export function useProperty<T>(
   block: Block,
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] {
-  const value = useDataWithSelector(block, doc => {
-    if (!doc) return schema.defaultValue
-    const stored = doc.properties[schema.name]
-    if (stored === undefined) return schema.defaultValue
-    return schema.codec.decode(stored)
-  })
+  const value = useHandle(block, {
+    selector: doc => {
+      if (!doc) return schema.defaultValue
+      const stored = doc.properties[schema.name]
+      if (stored === undefined) return schema.defaultValue
+      return schema.codec.decode(stored)
+    },
+  }) as T
 
   const setValue = useCallback(
-    (next: T) => {
-      void block.set(schema, next)
-    },
+    (next: T) => { void block.set(schema, next) },
     [block, schema],
   )
 
   return [value, setValue]
 }
 
-/** Alias kept for migration parity with the legacy hook name. The
- *  legacy `usePropertyValue` returned the property's `.value`; under
- *  the flat shape that distinction is gone and the new hook returns
- *  the typed value directly. Identical to `useProperty`. */
+/** Alias kept for migration parity with the legacy hook name. */
 export const usePropertyValue = useProperty
 
-/** Reactive content read. `''` when not loaded. */
-export const useContent = (block: Block): string =>
-  useDataWithSelector(block, doc => doc?.content ?? '')
+// ════════════════════════════════════════════════════════════════════
+// Collection hooks (LoaderHandles)
+// ════════════════════════════════════════════════════════════════════
 
-/** Reactive child-id list. The hook owns hydration: on mount and on
- *  every `repo.db.onChange({tables: ['blocks']})` notification, it
- *  re-issues `repo.load(parentId, {children: true})` so the cache
- *  picks up sync-applied inserts (which write to SQL but don't go
- *  through the TxEngine cache walk). After each load resolves, the
- *  hook recomputes from `cache.childrenOf` and bumps state only when
- *  the id list actually shifted.
- *
- *  Why not just rely on `cache.subscribe(parentId)`: the row-grain
- *  cache subscription only fires for changes to the parent's own
- *  snapshot; sibling-row inserts and deletes don't notify it. The
- *  table-grain `db.onChange` is the substitute until Phase 2 ships
- *  the row_events tail (which can pin invalidation to the relevant
- *  parent ids). The throttle keeps typing-bursts cheap.
- *
- *  Cold render: `cache.areChildrenLoaded(parentId)` is false until
- *  the first `repo.load({children: true})` resolves, so the initial
- *  state reads as []. Once the load lands, the next setChildIds
- *  picks up the populated list. */
+/** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
+ *  while the children handle is loading or for a leaf block; the
+ *  `repo.children(id)` handle re-resolves on local writes (TxEngine
+ *  fast path) and sync arrivals (row_events tail). */
 export const useChildIds = (block: Block): string[] => {
-  const repo = useRepo()
-  const [childIds, setChildIds] = useState<string[]>(() =>
-    safeChildIds(repo, block.id),
-  )
-
-  useEffect(() => {
-    let cancelled = false
-    const refresh = () => {
-      if (cancelled) return
-      setChildIds(prev => {
-        const next = safeChildIds(repo, block.id)
-        return arraysEqual(prev, next) ? prev : next
-      })
-    }
-    const reloadAndRefresh = async () => {
-      try {
-        await repo.load(block.id, {children: true})
-      } catch (error) {
-        if (!cancelled) console.warn('useChildIds load failed', error)
-      }
-      refresh()
-    }
-    // Cold-mount kickoff. The deduped load handles concurrent calls.
-    void reloadAndRefresh()
-
-    const unsubscribeCache = repo.cache.subscribe(block.id, refresh)
-    const unsubscribeDb = repo.db.onChange(
-      {
-        onChange: () => {
-          // Re-load children from SQL (catches sync-applied inserts
-          // that didn't pass through the cache walk), then refresh.
-          void reloadAndRefresh()
-        },
-        onError: (error) => {
-          console.warn('useChildIds onChange error', error)
-        },
-      },
-      {tables: ['blocks'], throttleMs: 32},
-    )
-    return () => {
-      cancelled = true
-      unsubscribeCache()
-      unsubscribeDb()
-    }
-  }, [repo, block.id])
-
-  return childIds
+  const data = useHandle(block.repo.children(block.id))
+  return useMemo(() => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => d.id), [data])
 }
 
-const safeChildIds = (repo: Repo, parentId: string): string[] => {
-  if (!repo.cache.areChildrenLoaded(parentId)) {
-    // Children not loaded yet — return empty rather than throwing.
-    // Callers wanting strict gating use `block.childIds` directly.
-    return EMPTY_CHILD_IDS
-  }
-  return repo.cache.childrenOf(parentId).map(c => c.id)
-}
-
-const arraysEqual = (a: string[], b: string[]): boolean => {
-  if (a === b) return true
-  if (a.length !== b.length) return false
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
-  return true
-}
-
-/** Reactive child Block facades (one per id). */
+/** Reactive child Block facades. */
 export const useChildren = (block: Block): Block[] => {
-  const ids = useChildIds(block)
+  const data = useHandle(block.repo.children(block.id))
   const repo = block.repo
-  return useMemo(() => ids.map(id => repo.block(id)), [ids, repo])
-}
-
-/** Whether the block has children. */
-export const useHasChildren = (block: Block): boolean =>
-  useChildIds(block).length > 0
-
-/** Walk parent chain from cached snapshots (synchronous). Returns
- *  what's currently in cache; missing links short-circuit so we
- *  never render stale chains. */
-const computeParentsFromCache = (repo: Repo, blockId: string): Block[] => {
-  const result: Block[] = []
-  const seen = new Set<string>([blockId])
-  let currentId: string | undefined = blockId
-  while (currentId) {
-    const data = repo.cache.getSnapshot(currentId)
-    if (!data?.parentId || seen.has(data.parentId)) break
-    seen.add(data.parentId)
-    result.unshift(repo.block(data.parentId))
-    currentId = data.parentId
-  }
-  return result
-}
-
-/** Returns the parent chain for a block reactively, without suspending.
- *  Initial render uses the cached chain; an effect then asks the repo
- *  to load any missing ancestors and updates state when they arrive. */
-export const useParents = (block: Block): Block[] => {
-  const repo = useRepo()
-  const blockId = block.id
-  const [parents, setParents] = useState<Block[]>(() =>
-    computeParentsFromCache(repo, blockId),
-  )
-
-  useEffect(() => {
-    setParents(computeParentsFromCache(repo, blockId))
-    let cancelled = false
-    void repo.load(blockId, {ancestors: true}).then(() => {
-      if (cancelled) return
-      setParents(prev => {
-        const next = computeParentsFromCache(repo, blockId)
-        const sameChain =
-          next.length === prev.length &&
-          next.every((p, i) => p.id === prev[i]?.id)
-        return sameChain ? prev : next
-      })
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [repo, blockId])
-
-  return parents
-}
-
-/** Returns the set of blocks whose `references` field points at
- *  `block.id`, reactively re-querying when any block changes
- *  (writes flush to row_events). Throttled to keep typing-bursts
- *  cheap. */
-export const useBacklinks = (block: Block): Block[] => {
-  const repo = useRepo()
-  const [backlinkIds, setBacklinkIds] = useState<string[]>(EMPTY_BACKLINK_IDS)
-
-  const blockId = block.id
-  useEffect(() => {
-    let cancelled = false
-    const refresh = async () => {
-      const workspaceId =
-        repo.cache.getSnapshot(blockId)?.workspaceId ?? repo.activeWorkspaceId
-      if (!workspaceId) return
-      try {
-        const blocks = await repo.findBacklinks(workspaceId, blockId)
-        if (cancelled) return
-        const nextIds = blocks.map(b => b.id)
-        setBacklinkIds(prev => (isEqual(prev, nextIds) ? prev : nextIds))
-      } catch (error) {
-        if (!cancelled) console.warn('useBacklinks query failed', error)
-      }
-    }
-
-    void refresh()
-
-    const dispose = repo.db.onChange(
-      {
-        onChange: () => {
-          void refresh()
-        },
-        onError: (error) => {
-          console.warn('useBacklinks onChange error', error)
-        },
-      },
-      {tables: ['row_events'], throttleMs: 250},
-    )
-
-    return () => {
-      cancelled = true
-      dispose()
-    }
-  }, [repo, blockId])
-
   return useMemo(
-    () => backlinkIds.map(id => repo.block(id)),
-    [backlinkIds, repo],
+    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+    [data, repo],
+  )
+}
+
+/** Whether the block has children. Selector keeps re-renders pinned to
+ *  the boolean — content edits inside a child don't bounce this hook. */
+export const useHasChildren = (block: Block): boolean =>
+  useHandle(block.repo.children(block.id), {
+    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).length > 0,
+  })
+
+/** Reactive parent chain (root → … → immediate parent), excluding
+ *  `block` itself. */
+export const useParents = (block: Block): Block[] => {
+  const data = useHandle(block.repo.ancestors(block.id))
+  const repo = block.repo
+  return useMemo(
+    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+    [data, repo],
+  )
+}
+
+/** Reactive backlinks — every block in `block`'s workspace whose
+ *  `references` field points at `block.id`. */
+export const useBacklinks = (block: Block): Block[] => {
+  const data = useHandle(block.repo.backlinks(block.id))
+  const repo = block.repo
+  return useMemo(
+    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+    [data, repo],
+  )
+}
+
+/** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
+ *  Phase 2.D for parity with the four `repo.X` factories; existing
+ *  call sites can adopt incrementally. */
+export const useSubtree = (block: Block): Block[] => {
+  const data = useHandle(block.repo.subtree(block.id))
+  const repo = block.repo
+  return useMemo(
+    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+    [data, repo],
   )
 }

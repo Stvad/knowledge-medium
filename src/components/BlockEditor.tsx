@@ -11,7 +11,7 @@ import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'rea
 import { useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
-import { useData, useDataWithSelector } from '@/hooks/block.ts'
+import { useData, useHandle } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 import { EditorView } from '@codemirror/view'
 import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
@@ -36,18 +36,15 @@ export const BlockEditor = ({
   const [, setIsEditing] = useIsEditing()
   const initialContent = useRef(blockData?.content ?? '')
   const uiStateBlock = useUIStateBlock()
-  const focusedBlockId = useDataWithSelector(
-    uiStateBlock,
-    doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
-  )
-  const isEditing = useDataWithSelector(
-    uiStateBlock,
-    doc => Boolean(doc?.properties[isEditingProp.name]),
-  )
-  const focusRequestId = useDataWithSelector(
-    uiStateBlock,
-    doc => (doc?.properties[editorFocusRequestProp.name] as number | undefined) ?? 0,
-  )
+  const focusedBlockId = useHandle(uiStateBlock, {
+    selector: doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
+  })
+  const isEditing = useHandle(uiStateBlock, {
+    selector: doc => Boolean(doc?.properties[isEditingProp.name]),
+  })
+  const focusRequestId = useHandle(uiStateBlock, {
+    selector: doc => (doc?.properties[editorFocusRequestProp.name] as number | undefined) ?? 0,
+  })
 
   // useRef-wrapped debounce is the per-component-instance idiom; its
   // body runs on debounce-fire (not during render), so the ref writes

@@ -39,7 +39,7 @@ import {
   isEditingProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { usePropertyValue, useDataWithSelector } from '@/hooks/block'
+import { usePropertyValue, useHandle } from '@/hooks/block'
 
 /**
  * One of core principles of the system is to store all state within the system.
@@ -294,28 +294,28 @@ export const resetBlockSelection = async (uiStateBlock: Block): Promise<void> =>
 }
 
 export const useInFocus = (blockId: string): boolean =>
-  useDataWithSelector(
-    useUIStateBlock(),
-    doc => doc?.properties[focusedBlockIdProp.name] === blockId,
-  )
+  useHandle(useUIStateBlock(), {
+    selector: doc => doc?.properties[focusedBlockIdProp.name] === blockId,
+  })
 
 export const useIsSelected = (blockId: string): boolean =>
-  useDataWithSelector(useUIStateBlock(), doc => {
-    const stored = doc?.properties[selectionStateProp.name]
-    if (stored === undefined) return false
-    const sel = selectionStateProp.codec.decode(stored)
-    return sel.selectedBlockIds.includes(blockId)
+  useHandle(useUIStateBlock(), {
+    selector: doc => {
+      const stored = doc?.properties[selectionStateProp.name]
+      if (stored === undefined) return false
+      const sel = selectionStateProp.codec.decode(stored)
+      return sel.selectedBlockIds.includes(blockId)
+    },
   })
 
 export const useInEditMode = (blockId: string): boolean => {
   const uiStateBlock = useUIStateBlock()
-  const focusedBlockId = useDataWithSelector(
-    uiStateBlock,
-    doc => doc?.properties[focusedBlockIdProp.name],
-  )
-  const isEditing = useDataWithSelector(uiStateBlock, doc =>
-    Boolean(doc?.properties[isEditingProp.name]),
-  )
+  const focusedBlockId = useHandle(uiStateBlock, {
+    selector: doc => doc?.properties[focusedBlockIdProp.name],
+  })
+  const isEditing = useHandle(uiStateBlock, {
+    selector: doc => Boolean(doc?.properties[isEditingProp.name]),
+  })
   return focusedBlockId === blockId && isEditing
 }
 
