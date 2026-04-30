@@ -26,12 +26,14 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ProcessorNotRegisteredError,
   ReadOnlyError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
   codecs,
   defineMutator,
   defineProperty,
+  definePostCommitProcessor,
   type Mutator,
   type Schema,
 } from '@/data/api'
@@ -55,6 +57,19 @@ const dateProp = defineProperty<Date | undefined>('due-date', {
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
   kind: 'date',
+})
+
+/** Explicit-watching test processor used by the afterCommit tests. The
+ *  apply fn is a no-op — engine tests pin scheduling/rollback semantics,
+ *  not what the processor does. Registered via `__setProcessorsForTesting`
+ *  in `setup()` so `tx.afterCommit('test.afterCommitProbe', ...)` passes
+ *  the §5.7 enqueue-time validation. */
+const afterCommitProbeProcessor = definePostCommitProcessor<{fromBlockId: string}>({
+  name: 'test.afterCommitProbe',
+  scope: ChangeScope.BlockDefault,
+  watches: { kind: 'explicit' },
+  scheduledArgsSchema: stringSchema<{fromBlockId: string}>(),
+  apply: async () => {},
 })
 
 interface Harness {
@@ -90,6 +105,10 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
     // empty and let the parseReferences integration tests cover it.
     registerKernelProcessors: false,
   })
+  // Register only the local test probe — afterCommit tests use it to
+  // schedule explicit jobs. The rest of the engine tests don't call
+  // afterCommit so the registry stays effectively empty for them.
+  repo.__setProcessorsForTesting([afterCommitProbeProcessor])
   return {
     h,
     cache,
@@ -232,7 +251,7 @@ describe('tx.createOrGet', () => {
       const r = await tx.createOrGet({id: 'det-livehit', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       expect(r).toEqual({id: 'det-livehit', inserted: false})
       expect(tx.meta.workspaceId).toBeNull()
-      tx.afterCommit('core.parseReferences', {fromBlockId: 'det-livehit'})
+      tx.afterCommit('test.afterCommitProbe', {fromBlockId: 'det-livehit'})
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(WorkspaceNotPinnedError)
   })
 
@@ -459,17 +478,24 @@ describe('single-workspace invariant', () => {
 describe('tx.afterCommit', () => {
   it('throws WorkspaceNotPinnedError when called before any write', async () => {
     await expect(env.repo.tx(async tx => {
-      tx.afterCommit('core.parseReferences', {})
+      tx.afterCommit('test.afterCommitProbe', {fromBlockId: 'x'})
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(WorkspaceNotPinnedError)
+  })
+
+  it('throws ProcessorNotRegisteredError when the target name is unknown', async () => {
+    await expect(env.repo.tx(async tx => {
+      await tx.create({id: 'ac-unreg', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      tx.afterCommit('test.notRegistered', {fromBlockId: 'ac-unreg'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toThrow(ProcessorNotRegisteredError)
+    // Tx rolled back — the create above is undone.
+    expect(env.cache.getSnapshot('ac-unreg')).toBeUndefined()
   })
 
   it('schedules a job after a write has pinned workspaceId', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'ac-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
-      tx.afterCommit('core.parseReferences', {fromBlockId: 'ac-1'}, {delayMs: 100})
+      tx.afterCommit('test.afterCommitProbe', {fromBlockId: 'ac-1'}, {delayMs: 100})
     }, {scope: ChangeScope.BlockDefault})
-    // Stage 1.3: job is collected but not dispatched (the framework
-    // that runs them lands in stage 1.5). The tx commits cleanly.
     expect(env.cache.getSnapshot('ac-1')).toBeDefined()
   })
 
@@ -477,7 +503,7 @@ describe('tx.afterCommit', () => {
     let dispatched = false
     await expect(env.repo.tx(async tx => {
       await tx.create({id: 'ac-roll', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
-      tx.afterCommit('core.parseReferences', {fromBlockId: 'ac-roll'})
+      tx.afterCommit('test.afterCommitProbe', {fromBlockId: 'ac-roll'})
       dispatched = false
       throw new Error('boom')
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow('boom')

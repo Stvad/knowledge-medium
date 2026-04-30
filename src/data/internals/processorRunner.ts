@@ -53,6 +53,11 @@ export interface CommittedTxOutcome {
   snapshots: SnapshotsMap
   /** afterCommit jobs scheduled by the user fn. */
   afterCommitJobs: AfterCommitJob[]
+  /** Processor registry snapshot taken at tx start (spec §3, §8). The
+   *  runner iterates this — not its own current registry — so a
+   *  `setFacetRuntime` call landing mid-flight can't change which
+   *  processors fire (or with what apply fn) for an already-running tx. */
+  processors: ReadonlyMap<string, AnyPostCommitProcessor>
 }
 
 /** Internal helper — convert a snapshots map entry into a ChangedRow. */
@@ -95,7 +100,6 @@ const collectFieldMatches = (
 }
 
 export class ProcessorRunner {
-  private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private readonly repo: Repo
   private readonly db: PowerSyncDb
   /** In-flight processor promises. Tracked so tests (and any caller
@@ -122,22 +126,13 @@ export class ProcessorRunner {
     }
   }
 
-  /** Replace the registry from a Map (typically read off the
-   *  postCommitProcessorsFacet contributions during Repo.setFacetRuntime). */
-  setRegistry(processors: ReadonlyMap<string, AnyPostCommitProcessor>): void {
-    this.processors = new Map(processors)
-  }
-
-  /** Look up by name; used by `tx.afterCommit` for `scheduledArgsSchema`
-   *  validation at enqueue time (called from inside the originating
-   *  tx so a bad arg can fail the tx). */
-  lookup(name: string): AnyPostCommitProcessor | undefined {
-    return this.processors.get(name)
-  }
-
   /** Dispatch all matching processors for one committed tx. Called by
-   *  Repo after `repo.tx` resolves. Errors in any one processor are
-   *  caught + logged; subsequent ones still run. */
+   *  Repo after `repo.tx` resolves. Walks the tx's processor snapshot
+   *  (`outcome.processors`), not the runner's current registry — that's
+   *  the §3/§8 contract: a tx fires the processors that were registered
+   *  when it started, even if `setFacetRuntime` has since replaced them.
+   *  Errors in any one processor are caught + logged; subsequent ones
+   *  still run. */
   async dispatch(outcome: CommittedTxOutcome): Promise<void> {
     if (outcome.workspaceId === null) {
       // Zero-write tx — no field-watching processors fire (no
@@ -147,7 +142,7 @@ export class ProcessorRunner {
     }
 
     // Field-watching processors: fire each at most once per tx.
-    for (const [name, processor] of this.processors) {
+    for (const [name, processor] of outcome.processors) {
       if (processor.watches.kind !== 'field') continue
       const changedRows = collectFieldMatches(processor, outcome.snapshots)
       if (changedRows.length === 0) continue
@@ -160,21 +155,25 @@ export class ProcessorRunner {
       this.track(this.runOne(processor, event, name))
     }
 
-    // Explicit processors: one job per `tx.afterCommit` call.
+    // Explicit processors: one job per `tx.afterCommit` call. The tx's
+    // afterCommit primitive validates registration + watches.kind +
+    // scheduledArgs at enqueue time (txEngine.afterCommit), so under
+    // normal flow every job here corresponds to a still-valid processor
+    // in `outcome.processors`. The defensive checks below catch the
+    // pathological case of the snapshot itself being mutated post-tx
+    // (which shouldn't happen — we hand out a frozen Map) and log
+    // instead of crashing the dispatcher.
     for (const job of outcome.afterCommitJobs) {
-      const processor = this.processors.get(job.processorName)
+      const processor = outcome.processors.get(job.processorName)
       if (processor === undefined) {
-        // Registered when the schedule landed; gone now (plugin
-        // disabled mid-flight). Log and continue — the tx already
-        // committed; we can't roll back from here.
         console.warn(
-          `[processorRunner] explicit job for "${job.processorName}" skipped — processor no longer registered`,
+          `[processorRunner] explicit job for "${job.processorName}" missing from tx snapshot — should have failed at enqueue`,
         )
         continue
       }
       if (processor.watches.kind !== 'explicit') {
         console.warn(
-          `[processorRunner] explicit job for "${job.processorName}" but processor watches.kind = "${processor.watches.kind}" — skipping`,
+          `[processorRunner] explicit job for "${job.processorName}" but processor watches.kind = "${processor.watches.kind}" — should have failed at enqueue`,
         )
         continue
       }

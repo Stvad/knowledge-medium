@@ -106,6 +106,12 @@ export interface TxResult<R> {
   txId: string
   /** User who ran the tx (for processor CommittedEvent.user). */
   user: User
+  /** Processor registry snapshot taken at tx start. The runner walks
+   *  this (not its current registry) so a `setFacetRuntime` call that
+   *  lands while a tx is in flight can't remove or replace processors
+   *  before that tx's field-watch / explicit jobs fire — the spec says
+   *  registries are snapshotted at tx start (§3, §8). */
+  processors: ReadonlyMap<string, AnyPostCommitProcessor>
 }
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
@@ -222,6 +228,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     workspaceId: meta.workspaceId,
     txId,
     user,
+    processors,
   }
 }
 

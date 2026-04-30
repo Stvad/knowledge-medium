@@ -119,10 +119,10 @@ export class Repo {
     // Initialize the processor runner. The runner needs a Repo
     // reference for opening processor txs; passing `this` is safe
     // because runner methods only use it post-construction (during
-    // dispatch). Sync the registry after instantiation so kernel
-    // processors registered above are visible.
+    // dispatch). The runner reads its registry per-tx from the snapshot
+    // baked into TxResult — we don't sync a registry into the runner
+    // here.
     this.processorRunner = new ProcessorRunner(this, opts.db)
-    this.processorRunner.setRegistry(this.processors)
     // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
     // need to alias `this` to a local. Each name lookup returns a
     // fresh dispatcher closure; that's fine, the underlying registry
@@ -235,6 +235,7 @@ export class Repo {
       workspaceId: result.workspaceId,
       snapshots: result.snapshots,
       afterCommitJobs: result.afterCommitJobs,
+      processors: result.processors,
     })
     return result.value
   }
@@ -256,7 +257,6 @@ export class Repo {
   setFacetRuntime(runtime: FacetRuntime): void {
     this.mutators = new Map(runtime.read(mutatorsFacet))
     this.processors = new Map(runtime.read(postCommitProcessorsFacet))
-    this.processorRunner.setRegistry(this.processors)
   }
 
   /** Wait until the post-commit processor framework has nothing
@@ -272,7 +272,6 @@ export class Repo {
    *  specific processor sets without a FacetRuntime. */
   __setProcessorsForTesting(processors: ReadonlyArray<AnyPostCommitProcessor>): void {
     this.processors = new Map(processors.map(p => [p.name, p]))
-    this.processorRunner.setRegistry(this.processors)
   }
 
   /** Build the dispatcher closure for a mutator name. Resolution order:

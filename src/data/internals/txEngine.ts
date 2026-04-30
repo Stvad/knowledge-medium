@@ -46,6 +46,7 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ProcessorNotRegisteredError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
 } from '@/data/api'
@@ -435,29 +436,34 @@ export class TxImpl implements Tx {
     options?: { delayMs?: number },
   ): void {
     if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
-    // Validate scheduledArgs at enqueue time against the registered
-    // processor (spec §5.7). Failing here makes the originating tx
-    // roll back, surfacing the bug to the caller. Validation runs only
-    // when the processor exists AND is explicit-watching; field-watch
-    // processors don't take scheduledArgs and are skipped (the type
-    // wouldn't permit afterCommit-scheduling them anyway).
+    // Validate the target at enqueue time (spec §5.7). Failures here
+    // propagate out of the user fn into the writeTransaction's rollback,
+    // surfacing the bug to the caller cleanly. Three checks:
+    //   1. processor must be registered (typo / stale plugin → throw)
+    //   2. processor must be explicit-watching (field-watch processors
+    //      don't take scheduledArgs and can't be scheduled)
+    //   3. scheduledArgs must parse against the processor's schema
+    // Skipping these and warning at dispatch time would silently lose
+    // the work after the originating tx had already committed.
     const processor = this.ctx.processors.get(processorName)
-    if (processor !== undefined && processor.watches.kind === 'explicit') {
-      // .parse throws on shape mismatch — propagates out of this call,
-      // out of the user fn, and into the writeTransaction's rollback.
-      // TypeScript can't narrow the discriminated union through the
-      // `AnyPostCommitProcessor = PostCommitProcessor<any>` alias
-      // because `any` collapses the discriminator; the runtime check
-      // above is the actual guard.
-      const schema = (processor as {scheduledArgsSchema: {parse: (x: unknown) => unknown}}).scheduledArgsSchema
-      args = schema.parse(args)
+    if (processor === undefined) {
+      throw new ProcessorNotRegisteredError(processorName)
     }
-    // If the processor isn't registered yet the args go through as-is;
-    // the dispatcher will skip it at fire time (with a warning) since
-    // it can't have been registered between schedule and dispatch.
+    if (processor.watches.kind !== 'explicit') {
+      throw new Error(
+        `tx.afterCommit("${processorName}") — processor watches.kind = "${processor.watches.kind}"; only "explicit" processors accept scheduled jobs`,
+      )
+    }
+    // .parse throws on shape mismatch — propagates as above.
+    // TypeScript can't narrow the discriminated union through the
+    // `AnyPostCommitProcessor = PostCommitProcessor<any>` alias
+    // because `any` collapses the discriminator; the runtime check
+    // above is the actual guard.
+    const schema = (processor as {scheduledArgsSchema: {parse: (x: unknown) => unknown}}).scheduledArgsSchema
+    const validatedArgs = schema.parse(args)
     this.ctx.afterCommitJobs.push({
       processorName,
-      args,
+      args: validatedArgs,
       delayMs: options?.delayMs,
     })
   }

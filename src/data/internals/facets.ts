@@ -11,7 +11,7 @@
 import { defineFacet } from '@/extensions/facet'
 import type {
   AnyMutator,
-  PostCommitProcessor,
+  AnyPostCommitProcessor,
   PropertySchema,
   PropertyUiContribution,
   Query,
@@ -94,10 +94,10 @@ export const propertyUiFacet = defineFacet<PropertyUiContribution<unknown>, Read
   empty: () => new Map(),
 })
 
-export const postCommitProcessorsFacet = defineFacet<PostCommitProcessor<unknown>, ReadonlyMap<string, PostCommitProcessor<unknown>>>({
+export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, ReadonlyMap<string, AnyPostCommitProcessor>>({
   id: 'data.postCommitProcessors',
   combine: (values) => {
-    const out = new Map<string, PostCommitProcessor<unknown>>()
+    const out = new Map<string, AnyPostCommitProcessor>()
     for (const p of values) {
       if (out.has(p.name)) {
         console.warn(
