@@ -1,15 +1,14 @@
 import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react-codemirror'
-import { EditorSelectionState } from '@/types.ts'
 import { Block } from '@/data/internals/block'
 import {
-  useIsEditing,
   editorSelection,
   focusedBlockIdProp,
   isEditingProp,
   editorFocusRequestProp,
+  type EditorSelectionState,
 } from '@/data/properties.ts'
 import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'react'
-import { useUIStateBlock } from '@/data/globalState'
+import { useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { useData, useDataWithSelector } from '@/hooks/block.ts'
@@ -39,15 +38,15 @@ export const BlockEditor = ({
   const uiStateBlock = useUIStateBlock()
   const focusedBlockId = useDataWithSelector(
     uiStateBlock,
-    doc => doc?.properties[focusedBlockIdProp.name]?.value as string | undefined,
+    doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
   )
   const isEditing = useDataWithSelector(
     uiStateBlock,
-    doc => Boolean(doc?.properties[isEditingProp.name]?.value),
+    doc => Boolean(doc?.properties[isEditingProp.name]),
   )
   const focusRequestId = useDataWithSelector(
     uiStateBlock,
-    doc => (doc?.properties[editorFocusRequestProp.name]?.value as number | undefined) ?? 0,
+    doc => (doc?.properties[editorFocusRequestProp.name] as number | undefined) ?? 0,
   )
 
   // useRef-wrapped debounce is the per-component-instance idiom; its
@@ -58,15 +57,13 @@ export const BlockEditor = ({
     // eslint-disable-next-line react-hooks/refs
     debounce((value: string) => {
       pendingCommittedContent.current = value
-      block.change(b => {
-        b.content = value
-      })
+      void block.setContent(value)
     }, 300),
   ).current
 
   const pushSelection = useRef(
     debounce((selection: EditorSelectionState) =>
-      uiStateBlock.setProperty({...editorSelection, value: selection}), 150),
+      void uiStateBlock.set(editorSelection, selection), 150),
   ).current
 
   const flushDebouncers = useCallback(() => {
@@ -104,21 +101,19 @@ export const BlockEditor = ({
     const frameId = requestAnimationFrame(() => {
       if (!editorView || cancelled) return
 
-      void (async () => {
-        editorView.focus()
+      editorView.focus()
 
-        const selection = (await uiStateBlock.getProperty(editorSelection))?.value
-        if (cancelled || selection?.blockId !== block.id) return
+      const selection = uiStateBlock.peekProperty(editorSelection)
+      if (cancelled || selection?.blockId !== block.id) return
 
-        if (selection.x !== undefined && selection.y !== undefined) {
-          placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
-        } else if (selection.x !== undefined) {
-          placeCursorAtX(editorView, selection.x, selection.line === 'last')
-        } else if (selection.start !== undefined) {
-          const end = selection.end ?? selection.start
-          editorView.dispatch({selection: {anchor: selection.start, head: end}})
-        }
-      })()
+      if (selection.x !== undefined && selection.y !== undefined) {
+        placeCursorAtCoords(editorView, {x: selection.x, y: selection.y})
+      } else if (selection.x !== undefined) {
+        placeCursorAtX(editorView, selection.x, selection.line === 'last')
+      } else if (selection.start !== undefined) {
+        const end = selection.end ?? selection.start
+        editorView.dispatch({selection: {anchor: selection.start, head: end}})
+      }
     })
 
     return () => {

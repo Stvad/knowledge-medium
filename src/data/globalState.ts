@@ -253,6 +253,10 @@ export const useUserProperty = <T>(
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] => usePropertyValue(useUserBlock(), schema)
 
+/** Sugar for the global editing flag — `[isEditing, setIsEditing]`. */
+export const useIsEditing = (): [boolean, (value: boolean) => void] =>
+  useUIStateProperty(isEditingProp)
+
 /** Selection state — sticky on the UI-state block. The setter merges
  *  partial updates into the current snapshot. */
 export function useSelectionState(): [

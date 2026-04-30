@@ -61,11 +61,17 @@ export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlo
 
 /** Editor-selection state for the active block. Object-typed; the
  *  `unsafeIdentity` codec is appropriate because the shape is engine-
- *  controlled and not exposed for plugin extension. */
+ *  controlled and not exposed for plugin extension. The optional
+ *  `line` / `x` / `y` fields are placement hints used by CodeMirror's
+ *  cursor-restoration helpers — start/end are the linear offsets,
+ *  x/y are pixel coordinates for visual restoration after a wrap. */
 export interface EditorSelectionState {
   blockId: string
   start?: number
   end?: number
+  line?: 'first' | 'last'
+  x?: number
+  y?: number
 }
 
 export const editorSelection = defineProperty<EditorSelectionState | undefined>('editorSelection', {

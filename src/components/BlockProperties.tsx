@@ -1,42 +1,83 @@
-import { Block } from '../data/block'
+import { Block } from '@/data/internals/block'
+import { ChangeScope, codecs, defineProperty, type PropertySchema } from '@/data/api'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
-import { BlockProperty, ListBlockProperty } from '@/types'
-import { stringProperty, numberProperty, booleanProperty, listProperty } from '@/data/properties'
 import { useState } from 'react'
 import { X, Plus, Trash2 } from 'lucide-react'
 import { useData } from '@/hooks/block.ts'
 
 interface BlockPropertiesProps {
-  block: Block;
+  block: Block
 }
 
-// Component for editing list properties
-function ListPropertyEditor({ property, onUpdate, readOnly }: {
-  property: ListBlockProperty<string>,
-  onUpdate: (newProperty: ListBlockProperty<string>) => void,
-  readOnly: boolean,
+/** Lossy kind inference from a JSON-encoded property value. Used by
+ *  the UI when no PropertySchema is registered for a property name —
+ *  the kind drives which editor to render. Phase 3's propertyUiFacet
+ *  provides the principled answer; this is the §5.6.1
+ *  unknown-schema-fallback. */
+type Kind = 'string' | 'number' | 'boolean' | 'list' | 'object'
+
+const inferKind = (value: unknown): Kind => {
+  if (Array.isArray(value)) return 'list'
+  if (typeof value === 'boolean') return 'boolean'
+  if (typeof value === 'number') return 'number'
+  if (typeof value === 'object' && value !== null) return 'object'
+  return 'string'
+}
+
+/** Build an ad-hoc PropertySchema for a property whose actual schema
+ *  isn't registered. Uses an unsafe-identity codec because JSON-encoded
+ *  shape == decoded shape for primitive properties. The schema's
+ *  `changeScope` is BlockDefault — UI-state properties live in
+ *  globalState.ts and never go through this editor. */
+const adhocSchema = (name: string, kind: Kind): PropertySchema<unknown> => ({
+  name,
+  codec: kind === 'list'
+    ? codecs.list(codecs.unsafeIdentity<unknown>()) as unknown as PropertySchema<unknown>['codec']
+    : codecs.unsafeIdentity<unknown>(),
+  defaultValue: kindDefault(kind),
+  changeScope: ChangeScope.BlockDefault,
+  kind,
+})
+
+const kindDefault = (kind: Kind): unknown => {
+  switch (kind) {
+    case 'string':  return ''
+    case 'number':  return 0
+    case 'boolean': return false
+    case 'list':    return [] as unknown[]
+    case 'object':  return {}
+  }
+}
+
+// ──── List editor ────
+
+function ListPropertyEditor({
+  value,
+  onChange,
+  readOnly,
+}: {
+  value: unknown[]
+  onChange: (next: unknown[]) => void
+  readOnly: boolean
 }) {
   const [newItem, setNewItem] = useState('')
-  const items = property.value || []
+  const items = value.map(v => typeof v === 'string' ? v : String(v))
 
   const addItem = () => {
     if (newItem.trim()) {
-      const updatedItems = [...items, newItem.trim()]
-      onUpdate({ ...property, value: updatedItems })
+      onChange([...items, newItem.trim()])
       setNewItem('')
     }
   }
 
   const removeItem = (index: number) => {
-    const updatedItems = items.filter((_, i) => i !== index)
-    onUpdate({ ...property, value: updatedItems })
+    onChange(items.filter((_, i) => i !== index))
   }
 
-  const updateItem = (index: number, newValue: string) => {
-    const updatedItems = items.map((item, i) => i === index ? newValue : item)
-    onUpdate({ ...property, value: updatedItems })
+  const updateItem = (index: number, next: string) => {
+    onChange(items.map((item, i) => i === index ? next : item))
   }
 
   return (
@@ -90,30 +131,35 @@ function ListPropertyEditor({ property, onUpdate, readOnly }: {
   )
 }
 
-// Component for rendering different property types
-function PropertyValueEditor({ property, onUpdate, readOnly }: {
-  property: BlockProperty,
-  onUpdate: (newProperty: BlockProperty) => void,
-  readOnly: boolean,
+// ──── Per-kind value editor ────
+
+function PropertyValueEditor({
+  kind,
+  value,
+  onChange,
+  readOnly,
+}: {
+  kind: Kind
+  value: unknown
+  onChange: (next: unknown) => void
+  readOnly: boolean
 }) {
-  if (property.type === 'list') {
+  if (kind === 'list') {
     return (
       <ListPropertyEditor
-        property={property as ListBlockProperty<string>}
-        onUpdate={onUpdate as (newProperty: ListBlockProperty<string>) => void}
+        value={Array.isArray(value) ? value : []}
+        onChange={onChange}
         readOnly={readOnly}
       />
     )
   }
 
-  if (property.type === 'boolean') {
+  if (kind === 'boolean') {
     return (
       <select
         className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        value={property.value?.toString() ?? 'false'}
-        onChange={(e) => {
-          onUpdate({ ...property, value: e.target.value === 'true' })
-        }}
+        value={String(value ?? false)}
+        onChange={(e) => onChange(e.target.value === 'true')}
         disabled={readOnly}
       >
         <option value="true">true</option>
@@ -122,64 +168,62 @@ function PropertyValueEditor({ property, onUpdate, readOnly }: {
     )
   }
 
-  if (property.type === 'number') {
+  if (kind === 'number') {
     return (
       <Input
         type="number"
         className="text-xs md:text-sm"
-        value={property?.value?.toString() ?? ''}
+        value={value === undefined || value === null ? '' : String(value)}
         onChange={(e) => {
-          const numValue = parseFloat(e.target.value)
-          onUpdate({ ...property, value: isNaN(numValue) ? undefined : numValue })
+          const n = parseFloat(e.target.value)
+          onChange(Number.isNaN(n) ? undefined : n)
         }}
         disabled={readOnly}
       />
     )
   }
 
-  // Default to string input
+  if (kind === 'object') {
+    return (
+      <Input
+        className="text-xs md:text-sm font-mono"
+        value={JSON.stringify(value ?? {})}
+        onChange={(e) => {
+          try {
+            onChange(JSON.parse(e.target.value))
+          } catch {
+            // Ignore malformed JSON during typing; the editor restores
+            // on next render if the user navigates away.
+          }
+        }}
+        disabled={readOnly}
+      />
+    )
+  }
+
+  // Default to string input.
   return (
     <Input
       className="text-xs md:text-sm"
-      value={property?.value?.toString() ?? ''}
-      onChange={(e) => {
-        onUpdate({ ...property, value: e.target.value })
-      }}
+      value={value === undefined || value === null ? '' : String(value)}
+      onChange={(e) => onChange(e.target.value)}
       disabled={readOnly}
     />
   )
 }
 
-type NewPropertyType = 'string' | 'number' | 'boolean' | 'list'
+// ──── Add-new-property form ────
 
-// Component for adding new properties with type selection
-function AddPropertyForm({ onAdd }: { onAdd: (property: BlockProperty) => void }) {
+function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: Kind) => void}) {
   const [isOpen, setIsOpen] = useState(false)
   const [propertyName, setPropertyName] = useState('')
-  const [propertyType, setPropertyType] = useState<NewPropertyType>('string')
+  const [propertyKind, setPropertyKind] = useState<Kind>('string')
 
   const handleAdd = () => {
     if (!propertyName.trim()) return
-
-    let newProperty: BlockProperty
-    switch (propertyType) {
-      case 'string':
-        newProperty = stringProperty(propertyName.trim(), '')
-        break
-      case 'number':
-        newProperty = numberProperty(propertyName.trim(), 0)
-        break
-      case 'boolean':
-        newProperty = booleanProperty(propertyName.trim(), false)
-        break
-      case 'list':
-        newProperty = listProperty<string>(propertyName.trim(), [])
-        break
-    }
-
-    onAdd(newProperty)
+    onAdd(propertyName.trim(), propertyKind)
     setPropertyName('')
-    setPropertyType('string')
+    setPropertyKind('string')
     setIsOpen(false)
   }
 
@@ -216,8 +260,8 @@ function AddPropertyForm({ onAdd }: { onAdd: (property: BlockProperty) => void }
         />
         <select
           className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm"
-          value={propertyType}
-          onChange={(e) => setPropertyType(e.target.value as NewPropertyType)}
+          value={propertyKind}
+          onChange={(e) => setPropertyKind(e.target.value as Kind)}
         >
           <option value="string">String</option>
           <option value="number">Number</option>
@@ -237,34 +281,44 @@ function AddPropertyForm({ onAdd }: { onAdd: (property: BlockProperty) => void }
   )
 }
 
-export function BlockProperties({ block }: BlockPropertiesProps) {
+// ──── Top-level component ────
+
+export function BlockProperties({block}: BlockPropertiesProps) {
   const blockData = useData(block)
   if (!blockData) return null
 
   const properties = blockData.properties || {}
   const readOnly = block.repo.isReadOnly
 
-  const updateKey = (newKey: string, key: string, property: BlockProperty) => {
-    if (newKey && newKey !== key) {
-      block.change(doc => {
-        doc.properties[newKey] = {...property, name: newKey}
-        delete doc.properties[key]
-      })
-    }
+  const setRaw = (name: string, kind: Kind, decodedValue: unknown) => {
+    void block.set(adhocSchema(name, kind), decodedValue)
   }
 
-  const updateProperty = (property: BlockProperty) => {
-    block.setProperty(property)
+  const renameProperty = async (oldName: string, newName: string) => {
+    if (!newName || newName === oldName) return
+    // Rename = read+delete+write under the new name in one tx so the
+    // rename is atomic for sync. Use repo.tx directly since the
+    // single-block write sugar can't express two-key updates.
+    const value = properties[oldName]
+    if (value === undefined) return
+    await block.repo.tx(async tx => {
+      const next = {...properties}
+      delete next[oldName]
+      next[newName] = value
+      await tx.update(block.id, {properties: next})
+    }, {scope: ChangeScope.BlockDefault, description: `rename property ${oldName} → ${newName}`})
   }
 
-  const deleteProperty = (key: string) => {
-    block.change(doc => {
-      delete doc.properties[key]
-    })
+  const deleteProperty = async (name: string) => {
+    const next = {...properties}
+    delete next[name]
+    await block.repo.tx(async tx => {
+      await tx.update(block.id, {properties: next})
+    }, {scope: ChangeScope.BlockDefault, description: `delete property ${name}`})
   }
 
-  const addProperty = (property: BlockProperty) => {
-    block.setProperty(property)
+  const addProperty = (name: string, kind: Kind) => {
+    setRaw(name, kind, kindDefault(kind))
   }
 
   return (
@@ -275,15 +329,16 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
       </div>
       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
         <Label className="w-full sm:w-1/3 text-xs md:text-sm">Last Changed</Label>
-        <Input value={new Date(blockData.updateTime).toLocaleString()} disabled className="bg-muted/50 text-xs md:text-sm" />
+        <Input value={new Date(blockData.updatedAt).toLocaleString()} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
         <Label className="w-full sm:w-1/3 text-xs md:text-sm">Changed by User</Label>
-        <Input value={blockData.updatedByUserId} disabled className="bg-muted/50 text-xs md:text-sm" />
+        <Input value={blockData.updatedBy} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
 
-      {Object.entries(properties).map(([key, property]) =>
-        property && (
+      {Object.entries(properties).map(([key, value]) => {
+        const kind = inferKind(value)
+        return (
           <div key={key} className="space-y-2">
             <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-start">
               <div className="w-full sm:w-1/3 space-y-1">
@@ -294,21 +349,20 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
                         e.preventDefault()
-                        updateKey(e.currentTarget.value, key, property)
+                        void renameProperty(key, e.currentTarget.value)
                       }
                     }}
-                    onBlur={(e) => updateKey(e.target.value, key, property)}
+                    onBlur={(e) => void renameProperty(key, e.target.value)}
                     disabled={readOnly}
                   />
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {property.type}
-                </div>
+                <div className="text-xs text-muted-foreground">{kind}</div>
               </div>
               <div className="flex-1">
                 <PropertyValueEditor
-                  property={property}
-                  onUpdate={updateProperty}
+                  kind={kind}
+                  value={value}
+                  onChange={(next) => setRaw(key, kind, next)}
                   readOnly={readOnly}
                 />
               </div>
@@ -316,7 +370,7 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => deleteProperty(key)}
+                  onClick={() => void deleteProperty(key)}
                   className="h-9 w-9 p-0 text-destructive hover:text-destructive"
                 >
                   <Trash2 className="h-4 w-4" />
@@ -324,7 +378,8 @@ export function BlockProperties({ block }: BlockPropertiesProps) {
               )}
             </div>
           </div>
-        ))}
+        )
+      })}
 
       {!readOnly && <AddPropertyForm onAdd={addProperty} />}
     </div>
