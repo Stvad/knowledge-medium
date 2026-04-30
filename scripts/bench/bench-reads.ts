@@ -167,7 +167,7 @@ export const runReadBenches = async (): Promise<BenchResult[]> => {
     await handle.load()
     const r2 = await bench(`repo.subtree(id).peek() warm (n=${tree.totalNodes})`, async () => {
       handle.peek()
-    }, {warmup: 5, iters: 5000})
+    }, {warmup: 5, iters: 5000, totalTimeoutMs: 30_000})
     r2.metadata = {n: tree.totalNodes}
     out.push(r2)
 

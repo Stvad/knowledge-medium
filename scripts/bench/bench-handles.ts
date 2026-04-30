@@ -35,7 +35,7 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     env.repo.children(tree.rootId)
     const r = await bench('repo.children(id) identity hit (warm)', async () => {
       env.repo.children(tree.rootId)
-    }, {warmup: 1000, iters: 100000})
+    }, {warmup: 100, iters: 10000, totalTimeoutMs: 30_000})
     out.push(r)
     await env.cleanup()
   }
@@ -117,22 +117,36 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     await env.cleanup()
   }
 
-  // ──── LoaderHandle invalidate → re-resolve latency ────
+  // ──── LoaderHandle invalidate → re-resolve cycle (with real change) ────
+  // We have to actually mutate the underlying data: re-resolving against
+  // unchanged rows hits §9.4 structural-diff suppression and the
+  // listener never fires. So the cycle is driven by `setContent` on a
+  // child each iter — measures invalidate fan-out + re-load + diff +
+  // notify. (This subsumes the pure-invalidate measurement; the
+  // `handleStore.invalidate (N=…)` rows above already isolate the
+  // synchronous walk cost.)
   {
     const env = await setupBenchEnv()
     const tree = await populateBalanced(env.db, 4, 2)
+    // Hydrate the cache so the handle's children loader operates on
+    // populated cache state (avoids cold-load noise per iter).
+    await env.repo.load(tree.rootId, {children: true})
     const handle = env.repo.children(tree.rootId)
     await handle.load()
-    let invalidations = 0
-    handle.subscribe(() => { invalidations++ })
-    const r = await bench('LoaderHandle invalidate → re-resolve cycle (children handle)', async () => {
-      const before = invalidations
-      env.repo.handleStore.invalidate({parentIds: [tree.rootId]})
-      // Wait for the listener to fire (re-resolve completes asynchronously).
-      while (invalidations === before) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
-    }, {warmup: 5, maxIters: 100})
+    let nextFire: (() => void) | null = null
+    handle.subscribe(() => { nextFire?.(); nextFire = null })
+    const childIds = tree.ids.filter(id => id !== tree.rootId).slice(0, 4)
+    let counter = 0
+    const r = await bench('LoaderHandle invalidate cycle (setContent on child → listener)', async () => {
+      const fireSeen = new Promise<void>((resolve) => { nextFire = resolve })
+      const childId = childIds[counter % childIds.length]
+      counter++
+      await env.repo.mutate['core.setContent']({id: childId, content: `c-${counter}`})
+      await Promise.race([
+        fireSeen,
+        new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+      ])
+    }, {warmup: 3, maxIters: 50, perIterTimeoutMs: 5_000, totalTimeoutMs: 30_000})
     out.push(r)
     await env.cleanup()
   }
@@ -142,6 +156,9 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     const env = await setupBenchEnv()
     const tree = await populateBalanced(env.db, 1, 0)
     const id = tree.rootId
+    // populateBalanced writes raw SQL; cache is empty. Hydrate now so
+    // setSnapshot below has a baseline shape to mutate.
+    await env.repo.load(id)
     let fired = 0
     const dispose: Array<() => void> = []
     for (let i = 0; i < subs; i++) {
@@ -167,6 +184,7 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     const env = await setupBenchEnv()
     const tree = await populateBalanced(env.db, 1, 0)
     const id = tree.rootId
+    await env.repo.load(id)
     let fired = 0
     env.cache.subscribe(id, () => { fired++ })
     const snap = env.cache.requireSnapshot(id)
@@ -215,40 +233,39 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
   // ──── Notification cascade per write at varying tree depth ────
   // For a chain root → … → leaf, subscribe at every level via Block
   // facade (cache.subscribe) AND the relevant handle (`children` of
-  // parent + `ancestors` of leaf). One mutate.setContent on the leaf
-  // and we count: cache subs fired, handle re-resolves observed.
-  // The bench measures the end-to-end wall time (tx commit → cache
-  // notify → handle invalidate → re-resolve loader → listener notify).
+  // parent). Per iteration we capture a "next handle fire" Promise
+  // (resolves on the first listener call after the write) and await
+  // it with a per-iter timeout. End-to-end wall time covers tx commit
+  // → cache notify → handle invalidate → re-resolve loader → listener.
   for (const depth of [1, 5, 25, 100]) {
     const env = await setupBenchEnv()
     const chain = await populateLinearChain(env.db, depth + 1)
     let cacheFired = 0
     let handleFired = 0
+    let nextFire: (() => void) | null = null
     for (const id of chain.ids) env.cache.subscribe(id, () => { cacheFired++ })
-    // ancestors handle for leaf — declares row dep on every ancestor.
     const ancH = env.repo.ancestors(chain.leafId)
     await ancH.load()
-    ancH.subscribe(() => { handleFired++ })
-    // Parent's children handle.
+    ancH.subscribe(() => { handleFired++; nextFire?.(); nextFire = null })
     const parentId = chain.ids.length >= 2 ? chain.ids[chain.ids.length - 2] : chain.leafId
     const ch = env.repo.children(parentId)
     await ch.load()
-    ch.subscribe(() => { handleFired++ })
+    ch.subscribe(() => { handleFired++; nextFire?.(); nextFire = null })
 
     let counter = 0
     const r = await bench(`mutate.setContent leaf (chain depth=${depth}) — fan-out latency`, async () => {
-      const before = handleFired
+      const fireSeen = new Promise<void>((resolve) => { nextFire = resolve })
       await env.repo.mutate['core.setContent']({id: chain.leafId, content: `c-${counter++}`})
-      // Drain pending re-resolves. Bounded — children handle should
-      // re-resolve once; ancestors handle of a leaf in a chain has the
-      // leaf as an upfront `row` dep (data.id), but ANCESTORS_SQL
-      // excludes the start id so cascades stop there. We expect at
-      // most one fire from `children(parent)`.
-      let polls = 0
-      while (handleFired === before && polls++ < 20) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
-    }, {warmup: 2, maxIters: 30})
+      // Wait at most 1s for a handle listener to fire. Children handle
+      // should re-resolve and notify once; ancestors handle for a
+      // leaf doesn't fire (ANCESTORS_SQL excludes the start id, and
+      // ancestor content didn't change). If neither fires, the timeout
+      // catches it instead of a busy-wait.
+      await Promise.race([
+        fireSeen,
+        new Promise<void>((resolve) => setTimeout(resolve, 1000)),
+      ])
+    }, {warmup: 2, maxIters: 20, perIterTimeoutMs: 5_000, totalTimeoutMs: 30_000})
     r.metadata = {
       depth,
       cacheNotifyPerWrite: (cacheFired / r.iterations).toFixed(1),

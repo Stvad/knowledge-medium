@@ -25,7 +25,20 @@ export interface BenchOptions {
   minMs?: number
   /** Hard cap on adaptive iters. Default 1000. */
   maxIters?: number
+  /** Hard ceiling on per-iteration wall time. If a single fn() call takes
+   *  longer than this, the bench rejects with a clear "stuck?" message
+   *  instead of hanging the whole run. Default 30 s. Pass `Infinity` to
+   *  disable (genuinely large fixture builds may need it). */
+  perIterTimeoutMs?: number
+  /** Hard ceiling on total measured-phase wall time. Stops sampling early
+   *  if exceeded (warmup not counted). Default 60 s. */
+  totalTimeoutMs?: number
 }
+
+/** Wall-clock budget check. We can't use a setTimeout-based watchdog —
+ *  a tight `await asyncFn()` loop generates microtasks faster than the
+ *  timer phase can drain, so timers starve and never fire. Checking
+ *  `performance.now()` between iters is reliable. */
 
 export interface BenchResult {
   name: string
@@ -51,18 +64,40 @@ export const bench = async (
   const minMs = opts.minMs ?? 500
   const maxIters = opts.maxIters ?? 1000
   const fixedIters = opts.iters
+  const perIterTimeoutMs = opts.perIterTimeoutMs ?? 30_000
+  const totalTimeoutMs = opts.totalTimeoutMs ?? 60_000
+
+  console.log(`  · ${name} …`)
+  const benchStart = performance.now()
 
   // Warmup — discard.
-  for (let i = 0; i < warmup; i++) await fn()
+  for (let i = 0; i < warmup; i++) {
+    if (performance.now() - benchStart > totalTimeoutMs) {
+      throw new Error(`bench ${name}: total timeout (${totalTimeoutMs}ms) hit during warmup at ${i}/${warmup}`)
+    }
+    await fn()
+  }
 
   const samples: number[] = []
   const t0 = performance.now()
   let i = 0
+  let stoppedEarly = false
+  let perIterBreach = false
   while (true) {
     const s = performance.now()
     await fn()
     const e = performance.now()
-    samples.push(e - s)
+    const elapsed = e - s
+    samples.push(elapsed)
+    if (elapsed > perIterTimeoutMs) {
+      perIterBreach = true
+      console.warn(`    ! ${name} iter ${i} took ${elapsed.toFixed(0)}ms (>${perIterTimeoutMs}ms threshold) — stopping early`)
+      break
+    }
+    if (e - benchStart > totalTimeoutMs) {
+      stoppedEarly = true
+      break
+    }
     i++
     if (fixedIters !== undefined) {
       if (i >= fixedIters) break
@@ -71,6 +106,13 @@ export const bench = async (
       if (e - t0 >= minMs && i >= 5) break
     }
   }
+  if (samples.length === 0) {
+    throw new Error(`bench ${name}: no samples collected`)
+  }
+  const note = stoppedEarly
+    ? `, hit ${(totalTimeoutMs / 1000).toFixed(0)}s budget`
+    : perIterBreach ? ', per-iter breach' : ''
+  console.log(`    → ${(performance.now() - benchStart).toFixed(0)}ms (n=${samples.length}${note})`)
 
   const totalMs = samples.reduce((a, b) => a + b, 0)
   const sorted = samples.slice().sort((a, b) => a - b)
