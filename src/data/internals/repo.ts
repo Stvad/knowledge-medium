@@ -32,7 +32,19 @@ import { KERNEL_MUTATORS } from './kernelMutators'
 import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
 import { mutatorsFacet, postCommitProcessorsFacet } from './facets'
 import { ProcessorRunner } from './processorRunner'
+import { Block } from './block'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
+import {
+  SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
+  SELECT_ALIASES_IN_WORKSPACE_SQL,
+  SELECT_BACKLINKS_FOR_BLOCK_SQL,
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+  SELECT_BLOCK_BY_ID_SQL,
+  SELECT_BLOCKS_BY_CONTENT_SQL,
+  SELECT_BLOCKS_BY_TYPE_SQL,
+  SELECT_FIRST_CHILD_BY_CONTENT_SQL,
+  type AliasMatch,
+} from './kernelQueries'
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -78,6 +90,25 @@ export class Repo {
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private readonly processorRunner: ProcessorRunner
+  /** Identity-stable Block facades, keyed by id. Stage-2 of Phase 1
+   *  upgrades these into ref-counted handles; for now they're plain
+   *  facades cached so repeat `repo.block(id)` calls return the same
+   *  instance (React `key`/memo identity friendly). */
+  private readonly blockFacades = new Map<string, Block>()
+  /** Backing field for `activeWorkspaceId` (see getter/setter below). */
+  private _activeWorkspaceId: string | null = null
+
+  /** Hydrate a list of `BlockRow`s into the cache + return parsed
+   *  BlockData[]. Internal helper for the kernel queries. */
+  private hydrateRows(rows: BlockRow[]): BlockData[] {
+    const out: BlockData[] = []
+    for (const r of rows) {
+      const data = parseBlockRow(r)
+      this.cache.setSnapshot(data)
+      out.push(data)
+    }
+    return out
+  }
 
   /** Typed-dispatch sugar. `repo.mutate.indent({id})` opens a 1-mutator
    *  tx with the mutator's scope and runs it. Lookup tries kernel-short
@@ -134,6 +165,20 @@ export class Repo {
         return dispatch(prop)
       },
     })
+  }
+
+  /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
+   *  on the returned facade (`block.data`, `block.peek()`, etc.) is gated
+   *  by what's in cache; call `block.load()` or `repo.load(id)` first
+   *  for guaranteed availability. The same `Block` instance is returned
+   *  on repeat calls so identity-based React keys / memo work. */
+  block(id: string): Block {
+    let cached = this.blockFacades.get(id)
+    if (!cached) {
+      cached = new Block(this, id)
+      this.blockFacades.set(id, cached)
+    }
+    return cached
   }
 
   /** Load a row + (optionally) a neighborhood into the cache. Spec §5.2.
@@ -202,6 +247,157 @@ export class Repo {
     }
 
     return data
+  }
+
+  // ──── Kernel queries (raw SQL; Phase 4 wraps in queriesFacet) ────
+
+  /** Backlinks: live blocks in `workspaceId` whose `references` field
+   *  points at `targetId`. Returns BlockData rows; callers wanting
+   *  Block facades use `repo.block(row.id)`. Each row is hydrated into
+   *  the cache as a side-effect so subsequent sync reads succeed. */
+  async findBacklinks(workspaceId: string, targetId: string): Promise<BlockData[]> {
+    if (!targetId || !workspaceId) return []
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BACKLINKS_FOR_BLOCK_SQL,
+      [workspaceId, targetId, targetId],
+    )
+    return this.hydrateRows(rows)
+  }
+
+  /** Live blocks in `workspaceId` whose `type` property equals `type`.
+   *  Hydrates results into cache. */
+  async findBlocksByType(workspaceId: string, type: string): Promise<BlockData[]> {
+    if (!workspaceId) return []
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_TYPE_SQL,
+      [workspaceId, type],
+    )
+    return this.hydrateRows(rows)
+  }
+
+  /** Substring-match content search in a workspace. Returns up to
+   *  `limit` rows ordered by recency. Empty `query` returns []. */
+  async searchBlocksByContent(
+    workspaceId: string,
+    query: string,
+    limit = 50,
+  ): Promise<BlockData[]> {
+    if (!query) return []
+    const rows = await this.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_CONTENT_SQL,
+      [workspaceId, query, limit],
+    )
+    return this.hydrateRows(rows)
+  }
+
+  /** Single-block lookup by exact alias in a workspace. Returns null
+   *  on no match. Hydrates the cache when a match is found. */
+  async findBlockByAliasInWorkspace(
+    workspaceId: string,
+    alias: string,
+  ): Promise<BlockData | null> {
+    if (!alias || !workspaceId) return null
+    const row = await this.db.getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+      [workspaceId, alias],
+    )
+    if (row === null) return null
+    const data = parseBlockRow(row)
+    this.cache.setSnapshot(data)
+    return data
+  }
+
+  /** Distinct alias values in a workspace, optionally substring-filtered.
+   *  Returns the raw strings (no block ids); used by autocomplete. */
+  async getAliasesInWorkspace(
+    workspaceId: string,
+    filter = '',
+  ): Promise<string[]> {
+    if (!workspaceId) return []
+    const rows = await this.db.getAll<{alias: string}>(
+      SELECT_ALIASES_IN_WORKSPACE_SQL,
+      [workspaceId, filter, filter],
+    )
+    return rows.map(r => r.alias)
+  }
+
+  /** Alias autocomplete with surrounding context — one row per
+   *  (alias, blockId) pair, plus the block's content for preview. */
+  async findAliasMatchesInWorkspace(
+    workspaceId: string,
+    filter: string,
+    limit = 50,
+  ): Promise<AliasMatch[]> {
+    if (!workspaceId) return []
+    return this.db.getAll<AliasMatch>(
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
+      [workspaceId, filter, filter, limit],
+    )
+  }
+
+  /** First child of `parentId` whose content matches exactly. Returns
+   *  null if no match. Used by daily-note / target-block helpers. */
+  async findFirstChildByContent(
+    parentId: string,
+    content: string,
+  ): Promise<BlockData | null> {
+    const row = await this.db.getOptional<BlockRow>(
+      SELECT_FIRST_CHILD_BY_CONTENT_SQL,
+      [parentId, content],
+    )
+    if (row === null) return null
+    const data = parseBlockRow(row)
+    this.cache.setSnapshot(data)
+    return data
+  }
+
+  /** Subtree rooted at `rootId` (depth-100 + visited-id guarded;
+   *  spec §11). Hydrates the result + sets `allChildrenLoaded` markers
+   *  for every parent inside the subtree. */
+  async subtree(rootId: string, opts?: {includeRoot?: boolean}): Promise<BlockData[]> {
+    const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [rootId])
+    const includeRoot = opts?.includeRoot ?? true
+    const out: BlockData[] = []
+    const seen = new Set<string>()
+    for (const r of rows) {
+      const data = parseBlockRow(r)
+      this.cache.setSnapshot(data)
+      seen.add(data.id)
+      if (includeRoot || data.id !== rootId) out.push(data)
+    }
+    for (const id of seen) this.cache.markChildrenLoaded(id)
+    return out
+  }
+
+  /** Ancestor chain up from `id` (excludes `id` itself). Hydrates
+   *  every ancestor into cache. */
+  async ancestors(id: string): Promise<BlockData[]> {
+    const rows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
+    return this.hydrateRows(rows)
+  }
+
+  /** Async existence check — cache-first, falls back to a single SQL
+   *  hit. Returns true for soft-deleted rows? No — soft-deleted rows
+   *  count as missing here so create/restore flows on the caller side
+   *  get the consistent "not found" signal. */
+  async exists(id: string): Promise<boolean> {
+    if (this.cache.hasSnapshot(id)) return true
+    const row = await this.db.getOptional<{id: string}>(SELECT_BLOCK_BY_ID_SQL, [id])
+    return row !== null
+  }
+
+  // ──── Active-workspace getter/setter (UI bookkeeping) ────
+
+  /** UI-visible "active" workspace pin — used by hooks (`useBacklinks`)
+   *  and panels that need a default workspace when there's no other
+   *  context. `repo.tx` does NOT consult this; tx workspaces come from
+   *  the first write's row per spec §5.3. */
+  get activeWorkspaceId(): string | null {
+    return this._activeWorkspaceId
+  }
+
+  setActiveWorkspaceId(workspaceId: string | null): void {
+    this._activeWorkspaceId = workspaceId
   }
 
   /** Run a transactional session. Spec §3, §10. */
