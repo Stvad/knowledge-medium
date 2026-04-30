@@ -12,7 +12,7 @@
 //     the deterministic-id path, and converting [[alias]] occurrences
 //     into resolved references[] rows so backlinks work after import.
 
-import { ChangeScope, type BlockData, type Tx } from '@/data/api'
+import { ChangeScope, type BlockData, type NewBlockData, type Tx } from '@/data/api'
 import { aliasesProp, typeProp } from '@/data/properties'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
 import { parseRelativeDate } from '@/utils/relativeDate'
@@ -160,16 +160,7 @@ export const importRoam = async (
       }
       pagesCreated += 1
       if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
-      const data = recon.page.data
-      await tx.createOrGet({
-        id: data.id,
-        workspaceId: data.workspaceId,
-        parentId: data.parentId,
-        orderKey: data.orderKey,
-        content: data.content,
-        properties: data.properties,
-        references: data.references,
-      })
+      await upsertImportedBlock(tx, recon.page.data)
     }
 
     // 5c. Descendants. The planner emits them in post-order (leaves
@@ -180,15 +171,7 @@ export const importRoam = async (
     for (let i = plan.descendants.length - 1; i >= 0; i--) {
       const desc = plan.descendants[i]
       const data = applyReparent(desc.data, reparentMap)
-      await tx.createOrGet({
-        id: data.id,
-        workspaceId: data.workspaceId,
-        parentId: data.parentId,
-        orderKey: data.orderKey,
-        content: data.content,
-        properties: data.properties,
-        references: data.references,
-      })
+      await upsertImportedBlock(tx, data)
     }
   }, {scope: ChangeScope.BlockDefault, description: 'roam import'})
 
@@ -351,6 +334,41 @@ const mergeIntoDailyNote = async (
   // at this row (the planner used dailyNoteBlockId as the plannedId,
   // so reparentMap leaves them alone).
   await getOrCreateDailyNote(repo, workspaceId, page.iso)
+}
+
+/**
+ * Insert a planned block, OR upgrade an existing row at the same id.
+ *
+ * `tx.createOrGet` returns the existing row's id without applying the
+ * data fields when the id is already present, so a prior placeholder
+ * (or a stale half-imported row) would otherwise stay frozen at its
+ * original empty state — content, parentId, orderKey, properties,
+ * references would never reach storage. After the createOrGet hit,
+ * we apply the planned data with tx.update + tx.move so a re-import
+ * containing the real Roam block actually lands. Last-write-wins is
+ * the explicit semantics here; re-imports overwrite local edits at
+ * the same id, which matches roam-import's "snapshot" model.
+ */
+const upsertImportedBlock = async (
+  tx: Tx,
+  data: NewBlockData & {id: string; content: string},
+) => {
+  const result = await tx.createOrGet({
+    id: data.id,
+    workspaceId: data.workspaceId,
+    parentId: data.parentId,
+    orderKey: data.orderKey,
+    content: data.content,
+    properties: data.properties,
+    references: data.references,
+  })
+  if (result.inserted) return
+  await tx.update(data.id, {
+    content: data.content,
+    properties: data.properties ?? {},
+    references: data.references ?? [],
+  })
+  await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
 }
 
 const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {

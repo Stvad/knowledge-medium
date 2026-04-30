@@ -191,6 +191,62 @@ describe('importRoam', () => {
       .toEqual(['Get really good at dancing'])
   })
 
+  it('upgrades a previously-imported placeholder when a later import contains the real block', async () => {
+    // First pass: an export that *references* leafA but the real block
+    // for leafA isn't in the children of any imported page. The
+    // planner emits a placeholder for it (so backlinks can resolve).
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ref',
+        uid: 'pageRef',
+        children: [
+          {
+            string: 'block with ((leafA))',
+            uid: 'parentRef',
+            ':block/refs': [{':block/uid': 'leafA'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const leafId = roamBlockId(WORKSPACE, 'leafA')
+    const beforeUpgrade = await readBlock(leafId)
+    expect(beforeUpgrade?.content).toBe('')           // placeholder
+    expect(beforeUpgrade?.parent_id).toBeNull()        // root-level
+
+    // Second pass: a different export that contains the real leafA
+    // block under a parent. The upgraded row should now have the real
+    // content + parent.
+    const realExport: RoamExport = [
+      {
+        title: 'page-with-leaf',
+        uid: 'pageLeaf',
+        children: [
+          {
+            string: 'parent of leaf',
+            uid: 'parentLeaf',
+            children: [
+              {
+                string: 'real leaf content',
+                uid: 'leafA',
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    await importRoam(realExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const afterUpgrade = await readBlock(leafId)
+    expect(afterUpgrade?.content).toBe('real leaf content')
+    expect(afterUpgrade?.parent_id).toBe(roamBlockId(WORKSPACE, 'parentLeaf'))
+  })
+
   it('dry-run reports counts without writing rows', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
