@@ -14,7 +14,7 @@
  *   - row_events tail subscription for sync-applied invalidation
  */
 
-import {randomUUID} from 'node:crypto'
+import { v4 as uuidv4 } from 'uuid'
 import type { FacetRuntime } from '@/extensions/facet'
 import type {
   AnyMutator,
@@ -135,7 +135,7 @@ export class Repo {
     this.user = opts.user
     this.isReadOnly = opts.isReadOnly ?? false
     this.now = opts.now ?? Date.now
-    this.newId = opts.newId ?? randomUUID
+    this.newId = opts.newId ?? uuidv4
     // Default tx-seq provider: monotonic counter seeded above any
     // value a prior Repo instance could have written. Date.now() in
     // milliseconds is plenty of headroom (Number.MAX_SAFE_INTEGER /
