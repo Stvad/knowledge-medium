@@ -97,7 +97,7 @@ describe('getApiSurface', () => {
 
 describe('describeRuntime', () => {
   const fakeLandingBlock = {id: 'landing-x'} as unknown as Block
-  const fakeRepo = {currentUser: {id: 'u-1', name: 'Test'}} as unknown as Repo
+  const fakeRepo = {user: {id: 'u-1', name: 'Test'}} as unknown as Repo
 
   const makeAction = (id: string, hasBinding: boolean): ActionConfig => ({
     id,

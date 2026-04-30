@@ -36,11 +36,12 @@ describe('@/extensions/api — public surface', () => {
     'Block',
     'Repo',
     'getActivePanelBlock',
-    'boolProp',
-    'numberProperty',
-    'stringProperty',
+    // PropertySchema authoring surface (replaces legacy boolProp /
+    // numberProperty / stringProperty / uiChangeScope)
+    'defineProperty',
+    'codecs',
+    'ChangeScope',
     'extensionDisabledProp',
-    'uiChangeScope',
   ]
 
   for (const name of requiredExports) {

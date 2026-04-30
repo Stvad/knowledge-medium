@@ -4,6 +4,34 @@
 
 `scripts/gen-sync-config.ts` keeps the local-SQLite raw-table mapping and the PowerSync sync-stream SELECT in lockstep (both projected from the same `BLOCK_STORAGE_COLUMNS` / `WORKSPACE_*` arrays), but **Postgres is still drift-prone** — someone can edit `BLOCK_STORAGE_COLUMNS` without writing the matching `supabase/migrations/<…>.sql`, and nothing fails until `db push` (or worse, a runtime PATCH that references a missing column). Fix shape: a CI step that calls `npx supabase db query --linked "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('blocks','workspaces','workspace_members')"` and asserts the returned set is a superset of every name in the TS column lists. Costs: needs a Supabase-reachable env in CI (or a checked-in `supabase/schema-snapshot.json` you regenerate via a `yarn snapshot:schema` script and diff against). Lower-effort variant: parse the migration files as text and grep for `add column.*<name>` per TS column — no DB connection needed but misses migrations that drop a column.
 
+## Rebuild legacy-API tests on `createTestDb`
+
+Stage 1.6 deleted eight test files that exercised the legacy
+`Repo`/`Block`/`UndoRedoManager`/legacy-property-shape against stub
+DBs that don't compose with the new tx-engine surface:
+
+- `src/utils/roamImport/test/import.test.ts`
+- `src/utils/roamImport/test/plan.test.ts`
+- `src/test/initData.test.ts`
+- `src/extensions/test/dynamicExtensions.test.ts`
+- `src/extensions/test/dynamicExtensionsIntegration.test.ts`
+- `src/utils/test/copy.test.ts`
+- `src/utils/test/markdownParser.test.helpers.ts`
+- `src/utils/test/markdownParser.test.ts`
+
+The behaviors they covered (Roam importer end-to-end, plan-vs-merge
+reconciliation, daily-note dedup, alias-target creation, dynamic
+extension lifecycle, copy/paste round-trips, indented-markdown ↔
+parentId+orderKey parsing) are not covered by the new-layer test
+suite (`src/data/internals/*.test.ts`). Rebuild on top of
+`createTestDb` (real SQLite + real triggers + real tx engine) so the
+tests exercise the full v4.27 path. Estimated: 4-6 commits across
+the eight files; the data shape is already the new flat one, the
+work is rewriting the test fixtures + harness wiring (most of these
+used 3-arg `new Repo(db, undoRedoManager, user)` and stub repos
+with hand-rolled `getOptional` regex routers, which all need to
+become `await createTestDb()` + `new Repo({db, cache, user})`).
+
 ## Re-implement undo/redo on `command_events` + `row_events`
 
 The legacy `UndoRedoManager` (`src/data/undoRedo.ts`) batched writes per
