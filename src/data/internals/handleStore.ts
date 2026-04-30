@@ -182,6 +182,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   private cancelGc: (() => void) | null = null
   private disposed = false
 
+  /** Set when `invalidate()` fires while a load is in flight. The
+   *  inflight load may have already read stale data from SQL before the
+   *  invalidating commit landed, so its result cannot be trusted on
+   *  its own. We let the load settle (so the suspending promise React
+   *  is awaiting still resolves) and immediately re-run the loader to
+   *  pick up the post-invalidation state. */
+  private pendingReinvalidate = false
+
   constructor(args: {
     store: HandleStore
     key: string
@@ -213,15 +221,39 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   }
 
   /** Actually run the loader. Skips the cached-value short-circuit; used
-   *  by `load()` (cold path) and `invalidate()` (force re-resolve). */
+   *  by `load()` (cold path) and `invalidate()` (force re-resolve).
+   *
+   *  Dep visibility during the load:
+   *    - Each `ctx.depend(dep)` call is published to `this.deps`
+   *      immediately so a mid-load `invalidate({…})` can match
+   *      upfront-declared deps even before the loader awaits SQL.
+   *    - On load success we replace `this.deps` with the freshly-
+   *      collected list (drops any deps from the prior resolve that
+   *      this resolve didn't re-declare).
+   *    - On load failure we restore the prior deps so the next attempt
+   *      still has a sensible matching baseline. */
   private runLoader(): Promise<T> {
+    // Reset pending-reinvalidate at run start. Anything that arrives
+    // during this run sets the flag; we re-run after settle.
+    this.pendingReinvalidate = false
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
     this.retain() // count the inflight load against GC
 
+    // Snapshot the prior deps so we can restore them if this load
+    // fails; meanwhile this.deps is rewritten as ctx.depend calls land,
+    // starting from a shallow copy of the prior deps. The starting
+    // copy keeps prior-resolution invalidation matches valid during
+    // the brief window before the loader has declared anything.
+    const priorDeps = this.deps
+    this.deps = priorDeps.slice()
     const collected: Dependency[] = []
+    const onDep = (dep: Dependency) => {
+      collected.push(dep)
+      this.deps.push(dep) // live-publish so mid-load matches() sees it
+    }
     const ctx: ResolveContext = {
-      depend(dep: Dependency) { collected.push(dep) },
+      depend(dep: Dependency) { onDep(dep) },
     }
 
     const p = this.loader(ctx).then(
@@ -230,6 +262,8 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         if (this.disposed) throw new Error(`Handle ${this.key} disposed mid-load`)
         const priorValue = this.value
         const hadPrior = this.status_ === 'ready' || this.status_ === 'error'
+        // Replace live deps with the freshly-collected set (drops any
+        // priorDeps the loader didn't re-declare).
         this.deps = collected
         this.value = value
         this.status_ = 'ready'
@@ -243,17 +277,41 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           this.notify(value)
         }
         this.release() // drop the inflight ref
+        // If invalidations arrived during this load, the data we just
+        // returned may already be stale. Re-run via a microtask so the
+        // promise that React awaited can resolve first.
+        if (this.pendingReinvalidate && !this.disposed) {
+          this.pendingReinvalidate = false
+          queueMicrotask(() => {
+            if (this.disposed) return
+            // No-op if a fresher load is already in flight (subscribe
+            // path or another invalidate scheduled it).
+            if (this.inflight) return
+            void this.runLoader().catch(() => {/* error on handle */})
+          })
+        }
         return value
       },
       (err) => {
         if (!this.disposed) {
+          // Roll back to the priorDeps — collected was incomplete.
+          this.deps = priorDeps
           this.status_ = 'error'
           this.error = err
           this.inflight = null
           this.suspendingPromise = null
-          // Don't clear deps — re-resolution may want them; but they
-          // weren't successfully captured anyway. Leave as-is.
           this.release()
+          // A pending reinvalidate against an errored load is still
+          // worth honoring — the state changed, and the next attempt
+          // may succeed.
+          if (this.pendingReinvalidate) {
+            this.pendingReinvalidate = false
+            queueMicrotask(() => {
+              if (this.disposed) return
+              if (this.inflight) return
+              void this.runLoader().catch(() => {/* error on handle */})
+            })
+          }
         }
         throw err
       },
@@ -306,9 +364,13 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // the new load completes — status stays 'ready' so the UI doesn't
     // flash a Suspense fallback for in-place updates.
     if (this.inflight) {
-      // Already re-resolving; the inflight call captures the latest
-      // dep state when it completes. Letting it ride avoids a thundering
-      // herd of retriggers when many invalidations land at once.
+      // A load is already running; it may have read stale data from
+      // SQL before the invalidating commit landed. Mark the run as
+      // dirty so runLoader's settle path schedules another pass once
+      // the current promise resolves. Multiple invalidations during
+      // one load coalesce into a single rerun (the next loader picks
+      // up the latest state in one go).
+      this.pendingReinvalidate = true
       return
     }
     void this.runLoader().catch(() => {/* error on handle */})

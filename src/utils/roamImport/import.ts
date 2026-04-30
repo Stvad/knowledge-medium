@@ -368,7 +368,13 @@ const ensurePlaceholderRow = async (
     })
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
-    await tx.restore(id, {content: ''})
+    // Restoring as an empty stub: clear references and properties too,
+    // not just content. The id may have previously been a real imported
+    // block whose tombstone left stale references / properties in place;
+    // a fresh placeholder must look genuinely fresh, otherwise old
+    // backlinks and property values can persist into the upgrade
+    // window (and indefinitely if the planned content is also empty).
+    await tx.restore(id, {content: '', references: [], properties: {}})
   }
 }
 

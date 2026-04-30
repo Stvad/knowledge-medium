@@ -466,3 +466,111 @@ describe('Dependencies + invalidate()', () => {
     await vi.waitFor(() => expect(fired).toEqual([1]))
   })
 })
+
+describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
+  it('upfront-declared deps match a mid-load invalidate', async () => {
+    // The loader declares its dep BEFORE awaiting — invalidate during
+    // the load should match the declared dep, set pendingReinvalidate,
+    // and force a rerun once the load settles.
+    const store = makeStore()
+    let releaseFirstLoad!: () => void
+    let n = 1
+    let runs = 0
+    const calls: number[] = []
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' }) // upfront, sync
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseFirstLoad = r })
+          }
+          calls.push(n)
+          return n
+        },
+      }),
+    )
+    h.subscribe(() => {})
+
+    // Loader paused awaiting releaseFirstLoad; deps are live.
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    n = 2
+    store.invalidate({ rowIds: ['r1'] }) // matches the upfront dep
+
+    releaseFirstLoad()
+    // First load settles → pendingReinvalidate triggers a rerun that
+    // reads the fresh n=2 and re-publishes.
+    await vi.waitFor(() => expect(runs).toBe(2))
+    expect(calls).toEqual([2, 2])
+  })
+
+  it('coalesces multiple invalidations during one load into one rerun', async () => {
+    const store = makeStore()
+    let releaseLoad!: () => void
+    let n = 1
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseLoad = r })
+          }
+          return n
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+
+    // Three invalidations during one load — should coalesce into one
+    // rerun, not three.
+    n = 2
+    store.invalidate({ rowIds: ['r1'] })
+    store.invalidate({ rowIds: ['r1'] })
+    store.invalidate({ rowIds: ['r1'] })
+    releaseLoad()
+
+    await vi.waitFor(() => expect(runs).toBe(2))
+    // Settle the microtask queue — confirm no further reruns fired.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(2)
+  })
+
+  it('failed load with mid-load invalidate reruns on next attempt', async () => {
+    const store = makeStore()
+    let runs = 0
+    let nextResult: number | Error = new Error('boom')
+    let release!: () => void
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          if (runs === 1) {
+            await new Promise<void>((r) => { release = r })
+          }
+          if (nextResult instanceof Error) throw nextResult
+          return nextResult
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    store.invalidate({ rowIds: ['r1'] }) // queue rerun
+    nextResult = 7
+    release()
+
+    await vi.waitFor(() => expect(runs).toBe(2))
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    expect(h.peek()).toBe(7)
+  })
+})

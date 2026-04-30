@@ -185,20 +185,24 @@ export class Block implements Handle<BlockData | null> {
     return this.repo.cache.childrenOf(this.id).map(c => c.id)
   }
 
-  /** Children as Block instances. Same gating as `childIds`. */
+  /** Children as Block instances. Same gating as `childIds`. Routes
+   *  through `repo.block(id)` so the returned facades share identity
+   *  with every other access point — `block.children[0] === repo.block(c.id)`
+   *  and React `key={child.id}` memoizes correctly across renders. */
   get children(): Block[] {
-    return this.childIds.map(id => new Block(this.repo, id))
+    return this.childIds.map(id => this.repo.block(id))
   }
 
   /** Parent as Block, or null if no parent (workspace root) or if the
    *  parent row isn't in cache. (Throwing here would be too strict —
-   *  most callers want best-effort.) */
+   *  most callers want best-effort.) Returns the identity-stable facade
+   *  from `repo.block(parentId)` for the same reason as `children`. */
   get parent(): Block | null {
     const data = this.peek()
     if (data === undefined || data === null) return null
     if (data.parentId === null) return null
     if (!this.repo.cache.getSnapshot(data.parentId)) return null
-    return new Block(this.repo, data.parentId)
+    return this.repo.block(data.parentId)
   }
 
   // ──── Single-block write sugar (each is a 1-mutator tx) ────
