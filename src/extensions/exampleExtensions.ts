@@ -38,7 +38,7 @@ const HelloContent = ({ block }) => (
     <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>
       hello-renderer custom content area:
     </div>
-    <em>{block.dataSync()?.content}</em>
+    <em>{block.peek()?.content}</em>
   </div>
 )
 
@@ -54,6 +54,7 @@ export default blockRenderersFacet.of({
 const FOLD_ALL_ACTION_SOURCE = `import {
   actionsFacet,
   ActionContextTypes,
+  ChangeScope,
   getActivePanelBlock,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -76,17 +77,28 @@ export default actionsFacet.of({
   defaultBinding: { keys: ['cmd+shift+f', 'ctrl+shift+f'] },
   handler: async ({ uiStateBlock }) => {
     const panel = await getActivePanelBlock(uiStateBlock)
-    const topLevelId = (await panel?.data())?.properties[topLevelBlockIdProp.name]?.value
+    if (!panel) return
+    await panel.load()
+    const topLevelId = panel.peekProperty(topLevelBlockIdProp)
     if (!topLevelId) return
 
     const repo = uiStateBlock.repo
-    const subtree = await repo.getSubtreeBlockData(topLevelId, { includeRoot: false })
+    // repo.subtree hydrates the cache for every visited row, so per-block
+    // peekProperty reads below are sync.
+    const subtree = await repo.subtree(topLevelId, { includeRoot: false })
     // If anything is uncollapsed, collapse all; otherwise expand all.
-    const anyExpanded = subtree.some(b => b.properties[isCollapsedProp.name]?.value !== true)
-    for (const data of subtree) {
-      const block = repo.find(data.id)
-      block.setProperty({ ...isCollapsedProp, value: anyExpanded })
-    }
+    const anyExpanded = subtree.some(
+      data => repo.block(data.id).peekProperty(isCollapsedProp) !== true,
+    )
+    await repo.tx(async tx => {
+      for (const data of subtree) {
+        await tx.setProperty({
+          id: data.id,
+          schema: isCollapsedProp,
+          value: anyExpanded,
+        })
+      }
+    }, { scope: ChangeScope.UiState, description: 'fold all' })
   },
 })
 `
@@ -96,17 +108,27 @@ const EMOJI_REACT_SOURCE = `import {
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
   ActionContextTypes,
+  ChangeScope,
+  codecs,
+  defineProperty,
   isSelectionClick,
 } from '@/extensions/api.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
-// decorator that layers a reactions row (stored under
-// properties['user:reactions']) below whatever the block already
-// renders — markdown, video player, edit-mode CodeMirror, or another
-// custom renderer. Decorators stack on top of the chosen content
-// renderer, so a video block with reactions shows both, and a block
-// with a custom 'renderer: hello-renderer' property still gets its
-// reactions row.
+// decorator that layers a reactions row (stored under property
+// 'user:reactions') below whatever the block already renders —
+// markdown, video player, edit-mode CodeMirror, or another custom
+// renderer. Decorators stack on top of the chosen content renderer,
+// so a video block with reactions shows both, and a block with a
+// custom 'renderer: hello-renderer' property still gets its reactions
+// row.
+
+const reactionsProp = defineProperty('user:reactions', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'list',
+})
 
 const EMOJI_OPTIONS = ['🔥', '👍', '🎉', '❤️']
 
@@ -116,16 +138,10 @@ const ReactionsRow = ({ reactions }) => (
   </div>
 )
 
-const cycleReaction = (block) => {
-  const current = block.dataSync()?.properties['user:reactions']?.value ?? []
+const cycleReaction = async (block) => {
+  const current = block.peekProperty(reactionsProp) ?? []
   const nextEmoji = EMOJI_OPTIONS[current.length % EMOJI_OPTIONS.length]
-  block.change((doc) => {
-    doc.properties['user:reactions'] = {
-      name: 'user:reactions',
-      type: 'list',
-      value: [...current, nextEmoji],
-    }
-  })
+  await block.set(reactionsProp, [...current, nextEmoji])
 }
 
 export default [
@@ -135,7 +151,7 @@ export default [
     if (isSelectionClick(event)) return
     event.preventDefault()
     event.stopPropagation()
-    cycleReaction(ctx.block)
+    void cycleReaction(ctx.block)
   }),
 
   // Same operation as a keyboard action.
@@ -148,7 +164,7 @@ export default [
   }),
 
   blockContentDecoratorsFacet.of((ctx) => {
-    const reactions = ctx.block.dataSync()?.properties['user:reactions']?.value
+    const reactions = ctx.block.peekProperty(reactionsProp)
     if (!Array.isArray(reactions) || reactions.length === 0) return null
 
     return (Inner) => {
@@ -185,7 +201,7 @@ const kudosFacet = defineFacet({
 
 const KudosBannerContent = ({ block }) => (
   <div>
-    <em>{block.dataSync()?.content}</em>
+    <em>{block.peek()?.content}</em>
     <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>
       Kudos facet defined. (Other extensions can contribute to user.kudos.)
     </div>
