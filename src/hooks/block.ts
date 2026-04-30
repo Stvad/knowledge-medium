@@ -71,7 +71,17 @@ export const useData = (block: Block): BlockData | undefined => {
 /** Reactive read with a selector applied to the BlockData. The
  *  selector + equality fns may be inline lambdas; latest-ref pattern
  *  keeps `useSyncExternalStore`'s subscribe/getSnapshot identities
- *  stable across renders. */
+ *  stable across renders.
+ *
+ *  `getSnapshot` MUST return a stable reference while the underlying
+ *  cache snapshot is unchanged — otherwise React may either cycle
+ *  ("Cached snapshot inside store mutated") or warn about a render
+ *  loop. Selectors that allocate (codec.list decode → fresh array,
+ *  object spread, etc.) violate this if we naively re-call them on
+ *  every getSnapshot. We memoize against the source snapshot
+ *  identity: BlockCache reuses the deepFrozen snapshot reference
+ *  until it actually changes, so `Object.is(prev, next)` is the
+ *  correct "no underlying change" test. */
 export const useDataWithSelector = <T,>(
   block: Block,
   selector: (doc: BlockData | undefined) => T,
@@ -90,11 +100,34 @@ export const useDataWithSelector = <T,>(
   // eslint-disable-next-line react-hooks/refs
   equalityRef.current = isSelectionEqual
 
+  // Snapshot-identity memo for getSnapshot stability. SOURCE_NEVER_SET
+  // is the sentinel for "first call" — we can't use undefined because
+  // the source snapshot can legitimately be undefined (block not
+  // loaded yet) and we'd then refuse to seed the cache.
+  const SOURCE_NEVER_SET = useRef<BlockData | undefined>(undefined).current
+  const lastSourceRef = useRef<BlockData | undefined | typeof SOURCE_NEVER_SET>(
+    SOURCE_NEVER_SET,
+  )
+  const lastSelectionRef = useRef<T | undefined>(undefined)
+  const lastSelectorRef = useRef<typeof selector | undefined>(undefined)
+
   useEnsureBlockLoaded(block)
 
   const getSelection = useCallback(
-    () => selectorRef.current(repo.cache.getSnapshot(block.id)),
-    [repo, block.id],
+    (): T => {
+      const source = repo.cache.getSnapshot(block.id)
+      const cached =
+        lastSourceRef.current !== SOURCE_NEVER_SET &&
+        Object.is(source, lastSourceRef.current) &&
+        lastSelectorRef.current === selectorRef.current
+      if (cached) return lastSelectionRef.current as T
+      const next = selectorRef.current(source)
+      lastSourceRef.current = source
+      lastSelectorRef.current = selectorRef.current
+      lastSelectionRef.current = next
+      return next
+    },
+    [repo, block.id, SOURCE_NEVER_SET],
   )
 
   return useSyncExternalStore(
@@ -154,51 +187,67 @@ export const usePropertyValue = useProperty
 export const useContent = (block: Block): string =>
   useDataWithSelector(block, doc => doc?.content ?? '')
 
-/** Reactive child-id list. Reads `repo.cache.childrenOf(parentId)`
- *  via the cache subscription; uses `useState` + an effect-driven
- *  refresh because `cache.childrenOf` reads across multiple snapshots
- *  (parent + every child), and the row-grain `cache.subscribe(parentId)`
- *  only notifies on changes to the parent's row. Callers that need
- *  children-loaded gating should call `repo.load(parentId, {children:
- *  true})` first; absent that, returns whatever's currently in cache.
+/** Reactive child-id list. The hook owns hydration: on mount and on
+ *  every `repo.db.onChange({tables: ['blocks']})` notification, it
+ *  re-issues `repo.load(parentId, {children: true})` so the cache
+ *  picks up sync-applied inserts (which write to SQL but don't go
+ *  through the TxEngine cache walk). After each load resolves, the
+ *  hook recomputes from `cache.childrenOf` and bumps state only when
+ *  the id list actually shifted.
  *
- *  Stage-2 of Phase 1 (HandleStore + row_events tail) will replace
- *  this with a proper subscription that fires when any child row
- *  changes; for now it refreshes whenever the parent's snapshot does. */
+ *  Why not just rely on `cache.subscribe(parentId)`: the row-grain
+ *  cache subscription only fires for changes to the parent's own
+ *  snapshot; sibling-row inserts and deletes don't notify it. The
+ *  table-grain `db.onChange` is the substitute until Phase 2 ships
+ *  the row_events tail (which can pin invalidation to the relevant
+ *  parent ids). The throttle keeps typing-bursts cheap.
+ *
+ *  Cold render: `cache.areChildrenLoaded(parentId)` is false until
+ *  the first `repo.load({children: true})` resolves, so the initial
+ *  state reads as []. Once the load lands, the next setChildIds
+ *  picks up the populated list. */
 export const useChildIds = (block: Block): string[] => {
   const repo = useRepo()
-  useEnsureBlockLoaded(block)
-  // Side-channel: recompute via cache.subscribe on the parent id.
-  // The cache.childrenOf scan is O(snapshots) but is also what
-  // repo.cache.areChildrenLoaded gates on; the read is cheap.
   const [childIds, setChildIds] = useState<string[]>(() =>
     safeChildIds(repo, block.id),
   )
 
   useEffect(() => {
-    setChildIds(safeChildIds(repo, block.id))
-    // Subscribe to the parent for parent-shape changes. Sibling
-    // mutations don't notify yet (Phase 2 row_events tail); to plug
-    // that gap we also poll on a `db.onChange({tables:['blocks']})`
-    // throttled subscription so newly-arriving children re-trigger.
-    const unsubscribeCache = repo.cache.subscribe(block.id, () => {
+    let cancelled = false
+    const refresh = () => {
+      if (cancelled) return
       setChildIds(prev => {
         const next = safeChildIds(repo, block.id)
         return arraysEqual(prev, next) ? prev : next
       })
-    })
+    }
+    const reloadAndRefresh = async () => {
+      try {
+        await repo.load(block.id, {children: true})
+      } catch (error) {
+        if (!cancelled) console.warn('useChildIds load failed', error)
+      }
+      refresh()
+    }
+    // Cold-mount kickoff. The deduped load handles concurrent calls.
+    void reloadAndRefresh()
+
+    const unsubscribeCache = repo.cache.subscribe(block.id, refresh)
     const unsubscribeDb = repo.db.onChange(
       {
         onChange: () => {
-          setChildIds(prev => {
-            const next = safeChildIds(repo, block.id)
-            return arraysEqual(prev, next) ? prev : next
-          })
+          // Re-load children from SQL (catches sync-applied inserts
+          // that didn't pass through the cache walk), then refresh.
+          void reloadAndRefresh()
+        },
+        onError: (error) => {
+          console.warn('useChildIds onChange error', error)
         },
       },
       {tables: ['blocks'], throttleMs: 32},
     )
     return () => {
+      cancelled = true
       unsubscribeCache()
       unsubscribeDb()
     }
