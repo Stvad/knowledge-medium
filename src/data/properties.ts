@@ -1,125 +1,202 @@
-import { useUIStateProperty } from '@/data/globalState.ts'
-import {
-  BlockProperty,
-  StringBlockProperty,
-  NumberBlockProperty,
-  BooleanBlockProperty,
-  ObjectBlockProperty,
-  ListBlockProperty,
-  EditorSelectionState, BlockPropertyValue,
-} from '@/types'
-import { reassembleTagProducer } from '@/utils/templateLiterals.ts'
-import { removeUndefined } from '@/utils/object.ts'
-import { Block } from '@/data/block.ts'
-
-const defineCreatorFunction = <T extends BlockProperty>(type: string) =>
-  (name: string, value?: T['value'], changeScope?: string): T => removeUndefined({
-    name,
-    type,
-    value,
-    changeScope,
-  }) as T
-
-export const stringProperty = defineCreatorFunction<StringBlockProperty>('string')
-export const numberProperty = defineCreatorFunction<NumberBlockProperty>('number')
-export const booleanProperty = defineCreatorFunction<BooleanBlockProperty>('boolean')
-export const boolProp = booleanProperty
-export const objectProperty = <V extends object>(
-  name: string,
-  value?: V,
-  changeScope?: string,
-): ObjectBlockProperty<V> => defineCreatorFunction<ObjectBlockProperty<V>>('object')(name, value, changeScope)
-
-export const listProperty = <T extends BlockPropertyValue>(
-  name: string,
-  value?: T[],
-  changeScope?: string,
-): ListBlockProperty<T> => defineCreatorFunction<ListBlockProperty<T>>('list')(name, value, changeScope)
-
-export const sp = reassembleTagProducer(stringProperty)
-export const np = reassembleTagProducer(numberProperty)
-export const bp = reassembleTagProducer(booleanProperty)
-
-export const fromList = (...values: BlockProperty[]) =>
-  Object.fromEntries(values.map(v => [v.name, v]))
-
-export const aliasProp = (aliases: string[] = []) =>
-  listProperty<string>('alias', aliases)
-
-export const useIsEditing = () => useUIStateProperty(isEditingProp)
-
-export const uiChangeScope = 'ui-state'
 /**
- * Common prop configs
+ * Kernel + UI-state property descriptors. Each export is a
+ * `PropertySchema<T>` (data-layer definition with codec + default +
+ * change scope + kind). React UI contributions live separately under
+ * `propertyUiFacet` (Phase 3). See spec §4.1.1 / §5.6 / §6.
+ *
+ * Migration note (1.6): legacy creator helpers (`stringProperty`,
+ * `boolProp`, `objectProperty`, etc.) returned a record-shape
+ * `{name, type, value}` that doubled as schema AND value. The new
+ * shape is flat — `block.set(schema, value)` / `block.get(schema)`
+ * encode/decode through the codec; storage holds the encoded value
+ * directly. Helpers like `aliasProp(['x','y'])` (which embedded a
+ * default value into the descriptor) are gone — the schema's
+ * `defaultValue` is the single source of truth, callers pass values
+ * via `block.set(schema, value)`.
  */
+import { Block } from '@/data/internals/block'
+import {
+  ChangeScope,
+  codecs,
+  defineProperty,
+  type PropertySchema,
+} from '@/data/api'
 
-// System properties
-export const showPropertiesProp = boolProp('system:showProperties', false, uiChangeScope)
-export const isCollapsedProp = boolProp('system:collapsed', false, uiChangeScope)
-export const isEditingProp = boolProp('isEditing', false, uiChangeScope)
-export const topLevelBlockIdProp = stringProperty('topLevelBlockId', undefined, uiChangeScope)
-export const focusedBlockIdProp = stringProperty('focusedBlockId', undefined, uiChangeScope)
-export const editorSelection = objectProperty<EditorSelectionState>('editorSelection', undefined, uiChangeScope)
-export const editorFocusRequestProp = numberProperty('editorFocusRequest', 0, uiChangeScope)
-export const recentBlockIdsProp = listProperty<string>('recentBlockIds', [], uiChangeScope)
+// ──── UI-state schemas (changeScope: UiState) ────
+
+export const showPropertiesProp = defineProperty<boolean>('system:showProperties', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.UiState,
+  kind: 'boolean',
+})
+
+export const isCollapsedProp = defineProperty<boolean>('system:collapsed', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.UiState,
+  kind: 'boolean',
+})
+
+export const isEditingProp = defineProperty<boolean>('isEditing', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.UiState,
+  kind: 'boolean',
+})
+
+export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelBlockId', {
+  codec: codecs.optional(codecs.string),
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+  kind: 'string',
+})
+
+export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlockId', {
+  codec: codecs.optional(codecs.string),
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+  kind: 'string',
+})
+
+/** Editor-selection state for the active block. Object-typed; the
+ *  `unsafeIdentity` codec is appropriate because the shape is engine-
+ *  controlled and not exposed for plugin extension. */
+export interface EditorSelectionState {
+  blockId: string
+  start?: number
+  end?: number
+}
+
+export const editorSelection = defineProperty<EditorSelectionState | undefined>('editorSelection', {
+  codec: codecs.optional<EditorSelectionState>(codecs.unsafeIdentity<EditorSelectionState>()),
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+  kind: 'object',
+})
+
+export const editorFocusRequestProp = defineProperty<number>('editorFocusRequest', {
+  codec: codecs.number,
+  defaultValue: 0,
+  changeScope: ChangeScope.UiState,
+  kind: 'number',
+})
+
+export const recentBlockIdsProp = defineProperty<string[]>('recentBlockIds', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.UiState,
+  kind: 'list',
+})
+
+export interface BlockSelectionState {
+  selectedBlockIds: string[]
+  anchorBlockId: string | null
+}
+
+export const selectionStateProp = defineProperty<BlockSelectionState>('blockSelectionState', {
+  codec: codecs.unsafeIdentity<BlockSelectionState>(),
+  defaultValue: {selectedBlockIds: [], anchorBlockId: null},
+  changeScope: ChangeScope.UiState,
+  kind: 'object',
+})
+
+// ──── Block-content schemas (changeScope: BlockDefault) ────
+
+export const typeProp = defineProperty<string | undefined>('type', {
+  codec: codecs.optional(codecs.string),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'string',
+})
+
+export const rendererProp = defineProperty<string | undefined>('renderer', {
+  codec: codecs.optional(codecs.string),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'string',
+})
+
+export const rendererNameProp = defineProperty<string | undefined>('rendererName', {
+  codec: codecs.optional(codecs.string),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'string',
+})
+
+/** Extension lifecycle — content-scope (a flagged extension stays
+ *  disabled across reloads, so writes go to the upload queue). */
+export const extensionDisabledProp = defineProperty<boolean>('system:disabled', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'boolean',
+})
+
+export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
+  codec: codecs.optional(codecs.number),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'number',
+})
+
+export const currentLoadTimeProp = defineProperty<number | undefined>('currentLoadTime', {
+  codec: codecs.optional(codecs.number),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'number',
+})
+
+export const createdAtProp = defineProperty<number | undefined>('createdAt', {
+  codec: codecs.optional(codecs.number),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'number',
+})
+
+export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlockId', {
+  codec: codecs.optional(codecs.string),
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'string',
+})
+
+/** Re-export of the canonical alias schema (defined under
+ *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
+ *  processor can reference it without circling back through this
+ *  module). Kept here so call-site migrations can import every
+ *  descriptor from a single path. */
+export { aliasesProp } from '@/data/internals/coreProperties'
+
+// ──── Helpers ────
 
 export const RECENT_BLOCKS_LIMIT = 10
 
-export const pushRecentBlockId = (uiStateBlock: Block, blockId: string) => {
-  const current = (uiStateBlock.dataSync()?.properties[recentBlockIdsProp.name]?.value as string[] | undefined) ?? []
+/** Push `blockId` to the front of the recent list (deduped, capped at
+ *  RECENT_BLOCKS_LIMIT). Fire-and-forget — UI-state writes don't need
+ *  to await. */
+export const pushRecentBlockId = (uiStateBlock: Block, blockId: string): void => {
+  const current = uiStateBlock.peekProperty(recentBlockIdsProp) ?? []
   const next = [blockId, ...current.filter(id => id !== blockId)].slice(0, RECENT_BLOCKS_LIMIT)
-  uiStateBlock.setProperty({...recentBlockIdsProp, value: next})
+  void uiStateBlock.set(recentBlockIdsProp, next)
 }
 
-export interface BlockSelectionState {
-  selectedBlockIds: string[];
-  anchorBlockId: string | null;
-}
-
-export const selectionStateProp: ObjectBlockProperty<BlockSelectionState> = objectProperty<BlockSelectionState>(
-  'blockSelectionState',
-  {
-    selectedBlockIds: [],
-    anchorBlockId: null,
-  },
-  uiChangeScope,
-)
-
-// Block type properties
-export const typeProp = stringProperty('type')
-export const rendererProp = stringProperty('renderer')
-export const rendererNameProp = stringProperty('rendererName')
-
-// Extension lifecycle properties — content-scope (a flagged extension
-// stays disabled across reloads), so no uiChangeScope.
-export const extensionDisabledProp = boolProp('system:disabled', false)
-
-// Timing properties
-export const previousLoadTimeProp = numberProperty('previousLoadTime')
-export const currentLoadTimeProp = numberProperty('currentLoadTime')
-export const createdAtProp = numberProperty('createdAt')
-
-// Block reference properties
-export const sourceBlockIdProp = stringProperty('sourceBlockId')
-
-
-export const setIsEditing = (uiStateBlock: Block, editing: boolean) => {
-  // In a read-only workspace, refuse the transition into edit mode at the
-  // source. Wrappers like enterBlockEditMode / enterEditMode also short-
-  // circuit, but gating here keeps any future caller honest.
+/** Set the editing flag on the UI-state block. Refuses to enter edit
+ *  mode in a read-only repo (workspace viewer) — the wrappers also
+ *  short-circuit, but this gate keeps any new caller honest. */
+export const setIsEditing = (uiStateBlock: Block, editing: boolean): void => {
   if (editing && uiStateBlock.repo.isReadOnly) return
-  uiStateBlock.setProperty({...isEditingProp, value: editing})
-}
-export const setFocusedBlockId = (uiStateBlock: Block, id: string) => {
-  uiStateBlock.setProperty({...focusedBlockIdProp, value: id})
+  void uiStateBlock.set(isEditingProp, editing)
 }
 
-export const requestEditorFocus = (uiStateBlock: Block) => {
-  const currentRequestId =
-    (uiStateBlock.dataSync()?.properties[editorFocusRequestProp.name]?.value as number | undefined) ?? 0
-
-  uiStateBlock.setProperty({
-    ...editorFocusRequestProp,
-    value: currentRequestId + 1,
-  })
+export const setFocusedBlockId = (uiStateBlock: Block, id: string): void => {
+  void uiStateBlock.set(focusedBlockIdProp, id)
 }
+
+export const requestEditorFocus = (uiStateBlock: Block): void => {
+  const current = uiStateBlock.peekProperty(editorFocusRequestProp) ?? 0
+  void uiStateBlock.set(editorFocusRequestProp, current + 1)
+}
+
+// Re-export PropertySchema for callers who want to type-narrow.
+export type { PropertySchema }
