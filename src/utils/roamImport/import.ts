@@ -375,6 +375,13 @@ const ensurePlaceholderRow = async (
     // backlinks and property values can persist into the upgrade
     // window (and indefinitely if the planned content is also empty).
     await tx.restore(id, {content: '', references: [], properties: {}})
+    // Move the restored row to the placeholder location. tx.restore
+    // alone keeps parentId / orderKey at whatever they were when the
+    // tombstone was created — that may be under a deleted parent or
+    // somewhere else entirely, neither of which is a valid spot for
+    // an unresolved ((uid)) placeholder. Match the fresh-create branch
+    // above: parent_id = NULL, order_key = 'a0'.
+    await tx.move(id, {parentId: null, orderKey: 'a0'})
   }
 }
 

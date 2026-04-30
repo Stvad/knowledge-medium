@@ -514,6 +514,13 @@ export class Repo {
    *  includeRoot=false / opts-driven one-shot, use `repo.loadSubtree`.
    *
    *  Dependencies declared:
+   *    - `row` + `parent-edge` on `id` declared upfront — covers two
+   *      edge cases: (a) the root is missing on first load and the
+   *      result rows array is empty, leaving us with no per-row deps
+   *      to invalidate against when the root is later created; and
+   *      (b) a child insert/move that lands while SUBTREE_SQL is in
+   *      flight — the mid-load invalidation fix needs an upfront dep
+   *      to match against.
    *    - `parent-edge` on every visited id — any row whose `parent_id`
    *      lands inside the subtree invalidates (new descendant arriving
    *      via sync, descendant moved out, etc.).
@@ -526,6 +533,11 @@ export class Repo {
         store: this.handleStore,
         key,
         loader: async (ctx) => {
+          // Upfront deps — declared before SQL so empty-result and
+          // mid-load invalidations have something to match against.
+          // Re-declared per-row below; HandleStore tolerates duplicates.
+          ctx.depend({kind: 'row', id})
+          ctx.depend({kind: 'parent-edge', parentId: id})
           const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
           const out: BlockData[] = []
           const seen = new Set<string>()

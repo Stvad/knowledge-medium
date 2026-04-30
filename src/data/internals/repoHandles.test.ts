@@ -138,14 +138,25 @@ describe('repo.subtree(id)', () => {
     expect(env.cache.areChildrenLoaded('b')).toBe(true)
   })
 
-  it('declares row + parent-edge on every visited id', async () => {
+  it('declares row + parent-edge on every visited id (and upfront on root)', async () => {
     await create('r')
     await create('a', {parentId: 'r', orderKey: 'a0'})
     const h = env.repo.subtree('r')
     await h.load()
     const deps = h.__depsForTest()
-    expect(depIds(deps, 'row').sort()).toEqual(['a', 'r'])
-    expect(depIds(deps, 'parent-edge').sort()).toEqual(['a', 'r'])
+    // Subtree declares root deps upfront BEFORE the SQL (so empty-result
+    // and mid-load cases still match) AND per-row during the walk.
+    // The duplicate `row:r` is intentional — assert against the unique set.
+    expect(new Set(depIds(deps, 'row'))).toEqual(new Set(['a', 'r']))
+    expect(new Set(depIds(deps, 'parent-edge'))).toEqual(new Set(['a', 'r']))
+  })
+
+  it('declares root deps even when the subtree is empty (root not yet created)', async () => {
+    const h = env.repo.subtree('not-yet')
+    await h.load()
+    const deps = h.__depsForTest()
+    expect(depIds(deps, 'row')).toEqual(['not-yet'])
+    expect(depIds(deps, 'parent-edge')).toEqual(['not-yet'])
   })
 })
 
