@@ -9,8 +9,8 @@ import { memoize } from 'lodash'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 import {
+  buildLocalPersonalWorkspace,
   canAccessRemoteWorkspace,
-  ensureLocalPersonalWorkspace,
   ensurePersonalWorkspace,
   getLocalMemberRole,
   getLocalWorkspace,
@@ -101,10 +101,12 @@ const resolveWorkspace = async (
 
   // Remote sync disabled (e.g. dev mode without VITE_SUPABASE_*) and
   // nothing local yet: synthesize a deterministic per-user personal
-  // workspace + owner membership locally so the rest of bootstrap
-  // (seedTutorial, daily note, Tutorial bullet) can run unchanged.
-  const local = await ensureLocalPersonalWorkspace(repo)
-  return {id: local.workspace.id, freshlyCreated: local.inserted}
+  // workspace + owner membership and prime, mirroring the remote
+  // branch's prime-and-return shape. Bootstrap (seedTutorial, daily
+  // note, Tutorial bullet) then runs unchanged on freshlyCreated=true.
+  const built = buildLocalPersonalWorkspace(repo.user)
+  await primeLocalWorkspaceAndMember(repo, built.workspace, built.member)
+  return {id: built.workspace.id, freshlyCreated: true}
 }
 
 const getInitialBlock = memoize(
