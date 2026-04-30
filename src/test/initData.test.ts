@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { PowerSyncDatabase } from '@powersync/web'
-import { Repo } from '@/data/repo'
+import { Repo } from '@/data/internals/repo'
 import { UndoRedoManager } from '@/data/undoRedo'
 import { seedTutorial } from '@/initData'
 

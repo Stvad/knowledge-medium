@@ -8,7 +8,7 @@ import {
   MultiSelectModeDependencies,
   PropertyEditingDependencies,
 } from '@/shortcuts/types.ts'
-import { Block } from '@/data/block'
+import { Block } from '@/data/internals/block'
 import { EditorView } from '@codemirror/view'
 
 const isBaseShortcutDependencies = (deps: unknown): deps is BaseShortcutDependencies =>

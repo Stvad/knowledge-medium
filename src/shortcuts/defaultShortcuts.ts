@@ -13,8 +13,8 @@ import {
   defaultChangeScope,
   Block,
   getRootBlock,
-} from '@/data/block.ts'
-import { Repo } from '@/data/repo.ts'
+} from '@/data/internals/block'
+import { Repo } from '@/data/internals/repo'
 import { importState } from '@/utils/state.ts'
 import {
   focusedBlockIdProp,

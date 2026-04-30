@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import { useRepo } from '@/context/repo.tsx'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
@@ -82,7 +82,7 @@ export function AppRuntimeProvider({
     errorStore.reset()
 
     const workspaceId =
-      landingBlock.dataSync()?.workspaceId ?? repo.activeWorkspaceId
+      landingBlock.peek()?.workspaceId ?? repo.activeWorkspaceId
     if (!workspaceId) {
       // Should not happen — getInitialBlock sets activeWorkspaceId
       // before any render. If it does, there's nothing to load.

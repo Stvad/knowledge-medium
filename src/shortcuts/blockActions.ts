@@ -2,8 +2,8 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
   Block,
-} from '@/data/block.ts'
-import { Repo } from '@/data/repo.ts'
+} from '@/data/internals/block'
+import { Repo } from '@/data/internals/repo'
 import { resetBlockSelection } from '@/data/globalState.ts'
 import {
   editorSelection,

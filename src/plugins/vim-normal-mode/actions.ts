@@ -3,8 +3,8 @@ import {
   getLastVisibleDescendant,
   nextVisibleBlock,
   previousVisibleBlock,
-} from '@/data/block.ts'
-import { Repo } from '@/data/repo.ts'
+} from '@/data/internals/block'
+import { Repo } from '@/data/internals/repo'
 import {
   isCollapsedProp,
   setFocusedBlockId,

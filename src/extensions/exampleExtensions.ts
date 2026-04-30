@@ -14,7 +14,7 @@
 // bullet, children, properties, and edit affordances; only the
 // content area is customized.
 
-import type { Block } from '@/data/block.ts'
+import type { Block } from '@/data/internals/block'
 import { typeProp } from '@/data/properties.ts'
 
 export interface ExampleExtensionDefinition {

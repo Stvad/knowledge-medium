@@ -7,7 +7,7 @@ import { QuickFind } from '@/components/QuickFind.tsx'
 import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import { useUserBlock } from '@/data/globalState.ts'
 import { previousLoadTimeProp, currentLoadTimeProp, uiChangeScope } from '@/data/properties.ts'
 

@@ -7,7 +7,7 @@ import {
   FacetContribution,
 } from '@/extensions/facet.ts'
 import { extensionDisabledProp } from '@/data/properties.ts'
-import { Repo } from '@/data/repo.ts'
+import { Repo } from '@/data/internals/repo'
 import { BlockData } from '@/types.ts'
 
 export interface ExtensionLoadErrorReporter {

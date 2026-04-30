@@ -1,6 +1,6 @@
 import type { HTMLAttributes, MouseEvent } from 'react'
 import type { EditorView } from '@codemirror/view'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import {
   editorSelection,
   selectionStateProp,
@@ -12,7 +12,7 @@ import {
   getSelectionStateSnapshot,
   resetBlockSelection,
 } from '@/data/globalState.ts'
-import { Repo } from '@/data/repo.ts'
+import { Repo } from '@/data/internals/repo'
 import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.ts'
 import type { ActionContextActivation } from '@/shortcuts/types.ts'
 import type { BlockRenderer } from '@/types.ts'

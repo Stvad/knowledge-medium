@@ -1,7 +1,7 @@
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
-import { Repo } from '@/data/repo.ts'
+import { Repo } from '@/data/internals/repo'
 
 export interface DescribeRuntimeContext {
   landingBlock: Block

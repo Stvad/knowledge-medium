@@ -1,6 +1,6 @@
 import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react-codemirror'
 import { EditorSelectionState } from '@/types.ts'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import {
   useIsEditing,
   editorSelection,

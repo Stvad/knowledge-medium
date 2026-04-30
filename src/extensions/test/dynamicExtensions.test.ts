@@ -12,7 +12,7 @@ import {
   type AppExtension,
   type FacetContribution,
 } from '@/extensions/facet'
-import type { Repo } from '@/data/repo'
+import type { Repo } from '@/data/internals/repo'
 import type { BlockData, BlockProperties } from '@/types'
 
 // Test-local facet so contributions don't pollute / collide with the

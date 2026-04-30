@@ -1,5 +1,5 @@
 import { MouseEvent } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import { BlockContextType } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'

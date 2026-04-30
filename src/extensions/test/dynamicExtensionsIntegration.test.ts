@@ -10,7 +10,7 @@ import {
   resolveFacetRuntime,
   type AppExtension,
 } from '@/extensions/facet'
-import type { Repo } from '@/data/repo'
+import type { Repo } from '@/data/internals/repo'
 import type { BlockData, BlockProperties } from '@/types'
 
 // Mirror the seam used by the rest of the suite: a test-local facet so

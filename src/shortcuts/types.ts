@@ -1,4 +1,4 @@
-import { Block } from '@/data/block';
+import { Block } from '@/data/internals/block';
 import { Optional } from '@/utils/types.ts'
 import { EditorView } from '@codemirror/view'
 

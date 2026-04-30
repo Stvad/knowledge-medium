@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef } from 'react'
 import React from 'react'
 import ReactDOM from 'react-dom'
-import { Block } from '@/data/block.ts'
-import { Repo } from '@/data/repo.ts'
+import { Block } from '@/data/internals/block'
+import type { Repo } from '@/data/internals/repo'
+import { ChangeScope, type BlockData } from '@/data/api'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { describeRuntime } from '@/agentRuntime/describeRuntime.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { BlockData, BlockProperties } from '@/types.ts'
+import { BlockProperties } from '@/types.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
 
 type SqlMode = 'all' | 'get' | 'optional' | 'execute'
@@ -28,10 +29,10 @@ interface AgentRuntimeContext {
   safeMode: boolean
   sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
   block: (id: string) => Block
-  getBlock: (id: string) => Promise<BlockData | undefined>
+  getBlock: (id: string) => Promise<BlockData | null>
   getSubtree: (rootId?: string, includeRoot?: boolean) => Promise<BlockData[]>
-  createBlock: (input?: CreateBlockInput) => Promise<BlockData | undefined>
-  updateBlock: (input: UpdateBlockInput) => Promise<BlockData | undefined>
+  createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
+  updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime
@@ -54,7 +55,6 @@ interface UpdateBlockInput {
   content?: string
   properties?: BlockProperties
   replaceProperties?: boolean
-  childIds?: string[]
 }
 
 interface UseAgentRuntimeBridgeOptions {
@@ -146,8 +146,6 @@ const runSql = async (
   params: unknown[] = [],
   mode: SqlMode = 'all',
 ) => {
-  await repo.flush()
-
   if (mode === 'get') {
     return repo.db.get(sql, params)
   }
@@ -155,63 +153,85 @@ const runSql = async (
     return repo.db.getOptional(sql, params)
   }
   if (mode === 'execute') {
-    const result = await repo.db.execute(sql, params)
-    await repo.flush()
-    return result
+    return repo.db.execute(sql, params)
   }
-
   return repo.db.getAll(sql, params)
+}
+
+/** Translate the agent's `position` shape into the kernel mutator's
+ *  `position` arg. The legacy bridge accepted `'first' | 'last' |
+ *  number` (a numeric index); the new mutator-level position is
+ *  `{kind: 'first'|'last'|'before'|'after', siblingId?}`. We map
+ *  numeric indices best-effort: 0 → 'first', anything else → 'last'.
+ *  Calls that need precise positional inserts can issue tx.move
+ *  through the `eval` channel. */
+const mapPosition = (
+  position: BlockPosition | undefined,
+): {kind: 'first'} | {kind: 'last'} | undefined => {
+  if (position === undefined || position === 'last') return {kind: 'last'}
+  if (position === 'first' || position === 0) return {kind: 'first'}
+  return {kind: 'last'}
 }
 
 const createRuntimeBlock = async (
   repo: Repo,
   input: CreateBlockInput = {},
-) => {
-  const data = {
-    ...(input.data ?? {}),
-    ...(input.content !== undefined ? {content: input.content} : {}),
-    ...(input.properties !== undefined ? {properties: input.properties} : {}),
-  }
+): Promise<BlockData | null> => {
+  const content = input.content ?? (input.data?.content as string | undefined) ?? ''
+  const properties = input.properties ?? (input.data?.properties as Record<string, unknown> | undefined)
 
   if (input.parentId) {
-    const parent = repo.find(input.parentId)
-    await parent.data()
-    const block = await parent.createChild({
-      data,
-      position: input.position ?? 'last',
-    })
-    await repo.flush()
-    return block.data()
+    const id = await repo.mutate.createChild({
+      parentId: input.parentId,
+      content,
+      properties,
+      position: mapPosition(input.position),
+    }) as string
+    return repo.load(id)
   }
 
-  const block = repo.create(data)
-  await repo.flush()
-  return block.data()
+  // Parent-less create. Workspace must be supplied somehow — the
+  // agent input doesn't carry one explicitly, so use the active
+  // workspace pin (set by App boot). If no pin, this is a hard error.
+  const workspaceId = (input.data?.workspaceId as string | undefined) ?? repo.activeWorkspaceId
+  if (!workspaceId) {
+    throw new Error('createBlock with no parentId requires an active workspace')
+  }
+  const id = (input.data?.id as string | undefined) ?? crypto.randomUUID()
+  await repo.tx(async tx => {
+    await tx.create({
+      id,
+      workspaceId,
+      parentId: null,
+      orderKey: (input.data?.orderKey as string | undefined) ?? 'a0',
+      content,
+      properties,
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime create root block'})
+  return repo.load(id)
 }
 
 const updateRuntimeBlock = async (
   repo: Repo,
   input: UpdateBlockInput,
-) => {
-  const block = repo.find(input.id)
-  await block.data()
+): Promise<BlockData | null> => {
+  const before = await repo.load(input.id)
+  if (!before) throw new Error(`updateBlock: block ${input.id} not found`)
 
-  block.change((doc) => {
-    if (input.content !== undefined) {
-      doc.content = input.content
-    }
-    if (input.properties !== undefined) {
-      doc.properties = input.replaceProperties
-        ? structuredClone(input.properties)
-        : {...doc.properties, ...structuredClone(input.properties)}
-    }
-    if (input.childIds !== undefined) {
-      doc.childIds = [...input.childIds]
-    }
-  }, {description: 'Agent runtime block update'})
+  const nextProperties = input.properties === undefined
+    ? undefined
+    : input.replaceProperties
+      ? structuredClone(input.properties) as Record<string, unknown>
+      : {...before.properties, ...structuredClone(input.properties)} as Record<string, unknown>
 
-  await repo.flush()
-  return block.data()
+  await repo.tx(async tx => {
+    await tx.update(input.id, {
+      ...(input.content !== undefined ? {content: input.content} : {}),
+      ...(nextProperties !== undefined ? {properties: nextProperties} : {}),
+    })
+  }, {scope: ChangeScope.BlockDefault, description: 'agent runtime block update'})
+
+  return repo.load(input.id)
 }
 
 const executeCommand = async (
@@ -270,6 +290,18 @@ const executeCommand = async (
         throw new Error('properties must be an object')
       }
 
+      // childIds direct replacement is dropped — the new tree shape
+      // stores parent_id+order_key as the source of truth, not a
+      // childIds array. Agents that need to reorder children should
+      // issue tx.move calls per child via the eval channel.
+      if (command.childIds !== undefined) {
+        if (!isStringArray(command.childIds)) {
+          throw new Error('childIds must be an array of strings')
+        }
+        throw new Error(
+          'childIds replacement is no longer supported by update-block; use repo.mutate.move per child instead',
+        )
+      }
       return context.updateBlock({
         id: requireString(command.blockId ?? command.id, 'blockId'),
         content: command.content === undefined
@@ -277,13 +309,6 @@ const executeCommand = async (
           : requireString(command.content, 'content'),
         properties,
         replaceProperties: Boolean(command.replaceProperties),
-        childIds: command.childIds === undefined
-          ? undefined
-          : isStringArray(command.childIds)
-            ? command.childIds
-            : (() => {
-              throw new Error('childIds must be an array of strings')
-            })(),
       })
     }
 
@@ -382,7 +407,7 @@ const serializeValue = (value: unknown, seen = new WeakSet<object>()): unknown =
     return {
       type: 'Block',
       id: value.id,
-      data: serializeValue(value.dataSync(), seen),
+      data: serializeValue(value.peek(), seen),
     }
   }
 
@@ -500,13 +525,10 @@ export function useAgentRuntimeBridge({
         runtime: currentRuntime,
         safeMode: currentSafeMode,
         sql: (sql, params, mode) => runSql(currentRepo, sql, params, mode),
-        block: id => currentRepo.find(id),
-        getBlock: async id => {
-          const block = currentRepo.find(id)
-          return block.data()
-        },
+        block: id => currentRepo.block(id),
+        getBlock: id => currentRepo.load(id),
         getSubtree: (rootId, includeRoot) =>
-          currentRepo.getSubtreeBlockData(rootId ?? currentLandingBlock.id, {includeRoot}),
+          currentRepo.subtree(rootId ?? currentLandingBlock.id, {includeRoot}),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
         actions: readRuntimeActions(currentRuntime),
@@ -528,7 +550,7 @@ export function useAgentRuntimeBridge({
 
       return postJson(`${baseUrl}/runtime/clients/${clientId}`, {
         landingBlockId: currentLandingBlock.id,
-        currentUser: currentRepo.currentUser,
+        currentUser: currentRepo.user,
         safeMode: currentSafeMode,
         href: window.location.href,
         userAgent: window.navigator.userAgent,
@@ -567,7 +589,6 @@ export function useAgentRuntimeBridge({
 
           try {
             const value = await executeCommand(command, context())
-            await latestContext.current.repo.flush()
             await reportResult(command.commandId, {
               ok: true,
               value: serializeValue(value),

@@ -93,8 +93,8 @@ export {
 } from '@/shortcuts/blockActions.ts'
 
 // --- Block / data primitives ---
-export { Block } from '@/data/block.ts'
-export { Repo } from '@/data/repo.ts'
+export { Block } from '@/data/internals/block'
+export { Repo } from '@/data/internals/repo'
 export { getActivePanelBlock, getPanelsBlock } from '@/data/globalState.ts'
 export {
   boolProp,

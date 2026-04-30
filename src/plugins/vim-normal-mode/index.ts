@@ -4,7 +4,7 @@ import {
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
 import { AppExtension } from '@/extensions/facet.ts'
-import { Repo } from '@/data/repo.ts'
+import { Repo } from '@/data/internals/repo'
 import { vimNormalModeActionsExtension } from './actions.ts'
 import {
   vimBlockClickBehavior,

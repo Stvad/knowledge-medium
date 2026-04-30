@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { Block } from '@/data/block.ts'
-import type { Repo } from '@/data/repo.ts'
+import type { Block } from '@/data/internals/block'
+import type { Repo } from '@/data/internals/repo'
 import type { BlockRenderer } from '@/types.ts'
 import {
   blockContentRendererFacet,

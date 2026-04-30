@@ -73,6 +73,10 @@ export interface PowerSyncDb {
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
   get<T>(sql: string, params?: unknown[]): Promise<T>
+  /** Execute an arbitrary SQL statement (no result rows). Used by the
+   *  agent runtime bridge for `mode='execute'` SQL. Avoid in
+   *  application code — every write should go through `repo.tx`. */
+  execute(sql: string, params?: unknown[]): Promise<unknown>
   onChange(
     handler: PowerSyncDbChangeHandler,
     options?: PowerSyncDbChangeOptions,

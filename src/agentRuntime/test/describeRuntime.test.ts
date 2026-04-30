@@ -6,8 +6,8 @@ import {
   getApiSurface,
 } from '@/agentRuntime/describeRuntime.ts'
 import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
-import type { Block } from '@/data/block.ts'
-import type { Repo } from '@/data/repo.ts'
+import type { Block } from '@/data/internals/block'
+import type { Repo } from '@/data/internals/repo'
 import type { ActionConfig } from '@/shortcuts/types.ts'
 
 beforeEach(() => {

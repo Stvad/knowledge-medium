@@ -1,7 +1,7 @@
 import {BlockData} from '../types.ts'
 import {isNotNullish} from './types.ts'
-import { Block } from '@/data/block.ts'
-import { Repo } from '@/data/repo.ts'
+import { Block } from '@/data/internals/block'
+import { Repo } from '@/data/internals/repo'
 
 export const importState = async (
   state: { blocks: Partial<BlockData>[] },

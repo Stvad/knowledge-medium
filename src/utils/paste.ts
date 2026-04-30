@@ -1,5 +1,5 @@
-import { Block } from '@/data/block.ts'
-import { Repo } from '@/data/repo.ts'
+import { Block } from '@/data/internals/block'
+import { Repo } from '@/data/internals/repo'
 import { importState } from '@/utils/state.ts'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.ts'
 

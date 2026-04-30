@@ -1,5 +1,5 @@
 import { FunctionComponent } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 
 // BlockData / BlockReference are the canonical domain shape; their definition
 // lives with the rest of the data-layer API in `@/data/api`. Re-exported here

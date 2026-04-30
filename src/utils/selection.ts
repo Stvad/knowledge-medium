@@ -1,5 +1,5 @@
-import { Block } from '@/data/block';
-import { Repo } from '@/data/repo';
+import { Block } from '@/data/internals/block';
+import { Repo } from '@/data/internals/repo';
 import { selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp } from '@/data/properties';
 import { getVisibleBlockIdsInOrder } from '@/data/blockTraversal.ts';
 

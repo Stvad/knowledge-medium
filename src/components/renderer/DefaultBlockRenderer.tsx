@@ -13,7 +13,7 @@ import {
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
 import { useRef, ClipboardEvent, useState, useMemo, Ref, useEffect } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import {
   useUIStateProperty,
   useUserProperty,
