@@ -296,7 +296,7 @@ describe('ProcessorRunner — awaitIdle wave', () => {
     // Two processors: A schedules B via afterCommit on its own
     // post-commit tx. awaitIdle should wait through both waves.
     const aCalls: Calls = {events: []}
-    const bCalls: Calls = {events: []}
+    const bCalls: Calls<undefined> = {events: []}
     let aRan = false
 
     const procB: AnyPostCommitProcessor = recordingExplicitProcessor<undefined>('test.b', bCalls)

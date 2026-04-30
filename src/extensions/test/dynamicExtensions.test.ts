@@ -9,7 +9,6 @@ import {
 import {
   defineFacet,
   resolveFacetRuntime,
-  type AppExtension,
   type FacetContribution,
 } from '@/extensions/facet'
 import { extensionDisabledProp } from '@/data/properties'
