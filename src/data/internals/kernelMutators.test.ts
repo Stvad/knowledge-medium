@@ -97,6 +97,13 @@ describe('core.setProperty', () => {
     kind: 'string',
   })
 
+  const uiFlagProp = defineProperty<boolean>('ui:flag', {
+    codec: codecs.boolean,
+    defaultValue: false,
+    changeScope: ChangeScope.UiState,
+    kind: 'boolean',
+  })
+
   it('encodes the value via codec and stores under properties[name]', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
@@ -104,6 +111,46 @@ describe('core.setProperty', () => {
     )
     await env.repo.mutate.setProperty({id: 'p1', schema: titleProp, value: 'Hello'})
     expect(env.read('p1')!.properties.title).toBe('Hello')
+  })
+
+  it('derives tx scope from schema.changeScope: a UiState property writes as local-ephemeral', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.setProperty({id: 'p2', schema: uiFlagProp, value: true})
+    // Inspect command_events for the second tx; it should be tagged
+    // with scope=UiState and source=local-ephemeral, NOT BlockDefault/user.
+    const events = await env.h.db.getAll<{scope: string; source: string}>(
+      'SELECT scope, source FROM command_events ORDER BY created_at',
+    )
+    expect(events).toHaveLength(2)
+    expect(events[1]).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
+  })
+
+  it('UiState property writes are allowed in read-only mode (where BlockDefault writes throw)', async () => {
+    // Pre-seed a target row in a regular repo so the read-only repo
+    // has something to write to.
+    await env.repo.tx(
+      tx => tx.create({id: 'p3', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const ro = await import('./repo').then(m => new m.Repo({
+      db: env.h.db,
+      cache: env.cache,
+      user: {id: 'user-1', name: 'Test'},
+      isReadOnly: true,
+    }))
+    // BlockDefault throws ReadOnlyError; UiState passes through.
+    await expect(
+      ro.mutate.setProperty({id: 'p3', schema: titleProp, value: 'no'}),
+    ).rejects.toThrow(/read.?only/i)
+    await ro.mutate.setProperty({id: 'p3', schema: uiFlagProp, value: true})
+    // Local-ephemeral source so it didn't enter the upload queue.
+    const ephemeral = await env.h.db.getAll<{source: string}>(
+      "SELECT source FROM command_events WHERE scope = 'local-ui'",
+    )
+    expect(ephemeral.every(e => e.source === 'local-ephemeral')).toBe(true)
   })
 })
 

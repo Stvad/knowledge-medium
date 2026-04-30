@@ -132,7 +132,13 @@ export const setProperty = defineMutator<
 >({
   name: 'core.setProperty',
   argsSchema: setPropertySchema as unknown as { parse: (x: unknown) => {id: string; schema: PropertySchema<unknown>; value: unknown} },
-  scope: ChangeScope.BlockDefault,
+  // Scope is derived from the property's own `changeScope` so a UI-state
+  // schema's writes get `ChangeScope.UiState` (→ source='local-ephemeral',
+  // upload-routing trigger skips, allowed in read-only) and a content
+  // schema's writes get `ChangeScope.BlockDefault` (→ source='user',
+  // syncs, blocked in read-only). Without this, every property write
+  // would upload as content regardless of how it was declared.
+  scope: ({schema}) => schema.changeScope,
   describe: ({id, schema}) => `set property ${schema.name} on ${id}`,
   apply: async (tx, {id, schema, value}) => {
     await tx.setProperty(id, schema, value)
