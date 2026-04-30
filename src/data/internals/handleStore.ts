@@ -1,0 +1,427 @@
+/**
+ * HandleStore + LoaderHandle (spec §5.1, §9.1, §9.2).
+ *
+ * HandleStore is the central registry for `Handle<T>` instances.
+ *
+ *   - Identity rule: same key (`(name, JSON.stringify(args))`) → same handle
+ *     instance returned from `getOrCreate`.
+ *   - Ref-count GC: handles dispose `gcTimeMs` after refCount reaches zero
+ *     (drained subscribers + drained in-flight loads).
+ *   - Invalidation index: handles declare `Dependency`s during `resolve`;
+ *     the store walks an inverted index when `invalidate(change)` fires.
+ *
+ * LoaderHandle is the base implementation used by Repo's collection
+ * factories (`repo.children`, `repo.subtree`, etc.). It plumbs:
+ *
+ *   - peek / load / subscribe / read / status (the Handle<T> surface),
+ *   - structural diffing (lodash.isEqual default; spec §9.4),
+ *   - dependency declaration via a `ResolveContext` passed to the loader,
+ *   - retain/release wiring on subscribe/unsubscribe so the store can GC.
+ *
+ * Block does NOT register here — it has its own row-grain subscription
+ * via BlockCache.subscribe and is identity-stable through `Repo.blockFacades`.
+ * The Handle interface on Block (§5.2) is a structural fit on top of those
+ * existing primitives; HandleStore is the home for collection handles only.
+ */
+
+import { isEqual } from 'lodash'
+import type { Handle, HandleStatus, Unsubscribe } from '@/data/api'
+
+/** Dependency kinds (spec §9.2). A handle whose `Dependency` matches an
+ *  incoming `ChangeNotification` is invalidated and re-resolved. */
+export type Dependency =
+  | { kind: 'row'; id: string }
+  | { kind: 'parent-edge'; parentId: string }
+  | { kind: 'workspace'; workspaceId: string }
+  | { kind: 'table'; table: string }
+
+/** Set of changes the store walks against handle dependencies. The
+ *  fast path (TxEngine post-commit) and the slow path (row_events tail)
+ *  both produce notifications of this shape. Empty fields mean "no
+ *  changes of that kind." */
+export interface ChangeNotification {
+  rowIds?: ReadonlySet<string> | readonly string[]
+  /** Parent edges affected — for a row whose parent_id changed, BOTH
+   *  the old and new parent ids appear here (spec §9.2). */
+  parentIds?: ReadonlySet<string> | readonly string[]
+  workspaceIds?: ReadonlySet<string> | readonly string[]
+  tables?: ReadonlySet<string> | readonly string[]
+}
+
+/** Context handed to a handle's loader. The loader calls `depend(...)`
+ *  during resolve so the store can route future invalidations. */
+export interface ResolveContext {
+  depend(dep: Dependency): void
+}
+
+/** Loader callback shape for LoaderHandle. Receives a ResolveContext for
+ *  dep declaration and returns the value the handle exposes. */
+export type Loader<T> = (ctx: ResolveContext) => Promise<T>
+
+/** Default GC delay — after refCount hits zero the handle waits this
+ *  long before disposing, so a quick re-subscribe (re-render) doesn't
+ *  thrash. */
+const DEFAULT_GC_TIME_MS = 5_000
+
+export interface HandleStoreOptions {
+  gcTimeMs?: number
+  /** Schedule GC. Default `setTimeout`; tests inject a manual scheduler. */
+  schedule?: (cb: () => void, ms: number) => () => void
+}
+
+interface RegisteredHandle {
+  key: string
+  /** Walks deps; returns true if this handle should be invalidated. */
+  matches: (change: ChangeNotification) => boolean
+  /** Called by the store when an invalidation hits. The handle re-runs
+   *  its loader and notifies subscribers if the value changed. */
+  invalidate: () => void
+  /** Called when GC fires — handle clears its state, the store removes
+   *  the entry from the registry. */
+  dispose: () => void
+  /** Called from the store when the first subscriber is added or a load
+   *  starts; cancels any pending GC. */
+  retain: () => void
+  /** Called when the last subscriber drops or a load completes; if
+   *  refCount reaches zero, schedules dispose. */
+  release: () => void
+}
+
+/** Identity-stable registry of handles. */
+export class HandleStore {
+  private readonly handles = new Map<string, RegisteredHandle>()
+  private readonly gcTimeMs: number
+  private readonly schedule: (cb: () => void, ms: number) => () => void
+
+  constructor(opts?: HandleStoreOptions) {
+    this.gcTimeMs = opts?.gcTimeMs ?? DEFAULT_GC_TIME_MS
+    this.schedule =
+      opts?.schedule ??
+      ((cb, ms) => {
+        const t = setTimeout(cb, ms)
+        return () => clearTimeout(t)
+      })
+  }
+
+  /** Returns the GC delay in ms (used by LoaderHandle for its own
+   *  scheduling). */
+  getGcTimeMs(): number { return this.gcTimeMs }
+
+  getScheduler(): (cb: () => void, ms: number) => () => void { return this.schedule }
+
+  /** Get-or-create. Identity rule: same key → same instance. */
+  getOrCreate<T extends RegisteredHandle>(key: string, factory: () => T): T {
+    const existing = this.handles.get(key)
+    if (existing) return existing as T
+    const created = factory()
+    this.handles.set(key, created)
+    return created
+  }
+
+  /** Remove a key (called by the handle itself on dispose). */
+  remove(key: string): void { this.handles.delete(key) }
+
+  /** Walk all registered handles, invalidate the ones whose deps match. */
+  invalidate(change: ChangeNotification): void {
+    if (this.handles.size === 0) return
+    if (
+      (!change.rowIds || sizeOf(change.rowIds) === 0) &&
+      (!change.parentIds || sizeOf(change.parentIds) === 0) &&
+      (!change.workspaceIds || sizeOf(change.workspaceIds) === 0) &&
+      (!change.tables || sizeOf(change.tables) === 0)
+    ) {
+      return
+    }
+    // Snapshot the handle list — invalidate() may resolve synchronously
+    // in tests and trigger further changes; iterating a stable snapshot
+    // keeps that bounded.
+    const snapshot = Array.from(this.handles.values())
+    for (const h of snapshot) {
+      if (h.matches(change)) h.invalidate()
+    }
+  }
+
+  /** Test/debug: how many handles are currently registered. */
+  size(): number { return this.handles.size }
+
+  /** Dispose every handle (test cleanup). */
+  clear(): void {
+    const snapshot = Array.from(this.handles.values())
+    for (const h of snapshot) h.dispose()
+    this.handles.clear()
+  }
+}
+
+const sizeOf = (xs: ReadonlySet<string> | readonly string[]): number =>
+  xs instanceof Set ? xs.size : (xs as readonly string[]).length
+
+/** Generic loader-backed handle. The collection factories (`repo.children`,
+ *  `repo.subtree`, etc.) construct one of these with a key + loader. */
+export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
+  readonly key: string
+
+  private readonly store: HandleStore
+  private readonly loader: Loader<T>
+  private readonly equality: (a: T, b: T) => boolean
+
+  private value: T | undefined = undefined
+  private status_: HandleStatus = 'idle'
+  private error: unknown = undefined
+
+  private readonly listeners = new Set<(value: T) => void>()
+  private deps: Dependency[] = []
+
+  /** Inflight `load()` promise — dedup'd. Cleared once it settles. */
+  private inflight: Promise<T> | null = null
+  /** Suspense throw target — same as `inflight` while loading; let the
+   *  caller `await` the same promise React threw. */
+  private suspendingPromise: Promise<T> | null = null
+
+  /** Ref count = subscribers + inflight (1 if loading). Drives GC. */
+  private refCount = 0
+  private cancelGc: (() => void) | null = null
+  private disposed = false
+
+  constructor(args: {
+    store: HandleStore
+    key: string
+    loader: Loader<T>
+    /** Optional custom equality; defaults to lodash.isEqual (spec §9.4). */
+    equality?: (a: T, b: T) => boolean
+  }) {
+    this.store = args.store
+    this.key = args.key
+    this.loader = args.loader
+    this.equality = args.equality ?? isEqual
+  }
+
+  // ──── Handle<T> surface ────
+
+  peek(): T | undefined { return this.value }
+
+  status(): HandleStatus { return this.status_ }
+
+  load(): Promise<T> {
+    if (this.disposed) {
+      return Promise.reject(new Error(`Handle ${this.key} has been disposed`))
+    }
+    if (this.status_ === 'ready' && this.value !== undefined) {
+      return Promise.resolve(this.value)
+    }
+    if (this.inflight) return this.inflight
+    return this.runLoader()
+  }
+
+  /** Actually run the loader. Skips the cached-value short-circuit; used
+   *  by `load()` (cold path) and `invalidate()` (force re-resolve). */
+  private runLoader(): Promise<T> {
+    this.status_ = this.value === undefined ? 'loading' : this.status_
+    this.error = undefined
+    this.retain() // count the inflight load against GC
+
+    const collected: Dependency[] = []
+    const ctx: ResolveContext = {
+      depend(dep: Dependency) { collected.push(dep) },
+    }
+
+    const p = this.loader(ctx).then(
+      (value) => {
+        // Disposal during a load: don't apply, don't notify.
+        if (this.disposed) throw new Error(`Handle ${this.key} disposed mid-load`)
+        const priorValue = this.value
+        const hadPrior = this.status_ === 'ready' || this.status_ === 'error'
+        this.deps = collected
+        this.value = value
+        this.status_ = 'ready'
+        this.error = undefined
+        this.inflight = null
+        this.suspendingPromise = null
+        // Structural-diff: skip listener walk if value didn't change
+        // (spec §9.4). On the first successful load there's no prior
+        // value to compare against — always notify.
+        if (!hadPrior || priorValue === undefined || !this.equality(priorValue, value)) {
+          this.notify(value)
+        }
+        this.release() // drop the inflight ref
+        return value
+      },
+      (err) => {
+        if (!this.disposed) {
+          this.status_ = 'error'
+          this.error = err
+          this.inflight = null
+          this.suspendingPromise = null
+          // Don't clear deps — re-resolution may want them; but they
+          // weren't successfully captured anyway. Leave as-is.
+          this.release()
+        }
+        throw err
+      },
+    )
+    this.inflight = p
+    this.suspendingPromise = p
+    return p
+  }
+
+  subscribe(listener: (value: T) => void): Unsubscribe {
+    if (this.disposed) {
+      // Listening to a disposed handle is a no-op + immediate
+      // unsubscribe; callers should re-acquire via the factory.
+      return () => {}
+    }
+    this.listeners.add(listener)
+    this.retain()
+    // First subscriber kicks off a load if we're idle.
+    if (this.status_ === 'idle' && !this.inflight) {
+      void this.load().catch(() => {/* error stored on the handle */})
+    }
+    return () => {
+      if (!this.listeners.delete(listener)) return
+      this.release()
+    }
+  }
+
+  read(): T {
+    if (this.status_ === 'ready' && this.value !== undefined) return this.value
+    if (this.status_ === 'error') throw this.error
+    // Suspense path: throw a promise React can `await`.
+    if (this.suspendingPromise) throw this.suspendingPromise
+    // Idle: kick off a load and throw the resulting promise.
+    throw this.load()
+  }
+
+  // ──── RegisteredHandle surface (HandleStore-facing) ────
+
+  matches(change: ChangeNotification): boolean {
+    if (this.deps.length === 0) return false
+    for (const dep of this.deps) {
+      if (matchesDep(dep, change)) return true
+    }
+    return false
+  }
+
+  invalidate(): void {
+    if (this.disposed) return
+    // Force a re-resolve. Readers see the stale value via peek() until
+    // the new load completes — status stays 'ready' so the UI doesn't
+    // flash a Suspense fallback for in-place updates.
+    if (this.inflight) {
+      // Already re-resolving; the inflight call captures the latest
+      // dep state when it completes. Letting it ride avoids a thundering
+      // herd of retriggers when many invalidations land at once.
+      return
+    }
+    void this.runLoader().catch(() => {/* error on handle */})
+  }
+
+  retain(): void {
+    if (this.disposed) return
+    this.refCount++
+    if (this.cancelGc) {
+      this.cancelGc()
+      this.cancelGc = null
+    }
+  }
+
+  release(): void {
+    if (this.disposed) return
+    if (this.refCount === 0) return
+    this.refCount--
+    if (this.refCount === 0) {
+      const gcMs = this.store.getGcTimeMs()
+      if (gcMs <= 0) {
+        this.dispose()
+        return
+      }
+      this.cancelGc = this.store.getScheduler()(() => this.dispose(), gcMs)
+    }
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    if (this.cancelGc) {
+      this.cancelGc()
+      this.cancelGc = null
+    }
+    this.listeners.clear()
+    this.deps = []
+    this.value = undefined
+    this.status_ = 'idle'
+    this.inflight = null
+    this.suspendingPromise = null
+    this.store.remove(this.key)
+  }
+
+  // ──── private ────
+
+  private notify(value: T): void {
+    if (this.listeners.size === 0) return
+    // Structural-diff against the prior value cheaply: if the value
+    // didn't actually change (re-resolve produced an equal result),
+    // skip the listener walk.
+    // We compare against the value we've already stored (above caller
+    // updated `this.value` first — peek() must return the new value
+    // when listeners fire).
+    // Snapshot listeners — a listener may unsubscribe during dispatch.
+    const snapshot = Array.from(this.listeners)
+    for (const fn of snapshot) {
+      try { fn(value) } catch (err) {
+        // Listener errors must not break dispatch; surface via console.
+        console.error(`HandleStore listener error on ${this.key}:`, err)
+      }
+    }
+  }
+
+  /** Test-only: snapshot of declared dependencies. */
+  __depsForTest(): readonly Dependency[] { return this.deps }
+}
+
+const matchesDep = (dep: Dependency, change: ChangeNotification): boolean => {
+  switch (dep.kind) {
+    case 'row':
+      return change.rowIds ? has(change.rowIds, dep.id) : false
+    case 'parent-edge':
+      return change.parentIds ? has(change.parentIds, dep.parentId) : false
+    case 'workspace':
+      return change.workspaceIds ? has(change.workspaceIds, dep.workspaceId) : false
+    case 'table':
+      return change.tables ? has(change.tables, dep.table) : false
+  }
+}
+
+const has = (xs: ReadonlySet<string> | readonly string[], target: string): boolean => {
+  if (xs instanceof Set) return xs.has(target)
+  for (const x of xs) if (x === target) return true
+  return false
+}
+
+/** Stable args→key serializer. JSON.stringify with sorted object keys
+ *  so `{a:1,b:2}` and `{b:2,a:1}` yield the same key (spec identity rule). */
+export const stableArgsKey = (args: unknown): string => {
+  if (args === undefined || args === null) return ''
+  return JSON.stringify(args, sortedReplacer(args))
+}
+
+const sortedReplacer = (root: unknown) => {
+  // For plain objects, walk with sorted keys. Arrays + primitives untouched.
+  // We keep this allocation-free for the common no-object case via the
+  // root-type peek above.
+  if (typeof root !== 'object' || root === null || Array.isArray(root)) {
+    return undefined
+  }
+  return (_key: string, value: unknown) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const obj = value as Record<string, unknown>
+      const out: Record<string, unknown> = {}
+      for (const k of Object.keys(obj).sort()) out[k] = obj[k]
+      return out
+    }
+    return value
+  }
+}
+
+/** Compose a Handle key from a name + optional args. Used by Repo
+ *  factories to construct identity-stable keys. */
+export const handleKey = (name: string, args?: unknown): string =>
+  args === undefined ? name : `${name}:${stableArgsKey(args)}`

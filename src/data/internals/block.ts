@@ -1,17 +1,25 @@
 /**
- * New `Block` sync facade (spec §5.2). Loading is an explicit boundary
- * (`block.load()` or `repo.load(id, opts)`); post-load access is sync.
+ * `Block` — sync facade + Handle<BlockData|null> for a single block row
+ * (spec §5.1, §5.2).
  *
- * The legacy `Block` class at `src/data/block.ts` stays in place until
- * stage 1.6 sweeps the call sites; the new shape lives here under
- * `src/data/internals/block.ts` so the migration is mechanical.
+ * Block satisfies the Handle interface structurally (peek/load/subscribe/
+ * read/status/key) AND adds the OO sugar that 95% of imperative call
+ * sites use: `data` (sync, throws), `childIds` / `children` / `parent`
+ * (sync tree relatives), `get` / `peekProperty` (typed property reads),
+ * `set` / `setContent` / `delete` (single-block write sugar). Picking one
+ * object that does both jobs (vs. a separate `Handle` and `Block`) keeps
+ * the call-site surface uniform and unifies "row reactivity" with "row
+ * imperative work" under one identity-stable instance — see the
+ * data-layer-redesign task §13.2 design discussion.
  *
- * What this NOT-yet-includes (deferred to stage 2 of Phase 1):
- *   - HandleStore-backed reactive `subscribe` returning a Handle —
- *     `subscribe(listener)` here goes directly through `BlockCache.subscribe`,
- *     which gives the right behavior for the call-site sweep that uses
- *     `useSyncExternalStore` against the cache anyway.
- *   - `useHandle(handle)` adapter — comes when handles arrive.
+ * Identity: the same `Block` instance is returned from `repo.block(id)`
+ * for a given id (Repo holds them in `blockFacades`). Block does NOT
+ * register with `HandleStore` — its row-grain subscriptions go through
+ * `BlockCache.subscribe(id, …)` (already in place from Phase 1) and the
+ * cache fires whenever the snapshot changes. HandleStore is the registry
+ * for *collection* handles (`repo.children/subtree/ancestors/backlinks`),
+ * which need the dependency-shaped invalidation index that the row-grain
+ * cache already provides for free.
  */
 
 import {
@@ -19,19 +27,42 @@ import {
   BlockNotLoadedError,
   ChildrenNotLoadedError,
   type BlockData,
+  type Handle,
+  type HandleStatus,
   type PropertySchema,
   type Unsubscribe,
 } from '@/data/api'
 import type { Repo } from './repo'
 
-export class Block {
+export class Block implements Handle<BlockData | null> {
   readonly id: string
   readonly repo: Repo
+
+  /** Inflight `load()` promise — dedup'd at the Block level so Suspense
+   *  paths can throw a stable promise across renders. Cleared once it
+   *  settles. The cache also has its own `dedupLoad` helper, but
+   *  `repo.load` deliberately doesn't use it (different `opts` would
+   *  silently merge); doing the dedup here keeps `read()` honest. */
+  private inflight: Promise<BlockData | null> | null = null
+
+  /** Counts overlapping `load()` calls in flight. Drives `status()`'s
+   *  'loading' branch — needed since the cache itself doesn't know who
+   *  is currently loading what. */
+  private loadingCount = 0
+
+  /** Last error from a failed load. `status()` returns 'error' until the
+   *  next successful load clears it. */
+  private lastError: unknown = undefined
 
   constructor(repo: Repo, id: string) {
     this.repo = repo
     this.id = id
   }
+
+  /** Stable Handle key — namespaced so a handle store dedup index could
+   *  include Block (we don't currently register, but the key is part of
+   *  the contract so the option remains open). */
+  get key(): string { return `block:${this.id}` }
 
   // ──── Reads ────
 
@@ -58,18 +89,67 @@ export class Block {
     return undefined
   }
 
-  /** Ensure loaded. Idempotent + dedup'd via the cache's pendingLoads
-   *  table. Returns null when the row doesn't exist. */
+  /** Ensure loaded. Idempotent + dedup'd at the Block level so Suspense
+   *  paths can throw a stable promise across renders. Returns null when
+   *  the row doesn't exist. */
   load(): Promise<BlockData | null> {
-    return this.repo.load(this.id)
+    if (this.inflight) return this.inflight
+    this.loadingCount++
+    const p = this.repo.load(this.id)
+      .then(
+        (value) => {
+          this.lastError = undefined
+          return value
+        },
+        (err) => {
+          this.lastError = err
+          throw err
+        },
+      )
+      .finally(() => {
+        this.loadingCount = Math.max(0, this.loadingCount - 1)
+        if (this.inflight === p) this.inflight = null
+      })
+    this.inflight = p
+    return p
   }
 
-  /** Subscribe to cache mutations for this id. */
+  /** Subscribe to cache mutations for this id. Listener fires with the
+   *  current `BlockData | null` (null = confirmed missing or evicted). */
   subscribe(listener: (data: BlockData | null) => void): Unsubscribe {
     return this.repo.cache.subscribe(this.id, () => {
       const next = this.repo.cache.getSnapshot(this.id) ?? null
       listener(next)
     })
+  }
+
+  /** Suspense-path read. Returns the value if loaded; throws a Promise
+   *  React can `await` if not loaded yet; throws the stored error if the
+   *  last load failed. (Spec §5.1.) */
+  read(): BlockData | null {
+    const status = this.status()
+    if (status === 'ready') {
+      const snap = this.repo.cache.getSnapshot(this.id)
+      if (snap !== undefined) return snap
+      // Missing-confirmed branch: status='ready' with no snapshot.
+      return null
+    }
+    if (status === 'error') throw this.lastError
+    // 'loading' or 'idle': trigger / reuse a load and throw it.
+    throw this.load()
+  }
+
+  /** Handle lifecycle status (spec §5.1):
+   *    'ready'   — snapshot loaded OR row confirmed missing
+   *    'loading' — at least one `load()` call in flight, no value yet
+   *    'error'   — last load failed; cleared by the next successful load
+   *    'idle'    — no load attempted yet, no snapshot in cache */
+  status(): HandleStatus {
+    if (this.repo.cache.hasSnapshot(this.id)) return 'ready'
+    if (this.repo.cache.isMissing(this.id)) return 'ready'
+    if (this.loadingCount > 0) return 'loading'
+    if (this.lastError !== undefined) return 'error'
+    return 'idle'
   }
 
   // ──── Properties ────
