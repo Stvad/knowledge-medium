@@ -10,11 +10,9 @@
  *     fingerprint match
  *   - Subscriptions: fire on set + delete, dedupe on no-op set,
  *     unsubscribe stops firing
- *   - Dirty tracking: markDirty + isDirty + clearDirty independent of
- *     snapshot presence
- *   - hydrate (dirty-aware): drops remote when local is dirty + differs;
- *     accepts when remote matches local; clears dirty either way
- *   - trackedIds: union of subscribed + dirty
+ *   - applySyncSnapshot (LWW): rejects sync arrivals whose updatedAt is
+ *     older than the cached snapshot; accepts equal-or-newer
+ *   - trackedIds: subscribed listener ids
  *   - dedupLoad: shares in-flight promise; restarts after resolve/reject
  *   - allChildrenLoaded markers: mark/clear/areChildrenLoaded
  *   - missing markers: markMissing notifies on first transition,
@@ -147,70 +145,57 @@ describe('BlockCache subscriptions', () => {
   })
 })
 
-describe('BlockCache dirty tracking', () => {
-  it('tracks dirty ids independently of snapshot presence', () => {
+describe('BlockCache applySyncSnapshot (LWW)', () => {
+  it('accepts when nothing is cached', () => {
     const cache = new BlockCache()
-    cache.markDirty('block-1')
-    expect(cache.isDirty('block-1')).toBe(true)
-    expect(cache.hasSnapshot('block-1')).toBe(false)
-  })
-
-  it('clears dirty on demand', () => {
-    const cache = new BlockCache()
-    cache.markDirty('block-1')
-    cache.clearDirty('block-1')
-    expect(cache.isDirty('block-1')).toBe(false)
-  })
-})
-
-describe('BlockCache hydrate (dirty-aware)', () => {
-  it('applies the incoming snapshot when nothing is dirty', () => {
-    const cache = new BlockCache()
-    cache.hydrate(snap({content: 'fresh'}))
+    expect(cache.applySyncSnapshot(snap({content: 'fresh', updatedAt: 100}))).toBe(true)
     expect(cache.getSnapshot('block-1')?.content).toBe('fresh')
   })
 
-  it('drops the incoming snapshot when it differs from a dirty local copy', () => {
+  it('rejects an older snapshot', () => {
     const cache = new BlockCache()
-    cache.setSnapshot(snap({content: 'local'}))
-    cache.markDirty('block-1')
-
-    cache.hydrate(snap({content: 'remote'}))
-    expect(cache.getSnapshot('block-1')?.content).toBe('local')
-    expect(cache.isDirty('block-1')).toBe(true)
+    cache.setSnapshot(snap({content: 'newer', updatedAt: 200}))
+    expect(cache.applySyncSnapshot(snap({content: 'older', updatedAt: 100}))).toBe(false)
+    expect(cache.getSnapshot('block-1')?.content).toBe('newer')
   })
 
-  it('clears dirty when the remote already matches the local copy', () => {
+  it('accepts a strictly newer snapshot', () => {
     const cache = new BlockCache()
-    cache.setSnapshot(snap({content: 'local'}))
-    cache.markDirty('block-1')
-
-    cache.hydrate(snap({content: 'local'}))
-    expect(cache.isDirty('block-1')).toBe(false)
+    cache.setSnapshot(snap({content: 'older', updatedAt: 100}))
+    expect(cache.applySyncSnapshot(snap({content: 'newer', updatedAt: 200}))).toBe(true)
+    expect(cache.getSnapshot('block-1')?.content).toBe('newer')
   })
 
-  it('hydrating a dirty id with no existing snapshot accepts and clears dirty', () => {
+  it('accepts an equal-time snapshot (echo of own commit; fingerprint dedupes)', () => {
     const cache = new BlockCache()
-    cache.markDirty('block-1')
+    cache.setSnapshot(snap({content: 'x', updatedAt: 100}))
+    // Echo of our own commit lands with the same updatedAt; fingerprint
+    // dedup inside setSnapshot keeps it a no-op rather than re-firing.
+    expect(cache.applySyncSnapshot(snap({content: 'x', updatedAt: 100}))).toBe(false)
+  })
 
-    cache.hydrate(snap({content: 'remote'}))
-    expect(cache.getSnapshot('block-1')?.content).toBe('remote')
-    expect(cache.isDirty('block-1')).toBe(false)
+  it('does not notify subscribers when an older snapshot is rejected', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap({content: 'newer', updatedAt: 200}))
+    const listener = vi.fn()
+    cache.subscribe('block-1', listener)
+    cache.applySyncSnapshot(snap({content: 'older', updatedAt: 100}))
+    expect(listener).not.toHaveBeenCalled()
   })
 })
 
 describe('BlockCache trackedIds', () => {
-  it('returns the union of subscribed ids and dirty ids', () => {
+  it('returns the set of subscribed ids', () => {
     const cache = new BlockCache()
     cache.subscribe('a', () => {})
-    cache.markDirty('b')
+    cache.subscribe('b', () => {})
     expect(cache.trackedIds()).toEqual(new Set(['a', 'b']))
   })
 
-  it('drops a subscribed id once the last listener unsubscribes', () => {
+  it('drops an id once its last listener unsubscribes', () => {
     const cache = new BlockCache()
     const unsubscribe = cache.subscribe('a', () => {})
-    cache.markDirty('b')
+    cache.subscribe('b', () => {})
     unsubscribe()
     expect(cache.trackedIds()).toEqual(new Set(['b']))
   })

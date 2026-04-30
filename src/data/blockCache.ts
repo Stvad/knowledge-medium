@@ -16,7 +16,6 @@ const blockFingerprint = (blockData: BlockData | undefined) =>
 export class BlockCache {
   private readonly snapshots = new Map<string, BlockData>()
   private readonly listeners = new Map<string, Set<() => void>>()
-  private readonly dirty = new Set<string>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   /** Per-parent "all children loaded" marker (data-layer §5.2). The
    *  cache cannot distinguish "leaf node" from "children not yet
@@ -47,6 +46,10 @@ export class BlockCache {
     return snapshot
   }
 
+  /** Unconditional snapshot write. Used by the local commit pipeline,
+   *  whose write IS the latest authoritative state for the row. Returns
+   *  true if listeners were notified (i.e. the snapshot actually
+   *  changed by fingerprint). */
   setSnapshot(snapshot: BlockData): boolean {
     const existing = this.snapshots.get(snapshot.id)
 
@@ -61,24 +64,26 @@ export class BlockCache {
     return true
   }
 
+  /** LWW-gated snapshot write for sync-arrival paths (row_events tail,
+   *  re-reads from SQL inside `repo.load`). Rejects an incoming
+   *  snapshot whose `updatedAt` is older than what's already cached —
+   *  PowerSync can deliver an older row state during the upload window
+   *  while the local commit pipeline has already advanced the cache,
+   *  and re-reading the SQLite row after a sync-clobber would
+   *  otherwise reintroduce the stale state. Equal `updatedAt` accepts
+   *  (covers the common echo-of-our-own-write case, which is a no-op
+   *  via fingerprint dedup inside `setSnapshot`). */
+  applySyncSnapshot(snapshot: BlockData): boolean {
+    const existing = this.snapshots.get(snapshot.id)
+    if (existing && snapshot.updatedAt < existing.updatedAt) return false
+    return this.setSnapshot(snapshot)
+  }
+
   deleteSnapshot(id: string): boolean {
     if (!this.snapshots.delete(id)) return false
 
     this.notify(id)
     return true
-  }
-
-  hydrate(snapshot: BlockData): void {
-    const existing = this.snapshots.get(snapshot.id)
-
-    if (this.dirty.has(snapshot.id)) {
-      if (existing && blockFingerprint(existing) !== blockFingerprint(snapshot)) {
-        return
-      }
-      this.dirty.delete(snapshot.id)
-    }
-
-    this.setSnapshot(snapshot)
   }
 
   subscribe(id: string, listener: () => void): () => void {
@@ -97,20 +102,8 @@ export class BlockCache {
     }
   }
 
-  markDirty(id: string): void {
-    this.dirty.add(id)
-  }
-
-  isDirty(id: string): boolean {
-    return this.dirty.has(id)
-  }
-
-  clearDirty(id: string): void {
-    this.dirty.delete(id)
-  }
-
   trackedIds(): Set<string> {
-    return new Set([...this.listeners.keys(), ...this.dirty])
+    return new Set(this.listeners.keys())
   }
 
   dedupLoad(

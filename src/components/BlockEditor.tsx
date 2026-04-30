@@ -27,14 +27,19 @@ export const BlockEditor = ({
   ...codeMirrorProps
 }: BlockEditorProps) => {
   const blockData = useData(block)
-  const pendingLocalEdits = useRef(false)
-  const pendingCommittedContent = useRef<string | null>(null)
 
   const cm = useRef<ReactCodeMirrorRef>(null)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
   const [, setIsEditing] = useIsEditing()
   const initialContent = useRef(blockData?.content ?? '')
+  // Last value we handed to `block.setContent` (or adopted from an
+  // external change). Decides whether a `blockData` update is (a) our
+  // own committed echo / a no-op (live === incoming), (b) an external
+  // change we should adopt (live matches lastCommittedContent), or
+  // (c) an arrival that would clobber edits the user has typed past
+  // their last commit (skip; the next debounced commit reconciles).
+  const lastCommittedContent = useRef(blockData?.content ?? '')
   const uiStateBlock = useUIStateBlock()
   const focusedBlockId = useHandle(uiStateBlock, {
     selector: doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
@@ -53,7 +58,7 @@ export const BlockEditor = ({
   const pushChange = useRef(
     // eslint-disable-next-line react-hooks/refs
     debounce((value: string) => {
-      pendingCommittedContent.current = value
+      lastCommittedContent.current = value
       void block.setContent(value)
     }, 300),
   ).current
@@ -72,23 +77,22 @@ export const BlockEditor = ({
 
   useEffect(() => {
     if (!blockData || !editorView) return
-
     const live = editorView.state.doc.toString()
     const incoming = blockData.content
-
-    if (pendingCommittedContent.current !== null && incoming === pendingCommittedContent.current) {
-      pendingCommittedContent.current = null
-      pendingLocalEdits.current = false
-    }
-
-    if (pendingLocalEdits.current) return
-
-    if (live !== incoming) {
-      editorView.dispatch({
-        changes: {from: 0, to: live.length, insert: incoming},
-        selection: editorView.state.selection,
-      })
-    }
+    if (live === incoming) return
+    // User has typed past the last commit — adopting `incoming` here
+    // would discard those characters. Skip; the user's next debounced
+    // commit will catch the editor up. The cache layer (BlockCache.
+    // applySyncSnapshot) already filters stale sync echoes by
+    // updatedAt, so anything reaching us with a different content
+    // really is either our own committed echo or a genuine external
+    // change.
+    if (live !== lastCommittedContent.current) return
+    editorView.dispatch({
+      changes: {from: 0, to: live.length, insert: incoming},
+      selection: editorView.state.selection,
+    })
+    lastCommittedContent.current = incoming
   }, [blockData, editorView])
 
   useEffect(() => {
@@ -151,7 +155,6 @@ export const BlockEditor = ({
       // eslint-disable-next-line react-hooks/refs
       value={initialContent.current}
       onChange={(value) => {
-        pendingLocalEdits.current = true
         pushChange(value)
       }}
       onUpdate={(viewUpdate) => {

@@ -155,7 +155,7 @@ export class Repo {
     const out: BlockData[] = []
     for (const r of rows) {
       const data = parseBlockRow(r)
-      this.cache.setSnapshot(data)
+      this.cache.applySyncSnapshot(data)
       out.push(data)
     }
     return out
@@ -303,18 +303,18 @@ export class Repo {
       return null
     }
     const data = parseBlockRow(row)
-    this.cache.setSnapshot(data)
+    this.cache.applySyncSnapshot(data)
 
     if (opts?.children) {
       const childRows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-      for (const r of childRows) this.cache.setSnapshot(parseBlockRow(r))
+      for (const r of childRows) this.cache.applySyncSnapshot(parseBlockRow(r))
       this.cache.markChildrenLoaded(id)
     }
 
     if (opts?.ancestors) {
       // Pass id twice — ANCESTORS_SQL uses it as both start and skip.
       const ancestorRows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
-      for (const r of ancestorRows) this.cache.setSnapshot(parseBlockRow(r))
+      for (const r of ancestorRows) this.cache.applySyncSnapshot(parseBlockRow(r))
     }
 
     if (opts?.descendants) {
@@ -325,7 +325,7 @@ export class Repo {
       const fullyHydrated = new Set<string>()
       for (const r of subtreeRows) {
         if (r.depth > maxDepth) continue
-        this.cache.setSnapshot(parseBlockRow(r))
+        this.cache.applySyncSnapshot(parseBlockRow(r))
       }
       // Every visited row at depth < maxDepth has its children fully
       // hydrated by the same query (children are in the result set
@@ -393,7 +393,7 @@ export class Repo {
     )
     if (row === null) return null
     const data = parseBlockRow(row)
-    this.cache.setSnapshot(data)
+    this.cache.applySyncSnapshot(data)
     return data
   }
 
@@ -437,7 +437,7 @@ export class Repo {
     )
     if (row === null) return null
     const data = parseBlockRow(row)
-    this.cache.setSnapshot(data)
+    this.cache.applySyncSnapshot(data)
     return data
   }
 
@@ -453,7 +453,7 @@ export class Repo {
     const seen = new Set<string>()
     for (const r of rows) {
       const data = parseBlockRow(r)
-      this.cache.setSnapshot(data)
+      this.cache.applySyncSnapshot(data)
       seen.add(data.id)
       if (includeRoot || data.id !== rootId) out.push(data)
     }
@@ -498,7 +498,7 @@ export class Repo {
           const out: BlockData[] = []
           for (const r of rows) {
             const data = parseBlockRow(r)
-            this.cache.setSnapshot(data)
+            this.cache.applySyncSnapshot(data)
             ctx.depend({kind: 'row', id: data.id})
             out.push(data)
           }
@@ -543,7 +543,7 @@ export class Repo {
           const seen = new Set<string>()
           for (const r of rows) {
             const data = parseBlockRow(r)
-            this.cache.setSnapshot(data)
+            this.cache.applySyncSnapshot(data)
             seen.add(data.id)
             ctx.depend({kind: 'row', id: data.id})
             ctx.depend({kind: 'parent-edge', parentId: data.id})
@@ -574,7 +574,7 @@ export class Repo {
           const out: BlockData[] = []
           for (const r of rows) {
             const data = parseBlockRow(r)
-            this.cache.setSnapshot(data)
+            this.cache.applySyncSnapshot(data)
             ctx.depend({kind: 'row', id: data.id})
             out.push(data)
           }
@@ -621,7 +621,7 @@ export class Repo {
           const out: BlockData[] = []
           for (const r of rows) {
             const data = parseBlockRow(r)
-            this.cache.setSnapshot(data)
+            this.cache.applySyncSnapshot(data)
             ctx.depend({kind: 'row', id: data.id})
             out.push(data)
           }

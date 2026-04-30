@@ -139,9 +139,13 @@ export const startRowEventsTail = (args: {
 
       // Cache update: sync writes don't go through commitPipeline's
       // post-commit cache walk. Without this, Block.subscribe listeners
-      // wouldn't fire on remote changes.
+      // wouldn't fire on remote changes. Routed through
+      // `applySyncSnapshot` so a stale `updated_at` (PowerSync delivering
+      // server-state-at-time-T while the local cache has advanced via the
+      // fast path) is rejected — otherwise the editor sees its own older
+      // echoes clobber the live snapshot mid-typing.
       if (after) {
-        cache.setSnapshot(after as BlockData)
+        cache.applySyncSnapshot(after as BlockData)
       } else {
         // No after_json (hard delete via row_events kind='delete'?).
         // SQLite blocks rows are soft-deleted (the column is `deleted=1`)
