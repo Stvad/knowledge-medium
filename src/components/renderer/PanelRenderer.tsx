@@ -10,6 +10,7 @@ import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useMemo } from 'react'
 import { usePropertyValue, useContent } from '@/hooks/block.ts'
+import { ChangeScope } from '@/data/api'
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -38,7 +39,16 @@ export function PanelRenderer({block}: BlockRendererProps) {
   );
 
   const handleClose = () => {
-    void block.delete()
+    // Panels are UI-state rows — their lifecycle (open/close) is local
+    // ephemeral state, not user content. block.delete() routes through
+    // core.delete with ChangeScope.BlockDefault, which would put panel
+    // close into the content undo stack and (in read-only workspaces)
+    // throw a ReadOnlyError. Open an explicit UiState tx instead so
+    // the close lands as local-ephemeral and stays out of content
+    // sync / undo.
+    void repo.tx(async tx => {
+      await tx.delete(block.id)
+    }, {scope: ChangeScope.UiState, description: 'close panel'})
   }
 
   if (!topLevelBlockId) {
