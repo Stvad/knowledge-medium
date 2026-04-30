@@ -7,14 +7,14 @@ import {
   CodeMirrorEditModeDependencies,
   ActionTrigger,
 } from './types'
-import {
-  previousVisibleBlock,
-  nextVisibleBlock,
-  defaultChangeScope,
-  Block,
-  getRootBlock,
-} from '@/data/internals/block'
+import { Block } from '@/data/internals/block'
 import { Repo } from '@/data/internals/repo'
+import { ChangeScope } from '@/data/api'
+import {
+  nextVisibleBlock,
+  previousVisibleBlock,
+  getRootBlock,
+} from '@/utils/selection.ts'
 import { importState } from '@/utils/state.ts'
 import {
   focusedBlockIdProp,
@@ -55,29 +55,42 @@ import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
 import type { RoamExport } from '@/utils/roamImport/types.ts'
 
-const splitCodeMirrorBlockAtCursor = async (block: Block, editorView: EditorView, isTopLevel: boolean): Promise<Block> => {
+const splitCodeMirrorBlockAtCursor = async (
+  block: Block,
+  editorView: EditorView,
+  isTopLevel: boolean,
+): Promise<Block> => {
   const doc = editorView.state.doc
   const cursorPos = editorView.state.selection.main.head
 
   const beforeCursor = doc.sliceString(0, cursorPos)
   const afterCursor = doc.sliceString(cursorPos)
+  const repo = block.repo
 
   if (isTopLevel) {
-    const child = await block.createChild({data: {content: afterCursor}, position: 'first'})
-    block.change(b => b.content = beforeCursor)
-
-    return child
-  } else {
-    await block.createSiblingAbove({content: beforeCursor})
-
-    block.change(b => b.content = afterCursor)
-
-    editorView.dispatch({
-      selection: EditorSelection.cursor(0)
-    })
-
-    return block
+    // Top-level: drop the after-cursor content into a new first
+    // child; the original block keeps the before-cursor content. We
+    // do both in one tx so the visible split is atomic.
+    let newChildId = ''
+    await repo.tx(async tx => {
+      newChildId = await repo.mutate.createChild({
+        parentId: block.id,
+        content: afterCursor,
+        position: {kind: 'first'},
+      }) as string
+      await tx.update(block.id, {content: beforeCursor})
+    }, {scope: ChangeScope.BlockDefault, description: 'split top-level block'})
+    return repo.block(newChildId)
   }
+
+  // Non-top-level: core.split puts before-cursor in self and creates
+  // a new sibling AFTER self with after-cursor content. Return the
+  // new sibling so the caller focuses it.
+  const newSiblingId = await repo.mutate.split({id: block.id, at: cursorPos}) as string
+  // Place cursor at start of the editor — the editor will remount
+  // for the new sibling once focus shifts.
+  editorView.dispatch({selection: EditorSelection.cursor(0)})
+  return repo.block(newSiblingId)
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
@@ -160,28 +173,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: ['cmd+shift+`', 'ctrl+shift+`'],
       },
     },
-    {
-      id: 'undo',
-      description: 'Undo last action',
-      context: ActionContextTypes.GLOBAL,
-      handler: () => {
-        repo.undoRedoManager.undo(defaultChangeScope)
-      },
-      defaultBinding: {
-        keys: ['cmd+z', 'ctrl+z'],
-      },
-    },
-    {
-      id: 'redo',
-      description: 'Redo last action',
-      context: ActionContextTypes.GLOBAL,
-      handler: () => {
-        repo.undoRedoManager.redo(defaultChangeScope)
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+z', 'ctrl+shift+z', 'cmd+y', 'ctrl+y'],
-      },
-    },
+    // Undo/redo bindings dropped — UndoRedoManager removed in 1.6.E
+    // (tracked in tasks/follow-ups.md). Re-add once the
+    // command_events / row_events-based undo lands.
     {
       id: 'refresh_extensions',
       description: 'Reload extensions',
@@ -204,8 +198,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Export current document',
       context: ActionContextTypes.GLOBAL,
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
-        const root = await getRootBlock(repo.find(uiStateBlock.id))
-        const blocks = await repo.getSubtreeBlockData(root.id, {includeRoot: true})
+        await repo.load(uiStateBlock.id, {ancestors: true})
+        const root = getRootBlock(repo.block(uiStateBlock.id))
+        const blocks = await repo.subtree(root.id, {includeRoot: true})
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')
@@ -286,7 +281,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
               const summary = await importRoam(parsed, repo, {
                 workspaceId,
-                currentUserId: repo.currentUser.id,
+                currentUserId: repo.user.id,
                 onProgress: msg => console.log(`[roam-import] ${msg}`),
               })
               console.log('[roam-import] done', summary)
@@ -317,14 +312,15 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.GLOBAL,
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         const panel = await getActivePanelBlock(uiStateBlock)
-        const data = await panel?.data()
+        if (!panel) return
+        await panel.load()
         const parentId =
-          (data?.properties[focusedBlockIdProp.name]?.value as string | undefined) ??
-          (data?.properties[topLevelBlockIdProp.name]?.value as string | undefined)
-        if (!panel || !parentId) return
+          panel.peekProperty(focusedBlockIdProp) ??
+          panel.peekProperty(topLevelBlockIdProp)
+        if (!parentId) return
 
-        const created = await insertExampleExtensionsUnder(repo.find(parentId))
-        if (created[0]) panel.setProperty({...focusedBlockIdProp, value: created[0].id})
+        const created = await insertExampleExtensionsUnder(repo.block(parentId))
+        if (created[0]) await panel.set(focusedBlockIdProp, created[0].id)
       },
     },
     {
@@ -334,9 +330,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         const panel = await getActivePanelBlock(uiStateBlock)
         if (!panel) return
+        await panel.load()
 
-        const data = await panel.data()
-        const focusedBlockId = data?.properties[focusedBlockIdProp.name]?.value as string | undefined
+        const focusedBlockId = panel.peekProperty(focusedBlockIdProp)
         if (!focusedBlockId) return
 
         if (isMainPanel(panel)) {
@@ -344,7 +340,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           if (!workspaceId) return
           writeAppHash(workspaceId, focusedBlockId)
         } else {
-          panel.setProperty({...topLevelBlockIdProp, value: focusedBlockId})
+          await panel.set(topLevelBlockIdProp, focusedBlockId)
         }
       },
       defaultBinding: {
@@ -358,12 +354,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         const panel = await getActivePanelBlock(uiStateBlock)
         if (!panel) return
+        await panel.load()
 
-        const data = await panel.data()
-        const topLevelBlockId = data?.properties[topLevelBlockIdProp.name]?.value as string | undefined
+        const topLevelBlockId = panel.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        const parent = await repo.find(topLevelBlockId).parent()
+        await repo.load(topLevelBlockId, {ancestors: true})
+        const parent = repo.block(topLevelBlockId).parent
         if (!parent) return
 
         if (isMainPanel(panel)) {
@@ -371,7 +368,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           if (!workspaceId) return
           writeAppHash(workspaceId, parent.id)
         } else {
-          panel.setProperty({...topLevelBlockIdProp, value: parent.id})
+          await panel.set(topLevelBlockIdProp, parent.id)
         }
       },
       defaultBinding: {
@@ -385,9 +382,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         const panel = await getActivePanelBlock(uiStateBlock)
         if (!panel) return
+        await panel.load()
 
-        const data = await panel.data()
-        const focusedBlockId = data?.properties[focusedBlockIdProp.name]?.value as string | undefined
+        const focusedBlockId = panel.peekProperty(focusedBlockIdProp)
         if (!focusedBlockId) return
 
         window.dispatchEvent(new CustomEvent('open-panel', {
@@ -459,9 +456,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
-        const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
+        await block.load()
+        await repo.load(block.id, {children: true})
+        const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
         const isTopLevel = block.id === topLevelBlockId
 
         const selection = editorView.state.selection.main
@@ -469,9 +468,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const cursorPos = selection.head
 
         const createSiblingBelow = async () => {
-          const newBlock = await block.createSiblingBelow()
-          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
+          const newId = await repo.mutate.createSiblingBelow({siblingId: block.id}) as string
+          if (newId) setFocusedBlockId(uiStateBlock, newId)
         }
+
+        const blockHasChildren = repo.cache.areChildrenLoaded(block.id)
+          ? repo.cache.childrenOf(block.id).length > 0
+          : false
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
@@ -480,15 +483,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         }
         // Case 2: Cursor is at end of text and block has children
         else if (cursorPos === doc.length &&
-          (await block.hasChildren() && !isCollapsed || isTopLevel)) {
-          const newBlock = await block.createChild({position: 'first'})
-          if (newBlock) setFocusedBlockId(uiStateBlock, newBlock.id)
+          (blockHasChildren && !isCollapsed || isTopLevel)) {
+          const newId = await repo.mutate.createChild({
+            parentId: block.id,
+            position: {kind: 'first'},
+          }) as string
+          if (newId) setFocusedBlockId(uiStateBlock, newId)
         }
         // Repeated empty blocks creation - outdents the new block
         else if (editorView.state.doc.length === 0) {
-          const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
-
-          if (topLevelBlockId && !await block.outdent(topLevelBlockId)) {
+          try {
+            await repo.mutate.outdent({id: block.id, topLevelBlockId})
+          } catch {
             await createSiblingBelow()
           }
         }
@@ -512,7 +518,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId || !isOnFirstVisualLine(editorView)) return
 
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
@@ -523,12 +529,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
          * I don't like that we have to do this, somewhat breaks encapsulation
          */
         trigger.preventDefault()
-        uiStateBlock.setProperty({
-          ...editorSelection, value: {
-            blockId: prevVisible.id,
-            line: 'last',
-            x: getCaretRect(editorView)?.left,
-          },
+        await uiStateBlock.set(editorSelection, {
+          blockId: prevVisible.id,
+          line: 'last',
+          x: getCaretRect(editorView)?.left,
         })
 
         setFocusedBlockId(uiStateBlock, prevVisible.id)
@@ -548,7 +552,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const {block, editorView, uiStateBlock} = deps
         if (!block || !editorView || !uiStateBlock) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId || !isOnLastVisualLine(editorView)) return
 
         const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
@@ -560,11 +564,9 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
          */
         trigger.preventDefault()
 
-        uiStateBlock.setProperty({
-          ...editorSelection, value: {
-            blockId: nextVisible.id,
-            x: getCaretRect(editorView)?.left,
-          },
+        await uiStateBlock.set(editorSelection, {
+          blockId: nextVisible.id,
+          x: getCaretRect(editorView)?.left,
         })
 
         setFocusedBlockId(uiStateBlock, nextVisible.id)
@@ -580,14 +582,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async (deps: CodeMirrorEditModeDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
-        const blockData = await block.data()
+        const blockData = await repo.load(block.id)
         if (!(blockData?.content === '')) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-        block.delete()
+        await block.delete()
         if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
       },
       defaultBinding: {
@@ -617,7 +619,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'clear_selection',
       description: 'Clear selection',
       context: ActionContextTypes.MULTI_SELECT_MODE,
-      handler: async (deps: MultiSelectModeDependencies) => deps.uiStateBlock.setProperty(selectionStateProp),
+      handler: async (deps: MultiSelectModeDependencies) =>
+        deps.uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue),
       defaultBinding: {
         keys: 'escape',
       },
@@ -646,7 +649,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         for (const block of selectedBlocks.toReversed()) {
           await block.delete()
         }
-        uiStateBlock.setProperty(selectionStateProp)
+        await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
       },
       defaultBinding: {
         keys: ['cmd+x', 'ctrl+x', 'd'],
@@ -666,7 +669,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         const pasted = await pasteFromClipboard(target, repo, {position: 'after'})
         if (pasted[0]) {
-          uiStateBlock.setProperty(selectionStateProp)
+          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
           setFocusedBlockId(uiStateBlock, pasted[0].id)
         }
       },
@@ -685,7 +688,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         const pasted = await pasteFromClipboard(target, repo, {position: 'before'})
         if (pasted[0]) {
-          uiStateBlock.setProperty(selectionStateProp)
+          await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
           setFocusedBlockId(uiStateBlock, pasted[0].id)
         }
       },
