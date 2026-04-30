@@ -247,6 +247,68 @@ describe('importRoam', () => {
     expect(afterUpgrade?.parent_id).toBe(roamBlockId(WORKSPACE, 'parentLeaf'))
   })
 
+  it('restores a tombstoned imported block on re-import', async () => {
+    // First import lands the block.
+    await importRoam(minimalExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const leafId = roamBlockId(WORKSPACE, 'leafA')
+    expect((await readBlock(leafId))?.deleted).toBe(0)
+
+    // Simulate user deletion of the imported block (subtree-aware).
+    await env.repo.mutate.delete({id: leafId})
+    expect((await readBlock(leafId))?.deleted).toBe(1)
+
+    // Re-import the same export — without the tombstone-restore
+    // branch, this would throw DeletedConflictError and abort the tx.
+    await importRoam(minimalExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const restored = await readBlock(leafId)
+    expect(restored?.deleted).toBe(0)
+    expect(restored?.content).toBe('leaf with [[wcs/plan]]')
+    expect(restored?.parent_id).toBe(roamBlockId(WORKSPACE, 'parentA'))
+  })
+
+  it('restores a tombstoned placeholder on re-import', async () => {
+    // First import has an unresolved ((leafA)) ref → emits placeholder.
+    const placeholderExport: RoamExport = [
+      {
+        title: 'page-with-ref',
+        uid: 'pageRef',
+        children: [
+          {
+            string: 'block with ((leafA))',
+            uid: 'parentRef',
+            ':block/refs': [{':block/uid': 'leafA'}],
+          },
+        ],
+      },
+    ]
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const placeholderId = roamBlockId(WORKSPACE, 'leafA')
+    expect((await readBlock(placeholderId))?.deleted).toBe(0)
+
+    // User deletes the placeholder.
+    await env.repo.mutate.delete({id: placeholderId})
+    expect((await readBlock(placeholderId))?.deleted).toBe(1)
+
+    // Re-importing the same placeholder-emitting export should not
+    // crash; the placeholder row is restored so refs resolve again.
+    await importRoam(placeholderExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+
+    const restored = await readBlock(placeholderId)
+    expect(restored?.deleted).toBe(0)
+    expect(restored?.content).toBe('')
+  })
+
   it('dry-run reports counts without writing rows', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

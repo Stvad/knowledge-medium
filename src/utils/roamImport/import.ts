@@ -12,7 +12,13 @@
 //     the deterministic-id path, and converting [[alias]] occurrences
 //     into resolved references[] rows so backlinks work after import.
 
-import { ChangeScope, type BlockData, type NewBlockData, type Tx } from '@/data/api'
+import {
+  ChangeScope,
+  DeletedConflictError,
+  type BlockData,
+  type NewBlockData,
+  type Tx,
+} from '@/data/api'
 import { aliasesProp, typeProp } from '@/data/properties'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
 import { parseRelativeDate } from '@/utils/relativeDate'
@@ -131,16 +137,15 @@ export const importRoam = async (
   let pagesMerged = 0
   const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
   await repo.tx(async tx => {
-    // 5a. Placeholder stand-ins. Idempotent — re-running is a no-op,
-    //     and a future import that contains the real block upserts
-    //     onto the same row.
+    // 5a. Placeholder stand-ins. Idempotent — re-running is a no-op
+    //     against a live row, and a future import that contains the
+    //     real block upserts onto the same row via upsertImportedBlock
+    //     (5c). On a tombstone we restore with the empty stub so
+    //     references[] in other blocks can still resolve.
     for (const placeholder of plan.placeholders) {
-      await tx.createOrGet({
+      await ensurePlaceholderRow(tx, {
         id: placeholder.blockId,
         workspaceId: options.workspaceId,
-        parentId: null,
-        orderKey: 'a0',
-        content: '',
       })
     }
 
@@ -337,38 +342,86 @@ const mergeIntoDailyNote = async (
 }
 
 /**
+ * Ensure a placeholder row exists at `id`. Used for ((uid)) targets
+ * whose real block isn't in this export — references[] in imported
+ * content needs the row to be present so backlinks resolve. Three
+ * branches:
+ *   - Fresh insert: write an empty stub at workspace root.
+ *   - Live-row hit: leave alone (a real block with content may
+ *     already live at this id; a placeholder must NOT clobber it).
+ *   - Tombstone hit: tx.restore with empty content so the row comes
+ *     back to life and references resolve. The user can re-delete
+ *     after the import if they were intentionally cleaning up;
+ *     leaving the row tombstoned would crash the import tx.
+ */
+const ensurePlaceholderRow = async (
+  tx: Tx,
+  {id, workspaceId}: {id: string; workspaceId: string},
+) => {
+  try {
+    await tx.createOrGet({
+      id,
+      workspaceId,
+      parentId: null,
+      orderKey: 'a0',
+      content: '',
+    })
+  } catch (err) {
+    if (!(err instanceof DeletedConflictError)) throw err
+    await tx.restore(id, {content: ''})
+  }
+}
+
+/**
  * Insert a planned block, OR upgrade an existing row at the same id.
  *
- * `tx.createOrGet` returns the existing row's id without applying the
- * data fields when the id is already present, so a prior placeholder
- * (or a stale half-imported row) would otherwise stay frozen at its
- * original empty state — content, parentId, orderKey, properties,
- * references would never reach storage. After the createOrGet hit,
- * we apply the planned data with tx.update + tx.move so a re-import
- * containing the real Roam block actually lands. Last-write-wins is
- * the explicit semantics here; re-imports overwrite local edits at
- * the same id, which matches roam-import's "snapshot" model.
+ * Three branches:
+ *   - Fresh insert (createOrGet returns inserted=true): nothing else
+ *     to do — the row was written with the planned data.
+ *   - Live-row hit (inserted=false): apply the planned content /
+ *     properties / references via tx.update and re-parent via
+ *     tx.move so a prior placeholder gets upgraded.
+ *   - Tombstone hit (createOrGet throws DeletedConflictError):
+ *     tx.restore writes deleted=0 + the data-field patch in one
+ *     UPDATE; tx.move handles parent_id + order_key. Without this
+ *     branch a re-import of a previously-deleted Roam block / page
+ *     would crash the entire import tx.
+ *
+ * Last-write-wins is the explicit semantics on the live-row path:
+ * re-imports overwrite local edits at the same id. Same on the
+ * tombstone path — re-importing resurrects the row with the planned
+ * data rather than the user's pre-deletion state.
  */
 const upsertImportedBlock = async (
   tx: Tx,
   data: NewBlockData & {id: string; content: string},
 ) => {
-  const result = await tx.createOrGet({
-    id: data.id,
-    workspaceId: data.workspaceId,
-    parentId: data.parentId,
-    orderKey: data.orderKey,
-    content: data.content,
-    properties: data.properties,
-    references: data.references,
-  })
-  if (result.inserted) return
-  await tx.update(data.id, {
-    content: data.content,
-    properties: data.properties ?? {},
-    references: data.references ?? [],
-  })
-  await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
+  try {
+    const result = await tx.createOrGet({
+      id: data.id,
+      workspaceId: data.workspaceId,
+      parentId: data.parentId,
+      orderKey: data.orderKey,
+      content: data.content,
+      properties: data.properties,
+      references: data.references,
+    })
+    if (result.inserted) return
+    await tx.update(data.id, {
+      content: data.content,
+      properties: data.properties ?? {},
+      references: data.references ?? [],
+    })
+    await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
+  } catch (err) {
+    if (!(err instanceof DeletedConflictError)) throw err
+    await tx.restore(data.id, {
+      content: data.content,
+      properties: data.properties ?? {},
+      references: data.references ?? [],
+    })
+    await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
+  }
 }
 
 const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {
