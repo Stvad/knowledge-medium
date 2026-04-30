@@ -1,7 +1,9 @@
 import type { BlockData } from './blockData'
-import type { ChangeScope } from './changeScope'
+// Type-only — no runtime cycle. Keeps `ProcessorCtx.repo` honest (full
+// Repo capability surface for processors) without inventing a narrow
+// shadow interface.
+import type { Repo } from '../internals/repo'
 import type { Schema } from './schema'
-import type { Tx } from './tx'
 import type { User } from './user'
 
 /** Plugin-augmentable type registry for processor scheduled args.
@@ -38,14 +40,24 @@ export type ProcessorWatches<ScheduledArgs> =
       scheduledArgsSchema: Schema<ScheduledArgs>
     }
 
+/** A processor is a plain async function that reacts to a committed tx
+ *  and decides for itself whether to read, write, or do neither. The
+ *  framework does NOT auto-open a writeTransaction (v4.32 — see §5.7);
+ *  if the processor wants to write, it calls `ctx.repo.tx(...)` itself.
+ *
+ *  This shape supports three legitimate processor modes uniformly:
+ *    - pure side-effects (UI invalidation, analytics) → no tx, no cost
+ *    - read-derive-cache → reads via `ctx.db`, no tx
+ *    - conditional or always writes → opens its own `ctx.repo.tx(...)`
+ *      with the scope it wants
+ *
+ *  Why no `scope` field on the processor itself: scope is a tx property,
+ *  not a processor property. A processor that opens multiple txs may
+ *  legitimately want different scopes per tx; one that never writes
+ *  should not have to declare a scope it won't use. The processor names
+ *  the scope at the `repo.tx` call site, where it's actually needed. */
 export type PostCommitProcessor<ScheduledArgs = unknown> = {
   readonly name: string
-  /** ChangeScope for the processor's own writeTransaction. Determines
-   *  whether the processor's writes enter the document undo stack and
-   *  whether they upload. Reference parsing uses
-   *  `ChangeScope.References` (separate undo bucket; uploads); plugins
-   *  pick whatever matches their semantics. */
-  readonly scope: ChangeScope
   readonly apply: (
     event: CommittedEvent<ScheduledArgs>,
     ctx: ProcessorCtx,
@@ -71,16 +83,39 @@ export interface CommittedEvent<ScheduledArgs = unknown> {
   scheduledArgs?: ScheduledArgs
 }
 
-/** Processor context. */
+/** Read-only SQL surface available to a processor outside any tx.
+ *  Sees committed state at processor-fire time (the originating user
+ *  tx is committed by the time `apply` fires). Intentionally narrower
+ *  than `PowerSyncDatabase` — no `execute`, no `writeTransaction` — so
+ *  the type prevents accidental writes through this handle. Writes
+ *  must go through a `repo.tx(...)` opened by the processor. */
+export interface ProcessorReadDb {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+  get<T>(sql: string, params?: unknown[]): Promise<T>
+}
+
+/** Processor context (v4.32). The framework no longer auto-opens a tx;
+ *  the processor decides.
+ *
+ *  - `db`: raw SQL for committed-state reads. The originating user tx
+ *    is committed before `apply` fires, so reads see committed state.
+ *    No writer is open at this surface unless the processor opens one
+ *    itself via `repo.tx`, so reads don't queue behind a writer.
+ *  - `repo`: full `Repo` — open a write tx (`repo.tx(fn, {scope})`)
+ *    when/if the processor decides to write, invoke other mutators via
+ *    `repo.mutate.*`, run kernel queries (`repo.findBacklinks`, etc.).
+ *    Imported here as a type-only reference; type cycles via `import
+ *    type` are erased at compile time so there's no runtime cycle. */
 export interface ProcessorCtx {
-  /** This processor's own tx (its own writeTransaction). Writes commit
-   *  when the processor's `apply` resolves. */
-  tx: Tx
-  /** Raw SQL for committed-state reads. Writes through `db` are
-   *  unsupported — go through `ctx.tx`. */
-  db: unknown
-  /** For handle composition or invoking other mutators. */
-  repo: unknown
+  /** Raw SQL for committed-state reads. The narrow shape is deliberate:
+   *  `.execute()` / `.writeTransaction()` are absent so accidental writes
+   *  through this handle are compile-time errors. Writes go through
+   *  `ctx.repo.tx(...)`. */
+  db: ProcessorReadDb
+  /** Full `Repo` — open a write tx when needed, invoke mutators, run
+   *  kernel queries. */
+  repo: Repo
 }
 
 export const definePostCommitProcessor = <ScheduledArgs = undefined>(

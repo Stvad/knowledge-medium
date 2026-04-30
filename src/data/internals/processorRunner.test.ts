@@ -27,7 +27,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
   type AnyPostCommitProcessor,
-  type Tx,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -70,7 +69,6 @@ const recordingFieldProcessor = (
   calls: Calls,
 ): AnyPostCommitProcessor => ({
   name,
-  scope: ChangeScope.References,
   watches: {kind: 'field', table: 'blocks', fields},
   apply: async (event) => {
     calls.events.push({
@@ -85,7 +83,6 @@ const recordingExplicitProcessor = <S>(
   calls: Calls<S>,
 ): AnyPostCommitProcessor => ({
   name,
-  scope: ChangeScope.References,
   watches: {kind: 'explicit'},
   // Pass-through schema — we want the runner-level path tested here,
   // not the codec-validation path (txEngine.test pins that).
@@ -207,7 +204,6 @@ describe('ProcessorRunner — error isolation', () => {
 
     const failing: AnyPostCommitProcessor = {
       name: 'test.failing',
-      scope: ChangeScope.References,
       watches: {kind: 'field', table: 'blocks', fields: ['content']},
       apply: async () => { throw new Error('processor blew up') },
     }
@@ -264,7 +260,6 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
     let swapped = false
     const swappingEarly: AnyPostCommitProcessor = {
       name: 'test.early',
-      scope: ChangeScope.References,
       watches: {kind: 'field', table: 'blocks', fields: ['content']},
       apply: async (event) => {
         earlyCalls.events.push({txId: event.txId, changedRowIds: event.changedRows.map(r => r.id)})
@@ -303,23 +298,23 @@ describe('ProcessorRunner — awaitIdle wave', () => {
 
     const procA: AnyPostCommitProcessor = {
       name: 'test.a',
-      scope: ChangeScope.References,
       watches: {kind: 'field', table: 'blocks', fields: ['content']},
       apply: async (event, ctx) => {
         aCalls.events.push({txId: event.txId, changedRowIds: event.changedRows.map(r => r.id)})
         if (aRan) return
         aRan = true
-        // Schedule B from inside A's processor tx. Need a write to pin
-        // workspaceId for tx.afterCommit.
-        const tx = ctx.tx as Tx
-        await tx.create({
-          id: 'a-cascade',
-          workspaceId: WS,
-          parentId: null,
-          orderKey: 'a-cascade-key',
-          content: 'cascade',
-        })
-        tx.afterCommit('test.b', undefined)
+        // Open A's own tx and schedule B from inside it. Need a write
+        // to pin workspaceId for tx.afterCommit.
+        await ctx.repo.tx(async tx => {
+          await tx.create({
+            id: 'a-cascade',
+            workspaceId: WS,
+            parentId: null,
+            orderKey: 'a-cascade-key',
+            content: 'cascade',
+          })
+          tx.afterCommit('test.b', undefined)
+        }, {scope: ChangeScope.References})
       },
     }
 

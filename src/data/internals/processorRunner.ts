@@ -15,9 +15,17 @@
  *      caller fails the originating tx (clean rollback) instead of
  *      failing silently when the processor would otherwise fire.
  *
- * Both run in their own writeTransaction (their own `repo.tx`) using
- * the processor's declared scope. Failures are caught + logged so a
- * crashing processor can't poison subsequent jobs.
+ * The framework does NOT auto-open a writeTransaction for the processor
+ * (v4.32 — see §5.7). `apply(event, ctx)` runs as a plain async function
+ * with `ctx = { db, repo }`. Pure-side-effect processors do nothing more;
+ * write processors open their own `ctx.repo.tx(...)` when they decide to
+ * write. This avoids holding a writer slot through read phases (the
+ * shape that produced the §10 / `tasks/processor-tx-deadlock.md`
+ * deadlock under PowerSync's serialized single-connection config) and
+ * lets pure-side-effect processors skip the writer cost entirely.
+ *
+ * Failures are caught + logged so a crashing processor can't poison
+ * subsequent jobs.
  *
  * Stage-1.5 deferred:
  *   - per-block content debouncing (§7.2 row "Trigger on content change"):
@@ -34,7 +42,6 @@ import {
   type ChangedRow,
   type CommittedEvent,
   type ProcessorCtx,
-  type Tx,
   type User,
 } from '@/data/api'
 import type { AfterCommitJob } from './txEngine'
@@ -204,26 +211,23 @@ export class ProcessorRunner {
     void p.finally(() => this.pending.delete(p))
   }
 
-  /** Open a writeTransaction for the processor and call its apply.
-   *  Errors are caught + logged with the processor name + txId so
-   *  one buggy processor can't poison the dispatch loop. */
+  /** Invoke the processor's apply with a `{db, repo}` ctx. The framework
+   *  does not wrap apply in a writeTransaction (v4.32) — apply is a
+   *  plain async fn that reads via `ctx.db` and (if it needs to write)
+   *  opens its own tx via `ctx.repo.tx(...)`. Errors are caught + logged
+   *  with the processor name + txId so one buggy processor can't poison
+   *  the dispatch loop. */
   private async runOne(
     processor: AnyPostCommitProcessor,
     event: CommittedEvent<unknown>,
     name: string,
   ): Promise<void> {
     try {
-      await this.repo.tx(async (tx: Tx) => {
-        const ctx: ProcessorCtx = {
-          tx,
-          db: this.db,
-          repo: this.repo,
-        }
-        await processor.apply(event, ctx)
-      }, {
-        scope: processor.scope,
-        description: `processor: ${name}`,
-      })
+      const ctx: ProcessorCtx = {
+        db: this.db,
+        repo: this.repo,
+      }
+      await processor.apply(event, ctx)
     } catch (err) {
       // Codec errors at enqueue time fail the originating tx; here at
       // fire time we're past that boundary, so log loudly and move on.

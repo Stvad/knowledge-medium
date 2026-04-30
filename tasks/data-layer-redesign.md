@@ -1149,8 +1149,33 @@ The trade we're making by lifting schema out of stored values: gain plugin exten
 ### 5.7 `PostCommitProcessor`
 
 ```ts
-/** All processors run as follow-ups in their own writeTransaction, after the
- *  originating user tx commits. (v4.20 dropped the same-tx mode — see §16.2.)
+/** All processors run as follow-ups after the originating user tx commits.
+ *  (v4.20 dropped the same-tx mode — see §16.2.)
+ *
+ *  v4.32: the framework no longer auto-wraps `apply` in a writeTransaction.
+ *  `apply` runs as a plain async function with `ctx = { db, repo }`. If the
+ *  processor wants to write, it opens its own `ctx.repo.tx(fn, {scope})`.
+ *  Three legitimate processor shapes are supported uniformly:
+ *    - pure side-effects (UI invalidation, analytics) — no tx, no cost.
+ *    - read-derive-cache — reads via `ctx.db`, no tx.
+ *    - conditional or always writes — open `ctx.repo.tx(...)` with whatever
+ *      scope is appropriate; multiple txes are fine if they need different
+ *      scopes or atomicity boundaries.
+ *
+ *  Why no `scope` field on the processor itself: scope is a tx property, not
+ *  a processor property. The processor names it at the `repo.tx` call site
+ *  where it's actually consumed.
+ *
+ *  Why the framework no longer wraps `apply` in a writeTransaction: a
+ *  processor that reads-then-conditionally-writes (e.g. `cleanupOrphanAliases`
+ *  whose 99% case is "still referenced — skip"), or a pure side-effect
+ *  processor, paid the cost of holding a writer slot through its read phase.
+ *  Under PowerSync's serialized single-connection config that read-while-
+ *  holding-writer shape was the source of the `tasks/processor-tx-deadlock.md`
+ *  cycle (writer awaits an enqueued read on the same queue). Letting the
+ *  processor decide when to open a tx structurally removes that hazard:
+ *  reads in the read phase don't queue behind a writer because no writer is
+ *  open yet. The processor still uses a single tx for atomic write batches.
  *
  *  Discriminated on watches.kind:
  *  - 'field':    fires when the originating tx wrote any of the named fields
@@ -1219,19 +1244,29 @@ interface CommittedEvent<ScheduledArgs = unknown> {
  *  null workspace; CommittedEvent's type contract isn't compromised. */
 
 interface ProcessorCtx {
-  /** The processor's own tx (its own writeTransaction). Writes commit when
-   *  the processor's apply resolves. */
-  tx: Tx
+  /** Raw SQL for committed-state reads. Sees committed state at
+   *  processor-fire time (the originating user tx is already committed by
+   *  definition). The framework does not open a writeTransaction around
+   *  `apply`, so reads through `db` are not contending with a writer slot
+   *  the framework holds. Writes through `ctx.db` are unsupported — the
+   *  processor opens a tx via `ctx.repo.tx(...)` when it wants to write. */
+  db: ProcessorReadDb       // narrow: getOptional / getAll / get only
 
-  /** Raw SQL for reads — sees committed state at processor-fire time
-   *  (the originating user tx is already committed by definition). Writes
-   *  through ctx.db are unsupported; processor writes go through ctx.tx. */
-  db: PowerSyncDatabase
-
-  /** For handle composition or invoking other mutators. */
+  /** Full `Repo` — open a write tx when/if the processor decides to write,
+   *  invoke other mutators via `repo.mutate.*`, run kernel queries. */
   repo: Repo
 }
 ```
+
+`ProcessorReadDb` is a narrow interface declared in
+`@/data/api/processor.ts` — intentionally smaller than the full
+`PowerSyncDatabase` (no `execute`, no `writeTransaction`) so accidental
+writes through this handle are compile-time errors.
+
+`Repo` is referenced via a type-only import from `@/data/internals/repo`.
+Type-only cycles are erased at compile time so there's no runtime cycle;
+plugin processor authors get the full `Repo` capability surface (kernel
+queries, `block()`, `load()`, etc.) without an artificial shadow type.
 
 **On `tx.afterCommit` arg validation**:
 
@@ -1596,8 +1631,11 @@ Bespoke hooks (`useBlockData`, `useSubtree`, etc.) are 1-line sugar; primitive i
 │   8. resolve repo.tx promise with user fn's return value       │
 │                                                                │
 │ post-resolve (fire-and-after):                                 │
-│   9. dispatch tx.afterCommit jobs (own writeTransactions)      │
-│       and field-watch follow-up processors                     │
+│   9. dispatch field-watch + tx.afterCommit follow-up           │
+│       processors. Each `apply` runs as a plain async fn with   │
+│       `ctx = { db, repo }`. The framework does NOT auto-open a │
+│       writeTransaction (v4.32, §5.7). A processor that needs   │
+│       to write opens its own `ctx.repo.tx(fn, {scope})`.       │
 └──────────────────────────────────────────────────────────────┘
 ```
 

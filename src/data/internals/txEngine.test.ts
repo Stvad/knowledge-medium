@@ -66,7 +66,6 @@ const dateProp = defineProperty<Date | undefined>('due-date', {
  *  the §5.7 enqueue-time validation. */
 const afterCommitProbeProcessor = definePostCommitProcessor<{fromBlockId: string}>({
   name: 'test.afterCommitProbe',
-  scope: ChangeScope.BlockDefault,
   watches: { kind: 'explicit' },
   scheduledArgsSchema: stringSchema<{fromBlockId: string}>(),
   apply: async () => {},
