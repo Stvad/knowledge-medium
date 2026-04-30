@@ -1,52 +1,69 @@
-import { useBlockContext } from '@/context/block.tsx'
-import { Block } from '@/data/block.ts'
+/**
+ * UI-state plumbing — per-user "user page" + per-panel ui-state child
+ * tree, plus the React hooks that read/write properties on those
+ * blocks. Persists app-shell state (focus, selection, edit-mode,
+ * recents, top-level block) inside the same block tree as content,
+ * scoped to `ChangeScope.UiState` so the writes are routed to local-
+ * ephemeral storage and never enter the upload queue.
+ *
+ * Migration note (1.6): legacy callers used `repo.find(...)` /
+ * `block.childByContent(name, createIfMissing, {scope})` /
+ * `block.change(callback)` — all gone. The new shape composes with:
+ *   - `repo.block(id)` for a Block facade (sync, identity-stable)
+ *   - `repo.load(id, {...})` to populate cache neighborhoods
+ *   - `repo.tx(fn, {scope: ChangeScope.UiState})` for writes
+ *   - `tx.createOrGet({id, ...})` for idempotent bootstrap
+ * Deterministic ids derived from (workspace, user, ...) keep two
+ * offline clients converging on the same row when they later sync.
+ */
+
 import { use, useCallback } from 'react'
-import { BlockProperty, User, BlockContextType } from '@/types.ts'
+import { useBlockContext } from '@/context/block.tsx'
+import { useUser } from '@/components/Login.tsx'
+import { useRepo } from '@/context/repo.tsx'
 import { memoize } from 'lodash'
 import { v5 as uuidv5 } from 'uuid'
-import { useRepo } from '@/context/repo.tsx'
-import { useUser } from '@/components/Login.tsx'
-import { Repo } from '@/data/repo.ts'
-
 import {
-  uiChangeScope,
+  ChangeScope,
+  type PropertySchema,
+  type User,
+} from '@/data/api'
+import { Block } from '@/data/internals/block'
+import type { Repo } from '@/data/internals/repo'
+import type { BlockContextType } from '@/types'
+import {
+  aliasesProp,
   selectionStateProp,
-  BlockSelectionState,
+  type BlockSelectionState,
   focusedBlockIdProp,
   isEditingProp,
   topLevelBlockIdProp,
-  aliasProp,
-  fromList,
-} from '@/data/properties.ts'
-import { usePropertyValue, useDataWithSelector } from '@/hooks/block.ts'
+} from '@/data/properties'
+import { usePropertyValue, useDataWithSelector } from '@/hooks/block'
 
 /**
- * One of core principles of the system is to store all state within the system
+ * One of core principles of the system is to store all state within the system.
  */
 
-// Deterministic id for the per-user "user page" — a parent-less alias-bearing
-// block that hosts the user's `ui-state` subtree for a given workspace. Same
-// pattern as DAILY_NOTE_NS in dailyNotes.ts: two clients booting offline
-// converge on the same row when they later sync, so we don't end up with
-// duplicate user pages competing for alias resolution.
+// ──── Deterministic-id namespaces ────
+
+// Per-user "user page" — parent-less alias-bearing block hosting the
+// user's UI-state subtree for a given workspace. Same pattern as
+// DAILY_NOTE_NS: two offline clients converge on the same row when
+// they sync, so we never end up with duplicate user pages.
 const USER_PAGE_NS = '4d9d2a73-3e5a-4f43-95e3-2a76b1b7e6d7'
+// Per-(parent, content) UI-state child — used by the bootstrap below
+// (ui-state, panels, panel/main, etc.) so each name resolves to the
+// same block id across clients.
+const UI_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
 
 const userPageBlockId = (workspaceId: string, userId: string): string =>
   uuidv5(`${workspaceId}:${userId}`, USER_PAGE_NS)
 
-/**
- * Hook to access and modify UI state properties
- * @param config Property configuration, including name, type, and default value.
- */
-export function useUIStateProperty<T extends BlockProperty>(
-  config: T,
-): [T['value'], (value: T['value']) => void] {
-  const block = useUIStateBlock()
-  // Force uiChangeScope for UI state properties
-  const uiConfig: T = { ...config, changeScope: uiChangeScope }
+const uiChildBlockId = (parentId: string, content: string): string =>
+  uuidv5(`${parentId}:${content}`, UI_CHILD_NS)
 
-  return usePropertyValue(block, uiConfig)
-}
+// ──── Helpers ────
 
 const requireWorkspaceId = (repo: Repo, caller: string): string => {
   const workspaceId = repo.activeWorkspaceId
@@ -55,6 +72,143 @@ const requireWorkspaceId = (repo: Repo, caller: string): string => {
   }
   return workspaceId
 }
+
+/** Idempotent UI-state child creation. Returns the Block facade for
+ *  the child whose content equals `content` under `parent`. The id
+ *  comes from `uiChildBlockId(parentId, content)` so repeat calls hit
+ *  the same row deterministically. Restores soft-deleted rows in the
+ *  same scope. */
+const ensureUiChild = async (
+  repo: Repo,
+  parent: Block,
+  content: string,
+): Promise<Block> => {
+  const parentData = parent.peek() ?? await parent.load()
+  if (!parentData) throw new Error(`ensureUiChild: parent ${parent.id} not loaded`)
+  const childId = uiChildBlockId(parent.id, content)
+
+  await repo.tx(async tx => {
+    const existing = await tx.get(childId)
+    if (existing && !existing.deleted) {
+      return
+    }
+    if (existing && existing.deleted) {
+      await tx.restore(childId, {content})
+      return
+    }
+    // Fresh insert. Use 'a0' as a starter order key — fine because
+    // UI-state children don't compete for ordering with other
+    // siblings beyond the bootstrap bucket; if we ever add multiple
+    // ui-state children with stable order, swap to keyAtEnd.
+    await tx.create({
+      id: childId,
+      workspaceId: parentData.workspaceId,
+      parentId: parent.id,
+      orderKey: 'a0',
+      content,
+    })
+  }, {scope: ChangeScope.UiState})
+
+  return repo.block(childId)
+}
+
+// ──── Bootstrap blocks ────
+
+/** Per-user "user page" block — created (or restored) on first access.
+ *  The alias matches the user's display name so QuickFind / wiki-link
+ *  resolution can target it directly. Memoized per (repo, workspaceId,
+ *  userId) — `use()` requires a stable promise per render. */
+export const getUserBlock = memoize(
+  async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
+    const id = userPageBlockId(workspaceId, user.id)
+    const existing = await repo.load(id)
+
+    if (existing && !existing.deleted) return repo.block(id)
+
+    await repo.tx(async tx => {
+      if (existing && existing.deleted) {
+        await tx.restore(id, {content: user.name})
+        await tx.setProperty(id, aliasesProp, [user.name])
+        return
+      }
+      await tx.create({
+        id,
+        workspaceId,
+        parentId: null,
+        orderKey: 'a0',
+        content: user.name,
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode([user.name])},
+      })
+    }, {scope: ChangeScope.UiState})
+
+    return repo.block(id)
+  },
+  (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}`,
+)
+
+/** Resolve the UI-state block scoped to the current panel context.
+ *  In a panel context (`context.panelId`), returns the panel's own
+ *  block — per-panel UI state lives directly on it. Outside a panel,
+ *  returns the user-level `ui-state` child of the user page. */
+export const getUIStateBlock = memoize(
+  async (
+    repo: Repo,
+    workspaceId: string,
+    user: User,
+    context: BlockContextType,
+  ): Promise<Block> => {
+    if (context.panelId) {
+      await repo.load(context.panelId)
+      return repo.block(context.panelId)
+    }
+
+    const userBlock = await getUserBlock(repo, workspaceId, user)
+    return ensureUiChild(repo, userBlock, 'ui-state')
+  },
+  (repo, workspaceId, user, context) =>
+    `${repoIdentity(repo)}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`,
+)
+
+const PANELS_PATH_PART = 'panels'
+export const getPanelsBlock = memoize(
+  async (uiStateBlock: Block): Promise<Block> =>
+    ensureUiChild(uiStateBlock.repo, uiStateBlock, PANELS_PATH_PART),
+  (uiBlock) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}`,
+)
+
+export const MAIN_PANEL_NAME = 'main'
+
+export const isMainPanel = (panel: Block): boolean =>
+  panel.peek()?.content === MAIN_PANEL_NAME
+
+/** Resolve the panel ui-state block the user is most likely working
+ *  in. GLOBAL action handlers receive the user-level UI-state block,
+ *  where per-panel state — focused/topLevel block ids — is *not*
+ *  stored. Per-panel state lives on each panel block under
+ *  ui-state/panels, so any GLOBAL handler that wants to act on "the
+ *  current view" needs to walk to the right panel first.
+ *
+ *  Picks the first panel with a focused block; falls back to the
+ *  first panel that has a topLevelBlockId so the helper still resolves
+ *  on a fresh page where the user hasn't focused anything yet. */
+export const getActivePanelBlock = async (
+  uiStateBlock: Block,
+): Promise<Block | undefined> => {
+  const panelsBlock = await getPanelsBlock(uiStateBlock)
+  await uiStateBlock.repo.load(panelsBlock.id, {children: true})
+  const panels = panelsBlock.children
+  let fallback: Block | undefined
+  for (const panel of panels) {
+    await panel.load()
+    const focused = panel.peekProperty(focusedBlockIdProp)
+    const topLevel = panel.peekProperty(topLevelBlockIdProp)
+    if (focused) return panel
+    if (!fallback && topLevel) fallback = panel
+  }
+  return fallback
+}
+
+// ──── React hooks ────
 
 export function useUIStateBlock(): Block {
   const context = useBlockContext()
@@ -73,137 +227,95 @@ export function useUserBlock(): Block {
   return use(getUserBlock(repo, workspaceId, user))
 }
 
-export const useUserProperty = <T extends BlockProperty>(
-  config: T,
-): [T['value'], (value: T['value']) => void] =>
-  usePropertyValue(useUserBlock(), config)
-
-/**
- * Memoized for using with \`use\` react function
- */
-// Per-user UI state is stored under a parent-less "user page" block addressed
-// by a deterministic id derived from (workspaceId, user.id). Both the create
-// and any resurrect-from-soft-delete go through uiChangeScope so they're
-// tolerated in read-only workspaces (routed to ephemeral storage there — UI
-// state lives session-only for viewers, never escapes locally).
-export const getUIStateBlock = memoize(
-  async (repo: Repo, workspaceId: string, user: User, context: BlockContextType): Promise<Block> => {
-    if (context.panelId) {
-      return repo.find(context.panelId)
-    }
-
-    const userBlock = await getUserBlock(repo, workspaceId, user)
-    return userBlock.childByContent('ui-state', true, {scope: uiChangeScope})
-  }, (repo, workspaceId, user, context) =>
-    `${repo.instanceId}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`)
-
-export const getUserBlock = memoize(
-  async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
-    const id = userPageBlockId(workspaceId, user.id)
-    const existing = await repo.loadBlockData(id)
-
-    if (existing && !existing.deleted) return repo.find(id)
-
-    if (existing && existing.deleted) {
-      const block = repo.find(id)
-      block.change((doc) => { doc.deleted = false }, {scope: uiChangeScope})
-      return block
-    }
-
-    return repo.create({
-      id,
-      workspaceId,
-      content: user.name,
-      properties: fromList(aliasProp([user.name])),
-    }, {scope: uiChangeScope})
-  },
-  (repo, workspaceId, user) => `${repo.instanceId}:${workspaceId}:${user.id}`)
-
-
-const panelsPathPart = 'panels'
-export const getPanelsBlock = memoize(
-  async (uiStateBlock: Block): Promise<Block> =>
-    uiStateBlock.childByContent([panelsPathPart], true, {scope: uiChangeScope}),
-  (uiBlock) => `${uiBlock.repo.instanceId}:${uiBlock.id}`)
-
-export const MAIN_PANEL_NAME = 'main'
-export const isMainPanel = (panel: Block) => panel.dataSync()?.content === MAIN_PANEL_NAME
-
-/**
- * Resolve the panel ui-state block the user is most likely working in.
- *
- * GLOBAL action handlers receive the user-level ui-state block, where
- * per-panel state — focusedBlockId, topLevelBlockId — is *not* stored.
- * Panel state lives on each panel's own block under ui-state/panels,
- * so any GLOBAL handler that wants to act on "the current view" needs
- * to walk to the right panel first.
- *
- * Picks the first panel with a focused block; falls back to the first
- * panel that has a topLevelBlockId so the helper still resolves on a
- * fresh page where the user hasn't focused anything yet. Returns
- * undefined only if no panels exist.
- */
-export const getActivePanelBlock = async (uiStateBlock: Block): Promise<Block | undefined> => {
-  const panelsBlock = await getPanelsBlock(uiStateBlock)
-  const panels = await panelsBlock.children()
-  let fallback: Block | undefined
-  for (const panel of panels) {
-    const data = await panel.data()
-    if (data?.properties[focusedBlockIdProp.name]?.value) return panel
-    if (!fallback && data?.properties[topLevelBlockIdProp.name]?.value) fallback = panel
-  }
-  return fallback
+/** Hook to access and modify a UI-state property on the active UI-state
+ *  block. The property's schema dictates codec + default; writes are
+ *  scoped via the schema's `changeScope` (typically `UiState`). */
+export function useUIStateProperty<T>(
+  schema: PropertySchema<T>,
+): [T, (value: T) => void] {
+  const block = useUIStateBlock()
+  return usePropertyValue(block, schema)
 }
 
+export const useUserProperty = <T>(
+  schema: PropertySchema<T>,
+): [T, (value: T) => void] => usePropertyValue(useUserBlock(), schema)
+
+/** Selection state — sticky on the UI-state block. The setter merges
+ *  partial updates into the current snapshot. */
 export function useSelectionState(): [
   BlockSelectionState,
-  (newState: Partial<BlockSelectionState>) => void
+  (newState: Partial<BlockSelectionState>) => void,
 ] {
   const uiStateBlock = useUIStateBlock()
-  const [currentSelectionState, setRawSelectionState] = usePropertyValue(uiStateBlock, selectionStateProp)
+  const [current, setRaw] = usePropertyValue(uiStateBlock, selectionStateProp)
 
-  const setSelectionState = useCallback((newState: Partial<BlockSelectionState>) => {
-    setRawSelectionState({
-      ...(currentSelectionState || selectionStateProp.value!),
-      ...newState,
-    })
-  }, [currentSelectionState, setRawSelectionState])
-
-  return [currentSelectionState || selectionStateProp.value!, setSelectionState]
-}
-
-export const getSelectionStateSnapshot = (uiStateBlock: Block): BlockSelectionState =>
-  (uiStateBlock.dataSync()?.properties[selectionStateProp.name]?.value as BlockSelectionState | undefined)
-  ?? selectionStateProp.value!
-
-export const resetBlockSelection = async (block: Block) => {
-  const currentState = await block.getProperty(selectionStateProp)
-  if (!currentState?.value?.selectedBlockIds.length && !currentState?.value?.anchorBlockId) return
-
-  block.setProperty({
-    ...selectionStateProp,
-    value: {
-      selectedBlockIds: [],
-      anchorBlockId: null,
+  const setSelectionState = useCallback(
+    (newState: Partial<BlockSelectionState>) => {
+      setRaw({...current, ...newState})
     },
-  })
+    [current, setRaw],
+  )
+
+  return [current, setSelectionState]
 }
 
-export const useInFocus = (blockId: string) =>
-  useDataWithSelector(useUIStateBlock(),
-    doc => doc?.properties[focusedBlockIdProp.name]?.value === blockId)
+/** Sync selection-state read; doesn't subscribe — for use in
+ *  imperative shortcut handlers. Returns the schema default when
+ *  nothing's stored. */
+export const getSelectionStateSnapshot = (uiStateBlock: Block): BlockSelectionState =>
+  uiStateBlock.peekProperty(selectionStateProp) ?? selectionStateProp.defaultValue
 
-export const useIsSelected = (blockId: string) =>
-  useDataWithSelector(useUIStateBlock(), (doc) => {
-    const selectionState = doc?.properties[selectionStateProp.name]?.value as BlockSelectionState | undefined
-    return selectionState?.selectedBlockIds.includes(blockId) ?? false
+export const resetBlockSelection = async (uiStateBlock: Block): Promise<void> => {
+  const current = uiStateBlock.peekProperty(selectionStateProp)
+  if (!current?.selectedBlockIds.length && !current?.anchorBlockId) return
+  await uiStateBlock.set(selectionStateProp, {selectedBlockIds: [], anchorBlockId: null})
+}
+
+export const useInFocus = (blockId: string): boolean =>
+  useDataWithSelector(
+    useUIStateBlock(),
+    doc => doc?.properties[focusedBlockIdProp.name] === blockId,
+  )
+
+export const useIsSelected = (blockId: string): boolean =>
+  useDataWithSelector(useUIStateBlock(), doc => {
+    const stored = doc?.properties[selectionStateProp.name]
+    if (stored === undefined) return false
+    const sel = selectionStateProp.codec.decode(stored)
+    return sel.selectedBlockIds.includes(blockId)
   })
 
-export const useInEditMode = (blockId: string) => {
+export const useInEditMode = (blockId: string): boolean => {
   const uiStateBlock = useUIStateBlock()
-  const focusedBlockId = useDataWithSelector(uiStateBlock,
-    doc => doc?.properties[focusedBlockIdProp.name]?.value)
-  const isEditing = useDataWithSelector(uiStateBlock,
-    doc => Boolean(doc?.properties[isEditingProp.name]?.value))
+  const focusedBlockId = useDataWithSelector(
+    uiStateBlock,
+    doc => doc?.properties[focusedBlockIdProp.name],
+  )
+  const isEditing = useDataWithSelector(uiStateBlock, doc =>
+    Boolean(doc?.properties[isEditingProp.name]),
+  )
   return focusedBlockId === blockId && isEditing
+}
+
+// ──── Internal: stable-ish identity for memoization keys ────
+
+/** Memoization keys for the bootstrap helpers need to invalidate
+ *  whenever the Repo instance changes (test isolation, sign-out /
+ *  sign-in cycle). The new Repo has no `instanceId` field; we lazily
+ *  attach one via a private symbol so existing memo keys keep
+ *  collision-free identities without touching the public surface. */
+const repoIdentitySymbol = Symbol('globalState.repoIdentity')
+let nextRepoIdentity = 1
+
+interface RepoWithIdentity {
+  [repoIdentitySymbol]?: number
+}
+
+const repoIdentity = (repo: Repo): number => {
+  const carrier = repo as Repo & RepoWithIdentity
+  if (carrier[repoIdentitySymbol] === undefined) {
+    carrier[repoIdentitySymbol] = nextRepoIdentity++
+  }
+  return carrier[repoIdentitySymbol]!
 }
