@@ -1,0 +1,236 @@
+// @vitest-environment node
+/**
+ * Tests for Repo's collection-handle factories (Phase 2.B):
+ *   `repo.children(id)`, `repo.subtree(id)`, `repo.ancestors(id)`,
+ *   `repo.backlinks(id)` — each returning a LoaderHandle<BlockData[]>.
+ *
+ * Coverage:
+ *   - Identity stability per (factory, id).
+ *   - Loader correctness: data shape matches the legacy one-shot APIs
+ *     (CHILDREN_SQL / SUBTREE_SQL / ANCESTORS_SQL / SELECT_BACKLINKS).
+ *   - Side-effects: `children` + `subtree` set `allChildrenLoaded`;
+ *     ancestors + backlinks hydrate the cache.
+ *   - Dependencies declared during resolve (verified via the test-only
+ *     `__depsForTest` helper on LoaderHandle):
+ *       - `children`:  parent-edge on `id` + row on each child.
+ *       - `subtree`:   row + parent-edge on every visited id.
+ *       - `ancestors`: row on `id` + every ancestor id.
+ *       - `backlinks`: row on `id`, workspace, row on each backlink.
+ *   - Invalidation through the HandleStore index: the right shape of
+ *     change re-resolves the handle. (The TxEngine + row_events tail
+ *     wiring is Phase 2.C; here we drive `handleStore.invalidate` by
+ *     hand to verify the dep-matching contract.)
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope } from '@/data/api'
+import { BlockCache } from '@/data/blockCache'
+import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { Repo } from './repo'
+import type { Dependency } from './handleStore'
+
+interface Harness { h: TestDb; cache: BlockCache; repo: Repo }
+
+const setup = async (): Promise<Harness> => {
+  const h = await createTestDb()
+  const cache = new BlockCache()
+  const repo = new Repo({db: h.db, cache, user: {id: 'u1'}})
+  return {h, cache, repo}
+}
+
+let env: Harness
+beforeEach(async () => { env = await setup() })
+afterEach(async () => { await env.h.cleanup() })
+
+const create = async (
+  id: string,
+  args: {parentId?: string | null; orderKey?: string; content?: string; workspaceId?: string} = {},
+) => {
+  await env.repo.tx(
+    tx => tx.create({
+      id,
+      workspaceId: args.workspaceId ?? 'ws-1',
+      parentId: args.parentId ?? null,
+      orderKey: args.orderKey ?? `key-${id}`,
+      content: args.content ?? id,
+    }),
+    {scope: ChangeScope.BlockDefault},
+  )
+}
+
+const depKinds = (deps: readonly Dependency[]) => deps.map(d => d.kind).sort()
+const depIds = (deps: readonly Dependency[], kind: Dependency['kind']) =>
+  deps
+    .filter(d => d.kind === kind)
+    .map(d => {
+      if (d.kind === 'row') return d.id
+      if (d.kind === 'parent-edge') return d.parentId
+      if (d.kind === 'workspace') return d.workspaceId
+      return d.table
+    })
+    .sort()
+
+describe('repo.children(id)', () => {
+  it('identity-stable across calls', () => {
+    const a = env.repo.children('p')
+    const b = env.repo.children('p')
+    expect(a).toBe(b)
+    // different id → different handle
+    expect(env.repo.children('q')).not.toBe(a)
+  })
+
+  it('loader returns children sorted by (orderKey, id) and marks allChildrenLoaded', async () => {
+    await create('p')
+    await create('c1', {parentId: 'p', orderKey: 'a0'})
+    await create('c2', {parentId: 'p', orderKey: 'a1'})
+    const h = env.repo.children('p')
+    const result = await h.load()
+    expect(result.map(b => b.id)).toEqual(['c1', 'c2'])
+    expect(env.cache.areChildrenLoaded('p')).toBe(true)
+  })
+
+  it('declares parent-edge on id + row on each child', async () => {
+    await create('p')
+    await create('c1', {parentId: 'p', orderKey: 'a0'})
+    await create('c2', {parentId: 'p', orderKey: 'a1'})
+    const h = env.repo.children('p')
+    await h.load()
+    const deps = h.__depsForTest()
+    expect(depKinds(deps)).toEqual(['parent-edge', 'row', 'row'])
+    expect(depIds(deps, 'parent-edge')).toEqual(['p'])
+    expect(depIds(deps, 'row')).toEqual(['c1', 'c2'])
+  })
+
+  it('handleStore.invalidate({parentIds:[id]}) re-resolves the handle', async () => {
+    await create('p')
+    await create('c1', {parentId: 'p', orderKey: 'a0'})
+    const h = env.repo.children('p')
+    const fired: number[] = []
+    h.subscribe(v => fired.push(v.length))
+    await vi.waitFor(() => expect(fired).toEqual([1]))
+
+    // Add another child via tx (cache populated through commit walk),
+    // then drive invalidation explicitly — this isolates the
+    // dep-matching contract from the (Phase 2.C) wiring.
+    await create('c2', {parentId: 'p', orderKey: 'a1'})
+    env.repo.handleStore.invalidate({parentIds: ['p']})
+    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+  })
+})
+
+describe('repo.subtree(id)', () => {
+  it('identity-stable across calls', () => {
+    const a = env.repo.subtree('r')
+    const b = env.repo.subtree('r')
+    expect(a).toBe(b)
+  })
+
+  it('returns root + descendants and marks every visited parent', async () => {
+    await create('r')
+    await create('a', {parentId: 'r', orderKey: 'a0'})
+    await create('b', {parentId: 'a', orderKey: 'b0'})
+    const h = env.repo.subtree('r')
+    const out = await h.load()
+    const ids = out.map(b => b.id).sort()
+    expect(ids).toEqual(['a', 'b', 'r'])
+    expect(env.cache.areChildrenLoaded('r')).toBe(true)
+    expect(env.cache.areChildrenLoaded('a')).toBe(true)
+    expect(env.cache.areChildrenLoaded('b')).toBe(true)
+  })
+
+  it('declares row + parent-edge on every visited id', async () => {
+    await create('r')
+    await create('a', {parentId: 'r', orderKey: 'a0'})
+    const h = env.repo.subtree('r')
+    await h.load()
+    const deps = h.__depsForTest()
+    expect(depIds(deps, 'row').sort()).toEqual(['a', 'r'])
+    expect(depIds(deps, 'parent-edge').sort()).toEqual(['a', 'r'])
+  })
+})
+
+describe('repo.ancestors(id)', () => {
+  it('identity-stable across calls', () => {
+    const a = env.repo.ancestors('x')
+    const b = env.repo.ancestors('x')
+    expect(a).toBe(b)
+  })
+
+  it('returns chain (root → … → parent), excludes id itself', async () => {
+    await create('r')
+    await create('a', {parentId: 'r', orderKey: 'a0'})
+    await create('b', {parentId: 'a', orderKey: 'b0'})
+    const h = env.repo.ancestors('b')
+    const out = await h.load()
+    const ids = out.map(b => b.id)
+    expect(ids).not.toContain('b')
+    expect(ids).toContain('a')
+    expect(ids).toContain('r')
+  })
+
+  it('declares row deps on id + every ancestor', async () => {
+    await create('r')
+    await create('a', {parentId: 'r', orderKey: 'a0'})
+    await create('b', {parentId: 'a', orderKey: 'b0'})
+    const h = env.repo.ancestors('b')
+    await h.load()
+    const deps = h.__depsForTest()
+    expect(depIds(deps, 'row').sort()).toEqual(['a', 'b', 'r'])
+    expect(depIds(deps, 'parent-edge')).toEqual([])
+  })
+})
+
+describe('repo.backlinks(id)', () => {
+  it('identity-stable across calls', () => {
+    const a = env.repo.backlinks('t')
+    const b = env.repo.backlinks('t')
+    expect(a).toBe(b)
+  })
+
+  it('returns blocks whose references include id', async () => {
+    await create('t', {workspaceId: 'ws-1'})
+    // Create a block that references `t`. tx.update doesn't take
+    // references; we patch via direct SQL after the row exists.
+    await create('linker', {workspaceId: 'ws-1', content: 'see t'})
+    await env.h.db.execute(
+      `UPDATE blocks SET references_json = ? WHERE id = ?`,
+      [JSON.stringify([{id: 't', alias: 't'}]), 'linker'],
+    )
+    const h = env.repo.backlinks('t')
+    const out = await h.load()
+    expect(out.map(b => b.id)).toEqual(['linker'])
+  })
+
+  it('returns [] when the source block is missing', async () => {
+    const h = env.repo.backlinks('nope')
+    const out = await h.load()
+    expect(out).toEqual([])
+  })
+
+  it('declares row(id) + workspace dep + row deps on each backlink', async () => {
+    await create('t', {workspaceId: 'ws-1'})
+    await create('linker', {workspaceId: 'ws-1'})
+    await env.h.db.execute(
+      `UPDATE blocks SET references_json = ? WHERE id = ?`,
+      [JSON.stringify([{id: 't', alias: 't'}]), 'linker'],
+    )
+    const h = env.repo.backlinks('t')
+    await h.load()
+    const deps = h.__depsForTest()
+    expect(depIds(deps, 'row').sort()).toEqual(['linker', 't'])
+    expect(depIds(deps, 'workspace')).toEqual(['ws-1'])
+  })
+})
+
+describe('Acceptance §13.2: status() distinguishes loading vs not-found', () => {
+  it('Block.status returns ready+null after load on a missing row', async () => {
+    const b = env.repo.block('nope')
+    expect(b.status()).toBe('idle')
+    const p = b.load()
+    expect(b.status()).toBe('loading')
+    const v = await p
+    expect(v).toBeNull()
+    expect(b.status()).toBe('ready')
+    expect(b.peek()).toBeNull()
+  })
+})

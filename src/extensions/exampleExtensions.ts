@@ -83,9 +83,9 @@ export default actionsFacet.of({
     if (!topLevelId) return
 
     const repo = uiStateBlock.repo
-    // repo.subtree hydrates the cache for every visited row, so per-block
+    // repo.loadSubtree hydrates the cache for every visited row, so per-block
     // peekProperty reads below are sync.
-    const subtree = await repo.subtree(topLevelId, { includeRoot: false })
+    const subtree = await repo.loadSubtree(topLevelId, { includeRoot: false })
     // If anything is uncollapsed, collapse all; otherwise expand all.
     const anyExpanded = subtree.some(
       data => repo.block(data.id).peekProperty(isCollapsedProp) !== true,

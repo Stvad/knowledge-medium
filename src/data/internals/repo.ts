@@ -33,6 +33,11 @@ import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
 import { mutatorsFacet, postCommitProcessorsFacet } from './facets'
 import { ProcessorRunner } from './processorRunner'
 import { Block } from './block'
+import {
+  HandleStore,
+  LoaderHandle,
+  handleKey,
+} from './handleStore'
 import { UndoManager, type UndoEntry } from './undoManager'
 import type { TxImpl } from './txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
@@ -103,11 +108,20 @@ export class Repo {
    *  `repo.tx` records every undoable commit here; `repo.undo` /
    *  `repo.redo` pop entries and replay them via `TxImpl.applyRaw`. */
   readonly undoManager: UndoManager
-  /** Identity-stable Block facades, keyed by id. Stage-2 of Phase 1
-   *  upgrades these into ref-counted handles; for now they're plain
-   *  facades cached so repeat `repo.block(id)` calls return the same
-   *  instance (React `key`/memo identity friendly). */
+  /** Identity-stable Block facades, keyed by id. Block satisfies
+   *  Handle<BlockData|null> structurally (spec §5.1, §5.2) — its
+   *  row-grain reactivity goes through BlockCache.subscribe directly,
+   *  so it doesn't need a HandleStore entry; this map IS its identity
+   *  table. */
   private readonly blockFacades = new Map<string, Block>()
+  /** Handle registry for collection factories: `repo.children`,
+   *  `repo.subtree`, `repo.ancestors`, `repo.backlinks`. Identity rule:
+   *  same key → same LoaderHandle instance. GC after `gcTimeMs` of
+   *  zero subscribers + zero in-flight loads. The store also walks
+   *  invalidation: TxEngine fast path + row_events tail (Phase 2.C)
+   *  call `handleStore.invalidate({…})` to fan out to dep-matching
+   *  handles. */
+  readonly handleStore: HandleStore = new HandleStore()
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -372,8 +386,10 @@ export class Repo {
 
   /** Subtree rooted at `rootId` (depth-100 + visited-id guarded;
    *  spec §11). Hydrates the result + sets `allChildrenLoaded` markers
-   *  for every parent inside the subtree. */
-  async subtree(rootId: string, opts?: {includeRoot?: boolean}): Promise<BlockData[]> {
+   *  for every parent inside the subtree. One-shot Promise variant —
+   *  for reactive use, prefer `repo.subtree(id)` which returns a
+   *  Handle<BlockData[]>. */
+  async loadSubtree(rootId: string, opts?: {includeRoot?: boolean}): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [rootId])
     const includeRoot = opts?.includeRoot ?? true
     const out: BlockData[] = []
@@ -389,10 +405,161 @@ export class Repo {
   }
 
   /** Ancestor chain up from `id` (excludes `id` itself). Hydrates
-   *  every ancestor into cache. */
-  async ancestors(id: string): Promise<BlockData[]> {
+   *  every ancestor into cache. One-shot Promise variant — for reactive
+   *  use, prefer `repo.ancestors(id)` which returns Handle<BlockData[]>. */
+  async loadAncestors(id: string): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
     return this.hydrateRows(rows)
+  }
+
+  // ──── Handle factories (collection reactivity) ────
+
+  /** Reactive children of `id`. Returns a Handle<BlockData[]> sorted
+   *  by `(orderKey, id)`. Identity-stable across calls; GC'd via
+   *  HandleStore once subscribers drain.
+   *
+   *  Dependencies declared:
+   *    - `parent-edge` on `id` — any row whose `parent_id` lands at or
+   *      leaves `id` invalidates the handle (covers child added /
+   *      removed / moved-in / moved-out).
+   *    - `row` on each currently-visible child id — covers content /
+   *      property updates inside a child without an edge change.
+   *
+   *  Side-effect: each call's loader hydrates the child rows into the
+   *  cache and sets the `allChildrenLoaded(id)` marker, matching
+   *  `repo.load(id, {children: true})`. Block.childIds therefore reads
+   *  honestly after the handle's first load resolves. */
+  children(id: string): LoaderHandle<BlockData[]> {
+    const key = handleKey('children', {id})
+    return this.handleStore.getOrCreate(key, () =>
+      new LoaderHandle<BlockData[]>({
+        store: this.handleStore,
+        key,
+        loader: async (ctx) => {
+          ctx.depend({kind: 'parent-edge', parentId: id})
+          const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+          const out: BlockData[] = []
+          for (const r of rows) {
+            const data = parseBlockRow(r)
+            this.cache.setSnapshot(data)
+            ctx.depend({kind: 'row', id: data.id})
+            out.push(data)
+          }
+          this.cache.markChildrenLoaded(id)
+          return out
+        },
+      }),
+    )
+  }
+
+  /** Reactive subtree rooted at `id`, includeRoot=true (spec §11).
+   *  Identity-stable across calls; GC'd via HandleStore. For the
+   *  includeRoot=false / opts-driven one-shot, use `repo.loadSubtree`.
+   *
+   *  Dependencies declared:
+   *    - `parent-edge` on every visited id — any row whose `parent_id`
+   *      lands inside the subtree invalidates (new descendant arriving
+   *      via sync, descendant moved out, etc.).
+   *    - `row` on every visited id — covers content / property updates
+   *      and root deletion. */
+  subtree(id: string): LoaderHandle<BlockData[]> {
+    const key = handleKey('subtree', {id})
+    return this.handleStore.getOrCreate(key, () =>
+      new LoaderHandle<BlockData[]>({
+        store: this.handleStore,
+        key,
+        loader: async (ctx) => {
+          const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+          const out: BlockData[] = []
+          const seen = new Set<string>()
+          for (const r of rows) {
+            const data = parseBlockRow(r)
+            this.cache.setSnapshot(data)
+            seen.add(data.id)
+            ctx.depend({kind: 'row', id: data.id})
+            ctx.depend({kind: 'parent-edge', parentId: data.id})
+            out.push(data)
+          }
+          for (const visited of seen) this.cache.markChildrenLoaded(visited)
+          return out
+        },
+      }),
+    )
+  }
+
+  /** Reactive ancestor chain (excludes `id` itself). For the one-shot
+   *  Promise variant, use `repo.loadAncestors`.
+   *
+   *  Dependencies declared:
+   *    - `row` on `id` — its `parent_id` change rewrites the chain.
+   *    - `row` on every ancestor — its `parent_id` change does too. */
+  ancestors(id: string): LoaderHandle<BlockData[]> {
+    const key = handleKey('ancestors', {id})
+    return this.handleStore.getOrCreate(key, () =>
+      new LoaderHandle<BlockData[]>({
+        store: this.handleStore,
+        key,
+        loader: async (ctx) => {
+          ctx.depend({kind: 'row', id})
+          const rows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
+          const out: BlockData[] = []
+          for (const r of rows) {
+            const data = parseBlockRow(r)
+            this.cache.setSnapshot(data)
+            ctx.depend({kind: 'row', id: data.id})
+            out.push(data)
+          }
+          return out
+        },
+      }),
+    )
+  }
+
+  /** Reactive backlinks for `id` — every block in `id`'s workspace
+   *  whose `references` field points at `id`. Resolves the workspace
+   *  from cache (or via a load of `id` if cold).
+   *
+   *  Dependencies declared:
+   *    - `row` on `id` — workspace can move (if we ever support it),
+   *      and we want a fresh resolve after the source block reloads.
+   *    - `workspace` on the resolved workspace id — coarse but correct;
+   *      any reference write in the same workspace re-resolves. A
+   *      future per-target inverted index could refine this, but the
+   *      coarser dep is the safe correctness baseline.
+   *    - `row` on each currently-visible backlink id — direct row
+   *      changes inside a known backlink reflect.
+   *
+   *  Returns `[]` when the source block is missing. */
+  backlinks(id: string): LoaderHandle<BlockData[]> {
+    const key = handleKey('backlinks', {id})
+    return this.handleStore.getOrCreate(key, () =>
+      new LoaderHandle<BlockData[]>({
+        store: this.handleStore,
+        key,
+        loader: async (ctx) => {
+          ctx.depend({kind: 'row', id})
+          // Resolve workspace: cache first (cheap), then load.
+          const cachedSnap = this.cache.getSnapshot(id)
+          const workspaceId = cachedSnap?.workspaceId
+            ?? (await this.load(id))?.workspaceId
+            ?? this._activeWorkspaceId
+          if (!workspaceId) return []
+          ctx.depend({kind: 'workspace', workspaceId})
+          const rows = await this.db.getAll<BlockRow>(
+            SELECT_BACKLINKS_FOR_BLOCK_SQL,
+            [workspaceId, id, id],
+          )
+          const out: BlockData[] = []
+          for (const r of rows) {
+            const data = parseBlockRow(r)
+            this.cache.setSnapshot(data)
+            ctx.depend({kind: 'row', id: data.id})
+            out.push(data)
+          }
+          return out
+        },
+      }),
+    )
   }
 
   /** Async existence check — cache-first, falls back to a single SQL
