@@ -377,11 +377,14 @@ export class Repo {
   }
 
   /** Async existence check — cache-first, falls back to a single SQL
-   *  hit. Returns true for soft-deleted rows? No — soft-deleted rows
-   *  count as missing here so create/restore flows on the caller side
-   *  get the consistent "not found" signal. */
+   *  hit. Soft-deleted rows count as MISSING here so create/restore
+   *  flows on the caller side get the consistent "not found" signal.
+   *  The cache holds tombstone snapshots after `tx.delete` (so peek
+   *  can show `deleted: true`); `hasSnapshot` alone would falsely
+   *  report a tombstoned row as existing, hence the `deleted` gate. */
   async exists(id: string): Promise<boolean> {
-    if (this.cache.hasSnapshot(id)) return true
+    const cached = this.cache.getSnapshot(id)
+    if (cached !== undefined) return !cached.deleted
     const row = await this.db.getOptional<{id: string}>(SELECT_BLOCK_BY_ID_SQL, [id])
     return row !== null
   }

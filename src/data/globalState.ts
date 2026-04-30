@@ -117,15 +117,27 @@ const ensureUiChild = async (
 /** Per-user "user page" block — created (or restored) on first access.
  *  The alias matches the user's display name so QuickFind / wiki-link
  *  resolution can target it directly. Memoized per (repo, workspaceId,
- *  userId) — `use()` requires a stable promise per render. */
+ *  userId) — `use()` requires a stable promise per render.
+ *
+ *  The fast path uses `repo.load` to skip the tx entirely when the row
+ *  is already live in cache or in SQL. Tombstone branch lives INSIDE
+ *  the tx because `repo.load` filters `deleted = 0` (so tombstones
+ *  always come back as `null`); we have to use `tx.get` to see them. */
 export const getUserBlock = memoize(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const id = userPageBlockId(workspaceId, user.id)
-    const existing = await repo.load(id)
-
-    if (existing && !existing.deleted) return repo.block(id)
+    const live = await repo.load(id)
+    if (live && !live.deleted) return repo.block(id)
 
     await repo.tx(async tx => {
+      // Re-read inside the tx with the unfiltered `tx.get` so we see
+      // tombstones. (`repo.load` returned null in that case, so the
+      // outer `live` is no signal here.) Three outcomes:
+      //   1. live row appeared between load and tx open  → no-op
+      //   2. tombstoned row                              → restore
+      //   3. truly missing                               → create
+      const existing = await tx.get(id)
+      if (existing && !existing.deleted) return
       if (existing && existing.deleted) {
         await tx.restore(id, {content: user.name})
         await tx.setProperty(id, aliasesProp, [user.name])
