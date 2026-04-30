@@ -120,7 +120,14 @@ export function useHandle<T, S = T | undefined>(
     lastSelection: undefined,
     lastSelector: undefined,
   }))
+  // Field-level mutation of the state object during render is the
+  // explicit intent here — see comment block above. The
+  // `react-hooks/immutability` rule flags this conservatively because
+  // it can't tell that `state` is a deliberate mutable bag, not a
+  // hook return value the compiler optimizes against.
+  // eslint-disable-next-line react-hooks/immutability
   state.selector = selector
+  // eslint-disable-next-line react-hooks/immutability
   state.equality = equality
 
   const getSelection = useCallback((): S => {
@@ -131,9 +138,11 @@ export function useHandle<T, S = T | undefined>(
       state.lastSelector === state.selector
     if (cached) return state.lastSelection as S
     const next = state.selector(source)
+    /* eslint-disable react-hooks/immutability */
     state.lastSource = source
     state.lastSelector = state.selector
     state.lastSelection = next
+    /* eslint-enable react-hooks/immutability */
     return next
   }, [handle, state])
 
