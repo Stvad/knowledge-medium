@@ -1,3 +1,4 @@
+import { v5 as uuidv5 } from 'uuid'
 import { supabase } from '@/services/supabase'
 import type {
   Workspace,
@@ -450,4 +451,53 @@ export const primeLocalWorkspaceAndMember = async (
 ): Promise<void> => {
   await primeLocalWorkspace(repo, workspace)
   await primeLocalMembership(repo, member)
+}
+
+// ---------------------------------------------------------------------------
+// Local-only personal workspace bootstrap (used when remote sync is
+// disabled — `.env.local` without VITE_SUPABASE_*). Mirrors
+// `ensurePersonalWorkspace` but without an RPC: we synthesize a
+// workspace + owner membership directly into local SQLite. IDs are
+// derived from the user id with uuidv5 so reloads (or repeat boots in
+// the same browser profile) converge on the same workspace.
+// ---------------------------------------------------------------------------
+
+const LOCAL_PERSONAL_WORKSPACE_NS = 'b13a1f4e-8a9d-4d8e-9e3a-7c2c4f5a1c80'
+
+export const ensureLocalPersonalWorkspace = async (
+  repo: Repo,
+): Promise<EnsuredPersonalWorkspace> => {
+  const userId = repo.user.id
+  const workspaceId = uuidv5(`local-personal:${userId}`, LOCAL_PERSONAL_WORKSPACE_NS)
+  const memberId = uuidv5(`local-member:${userId}`, LOCAL_PERSONAL_WORKSPACE_NS)
+
+  const existing = await getLocalWorkspace(repo, workspaceId)
+  if (existing) {
+    const memberships = await listLocalWorkspaceMembers(repo, workspaceId)
+    const ownerMember = memberships.find((m) => m.userId === userId)
+    if (!ownerMember) {
+      throw new Error(
+        `Local personal workspace ${workspaceId} is missing a membership for user ${userId}`,
+      )
+    }
+    return {workspace: existing, member: ownerMember, inserted: false}
+  }
+
+  const now = Date.now()
+  const workspace: Workspace = {
+    id: workspaceId,
+    name: `${repo.user.name}'s Workspace`,
+    ownerUserId: userId,
+    createTime: now,
+    updateTime: now,
+  }
+  const member: WorkspaceMembership = {
+    id: memberId,
+    workspaceId,
+    userId,
+    role: 'owner',
+    createTime: now,
+  }
+  await primeLocalWorkspaceAndMember(repo, workspace, member)
+  return {workspace, member, inserted: true}
 }

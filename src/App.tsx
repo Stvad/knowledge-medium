@@ -10,6 +10,7 @@ import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 import {
   canAccessRemoteWorkspace,
+  ensureLocalPersonalWorkspace,
   ensurePersonalWorkspace,
   getLocalMemberRole,
   getLocalWorkspace,
@@ -98,7 +99,12 @@ const resolveWorkspace = async (
   const locals = await listLocalWorkspaces(repo)
   if (locals.length > 0) return {id: locals[0].id, freshlyCreated: false}
 
-  throw new Error('No workspace available and remote sync is disabled')
+  // Remote sync disabled (e.g. dev mode without VITE_SUPABASE_*) and
+  // nothing local yet: synthesize a deterministic per-user personal
+  // workspace + owner membership locally so the rest of bootstrap
+  // (seedTutorial, daily note, Tutorial bullet) can run unchanged.
+  const local = await ensureLocalPersonalWorkspace(repo)
+  return {id: local.workspace.id, freshlyCreated: local.inserted}
 }
 
 const getInitialBlock = memoize(
