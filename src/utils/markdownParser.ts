@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
+import { keyAtEnd } from '@/data/internals/orderKey.ts'
 
 /** Lightweight intermediate shape produced by the markdown parser.
  *  Holds only the fields the importer actually needs — id, content,
@@ -109,10 +110,12 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
 
   // Second pass: convert to ParsedBlock[] with parentId + orderKey.
   // The new tree shape stores parent_id+order_key as the source of
-  // truth — no childIds array. Each parent tracks how many children
-  // it's seen so we can synth a deterministic order key per sibling.
+  // truth — no childIds array. Each parent tracks the previously
+  // assigned key so siblings get base62 fractional keys via
+  // keyAtEnd; using `a${childCount}` would break lexicographic sort
+  // at 11+ siblings (a10 < a2).
   const blocks: ParsedBlock[] = []
-  const parentStack: Array<{id: string; childCount: number} | undefined> = []
+  const parentStack: Array<{id: string; lastOrderKey: string | null} | undefined> = []
 
   for (const parsed of parsedBlocks) {
     const id = uuidv4()
@@ -123,18 +126,18 @@ export function parseMarkdownToBlocks(text: string): ParsedBlock[] {
     }
 
     let parentId: string | undefined
-    let orderKey = 'a0'  // root-level siblings: caller decides
+    let orderKey = keyAtEnd(null)  // root-level siblings: caller may overwrite
     if (parsed.level > 0 && parentStack.length === parsed.level && parentStack[parsed.level - 1]) {
       const parent = parentStack[parsed.level - 1]!
       parentId = parent.id
-      orderKey = `a${parent.childCount}`
-      parent.childCount++
+      orderKey = keyAtEnd(parent.lastOrderKey)
+      parent.lastOrderKey = orderKey
     }
 
     while (parentStack.length < parsed.level) {
       parentStack.push(undefined)
     }
-    parentStack[parsed.level] = {id, childCount: 0}
+    parentStack[parsed.level] = {id, lastOrderKey: null}
     blocks.push({id, parentId, orderKey, content: parsed.content})
   }
 

@@ -2,6 +2,7 @@ import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.ts'
+import { keysBetween } from '@/data/internals/orderKey.ts'
 
 /** Paste markdown text as a sibling subtree relative to a target
  *  block. The target's parent receives the new tree as children;
@@ -34,26 +35,30 @@ export async function pasteMultilineText(
   const parsed = parseMarkdownToBlocks(pastedText)
   if (parsed.length === 0) return []
 
-  // Order keys: build a sequence relative to the target's order_key.
-  // The simplest correct approach: prefix the target's order_key with
-  // a deterministic discriminator. For 'after' use `${target}~a0`,
-  // `${target}~a1`, etc.; for 'before' use `${target}~~a0`, where the
-  // tilde sort places ~ before ~~ but after the target's own key.
-  // This is a placeholder — a proper implementation would use
-  // `keysBetween(target.orderKey, nextSibling.orderKey, count)` from
-  // fractional-indexing-jittered. Pragmatically here, we use simple
-  // suffixes and accept that a future paste against an in-between
-  // sibling can collide; for v1 paste this is acceptable.
-  const baseKey = targetData.orderKey
-  const rootKeyFor = (i: number): string =>
-    position === 'after' ? `${baseKey}~a${i}` : `${baseKey}~~a${i}`
+  const rootCount = parsed.reduce((n, b) => n + (b.parentId ? 0 : 1), 0)
 
   const rootBlocks: Block[] = []
   await repo.tx(async tx => {
+    // Compute order keys for the new root-level siblings between the
+    // target and its before/after neighbour. Earlier versions just
+    // suffixed the target's order_key (e.g. `${baseKey}~a0`), which
+    // always sorts AFTER the target lexicographically — so 'before'
+    // silently inserted after the target. Read the actual neighbours
+    // and use keysBetween so 'before' lands above the target.
+    const siblings = await tx.childrenOf(parentId, targetData.workspaceId)
+    const ix = siblings.findIndex(s => s.id === pasteTarget.id)
+    const lower = position === 'after'
+      ? siblings[ix]?.orderKey ?? null
+      : siblings[ix - 1]?.orderKey ?? null
+    const upper = position === 'after'
+      ? siblings[ix + 1]?.orderKey ?? null
+      : siblings[ix]?.orderKey ?? null
+    const rootKeys = rootCount > 0 ? keysBetween(lower, upper, rootCount) : []
+
     let rootIndex = 0
     for (const block of parsed) {
       const isRoot = !block.parentId
-      const orderKey = isRoot ? rootKeyFor(rootIndex++) : block.orderKey
+      const orderKey = isRoot ? rootKeys[rootIndex++] : block.orderKey
       const id = await tx.create({
         id: block.id,
         workspaceId: targetData.workspaceId,
