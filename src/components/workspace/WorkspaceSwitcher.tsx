@@ -117,7 +117,7 @@ export function WorkspaceSwitcher() {
               <span>New workspace</span>
             </DropdownMenuItem>
           )}
-          {activeWorkspace && (
+          {activeWorkspace && !localOnly && (
             <DropdownMenuItem
               onSelect={() => { setTimeout(() => setSettingsOpen(true), 0) }}
             >

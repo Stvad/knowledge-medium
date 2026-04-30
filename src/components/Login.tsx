@@ -126,12 +126,6 @@ function LocalLogin({children, clearLocalOnlyOnSignOut}: LocalLoginProps) {
     <div className="flex flex-col items-center justify-center min-h-screen px-6">
       <div className="w-full max-w-sm space-y-4">
         <h1 className="text-2xl font-bold text-center">Thought Medium</h1>
-        {clearLocalOnlyOnSignOut && (
-          <p className="text-xs text-muted-foreground text-center">
-            Local-only mode — your data stays on this device and isn&apos;t
-            synced to the cloud.
-          </p>
-        )}
         <div className="space-y-2">
           <Input
             placeholder="Enter your name"
@@ -388,9 +382,6 @@ function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
           >
             Use without sync (local-only)
           </Button>
-          <p className="text-xs text-muted-foreground text-center">
-            Skip auth entirely. Data stays on this device and never leaves it.
-          </p>
         </div>
       </div>
     </div>

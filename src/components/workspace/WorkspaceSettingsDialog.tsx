@@ -11,13 +11,11 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { useRepo } from '@/context/repo'
-import { useIsLocalOnly } from '@/components/Login'
 import {
   deleteWorkspace,
   inviteMemberByEmail,
   listWorkspaceMembersWithEmails,
   removeWorkspaceMember,
-  renameLocalWorkspace,
   renameWorkspace,
   updateWorkspaceMemberRole,
 } from '@/data/workspaces'
@@ -44,10 +42,6 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
   const repo = useRepo()
   const isOwner = workspace.ownerUserId === repo.user.id
   const isViewer = repo.isReadOnly
-  // Local-only mode: members + invitations + remote delete all require
-  // Supabase RPCs that throw without a configured client. Hide those
-  // sections; rename still works (against the local raw workspaces table).
-  const localOnly = useIsLocalOnly()
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -58,23 +52,14 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
         </DialogHeader>
         <div className="space-y-6">
           <RenameSection workspace={workspace} disabled={!isOwner} />
-          {!localOnly && <MembersSection workspace={workspace} canManage={isOwner} />}
-          {!localOnly && isOwner && (
-            <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />
-          )}
-          {localOnly && (
-            <p className="text-sm text-muted-foreground">
-              Local-only mode — invitations and workspace deletion are
-              disabled because there&apos;s no remote backend to apply them
-              against.
-            </p>
-          )}
-          {!localOnly && !isOwner && isViewer && (
+          <MembersSection workspace={workspace} canManage={isOwner} />
+          {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
+          {!isOwner && isViewer && (
             <p className="text-sm text-muted-foreground">
               You have read-only access to this workspace. Edits made locally won't be saved.
             </p>
           )}
-          {!localOnly && !isOwner && !isViewer && (
+          {!isOwner && !isViewer && (
             <p className="text-sm text-muted-foreground">
               Only the workspace owner can rename, invite members, or delete this workspace.
             </p>
@@ -86,8 +71,6 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
 }
 
 function RenameSection({workspace, disabled}: {workspace: Workspace, disabled: boolean}) {
-  const repo = useRepo()
-  const localOnly = useIsLocalOnly()
   const [name, setName] = useState(workspace.name)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -106,11 +89,7 @@ function RenameSection({workspace, disabled}: {workspace: Workspace, disabled: b
     if (!trimmed || trimmed === workspace.name) return
     setSubmitting(true); setError(null); setInfo(null)
     try {
-      if (localOnly) {
-        await renameLocalWorkspace(repo, workspace.id, trimmed)
-      } else {
-        await renameWorkspace(workspace.id, trimmed)
-      }
+      await renameWorkspace(workspace.id, trimmed)
       setInfo('Renamed.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Rename failed')

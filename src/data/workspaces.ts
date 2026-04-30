@@ -501,21 +501,3 @@ export const ensureLocalPersonalWorkspace = async (
   await primeLocalWorkspaceAndMember(repo, workspace, member)
   return {workspace, member, inserted: true}
 }
-
-// Local-only rename — direct UPDATE on the raw workspaces table. The
-// raw table has no powersync_crud trigger, so this never enters the
-// upload queue (which is what we want in local-only mode where no
-// queue is being drained anyway). Used by WorkspaceSettingsDialog when
-// the session is in local-only mode.
-export const renameLocalWorkspace = async (
-  repo: Repo,
-  workspaceId: string,
-  name: string,
-): Promise<void> => {
-  const trimmed = name.trim()
-  if (!trimmed) throw new Error('Workspace name cannot be empty')
-  await repo.db.execute(
-    `UPDATE workspaces SET name = ?, update_time = ? WHERE id = ?`,
-    [trimmed, Date.now(), workspaceId],
-  )
-}
