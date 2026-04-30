@@ -18,6 +18,7 @@ import {randomUUID} from 'node:crypto'
 import type { FacetRuntime } from '@/extensions/facet'
 import type {
   AnyMutator,
+  AnyPostCommitProcessor,
   BlockData,
   RepoTxOptions,
   Tx,
@@ -28,7 +29,9 @@ import { runTx, type PowerSyncDb } from './commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './kernelMutators'
-import { mutatorsFacet } from './facets'
+import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
+import { mutatorsFacet, postCommitProcessorsFacet } from './facets'
+import { ProcessorRunner } from './processorRunner'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
 
 export interface RepoOptions {
@@ -54,7 +57,13 @@ export interface RepoOptions {
    *  immediately. Set false when a test wants to populate the registry
    *  explicitly (or when `setFacetRuntime` is the only registration
    *  path). */
-  registerKernel?: boolean
+  registerKernelMutators?: boolean
+  /** When true (default), kernel post-commit processors are registered
+   *  at construction time. Set false when a test isolates the engine /
+   *  mutator surface from processor side-effects (e.g. parseReferences
+   *  firing on every content write would add follow-up txs the engine
+   *  test isn't asserting on). */
+  registerKernelProcessors?: boolean
 }
 
 export class Repo {
@@ -67,6 +76,8 @@ export class Repo {
   private readonly newId: () => string
   private readonly newTxSeq: () => number
   private mutators: Map<string, AnyMutator> = new Map()
+  private processors: Map<string, AnyPostCommitProcessor> = new Map()
+  private readonly processorRunner: ProcessorRunner
 
   /** Typed-dispatch sugar. `repo.mutate.indent({id})` opens a 1-mutator
    *  tx with the mutator's scope and runs it. Lookup tries kernel-short
@@ -92,13 +103,26 @@ export class Repo {
       let seq = Date.now()
       this.newTxSeq = () => ++seq
     }
-    // Register kernel mutators by default. setFacetRuntime overrides
-    // with the merged kernel + plugin registry once a runtime is
-    // supplied; callers can also pass `registerKernel: false` to start
-    // empty (used by tests that want explicit registration semantics).
-    if (opts.registerKernel ?? true) {
+    // Register kernel contributions by default. setFacetRuntime
+    // overrides with the merged kernel + plugin registry once a
+    // runtime is supplied; callers can pass either of the
+    // `registerKernel*` flags as `false` to start empty for that
+    // facet (used by tests + tooling that want explicit registration
+    // semantics). The two flags are independent so engine tests can
+    // skip processor side-effects while keeping mutator dispatch.
+    if (opts.registerKernelMutators ?? true) {
       this.registerMutators(KERNEL_MUTATORS)
     }
+    if (opts.registerKernelProcessors ?? true) {
+      for (const p of KERNEL_PROCESSORS) this.processors.set(p.name, p)
+    }
+    // Initialize the processor runner. The runner needs a Repo
+    // reference for opening processor txs; passing `this` is safe
+    // because runner methods only use it post-construction (during
+    // dispatch). Sync the registry after instantiation so kernel
+    // processors registered above are visible.
+    this.processorRunner = new ProcessorRunner(this, opts.db)
+    this.processorRunner.setRegistry(this.processors)
     // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
     // need to alias `this` to a local. Each name lookup returns a
     // fresh dispatcher closure; that's fine, the underlying registry
@@ -197,12 +221,21 @@ export class Repo {
       newId: this.newId,
       now: this.now,
       mutators: this.mutators,
+      processors: this.processors,
     })
-    // afterCommit jobs returned but not dispatched in stage 1.3 — the
-    // post-commit processor framework lands in stage 1.5. Until then,
-    // we keep them on the result for tests that want to verify
-    // scheduling semantics; they don't fire and we don't leak them.
-    void result.afterCommitJobs
+    // Step 9 of the §10 pipeline — dispatch field-watch + explicit
+    // post-commit processors. Failures are caught + logged inside the
+    // runner so a buggy processor can't poison the caller's resolve.
+    // Awaited so synchronously-fired processors land before the
+    // caller sees the resolved promise; delayed (delayMs > 0) jobs
+    // run after.
+    void this.processorRunner.dispatch({
+      txId: result.txId,
+      user: result.user,
+      workspaceId: result.workspaceId,
+      snapshots: result.snapshots,
+      afterCommitJobs: result.afterCommitJobs,
+    })
     return result.value
   }
 
@@ -214,15 +247,32 @@ export class Repo {
     return this.dispatchMutator(name)(args) as Promise<R>
   }
 
-  /** Update the mutator registry from a FacetRuntime. Spec §8. Reads
-   *  `mutatorsFacet` contributions; future stages will read the other
-   *  data-layer facets (queries, properties, processors) here too.
-   *  Replaces the current registry; kernel mutators must be present in
-   *  the runtime if the caller wants them — pass them in via the
+  /** Update the data-layer registries from a FacetRuntime. Spec §8.
+   *  Reads `mutatorsFacet` and `postCommitProcessorsFacet` contributions
+   *  (other data-layer facets land in later stages). Replaces the
+   *  current registries; kernel mutators must be present in the
+   *  runtime if the caller wants them — pass them in via the
    *  static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
-    const merged = runtime.read(mutatorsFacet)
-    this.mutators = new Map(merged)
+    this.mutators = new Map(runtime.read(mutatorsFacet))
+    this.processors = new Map(runtime.read(postCommitProcessorsFacet))
+    this.processorRunner.setRegistry(this.processors)
+  }
+
+  /** Wait until the post-commit processor framework has nothing
+   *  pending — useful in tests + scripted scenarios that need
+   *  deterministic ordering after a `repo.tx` resolves. Does NOT
+   *  advance timers; jobs scheduled with `delayMs` only enter the
+   *  pending set when the timer fires. */
+  async awaitProcessors(): Promise<void> {
+    await this.processorRunner.awaitIdle()
+  }
+
+  /** Test-only escape hatch retained for stage-level tests that wire
+   *  specific processor sets without a FacetRuntime. */
+  __setProcessorsForTesting(processors: ReadonlyArray<AnyPostCommitProcessor>): void {
+    this.processors = new Map(processors.map(p => [p.name, p]))
+    this.processorRunner.setRegistry(this.processors)
   }
 
   /** Build the dispatcher closure for a mutator name. Resolution order:

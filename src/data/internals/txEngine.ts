@@ -25,6 +25,7 @@
 
 import type {
   AnyMutator,
+  AnyPostCommitProcessor,
   BlockData,
   BlockDataPatch,
   ChangeScope,
@@ -106,6 +107,12 @@ export interface TxImplContext {
    *  registry is empty in v1; tx.run with an unregistered mutator
    *  throws MutatorNotRegisteredError. */
   mutators: ReadonlyMap<string, AnyMutator>
+  /** Processor registry snapshot (taken at tx start). Used by
+   *  `tx.afterCommit` to validate `scheduledArgs` against the
+   *  processor's `scheduledArgsSchema` at enqueue time so a bad arg
+   *  fails the originating tx (clean rollback) instead of failing
+   *  later at fire time. */
+  processors: ReadonlyMap<string, AnyPostCommitProcessor>
   /** UUID generator — injected for testability. */
   newId: () => string
 }
@@ -423,9 +430,26 @@ export class TxImpl implements Tx {
     options?: { delayMs?: number },
   ): void {
     if (!this.workspacePinned) throw new WorkspaceNotPinnedError()
-    // Schema validation lands in stage 1.5 alongside the processor
-    // framework; for stage 1.3 we record the schedule and the
-    // pipeline drops jobs on rollback.
+    // Validate scheduledArgs at enqueue time against the registered
+    // processor (spec §5.7). Failing here makes the originating tx
+    // roll back, surfacing the bug to the caller. Validation runs only
+    // when the processor exists AND is explicit-watching; field-watch
+    // processors don't take scheduledArgs and are skipped (the type
+    // wouldn't permit afterCommit-scheduling them anyway).
+    const processor = this.ctx.processors.get(processorName)
+    if (processor !== undefined && processor.watches.kind === 'explicit') {
+      // .parse throws on shape mismatch — propagates out of this call,
+      // out of the user fn, and into the writeTransaction's rollback.
+      // TypeScript can't narrow the discriminated union through the
+      // `AnyPostCommitProcessor = PostCommitProcessor<any>` alias
+      // because `any` collapses the discriminator; the runtime check
+      // above is the actual guard.
+      const schema = (processor as {scheduledArgsSchema: {parse: (x: unknown) => unknown}}).scheduledArgsSchema
+      args = schema.parse(args)
+    }
+    // If the processor isn't registered yet the args go through as-is;
+    // the dispatcher will skip it at fire time (with a warning) since
+    // it can't have been registered between schedule and dispatch.
     this.ctx.afterCommitJobs.push({
       processorName,
       args,

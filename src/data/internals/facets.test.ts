@@ -34,7 +34,9 @@ beforeEach(async () => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    registerKernel: false,  // start empty so setFacetRuntime is the only registration
+    // Start empty so setFacetRuntime is the only registration path.
+    registerKernelMutators: false,
+    registerKernelProcessors: false,
   })
 })
 afterEach(async () => { await h.cleanup() })
@@ -91,7 +93,7 @@ describe('setFacetRuntime + mutatorsFacet', () => {
   })
 
   it('setFacetRuntime replaces the registry — kernel mutators are not implicitly retained', async () => {
-    // We started with registerKernel: false, so the registry begins empty.
+    // We started with registerKernelMutators: false, so the registry begins empty.
     // After setFacetRuntime with only a plugin mutator, kernel calls fail.
     let observed = false
     const plugin = defineMutator<{id: string}, void>({

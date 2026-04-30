@@ -84,6 +84,11 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
     isReadOnly: overrides?.isReadOnly,
     now: tick,
     newId,
+    // Engine tests pin Tx primitive behavior. Kernel processors firing
+    // on content writes would add follow-up txs (parseReferences) the
+    // engine assertions don't account for — keep the processor surface
+    // empty and let the parseReferences integration tests cover it.
+    registerKernelProcessors: false,
   })
   return {
     h,

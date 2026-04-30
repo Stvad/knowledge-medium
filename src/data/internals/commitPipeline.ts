@@ -25,7 +25,14 @@
  *   - DB error inside the writeTransaction → same rollback path.
  */
 
-import type { AnyMutator, ChangeScope, RepoTxOptions, Tx, User } from '@/data/api'
+import type {
+  AnyMutator,
+  AnyPostCommitProcessor,
+  ChangeScope,
+  RepoTxOptions,
+  Tx,
+  User,
+} from '@/data/api'
 import { ReadOnlyError, ChangeScope as ChangeScopeConst } from '@/data/api'
 import {
   newTxMeta,
@@ -74,6 +81,9 @@ export interface RunTxParams<R> {
   newId: () => string
   now: () => number
   mutators: ReadonlyMap<string, AnyMutator>
+  /** Processor registry snapshot, captured at tx start. Used by
+   *  `tx.afterCommit` to validate scheduledArgs at enqueue time. */
+  processors: ReadonlyMap<string, AnyPostCommitProcessor>
 }
 
 export interface TxResult<R> {
@@ -82,10 +92,28 @@ export interface TxResult<R> {
   /** afterCommit jobs scheduled by the tx — to be dispatched by the
    *  caller (Repo) after the tx promise resolves. Empty if rollback. */
   afterCommitJobs: AfterCommitJob[]
+  /** Snapshots map for the committed tx — used by the post-commit
+   *  processor framework to compute field-watch matches. Empty map if
+   *  the user fn made no writes. */
+  snapshots: SnapshotsMap
+  /** Pinned workspace at commit time. `null` for zero-write txs;
+   *  CommittedEvent contracts on this being a string when present, so
+   *  the runner skips field-watch + explicit dispatch entirely when
+   *  null (no work to do anyway — no field changed, and afterCommit
+   *  threw WorkspaceNotPinnedError if called pre-write). */
+  workspaceId: string | null
+  /** Tx id (for processor CommittedEvent.txId). */
+  txId: string
+  /** User who ran the tx (for processor CommittedEvent.user). */
+  user: User
 }
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
-  const {db, cache, fn, opts, user, isReadOnly, newTxId, newTxSeq, newId, now, mutators} = params
+  const {
+    db, cache, fn, opts, user, isReadOnly,
+    newTxId, newTxSeq, newId, now,
+    mutators, processors,
+  } = params
   const {scope, description} = opts
 
   // §10.3 read-only gate. UiState is always allowed (local chrome state).
@@ -126,6 +154,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
       afterCommitJobs,
       mutatorCalls,
       mutators,
+      processors,
       now,
       newId,
     })
@@ -184,9 +213,16 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     }
   }
 
-  // Step 9 jobs are returned — Repo dispatches them after resolving.
-  // (Currently the framework that runs them lands in stage 1.5.)
-  return {value, afterCommitJobs}
+  // Step 9 — return everything Repo needs to dispatch field-watch +
+  // explicit processors. Repo wraps this with its ProcessorRunner.
+  return {
+    value,
+    afterCommitJobs,
+    snapshots,
+    workspaceId: meta.workspaceId,
+    txId,
+    user,
+  }
 }
 
 // Internal export for tests / debug — `scopeUploadsToServer` documents

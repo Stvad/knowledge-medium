@@ -1,4 +1,5 @@
 import type { BlockData } from './blockData'
+import type { ChangeScope } from './changeScope'
 import type { Schema } from './schema'
 import type { Tx } from './tx'
 import type { User } from './user'
@@ -39,6 +40,12 @@ export type ProcessorWatches<ScheduledArgs> =
 
 export type PostCommitProcessor<ScheduledArgs = unknown> = {
   readonly name: string
+  /** ChangeScope for the processor's own writeTransaction. Determines
+   *  whether the processor's writes enter the document undo stack and
+   *  whether they upload. Reference parsing uses
+   *  `ChangeScope.References` (separate undo bucket; uploads); plugins
+   *  pick whatever matches their semantics. */
+  readonly scope: ChangeScope
   readonly apply: (
     event: CommittedEvent<ScheduledArgs>,
     ctx: ProcessorCtx,
@@ -79,3 +86,11 @@ export interface ProcessorCtx {
 export const definePostCommitProcessor = <ScheduledArgs = undefined>(
   processor: PostCommitProcessor<ScheduledArgs>,
 ): PostCommitProcessor<ScheduledArgs> => processor
+
+/** Variance-erased processor type for storage in heterogeneous
+ *  collections (the engine's processor registry, the
+ *  postCommitProcessorsFacet's contributions). Same rationale as
+ *  AnyMutator — `unknown` doesn't compose cleanly under
+ *  contravariance, `any` is the conventional escape. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPostCommitProcessor = PostCommitProcessor<any>

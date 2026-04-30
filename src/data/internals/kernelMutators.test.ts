@@ -40,6 +40,11 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    // Mutator tests assert on user-facing tx side-effects (cache,
+    // command_events). Kernel processors firing add follow-up txs
+    // that aren't under test here; integration coverage lives in
+    // parseReferencesProcessor.test.ts.
+    registerKernelProcessors: false,
   })
   return {
     h,

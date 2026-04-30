@@ -1,0 +1,239 @@
+/**
+ * Post-commit processor framework (spec §5.7, §7).
+ *
+ * Two firing channels:
+ *   1. Field-watching processors fire when a tx wrote to one of the
+ *      named fields on `blocks`. Engine determines this by walking the
+ *      tx's snapshots map: for each (id, before, after) where any
+ *      watched field changed value, the row is added to the
+ *      processor's CommittedEvent.changedRows. If at least one row
+ *      changed, the processor fires once with the aggregated list.
+ *
+ *   2. Explicit processors fire only when a tx called
+ *      `tx.afterCommit(name, args)`. Args are validated by the
+ *      processor's `scheduledArgsSchema` at enqueue time so a buggy
+ *      caller fails the originating tx (clean rollback) instead of
+ *      failing silently when the processor would otherwise fire.
+ *
+ * Both run in their own writeTransaction (their own `repo.tx`) using
+ * the processor's declared scope. Failures are caught + logged so a
+ * crashing processor can't poison subsequent jobs.
+ *
+ * Stage-1.5 deferred:
+ *   - per-block content debouncing (§7.2 row "Trigger on content change"):
+ *     v1 ships every fire immediately. The dispatcher ordering is
+ *     append-only and sequential, so two close-together content writes
+ *     run parseReferences twice — that's slightly more work than the
+ *     legacy debounced behavior, but is easier to reason about and
+ *     covers correctness. Add coalescing if profiling shows pain.
+ */
+
+import {
+  CodecError,
+  type AnyPostCommitProcessor,
+  type ChangedRow,
+  type CommittedEvent,
+  type ProcessorCtx,
+  type Tx,
+  type User,
+} from '@/data/api'
+import type { AfterCommitJob } from './txEngine'
+import type { SnapshotsMap } from './txSnapshots'
+import type { PowerSyncDb } from './commitPipeline'
+import type { Repo } from './repo'
+
+/** Tx-grain inputs the runner needs to decide what fires + with which
+ *  changedRows. Built by the commit pipeline from the snapshots map +
+ *  collected afterCommit jobs. */
+export interface CommittedTxOutcome {
+  txId: string
+  user: User
+  workspaceId: string | null
+  /** Snapshots map walked into a flat list. */
+  snapshots: SnapshotsMap
+  /** afterCommit jobs scheduled by the user fn. */
+  afterCommitJobs: AfterCommitJob[]
+}
+
+/** Internal helper — convert a snapshots map entry into a ChangedRow. */
+const toChangedRow = (id: string, before: ChangedRow['before'], after: ChangedRow['after']): ChangedRow =>
+  ({id, before, after})
+
+/** True iff `before.field !== after.field`. Both can be null
+ *  (insert / hard-delete); JSON.stringify equality is sufficient for
+ *  the structured fields (`properties`, `references`). */
+const fieldChanged = (
+  before: ChangedRow['before'],
+  after: ChangedRow['after'],
+  field: string,
+): boolean => {
+  // Insert: every field is "new".
+  if (before === null) return after !== null
+  // Hard-delete: treat as a change in every field.
+  if (after === null) return true
+  const a = (before as unknown as Record<string, unknown>)[field]
+  const b = (after as unknown as Record<string, unknown>)[field]
+  // Strict equality is right for primitives; JSON.stringify covers
+  // properties (Record<string, unknown>) and references (BlockReference[]).
+  return a === b ? false : JSON.stringify(a) !== JSON.stringify(b)
+}
+
+/** Build per-processor changedRows from the tx's snapshots. */
+const collectFieldMatches = (
+  processor: AnyPostCommitProcessor,
+  snapshots: SnapshotsMap,
+): ChangedRow[] => {
+  if (processor.watches.kind !== 'field') return []
+  if (processor.watches.table !== 'blocks') return []  // only blocks today
+  const out: ChangedRow[] = []
+  for (const [id, entry] of snapshots) {
+    if (processor.watches.fields.some(f => fieldChanged(entry.before, entry.after, f as string))) {
+      out.push(toChangedRow(id, entry.before, entry.after))
+    }
+  }
+  return out
+}
+
+export class ProcessorRunner {
+  private processors: Map<string, AnyPostCommitProcessor> = new Map()
+  private readonly repo: Repo
+  private readonly db: PowerSyncDb
+  /** In-flight processor promises. Tracked so tests (and any caller
+   *  who needs deterministic ordering) can `awaitIdle()` before
+   *  assertions. Each promise removes itself from the set on
+   *  settlement (success or failure). */
+  private readonly pending: Set<Promise<void>> = new Set()
+
+  constructor(repo: Repo, db: PowerSyncDb) {
+    this.repo = repo
+    this.db = db
+  }
+
+  /** Wait until every currently-pending processor (synchronous + any
+   *  already-fired delayed jobs) resolves. Does NOT advance timers —
+   *  delayed jobs that haven't started yet aren't pending. Tests that
+   *  need to flush a delayed job should use vi.useFakeTimers /
+   *  vi.runAllTimers (or just sleep). */
+  async awaitIdle(): Promise<void> {
+    while (this.pending.size > 0) {
+      // Snapshot — new jobs scheduled while we wait will be in `pending`
+      // when this batch settles, and the loop catches them.
+      await Promise.allSettled([...this.pending])
+    }
+  }
+
+  /** Replace the registry from a Map (typically read off the
+   *  postCommitProcessorsFacet contributions during Repo.setFacetRuntime). */
+  setRegistry(processors: ReadonlyMap<string, AnyPostCommitProcessor>): void {
+    this.processors = new Map(processors)
+  }
+
+  /** Look up by name; used by `tx.afterCommit` for `scheduledArgsSchema`
+   *  validation at enqueue time (called from inside the originating
+   *  tx so a bad arg can fail the tx). */
+  lookup(name: string): AnyPostCommitProcessor | undefined {
+    return this.processors.get(name)
+  }
+
+  /** Dispatch all matching processors for one committed tx. Called by
+   *  Repo after `repo.tx` resolves. Errors in any one processor are
+   *  caught + logged; subsequent ones still run. */
+  async dispatch(outcome: CommittedTxOutcome): Promise<void> {
+    if (outcome.workspaceId === null) {
+      // Zero-write tx — no field-watching processors fire (no
+      // snapshots), and tx.afterCommit threw WorkspaceNotPinnedError
+      // during the user fn so afterCommitJobs is also empty. Bail.
+      return
+    }
+
+    // Field-watching processors: fire each at most once per tx.
+    for (const [name, processor] of this.processors) {
+      if (processor.watches.kind !== 'field') continue
+      const changedRows = collectFieldMatches(processor, outcome.snapshots)
+      if (changedRows.length === 0) continue
+      const event: CommittedEvent<undefined> = {
+        txId: outcome.txId,
+        changedRows,
+        user: outcome.user,
+        workspaceId: outcome.workspaceId,
+      }
+      this.track(this.runOne(processor, event, name))
+    }
+
+    // Explicit processors: one job per `tx.afterCommit` call.
+    for (const job of outcome.afterCommitJobs) {
+      const processor = this.processors.get(job.processorName)
+      if (processor === undefined) {
+        // Registered when the schedule landed; gone now (plugin
+        // disabled mid-flight). Log and continue — the tx already
+        // committed; we can't roll back from here.
+        console.warn(
+          `[processorRunner] explicit job for "${job.processorName}" skipped — processor no longer registered`,
+        )
+        continue
+      }
+      if (processor.watches.kind !== 'explicit') {
+        console.warn(
+          `[processorRunner] explicit job for "${job.processorName}" but processor watches.kind = "${processor.watches.kind}" — skipping`,
+        )
+        continue
+      }
+      const event: CommittedEvent<unknown> = {
+        txId: outcome.txId,
+        changedRows: [],
+        user: outcome.user,
+        workspaceId: outcome.workspaceId,
+        scheduledArgs: job.args,
+      }
+      if (job.delayMs && job.delayMs > 0) {
+        // Wrap the delay + the run in a single tracked promise so
+        // awaitIdle() — once the timer has fired — waits for the run
+        // too. Until the timer fires there's nothing pending, which
+        // matches the spec: §16.4 calls out that delayMs is real
+        // wall-clock time and not part of the synchronous commit step.
+        setTimeout(() => {
+          this.track(this.runOne(processor, event, job.processorName))
+        }, job.delayMs)
+      } else {
+        this.track(this.runOne(processor, event, job.processorName))
+      }
+    }
+  }
+
+  private track(p: Promise<void>): void {
+    this.pending.add(p)
+    void p.finally(() => this.pending.delete(p))
+  }
+
+  /** Open a writeTransaction for the processor and call its apply.
+   *  Errors are caught + logged with the processor name + txId so
+   *  one buggy processor can't poison the dispatch loop. */
+  private async runOne(
+    processor: AnyPostCommitProcessor,
+    event: CommittedEvent<unknown>,
+    name: string,
+  ): Promise<void> {
+    try {
+      await this.repo.tx(async (tx: Tx) => {
+        const ctx: ProcessorCtx = {
+          tx,
+          db: this.db,
+          repo: this.repo,
+        }
+        await processor.apply(event, ctx)
+      }, {
+        scope: processor.scope,
+        description: `processor: ${name}`,
+      })
+    } catch (err) {
+      // Codec errors at enqueue time fail the originating tx; here at
+      // fire time we're past that boundary, so log loudly and move on.
+      const reason = err instanceof CodecError
+        ? `[${err.expected}]`
+        : (err instanceof Error ? err.message : String(err))
+      console.error(
+        `[processorRunner] processor "${name}" failed for tx ${event.txId}: ${reason}`,
+      )
+    }
+  }
+}
