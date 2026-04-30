@@ -1,4 +1,4 @@
-project_id = "knowledge-medium"
+project_id = "thought-medium"
 
 [auth]
 site_url = "http://127.0.0.1:5173"
