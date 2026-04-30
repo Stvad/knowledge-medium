@@ -104,8 +104,9 @@ export const applyToAllBlocksInSelection = <T extends ActionContextType>(
     const blocks = applyInReverseOrder ? selectedBlocks.toReversed() : selectedBlocks
     console.log(`[makeMultiSelect] Running action for ${blocks.length} blocks`)
 
-    // todo Create a transaction for all operations to be atomic
-    // uiStateBlock.repo.undoRedoManager.transaction(() => {
+    // todo Wrap all per-block actions into a single repo.tx so undo
+    // collapses the bulk action into one entry; today each per-block
+    // action commits its own tx and is its own undo step.
 
     // Process blocks sequentially, awaiting each one before proceeding
     for (const block of blocks) {

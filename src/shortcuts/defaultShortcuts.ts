@@ -173,9 +173,29 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         keys: ['cmd+shift+`', 'ctrl+shift+`'],
       },
     },
-    // Undo/redo bindings dropped — UndoRedoManager removed in 1.6.E
-    // (tracked in tasks/follow-ups.md). Re-add once the
-    // command_events / row_events-based undo lands.
+    {
+      id: 'undo',
+      description: 'Undo',
+      context: ActionContextTypes.GLOBAL,
+      handler: async () => { await repo.undo() },
+      defaultBinding: {
+        keys: ['cmd+z', 'ctrl+z'],
+        eventOptions: {preventDefault: true},
+      },
+    },
+    {
+      id: 'redo',
+      description: 'Redo',
+      context: ActionContextTypes.GLOBAL,
+      handler: async () => { await repo.redo() },
+      defaultBinding: {
+        // cmd+shift+z is the macOS convention; ctrl+y is the
+        // Windows / Linux convention (and matches what the legacy
+        // UndoRedoManager bindings used).
+        keys: ['cmd+shift+z', 'ctrl+shift+z', 'ctrl+y'],
+        eventOptions: {preventDefault: true},
+      },
+    },
     {
       id: 'refresh_extensions',
       description: 'Reload extensions',

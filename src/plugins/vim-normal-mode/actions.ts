@@ -281,8 +281,22 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         keys: 'shift+p',
       },
     }),
-    // Undo/redo (`u`, `ctrl+r`) dropped — UndoRedoManager removed in
-    // 1.6.E. Re-impl tracked in tasks/follow-ups.md.
+    bindNormal({
+      id: 'undo',
+      description: 'Undo',
+      handler: async () => { await repo.undo() },
+      defaultBinding: {
+        keys: 'u',
+      },
+    }),
+    bindNormal({
+      id: 'redo',
+      description: 'Redo',
+      handler: async () => { await repo.redo() },
+      defaultBinding: {
+        keys: 'ctrl+r',
+      },
+    }),
     bindNormal({
       id: 'collapse_into_parent',
       description: 'Collapse current block into its parent and focus parent',
