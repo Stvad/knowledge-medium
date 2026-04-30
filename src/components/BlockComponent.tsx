@@ -1,4 +1,4 @@
-import { Block } from '../data/block'
+import { Block } from '@/data/internals/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.tsx'
 import { useRepo } from '@/context/repo.tsx'
@@ -14,7 +14,7 @@ interface BlockComponentProps {
 
 export function BlockComponent({blockId}: BlockComponentProps) {
   const repo = useRepo()
-  const block = repo.find(blockId)
+  const block = repo.block(blockId)
   const context = useBlockContext()
   const Renderer = useRenderer({block, context})
 

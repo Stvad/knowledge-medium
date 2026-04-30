@@ -1,10 +1,10 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
 import { use, useEffect } from 'react'
-import { Block } from '@/data/block.ts'
+import { Block } from '@/data/internals/block'
 import { useRepo } from '@/context/repo.tsx'
 import { useHash, useSearchParam } from 'react-use'
-import { Repo } from '@/data/repo'
+import type { Repo } from '@/data/internals/repo'
 import { memoize } from 'lodash'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
@@ -122,17 +122,16 @@ const getInitialBlock = memoize(
     // is actually 'viewer', the very next sync tick flips us — and any
     // edits attempted in the meantime would be RLS-rejected server-side
     // anyway.
-    const role = await getLocalMemberRole(repo, workspaceId, repo.currentUser.id)
-    repo.setReadOnly(role === 'viewer')
+    const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
+    repo.isReadOnly = role === 'viewer'
 
     rememberWorkspace(workspaceId)
 
     if (requestedBlockId && await repo.exists(requestedBlockId)) {
-      const block = repo.find(requestedBlockId)
-      const data = await block.data()
+      const data = await repo.load(requestedBlockId)
       if (data && data.workspaceId === workspaceId) {
         writeAppHash(workspaceId, requestedBlockId)
-        return {workspaceId, block}
+        return {workspaceId, block: repo.block(requestedBlockId)}
       }
     }
 
@@ -141,7 +140,7 @@ const getInitialBlock = memoize(
     // daily note (added below) makes it discoverable from the landing
     // page without hijacking it.
     if (freshlyCreated) {
-      seedTutorial(repo, workspaceId)
+      void seedTutorial(repo, workspaceId)
     }
 
     // Land on today's daily note. getOrCreateDailyNote is idempotent
@@ -153,25 +152,36 @@ const getInitialBlock = memoize(
 
     // First-run discoverability: prepend a [[Tutorial]] bullet on the
     // freshly-created daily note so the welcome content is one click
-    // away from the landing page.
+    // away from the landing page. createChild with position={kind:'first'}
+    // computes an order_key that lands before any existing children.
     if (freshlyCreated) {
-      const tutorialBullet = repo.create({
-        workspaceId,
+      await repo.mutate.createChild({
         parentId: dailyNote.id,
         content: '[[Tutorial]]',
-      })
-      dailyNote.change((doc) => {
-        doc.childIds.unshift(tutorialBullet.id)
+        position: {kind: 'first'},
       })
     }
 
-    await repo.flush()
     writeAppHash(workspaceId, dailyNote.id)
     return {workspaceId, block: dailyNote}
   },
   (repo, workspaceId, blockId, useRemoteSync) =>
-    `${repo.instanceId}:${workspaceId ?? '__no_ws__'}:${blockId ?? '__no_block__'}:${useRemoteSync ? 'remote' : 'local'}`,
+    `${repoIdentity(repo)}:${workspaceId ?? '__no_ws__'}:${blockId ?? '__no_block__'}:${useRemoteSync ? 'remote' : 'local'}`,
 )
+
+// Same Symbol-attached numeric identity helper as `globalState.ts` —
+// the new Repo doesn't carry an `instanceId` field. Kept local so the
+// memoize key stays unique per Repo instance without touching Repo's
+// public surface.
+const REPO_IDENTITY = Symbol('App.repoIdentity')
+let nextRepoIdentity = 1
+const repoIdentity = (repo: Repo): number => {
+  const carrier = repo as Repo & {[REPO_IDENTITY]?: number}
+  if (carrier[REPO_IDENTITY] === undefined) {
+    carrier[REPO_IDENTITY] = nextRepoIdentity++
+  }
+  return carrier[REPO_IDENTITY]!
+}
 
 const App = () => {
   const repo = useRepo()
@@ -198,7 +208,7 @@ const App = () => {
   const activeRole = rolesByWorkspaceId.get(activeWorkspaceId)
   useEffect(() => {
     if (!activeRole) return
-    repo.setReadOnly(activeRole === 'viewer')
+    repo.isReadOnly = activeRole === 'viewer'
   }, [activeRole, repo])
 
   return (
