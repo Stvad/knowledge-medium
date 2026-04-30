@@ -487,3 +487,64 @@ const sortedReplacer = (root: unknown) => {
  *  factories to construct identity-stable keys. */
 export const handleKey = (name: string, args?: unknown): string =>
   args === undefined ? name : `${name}:${stableArgsKey(args)}`
+
+/** Per-id snapshot pair shape. Mirrors `SnapshotEntry` from
+ *  `txSnapshots.ts` without importing it (handleStore stays free of
+ *  internals dependencies). */
+export interface ChangeSnapshot {
+  before: { parentId: string | null; workspaceId: string; deleted?: boolean } | null
+  after: { parentId: string | null; workspaceId: string; deleted?: boolean } | null
+}
+
+/** Compute a `ChangeNotification` from a tx's per-id snapshots map.
+ *  Used by the TxEngine fast path (§9.3): post-commit, the engine
+ *  passes its snapshots map here and feeds the result into
+ *  `handleStore.invalidate(...)`.
+ *
+ *  Rules:
+ *    - `rowIds`: every id touched by the tx (any field change is enough
+ *       to invalidate row deps).
+ *    - `parentIds`: union of `before.parentId` / `after.parentId` ONLY
+ *       when the row's *membership* in a parent's live-children set
+ *       changed (creation, soft-deletion, restore, parent move). Pure
+ *       content / property edits don't fire parent-edge deps.
+ *    - `workspaceIds`: every workspace_id touched (covers backlinks
+ *       handles' coarse workspace dep).
+ */
+export const snapshotsToChangeNotification = (
+  snapshots: ReadonlyMap<string, ChangeSnapshot>,
+): ChangeNotification => {
+  const rowIds = new Set<string>()
+  const parentIds = new Set<string>()
+  const workspaceIds = new Set<string>()
+  for (const [id, entry] of snapshots) {
+    rowIds.add(id)
+    if (entry.before?.workspaceId) workspaceIds.add(entry.before.workspaceId)
+    if (entry.after?.workspaceId) workspaceIds.add(entry.after.workspaceId)
+
+    const beforeParent = entry.before?.parentId ?? null
+    const afterParent = entry.after?.parentId ?? null
+    const beforeLive = !!entry.before && !entry.before.deleted
+    const afterLive = !!entry.after && !entry.after.deleted
+
+    // Created (no prior live row → now live somewhere): the new
+    // parent gains a child.
+    if (!beforeLive && afterLive && afterParent !== null) {
+      parentIds.add(afterParent)
+    }
+    // Soft-deleted (prior live → now tombstoned): the prior parent
+    // loses a child.
+    else if (beforeLive && !afterLive && beforeParent !== null) {
+      parentIds.add(beforeParent)
+    }
+    // Moved (live both sides, parent changed): both sides update.
+    else if (beforeLive && afterLive && beforeParent !== afterParent) {
+      if (beforeParent !== null) parentIds.add(beforeParent)
+      if (afterParent !== null) parentIds.add(afterParent)
+    }
+    // Pure field change with same parent_id and same liveness: rowId
+    // alone covers it. No parent-edge entry — `repo.children(id)`
+    // already declares row deps on each child for this case.
+  }
+  return { rowIds, parentIds, workspaceIds }
+}

@@ -37,7 +37,13 @@ import {
   HandleStore,
   LoaderHandle,
   handleKey,
+  snapshotsToChangeNotification,
 } from './handleStore'
+import {
+  startRowEventsTail,
+  type RowEventsTail,
+  type RowEventsTailOptions,
+} from './rowEventsTail'
 import { UndoManager, type UndoEntry } from './undoManager'
 import type { TxImpl } from './txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
@@ -83,6 +89,15 @@ export interface RepoOptions {
    *  firing on every content write would add follow-up txs the engine
    *  test isn't asserting on). */
   registerKernelProcessors?: boolean
+  /** When true (default), the row_events tail subscription is started
+   *  at construction time so sync-applied writes propagate into the
+   *  cache + invalidate handles (spec §9.3). Set false in unit tests
+   *  that want explicit control over tail timing — they can call
+   *  `repo.startRowEventsTail({initialLastId: 0})` to opt back in
+   *  with deterministic semantics. */
+  startRowEventsTail?: boolean
+  /** Options forwarded to the row_events tail when started. */
+  rowEventsTailOptions?: RowEventsTailOptions
 }
 
 export class Repo {
@@ -122,6 +137,10 @@ export class Repo {
    *  call `handleStore.invalidate({…})` to fan out to dep-matching
    *  handles. */
   readonly handleStore: HandleStore = new HandleStore()
+  /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
+   *  start, replaced on subsequent starts. Tests can `dispose()` and
+   *  re-`start` for deterministic flushing. */
+  private rowEventsTail: RowEventsTail | null = null
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -198,6 +217,44 @@ export class Repo {
         return dispatch(prop)
       },
     })
+    // Start the row_events tail by default (spec §9.3). Tests that
+    // want deterministic timing pass startRowEventsTail: false and
+    // call repo.startRowEventsTail({initialLastId: 0}) themselves
+    // before issuing sync-style writes.
+    if (opts.startRowEventsTail ?? true) {
+      this.startRowEventsTail(opts.rowEventsTailOptions)
+    }
+  }
+
+  /** Start the row_events tail subscription (spec §9.3). Idempotent
+   *  in spirit: if a tail is already running, it's disposed first so
+   *  the new options take effect. Returns the tail for inspection /
+   *  manual flushing. */
+  startRowEventsTail(options?: RowEventsTailOptions): RowEventsTail {
+    if (this.rowEventsTail) this.rowEventsTail.dispose()
+    this.rowEventsTail = startRowEventsTail({
+      db: this.db,
+      cache: this.cache,
+      handleStore: this.handleStore,
+      options,
+    })
+    return this.rowEventsTail
+  }
+
+  /** Dispose the active row_events tail (no-op if none). Tests use
+   *  this to detach the subscription before tearing down the test DB. */
+  stopRowEventsTail(): void {
+    if (this.rowEventsTail) {
+      this.rowEventsTail.dispose()
+      this.rowEventsTail = null
+    }
+  }
+
+  /** Manually flush the row_events tail — synchronously consumes any
+   *  rows not yet processed and walks `handleStore.invalidate(...)`.
+   *  Tests use this instead of waiting on the throttle window. */
+  async flushRowEventsTail(): Promise<void> {
+    if (this.rowEventsTail) await this.rowEventsTail.flush()
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -675,6 +732,17 @@ export class Repo {
       mutators: this.mutators,
       processors: this.processors,
     })
+    // TxEngine fast path (spec §9.3 path 1): post-commit, fan-out the
+    // tx's snapshots diff to dep-matching collection handles. The
+    // commit pipeline already updated the BlockCache (which fires
+    // Block.subscribe row-grain listeners) — this layer is just for
+    // children/subtree/ancestors/backlinks handles. Synchronous walk;
+    // each handle's runLoader is async, but `invalidate` only sets
+    // pendingReinvalidate / kicks off a microtask, so the caller's tx
+    // resolve isn't blocked on handle re-resolution.
+    if (result.snapshots.size > 0) {
+      this.handleStore.invalidate(snapshotsToChangeNotification(result.snapshots))
+    }
     // Step 9 of the §10 pipeline — dispatch field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the
     // runner so a buggy processor can't poison the caller's resolve.
