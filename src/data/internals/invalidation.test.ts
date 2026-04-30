@@ -319,6 +319,33 @@ describe('row_events tail: sync-applied invalidation', () => {
     })
   })
 
+  it('does NOT clear allChildrenLoaded on pure content edits (reviewer P2)', async () => {
+    await create('p')
+    await create('c1', {parentId: 'p', orderKey: 'a0', content: 'one'})
+    // Pre-populate the children-loaded marker via a load.
+    const h = env.repo.children('p')
+    await h.load()
+    expect(env.cache.areChildrenLoaded('p')).toBe(true)
+
+    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+
+    // Sync-applied UPDATE that touches content only — same parent_id,
+    // not deleted. Membership of p's children unchanged.
+    await env.h.db.execute(
+      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
+    )
+    await env.h.db.execute(
+      `UPDATE blocks SET content = 'remote-edit' WHERE id = ?`,
+      ['c1'],
+    )
+
+    await env.repo.flushRowEventsTail()
+    // Marker MUST still be set — a subsequent block.childIds read must
+    // not throw ChildrenNotLoadedError on this parent.
+    expect(env.cache.areChildrenLoaded('p')).toBe(true)
+    expect(env.repo.block('p').childIds).toEqual(['c1'])
+  })
+
   it('high-watermark: only consumes new rows (id > lastId)', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0'}) // local write — id=N

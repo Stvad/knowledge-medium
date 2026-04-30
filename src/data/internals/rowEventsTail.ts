@@ -86,23 +86,11 @@ export const startRowEventsTail = (args: {
   let disposed = false
   let unsubscribe: (() => void) | null = null
 
-  const ready = (async () => {
-    if (options?.initialLastId !== undefined) {
-      lastId = options.initialLastId
-    } else {
-      // Start at the current MAX(id) so we don't replay historical rows
-      // (those are already represented in the persisted state). Future
-      // sync arrivals get id > lastId and are picked up.
-      const row = await db.getOptional<{ maxId: number | null }>(
-        `SELECT MAX(id) AS maxId FROM row_events`,
-      )
-      lastId = row?.maxId ?? 0
-    }
-  })().catch((err) => { onError(err) })
-
-  const processOnce = async (): Promise<void> => {
+  /** Inner drain — reads + processes rows with id > lastId. Used by
+   *  both the init-time catch-up read AND the subscription's onChange
+   *  handler. Does NOT await `ready` (callers ensure ordering). */
+  const drain = async (): Promise<void> => {
     if (disposed) return
-    await ready
     const rows = await db.getAll<RowEventRow>(
       `SELECT id, block_id, kind, before_json, after_json
          FROM row_events
@@ -148,14 +136,6 @@ export const startRowEventsTail = (args: {
         if (afterParent !== null) parentIds.add(afterParent)
       }
 
-      // Auto-clear allChildrenLoaded markers (spec §5.2): any parent
-      // gaining or losing a child via sync needs its marker cleared
-      // so `block.childIds` doesn't lie. Both before and after parents
-      // are touched defensively — children-of correctness wins over a
-      // marginally redundant clear.
-      if (beforeParent !== null) cache.clearChildrenLoaded(beforeParent)
-      if (afterParent !== null) cache.clearChildrenLoaded(afterParent)
-
       // Cache update: sync writes don't go through commitPipeline's
       // post-commit cache walk. Without this, Block.subscribe listeners
       // wouldn't fire on remote changes.
@@ -171,23 +151,61 @@ export const startRowEventsTail = (args: {
       }
     }
 
+    // Auto-clear allChildrenLoaded markers (spec §5.2) ONLY for parents
+    // whose children-set membership actually changed (i.e. the parent
+    // ids we put into `parentIds` above). Pure content / property /
+    // reference edits leave `parentIds` empty and don't clear any
+    // marker — clearing on those would make `block.childIds` start
+    // throwing for unrelated callers that previously did
+    // `repo.load(parent, {children: true})` and have no reactive
+    // children-handle subscribed to re-set the marker.
+    for (const parent of parentIds) cache.clearChildrenLoaded(parent)
+
     const notification: ChangeNotification = { rowIds, parentIds, workspaceIds }
     handleStore.invalidate(notification)
   }
 
-  // Subscribe to the row_events table. The throttle coalesces burst
-  // arrivals into one tail-pass per window. We don't pass-through the
-  // promise — onChange's contract is fire-and-forget; we just log
-  // errors via onError.
-  unsubscribe = db.onChange(
-    {
-      onChange: () => {
-        void processOnce().catch((err) => onError(err))
+  // Init: ESTABLISH the watermark BEFORE subscribing, then SUBSCRIBE,
+  // then drain any rows that landed between the watermark query and
+  // the subscription registration. Without this ordering, a sync row
+  // landing in that gap could be:
+  //   (a) included in MAX(id) → bumps watermark above it,
+  //   (b) but the subscription wasn't yet registered to fire,
+  //   (c) so processOnce never re-reads it (id > watermark filters out).
+  // The catch-up drain after subscribe closes the gap: anything in
+  // the gap satisfies id > options-supplied initialLastId (or the
+  // pre-subscribe MAX(id)) and gets consumed.
+  const ready = (async () => {
+    if (options?.initialLastId !== undefined) {
+      lastId = options.initialLastId
+    } else {
+      const row = await db.getOptional<{ maxId: number | null }>(
+        `SELECT MAX(id) AS maxId FROM row_events`,
+      )
+      lastId = row?.maxId ?? 0
+    }
+    if (disposed) return
+    unsubscribe = db.onChange(
+      {
+        onChange: () => {
+          void processOnce().catch((err) => onError(err))
+        },
+        onError: (err) => onError(err),
       },
-      onError: (err) => onError(err),
-    },
-    { tables: ['row_events'], throttleMs },
-  )
+      { tables: ['row_events'], throttleMs },
+    )
+    // Catch-up: any row that landed between the watermark query and
+    // the subscription registration above. Subscription is now active,
+    // so further rows trigger onChange normally.
+    await drain()
+  })().catch((err) => { onError(err) })
+
+  const processOnce = async (): Promise<void> => {
+    if (disposed) return
+    await ready
+    if (disposed) return
+    await drain()
+  }
 
   return {
     dispose() {
