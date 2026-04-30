@@ -129,6 +129,11 @@ export const getUserBlock = memoize(
     const live = await repo.load(id)
     if (live && !live.deleted) return repo.block(id)
 
+    // User.name is optional in the data-layer User shape; fall back
+    // to the id so the user-page block always has *some* content
+    // and an addressable alias.
+    const displayName = user.name ?? user.id
+
     await repo.tx(async tx => {
       // Re-read inside the tx with the unfiltered `tx.get` so we see
       // tombstones. (`repo.load` returned null in that case, so the
@@ -139,8 +144,8 @@ export const getUserBlock = memoize(
       const existing = await tx.get(id)
       if (existing && !existing.deleted) return
       if (existing && existing.deleted) {
-        await tx.restore(id, {content: user.name})
-        await tx.setProperty(id, aliasesProp, [user.name])
+        await tx.restore(id, {content: displayName})
+        await tx.setProperty(id, aliasesProp, [displayName])
         return
       }
       await tx.create({
@@ -148,8 +153,8 @@ export const getUserBlock = memoize(
         workspaceId,
         parentId: null,
         orderKey: 'a0',
-        content: user.name,
-        properties: {[aliasesProp.name]: aliasesProp.codec.encode([user.name])},
+        content: displayName,
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode([displayName])},
       })
     }, {scope: ChangeScope.UiState})
 

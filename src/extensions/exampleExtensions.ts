@@ -238,15 +238,15 @@ To turn an extension off without deleting it, set its \`system:disabled\` proper
 export const insertExampleExtensionsUnder = async (
   parentBlock: Block,
 ): Promise<Block[]> => {
+  const repo = parentBlock.repo
   const created: Block[] = []
   for (const example of exampleExtensions) {
-    const child = await parentBlock.createChild({
-      data: {
-        content: example.source,
-        properties: {type: {...typeProp, value: 'extension'}},
-      },
-    })
-    created.push(child)
+    const id = await repo.mutate.createChild({
+      parentId: parentBlock.id,
+      content: example.source,
+      properties: {[typeProp.name]: typeProp.codec.encode('extension')},
+    }) as string
+    created.push(repo.block(id))
   }
   return created
 }

@@ -250,12 +250,9 @@ export const enterBlockEditMode = async (
   setIsEditing(uiStateBlock, true)
 
   if (selection) {
-    uiStateBlock.setProperty({
-      ...editorSelection,
-      value: {
-        blockId: block.id,
-        ...selection,
-      },
+    void uiStateBlock.set(editorSelection, {
+      blockId: block.id,
+      ...selection,
     })
   }
 
@@ -279,14 +276,11 @@ export const handleBlockSelectionClick = async (
 
     const validatedIds = await validateSelectionHierarchy(newSelectedIds, repo)
 
-    uiStateBlock.setProperty({
-      ...selectionStateProp,
-      value: {
-        selectedBlockIds: validatedIds,
-        anchorBlockId: validatedIds.length > 0
-          ? (selectionState.anchorBlockId || block.id)
-          : null,
-      },
+    void uiStateBlock.set(selectionStateProp, {
+      selectedBlockIds: validatedIds,
+      anchorBlockId: validatedIds.length > 0
+        ? (selectionState.anchorBlockId || block.id)
+        : null,
     })
   } else if (event.shiftKey) {
     await extendSelection(block.id, uiStateBlock, repo)

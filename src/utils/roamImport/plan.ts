@@ -1,5 +1,5 @@
-import { BlockData, BlockProperties, BlockReference, NumberBlockProperty, StringBlockProperty } from '@/types'
-import { aliasProp, fromList, numberProperty, stringProperty, typeProp } from '@/data/properties'
+import type { BlockData, BlockReference } from '@/data/api'
+import { aliasesProp, typeProp } from '@/data/properties'
 import { parseReferences } from '@/utils/referenceParser'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
 import { resolveDailyPage, roamBlockId } from './ids'
@@ -21,7 +21,10 @@ export interface PreparedPage {
    * skip this — getOrCreateDailyNote owns the daily-note row.
    */
   data?: BlockData
-  /** First-level child block ids (in order). */
+  /** First-level child block ids (in order). The orchestrator uses
+   *  this to issue tx.move calls re-parenting the descendants under
+   *  the page block, since each PreparedBlock carries its own
+   *  parentId derived from the planner's traversal. */
   childIds: string[]
 }
 
@@ -100,22 +103,27 @@ const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> 
   return {...fromBlockProps, ...getExtraRoamProps(block)}
 }
 
+/** Translate Roam's property bag into the new flat-property shape:
+ *  values are stored encoded directly under their (namespaced) key.
+ *  Numbers stay numbers, strings stay strings, structured values are
+ *  JSON-stringified for round-trip. The Roam namespace prefix
+ *  (`roam:`) keeps these from colliding with kernel properties. */
 const propertiesFromRoam = (
   raw: Record<string, unknown>,
-): Record<string, NumberBlockProperty | StringBlockProperty> => {
-  const out: Record<string, NumberBlockProperty | StringBlockProperty> = {}
+): Record<string, unknown> => {
+  const out: Record<string, unknown> = {}
 
   for (const [key, value] of Object.entries(raw)) {
     const propName = namespacedKey(key)
     if (typeof value === 'number') {
-      out[propName] = numberProperty(propName, value)
+      out[propName] = value
     } else if (typeof value === 'string') {
-      out[propName] = stringProperty(propName, value)
+      out[propName] = value
     } else if (value !== null && value !== undefined) {
-      // Object/array values aren't well-typed in our property system yet.
-      // Stringify so the data round-trips; a follow-up can promote
-      // structured values once we have more known shapes.
-      out[propName] = stringProperty(propName, JSON.stringify(value))
+      // Object/array values: stringify so the data round-trips;
+      // a follow-up can promote structured values once we have
+      // more known shapes.
+      out[propName] = JSON.stringify(value)
     }
   }
 
@@ -133,49 +141,58 @@ const buildBlock = (
   ctx: BuildContext,
   block: RoamBlock,
   parentId: string,
+  siblingIndex: number,
   pushDescendant: (b: PreparedBlock) => void,
 ): string => {
   const id = ctx.uidMap.get(block.uid)
   if (!id) throw new Error(`Roam uid not in uidMap: ${block.uid}`)
 
   const childIds: string[] = []
-  for (const child of block.children ?? []) {
-    childIds.push(buildBlock(ctx, child, id, pushDescendant))
+  const children = block.children ?? []
+  for (let i = 0; i < children.length; i++) {
+    childIds.push(buildBlock(ctx, children[i], id, i, pushDescendant))
   }
 
   const data = composeBlockData({
     ctx,
     id,
     parentId,
-    childIds,
+    orderKey: siblingOrderKey(siblingIndex),
     rawString: block.string,
     heading: block.heading,
     roamProps: collectRoamProps(block),
     roamRefUids: collectUidRefs(block),
-    createTime: cloneTimestamp(block['create-time'], Date.now()),
-    updateTime: cloneTimestamp(block['edit-time'] ?? block['create-time'], Date.now()),
+    createdAt: cloneTimestamp(block['create-time'], Date.now()),
+    updatedAt: cloneTimestamp(block['edit-time'] ?? block['create-time'], Date.now()),
   })
 
   pushDescendant({data, roamUid: block.uid})
   return id
 }
 
+/** Deterministic order key from a sibling index. The Roam children
+ *  array IS the order, so a simple `a${index}` chain preserves it.
+ *  Same import twice → same keys → upserts onto the same rows.
+ *  (Not a fractional-indexing-jittered key, but inserting between
+ *  imports isn't a workflow we support — re-importing replaces. */
+const siblingOrderKey = (index: number): string => `a${index.toString().padStart(6, '0')}`
+
 interface ComposeArgs {
   ctx: BuildContext
   id: string
-  parentId: string | undefined
-  childIds: string[]
+  parentId: string | null
+  orderKey: string
   rawString: string
   heading?: number
   roamProps: Record<string, unknown>
   roamRefUids: string[]
-  createTime: number
-  updateTime: number
-  extraProperties?: BlockProperties
+  createdAt: number
+  updatedAt: number
+  extraProperties?: Record<string, unknown>
 }
 
 const composeBlockData = (args: ComposeArgs): BlockData => {
-  const {ctx, id, parentId, childIds, rawString, heading, roamProps, roamRefUids, createTime, updateTime, extraProperties} = args
+  const {ctx, id, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties} = args
 
   const rewritten = rewriteRoamContent(rawString, ctx.uidMap)
   for (const u of rewritten.unresolvedBlockUids) ctx.unresolvedBlockUids.add(u)
@@ -195,34 +212,34 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     .filter((mapped): mapped is string => Boolean(mapped))
     .map(mapped => ({id: mapped, alias: mapped}))
 
-  const properties: BlockProperties = {
+  const properties: Record<string, unknown> = {
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
   }
 
   // Simple `key::value` blocks land as both content (preserves display)
-  // and a `roam:<key>` string property (queryable). Complex shapes
+  // and a `roam:<key>` property (queryable). Complex shapes
   // (multi-line, mixed-with-content, multi-attr) are pass-through.
   const inlineAttr = detectInlineAttribute(rawString)
   if (inlineAttr) {
     const propName = `${NS_PREFIX}:${inlineAttr.key}`
-    if (!properties[propName]) {
-      properties[propName] = stringProperty(propName, inlineAttr.value)
+    if (properties[propName] === undefined) {
+      properties[propName] = inlineAttr.value
     }
   }
 
   const data: BlockData = {
     id,
     workspaceId: ctx.options.workspaceId,
+    parentId,
+    orderKey,
     content,
     properties,
-    childIds,
-    parentId,
-    createTime,
-    updateTime,
-    createdByUserId: ctx.options.currentUserId,
-    updatedByUserId: ctx.options.currentUserId,
     references: blockRefs,
+    createdAt,
+    updatedAt,
+    createdBy: ctx.options.currentUserId,
+    updatedBy: ctx.options.currentUserId,
     deleted: false,
   }
 
@@ -315,8 +332,9 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     if (!pageBlockId) throw new Error(`Page uid not in uidMap: ${page.uid}`)
 
     const childIds: string[] = []
-    for (const child of page.children ?? []) {
-      childIds.push(buildBlock(ctx, child, pageBlockId, pushDescendant))
+    const pageChildren = page.children ?? []
+    for (let i = 0; i < pageChildren.length; i++) {
+      childIds.push(buildBlock(ctx, pageChildren[i], pageBlockId, i, pushDescendant))
     }
 
     if (daily) {
@@ -333,20 +351,24 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
 
     // Non-daily top-level page: build the page block. The orchestrator
     // will check for an existing block with this alias before deciding
-    // to create vs merge.
-    const titleAliasProp = aliasProp([page.title])
+    // to create vs merge. Pages are root blocks (parentId=null) with
+    // a starter order key — top-level workspace ordering isn't
+    // import-controlled.
     const pageData = composeBlockData({
       ctx,
       id: pageBlockId,
-      parentId: undefined,
-      childIds,
+      parentId: null,
+      orderKey: 'a0',
       rawString: page.title,
       heading: undefined,
       roamProps: collectRoamProps(page),
       roamRefUids: collectUidRefs(page),
-      createTime: cloneTimestamp(page['create-time'], Date.now()),
-      updateTime: cloneTimestamp(page['edit-time'] ?? page['create-time'], Date.now()),
-      extraProperties: fromList(titleAliasProp, {...typeProp, value: 'page'}),
+      createdAt: cloneTimestamp(page['create-time'], Date.now()),
+      updatedAt: cloneTimestamp(page['edit-time'] ?? page['create-time'], Date.now()),
+      extraProperties: {
+        [aliasesProp.name]: aliasesProp.codec.encode([page.title]),
+        [typeProp.name]: typeProp.codec.encode('page'),
+      },
     })
 
     preparedPages.push({

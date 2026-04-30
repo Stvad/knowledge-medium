@@ -6,7 +6,7 @@ import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
 export function BlockEmbed({blockId}: {blockId: string}) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
-  const target = repo.find(blockId)
+  const target = repo.block(blockId)
   const targetData = useData(target)
 
   if (!targetData) {

@@ -69,7 +69,7 @@ export const dynamicExtensionsExtension = (
   const collected: AppExtension[] = []
 
   for (const block of extensionBlocks) {
-    if (block.properties[extensionDisabledProp.name]?.value === true) continue
+    if (block.properties[extensionDisabledProp.name] === true) continue
 
     try {
       const {module} = await compileExtensionModule(block.content, block.id, cache)

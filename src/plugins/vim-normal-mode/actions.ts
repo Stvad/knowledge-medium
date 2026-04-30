@@ -1,17 +1,16 @@
-import {
-  defaultChangeScope,
-  getLastVisibleDescendant,
-  nextVisibleBlock,
-  previousVisibleBlock,
-} from '@/data/internals/block'
 import { Repo } from '@/data/internals/repo'
 import {
   isCollapsedProp,
   setFocusedBlockId,
   setIsEditing,
   topLevelBlockIdProp,
+  selectionStateProp,
 } from '@/data/properties.ts'
-import { selectionStateProp } from '@/data/properties'
+import {
+  getLastVisibleDescendant,
+  nextVisibleBlock,
+  previousVisibleBlock,
+} from '@/utils/selection.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { copyBlockToClipboard } from '@/utils/copy.ts'
@@ -80,11 +79,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
-        if (nextVisible) setFocusedBlockId(uiStateBlock, nextVisible.id)
+        const next = await nextVisibleBlock(block, topLevelBlockId)
+        if (next) setFocusedBlockId(uiStateBlock, next.id)
       },
       defaultBinding: {
         keys: ['down', 'k'],
@@ -97,11 +96,11 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-        if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
+        const prev = await previousVisibleBlock(block, topLevelBlockId)
+        if (prev) setFocusedBlockId(uiStateBlock, prev.id)
       },
       defaultBinding: {
         keys: ['up', 'h'],
@@ -119,7 +118,8 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'enter_edit_mode_at_end',
       description: 'Enter edit mode at end',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        enterEditMode(uiStateBlock, {blockId: block.id, start: block.dataSync()?.content.length})
+        await block.load()
+        enterEditMode(uiStateBlock, {blockId: block.id, start: block.peek()?.content.length})
       },
       defaultBinding: {
         keys: 'a',
@@ -135,16 +135,22 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
 
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
-        const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-        const hasChildren = await block.hasChildren()
+        await block.load()
+        await repo.load(block.id, {children: true})
+        const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
+        const hasChildren = repo.cache.areChildrenLoaded(block.id)
+          ? repo.cache.childrenOf(block.id).length > 0
+          : false
         const isTopLevel = block.id === topLevelBlockId
 
         const hasUncollapsedChildren = hasChildren && !isCollapsed
-        const result = hasUncollapsedChildren || isTopLevel ? await block.createChild({position: 'first'}) : await block.createSiblingBelow()
-        if (result) {
-          setFocusedBlockId(uiStateBlock, result.id)
+        const newId = hasUncollapsedChildren || isTopLevel
+          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}}) as string
+          : await repo.mutate.createSiblingBelow({siblingId: block.id}) as string
+        if (newId) {
+          setFocusedBlockId(uiStateBlock, newId)
           setIsEditing(uiStateBlock, true)
         }
       },
@@ -159,12 +165,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
 
-        uiStateBlock.setProperty({
-          ...selectionStateProp,
-          value: {
-            selectedBlockIds: [block.id],
-            anchorBlockId: block.id,
-          },
+        await uiStateBlock.set(selectionStateProp, {
+          selectedBlockIds: [block.id],
+          anchorBlockId: block.id,
         })
       },
       defaultBinding: {
@@ -179,7 +182,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_to_first_visible_block',
       description: 'Jump to first visible block',
       handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
         setFocusedBlockId(uiStateBlock, topLevelBlockId)
@@ -192,10 +195,10 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_to_last_visible_block',
       description: 'Jump to last visible block',
       handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        const lastBlock = await getLastVisibleDescendant(repo.find(topLevelBlockId), true)
+        const lastBlock = await getLastVisibleDescendant(repo.block(topLevelBlockId))
         if (!lastBlock) return
 
         setFocusedBlockId(uiStateBlock, lastBlock.id)
@@ -219,7 +222,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_many_down',
       description: 'Jump down several blocks',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
         const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'down')
@@ -233,7 +236,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'jump_many_up',
       description: 'Jump up several blocks',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
         const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'up')
@@ -247,9 +250,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'create_block_above_and_edit',
       description: 'Create block above and enter edit mode',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        const created = await block.createSiblingAbove()
-        if (!created) return
-        setFocusedBlockId(uiStateBlock, created.id)
+        const newId = await repo.mutate.createSiblingAbove({siblingId: block.id}) as string
+        if (!newId) return
+        setFocusedBlockId(uiStateBlock, newId)
         setIsEditing(uiStateBlock, true)
       },
       defaultBinding: {
@@ -278,37 +281,20 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         keys: 'shift+p',
       },
     }),
-    bindNormal({
-      id: 'normal_undo',
-      description: 'Undo last action',
-      handler: () => {
-        repo.undoRedoManager.undo(defaultChangeScope)
-      },
-      defaultBinding: {
-        keys: 'u',
-      },
-    }),
-    bindNormal({
-      id: 'normal_redo',
-      description: 'Redo last action',
-      handler: () => {
-        repo.undoRedoManager.redo(defaultChangeScope)
-      },
-      defaultBinding: {
-        keys: 'ctrl+r',
-      },
-    }),
+    // Undo/redo (`u`, `ctrl+r`) dropped — UndoRedoManager removed in
+    // 1.6.E. Re-impl tracked in tasks/follow-ups.md.
     bindNormal({
       id: 'collapse_into_parent',
       description: 'Collapse current block into its parent and focus parent',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId || block.id === topLevelBlockId) return
 
-        const parent = await block.parent()
+        await repo.load(block.id, {ancestors: true})
+        const parent = block.parent
         if (!parent || parent.id === topLevelBlockId) return
 
-        parent.setProperty({...isCollapsedProp, value: true})
+        await parent.set(isCollapsedProp, true)
         setFocusedBlockId(uiStateBlock, parent.id)
       },
       defaultBinding: {

@@ -1,5 +1,5 @@
 import { Block } from '@/data/internals/block'
-import { ChangeScope, codecs, defineProperty, type PropertySchema } from '@/data/api'
+import { ChangeScope, codecs, type PropertySchema } from '@/data/api'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'

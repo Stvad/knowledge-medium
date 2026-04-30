@@ -87,7 +87,7 @@ export const useMyWorkspaceRoles = (): {
   const repo = useRepo()
   const {data, isLoading} = useQuery<{workspace_id: string, role: string}>(
     SELECT_MY_ROLES_SQL,
-    [repo.currentUser.id],
+    [repo.user.id],
   )
   const rolesByWorkspaceId = useMemo(
     () => new Map(data.map((row) => [row.workspace_id, row.role as WorkspaceRole])),

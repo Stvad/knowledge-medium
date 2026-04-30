@@ -31,7 +31,7 @@ export interface ApiSurfaceSummary {
 
 export interface RuntimeDescription {
   landingBlockId: string
-  currentUser: {id: string, name: string}
+  currentUser: {id: string, name?: string}
   safeMode: boolean
   actions: Array<{
     id: string
@@ -108,7 +108,7 @@ export const describeRuntime = async (
   context: DescribeRuntimeContext,
 ): Promise<RuntimeDescription> => ({
   landingBlockId: context.landingBlock.id,
-  currentUser: context.repo.currentUser,
+  currentUser: context.repo.user,
   safeMode: context.safeMode,
   actions: context.actions.map(action => ({
     id: action.id,

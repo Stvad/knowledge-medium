@@ -13,7 +13,7 @@ import type { RoamExport } from './types'
 interface RoamImportWindowAPI {
   /**
    * Run the import against the active workspace. workspaceId and
-   * currentUserId default to repo.activeWorkspaceId / repo.currentUser.id;
+   * currentUserId default to repo.activeWorkspaceId / repo.user.id;
    * pass overrides if you want to import elsewhere.
    */
   run: (pages: RoamExport, options?: Partial<RoamImportOptions>) => Promise<RoamImportSummary>
@@ -44,7 +44,7 @@ export const ensureRoamImportWindowHook = (repo: Repo) => {
       }
       return importRoam(pages, repo, {
         workspaceId,
-        currentUserId: options.currentUserId ?? repo.currentUser.id,
+        currentUserId: options.currentUserId ?? repo.user.id,
         dryRun: options.dryRun,
         onProgress: options.onProgress ?? (msg => console.log(`[roam-import] ${msg}`)),
       })

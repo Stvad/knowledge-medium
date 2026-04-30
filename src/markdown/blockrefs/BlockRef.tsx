@@ -21,7 +21,7 @@ export function BlockRef({blockId}: {blockId: string}) {
   const repo = useRepo()
   const {panelId} = useBlockContext()
   const ancestors = useBlockRefAncestors()
-  const target = repo.find(blockId)
+  const target = repo.block(blockId)
   const targetData = useData(target)
   const content = useContent(target)
   const runtime = useAppRuntime()

@@ -96,15 +96,11 @@ export {
 export { Block } from '@/data/internals/block'
 export { Repo } from '@/data/internals/repo'
 export { getActivePanelBlock, getPanelsBlock } from '@/data/globalState.ts'
+// PropertySchema authoring — extensions define their own typed
+// properties via `defineProperty` from the data-layer api.
+export { defineProperty, codecs, ChangeScope } from '@/data/api'
+export type { PropertySchema, Codec, BlockData } from '@/data/api'
 export {
-  boolProp,
-  booleanProperty,
-  numberProperty,
-  stringProperty,
-  listProperty,
-  objectProperty,
-  fromList,
-  uiChangeScope,
   // System UI-state props extensions might want to read/write
   isCollapsedProp,
   showPropertiesProp,
@@ -114,9 +110,6 @@ export {
   extensionDisabledProp,
 } from '@/data/properties.ts'
 export type {
-  BlockData,
-  BlockProperty,
-  BlockProperties,
   BlockRenderer,
   BlockRendererProps,
   BlockContextType,

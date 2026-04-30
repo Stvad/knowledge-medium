@@ -65,7 +65,7 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
 
 VideoPlayerRenderer.canRender = ({block}: BlockRendererProps) =>
 {
-  const blockData = block.dataSync()
+  const blockData = block.peek()
   return !!(blockData && ReactPlayer.canPlay?.(blockData.content))
 }
 

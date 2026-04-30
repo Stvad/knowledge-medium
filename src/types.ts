@@ -1,60 +1,25 @@
 import { FunctionComponent } from 'react'
+import type { BlockData } from '@/data/api'
 import { Block } from '@/data/internals/block'
 
-// BlockData / BlockReference are the canonical domain shape; their definition
+// BlockData / BlockReference are the canonical domain shape — their definition
 // lives with the rest of the data-layer API in `@/data/api`. Re-exported here
-// for backwards-compatibility with call sites that still import from `@/types`
-// — the call-site sweep in stage 1.6 of the data-layer redesign will move
-// imports onto `@/data/api` directly and this re-export will drop.
+// during the 1.6 migration; once consumers shift onto `@/data/api` directly
+// this re-export drops.
 export type { BlockData, BlockReference } from '@/data/api'
 
-export type BlockPropertyValue = string | number | Array<BlockPropertyValue> | boolean | undefined | object | null
+/** Loose alias for any decoded property value. The new shape stores
+ *  encoded values (untyped JSON) in `BlockData.properties` and decodes
+ *  via `block.get(schema)` / `block.peekProperty(schema)` at the
+ *  boundary — `BlockPropertyValue` is just the union of plausible
+ *  decoded shapes. */
+export type BlockPropertyValue = string | number | boolean | object | undefined | null | Array<BlockPropertyValue>
 
-// Legacy descriptor-shaped property API. Survives stages 1.2–1.5 alongside the
-// new flat `properties: Record<string, unknown>` storage shape; gets fully
-// retired in stage 1.6 when callers migrate to PropertySchema<T> + tx.setProperty.
-export interface BlockProperty {
-    name: string
-    type: string
-    value: BlockPropertyValue
-    changeScope?: string
-}
-
-export interface StringBlockProperty extends BlockProperty {
-    type: 'string'
-    value: string | undefined
-}
-
-export interface NumberBlockProperty extends BlockProperty {
-    type: 'number'
-    value: number | undefined
-}
-
-export interface BooleanBlockProperty extends BlockProperty {
-    type: 'boolean'
-    value: boolean | undefined
-}
-
-export interface ListBlockProperty<V extends BlockPropertyValue> extends BlockProperty {
-    type: 'list'
-    value: Array<V> | undefined
-}
-
-export interface ObjectBlockProperty<V extends object> extends BlockProperty {
-    type: 'object'
-    value: V | undefined
-}
-
-export interface BlockProperties {
-    type?: StringBlockProperty;
-    // renderer?: string;  // Reference to another block's document URL for renderer
-    previousLoadTime?: NumberBlockProperty
-    // currentLoadTime?: number
-    // 'system:collapsed'?: boolean,
-    // 'system:showProperties'?: boolean,
-
-    [key: string]: BlockProperty | undefined;
-}
+/** Map of decoded property values keyed by name. Mirrors
+ *  `BlockData['properties']` (which holds the encoded JSON) but typed
+ *  as the decoded view for callers that work with the values
+ *  pre-codec. */
+export type BlockProperties = Record<string, unknown>
 
 export type WorkspaceRole = 'owner' | 'editor' | 'viewer'
 
@@ -105,14 +70,11 @@ export interface RendererRegistry {
     [key: string]: BlockRenderer;
 }
 
-export interface EditorSelectionState {
-    blockId: string
-    start?: number
-    end?: number
-    line?: 'first' | 'last'
-    x?: number
-    y?: number
-}
+/** EditorSelectionState now lives at @/data/properties — re-exported
+ *  here during the 1.6 migration so call sites that still import from
+ *  @/types compile. Once consumers shift onto @/data/properties this
+ *  re-export drops. */
+export type { EditorSelectionState } from '@/data/properties'
 
 export interface BlockContextType {
     topLevel?: boolean

@@ -43,7 +43,7 @@ const BacklinkBreadcrumbs = ({shownBlock, onSelect}: BreadcrumbsProps) => {
 const BacklinkItem = ({block}: { block: Block }) => {
   const repo = useRepo()
   const [shownBlockId, setShownBlockId] = useState(block.id)
-  const shownBlock = useMemo(() => repo.find(shownBlockId), [repo, shownBlockId])
+  const shownBlock = useMemo(() => repo.block(shownBlockId), [repo, shownBlockId])
 
   const handleSelect = useCallback((parent: Block) => {
     setShownBlockId(parent.id)

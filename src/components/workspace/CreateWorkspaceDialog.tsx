@@ -51,7 +51,7 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
       // App.tsx re-runs getInitialBlock for the new workspace, and
       // getOrCreateDailyNote creates today's note client-side. Doing
       // it again here would just race with that path.
-      await repo.flush()
+      /* repo.flush dropped — no write queue in new layer */
       onCreated(result.workspace)
       reset()
       onOpenChange(false)

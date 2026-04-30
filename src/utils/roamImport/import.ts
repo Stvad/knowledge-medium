@@ -4,19 +4,21 @@
 //
 // Design intent
 //   - The pure planner (`planImport`) has already laid out IDs, content
-//     rewrites, parent/child links, and partial references[] data.
+//     rewrites, parent/child links via parentId+orderKey, and partial
+//     references[] data.
 //   - This module bridges plan → live system, handling the parts that
 //     need to talk to the workspace: looking up existing alias-pages so
 //     we can merge instead of duplicate, materialising daily-notes via
 //     the deterministic-id path, and converting [[alias]] occurrences
 //     into resolved references[] rows so backlinks work after import.
 
-import { aliasProp, fromList, typeProp } from '@/data/properties'
+import { ChangeScope, type BlockData, type Tx } from '@/data/api'
+import { aliasesProp, typeProp } from '@/data/properties'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
 import { parseRelativeDate } from '@/utils/relativeDate'
 import { parseReferences } from '@/utils/referenceParser'
-import { Repo } from '@/data/internals/repo'
-import { BlockData } from '@/types'
+import type { Repo } from '@/data/internals/repo'
+import { v4 as uuidv4 } from 'uuid'
 import { planImport, type PreparedPage, type RoamImportPlan } from './plan'
 import type { RoamExport } from './types'
 
@@ -112,53 +114,79 @@ export const importRoam = async (
     }
   }
 
-  // 4. Write placeholder stand-ins for content uids whose target isn't
-  //    in this export. Idempotent under deterministic ids — re-running
-  //    is a no-op, and a future import that contains the real block
-  //    upserts onto the same row.
-  for (const placeholder of plan.placeholders) {
-    if (await repo.exists(placeholder.blockId)) continue
-    repo.create({
-      id: placeholder.blockId,
-      workspaceId: options.workspaceId,
-      content: '',
-    })
-  }
-  if (plan.placeholders.length > 0) {
-    log(`Wrote ${plan.placeholders.length} placeholder blocks for unresolved refs`)
-  }
-
-  // 5. Write descendants. Reparent direct children of merging pages.
-  for (const desc of plan.descendants) {
-    const data = applyReparent(desc.data, reparentMap)
-    repo.create(data)
-  }
-  log(`Wrote ${plan.descendants.length} descendant blocks`)
-
-  // 5. Write or merge each page.
-  let pagesCreated = 0
-  let pagesMerged = 0
-  let pagesDaily = 0
+  // 4. Make sure the daily-note rows referenced by daily-page
+  //    reconciliations exist. getOrCreateDailyNote opens its own tx
+  //    and is idempotent — safe to call concurrently across imports.
   for (const recon of reconciliations) {
     if (recon.page.isDaily) {
-      pagesDaily += 1
       await mergeIntoDailyNote(repo, options.workspaceId, recon.page)
-      continue
     }
-    if (recon.merging) {
-      pagesMerged += 1
-      mergeIntoExistingPage(repo, recon)
-      continue
-    }
-    pagesCreated += 1
-    if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
-    repo.create(recon.page.data)
   }
-  log(
-    `Pages: ${pagesCreated} created, ${pagesMerged} merged into existing aliases, ${pagesDaily} daily-note merges`,
-  )
 
-  await repo.flush()
+  // 5. Write placeholders + descendants + non-daily pages in one
+  //    big tx. Re-parenting (planned → final) is applied to each
+  //    descendant's `parentId` before tx.createOrGet so the row
+  //    lands under the right parent without a follow-up move.
+  let pagesCreated = 0
+  let pagesMerged = 0
+  const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
+  await repo.tx(async tx => {
+    // 5a. Placeholder stand-ins. Idempotent — re-running is a no-op,
+    //     and a future import that contains the real block upserts
+    //     onto the same row.
+    for (const placeholder of plan.placeholders) {
+      await tx.createOrGet({
+        id: placeholder.blockId,
+        workspaceId: options.workspaceId,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+      })
+    }
+
+    // 5b. Descendants. Each PreparedBlock carries its own parentId from
+    //     the planner; if its parentId points at a planned page that
+    //     reconciled to an existing block, swap to the final id.
+    for (const desc of plan.descendants) {
+      const data = applyReparent(desc.data, reparentMap)
+      await tx.createOrGet({
+        id: data.id,
+        workspaceId: data.workspaceId,
+        parentId: data.parentId,
+        orderKey: data.orderKey,
+        content: data.content,
+        properties: data.properties,
+        references: data.references,
+      })
+    }
+
+    // 5c. Non-daily pages. Merging pages get an alias union + re-parent
+    //     of the planned children's referenced parent (already handled
+    //     above via reparentMap). Non-merging pages create the page row.
+    for (const recon of reconciliations) {
+      if (recon.page.isDaily) continue
+      if (recon.merging) {
+        pagesMerged += 1
+        await mergeIntoExistingPage(tx, recon)
+        continue
+      }
+      pagesCreated += 1
+      if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
+      const data = recon.page.data
+      await tx.createOrGet({
+        id: data.id,
+        workspaceId: data.workspaceId,
+        parentId: data.parentId,
+        orderKey: data.orderKey,
+        content: data.content,
+        properties: data.properties,
+        references: data.references,
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'roam import'})
+
+  log(`Wrote ${plan.placeholders.length} placeholders, ${plan.descendants.length} descendants, ` +
+    `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes`)
 
   return {
     pagesCreated,
@@ -267,12 +295,22 @@ const resolveAliases = async (
       continue
     }
 
-    const aliasBlock = repo.create({
-      workspaceId,
-      content: alias,
-      properties: fromList(aliasProp([alias])),
-    })
-    aliasIdMap.set(alias, aliasBlock.id)
+    // Create a new alias-target block in its own short tx so the row
+    // is committable independently of the main import tx (parseRefs
+    // post-commit processor needs a live workspace and we want it
+    // running here).
+    const newId = uuidv4()
+    await repo.tx(async tx => {
+      await tx.create({
+        id: newId,
+        workspaceId,
+        parentId: null,
+        orderKey: 'a0',
+        content: alias,
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode([alias])},
+      })
+    }, {scope: ChangeScope.BlockDefault, description: `roam import: alias target ${alias}`})
+    aliasIdMap.set(alias, newId)
     aliasBlocksCreated += 1
   }
 
@@ -301,33 +339,32 @@ const mergeIntoDailyNote = async (
   page: PreparedPage,
 ) => {
   if (!page.iso) throw new Error('Daily page is missing iso date')
-  const daily = await getOrCreateDailyNote(repo, workspaceId, page.iso)
-
-  daily.change((doc) => {
-    for (const childId of page.childIds) {
-      if (!doc.childIds.includes(childId)) doc.childIds.push(childId)
-    }
-  })
+  // Materialize the daily note row (idempotent). The descendants are
+  // created later in the main import tx with parentId already pointing
+  // at this row (the planner used dailyNoteBlockId as the plannedId,
+  // so reparentMap leaves them alone).
+  await getOrCreateDailyNote(repo, workspaceId, page.iso)
 }
 
-const mergeIntoExistingPage = (repo: Repo, recon: PageReconciliation) => {
-  const existing = repo.find(recon.finalId)
-
+const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {
+  const existing = await tx.get(recon.finalId)
+  if (!existing) {
+    throw new Error(`mergeIntoExistingPage: existing page ${recon.finalId} not found`)
+  }
   // Make sure the existing page records the imported alias too — Roam
-  // can have aliases the local block doesn't know about (e.g. ISO
-  // alternate). If the title matches an existing alias, this is a no-op.
-  existing.change((doc) => {
-    const aliasValue = doc.properties.alias?.value
-    const aliases = Array.isArray(aliasValue) ? aliasValue.filter(v => typeof v === 'string') as string[] : []
-    if (!aliases.includes(recon.page.title)) {
-      const updated = [...aliases, recon.page.title]
-      doc.properties.alias = aliasProp(updated)
-    }
-    if (!doc.properties.type) {
-      doc.properties.type = {...typeProp, value: 'page'}
-    }
-    for (const childId of recon.page.childIds) {
-      if (!doc.childIds.includes(childId)) doc.childIds.push(childId)
-    }
-  })
+  // can have aliases the local block doesn't know about. If the title
+  // already appears, this is a no-op.
+  const aliasesValue = existing.properties[aliasesProp.name]
+  const aliases = Array.isArray(aliasesValue)
+    ? aliasesValue.filter((v): v is string => typeof v === 'string')
+    : []
+  if (!aliases.includes(recon.page.title)) {
+    await tx.setProperty(recon.finalId, aliasesProp, [...aliases, recon.page.title])
+  }
+  if (existing.properties[typeProp.name] === undefined) {
+    await tx.setProperty(recon.finalId, typeProp, 'page')
+  }
+  // Descendants are already routed under recon.finalId via the
+  // reparentMap (their parentId was rewritten before tx.createOrGet).
+  // No explicit child-list manipulation needed in the new shape.
 }

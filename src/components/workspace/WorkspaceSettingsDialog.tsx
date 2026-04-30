@@ -40,7 +40,7 @@ interface Props {
 
 export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDeleted}: Props) {
   const repo = useRepo()
-  const isOwner = workspace.ownerUserId === repo.currentUser.id
+  const isOwner = workspace.ownerUserId === repo.user.id
   const isViewer = repo.isReadOnly
 
   return (
@@ -190,7 +190,7 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
         )}
         {members.map((m) => {
           const canEditThisMember =
-            canManage && m.role !== 'owner' && m.userId !== repo.currentUser.id
+            canManage && m.role !== 'owner' && m.userId !== repo.user.id
           return (
             <li key={m.id} className="flex items-center gap-3 px-3 py-2 text-sm">
               <span className="truncate flex-1">
