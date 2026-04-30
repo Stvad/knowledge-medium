@@ -1,8 +1,4 @@
-import {
-  nextVisibleBlock,
-  previousVisibleBlock,
-  Block,
-} from '@/data/internals/block'
+import { Block } from '@/data/internals/block'
 import { Repo } from '@/data/internals/repo'
 import { resetBlockSelection } from '@/data/globalState.ts'
 import {
@@ -15,6 +11,7 @@ import {
   setIsEditing,
   showPropertiesProp,
   topLevelBlockIdProp,
+  type EditorSelectionState,
 } from '@/data/properties.ts'
 import {
   ActionConfig,
@@ -23,8 +20,7 @@ import {
   BlockShortcutDependencies,
   ShortcutBinding,
 } from '@/shortcuts/types.ts'
-import { EditorSelectionState } from '@/types.ts'
-import { extendSelection } from '@/utils/selection'
+import { extendSelection, nextVisibleBlock, previousVisibleBlock } from '@/utils/selection'
 
 export interface BlockAction {
   id: string
@@ -57,8 +53,37 @@ export const bindBlockActionContext = <T extends ActionContextType>(
   handler: action.handler as ActionConfig<T>['handler'],
 })
 
+/** Move `block` up (-1) or down (+1) among its siblings. Computes a
+ *  new orderKey that lands between the appropriate neighbor pair so
+ *  the block's position changes deterministically. No-op if the
+ *  block is already at the relevant edge or if it has no parent. */
+const reorderBlock = async (repo: Repo, block: Block, direction: -1 | 1): Promise<void> => {
+  const data = block.peek() ?? await block.load()
+  if (!data || data.parentId === null) return
+
+  await repo.load(data.parentId, {children: true})
+  const siblings = repo.cache.childrenOf(data.parentId)
+  const idx = siblings.findIndex(s => s.id === block.id)
+  if (idx === -1) return
+
+  const target = idx + direction
+  if (target < 0 || target >= siblings.length) return
+
+  // Target sibling we want to land before/after. For direction=-1
+  // (move up), we want to land BEFORE siblings[target]. For
+  // direction=+1, we want to land AFTER siblings[target].
+  const targetSibling = siblings[target]
+  await repo.mutate.move({
+    id: block.id,
+    parentId: data.parentId,
+    position: direction === -1
+      ? {kind: 'before', siblingId: targetSibling.id}
+      : {kind: 'after', siblingId: targetSibling.id},
+  })
+}
+
 export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
-  if (uiStateBlock.dataSync()?.properties[isEditingProp.name]?.value) {
+  if (uiStateBlock.peekProperty(isEditingProp)) {
     requestEditorFocus(uiStateBlock)
   }
 }
@@ -69,35 +94,34 @@ export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionSt
   // request) that would otherwise fire for nothing.
   if (uiStateBlock.repo.isReadOnly) return
 
-  resetBlockSelection(uiStateBlock)
-
+  void resetBlockSelection(uiStateBlock)
   setIsEditing(uiStateBlock, true)
 
-  if (selection) uiStateBlock.setProperty({...editorSelection, value: selection})
+  if (selection) void uiStateBlock.set(editorSelection, selection)
   requestEditorFocus(uiStateBlock)
 }
 
 export const extendSelectionDown = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return
 
-  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
+  const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
   if (!focusedBlockId) return
 
-  const nextBlock = await nextVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
+  const nextBlock = await nextVisibleBlock(repo.block(focusedBlockId), topLevelBlockId)
   if (!nextBlock) return
 
   await extendSelection(nextBlock.id, uiStateBlock, repo)
 }
 
 export const extendSelectionUp = async (uiStateBlock: Block, repo: Repo) => {
-  const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+  const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
   if (!topLevelBlockId) return
 
-  const focusedBlockId = (await uiStateBlock.getProperty(focusedBlockIdProp))?.value
+  const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
   if (!focusedBlockId) return
 
-  const prevBlock = await previousVisibleBlock(repo.find(focusedBlockId), topLevelBlockId)
+  const prevBlock = await previousVisibleBlock(repo.block(focusedBlockId), topLevelBlockId)
   if (!prevBlock) return
 
   await extendSelection(prevBlock.id, uiStateBlock, repo)
@@ -108,7 +132,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'indent_block',
     description: 'Indent block',
     handler: async (deps: BlockShortcutDependencies) => {
-      await deps.block.indent()
+      await repo.mutate.indent({id: deps.block.id})
       requestEditorFocusIfEditing(deps.uiStateBlock)
     },
     defaultBinding: {
@@ -123,10 +147,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'outdent_block',
     description: 'Outdent block',
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
-      await block.outdent(topLevelBlockId)
+      await repo.mutate.outdent({id: block.id, topLevelBlockId})
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -143,7 +167,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await block.changeOrder(-1)
+      await reorderBlock(repo, block, -1)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -160,7 +184,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await block.changeOrder(1)
+      await reorderBlock(repo, block, 1)
       requestEditorFocusIfEditing(uiStateBlock)
     },
     defaultBinding: {
@@ -175,11 +199,11 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block, uiStateBlock} = deps
       if (!block || !uiStateBlock) return
 
-      const topLevelBlockId = (await uiStateBlock.getProperty(topLevelBlockIdProp))?.value
+      const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-      void block.delete()
+      await block.delete()
       if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
     },
     defaultBinding: {
@@ -194,8 +218,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block} = deps
       if (!block) return
 
-      const showProperties = (await block.getProperty(showPropertiesProp))?.value
-      block.setProperty({...showPropertiesProp, value: !showProperties})
+      const showProperties = block.peekProperty(showPropertiesProp) ?? false
+      await block.set(showPropertiesProp, !showProperties)
     },
     defaultBinding: {
       keys: 't',
@@ -209,8 +233,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const {block} = deps
       if (!block) return
 
-      const isCollapsed = (await block.getProperty(isCollapsedProp))?.value
-      block.setProperty({...isCollapsedProp, value: !isCollapsed})
+      const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
+      await block.set(isCollapsedProp, !isCollapsed)
     },
     defaultBinding: {
       keys: 'z',

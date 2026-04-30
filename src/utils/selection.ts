@@ -30,6 +30,72 @@ export async function getAllVisibleBlockIdsInOrder(
   return out
 }
 
+/** Returns the visible block immediately after `current` in document
+ *  order under `topLevelBlockId`. Returns null if `current` is the
+ *  last visible block. */
+export const nextVisibleBlock = async (
+  current: Block,
+  topLevelBlockId: string,
+): Promise<Block | null> => {
+  const repo = current.repo
+  const topLevelBlock = repo.block(topLevelBlockId)
+  const orderedIds = await getAllVisibleBlockIdsInOrder(topLevelBlock)
+  const idx = orderedIds.indexOf(current.id)
+  if (idx === -1 || idx === orderedIds.length - 1) return null
+  return repo.block(orderedIds[idx + 1])
+}
+
+/** Returns the visible block immediately before `current` in document
+ *  order under `topLevelBlockId`. Returns null if `current` is the
+ *  first visible block (typically the top-level itself). */
+export const previousVisibleBlock = async (
+  current: Block,
+  topLevelBlockId: string,
+): Promise<Block | null> => {
+  const repo = current.repo
+  const topLevelBlock = repo.block(topLevelBlockId)
+  const orderedIds = await getAllVisibleBlockIdsInOrder(topLevelBlock)
+  const idx = orderedIds.indexOf(current.id)
+  if (idx <= 0) return null
+  return repo.block(orderedIds[idx - 1])
+}
+
+/** Last visible descendant of `block` (deepest, last child of last
+ *  child, etc.). Used by keyboard navigation that needs to land on
+ *  the bottom of an expanded subtree. Returns the input block if it
+ *  has no expanded children. */
+export const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
+  const repo = block.repo
+  await repo.load(block.id, {descendants: true})
+  let current = block
+  while (true) {
+    const collapsed = current.peekProperty(isCollapsedProp) ?? false
+    if (collapsed && current.id !== block.id) return current
+    if (!repo.cache.areChildrenLoaded(current.id)) return current
+    const children = current.children
+    if (children.length === 0) return current
+    current = children[children.length - 1]
+  }
+}
+
+/** Walks ancestors via cache snapshots and returns the topmost block
+ *  reachable. Used by some shortcut handlers that need to jump to
+ *  the workspace root. */
+export const getRootBlock = (block: Block): Block => {
+  const repo = block.repo
+  let current: Block = block
+  const seen = new Set<string>()
+  while (true) {
+    if (seen.has(current.id)) return current
+    seen.add(current.id)
+    const data = current.peek()
+    if (!data?.parentId) return current
+    const parentSnap = repo.cache.getSnapshot(data.parentId)
+    if (!parentSnap) return current
+    current = repo.block(data.parentId)
+  }
+}
+
 /** Cache-only ancestor membership check. Walks parent chain via
  *  cache snapshots; returns true iff `descendant` is reached from
  *  `ancestor` going down (or, equivalently, if `ancestor` is in
