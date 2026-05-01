@@ -97,8 +97,8 @@ const namespacedKey = (key: string): string => {
 // pass.
 const SIMPLE_ATTR_RE = /^([A-Za-z][\w-]*)::\s*(.*)$/
 
-const detectInlineAttribute = (rawContent: string): {key: string, value: string} | null => {
-  if (rawContent.includes('\n')) return null
+const detectInlineAttribute = (rawContent: string | undefined): {key: string, value: string} | null => {
+  if (!rawContent || rawContent.includes('\n')) return null
   const match = SIMPLE_ATTR_RE.exec(rawContent)
   if (!match) return null
   return {key: match[1], value: match[2]}
@@ -193,7 +193,7 @@ const buildBlock = (
     id,
     parentId,
     orderKey: siblingOrderKey(siblingIndex),
-    rawString: block.string,
+    rawString: block.string ?? '',
     heading: block.heading,
     roamProps: collectRoamProps(block),
     roamRefUids: collectUidRefs(block),
@@ -323,7 +323,7 @@ const collectPlaceholderUids = (
 ): string[] => {
   const out = new Set<string>()
   const visit = (block: RoamBlock) => {
-    for (const uid of collectContentRefUids(block.string)) {
+    for (const uid of collectContentRefUids(block.string ?? '')) {
       if (!knownUids.has(uid)) out.add(uid)
     }
     for (const child of block.children ?? []) visit(child)

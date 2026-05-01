@@ -229,6 +229,27 @@ describe('planImport', () => {
     expect(byUid('h2')?.parentId).toBe(roamBlockId(WORKSPACE, 'attrUid'))
   })
 
+  it('handles blocks with no `string` field (empty bullets in real exports)', () => {
+    const sample = [{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        // No `string` at all — empty Roam bullet.
+        {uid: 'empty1'},
+        // Empty children array, also no string.
+        {uid: 'empty2', children: []},
+        // Sibling with content — must still import normally.
+        {string: 'has content', uid: 'b3'},
+      ],
+    }] as unknown as RoamExport
+    const plan = planImport(sample, {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
+    expect(byUid('empty1')?.content).toBe('')
+    expect(byUid('empty2')?.content).toBe('')
+    expect(byUid('b3')?.content).toBe('has content')
+  })
+
   it('promotes Roam attributes (props/:block/props) to namespaced properties', () => {
     // Cast through RoamExport — `:readwise-highlight-id` is a free-form
     // Roam attribute key not declared on the typed RoamBlock interface.

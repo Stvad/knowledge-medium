@@ -13,7 +13,9 @@ export interface RoamUidRef {
 }
 
 export interface RoamBlock {
-  string: string
+  // Roam exports omit `:block/string` for blocks that were never given
+  // any content (empty bullets) — treat absence as "".
+  string?: string
   uid: string
   'create-time'?: number
   'edit-time'?: number
