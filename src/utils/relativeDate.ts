@@ -32,5 +32,15 @@ export const parseRelativeDate = (
   if (result.text.length !== trimmed.length) return null
 
   const date = result.start.date()
+
+  // Reject implausible years. chrono is lenient and will happily parse
+  // "20201-04-01" (a Roam-import case from a typo'd page title) as
+  // April 1 of year 20201; downstream `formatIsoDate` then emits a
+  // 5-digit year like "20201-04-01" which fails ISO regex parsers.
+  // Treat anything outside 4-digit range as a non-date so the caller
+  // falls through to the non-daily path.
+  const year = date.getFullYear()
+  if (year < 1000 || year > 9999) return null
+
   return {iso: formatIsoDate(date), date}
 }

@@ -72,4 +72,14 @@ describe('parseRelativeDate', () => {
   it('parses an explicit ISO date', () => {
     expect(parseRelativeDate('2026-12-25', NOW)?.iso).toBe('2026-12-25')
   })
+
+  it('rejects implausible years (chrono will eat a 5-digit-year typo)', () => {
+    // Real Roam-import bug: a page titled "20201-04-01" (typo for
+    // 2021-04-01) crashed the importer because chrono parsed the year
+    // as 20201, then formatIsoDate emitted "20201-04-01" and the daily-
+    // note regex rejected the 5-digit year. Better to treat the whole
+    // string as a non-date and import as a regular page.
+    expect(parseRelativeDate('20201-04-01', NOW)).toBeNull()
+    expect(parseRelativeDate('999-04-01', NOW)).toBeNull()
+  })
 })
