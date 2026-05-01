@@ -25,12 +25,12 @@ describe('createTestDb harness', () => {
     expect(row).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
   })
 
-  it('installs all seven blocks triggers', async () => {
+  it('installs the documented set of blocks triggers', async () => {
     const names = (await h.db.getAll<{name: string}>(
       "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name",
     )).map(r => r.name)
     expect(names.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
-    expect(names).toHaveLength(7)
+    expect(names).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
   })
 
   it('writeTransaction commits on success, rolls back on throw', async () => {
