@@ -162,7 +162,7 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('Another')).toBe(true)
   })
 
-  it('promotes simple inline `key::value` blocks to roam:<key> properties', () => {
+  it('hoists simple inline `key::value` children onto the parent and drops them', () => {
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
@@ -176,12 +176,57 @@ describe('planImport', () => {
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 
     const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
-    expect(byUid('b1')?.properties['roam:URL']).toBe('https://example.com/foo')
-    expect(byUid('b2')?.properties['roam:author']).toBe('[[@stvad:matrix.org]]')
-    expect(byUid('b3')?.properties['roam:URL']).toBeUndefined()
-    expect(byUid('b4')?.properties['roam:URL']).toBeUndefined()
-    // Content preserved verbatim.
-    expect(byUid('b1')?.content).toBe('URL::https://example.com/foo')
+    // Standalone attr blocks are dropped — the property lives on the parent.
+    expect(byUid('b1')).toBeUndefined()
+    expect(byUid('b2')).toBeUndefined()
+    // Non-attr / multi-line blocks survive.
+    expect(byUid('b3')?.content).toBe('plain bullet, no attr')
+    expect(byUid('b4')?.content).toBe('URL::https://example.com\nfollowed by extra notes')
+    // The page (parent) carries the hoisted attributes.
+    const page = plan.pages.find(p => p.roamUid === 'pUid')
+    expect(page?.data?.properties['roam:URL']).toBe('https://example.com/foo')
+    expect(page?.data?.properties['roam:author']).toBe('[[@stvad:matrix.org]]')
+    expect(page?.promotedFromChildren).toEqual({
+      'roam:URL': 'https://example.com/foo',
+      'roam:author': '[[@stvad:matrix.org]]',
+    })
+    // childIds skip the dropped attr blocks.
+    expect(page?.childIds).toEqual([
+      roamBlockId(WORKSPACE, 'b3'),
+      roamBlockId(WORKSPACE, 'b4'),
+    ])
+  })
+
+  it('keeps `key::value` blocks with descendants but still hoists the property onto the parent', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent block',
+        uid: 'parentUid',
+        children: [{
+          string: 'highlights::',
+          uid: 'attrUid',
+          children: [
+            {string: 'first highlight', uid: 'h1'},
+            {string: 'second highlight', uid: 'h2'},
+          ],
+        }],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
+    // The attr block stays — its subtree would otherwise be unreachable.
+    const attr = byUid('attrUid')
+    expect(attr).toBeDefined()
+    expect(attr?.content).toBe('highlights::')
+    // It does NOT carry the property itself — the property is on the parent.
+    expect(attr?.properties['roam:highlights']).toBeUndefined()
+    // The parent block (Roam-side parent of the attr block) gets it.
+    expect(byUid('parentUid')?.properties['roam:highlights']).toBe('')
+    // Highlights survive too, parented under the attr block.
+    expect(byUid('h1')?.parentId).toBe(roamBlockId(WORKSPACE, 'attrUid'))
+    expect(byUid('h2')?.parentId).toBe(roamBlockId(WORKSPACE, 'attrUid'))
   })
 
   it('promotes Roam attributes (props/:block/props) to namespaced properties', () => {

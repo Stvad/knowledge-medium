@@ -157,10 +157,14 @@ export const importRoam = async (
     //     created in step 4. Merging pages get an alias union via
     //     mergeIntoExistingPage; non-merging pages create the row.
     for (const recon of reconciliations) {
-      if (recon.page.isDaily) continue
+      if (recon.page.isDaily) {
+        await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
+        continue
+      }
       if (recon.merging) {
         pagesMerged += 1
         await mergeIntoExistingPage(tx, recon)
+        await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
         continue
       }
       pagesCreated += 1
@@ -435,6 +439,38 @@ const upsertImportedBlock = async (
     })
     await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
   }
+}
+
+/**
+ * Fold `key::value` attributes hoisted from a Roam page's direct
+ * children onto the live page row with fill-if-missing semantics —
+ * an existing local value takes precedence over the imported one
+ * (matching the alias-union behavior in `mergeIntoExistingPage`).
+ *
+ * Used for daily and merging pages, where the row already exists
+ * before the import tx and the page-level `composeBlockData` path
+ * doesn't run. Non-daily, non-merging pages bake the same attrs
+ * into `pageData.properties` at planner time.
+ */
+const applyPromotedAttributes = async (
+  tx: Tx,
+  id: string,
+  promoted: Record<string, unknown>,
+) => {
+  const keys = Object.keys(promoted)
+  if (keys.length === 0) return
+  const existing = await tx.get(id)
+  if (!existing) return
+  let changed = false
+  const next = {...existing.properties}
+  for (const k of keys) {
+    if (next[k] === undefined) {
+      next[k] = promoted[k]
+      changed = true
+    }
+  }
+  if (!changed) return
+  await tx.update(id, {properties: next})
 }
 
 const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {

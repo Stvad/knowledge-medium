@@ -167,16 +167,13 @@ describe('repo.ancestors(id)', () => {
     expect(a).toBe(b)
   })
 
-  it('returns chain (root → … → parent), excludes id itself', async () => {
+  it('returns chain leaf-to-root, excludes id itself', async () => {
     await create('r')
     await create('a', {parentId: 'r', orderKey: 'a0'})
     await create('b', {parentId: 'a', orderKey: 'b0'})
     const h = env.repo.ancestors('b')
     const out = await h.load()
-    const ids = out.map(b => b.id)
-    expect(ids).not.toContain('b')
-    expect(ids).toContain('a')
-    expect(ids).toContain('r')
+    expect(out.map(x => x.id)).toEqual(['a', 'r'])
   })
 
   it('declares row deps on id + every ancestor', async () => {
