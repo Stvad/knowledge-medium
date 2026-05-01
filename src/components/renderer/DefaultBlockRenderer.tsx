@@ -89,6 +89,17 @@ const zoomIn = (block: Block, workspaceId: string) => {
   }
 }
 
+/** Static bullet visual — pure markup, no link/menu/data dependency.
+ *  Exported so LazyBlockComponent can reuse the exact same dot in its
+ *  placeholder, keeping placeholder layout aligned with mounted blocks. */
+export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicator?: boolean }) {
+  return (
+    <span
+      className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
+        (withChildrenIndicator ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
+  )
+}
+
 const BlockBullet = ({block}: { block: Block }) => {
   const repo = useRepo()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
@@ -121,9 +132,7 @@ const BlockBullet = ({block}: { block: Block }) => {
             }
           }}
         >
-            <span
-              className={`bullet h-1.5 w-1.5 rounded-full bg-muted-foreground/80 mx-auto` +
-                (hasChildren && isCollapsed ? 'bullet-with-children border-4 border-solid border-gray-200 box-content' : '')}/>
+          <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
         </a>
       </ContextMenuTrigger>
       <ContextMenuPortal>
