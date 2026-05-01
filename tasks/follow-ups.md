@@ -43,3 +43,14 @@ The same id-only shape would work for the other three list-handle factories in `
 - `backlinkIds` — Backlinks UI also renders each backlink's content; row deps are bounded by the backlinks list size.
 
 Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet` (per `tasks/data-layer-redesign.md` §13.4) is the canonical place for these — `repo.childIds` will migrate alongside `repo.children` to `repo.query.childIds` with no callsite changes downstream of the hooks.
+
+## Collapse-aware subtree preload in `PanelRenderer`
+
+`PanelRenderer` calls `repo.loadSubtree(topLevelBlockId)` once per page navigation to hydrate every descendant in one recursive-CTE query, so `LazyBlockComponent`-mounted blocks render against a warm cache instead of paying their own per-block `block.load()` round-trip. This restored the bulk-load behavior that `repo.children`'s row-dep side-effect used to provide before `useChildIds` migrated to `repo.childIds`.
+
+`SUBTREE_SQL` doesn't respect `isCollapsed` — it pulls every descendant regardless of UI fold state. For pages with deep, mostly-collapsed subtrees, this over-loads: rows the user will never scroll into still hit the cache. Two shapes worth considering when this matters:
+
+- **Collapse-aware variant**: a `SUBTREE_VISIBLE_SQL` that prunes recursion when a parent has `isCollapsed = true` (joining against the property dict, or against a `collapsed` projection on the row). Right shape if collapse is the dominant filter and subtrees are deep.
+- **Depth-bounded variant**: `repo.load(topLevelId, {descendants: <n>})` (already supported on `repo.load`) with a small depth cap (3–5). Cheaper than reading collapse state during the recursion; misses nothing the user can actually see without expanding. Easier to land.
+
+Defer until profiling shows real over-load. The per-page preload as it stands is already a meaningful win over the N+1 LazyBlockComponent round-trips it replaces.
