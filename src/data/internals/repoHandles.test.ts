@@ -218,6 +218,15 @@ describe('repo.backlinks(id)', () => {
       `UPDATE blocks SET references_json = ? WHERE id = ?`,
       [JSON.stringify([{id: 't', alias: 't'}]), 'linker'],
     )
+    // Drain the row_events tail BEFORE creating the handle. Otherwise
+    // the tail's throttled flush of the direct UPDATE above can race
+    // with the handle's first load: when invalidate({rowIds:['linker']})
+    // arrives between the load resolving and the test reading deps,
+    // runLoader's post-settle microtask kicks off a re-resolve whose
+    // synchronous prefix pushes upfront ctx.depend calls onto
+    // this.deps before the test's await-continuation runs — making
+    // __depsForTest() return mid-resolve state with duplicate rows.
+    await env.repo.flushRowEventsTail()
     const h = env.repo.backlinks('t')
     await h.load()
     const deps = h.__depsForTest()
