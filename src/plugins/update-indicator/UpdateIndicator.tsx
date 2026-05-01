@@ -1,34 +1,44 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useReducer } from 'react'
 import { Block } from '@/data/internals/block'
 import { useInFocus, useUserProperty } from '@/data/globalState'
 import { previousLoadTimeProp } from '@/data/properties.ts'
 import { useData } from '@/hooks/block.ts'
 
 /**
- * Small dot in the top-right corner of a block flagging that another user
- * touched the block since this user's previous session. Clears on focus.
+ * Per-tab session memory of "I've focused this block at least once, so the
+ * 'updated by other user' badge can stop pestering me."
  *
- * Mounted via `blockContentDecoratorsFacet` from `index.ts`, which wraps
- * the block's content in a positioned ancestor so this component's
- * `absolute right-1 top-1` lands on the content area regardless of layout.
+ * Lives at module scope rather than in component state on purpose: this
+ * component is mounted via a content decorator, and the decorator's
+ * wrapped renderer is rebuilt whenever blockInteractionContext changes
+ * (focus / edit-mode / selection / top-level toggles). A re-rebuild
+ * unmounts the wrapper and any local React state goes with it — which
+ * would mean the dot reappears every time the user clicks away.
+ *
+ * Page reload resets the Set, which is fine: reload also bumps
+ * `previousLoadTime`, so only updates the page hasn't seen yet count as
+ * "new" in the first place.
  */
+const seenBlocks = new Set<string>()
+
 export const UpdateIndicator = ({block}: { block: Block }) => {
-  const [seen, setSeen] = useState(false)
   const inFocus = useInFocus(block.id)
   const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
   const blockData = useData(block)
+  const [, forceRender] = useReducer((n: number) => n + 1, 0)
 
   useEffect(() => {
-    if (inFocus && !seen) {
-      setSeen(true)
+    if (inFocus && !seenBlocks.has(block.id)) {
+      seenBlocks.add(block.id)
+      forceRender()
     }
-  }, [inFocus, seen])
+  }, [inFocus, block.id])
 
   if (!blockData) return null
 
   const updatedByOtherUser = blockData.updatedBy !== block.repo.user.id
     && blockData.updatedAt > (previousLoadTime ?? 0)
-  const shouldShowUpdateIndicator = updatedByOtherUser && !seen
+  const shouldShowUpdateIndicator = updatedByOtherUser && !seenBlocks.has(block.id)
 
   if (!shouldShowUpdateIndicator) return null
 
