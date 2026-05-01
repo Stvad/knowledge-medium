@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { MouseEvent } from 'react'
 import type { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
 import {
@@ -46,6 +47,34 @@ describe('vim normal mode interactions', () => {
     const props = runtime.read(blockContentSurfacePropsFacet)({...context, inEditMode: true})
 
     expect(props).toEqual({})
+  })
+
+  it('does not let parent content capture a descendant block double-click', () => {
+    const props = vimContentSurfaceBehavior(context)
+    if (!props) throw new Error('expected vim content surface props')
+
+    const parent = document.createElement('div')
+    parent.className = 'tm-block'
+    parent.dataset.blockId = context.block.id
+    const child = document.createElement('div')
+    child.className = 'tm-block'
+    child.dataset.blockId = 'child-block'
+    const target = document.createElement('span')
+
+    parent.append(child)
+    child.append(target)
+
+    const event = {
+      detail: 2,
+      target,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent<HTMLDivElement>
+
+    props?.onMouseDownCapture?.(event)
+
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
   })
 
   it('defines Vim normal mode as a shortcut surface activation', () => {

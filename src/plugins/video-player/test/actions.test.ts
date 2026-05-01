@@ -46,6 +46,7 @@ describe('video player actions', () => {
       dependencies: {
         block: noteBlock,
         videoBlock,
+        focusTarget: 'children',
       },
     }])
   })
@@ -64,6 +65,27 @@ describe('video player actions', () => {
         block: noteBlock,
         videoBlock,
         editorView,
+        focusTarget: 'children',
+      },
+    }])
+  })
+
+  it('keeps the video-player context active while the native player surface has focus', () => {
+    const nativePlayerContext = {
+      ...baseContext,
+      block: videoBlock,
+      surface: 'video-player-native',
+      playerFocused: true,
+    } as ShortcutSurfaceContext & { playerFocused: true }
+
+    const activation = videoPlayerShortcutActivation(nativePlayerContext)
+
+    expect(activation).toEqual([{
+      context: VIDEO_PLAYER_CONTEXT,
+      dependencies: {
+        block: videoBlock,
+        videoBlock,
+        focusTarget: 'player',
       },
     }])
   })
