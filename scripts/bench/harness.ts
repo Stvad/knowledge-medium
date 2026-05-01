@@ -188,7 +188,8 @@ export const instrumentDb = (db: PowerSyncDb): {db: PowerSyncDb; counters: DbCou
   // Instrument the inner LockContext on writeTransaction too — calls
   // inside `tx.execute` / `tx.getAll` count for "roundtrips inside this
   // mutation."
-  const wrapTxDb = <T extends {execute: Function; getAll: Function; getOptional: Function; get: Function}>(txDb: T): T => ({
+  type AnyFn = (...args: unknown[]) => unknown
+  const wrapTxDb = <T extends {execute: AnyFn; getAll: AnyFn; getOptional: AnyFn; get: AnyFn}>(txDb: T): T => ({
     ...txDb,
     execute: ((sql: string, params?: unknown[]) => { state.execute++; return txDb.execute(sql, params) }) as T['execute'],
     getAll: ((sql: string, params?: unknown[]) => { state.getAll++; return txDb.getAll(sql, params) }) as T['getAll'],

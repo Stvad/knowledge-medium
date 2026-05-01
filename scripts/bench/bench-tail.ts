@@ -102,7 +102,7 @@ export const runTailBenches = async (): Promise<BenchResult[]> => {
       const synthId = `synth-${i}`
       const matchesSync = i < 1000
       const key = handleKey('synth-tail', {id: synthId})
-      const h = env.repo.handleStore.getOrCreate(
+      const h = env.repo.handleStore.getOrCreate<LoaderHandle<string>>(
         key,
         () => new LoaderHandle<string>({
           store: env.repo.handleStore, key,
@@ -116,8 +116,7 @@ export const runTailBenches = async (): Promise<BenchResult[]> => {
           },
         }),
       )
-      // @ts-ignore
-      await (h as any).load()
+      await h.load()
     }
     const r = await bench(`tail flush (burst N=100, ${M} handles, 1k match)`, async () => {
       await insertSyncRows(env.db, {workspaceId: w.workspaceId, count: 100})

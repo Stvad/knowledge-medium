@@ -17,12 +17,11 @@
  *     proxy for "how many React subscribers wake up per keystroke."
  */
 
-import type { ChangeNotification, Dependency } from '@/data/internals/handleStore'
+import type { ChangeNotification } from '@/data/internals/handleStore'
 import { LoaderHandle, handleKey } from '@/data/internals/handleStore'
-import { ChangeScope } from '@/data/api'
 import { bench, type BenchResult } from './harness'
 import { setupBenchEnv } from './setup'
-import { populateBalanced, populateFanOut, populateLinearChain } from './fixtures'
+import { populateBalanced, populateLinearChain } from './fixtures'
 
 export const runHandleBenches = async (): Promise<BenchResult[]> => {
   const out: BenchResult[] = []
@@ -65,9 +64,11 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     // returns false (deps array empty).
     for (let i = 0; i < N; i++) {
       const key = handleKey('synthetic', {id: ids[i]})
-      const h = env.repo.handleStore.getOrCreate(key, () => { throw new Error('expected to exist') })
-      // @ts-ignore — RegisteredHandle erases load(); we know it's a LoaderHandle here.
-      await (h as any).load()
+      const h = env.repo.handleStore.getOrCreate<LoaderHandle<string>>(
+        key,
+        () => { throw new Error('expected to exist') },
+      )
+      await h.load()
     }
     // The notification touches one row; with N handles registered, only
     // 1 should match. Wall time covers the linear walk + the matched
@@ -104,9 +105,11 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     }
     for (let i = 0; i < N; i++) {
       const key = handleKey('synthetic-ws', {id: ids[i]})
-      const h = env.repo.handleStore.getOrCreate(key, () => { throw new Error('expected') })
-      // @ts-ignore
-      await (h as any).load()
+      const h = env.repo.handleStore.getOrCreate<LoaderHandle<string>>(
+        key,
+        () => { throw new Error('expected') },
+      )
+      await h.load()
     }
     const change: ChangeNotification = {workspaceIds: ['ws-shared']}
     const r = await bench(`handleStore.invalidate (N=${N} all match → re-resolve)`, async () => {
@@ -208,7 +211,7 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     for (let i = 0; i < M; i++) {
       const id = `bystander-${i}`
       const key = handleKey('synth-bystander', {id})
-      const h = env.repo.handleStore.getOrCreate(
+      const h = env.repo.handleStore.getOrCreate<LoaderHandle<string>>(
         key,
         () => new LoaderHandle<string>({
           store: env.repo.handleStore, key,
@@ -218,8 +221,7 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
           },
         }),
       )
-      // @ts-ignore
-      await (h as any).load()
+      await h.load()
     }
     let i = 0
     const r = await bench(`mutate.setContent with ${M} bystander handles`, async () => {
