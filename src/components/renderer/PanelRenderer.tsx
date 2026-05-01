@@ -11,6 +11,16 @@ import { ActionContextTypes } from '@/shortcuts/types'
 import { useMemo } from 'react'
 import { usePropertyValue, useContent } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
+import { VirtualizedBlockTree } from '@/components/renderer/VirtualizedBlockTree.tsx'
+
+/** Spike flag — set `localStorage.virt = '1'` (or '0' to disable) and reload.
+ *  On by default so the perf change is observable; flip off to A/B. */
+const useVirtualizedTree = (): boolean => {
+  if (typeof window === 'undefined') return false
+  const stored = window.localStorage.getItem('virt')
+  if (stored === '0') return false
+  return true
+}
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -51,7 +61,13 @@ export function PanelRenderer({block}: BlockRendererProps) {
     }, {scope: ChangeScope.UiState, description: 'close panel'})
   }
 
-  if (!topLevelBlockId) {
+  const virtualized = useVirtualizedTree()
+  const topLevelBlock = useMemo(
+    () => topLevelBlockId ? repo.block(topLevelBlockId) : null,
+    [repo, topLevelBlockId],
+  )
+
+  if (!topLevelBlockId || !topLevelBlock) {
      console.warn(`Panel ${block.id} has no topLevelBlockId, skipping render.`)
      return null
   }
@@ -69,9 +85,14 @@ export function PanelRenderer({block}: BlockRendererProps) {
           <X className="h-4 w-4" />
         </Button>
       )}
-      <div className="flex-grow overflow-y-auto scrollbar-none">
+      <div className="flex-grow min-h-0 flex flex-col">
         <NestedBlockContextProvider overrides={{topLevel: false}}>
-          <BlockComponent blockId={topLevelBlockId}/>
+          {virtualized
+            ? <VirtualizedBlockTree rootBlock={topLevelBlock}/>
+            : <div className="flex-grow overflow-y-auto scrollbar-none">
+                <BlockComponent blockId={topLevelBlockId}/>
+              </div>
+          }
         </NestedBlockContextProvider>
       </div>
     </div>

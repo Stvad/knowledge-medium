@@ -84,6 +84,10 @@ export interface BlockContextType {
         name: string
     }
     panelId?: string
+    /** When true, DefaultBlockRenderer skips its recursive <BlockChildren>.
+     *  Set by VirtualizedBlockTree, which renders descendants as siblings
+     *  in a flat virtualized list. */
+    suppressChildren?: boolean
     [key: string]: unknown
 }
 

@@ -213,6 +213,15 @@ const App = () => {
     repo.setReadOnly(activeRole === 'viewer')
   }, [activeRole, repo])
 
+  // Dev-only instrumentation hook — gives a way to drive synthetic data
+  // and read mount counters from a Playwright/console driver. No-op in
+  // production (the seeder is gated behind `import.meta.env.DEV`).
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as Record<string, unknown>
+    w.__app = {repo, activeWorkspaceId, landingBlockId: landingBlock.id}
+  }, [repo, activeWorkspaceId, landingBlock.id])
+
   return (
     <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
       <AppRuntimeProvider landingBlock={landingBlock} safeMode={safeMode}>

@@ -236,6 +236,7 @@ export function DefaultBlockRenderer(
   const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const {suppressChildren} = useBlockContext()
 
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const collapsibleRef = useRef<HTMLDivElement | null>(null)
@@ -382,7 +383,7 @@ export function DefaultBlockRenderer(
           </div>
 
           <CollapsibleContent>
-            <ChildrenRenderer block={block}/>
+            {!suppressChildren && <ChildrenRenderer block={block}/>}
           </CollapsibleContent>
 
           {childrenFooterSections.map((SectionRenderer, index) => (

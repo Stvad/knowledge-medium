@@ -2,7 +2,7 @@ import { Block } from '@/data/internals/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.tsx'
 import { useRepo } from '@/context/repo.tsx'
-import { Suspense } from 'react'
+import { Suspense, useEffect } from 'react'
 import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -12,11 +12,45 @@ interface BlockComponentProps {
   blockId: string;
 }
 
+interface BlockStatsBucket {
+  mounts: number
+  unmounts: number
+  live: number
+  // Track ids currently mounted so we can size the per-instance set.
+  liveIds: Set<string>
+}
+
+const getBlockStats = (): BlockStatsBucket => {
+  if (typeof window === 'undefined') {
+    return {mounts: 0, unmounts: 0, live: 0, liveIds: new Set()}
+  }
+  const w = window as unknown as Record<string, unknown>
+  let stats = w.__blockStats as BlockStatsBucket | undefined
+  if (!stats) {
+    stats = {mounts: 0, unmounts: 0, live: 0, liveIds: new Set()}
+    w.__blockStats = stats
+  }
+  return stats
+}
+
 export function BlockComponent({blockId}: BlockComponentProps) {
   const repo = useRepo()
   const block = repo.block(blockId)
   const context = useBlockContext()
   const Renderer = useRenderer({block, context})
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const stats = getBlockStats()
+    stats.mounts += 1
+    stats.live += 1
+    stats.liveIds.add(blockId)
+    return () => {
+      stats.unmounts += 1
+      stats.live -= 1
+      stats.liveIds.delete(blockId)
+    }
+  }, [blockId])
 
   return <ErrorBoundary FallbackComponent={FallbackComponent}>
     <Suspense fallback={<SuspenseFallback/>}>
