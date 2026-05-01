@@ -17,13 +17,11 @@
  * "small" for smoke runs.
  */
 
-import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import { ANCESTORS_SQL, IS_DESCENDANT_OF_SQL, SUBTREE_SQL } from '@/data/internals/treeQueries'
 import { bench, time, type BenchResult } from './harness'
 import { setupBenchEnv } from './setup'
 import {
-  populateBalanced,
   populateFanOut,
   populateFlat,
   populateLinearChain,
