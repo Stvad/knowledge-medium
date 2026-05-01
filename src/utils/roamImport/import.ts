@@ -94,28 +94,51 @@ export const importRoam = async (
 ): Promise<RoamImportSummary> => {
   const start = Date.now()
   const log = (msg: string) => options.onProgress?.(msg)
+  // Phase-timer helper: each call returns the elapsed seconds since
+  // the previous call (or `start`, on first invocation). Including
+  // per-phase timings in progress messages turns the log into a
+  // crude profiler — useful for telling whether a slow import is
+  // stuck in plan / reconcile / write, without needing to attach a
+  // devtools profiler to a 5-minute import.
+  let phaseStart = start
+  const sinceLastPhase = (): string => {
+    const now = Date.now()
+    const s = ((now - phaseStart) / 1000).toFixed(1)
+    phaseStart = now
+    return `${s}s`
+  }
 
+  log(`Planning ${pages.length} top-level pages…`)
   const plan = planImport(pages, {
     workspaceId: options.workspaceId,
     currentUserId: options.currentUserId,
   })
 
-  log(`Planned ${plan.pages.length} pages, ${plan.descendants.length} descendant blocks`)
+  log(`Planned ${plan.pages.length} pages, ${plan.descendants.length} descendant blocks, ` +
+    `${plan.aliasesUsed.size} aliases, ${plan.placeholders.length} placeholders ` +
+    `(${sinceLastPhase()})`)
 
   // 1. Reconcile pages against the live workspace so we know which
   //    plannedIds get rerouted to existing alias-pages.
-  const reconciliations = await reconcilePages(plan.pages, repo, options.workspaceId)
+  log(`Reconciling ${plan.pages.length} pages against existing workspace…`)
+  const reconciliations = await reconcilePages(plan.pages, repo, options.workspaceId, log)
   const reparentMap = buildReparentMap(reconciliations)
+  log(`Reconciled ${reconciliations.length} pages ` +
+    `(${reconciliations.filter(r => r.merging).length} merge into existing) (${sinceLastPhase()})`)
 
   // 2. Build alias → blockId map for every alias mentioned in content.
   //    Pure planning — no DB writes here. Seat-materialisation for
   //    unowned aliases happens inside the main tx in step 5b.
+  log(`Resolving ${plan.aliasesUsed.size} aliases…`)
   const aliasResolution = await resolveAliases(
     plan.aliasesUsed,
     reconciliations,
     repo,
     options.workspaceId,
+    log,
   )
+  log(`Resolved ${aliasResolution.aliasIdMap.size} aliases ` +
+    `(${aliasResolution.aliasesNeedingSeat.length} need new seat rows) (${sinceLastPhase()})`)
 
   // 3. Patch references[] on every block with the alias rows.
   for (const desc of plan.descendants) {
@@ -124,6 +147,7 @@ export const importRoam = async (
   for (const page of plan.pages) {
     if (page.data) patchAliasReferences(page.data, aliasResolution.aliasIdMap)
   }
+  log(`Patched references on ${plan.descendants.length + plan.pages.length} blocks (${sinceLastPhase()})`)
 
   if (options.dryRun) {
     return {
@@ -152,9 +176,17 @@ export const importRoam = async (
   //    creation logic, and dailies are typically O(years) not
   //    O(unique_aliases), so the gain isn't worth the duplication.
   const dailyIsos = collectDailyIsos(reconciliations, aliasResolution.aliasIdMap, plan.aliasesUsed)
-  for (const iso of dailyIsos) {
-    await getOrCreateDailyNote(repo, options.workspaceId, iso)
+  if (dailyIsos.length > 0) log(`Materialising ${dailyIsos.length} daily notes…`)
+  // Throttle progress to every 100 dailies — emitting per-iteration
+  // would flood any UI banner with redraws when an export references
+  // years of dailies.
+  for (let i = 0; i < dailyIsos.length; i++) {
+    await getOrCreateDailyNote(repo, options.workspaceId, dailyIsos[i])
+    if ((i + 1) % 100 === 0 && i + 1 < dailyIsos.length) {
+      log(`Daily notes ${i + 1}/${dailyIsos.length}`)
+    }
   }
+  if (dailyIsos.length > 0) log(`Materialised ${dailyIsos.length} daily notes (${sinceLastPhase()})`)
 
   // 5. Write the import in two phases — one frontmatter tx (alias
   //    seats + placeholders + pages) followed by chunked descendant
@@ -240,7 +272,7 @@ export const importRoam = async (
 
   log(`Wrote frontmatter: ${plan.placeholders.length} placeholders, ` +
     `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes, ` +
-    `${aliasBlocksCreated} alias seats`)
+    `${aliasBlocksCreated} alias seats (${sinceLastPhase()})`)
 
   // 5d. Descendants in chunks. Planner emits them in post-order
   //     (leaves before parents); we walk in reverse so each
@@ -251,9 +283,11 @@ export const importRoam = async (
   //     invariant trigger's committed-state read.
   const total = plan.descendants.length
   const chunkSize = options.descendantChunkSize ?? DESCENDANT_CHUNK_SIZE
+  const descendantsStart = Date.now()
   let written = 0
   for (let chunkStart = total - 1; chunkStart >= 0; chunkStart -= chunkSize) {
     const chunkEnd = Math.max(0, chunkStart - chunkSize + 1)
+    const chunkBeganAt = Date.now()
     await repo.tx(async tx => {
       for (let i = chunkStart; i >= chunkEnd; i--) {
         const desc = plan.descendants[i]
@@ -261,9 +295,18 @@ export const importRoam = async (
         await upsertImportedBlock(tx, data)
       }
     }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
-    written += chunkStart - chunkEnd + 1
-    log(`Wrote descendants ${written}/${total}`)
+    const chunkRows = chunkStart - chunkEnd + 1
+    written += chunkRows
+    const chunkSec = (Date.now() - chunkBeganAt) / 1000
+    const elapsedSec = (Date.now() - descendantsStart) / 1000
+    const rate = elapsedSec > 0 ? written / elapsedSec : 0
+    const remaining = total - written
+    const etaSec = rate > 0 ? remaining / rate : 0
+    log(`Wrote descendants ${written}/${total} ` +
+      `(chunk ${chunkRows} rows in ${chunkSec.toFixed(1)}s, ` +
+      `${rate.toFixed(0)} rows/s, eta ~${formatEta(etaSec)})`)
   }
+  if (total > 0) log(`All ${total} descendants written (${sinceLastPhase()})`)
 
   return {
     pagesCreated,
@@ -277,6 +320,22 @@ export const importRoam = async (
     durationMs: Date.now() - start,
     dryRun: false,
   }
+}
+
+// Render a remaining-seconds estimate as e.g. "12s", "1m20s", "1h05m".
+// Resolution drops to coarser units past 60s so the message stays
+// short — chunked-import progress lines are already busy.
+const formatEta = (seconds: number): string => {
+  if (!Number.isFinite(seconds) || seconds < 0) return '?'
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  if (seconds < 3600) {
+    const m = Math.floor(seconds / 60)
+    const s = Math.round(seconds % 60)
+    return `${m}m${String(s).padStart(2, '0')}s`
+  }
+  const h = Math.floor(seconds / 3600)
+  const m = Math.round((seconds % 3600) / 60)
+  return `${h}h${String(m).padStart(2, '0')}m`
 }
 
 /** Distinct ISO dates that need a daily-note row before the main tx
@@ -333,23 +392,27 @@ const reconcilePages = async (
   preparedPages: RoamImportPlan['pages'],
   repo: Repo,
   workspaceId: string,
+  log?: (msg: string) => void,
 ): Promise<PageReconciliation[]> => {
   const out: PageReconciliation[] = []
-  for (const page of preparedPages) {
+  for (let i = 0; i < preparedPages.length; i++) {
+    const page = preparedPages[i]
     if (page.isDaily) {
       // Daily pages always route through getOrCreateDailyNote. Plan id
       // already equals dailyNoteBlockId, so finalId === plannedId and
       // there's no reparenting.
       out.push({plannedId: page.blockId, finalId: page.blockId, page, merging: false})
-      continue
+    } else {
+      const existing = await repo.findBlockByAliasInWorkspace(workspaceId, page.title)
+      if (existing) {
+        out.push({plannedId: page.blockId, finalId: existing.id, page, merging: true})
+      } else {
+        out.push({plannedId: page.blockId, finalId: page.blockId, page, merging: false})
+      }
     }
-
-    const existing = await repo.findBlockByAliasInWorkspace(workspaceId, page.title)
-    if (existing) {
-      out.push({plannedId: page.blockId, finalId: existing.id, page, merging: true})
-      continue
+    if (log && (i + 1) % 100 === 0 && i + 1 < preparedPages.length) {
+      log(`Reconciled ${i + 1}/${preparedPages.length} pages`)
     }
-    out.push({plannedId: page.blockId, finalId: page.blockId, page, merging: false})
   }
   return out
 }
@@ -402,6 +465,7 @@ const resolveAliases = async (
   recons: PageReconciliation[],
   repo: Repo,
   workspaceId: string,
+  log?: (msg: string) => void,
 ): Promise<AliasResolution> => {
   const aliasIdMap = new Map<string, string>()
   const aliasesNeedingSeat: string[] = []
@@ -412,37 +476,41 @@ const resolveAliases = async (
   const importedPagesByTitle = new Map<string, string>()
   for (const r of recons) importedPagesByTitle.set(r.page.title, r.finalId)
 
+  const total = aliases.size
+  let processed = 0
   for (const alias of aliases) {
     const importedHit = importedPagesByTitle.get(alias)
     if (importedHit) {
       aliasIdMap.set(alias, importedHit)
-      continue
+    } else {
+      const parsedDate = parseRelativeDate(alias)
+      if (parsedDate) {
+        // Daily-shaped alias → deterministic id. The row is materialised
+        // by getOrCreateDailyNote in step 4 (which also links to the
+        // workspace's journal page); we just predict the id here so
+        // references[] can be patched in-memory before that call.
+        aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
+      } else {
+        const existing = await repo.findBlockByAliasInWorkspace(workspaceId, alias)
+        if (existing) {
+          aliasIdMap.set(alias, existing.id)
+        } else {
+          // Unowned alias — point at the deterministic seat
+          // (`computeAliasSeatId`). The seat row will be created in the
+          // main import tx; if it already exists (from a prior import
+          // OR a typed-`[[alias]]` parseReferences run that landed at
+          // the same seat), createOrGet leaves it alone. Either way,
+          // references in imported content resolve to the same id
+          // across runs.
+          aliasIdMap.set(alias, computeAliasSeatId(alias, workspaceId))
+          aliasesNeedingSeat.push(alias)
+        }
+      }
     }
-
-    const parsedDate = parseRelativeDate(alias)
-    if (parsedDate) {
-      // Daily-shaped alias → deterministic id. The row is materialised
-      // by getOrCreateDailyNote in step 4 (which also links to the
-      // workspace's journal page); we just predict the id here so
-      // references[] can be patched in-memory before that call.
-      aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
-      continue
+    processed += 1
+    if (log && processed % 200 === 0 && processed < total) {
+      log(`Resolved ${processed}/${total} aliases`)
     }
-
-    const existing = await repo.findBlockByAliasInWorkspace(workspaceId, alias)
-    if (existing) {
-      aliasIdMap.set(alias, existing.id)
-      continue
-    }
-
-    // Unowned alias — point at the deterministic seat
-    // (`computeAliasSeatId`). The seat row will be created in the main
-    // import tx; if it already exists (from a prior import OR a
-    // typed-`[[alias]]` parseReferences run that landed at the same
-    // seat), createOrGet leaves it alone. Either way, references in
-    // imported content resolve to the same id across runs.
-    aliasIdMap.set(alias, computeAliasSeatId(alias, workspaceId))
-    aliasesNeedingSeat.push(alias)
   }
 
   return {aliasIdMap, aliasesNeedingSeat}

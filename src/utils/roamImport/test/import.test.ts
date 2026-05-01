@@ -484,8 +484,12 @@ describe('importRoam', () => {
     })
 
     expect(summary.blocksWritten).toBe(3)
-    // Two descendant chunks: 2 + 1.
-    const chunkLogs = progress.filter(m => m.startsWith('Wrote descendants'))
+    // Two descendant chunks: 2 + 1. Per-chunk progress includes
+    // throughput and ETA suffixes; we only assert the running counts
+    // because timings are non-deterministic in tests.
+    const chunkLogs = progress
+      .filter(m => m.startsWith('Wrote descendants'))
+      .map(m => m.replace(/ \(.*\)$/, ''))
     expect(chunkLogs).toEqual(['Wrote descendants 2/3', 'Wrote descendants 3/3'])
 
     const parent = await readBlock(roamBlockId(WORKSPACE, 'chainParent'))

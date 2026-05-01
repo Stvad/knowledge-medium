@@ -56,6 +56,7 @@ import { isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
+import { showProgressBanner } from '@/utils/roamImport/progressBanner.ts'
 import type { RoamExport } from '@/utils/roamImport/types.ts'
 
 const splitCodeMirrorBlockAtCursor = async (
@@ -378,10 +379,12 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             const content = loadEvent.target?.result
             if (typeof content !== 'string') return
 
+            const banner = showProgressBanner('Roam import: parsing JSON…')
             try {
               const parsed = JSON.parse(content) as RoamExport
               if (!Array.isArray(parsed)) {
                 console.error('[roam-import] expected top-level JSON array of pages')
+                banner.fail('Roam import failed: expected top-level JSON array of pages')
                 return
               }
 
@@ -398,28 +401,28 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
                 ?? repo.activeWorkspaceId
               if (!workspaceId) {
                 console.error('[roam-import] no active workspace')
+                banner.fail('Roam import failed: no active workspace')
                 return
               }
 
+              banner.update('Roam import: planning…')
               const summary = await importRoam(parsed, repo, {
                 workspaceId,
                 currentUserId: repo.user.id,
-                onProgress: msg => console.log(`[roam-import] ${msg}`),
+                onProgress: msg => {
+                  console.log(`[roam-import] ${msg}`)
+                  banner.update(`Roam import: ${msg}`)
+                },
               })
               console.log('[roam-import] done', summary)
-              window.alert(
-                `Roam import complete:\n` +
-                `  pages created: ${summary.pagesCreated}\n` +
-                `  pages merged: ${summary.pagesMerged}\n` +
-                `  daily notes: ${summary.pagesDaily}\n` +
-                `  blocks written: ${summary.blocksWritten}\n` +
-                `  alias blocks created: ${summary.aliasBlocksCreated}\n` +
-                `  placeholder blocks: ${summary.placeholdersCreated}\n` +
-                `  duration: ${summary.durationMs} ms`,
+              banner.done(
+                `Roam import complete: ${summary.pagesCreated} new pages, ` +
+                `${summary.pagesMerged} merged, ${summary.pagesDaily} daily, ` +
+                `${summary.blocksWritten} blocks (${(summary.durationMs / 1000).toFixed(1)}s)`,
               )
             } catch (err) {
               console.error('[roam-import] failed:', err)
-              window.alert(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)
+              banner.fail(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)
             }
           }
           reader.readAsText(file)
