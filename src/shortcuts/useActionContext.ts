@@ -38,13 +38,13 @@ export function useActionContextActivations(
   useEffect(() => {
     if (!activeActivations.length) return
 
-    for (const activation of activeActivations) {
-      activate(activation.context, activation.dependencies)
-    }
+    const handles = activeActivations.map(activation =>
+      activate(activation.context, activation.dependencies),
+    )
 
     return () => {
-      for (const activation of activeActivations) {
-        deactivate(activation.context)
+      for (const handle of handles) {
+        deactivate(handle)
       }
     }
   }, [activeActivations, activate, deactivate])

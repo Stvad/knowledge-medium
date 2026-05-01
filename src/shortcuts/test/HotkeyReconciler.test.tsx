@@ -62,8 +62,8 @@ const dispatchKeydown = (key: string) => {
 const Activator = ({context}: {context: ActionContextType}) => {
   const dispatch = useActiveContextsDispatch()
   useEffect(() => {
-    dispatch.activate(context, mockDeps)
-    return () => dispatch.deactivate(context)
+    const handle = dispatch.activate(context, mockDeps)
+    return () => dispatch.deactivate(handle)
   }, [dispatch, context])
   return null
 }
@@ -216,8 +216,8 @@ describe('HotkeyReconciler', () => {
     const FreshDeps = ({marker}: {marker: string}) => {
       const dispatch = useActiveContextsDispatch()
       useEffect(() => {
-        dispatch.activate(TEST_CONTEXT, {marker} as MockDeps)
-        return () => dispatch.deactivate(TEST_CONTEXT)
+        const handle = dispatch.activate(TEST_CONTEXT, {marker} as MockDeps)
+        return () => dispatch.deactivate(handle)
       }, [dispatch, marker])
       return null
     }
@@ -237,5 +237,58 @@ describe('HotkeyReconciler', () => {
     )
     act(() => dispatchKeydown('k'))
     expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'second'})
+  })
+
+  it('preserves the surviving claim when one of two overlapping owners unmounts', () => {
+    // Regression: prior to handle-scoped deactivation, two components racing
+    // to claim the same context-type clobbered each other on unmount —
+    // whoever cleaned up nuked the entry regardless of who currently owned
+    // it. A nested layout that mounts BlockChildren inside a parent's
+    // surface is the canonical trigger.
+    const handler = vi.fn()
+    const action = buildAction({
+      id: 'test.overlap',
+      handler,
+      defaultBinding: {keys: 'k'},
+    })
+
+    const Claim = ({marker}: {marker: string}) => {
+      const dispatch = useActiveContextsDispatch()
+      useEffect(() => {
+        const handle = dispatch.activate(TEST_CONTEXT, {marker} as MockDeps)
+        return () => dispatch.deactivate(handle)
+      }, [dispatch, marker])
+      return null
+    }
+
+    const harness = render(
+      <Harness actions={[action]} contexts={[testContextConfig]}>
+        <Claim marker="parent"/>
+        <Claim marker="child"/>
+      </Harness>,
+    )
+
+    act(() => dispatchKeydown('k'))
+    // Most recent claim wins.
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({marker: 'child'})
+
+    // Child unmounts — parent's claim must remain active.
+    harness.rerender(
+      <Harness actions={[action]} contexts={[testContextConfig]}>
+        <Claim marker="parent"/>
+      </Harness>,
+    )
+
+    act(() => dispatchKeydown('k'))
+    expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'parent'})
+
+    // Parent unmounts — context goes silent.
+    harness.rerender(
+      <Harness actions={[action]} contexts={[testContextConfig]}/>,
+    )
+
+    const beforeIdleDispatch = handler.mock.calls.length
+    act(() => dispatchKeydown('k'))
+    expect(handler.mock.calls.length).toBe(beforeIdleDispatch)
   })
 })
