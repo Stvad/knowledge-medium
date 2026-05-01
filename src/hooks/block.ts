@@ -267,12 +267,13 @@ export const useHasChildren = (block: Block): boolean =>
   })
 
 /** Reactive parent chain (root → … → immediate parent), excluding
- *  `block` itself. */
+ *  `block` itself. `repo.ancestors()` walks leaf-to-root, so reverse
+ *  for the breadcrumb-friendly order callers expect. */
 export const useParents = (block: Block): Block[] => {
   const data = useHandle(block.repo.ancestors(block.id))
   const repo = block.repo
   return useMemo(
-    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
     [data, repo],
   )
 }
