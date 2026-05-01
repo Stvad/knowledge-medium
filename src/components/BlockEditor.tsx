@@ -127,7 +127,7 @@ export const BlockEditor = ({
   // context (Escape, Tab, etc.) fire via hotkeys-js whenever this editor is
   // mounted — for any consumer (markdown editor, extension editor, future).
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
-  useShortcutSurfaceActivations('codemirror', shortcutSurfaceOptions)
+  useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
 
   if (!blockData) return null
 

@@ -35,7 +35,6 @@ import {
   ContextMenuItem,
   ContextMenuContent,
 } from '@/components/ui/context-menu.tsx'
-import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
 import { useHasChildren, usePropertyValue } from '@/hooks/block.ts'
@@ -48,7 +47,6 @@ import {
   blockContentSurfacePropsFacet,
   blockHeaderFacet,
   blockLayoutFacet,
-  shortcutSurfaceActivationsFacet,
   type BlockInteractionContext,
   type BlockLayout,
   type BlockLayoutSlots,
@@ -56,7 +54,10 @@ import {
   type BlockShellProps,
 } from '@/extensions/blockInteraction.ts'
 import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
-import { useBlockInteractionContext } from '@/extensions/blockInteractionContext.tsx'
+import {
+  useBlockInteractionContext,
+  useShortcutSurfaceActivations,
+} from '@/extensions/blockInteractionContext.tsx'
 import { focusedBlockIdProp } from '@/data/properties.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
@@ -355,14 +356,7 @@ export function DefaultBlockRenderer(
     () => resolveContentSurfaceProps(resolveContext),
     [resolveContext, resolveContentSurfaceProps],
   )
-  const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
-  const shortcutActivations = useMemo(
-    () => resolveShortcutActivations({
-      ...interactionContext,
-      surface: 'block',
-    }),
-    [interactionContext, resolveShortcutActivations],
-  )
+  useShortcutSurfaceActivations(block, 'block')
   const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
   const childrenFooterSections = useMemo(
     () => resolveChildrenFooterSections(resolveContext),
@@ -378,8 +372,6 @@ export function DefaultBlockRenderer(
     () => resolveBlockLayout(resolveContext) ?? DefaultBlockLayout,
     [resolveContext, resolveBlockLayout],
   )
-
-  useActionContextActivations(shortcutActivations)
 
   useEffect(() => {
     if (!inFocus) return
