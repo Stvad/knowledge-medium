@@ -50,7 +50,7 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { buildAppHash, writeAppHash } from '@/utils/routing.ts'
+import { buildAppHash, parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 import { isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
@@ -385,7 +385,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
                 return
               }
 
-              const workspaceId = repo.activeWorkspaceId
+              // Prefer the URL hash over `repo.activeWorkspaceId` —
+              // the hash is the source of truth for what workspace
+              // the user is viewing, and `repo.activeWorkspaceId`
+              // can lag behind it (the active id flips inside
+              // App.tsx's async getInitialBlock chain, which awaits
+              // workspace lookup + role role check before settling).
+              // If the user clicks the import shortcut shortly after
+              // switching workspaces, reading repo state alone would
+              // route the import into the prior workspace.
+              const workspaceId = parseAppHash(window.location.hash).workspaceId
+                ?? repo.activeWorkspaceId
               if (!workspaceId) {
                 console.error('[roam-import] no active workspace')
                 return

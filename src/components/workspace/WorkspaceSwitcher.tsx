@@ -43,13 +43,23 @@ export function WorkspaceSwitcher() {
 
   const navigateToWorkspace = useCallback((workspace: Workspace) => {
     if (workspace.id === activeWorkspaceId) return
+    // Flip repo.activeWorkspaceId BEFORE the hash change. App.tsx's
+    // getInitialBlock will set it again once it finishes resolving the
+    // new workspace, but that path is async (workspace lookup +
+    // optional remote-access RPC + daily-note materialisation), and
+    // anything that reads `repo.activeWorkspaceId` synchronously in
+    // the meantime — the global Roam-import shortcut, search, etc. —
+    // would otherwise see the previous workspace and act on it. The
+    // user's click is unambiguous intent; reflect it in repo state
+    // immediately so consumers don't lag behind the URL.
+    repo.setActiveWorkspaceId(workspace.id)
     // App.tsx subscribes to the hash via useHash; updating it triggers a
     // re-resolve of getInitialBlock for the new workspace. The new
     // workspace's root block id isn't known here (it may not even be local
     // yet for a just-joined workspace), so we navigate without a block id
     // and let App.tsx's bootstrap fill it in via writeAppHash once resolved.
     setHash(buildAppHash(workspace.id))
-  }, [activeWorkspaceId, setHash])
+  }, [activeWorkspaceId, repo, setHash])
 
   const handleDeleted = useCallback(() => {
     // The deleted workspace must NOT come back as the "remembered" default on

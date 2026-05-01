@@ -391,6 +391,59 @@ describe('importRoam', () => {
     expect(restored?.content).toBe('')
   })
 
+  it('writes only into the workspaceId option, never bleeds into others', async () => {
+    // Regression for "import picks the first workspace" — exercise
+    // the full plan→reconcile→write path with two workspaces present
+    // and confirm rows land exclusively in the requested one. The
+    // shortcut UI reads `repo.activeWorkspaceId` and passes it as
+    // `workspaceId` here, so this also pins the contract that
+    // importRoam respects its `workspaceId` argument verbatim.
+    const OTHER_WS = 'ws-2'
+
+    // Pre-seed OTHER_WS with a block that owns the "wcs/plan" alias —
+    // if reconcilePages or alias-resolution looked up against the
+    // wrong workspace, the import would merge into THIS row instead
+    // of creating a fresh page in WORKSPACE.
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'other-ws-seed',
+        workspaceId: OTHER_WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'wcs/plan',
+        properties: {[aliasesProp.name]: aliasesProp.codec.encode(['wcs/plan'])},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const summary = await importRoam(minimalExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    // Same expectations as the basic-tree test — pages created (not
+    // merged), wcs/plan landed at the planner's deterministic id in
+    // WORKSPACE.
+    expect(summary.pagesCreated).toBe(1)
+    expect(summary.pagesMerged).toBe(0)
+    const wcsPlan = await readBlock(roamBlockId(WORKSPACE, 'pageA'))
+    expect(wcsPlan?.content).toBe('wcs/plan')
+
+    // Cross-workspace check: every imported block carries
+    // workspace_id = WORKSPACE. OTHER_WS still has just its seed row.
+    const wsCounts = await env.h.db.getAll<{workspace_id: string; n: number}>(
+      'SELECT workspace_id, COUNT(*) AS n FROM blocks WHERE deleted = 0 GROUP BY workspace_id ORDER BY workspace_id',
+    )
+    const byWs = new Map(wsCounts.map(r => [r.workspace_id, r.n]))
+    expect(byWs.get(OTHER_WS)).toBe(1) // only the pre-seed
+    // WORKSPACE has the import (page + 2 descendants + alias seat) +
+    // any daily-note frontmatter materialized for the export's daily.
+    expect(byWs.get(WORKSPACE)).toBeGreaterThan(1)
+
+    // The pre-seed in OTHER_WS keeps its content untouched.
+    const otherSeed = await readBlock('other-ws-seed')
+    expect(otherSeed?.content).toBe('wcs/plan')
+  })
+
   it('chunks descendants across multiple txs without breaking parent links', async () => {
     // A four-deep chain so the descendant phase sees three rows
     // (parent + mid + leaf — page row is written in the frontmatter
