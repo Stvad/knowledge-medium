@@ -34,6 +34,7 @@ import {
   CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
+  BACKFILL_BLOCK_ALIASES_SQL,
   CLIENT_SCHEMA_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_NAMES,
 } from './clientSchema'
@@ -158,13 +159,13 @@ beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
 describe('client schema bootstrap', () => {
-  it('creates exactly seven triggers on `blocks`', () => {
+  it('creates the documented set of triggers on `blocks`', () => {
     const triggers = (h.db
       .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name")
       .all() as Array<{name: string}>)
       .map(r => r.name)
     expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
-    expect(triggers).toHaveLength(7)
+    expect(triggers).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
   })
 
   it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
@@ -395,5 +396,116 @@ describe('workspace-invariant triggers', () => {
     // Updating content (not parent_id/workspace_id) should not invoke the workspace-invariant UPDATE trigger.
     expect(() => h.updateBlock('b1', {content: 'x'})).not.toThrow()
     h.clearTxContext()
+  })
+})
+
+// ============================================================================
+// block_aliases trigger maintenance — the alias index that backs
+// findBlockByAliasInWorkspace, parseReferences' lookupAliasTarget, and
+// QuickFind autocomplete. All three pre-trigger queries scanned the
+// whole workspace; the index keeps them O(log n).
+// ============================================================================
+
+interface AliasRow {
+  block_id: string
+  workspace_id: string
+  alias: string
+  alias_lower: string
+}
+
+const aliasRows = (db: DatabaseSync): AliasRow[] =>
+  db.prepare('SELECT block_id, workspace_id, alias, alias_lower FROM block_aliases ORDER BY block_id, alias').all() as unknown as AliasRow[]
+
+describe('block_aliases trigger — INSERT', () => {
+  it('extracts aliases from properties_json into block_aliases on insert', () => {
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: '{"alias":["Foo","Bar"]}'})
+    expect(aliasRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', alias: 'Bar', alias_lower: 'bar'},
+      {block_id: 'b1', workspace_id: 'ws1', alias: 'Foo', alias_lower: 'foo'},
+    ])
+  })
+
+  it('inserts no rows for blocks without an alias property', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"type":"page"}'})
+    expect(aliasRows(h.db)).toEqual([])
+  })
+
+  it('inserts no rows for soft-deleted blocks', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}', deleted: 1})
+    expect(aliasRows(h.db)).toEqual([])
+  })
+
+  it('skips non-string array elements defensively', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo",42,null,"Bar"]}'})
+    expect(aliasRows(h.db).map(r => r.alias)).toEqual(['Bar', 'Foo'])
+  })
+})
+
+describe('block_aliases trigger — UPDATE', () => {
+  it('replaces aliases when properties_json changes', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})
+    h.updateBlock('b1', {properties_json: '{"alias":["Bar","Baz"]}'})
+    expect(aliasRows(h.db).map(r => r.alias)).toEqual(['Bar', 'Baz'])
+  })
+
+  it('clears aliases on soft-delete (deleted 0 → 1)', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})
+    h.updateBlock('b1', {deleted: 1})
+    expect(aliasRows(h.db)).toEqual([])
+  })
+
+  it('repopulates aliases on tombstone restore (deleted 1 → 0)', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}', deleted: 1})
+    expect(aliasRows(h.db)).toEqual([])
+    h.updateBlock('b1', {deleted: 0})
+    expect(aliasRows(h.db).map(r => r.alias)).toEqual(['Foo'])
+  })
+
+  it('does NOT fire on content-only edits', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})
+    // The UPDATE trigger is gated on UPDATE OF properties_json/deleted/workspace_id.
+    // A content-only edit must not churn block_aliases. We verify by inserting a
+    // dup row before the update and checking it survives — the trigger would have
+    // wiped it on fire.
+    h.db.prepare('INSERT INTO block_aliases VALUES (?, ?, ?, ?)').run('b1', 'ws1', 'manual-tag', 'manual-tag')
+    h.updateBlock('b1', {content: 'changed content'})
+    const aliases = aliasRows(h.db).map(r => r.alias)
+    expect(aliases).toContain('manual-tag')
+  })
+})
+
+describe('block_aliases trigger — DELETE', () => {
+  it('clears aliases on hard-delete', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})
+    h.deleteBlock('b1')
+    expect(aliasRows(h.db)).toEqual([])
+  })
+})
+
+describe('block_aliases backfill', () => {
+  it('populates the index from pre-existing blocks', () => {
+    // Simulate the upgrade path: an existing user has rows in `blocks`
+    // but the index hasn't been maintained yet. The triggers populated
+    // block_aliases on each INSERT above, so we wipe the table first
+    // to mimic the pre-index state.
+    h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: '{"alias":["Foo","Bar"]}'})
+    h.insertBlock({id: 'b2', workspace_id: 'ws1', properties_json: '{"alias":["Baz"]}', deleted: 1})
+    h.insertBlock({id: 'b3', workspace_id: 'ws2', properties_json: '{"alias":["Qux"]}'})
+    h.db.exec('DELETE FROM block_aliases')
+
+    h.db.exec(BACKFILL_BLOCK_ALIASES_SQL)
+
+    expect(aliasRows(h.db)).toEqual([
+      {block_id: 'b1', workspace_id: 'ws1', alias: 'Bar', alias_lower: 'bar'},
+      {block_id: 'b1', workspace_id: 'ws1', alias: 'Foo', alias_lower: 'foo'},
+      // b2 is soft-deleted → excluded
+      {block_id: 'b3', workspace_id: 'ws2', alias: 'Qux', alias_lower: 'qux'},
+    ])
+  })
+
+  it('is idempotent (safe to re-run on already-populated index)', () => {
+    h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})
+    h.db.exec(BACKFILL_BLOCK_ALIASES_SQL)
+    expect(aliasRows(h.db)).toHaveLength(1)
   })
 })

@@ -32,7 +32,7 @@ import {
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
 } from '@/data/blockSchema'
-import { CLIENT_SCHEMA_STATEMENTS } from '@/data/internals/clientSchema'
+import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
@@ -66,6 +66,16 @@ export const createTestDb = async (): Promise<TestDb> => {
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await db.execute(stmt)
   }
+  // No-op against a fresh test DB (no blocks yet), but mirrors the
+  // production startup ordering so any test that pre-seeds rows
+  // before the harness opens still gets backfilled.
+  await backfillBlockAliasesIfEmpty({
+    execute: sql => db.execute(sql),
+    getOptional: async <T,>(sql: string) => {
+      const row = await db.getOptional<T>(sql)
+      return row ?? null
+    },
+  })
 
   return {
     db,

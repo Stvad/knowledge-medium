@@ -44,7 +44,7 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
-import { CLIENT_SCHEMA_STATEMENTS } from '@/data/internals/clientSchema'
+import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({
@@ -151,13 +151,23 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
-  // ── tx_context, row_events, command_events + 7 triggers ──
-  // (5 audit/upload — 3 row_events writers + 2 upload-routing — and
-  // 2 workspace-invariant.) Statements include CREATE TABLE IF NOT
-  // EXISTS / CREATE INDEX IF NOT EXISTS / CREATE TRIGGER IF NOT
-  // EXISTS so re-running is a no-op against an already-bootstrapped
-  // dev database.
+  // ── tx_context, row_events, command_events, block_aliases + 10
+  // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
+  // Statements include CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT
+  // EXISTS / CREATE TRIGGER IF NOT EXISTS so re-running is a no-op
+  // against an already-bootstrapped dev database.
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await powerSyncDb.execute(stmt)
   }
+
+  // One-shot block_aliases backfill for users upgrading from the
+  // pre-index schema. Steady-state startups noop on a single LIMIT 1
+  // probe.
+  await backfillBlockAliasesIfEmpty({
+    execute: sql => powerSyncDb.execute(sql),
+    getOptional: async <T,>(sql: string) => {
+      const row = await powerSyncDb.getOptional<T>(sql)
+      return row ?? null
+    },
+  })
 }

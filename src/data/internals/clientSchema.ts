@@ -103,6 +103,59 @@ export const CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL = `
   ON command_events (workspace_id, created_at DESC)
 `
 
+/** Trigger-maintained side index of `(workspace_id, alias) → block_id`,
+ *  derived from the `alias` entry in each live block's `properties_json`.
+ *
+ *  The previous shape walked `json_each(properties_json, '$.alias')` per
+ *  query, which scans the full workspace partition every time. With
+ *  150-MB-class workspaces this is the dominant cost in alias-heavy
+ *  paths (Roam import, parseReferences, QuickFind autocomplete). The
+ *  index gives O(log n) `(workspace_id, alias_lower?)` lookup at the
+ *  cost of three triggers and one extra row per (block, alias) pair.
+ *
+ *  Local-only: the table is fully derivable from `blocks.properties_json`
+ *  so it is not synced — PowerSync's CRUD-apply path writes through
+ *  `BLOCKS_RAW_TABLE.put` (an `INSERT … ON CONFLICT DO UPDATE`) which
+ *  fires our INSERT/UPDATE triggers, populating this table on incoming
+ *  sync the same way local writes do.
+ *
+ *  Soft-delete: triggers keep block_aliases empty for blocks where
+ *  `deleted = 1`. Hard-delete (the DELETE row_event trigger on blocks
+ *  is reserved for future purges) also clears via the DELETE trigger
+ *  here. Restoring a tombstone (`UPDATE deleted = 1 → 0`) re-fires the
+ *  UPDATE trigger and re-populates from `properties_json`.
+ *
+ *  PRIMARY KEY (block_id, alias) makes the per-(block, alias) write
+ *  idempotent under `INSERT OR IGNORE` (e.g. duplicate aliases on the
+ *  same block, or backfill running over already-populated rows).
+ *  `alias` is stored verbatim (case preserved); `alias_lower` is the
+ *  pre-computed `LOWER(alias)` so case-insensitive autocomplete doesn't
+ *  re-evaluate `LOWER()` per row.
+ */
+export const CREATE_BLOCK_ALIASES_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS block_aliases (
+    block_id     TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    alias        TEXT NOT NULL,
+    alias_lower  TEXT NOT NULL,
+    PRIMARY KEY (block_id, alias)
+  )
+`
+
+/** Case-sensitive exact-match path: parseReferences `lookupAliasTarget`
+ *  and `findBlockByAliasInWorkspace`. */
+export const CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_block_aliases_ws_alias
+  ON block_aliases (workspace_id, alias)
+`
+
+/** Case-insensitive substring/prefix path: QuickFind +
+ *  `getAliasesInWorkspace` autocomplete. */
+export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_block_aliases_ws_alias_lower
+  ON block_aliases (workspace_id, alias_lower)
+`
+
 // ============================================================================
 // Helpers used inside trigger bodies. Centralised so the SQL fragments
 // match in every trigger.
@@ -336,6 +389,94 @@ export const CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL = `
 `
 
 // ============================================================================
+// block_aliases triggers (3) — fire for both local AND sync writes; same
+// shape as the row_events triggers. Together they hold the invariant:
+//
+//   block_aliases ⊇ { (id, workspace_id, alias, LOWER(alias))
+//                     | blocks row deleted = 0
+//                     ∧ alias ∈ properties_json $.alias }
+//
+// `INSERT OR IGNORE` covers re-entrant cases (duplicate alias values on
+// the same block, backfill against already-populated rows). The
+// `typeof(je.value) = 'text'` guard rejects malformed array elements
+// (numbers, nulls, nested objects) defensively — the codec only writes
+// strings, but stale data from earlier shapes shouldn't crash the
+// trigger.
+//
+// `json_each(NEW.properties_json, '$.alias')` returns 0 rows when the
+// `$.alias` path is missing — important because most blocks have no
+// aliases, and this is the hot path on every UPDATE OF content (which
+// fires the same trigger pattern via UPDATE OF properties_json … no
+// it doesn't; UPDATE OF columns gates the trigger on those columns
+// changing, so a content-only edit does NOT fire blocks_alias_update).
+// ============================================================================
+
+const aliasInsertSelectSql = (rowRef: 'NEW') => `
+      INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
+      SELECT ${rowRef}.id, ${rowRef}.workspace_id, je.value, LOWER(je.value)
+      FROM json_each(${rowRef}.properties_json, '$.alias') AS je
+      WHERE typeof(je.value) = 'text';
+`.trim()
+
+export const CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_alias_insert
+  AFTER INSERT ON blocks
+  WHEN NEW.deleted = 0
+  BEGIN
+    ${aliasInsertSelectSql('NEW')}
+  END
+`
+
+/** Fires only when `properties_json`, `deleted`, or `workspace_id`
+ *  changes — content edits, parent moves, and order_key changes don't
+ *  touch the alias index. Always wipes the row's prior aliases first
+ *  (cheap: PK lookup), then re-inserts unless the row is now soft-
+ *  deleted. Restoring a tombstone re-populates via the same path. */
+export const CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_alias_update
+  AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks
+  BEGIN
+    DELETE FROM block_aliases WHERE block_id = NEW.id;
+    INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
+    SELECT NEW.id, NEW.workspace_id, je.value, LOWER(je.value)
+    FROM json_each(NEW.properties_json, '$.alias') AS je
+    WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';
+  END
+`
+
+/** Hard-delete cleanup. Soft-deletes go through the UPDATE trigger
+ *  above (which sees `NEW.deleted = 1` and writes nothing back). */
+export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_alias_delete
+  AFTER DELETE ON blocks
+  BEGIN
+    DELETE FROM block_aliases WHERE block_id = OLD.id;
+  END
+`
+
+/** One-shot backfill from `blocks.properties_json`. Called after the
+ *  CLIENT_SCHEMA_STATEMENTS run, gated on `block_aliases` being empty
+ *  so existing installations populate the index once on the first
+ *  startup with this schema, and steady-state startups are a single
+ *  cheap LIMIT 1 read. New installations also no-op (no blocks ⇒
+ *  nothing to backfill).
+ *
+ *  Why not part of CLIENT_SCHEMA_STATEMENTS: the SELECT scans the
+ *  blocks table, which is multi-million rows on big workspaces.
+ *  Running unconditionally on every app start would defeat the index
+ *  the user just paid for. */
+export const SELECT_BLOCK_ALIASES_NONEMPTY_SQL = `
+  SELECT 1 FROM block_aliases LIMIT 1
+`
+
+export const BACKFILL_BLOCK_ALIASES_SQL = `
+  INSERT OR IGNORE INTO block_aliases (block_id, workspace_id, alias, alias_lower)
+  SELECT b.id, b.workspace_id, je.value, LOWER(je.value)
+  FROM blocks b, json_each(b.properties_json, '$.alias') AS je
+  WHERE b.deleted = 0 AND typeof(je.value) = 'text'
+`
+
+// ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).
 // ============================================================================
@@ -351,6 +492,9 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_COMMAND_EVENTS_TABLE_SQL,
   CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL,
   CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL,
+  CREATE_BLOCK_ALIASES_TABLE_SQL,
+  CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,
+  CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
@@ -360,6 +504,10 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,
+  // 3 block_aliases-maintenance triggers
+  CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,
+  CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL,
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -370,4 +518,23 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_upload_update',
   'blocks_parent_workspace_check_insert',
   'blocks_parent_workspace_check_update',
+  'blocks_alias_insert',
+  'blocks_alias_update',
+  'blocks_alias_delete',
 ] as const
+
+/** Run after CLIENT_SCHEMA_STATEMENTS to populate block_aliases from
+ *  pre-existing blocks rows on the first app start that includes the
+ *  alias-index schema. Subsequent starts are a single cheap LIMIT 1
+ *  read because triggers maintain the table from then on.
+ *
+ *  Tests open a fresh database with no blocks → noop. Production
+ *  picks up the existing PowerSync-synced blocks → one large INSERT
+ *  on the first start, then noop on every start after. */
+export const backfillBlockAliasesIfEmpty = async (
+  db: { execute: (sql: string) => Promise<unknown>; getOptional: <T>(sql: string) => Promise<T | null> },
+): Promise<void> => {
+  const existing = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_NONEMPTY_SQL)
+  if (existing !== null) return
+  await db.execute(BACKFILL_BLOCK_ALIASES_SQL)
+}
