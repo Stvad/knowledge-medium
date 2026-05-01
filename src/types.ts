@@ -88,6 +88,11 @@ export interface BlockContextType {
      *  Set by VirtualizedBlockTree, which renders descendants as siblings
      *  in a flat virtualized list. */
     suppressChildren?: boolean
+    /** When true, BlockChildren mounts each child via <LazyBlockComponent>
+     *  (intersection-observer placeholder) instead of <BlockComponent>.
+     *  Set by PanelRenderer when render mode is 'lazy'. Inherits down the
+     *  recursive render so descendants at every depth are also lazy. */
+    lazyChildren?: boolean
     [key: string]: unknown
 }
 

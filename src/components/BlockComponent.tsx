@@ -7,6 +7,7 @@ import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useChildIds } from '@/hooks/block.ts'
+import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
   blockId: string;
@@ -75,9 +76,11 @@ export function BlockComponent({blockId}: BlockComponentProps) {
  * youtube context seems more immediately meaningful/actionable
  */
 export const BlockChildren = ({block}: { block: Block }) => {
+  const {lazyChildren} = useBlockContext()
+  const Component = lazyChildren ? LazyBlockComponent : BlockComponent
   return <>
     {useChildIds(block).map((childId) => (
-      <BlockComponent
+      <Component
         key={childId}
         blockId={childId}
       />

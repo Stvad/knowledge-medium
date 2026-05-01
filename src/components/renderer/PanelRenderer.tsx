@@ -13,13 +13,26 @@ import { usePropertyValue, useContent } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
 import { VirtualizedBlockTree } from '@/components/renderer/VirtualizedBlockTree.tsx'
 
-/** Spike flag — set `localStorage.virt = '1'` (or '0' to disable) and reload.
- *  On by default so the perf change is observable; flip off to A/B. */
-const useVirtualizedTree = (): boolean => {
-  if (typeof window === 'undefined') return false
-  const stored = window.localStorage.getItem('virt')
-  if (stored === '0') return false
-  return true
+/** Spike flag — three render modes for A/B-ing the perf approaches.
+ *
+ *   localStorage.renderMode = 'tree'  → legacy recursive renderer (every
+ *                                       descendant mounted up-front)
+ *   localStorage.renderMode = 'virt'  → flat-list virtualization
+ *                                       (VirtualizedBlockTree)
+ *   localStorage.renderMode = 'lazy'  → recursive tree, but each child
+ *                                       mounts via IntersectionObserver
+ *                                       placeholder (LazyBlockComponent)
+ *
+ * Defaults to `'virt'`. Backward-compat: the old `localStorage.virt='0'`
+ * still selects 'tree' so existing toggles keep working. */
+type RenderMode = 'tree' | 'virt' | 'lazy'
+
+const useRenderMode = (): RenderMode => {
+  if (typeof window === 'undefined') return 'virt'
+  const stored = window.localStorage.getItem('renderMode')
+  if (stored === 'tree' || stored === 'virt' || stored === 'lazy') return stored
+  if (window.localStorage.getItem('virt') === '0') return 'tree'
+  return 'virt'
 }
 
 export function PanelRenderer({block}: BlockRendererProps) {
@@ -61,7 +74,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
     }, {scope: ChangeScope.UiState, description: 'close panel'})
   }
 
-  const virtualized = useVirtualizedTree()
+  const renderMode = useRenderMode()
   const topLevelBlock = useMemo(
     () => topLevelBlockId ? repo.block(topLevelBlockId) : null,
     [repo, topLevelBlockId],
@@ -71,6 +84,13 @@ export function PanelRenderer({block}: BlockRendererProps) {
      console.warn(`Panel ${block.id} has no topLevelBlockId, skipping render.`)
      return null
   }
+
+  // Lazy mode keeps the recursive tree but switches every BlockChildren
+  // call to mount via LazyBlockComponent. The flag is inherited through
+  // BlockContext so descendants at any depth pick it up.
+  const lazyOverrides = renderMode === 'lazy'
+    ? {topLevel: false, lazyChildren: true}
+    : {topLevel: false}
 
   return (
     <div className="panel max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
@@ -86,8 +106,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
         </Button>
       )}
       <div className="flex-grow min-h-0 flex flex-col">
-        <NestedBlockContextProvider overrides={{topLevel: false}}>
-          {virtualized
+        <NestedBlockContextProvider overrides={lazyOverrides}>
+          {renderMode === 'virt'
             ? <VirtualizedBlockTree rootBlock={topLevelBlock}/>
             : <div className="flex-grow overflow-y-auto scrollbar-none">
                 <BlockComponent blockId={topLevelBlockId}/>
