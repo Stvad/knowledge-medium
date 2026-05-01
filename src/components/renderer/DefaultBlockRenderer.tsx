@@ -49,12 +49,15 @@ import {
   blockHeaderFacet,
   blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
+  type BlockInteractionContext,
   type BlockLayout,
   type BlockLayoutSlots,
+  type BlockResolveContext,
   type BlockShellProps,
 } from '@/extensions/blockInteraction.ts'
 import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
 import { useBlockInteractionContext } from '@/extensions/blockInteractionContext.tsx'
+import { focusedBlockIdProp } from '@/data/properties.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -290,14 +293,15 @@ export function DefaultBlockRenderer(
   const isSelected = useIsSelected(block.id)
   const inFocus = useInFocus(block.id)
 
-  const blockInteractionContext = useMemo(() => ({
+  // Stable per-block resolver context — doesn't change on focus/edit/
+  // selection toggles, so facet resolvers and the components they
+  // produce keep stable identity. This is what stops UpdateIndicator
+  // (and any other content decorator) from remounting on every click.
+  const resolveContext = useMemo<BlockResolveContext>(() => ({
     block,
     repo,
     uiStateBlock,
     topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
     isTopLevel,
     blockContext,
     contentRenderers: [
@@ -315,52 +319,64 @@ export function DefaultBlockRenderer(
     repo,
     uiStateBlock,
     topLevelBlockId,
-    inFocus,
-    inEditMode,
-    isSelected,
     isTopLevel,
     blockContext,
     DefaultContentRenderer,
     EditContentRenderer,
   ])
 
+  // Full reactive interaction context — the React-context-published
+  // shape and the input to shortcut surface activation (which legitimately
+  // re-evaluates on every reactive change). Resolver-side facets (layout,
+  // content renderer, decorators, header/footer, click, surface props)
+  // do NOT consume this; they consume `resolveContext` above.
+  const interactionContext = useMemo<BlockInteractionContext>(() => ({
+    ...resolveContext,
+    inFocus,
+    inEditMode,
+    isSelected,
+  }), [resolveContext, inFocus, inEditMode, isSelected])
+
   const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
   const baseContentRenderer =
-    resolveBlockContentRenderer(blockInteractionContext) ?? DefaultContentRenderer
+    resolveBlockContentRenderer(resolveContext) ?? DefaultContentRenderer
   const decorateContent = runtime.read(blockContentDecoratorsFacet)
   const ContentRenderer = useMemo(
-    () => decorateContent(blockInteractionContext, baseContentRenderer),
-    [decorateContent, blockInteractionContext, baseContentRenderer],
+    () => decorateContent(resolveContext, baseContentRenderer),
+    [decorateContent, resolveContext, baseContentRenderer],
   )
   const resolveBlockClickHandler = runtime.read(blockClickHandlersFacet)
-  const handleBlockClick = resolveBlockClickHandler(blockInteractionContext)
+  const handleBlockClick = useMemo(
+    () => resolveBlockClickHandler(resolveContext),
+    [resolveBlockClickHandler, resolveContext],
+  )
   const resolveContentSurfaceProps = runtime.read(blockContentSurfacePropsFacet)
   const contentSurfaceProps = useMemo(
-    () => resolveContentSurfaceProps(blockInteractionContext),
-    [blockInteractionContext, resolveContentSurfaceProps],
+    () => resolveContentSurfaceProps(resolveContext),
+    [resolveContext, resolveContentSurfaceProps],
   )
   const resolveShortcutActivations = runtime.read(shortcutSurfaceActivationsFacet)
   const shortcutActivations = useMemo(
     () => resolveShortcutActivations({
-      ...blockInteractionContext,
+      ...interactionContext,
       surface: 'block',
     }),
-    [blockInteractionContext, resolveShortcutActivations],
+    [interactionContext, resolveShortcutActivations],
   )
   const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
   const childrenFooterSections = useMemo(
-    () => resolveChildrenFooterSections(blockInteractionContext),
-    [blockInteractionContext, resolveChildrenFooterSections],
+    () => resolveChildrenFooterSections(resolveContext),
+    [resolveContext, resolveChildrenFooterSections],
   )
   const resolveHeaderSections = runtime.read(blockHeaderFacet)
   const headerSections = useMemo(
-    () => resolveHeaderSections(blockInteractionContext),
-    [blockInteractionContext, resolveHeaderSections],
+    () => resolveHeaderSections(resolveContext),
+    [resolveContext, resolveHeaderSections],
   )
   const resolveBlockLayout = runtime.read(blockLayoutFacet)
   const Layout = useMemo(
-    () => resolveBlockLayout(blockInteractionContext) ?? DefaultBlockLayout,
-    [blockInteractionContext, resolveBlockLayout],
+    () => resolveBlockLayout(resolveContext) ?? DefaultBlockLayout,
+    [resolveContext, resolveBlockLayout],
   )
 
   useActionContextActivations(shortcutActivations)
@@ -371,23 +387,26 @@ export function DefaultBlockRenderer(
     if (element && !isElementProperlyVisible(element)) element.scrollIntoView({behavior: 'instant', block: 'nearest'})
   }, [inFocus])
 
-  // Stable across renders (latest closure picked up via closure capture
-  // of `inFocus`/`block`/etc.; no need for useCallback because the
-  // shellProps memo below captures handlePaste's identity for the layout's
-  // benefit). pasteMultilineText is async; React swallows the promise via
-  // the void cast in the wrapper.
-  const handlePaste = async (e: ClipboardEvent<HTMLElement>) => {
-    if (!inFocus) return
-    // todo this plausibly should be a global handler and not on the block
+  // Memoized on stable inputs so shellProps below doesn't churn on
+  // focus toggles. The "is this block focused?" check reads live state
+  // at fire time via `peekProperty`, not via the React `inFocus` prop —
+  // capturing `inFocus` would tie this closure (and shellProps) to
+  // reactive state, defeating the resolveContext stability split above.
+  // todo this plausibly should be a global handler and not on the block
+  const handlePaste = useMemo(
+    () => async (e: ClipboardEvent<HTMLElement>) => {
+      if (uiStateBlock.peekProperty(focusedBlockIdProp) !== block.id) return
 
-    e.preventDefault()
-    const pastedText = e.clipboardData.getData('text/plain')
+      e.preventDefault()
+      const pastedText = e.clipboardData.getData('text/plain')
 
-    const pasted = await pasteMultilineText(pastedText, block, repo)
-    if (pasted[0]) {
-      setFocusedBlockId(uiStateBlock, pasted[0].id)
-    }
-  }
+      const pasted = await pasteMultilineText(pastedText, block, repo)
+      if (pasted[0]) {
+        setFocusedBlockId(uiStateBlock, pasted[0].id)
+      }
+    },
+    [block, repo, uiStateBlock],
+  )
 
   // Content slot: the content surface div + its surface props + the
   // resolved/decorated ContentRenderer. Stable across renders unless one
@@ -512,10 +531,10 @@ export function DefaultBlockRenderer(
   ])
 
   return (
-    <BlockInteractionProvider context={blockInteractionContext}>
+    <BlockInteractionProvider context={interactionContext}>
       {/* Layout is resolved from blockLayoutFacet — its identity is
-          stable per blockInteractionContext (the resolver memo above),
-          not a fresh component each render. */}
+          stable per resolveContext (the resolver memo above), not a
+          fresh component each render. */}
       {/* eslint-disable-next-line react-hooks/static-components */}
       <Layout {...layoutSlots}/>
     </BlockInteractionProvider>

@@ -28,17 +28,38 @@ export interface BlockContentRendererSlot {
   renderer: BlockRenderer
 }
 
-export interface BlockInteractionContext {
+/**
+ * Stable per-block input to facet resolvers. Identity changes only on
+ * block swap, panel-context change (panelId/safeMode/etc.), or zoom
+ * (topLevelBlockId). Crucially does NOT include focus / edit mode /
+ * selection — those are reactive UI state, and folding them into the
+ * resolver context would re-run every facet resolver and reswap every
+ * decorator/layout/slot identity on each focus toggle.
+ *
+ * Contributions that need reactive state read it inside their rendered
+ * components via `useInFocus(block.id)` / `useInEditMode(block.id)` /
+ * `useIsSelected(block.id)`, or at fire time via snapshot helpers.
+ */
+export interface BlockResolveContext {
   block: Block
   repo: Repo
   uiStateBlock: Block
   topLevelBlockId?: string
-  inFocus: boolean
-  inEditMode: boolean
-  isSelected: boolean
   isTopLevel: boolean
   blockContext?: BlockContextType
   contentRenderers?: readonly BlockContentRendererSlot[]
+}
+
+/**
+ * Full interaction context — resolver context plus the reactive UI
+ * state. Currently consumed by the `shortcutSurfaceActivationsFacet`
+ * (which legitimately re-evaluates on every reactive change) and by
+ * the React-context exposed `useBlockInteractionContext()` hook.
+ */
+export interface BlockInteractionContext extends BlockResolveContext {
+  inFocus: boolean
+  inEditMode: boolean
+  isSelected: boolean
 }
 
 export interface EditorActivationSelection {
@@ -51,33 +72,33 @@ export interface EditorActivationSelection {
 export type BlockMouseHandler = (event: MouseEvent) => void | Promise<void>
 
 export type BlockContentRendererContribution =
-  (context: BlockInteractionContext) => BlockRenderer | null | undefined | false
+  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 
 export type BlockContentRendererResolver =
-  (context: BlockInteractionContext) => BlockRenderer | undefined
+  (context: BlockResolveContext) => BlockRenderer | undefined
 
 export type BlockContentDecorator =
   (innerRenderer: BlockRenderer) => BlockRenderer
 
 export type BlockContentDecoratorContribution =
-  (context: BlockInteractionContext) => BlockContentDecorator | null | undefined | false
+  (context: BlockResolveContext) => BlockContentDecorator | null | undefined | false
 
 export type BlockContentDecoratorResolver =
-  (context: BlockInteractionContext, inner: BlockRenderer) => BlockRenderer
+  (context: BlockResolveContext, inner: BlockRenderer) => BlockRenderer
 
 export type BlockClickContribution =
-  (context: BlockInteractionContext) => BlockMouseHandler | null | undefined | false
+  (context: BlockResolveContext) => BlockMouseHandler | null | undefined | false
 
 export type BlockClickResolver =
-  (context: BlockInteractionContext) => BlockMouseHandler | undefined
+  (context: BlockResolveContext) => BlockMouseHandler | undefined
 
 export type BlockContentSurfaceProps = HTMLAttributes<HTMLDivElement>
 
 export type BlockContentSurfaceContribution =
-  (context: BlockInteractionContext) => BlockContentSurfaceProps | null | undefined | false
+  (context: BlockResolveContext) => BlockContentSurfaceProps | null | undefined | false
 
 export type BlockContentSurfaceResolver =
-  (context: BlockInteractionContext) => BlockContentSurfaceProps
+  (context: BlockResolveContext) => BlockContentSurfaceProps
 
 // Slot for sections rendered above a block's body — top-level breadcrumbs
 // live here by default. Mirrors `blockChildrenFooterFacet` exactly: each
@@ -85,20 +106,20 @@ export type BlockContentSurfaceResolver =
 // for this block); the layout renders all returned components in
 // contribution order.
 export type BlockHeaderContribution =
-  (context: BlockInteractionContext) => BlockRenderer | null | undefined | false
+  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 
 export type BlockHeaderResolver =
-  (context: BlockInteractionContext) => readonly BlockRenderer[]
+  (context: BlockResolveContext) => readonly BlockRenderer[]
 
 // Slot for sections rendered after a block's children — Roam-style "Linked
 // References" lives here. Each contribution returns a renderer (or null/
 // undefined/false to opt out for this block); the DefaultBlockRenderer
 // renders all returned components in contribution order.
 export type BlockChildrenFooterContribution =
-  (context: BlockInteractionContext) => BlockRenderer | null | undefined | false
+  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 
 export type BlockChildrenFooterResolver =
-  (context: BlockInteractionContext) => readonly BlockRenderer[]
+  (context: BlockResolveContext) => readonly BlockRenderer[]
 
 // Block layout — owns the entire shape of a block as rendered (the
 // outer wrapper, controls placement, collapse behavior, and where the
@@ -151,10 +172,10 @@ export interface BlockLayoutSlots {
 export type BlockLayout = ComponentType<BlockLayoutSlots>
 
 export type BlockLayoutContribution =
-  (context: BlockInteractionContext) => BlockLayout | null | undefined | false
+  (context: BlockResolveContext) => BlockLayout | null | undefined | false
 
 export type BlockLayoutResolver =
-  (context: BlockInteractionContext) => BlockLayout | undefined
+  (context: BlockResolveContext) => BlockLayout | undefined
 
 export const blockHeaderFacet = defineFacet<
   BlockHeaderContribution,
@@ -195,7 +216,7 @@ export const blockLayoutFacet = defineFacet<
   BlockLayoutResolver
 >({
   id: 'core.block-layout',
-  combine: combineLastContributionResult<BlockInteractionContext, BlockLayout>(),
+  combine: combineLastContributionResult<BlockResolveContext, BlockLayout>(),
   empty: () => () => undefined,
   validate: isFunction<BlockLayoutContribution>,
 })
@@ -217,7 +238,7 @@ export type ShortcutActivationResolver =
   (context: ShortcutSurfaceContext) => readonly ActionContextActivation[]
 
 export const getBlockContentRendererSlot = (
-  context: BlockInteractionContext,
+  context: BlockResolveContext,
   slotId: string,
 ): BlockRenderer | undefined =>
   context.contentRenderers?.find(slot => slot.id === slotId)?.renderer
@@ -227,7 +248,7 @@ export const blockContentRendererFacet = defineFacet<
   BlockContentRendererResolver
 >({
   id: 'core.block-content-renderer',
-  combine: combineLastContributionResult<BlockInteractionContext, BlockRenderer>(
+  combine: combineLastContributionResult<BlockResolveContext, BlockRenderer>(
     context => getBlockContentRendererSlot(context, 'primary'),
   ),
   empty: () => context => getBlockContentRendererSlot(context, 'primary'),
@@ -262,7 +283,7 @@ export const blockClickHandlersFacet = defineFacet<
   BlockClickResolver
 >({
   id: 'core.block-click-handlers',
-  combine: combineLastContributionResult<BlockInteractionContext, BlockMouseHandler>(),
+  combine: combineLastContributionResult<BlockResolveContext, BlockMouseHandler>(),
   empty: () => () => undefined,
   validate: isFunction<BlockClickContribution>,
 })
@@ -273,7 +294,7 @@ export const blockClickHandlersFacet = defineFacet<
 // - everything else is last-wins
 export const mergeBlockContentSurfaceProps = (
   contributions: readonly BlockContentSurfaceContribution[],
-  context: BlockInteractionContext,
+  context: BlockResolveContext,
 ): BlockContentSurfaceProps => {
   const merged: Record<string, unknown> = {}
 
@@ -327,12 +348,12 @@ export const shortcutSurfaceActivationsFacet = defineFacet<
   validate: isFunction<ShortcutActivationContribution>,
 })
 
-export const focusBlock = ({block, uiStateBlock}: BlockInteractionContext) => {
+export const focusBlock = ({block, uiStateBlock}: BlockResolveContext) => {
   setFocusedBlockId(uiStateBlock, block.id)
 }
 
 export const enterBlockEditMode = async (
-  context: BlockInteractionContext,
+  context: BlockResolveContext,
   selection?: EditorActivationSelection,
 ) => {
   const {block, uiStateBlock} = context
@@ -360,16 +381,17 @@ export const enterBlockEditMode = async (
 }
 
 export const handleBlockSelectionClick = async (
-  context: BlockInteractionContext,
+  context: BlockResolveContext,
   event: MouseEvent,
 ) => {
-  const {block, repo, uiStateBlock, isSelected} = context
+  const {block, repo, uiStateBlock} = context
 
   event.preventDefault()
   event.stopPropagation()
 
   if (event.ctrlKey || event.metaKey) {
     const selectionState = getSelectionStateSnapshot(uiStateBlock)
+    const isSelected = selectionState.selectedBlockIds.includes(block.id)
     const newSelectedIds = isSelected
       ? selectionState.selectedBlockIds.filter(id => id !== block.id)
       : [...selectionState.selectedBlockIds, block.id]

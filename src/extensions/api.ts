@@ -71,6 +71,7 @@ export {
   type BlockContentSurfaceContribution,
   type BlockContentSurfaceProps,
   type BlockInteractionContext,
+  type BlockResolveContext,
   type BlockLayout,
   type BlockLayoutContribution,
   type BlockLayoutSlots,
