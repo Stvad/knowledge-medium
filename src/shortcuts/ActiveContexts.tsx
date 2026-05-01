@@ -17,37 +17,15 @@ import {
 
 export type ActiveContextsMap = ReadonlyMap<ActionContextType, BaseShortcutDependencies>
 
-/**
- * Opaque token returned from `activate`. Pass back to `deactivate` so the
- * provider can release the *specific* claim this caller made — necessary
- * when several components race to register the same context-type.
- */
-export type ActivationHandle = symbol
-
-interface ActivationEntry {
-  handle: ActivationHandle
-  dependencies: BaseShortcutDependencies
-}
-
 export interface ActiveContextsDispatch {
   /**
-   * Claim a context with validated dependencies. Multiple concurrent claims
-   * for the same context-type are tracked as a stack — the most recent claim
-   * is what handlers see, so last-mount-wins still holds. Returns a handle;
-   * keep it and pass to `deactivate` so the provider releases *this* claim
-   * even if newer claims have been pushed on top.
+   * Activate a context with validated dependencies. If the context is already
+   * active it is moved to the end of the activation order (matching prior
+   * singleton semantics).
    */
-  activate: (
-    context: ActionContextType,
-    dependencies: BaseShortcutDependencies,
-  ) => ActivationHandle
-  /**
-   * Release the claim identified by `handle`. If the handle is the active
-   * one for its context, the previous claim (if any) becomes active again;
-   * otherwise the entry is just removed from the stack. No-op for unknown
-   * handles, so unmount cleanup after a provider remount stays safe.
-   */
-  deactivate: (handle: ActivationHandle) => void
+  activate: (context: ActionContextType, dependencies: BaseShortcutDependencies) => void
+  /** Deactivate a context. No-op when inactive. */
+  deactivate: (context: ActionContextType) => void
 }
 
 /**
@@ -58,17 +36,6 @@ export interface ActiveContextsDispatch {
  */
 const ActiveContextsStateCtx = createContext<ActiveContextsMap | null>(null)
 const ActiveContextsDispatchCtx = createContext<ActiveContextsDispatch | null>(null)
-
-const computeTopMap = (
-  stacks: ReadonlyMap<ActionContextType, readonly ActivationEntry[]>,
-): ActiveContextsMap => {
-  const result = new Map<ActionContextType, BaseShortcutDependencies>()
-  for (const [context, stack] of stacks) {
-    const top = stack[stack.length - 1]
-    if (top) result.set(context, top.dependencies)
-  }
-  return result
-}
 
 export function ActiveContextsProvider({children}: PropsWithChildren) {
   const runtime = useAppRuntime()
@@ -84,22 +51,10 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
     runtimeRef.current = runtime
   }, [runtime])
 
-  // Internal: stacks of active claims per context. The visible state
-  // (`active`) is the top of each stack — re-derived after every mutation.
-  // Tracking by handle (rather than by context-type alone) is what makes
-  // overlapping claims safe: when component A unmounts after component B
-  // has already pushed a new claim, A's deactivate only removes A's entry
-  // from the stack; B's claim is preserved.
-  const stacksRef = useRef<Map<ActionContextType, ActivationEntry[]>>(new Map())
-  const handleContextRef = useRef<Map<ActivationHandle, ActionContextType>>(new Map())
   const [active, setActive] = useState<ActiveContextsMap>(() => new Map())
 
-  const refreshState = useCallback(() => {
-    setActive(computeTopMap(stacksRef.current))
-  }, [])
-
   const activate = useCallback(
-    (context: ActionContextType, dependencies: BaseShortcutDependencies): ActivationHandle => {
+    (context: ActionContextType, dependencies: BaseShortcutDependencies) => {
       const configs = runtimeRef.current.read(actionContextsFacet)
       const config = configs.find(c => c.type === context)
       if (!config) {
@@ -111,36 +66,26 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
         )
       }
 
-      const handle: ActivationHandle = Symbol(`activation:${context}`)
-      const stack = stacksRef.current.get(context) ?? []
-      stack.push({handle, dependencies})
-      stacksRef.current.set(context, stack)
-      handleContextRef.current.set(handle, context)
-
-      refreshState()
-      return handle
+      setActive(prev => {
+        const next = new Map(prev)
+        // Re-insert at end to keep activation order deterministic for
+        // command-palette display and last-active-wins semantics.
+        next.delete(context)
+        next.set(context, dependencies)
+        return next
+      })
     },
-    [refreshState],
+    [],
   )
 
-  const deactivate = useCallback((handle: ActivationHandle) => {
-    const context = handleContextRef.current.get(handle)
-    if (!context) return
-    handleContextRef.current.delete(handle)
-
-    const stack = stacksRef.current.get(context)
-    if (!stack) return
-
-    const idx = stack.findIndex(entry => entry.handle === handle)
-    if (idx === -1) return
-
-    stack.splice(idx, 1)
-    if (stack.length === 0) {
-      stacksRef.current.delete(context)
-    }
-
-    refreshState()
-  }, [refreshState])
+  const deactivate = useCallback((context: ActionContextType) => {
+    setActive(prev => {
+      if (!prev.has(context)) return prev
+      const next = new Map(prev)
+      next.delete(context)
+      return next
+    })
+  }, [])
 
   // `dispatch` is stable across renders so consumers that only need
   // activate/deactivate do not re-render on activation changes.
