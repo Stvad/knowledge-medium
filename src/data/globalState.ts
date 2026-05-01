@@ -308,16 +308,19 @@ export const useIsSelected = (blockId: string): boolean =>
     },
   })
 
-export const useInEditMode = (blockId: string): boolean => {
-  const uiStateBlock = useUIStateBlock()
-  const focusedBlockId = useHandle(uiStateBlock, {
-    selector: doc => doc?.properties[focusedBlockIdProp.name],
+export const useInEditMode = (blockId: string): boolean =>
+  // Combined into a single selector returning a per-block boolean so
+  // unaffected DefaultBlockRenderer instances bail out via
+  // useSyncExternalStore's Object.is check on focus changes. Splitting
+  // it into two `useHandle` calls (one returning the global focused id,
+  // one returning the editing flag) made every subscriber re-render on
+  // every focus change because the focused-id value changed for all
+  // subscribers, not just the two whose membership in "is focused" flipped.
+  useHandle(useUIStateBlock(), {
+    selector: doc =>
+      doc?.properties[focusedBlockIdProp.name] === blockId &&
+      Boolean(doc?.properties[isEditingProp.name]),
   })
-  const isEditing = useHandle(uiStateBlock, {
-    selector: doc => Boolean(doc?.properties[isEditingProp.name]),
-  })
-  return focusedBlockId === blockId && isEditing
-}
 
 // ──── Internal: shorthand for instance-scoped memo keys ────
 const repoIdentity = (repo: Repo): number => repo.instanceId
