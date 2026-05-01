@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo } from 'react'
+import { useMemo } from 'react'
 import { shortcutSurfaceActivationsFacet } from '@/extensions/blockInteraction.ts'
 import type {
   BlockInteractionContext,
@@ -19,11 +19,6 @@ import {
 } from '@/data/globalState.ts'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
 
-export const ReactBlockInteractionContext = createContext<BlockInteractionContext | null>(null)
-
-export const useBlockInteractionContext = () =>
-  useContext(ReactBlockInteractionContext)
-
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
   Record<string, unknown>
@@ -32,16 +27,17 @@ const emptyShortcutSurfaceOptions: ShortcutSurfaceOptions = {}
 
 /**
  * Activate a shortcut surface for a block. Builds the full reactive
- * context (block + repo + uiStateBlock + panel envelope + focus/edit/
- * selection) from hooks and feeds it through the
- * `shortcutSurfaceActivationsFacet` resolver. Contributions that gate on
- * reactive state (e.g. vim normal mode opting out when in edit mode)
- * therefore re-evaluate when that state changes — which is what we
- * want for shortcut surface scoping.
+ * context (block + repo + uiStateBlock + panel envelope + focus / edit
+ * mode / selection) from hooks and feeds it through the
+ * `shortcutSurfaceActivationsFacet` resolver. Contributions that gate
+ * on reactive state (e.g. vim normal mode opting out when the block is
+ * in edit mode) therefore re-evaluate when that state changes — which
+ * is what we want for shortcut surface scoping.
  *
- * Takes `block` directly rather than reading from a React context so it
- * doesn't tie itself to (and re-render on) every per-block state change
- * unrelated to shortcuts.
+ * Takes `block` directly rather than reading from a React context, so
+ * it doesn't subscribe to per-block state changes unrelated to
+ * shortcuts (and so resolver-side facets — layouts, decorators,
+ * surface props — keep stable identity through reactive updates).
  */
 export function useShortcutSurfaceActivations(
   block: Block,

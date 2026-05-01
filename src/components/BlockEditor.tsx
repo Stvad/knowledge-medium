@@ -14,7 +14,7 @@ import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { useData, useHandle } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 import { EditorView } from '@codemirror/view'
-import { useShortcutSurfaceActivations } from '@/extensions/blockInteractionContext.tsx'
+import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block

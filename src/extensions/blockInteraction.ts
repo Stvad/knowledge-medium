@@ -52,9 +52,11 @@ export interface BlockResolveContext {
 
 /**
  * Full interaction context — resolver context plus the reactive UI
- * state. Currently consumed by the `shortcutSurfaceActivationsFacet`
- * (which legitimately re-evaluates on every reactive change) and by
- * the React-context exposed `useBlockInteractionContext()` hook.
+ * state. Consumed only by `shortcutSurfaceActivationsFacet`, whose
+ * activations legitimately re-evaluate on every reactive change to
+ * scope which shortcut contexts are active. Other facets take
+ * `BlockResolveContext` and read reactive state inside their rendered
+ * components / fire-time handlers via hooks.
  */
 export interface BlockInteractionContext extends BlockResolveContext {
   inFocus: boolean

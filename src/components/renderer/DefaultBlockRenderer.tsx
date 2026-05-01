@@ -47,17 +47,12 @@ import {
   blockContentSurfacePropsFacet,
   blockHeaderFacet,
   blockLayoutFacet,
-  type BlockInteractionContext,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
   type BlockShellProps,
 } from '@/extensions/blockInteraction.ts'
-import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
-import {
-  useBlockInteractionContext,
-  useShortcutSurfaceActivations,
-} from '@/extensions/blockInteractionContext.tsx'
+import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
 import { focusedBlockIdProp } from '@/data/properties.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
@@ -239,10 +234,10 @@ export const DefaultBlockLayout: BlockLayout = ({
   Controls, Header,
   shellProps,
 }) => {
-  const ctx = useBlockInteractionContext()
-  const inFocus = ctx?.inFocus ?? false
-  const isTopLevel = ctx?.isTopLevel ?? false
-  const isSelected = ctx?.isSelected ?? false
+  const inFocus = useInFocus(block.id)
+  const isSelected = useIsSelected(block.id)
+  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+  const isTopLevel = topLevelBlockId === block.id
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   return (
@@ -291,7 +286,9 @@ export function DefaultBlockRenderer(
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = block.id === topLevelBlockId
 
-  const isSelected = useIsSelected(block.id)
+  // Scroll-into-view on focus (effect below). The `data-editing` attr
+  // on shellProps wants `inEditMode`. Other reactive state is read by
+  // the layout / slots themselves, not threaded through here.
   const inFocus = useInFocus(block.id)
 
   // Stable per-block resolver context — doesn't change on focus/edit/
@@ -325,18 +322,6 @@ export function DefaultBlockRenderer(
     DefaultContentRenderer,
     EditContentRenderer,
   ])
-
-  // Full reactive interaction context — the React-context-published
-  // shape and the input to shortcut surface activation (which legitimately
-  // re-evaluates on every reactive change). Resolver-side facets (layout,
-  // content renderer, decorators, header/footer, click, surface props)
-  // do NOT consume this; they consume `resolveContext` above.
-  const interactionContext = useMemo<BlockInteractionContext>(() => ({
-    ...resolveContext,
-    inFocus,
-    inEditMode,
-    isSelected,
-  }), [resolveContext, inFocus, inEditMode, isSelected])
 
   const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
   const baseContentRenderer =
@@ -458,11 +443,11 @@ export function DefaultBlockRenderer(
   // because mobile screens don't have desktop's horizontal real estate).
   const ControlsSlot = useMemo<ComponentType>(() => {
     const Slot = () => {
-      const ictx = useBlockInteractionContext()
+      const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
 
-      if (ictx?.isTopLevel) return null
+      if (topLevelBlockId === block.id) return null
 
       return (
         <>
@@ -523,12 +508,10 @@ export function DefaultBlockRenderer(
   ])
 
   return (
-    <BlockInteractionProvider context={interactionContext}>
-      {/* Layout is resolved from blockLayoutFacet — its identity is
-          stable per resolveContext (the resolver memo above), not a
-          fresh component each render. */}
-      {/* eslint-disable-next-line react-hooks/static-components */}
-      <Layout {...layoutSlots}/>
-    </BlockInteractionProvider>
+    // Layout is resolved from blockLayoutFacet — its identity is stable
+    // per resolveContext (the resolver memo above), not a fresh
+    // component each render.
+    // eslint-disable-next-line react-hooks/static-components
+    <Layout {...layoutSlots}/>
   )
 }
