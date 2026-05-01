@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   BlockNotFoundError,
   BlockNotLoadedError,
-  ChildrenNotLoadedError,
   CodecError,
   CycleError,
   DataLayerError,
@@ -26,7 +25,6 @@ describe('data-layer errors', () => {
     const errors = [
       new BlockNotFoundError('a'),
       new BlockNotLoadedError('a'),
-      new ChildrenNotLoadedError('a'),
       new CycleError('a', 'b'),
       new DeletedConflictError('a'),
       new DeterministicIdCrossWorkspaceError('a', 'w1', 'w2'),
@@ -69,7 +67,6 @@ describe('data-layer errors', () => {
   })
 
   it('messages include the relevant identifiers for grep-friendly logs', () => {
-    expect(new ChildrenNotLoadedError('the-id').message).toContain('the-id')
     expect(new ParentNotFoundError('parentX').message).toContain('parentX')
     expect(new ReadOnlyError('block-default').message).toContain('block-default')
   })

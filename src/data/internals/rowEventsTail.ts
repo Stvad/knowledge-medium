@@ -15,13 +15,11 @@
  *     on hard-delete) so Block facades subscribed via cache.subscribe
  *     reflect remote changes — without this, sync writes are invisible
  *     to UI consumers that don't go through a collection handle.
- *   - Auto-clears `allChildrenLoaded(parentId)` for any sync-applied
- *     write whose before_parent or after_parent matches a tracked
- *     parent (children-of marker becomes stale; the matching
- *     `repo.children(parentId)` handle re-resolves and re-sets the
- *     marker via its parent-edge dep below).
- *   - Calls `handleStore.invalidate(...)` with the same `ChangeNotification`
- *     shape the fast path uses, so collection handles re-resolve.
+ *   - Calls `handleStore.invalidate(...)` with a `ChangeNotification`
+ *     that lists `rowIds` + `parentIds` + `workspaceIds` so collection
+ *     handles re-resolve. `parentIds` covers both before- and after-
+ *     parents of sync-applied edge changes, matching the `parent-edge`
+ *     dep declared by `repo.children` / `repo.childIds`.
  *
  * Throttling: db.onChange's `throttleMs` coalesces sync-burst arrivals
  * into batched processing. 100ms is the spec's recommendation (§9.3).
@@ -156,16 +154,11 @@ export const startRowEventsTail = (args: {
       }
     }
 
-    // Auto-clear allChildrenLoaded markers (spec §5.2) ONLY for parents
-    // whose children-set membership actually changed (i.e. the parent
-    // ids we put into `parentIds` above). Pure content / property /
-    // reference edits leave `parentIds` empty and don't clear any
-    // marker — clearing on those would make `block.childIds` start
-    // throwing for unrelated callers that previously did
-    // `repo.load(parent, {children: true})` and have no reactive
-    // children-handle subscribed to re-set the marker.
-    for (const parent of parentIds) cache.clearChildrenLoaded(parent)
-
+    // Children-set changes propagate via `handleStore.invalidate` below
+    // — `repo.children(parentId)` / `repo.childIds(parentId)` declare
+    // a `parent-edge` dep, so a parent_id landing in `parentIds` here
+    // triggers re-resolve on the matching handle. No cache-level
+    // marker to clear (collection state lives on the handle).
     const notification: ChangeNotification = { rowIds, parentIds, workspaceIds }
     handleStore.invalidate(notification)
   }

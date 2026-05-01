@@ -482,7 +482,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
         await block.load()
-        await repo.load(block.id, {children: true})
+        const childIds = await block.childIds.load()
         const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
         const isTopLevel = block.id === topLevelBlockId
 
@@ -495,9 +495,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           if (newId) setFocusedBlockId(uiStateBlock, newId)
         }
 
-        const blockHasChildren = repo.cache.areChildrenLoaded(block.id)
-          ? repo.cache.childrenOf(block.id).length > 0
-          : false
+        const blockHasChildren = childIds.length > 0
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {

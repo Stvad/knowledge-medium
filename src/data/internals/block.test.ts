@@ -2,18 +2,18 @@
 /**
  * New Block facade tests (spec §5.2). Covers:
  *   - sync getters (data, peek, get, peekProperty)
- *   - throw paths (BlockNotLoadedError on cold cache, ChildrenNotLoadedError
- *     when allChildrenLoaded marker isn't set)
+ *   - throw paths (BlockNotLoadedError on cold cache)
  *   - subscribe: fires on cache mutation
  *   - write sugar (set / setContent / delete) routes through repo.mutate
- *   - repo.load(id, opts) populates the cache + markers
+ *   - repo.load(id, opts) hydrates the requested neighborhood
+ *   - childIds / children expose handles backed by repo.childIds /
+ *     repo.children
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   BlockNotFoundError,
   BlockNotLoadedError,
-  ChildrenNotLoadedError,
   ChangeScope,
   codecs,
   defineProperty,
@@ -174,21 +174,24 @@ describe('Block.childIds / children / parent', () => {
     await env.repo.mutate.createChild({parentId: 'p', id: 'c2'})
   })
 
-  it('throws ChildrenNotLoadedError when the marker isn\'t set', () => {
-    // Despite the cache having both children (commit walk populated
-    // them), the marker is set only by `repo.load(id, {children: true})`.
+  it('childIds returns the repo.childIds handle ordered by (orderKey, id)', async () => {
     const b = new Block(env.repo, 'p')
-    expect(() => b.childIds).toThrow(ChildrenNotLoadedError)
+    const ids = await b.childIds.load()
+    expect(ids).toEqual(['c1', 'c2'])
   })
 
-  it('returns child ids ordered by (orderKey, id) once the marker is set', async () => {
-    await env.repo.load('p', {children: true})
+  it('childIds is identity-stable with repo.childIds', () => {
     const b = new Block(env.repo, 'p')
-    expect(b.childIds).toEqual(['c1', 'c2'])
-    expect(b.children.map(c => c.id)).toEqual(['c1', 'c2'])
+    expect(b.childIds).toBe(env.repo.childIds('p'))
   })
 
-  it('parent returns the parent Block when the parent row is in cache', () => {
+  it('children returns the repo.children handle with full BlockData rows', async () => {
+    const b = new Block(env.repo, 'p')
+    const rows = await b.children.load()
+    expect(rows.map(r => r.id)).toEqual(['c1', 'c2'])
+  })
+
+  it('parent returns the parent Block whenever this block is loaded', () => {
     const c = new Block(env.repo, 'c1')
     const p = c.parent
     expect(p?.id).toBe('p')
@@ -198,6 +201,17 @@ describe('Block.childIds / children / parent', () => {
   it('parent returns null at the workspace root', () => {
     const p = new Block(env.repo, 'p')
     expect(p.parent).toBeNull()
+  })
+
+  it('parent returns the facade even when the parent row hasn\'t been hydrated', async () => {
+    // Drop only p so c1's parentId points at an uncached row.
+    env.cache.deleteSnapshot('p')
+    const c = new Block(env.repo, 'c1')
+    const parentFacade = c.parent
+    expect(parentFacade?.id).toBe('p')
+    // Caller can hydrate via the returned facade.
+    await parentFacade?.load()
+    expect(parentFacade?.data.id).toBe('p')
   })
 })
 
@@ -254,16 +268,12 @@ describe('repo.load', () => {
     expect(got?.id).toBe('p')
     expect(env.cache.getSnapshot('p')).toBeDefined()
     expect(env.cache.getSnapshot('c1')).toBeUndefined()
-    expect(env.cache.areChildrenLoaded('p')).toBe(false)
   })
 
-  it('repo.load(id, {children: true}) hydrates immediate children + sets allChildrenLoaded', async () => {
+  it('repo.load(id, {children: true}) hydrates immediate children', async () => {
     await env.repo.load('p', {children: true})
     expect(env.cache.getSnapshot('c1')).toBeDefined()
     expect(env.cache.getSnapshot('c2')).toBeDefined()
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
-    // Block.childIds works without throwing now.
-    expect(new Block(env.repo, 'p').childIds).toEqual(['c1', 'c2'])
   })
 
   it('repo.load(id, {ancestors: true}) hydrates the parent chain', async () => {
@@ -273,21 +283,17 @@ describe('repo.load', () => {
     expect(env.cache.getSnapshot('gp')).toBeDefined()
   })
 
-  it('repo.load(id, {descendants: true}) hydrates the full subtree + every visited parent\'s marker', async () => {
+  it('repo.load(id, {descendants: true}) hydrates the full subtree', async () => {
     await env.repo.load('gp', {descendants: true})
     for (const id of ['gp', 'p', 'c1', 'c2']) expect(env.cache.getSnapshot(id)).toBeDefined()
-    expect(env.cache.areChildrenLoaded('gp')).toBe(true)
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
   })
 
-  it('repo.load(id, {descendants: 1}) clips at depth 1, only marking the root', async () => {
+  it('repo.load(id, {descendants: 1}) clips at depth 1', async () => {
     await env.repo.load('gp', {descendants: 1})
     expect(env.cache.getSnapshot('gp')).toBeDefined()
     expect(env.cache.getSnapshot('p')).toBeDefined()
     // c1 / c2 are at depth 2; clipped.
     expect(env.cache.getSnapshot('c1')).toBeUndefined()
-    expect(env.cache.areChildrenLoaded('gp')).toBe(true)
-    expect(env.cache.areChildrenLoaded('p')).toBe(false)
   })
 
   it('returns null for a missing id without polluting the cache', async () => {
@@ -296,15 +302,13 @@ describe('repo.load', () => {
     expect(env.cache.getSnapshot('does-not-exist')).toBeUndefined()
   })
 
-  it('concurrent load(id) + load(id, {children: true}) BOTH end with children loaded + marker set', async () => {
+  it('concurrent load(id) + load(id, {children: true}) both hydrate fully', async () => {
     // Regression for a prior bug: `dedupLoad(id, ...)` keyed only by id
     // could merge the two calls into one promise driven by whichever
     // started first. The plain loader didn't fetch children, so the
-    // children-requesting caller's expectation was silently dropped:
-    // after both promises resolved, the cache had the row but no
-    // children, and allChildrenLoaded was false. The fix is to NOT use
-    // the id-keyed dedupLoad path in repo.load (each call does its own
-    // work; cache.setSnapshot is idempotent so we don't double-fire).
+    // children-requesting caller's expectation was silently dropped.
+    // The fix is to NOT use the id-keyed dedupLoad path in repo.load
+    // (each call does its own work; cache.setSnapshot is idempotent).
     const [r1, r2] = await Promise.all([
       env.repo.load('p'),
       env.repo.load('p', {children: true}),
@@ -314,6 +318,5 @@ describe('repo.load', () => {
     // The children-requesting caller's neighborhood DID land.
     expect(env.cache.getSnapshot('c1')).toBeDefined()
     expect(env.cache.getSnapshot('c2')).toBeDefined()
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
   })
 })

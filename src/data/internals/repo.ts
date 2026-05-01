@@ -165,15 +165,15 @@ export class Repo {
     return out
   }
 
-  /** Run `CHILDREN_SQL` for `parentId`, hydrate every row into cache,
-   *  and set the `allChildrenLoaded(parentId)` marker. Shared by the
-   *  `repo.load(id, {children: true})` opts path, `repo.children(id)`
-   *  handle, and the hydrating variant of `repo.childIds(id)`. */
+  /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
+   *  per-row cache. Shared by the `repo.load(id, {children: true})`
+   *  opts path, `repo.children(id)` handle, and the hydrating variant
+   *  of `repo.childIds(id)`. Collection-level reactivity is owned by
+   *  the `LoaderHandle` returned from `repo.children` / `repo.childIds`
+   *  — `BlockCache` doesn't track per-parent "loaded" state. */
   private async hydrateChildren(parentId: string, ctx?: ResolveContext): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [parentId])
-    const out = this.hydrateRows(rows, ctx)
-    this.cache.markChildrenLoaded(parentId)
-    return out
+    return this.hydrateRows(rows, ctx)
   }
 
   /** Build a collection handle: identity-stable per (kind, params),
@@ -304,23 +304,26 @@ export class Repo {
   /** Load a row + (optionally) a neighborhood into the cache. Spec §5.2.
    *
    *    repo.load(id)                          → just the row
-   *    repo.load(id, {children: true})        → row + immediate children;
-   *                                              sets the allChildrenLoaded
-   *                                              marker for `id`
+   *    repo.load(id, {children: true})        → row + immediate children
    *    repo.load(id, {ancestors: true})       → row + full parent chain
    *    repo.load(id, {descendants: N})        → row + subtree clipped at
    *                                              depth N (or whole tree
    *                                              if N is omitted/falsy
    *                                              for descendants:true)
    *
+   *  Hydrates rows into the cache so subsequent `block.peek()` /
+   *  `block.data` calls succeed. Collection reactivity (children /
+   *  subtree handles) is owned by the HandleStore, not this loader —
+   *  use `repo.children(id).load()` if you want a handle-cached
+   *  child-rows list with structural invalidation.
+   *
    *  Concurrency note: this method does NOT use `BlockCache.dedupLoad`.
    *  That helper keys by id only, which silently merged a plain
    *  `repo.load(id)` with a concurrent `repo.load(id, {children: true})`
    *  — the second caller would see the plain promise resolve and miss
-   *  the children + the allChildrenLoaded marker. Inlining the load
-   *  costs at most one extra row read per concurrent caller; the
-   *  cache's `setSnapshot` is fingerprint-deduplicated so listeners
-   *  don't fire twice. */
+   *  the children. Inlining the load costs at most one extra row read
+   *  per concurrent caller; the cache's `setSnapshot` is
+   *  fingerprint-deduplicated so listeners don't fire twice. */
   async load(
     id: string,
     opts?: { children?: boolean; ancestors?: boolean; descendants?: boolean | number },
@@ -346,20 +349,10 @@ export class Repo {
     if (opts?.descendants) {
       const subtreeRows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
       const maxDepth = typeof opts.descendants === 'number' ? opts.descendants : Infinity
-      // Track which parents we hydrate completely so we can mark
-      // their children-loaded state.
-      const fullyHydrated = new Set<string>()
       for (const r of subtreeRows) {
         if (r.depth > maxDepth) continue
         this.cache.applySyncSnapshot(parseBlockRow(r))
       }
-      // Every visited row at depth < maxDepth has its children fully
-      // hydrated by the same query (children are in the result set
-      // unless they exceed maxDepth). Mark accordingly.
-      for (const r of subtreeRows) {
-        if (r.depth < maxDepth) fullyHydrated.add(r.id)
-      }
-      for (const pid of fullyHydrated) this.cache.markChildrenLoaded(pid)
     }
 
     return data
@@ -468,14 +461,12 @@ export class Repo {
   }
 
   /** Subtree rooted at `rootId` (depth-100 + visited-id guarded;
-   *  spec §11). Hydrates the result + sets `allChildrenLoaded` markers
-   *  for every parent inside the subtree. One-shot Promise variant —
-   *  for reactive use, prefer `repo.subtree(id)` which returns a
-   *  Handle<BlockData[]>. */
+   *  spec §11). Hydrates the result into the cache. One-shot Promise
+   *  variant — for reactive use, prefer `repo.subtree(id)` which
+   *  returns a Handle<BlockData[]>. */
   async loadSubtree(rootId: string, opts?: {includeRoot?: boolean}): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [rootId])
     const all = this.hydrateRows(rows)
-    for (const data of all) this.cache.markChildrenLoaded(data.id)
     const includeRoot = opts?.includeRoot ?? true
     return includeRoot ? all : all.filter(d => d.id !== rootId)
   }
@@ -502,9 +493,7 @@ export class Repo {
    *      property updates inside a child without an edge change.
    *
    *  Side-effect: each call's loader hydrates the child rows into the
-   *  cache and sets the `allChildrenLoaded(id)` marker, matching
-   *  `repo.load(id, {children: true})`. Block.childIds therefore reads
-   *  honestly after the handle's first load resolves. */
+   *  cache. */
   children(id: string): LoaderHandle<BlockData[]> {
     return this.collectionHandle('children', {id}, async (ctx) => {
       ctx.depend({kind: 'parent-edge', parentId: id})
@@ -526,8 +515,8 @@ export class Repo {
    *  hydration. Honest about what the function name says.
    *
    *  Pass `{hydrate: true}` to opt into the full-row variant: runs
-   *  `CHILDREN_SQL`, `applySyncSnapshot` per row, marks
-   *  `allChildrenLoaded` — same side-effect shape as `repo.children`.
+   *  `CHILDREN_SQL` and `applySyncSnapshot`s every row into the
+   *  per-row cache — same side-effect shape as `repo.children`.
    *  The React hooks (`useChildIds`, `useHasChildren`) opt in because
    *  the consumers downstream of them (LazyBlockComponent → Block
    *  facade → useData) need the cache warm to avoid an N+1
@@ -578,7 +567,6 @@ export class Repo {
       const out = this.hydrateRows(rows, ctx)
       for (const data of out) {
         ctx.depend({kind: 'parent-edge', parentId: data.id})
-        this.cache.markChildrenLoaded(data.id)
       }
       return out
     })

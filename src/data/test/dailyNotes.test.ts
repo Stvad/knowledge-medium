@@ -137,7 +137,8 @@ describe('getOrCreateDailyNote', () => {
     const journalId = journalBlockId(WS)
     const journal = await env.repo.load(journalId, {children: true})
     expect(journal).not.toBeNull()
-    expect(env.repo.block(journalId).childIds).toContain(note.id)
+    const childIds = await env.repo.block(journalId).childIds.load()
+    expect(childIds).toContain(note.id)
   })
 
   it('is idempotent: second call returns the same row, no duplicate', async () => {
@@ -159,7 +160,7 @@ describe('getOrCreateDailyNote', () => {
 
     const journalId = journalBlockId(WS)
     await env.repo.load(journalId, {children: true})
-    const childIds = env.repo.block(journalId).childIds
+    const childIds = await env.repo.block(journalId).childIds.load()
     expect(childIds).toEqual(expect.arrayContaining([a.id, b.id]))
   })
 

@@ -8,8 +8,8 @@
  *   - Identity stability per (factory, id).
  *   - Loader correctness: data shape matches the legacy one-shot APIs
  *     (CHILDREN_SQL / SUBTREE_SQL / ANCESTORS_SQL / SELECT_BACKLINKS).
- *   - Side-effects: `children` + `subtree` set `allChildrenLoaded`;
- *     ancestors + backlinks hydrate the cache.
+ *   - Side-effects: each loader hydrates its result rows into the
+ *     per-row cache via `applySyncSnapshot`.
  *   - Dependencies declared during resolve (verified via the test-only
  *     `__depsForTest` helper on LoaderHandle):
  *       - `children`:  parent-edge on `id` + row on each child.
@@ -79,14 +79,13 @@ describe('repo.children(id)', () => {
     expect(env.repo.children('q')).not.toBe(a)
   })
 
-  it('loader returns children sorted by (orderKey, id) and marks allChildrenLoaded', async () => {
+  it('loader returns children sorted by (orderKey, id)', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0'})
     await create('c2', {parentId: 'p', orderKey: 'a1'})
     const h = env.repo.children('p')
     const result = await h.load()
     expect(result.map(b => b.id)).toEqual(['c1', 'c2'])
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
   })
 
   it('declares parent-edge on id + row on each child', async () => {
@@ -125,7 +124,7 @@ describe('repo.subtree(id)', () => {
     expect(a).toBe(b)
   })
 
-  it('returns root + descendants and marks every visited parent', async () => {
+  it('returns root + descendants', async () => {
     await create('r')
     await create('a', {parentId: 'r', orderKey: 'a0'})
     await create('b', {parentId: 'a', orderKey: 'b0'})
@@ -133,9 +132,6 @@ describe('repo.subtree(id)', () => {
     const out = await h.load()
     const ids = out.map(b => b.id).sort()
     expect(ids).toEqual(['a', 'b', 'r'])
-    expect(env.cache.areChildrenLoaded('r')).toBe(true)
-    expect(env.cache.areChildrenLoaded('a')).toBe(true)
-    expect(env.cache.areChildrenLoaded('b')).toBe(true)
   })
 
   it('declares row + parent-edge on every visited id (and upfront on root)', async () => {

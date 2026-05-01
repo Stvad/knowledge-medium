@@ -138,11 +138,9 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
         await block.load()
-        await repo.load(block.id, {children: true})
+        const childIds = await block.childIds.load()
         const isCollapsed = block.peekProperty(isCollapsedProp) ?? false
-        const hasChildren = repo.cache.areChildrenLoaded(block.id)
-          ? repo.cache.childrenOf(block.id).length > 0
-          : false
+        const hasChildren = childIds.length > 0
         const isTopLevel = block.id === topLevelBlockId
 
         const hasUncollapsedChildren = hasChildren && !isCollapsed

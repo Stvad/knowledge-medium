@@ -13,29 +13,28 @@ const deepFreeze = <T>(value: T): T => {
 const blockFingerprint = (blockData: BlockData | undefined) =>
   blockData ? JSON.stringify(blockData) : ''
 
+/** In-memory mirror of the per-row state of `blocks`. Holds:
+ *
+ *    - per-id BlockData snapshots (with subscriber list)
+ *    - confirmed-missing markers (for the Block facade's loaded/missing
+ *      distinction per spec §5.2)
+ *
+ *  Collection state (children, subtree, ancestors, backlinks) is NOT
+ *  cached here — it lives on `LoaderHandle`s registered with the
+ *  `HandleStore`, which is the single home for collection caching +
+ *  invalidation. Imperative callers that want children read from the
+ *  `repo.children(id)` / `repo.childIds(id)` handles, not from this
+ *  class. */
 export class BlockCache {
   private readonly snapshots = new Map<string, BlockData>()
   private readonly listeners = new Map<string, Set<() => void>>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
-  /** Per-parent "all children loaded" marker (data-layer §5.2). The
-   *  cache cannot distinguish "leaf node" from "children not yet
-   *  loaded" by sibling-scanning alone; the marker is the only honest
-   *  signal. `repo.load(id, {children: true})` sets it; the row_events
-   *  tail clears it when a new child arrives via sync. */
-  private readonly allChildrenLoaded = new Set<string>()
   /** Confirmed-missing markers — ids the loader looked up and the row
    *  did not exist (or was soft-deleted). Lets the Block facade
    *  distinguish "not loaded yet" (peek → undefined) from "confirmed
    *  missing" (peek → null) per spec §5.2. Cleared on setSnapshot
    *  (the row exists now). */
   private readonly missingIds = new Set<string>()
-  /** Parent-id → child-ids index. Maintained on every snapshot
-   *  insert / delete / parent-change so `childrenOf` can answer in
-   *  O(children) instead of scanning the full snapshot map. Holds
-   *  soft-deleted rows too — `childrenOf` filters those at read time
-   *  (the cache keeps tombstones around for undo/devtools per spec
-   *  §5.2). */
-  private readonly childrenByParent = new Map<string, Set<string>>()
 
   getSnapshot(id: string): BlockData | undefined {
     return this.snapshots.get(id)
@@ -64,15 +63,6 @@ export class BlockCache {
       return false
     }
 
-    // Maintain parent-children index. If the snapshot is new or its
-    // parentId moved, update the index before storing the new snapshot.
-    if (!existing) {
-      this.addToParentIndex(snapshot.parentId, snapshot.id)
-    } else if (existing.parentId !== snapshot.parentId) {
-      this.removeFromParentIndex(existing.parentId, snapshot.id)
-      this.addToParentIndex(snapshot.parentId, snapshot.id)
-    }
-
     this.snapshots.set(snapshot.id, deepFreeze(snapshot))
     // Row is now known-present — clear any prior confirmed-missing state.
     this.missingIds.delete(snapshot.id)
@@ -96,9 +86,7 @@ export class BlockCache {
   }
 
   deleteSnapshot(id: string): boolean {
-    const existing = this.snapshots.get(id)
     if (!this.snapshots.delete(id)) return false
-    if (existing) this.removeFromParentIndex(existing.parentId, id)
 
     this.notify(id)
     return true
@@ -142,29 +130,6 @@ export class BlockCache {
     this.listeners.get(id)?.forEach(listener => listener())
   }
 
-  // ──── allChildrenLoaded markers ────
-
-  /** Mark that the cache holds the complete set of children for a
-   *  parent. Set by `repo.load(parentId, {children: true})` and by the
-   *  subtree loader. */
-  markChildrenLoaded(parentId: string): void {
-    this.allChildrenLoaded.add(parentId)
-  }
-
-  /** Clear the marker — call when a new child has appeared (e.g.
-   *  sync-applied insert with this parent_id). */
-  clearChildrenLoaded(parentId: string): void {
-    this.allChildrenLoaded.delete(parentId)
-  }
-
-  /** True iff the cache marker says all children of `parentId` are
-   *  loaded. Used by `Block.childIds` / `Block.children` to decide
-   *  whether the sync getter is honest or should throw
-   *  `ChildrenNotLoadedError`. */
-  areChildrenLoaded(parentId: string): boolean {
-    return this.allChildrenLoaded.has(parentId)
-  }
-
   // ──── Confirmed-missing markers ────
 
   /** Mark `id` as confirmed-missing — `repo.load` looked it up and the
@@ -198,53 +163,5 @@ export class BlockCache {
     if (!this.missingIds.delete(id)) return false
     this.notify(id)
     return true
-  }
-
-  /** Children of `parentId` from the cache, ordered by `(orderKey, id)`,
-   *  filtered to non-deleted rows. The caller is responsible for
-   *  having checked `areChildrenLoaded(parentId)` first; this helper
-   *  doesn't verify the marker because (a) `block.childIds` does it
-   *  in the throw path, and (b) sometimes — e.g. inside a tx —
-   *  callers want a best-effort sibling list and accept the
-   *  partial-cache risk.
-   *
-   *  Reads from `childrenByParent` so the cost is O(children) instead
-   *  of a full O(snapshots) scan — important for tree-walks like
-   *  `getAllVisibleBlockIdsInOrder` which call this once per visited
-   *  block. */
-  childrenOf(parentId: string): BlockData[] {
-    const childIds = this.childrenByParent.get(parentId)
-    if (!childIds || childIds.size === 0) return []
-    const out: BlockData[] = []
-    for (const id of childIds) {
-      const data = this.snapshots.get(id)
-      if (data && !data.deleted) out.push(data)
-    }
-    out.sort((a, b) => {
-      if (a.orderKey < b.orderKey) return -1
-      if (a.orderKey > b.orderKey) return 1
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-    })
-    return out
-  }
-
-  // ──── Parent-children index maintenance ────
-
-  private addToParentIndex(parentId: string | null, childId: string): void {
-    if (parentId === null) return
-    let set = this.childrenByParent.get(parentId)
-    if (!set) {
-      set = new Set()
-      this.childrenByParent.set(parentId, set)
-    }
-    set.add(childId)
-  }
-
-  private removeFromParentIndex(parentId: string | null, childId: string): void {
-    if (parentId === null) return
-    const set = this.childrenByParent.get(parentId)
-    if (!set) return
-    set.delete(childId)
-    if (set.size === 0) this.childrenByParent.delete(parentId)
   }
 }

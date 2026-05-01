@@ -25,7 +25,6 @@
 import {
   BlockNotFoundError,
   BlockNotLoadedError,
-  ChildrenNotLoadedError,
   type BlockData,
   type Handle,
   type HandleStatus,
@@ -33,6 +32,7 @@ import {
   type Unsubscribe,
 } from '@/data/api'
 import type { Repo } from './repo'
+import type { LoaderHandle } from './handleStore'
 
 export class Block implements Handle<BlockData | null> {
   readonly id: string
@@ -173,35 +173,40 @@ export class Block implements Handle<BlockData | null> {
     return schema.codec.decode(stored)
   }
 
-  // ──── Tree relatives (sync; require neighborhood pre-loaded) ────
+  // ──── Tree relatives ────
 
-  /** Children ids in (orderKey, id) order. Throws
-   *  `ChildrenNotLoadedError` if the cache doesn't know whether all
-   *  children are loaded. */
-  get childIds(): string[] {
-    if (!this.repo.cache.areChildrenLoaded(this.id)) {
-      throw new ChildrenNotLoadedError(this.id)
-    }
-    return this.repo.cache.childrenOf(this.id).map(c => c.id)
+  /** Reactive child-id list. Delegates to `repo.childIds(this.id)` —
+   *  the LoaderHandle owns SQL + caching + invalidation, so call sites
+   *  never need to ask the BlockCache about children directly.
+   *  Imperative call sites do `await block.childIds.load()`; reactive
+   *  ones use `useChildIds(block)` (which subscribes to the same
+   *  handle). */
+  get childIds(): LoaderHandle<string[]> {
+    return this.repo.childIds(this.id)
   }
 
-  /** Children as Block instances. Same gating as `childIds`. Routes
-   *  through `repo.block(id)` so the returned facades share identity
-   *  with every other access point — `block.children[0] === repo.block(c.id)`
-   *  and React `key={child.id}` memoizes correctly across renders. */
-  get children(): Block[] {
-    return this.childIds.map(id => this.repo.block(id))
+  /** Reactive children-rows list. Same shape as `childIds` but loads
+   *  the full BlockData rows (per-row deps included), suitable for
+   *  imperative tree walks that need content / properties without an
+   *  extra `repo.block(id).load()` per child. Callers wanting Block
+   *  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
+  get children(): LoaderHandle<BlockData[]> {
+    return this.repo.children(this.id)
   }
 
-  /** Parent as Block, or null if no parent (workspace root) or if the
-   *  parent row isn't in cache. (Throwing here would be too strict —
-   *  most callers want best-effort.) Returns the identity-stable facade
-   *  from `repo.block(parentId)` for the same reason as `children`. */
+  /** Parent as Block, or null only if this block has no parent
+   *  (workspace root). Returns the identity-stable facade from
+   *  `repo.block(parentId)` regardless of whether the parent row is
+   *  in cache — call `.load()` on the result if you need data.
+   *
+   *  Note: requires this block's own row to be in cache (so we know
+   *  `parentId`). Returns null if this block isn't loaded yet — the
+   *  caller is expected to have awaited a prior `load()` if it's
+   *  reading parent imperatively. */
   get parent(): Block | null {
     const data = this.peek()
     if (data === undefined || data === null) return null
     if (data.parentId === null) return null
-    if (!this.repo.cache.getSnapshot(data.parentId)) return null
     return this.repo.block(data.parentId)
   }
 

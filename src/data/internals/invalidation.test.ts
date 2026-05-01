@@ -10,9 +10,9 @@
  *      in this tab.
  *
  *   2. row_events tail: filtered to source='sync', throttled, single
- *      Repo-level subscription. Updates the cache from after_json,
- *      auto-clears `allChildrenLoaded` markers on parent_id assignments,
- *      and walks the same handle invalidation. Covers PowerSync's
+ *      Repo-level subscription. Updates the cache from after_json and
+ *      walks the same handle invalidation (parent-edge dep on each
+ *      sync-applied parent_id assignment). Covers PowerSync's
  *      CRUD-apply path, which bypasses repo.tx.
  *
  * These tests verify each path drives handle re-resolution end-to-end
@@ -285,12 +285,10 @@ describe('row_events tail: sync-applied invalidation', () => {
     expect(fired).toEqual([0, 1])
   })
 
-  it('auto-clears allChildrenLoaded(parent) on sync-applied parent_id assignment', async () => {
+  it('invalidates the children handle on sync-applied parent_id assignment', async () => {
     await create('p')
-    // Pre-populate the marker by reading children once.
     const h = env.repo.children('p')
     await h.load()
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
 
     env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
 
@@ -307,25 +305,20 @@ describe('row_events tail: sync-applied invalidation', () => {
     )
 
     await env.repo.flushRowEventsTail()
-    // The marker is cleared by the tail; the children handle's
-    // re-resolution then re-sets it via its loader. Either we observe
-    // it cleared mid-flight, or we observe it set (post-resolve).
-    // The honest assertion: after flush, the new child is in the
-    // children list — which proves the marker → re-load → re-mark
-    // chain ran end-to-end.
+    // The parent-edge dep on `p` matches the new child's parent_id,
+    // so the children handle re-resolves end-to-end.
     await vi.waitFor(() => {
       const v = h.peek()
       expect(v?.map(b => b.id)).toEqual(['c1-remote'])
     })
   })
 
-  it('does NOT clear allChildrenLoaded on pure content edits (reviewer P2)', async () => {
+  it('does NOT re-resolve children on pure content edits (reviewer P2)', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0', content: 'one'})
-    // Pre-populate the children-loaded marker via a load.
     const h = env.repo.children('p')
     await h.load()
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
+    const initial = h.peek()
 
     env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
 
@@ -340,10 +333,15 @@ describe('row_events tail: sync-applied invalidation', () => {
     )
 
     await env.repo.flushRowEventsTail()
-    // Marker MUST still be set — a subsequent block.childIds read must
-    // not throw ChildrenNotLoadedError on this parent.
-    expect(env.cache.areChildrenLoaded('p')).toBe(true)
-    expect(env.repo.block('p').childIds).toEqual(['c1'])
+    // The handle declares a per-row dep on each child, so the content
+    // edit DOES invalidate the BlockData[] handle (row content is part
+    // of its value). It should NOT, however, change the membership.
+    await vi.waitFor(() => {
+      const v = h.peek()
+      expect(v?.map(b => b.id)).toEqual(['c1'])
+    })
+    expect(initial?.map(b => b.id)).toEqual(['c1'])
+    expect(await env.repo.childIds('p').load()).toEqual(['c1'])
   })
 
   it('high-watermark: only consumes new rows (id > lastId)', async () => {

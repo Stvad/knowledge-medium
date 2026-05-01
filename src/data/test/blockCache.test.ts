@@ -14,10 +14,8 @@
  *     older than the cached snapshot; accepts equal-or-newer
  *   - trackedIds: subscribed listener ids
  *   - dedupLoad: shares in-flight promise; restarts after resolve/reject
- *   - allChildrenLoaded markers: mark/clear/areChildrenLoaded
  *   - missing markers: markMissing notifies on first transition,
  *     clearMissing notifies, setSnapshot clears missing
- *   - childrenOf: filtered + (orderKey, id)-sorted from cache
  *
  * Replaces deleted `src/data/test/blockCache.test.ts` (legacy BlockData
  * shape used `childIds`/`createTime`/`updateTime`/`createdByUserId`).
@@ -252,29 +250,6 @@ describe('BlockCache dedupLoad', () => {
   })
 })
 
-describe('BlockCache allChildrenLoaded markers (spec §5.2)', () => {
-  it('areChildrenLoaded is false until markChildrenLoaded', () => {
-    const cache = new BlockCache()
-    expect(cache.areChildrenLoaded('parent')).toBe(false)
-    cache.markChildrenLoaded('parent')
-    expect(cache.areChildrenLoaded('parent')).toBe(true)
-  })
-
-  it('clearChildrenLoaded resets the flag', () => {
-    const cache = new BlockCache()
-    cache.markChildrenLoaded('parent')
-    cache.clearChildrenLoaded('parent')
-    expect(cache.areChildrenLoaded('parent')).toBe(false)
-  })
-
-  it('the marker is independent per parent', () => {
-    const cache = new BlockCache()
-    cache.markChildrenLoaded('p1')
-    expect(cache.areChildrenLoaded('p1')).toBe(true)
-    expect(cache.areChildrenLoaded('p2')).toBe(false)
-  })
-})
-
 describe('BlockCache confirmed-missing markers (spec §5.2)', () => {
   it('markMissing notifies subscribers on first transition only', () => {
     const cache = new BlockCache()
@@ -316,71 +291,3 @@ describe('BlockCache confirmed-missing markers (spec §5.2)', () => {
   })
 })
 
-describe('BlockCache childrenOf', () => {
-  const child = (id: string, parentId: string | null, orderKey: string, deleted = false) =>
-    snap({id, parentId, orderKey, deleted})
-
-  it('returns only live children of the given parent', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(child('a', 'parent', 'a1'))
-    cache.setSnapshot(child('b', 'parent', 'a2'))
-    cache.setSnapshot(child('c', 'other', 'a1'))
-    cache.setSnapshot(child('d', 'parent', 'a3', true))
-
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a', 'b'])
-  })
-
-  it('orders by (orderKey, id)', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(child('z', 'parent', 'a1'))
-    cache.setSnapshot(child('a', 'parent', 'a1'))
-    cache.setSnapshot(child('m', 'parent', 'a0'))
-
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['m', 'a', 'z'])
-  })
-
-  it('returns empty when no children match', () => {
-    expect(new BlockCache().childrenOf('parent')).toEqual([])
-  })
-
-  it('moves a child between parents when its parentId changes', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(child('a', 'p1', 'a0'))
-    expect(cache.childrenOf('p1').map(c => c.id)).toEqual(['a'])
-    expect(cache.childrenOf('p2')).toEqual([])
-
-    cache.setSnapshot(child('a', 'p2', 'a0'))
-    expect(cache.childrenOf('p1')).toEqual([])
-    expect(cache.childrenOf('p2').map(c => c.id)).toEqual(['a'])
-  })
-
-  it('drops a child from its parent when the snapshot is deleted', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(child('a', 'parent', 'a0'))
-    cache.setSnapshot(child('b', 'parent', 'a1'))
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a', 'b'])
-
-    cache.deleteSnapshot('a')
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['b'])
-  })
-
-  it('hides a soft-deleted child but resurrects it on un-delete', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(child('a', 'parent', 'a0'))
-    cache.setSnapshot(child('b', 'parent', 'a1'))
-    cache.setSnapshot(child('a', 'parent', 'a0', true))
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['b'])
-
-    cache.setSnapshot(child('a', 'parent', 'a0', false))
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a', 'b'])
-  })
-
-  it('ignores root-level (parentId === null) snapshots', () => {
-    const cache = new BlockCache()
-    cache.setSnapshot(child('root', null, 'a0'))
-    cache.setSnapshot(child('a', 'parent', 'a0'))
-    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a'])
-    // root has no parent — childrenOf shouldn't surface it under any key.
-    expect(cache.childrenOf('root')).toEqual([])
-  })
-})

@@ -1,5 +1,5 @@
 import { Block } from '@/data/internals/block'
-import { ClipboardData, BlockData } from '../types'
+import { ClipboardData } from '../types'
 import type { Repo } from '@/data/internals/repo'
 import { selectionStateProp } from '@/data/properties.ts'
 
@@ -9,42 +9,26 @@ const createIndentedContent = (content: string, depth: number): string => {
   return `${indentation}- ${content.split('\n').join('\n' + indentation + indentBy)}`
 }
 
-/** Walk the subtree rooted at `block` and produce an indented
- *  markdown serialization + the BlockData[] in document order. The
- *  walk reads from cache exclusively (callers must `repo.load(id,
- *  {descendants: true})` first); each level descends via
- *  `block.children` (sync, gated on `areChildrenLoaded`). */
-const processBlockRecursively = (
-  block: Block,
-  depth: number,
-): { blocks: BlockData[]; markdown: string[] } => {
-  const data = block.peek()
-  if (!data) return {blocks: [], markdown: []}
-
-  const markdown = [createIndentedContent(data.content, depth)]
-  const blocks: BlockData[] = [data]
-
-  // children getter throws if children not loaded; we caught loading
-  // upstream in serializeBlock.
-  for (const child of block.children) {
-    const sub = processBlockRecursively(child, depth + 1)
-    blocks.push(...sub.blocks)
-    markdown.push(...sub.markdown)
-  }
-
-  return {blocks, markdown}
-}
-
 export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
-  // Hydrate the entire subtree before the sync walk.
-  const data = await block.repo.load(block.id, {descendants: true})
-  if (!data) {
-    throw new Error(`Failed to retrieve data for block with id ${block.id}`)
-  }
-
-  const {blocks, markdown} = processBlockRecursively(block, 0)
+  // One SQL query hydrates the entire subtree in document order
+  // (SUBTREE_SQL ORDER BY path). We compute depth by walking that
+  // flat list once — the root sits at depth 0; every other row's
+  // depth is `parentDepth + 1` (parent must already have appeared
+  // since the query is depth-first). No per-parent handle creation,
+  // no recursive cache reads.
+  const blocks = await block.repo.loadSubtree(block.id, {includeRoot: true})
   if (blocks.length === 0) {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
+  }
+
+  const depthById = new Map<string, number>()
+  const markdown: string[] = []
+  for (const b of blocks) {
+    const depth = b.id === block.id
+      ? 0
+      : (depthById.get(b.parentId ?? '') ?? 0) + 1
+    depthById.set(b.id, depth)
+    markdown.push(createIndentedContent(b.content, depth))
   }
 
   return {

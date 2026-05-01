@@ -583,7 +583,7 @@ Identity rule: same `(name, JSON.stringify(args))` → same handle instance. GC 
 
 For multi-result handles (`subtree`, `backlinks`, query results), the type is `Handle<BlockData[]>` — possibly empty, never null.
 
-### 5.2 `Block` (sync view)
+### 5.2 `Block` (row facade)
 
 ```ts
 export interface Block {
@@ -601,19 +601,20 @@ export interface Block {
   get<T>(schema: PropertySchema<T>): T                       // returns descriptor.defaultValue if absent
   peekProperty<T>(schema: PropertySchema<T>): T | undefined  // no default substitution
 
-  /** Sync relatives. Require that the relevant set has been preloaded:
-   *  - childIds / children: requires `repo.load(id, { children: true })` previously
-   *    succeeded for this id (cache marks "all children loaded" on completion).
-   *    Throws ChildrenNotLoadedError if the marker isn't set. The cache CANNOT
-   *    distinguish "no children" from "children not loaded" by sibling-scanning
-   *    alone — a parent with zero loaded children might be a leaf, or might
-   *    just have unloaded children. The marker is the only honest signal.
-   *  - parent: requires the parent row to be in cache (preloaded via
-   *    `repo.load(id, { ancestors: true })` or natural neighborhood loads).
-   *  Components that need reactive children should use useHandle(repo.children(id))
-   *  instead — that's a Handle<BlockData[]> with first-class load + subscribe. */
-  readonly childIds: string[]                                // ordered by (order_key, id)
-  readonly children: Block[]
+  /** Tree relatives.
+   *  - childIds / children: handles backed by `repo.childIds(id)` /
+   *    `repo.children(id)`. Imperative callers do `await
+   *    block.childIds.load()`; reactive consumers use
+   *    `useChildIds(block)` / `useHandle(block.children)`. The handle
+   *    owns SQL + caching + invalidation — there is no children
+   *    cache on BlockCache itself.
+   *  - parent: identity-stable Block facade for `parentId`. Returns
+   *    null only when this block has no parent (workspace root) OR
+   *    when this block isn't loaded yet (peek() === undefined). The
+   *    returned facade may itself need a `.load()` if the caller wants
+   *    parent data — `block.parent` doesn't gate on cache state. */
+  readonly childIds: LoaderHandle<string[]>                  // ordered by (order_key, id)
+  readonly children: LoaderHandle<BlockData[]>
   readonly parent: Block | null
 
   subscribe(listener: (data: BlockData | null) => void): Unsubscribe
@@ -630,23 +631,35 @@ export interface Block {
 }
 ```
 
-`Block` is a thin facade. `childIds` is **derived from the cache** (other blocks with `parent_id = this.id`), not stored on `BlockData`. `BlockData` matches the row shape — no `childIds` field.
+`Block` is a thin facade. The cache stores per-row snapshots only —
+collection state (children, subtree, ancestors, backlinks) lives on
+`LoaderHandle`s registered with `HandleStore`. `BlockData` matches the
+row shape: no `childIds` field; no parent-children index on the cache.
 
-**Cache loaded-range markers.** The cache tracks per-parent metadata: `{ allChildrenLoaded: boolean }`. `repo.load(id, { children: true })` runs the children SQL, hydrates each child into the cache, and sets the marker for the parent on completion. `repo.subtree(rootId)`'s loader sets the marker for every visited parent. PowerSync sync-applied inserts of new children clear the marker for the affected parent (the row_events tail in §9.3 detects parent_id assignments and clears the corresponding marker). Children handles re-resolve naturally on the same invalidation.
+**Cache contents.** `BlockCache` holds per-id `BlockData` snapshots
+plus confirmed-missing markers. It does NOT hold a parent→children
+index, an `allChildrenLoaded` marker, or any other collection-shaped
+state — those concerns live on the `LoaderHandle`s for
+`repo.children(id)` / `repo.childIds(id)`. PowerSync sync-applied
+inserts/moves invalidate matching handles via the `parent-edge` dep
+declared by their loaders; the row_events tail produces a
+`ChangeNotification` listing `parentIds` and the `HandleStore` walks
+its inverted dep index.
 
 The full `repo.load` signature:
 
 ```ts
 repo.load(id: string, opts?: {
-  children?: boolean        // load id's immediate children; sets allChildrenLoaded marker
-  ancestors?: boolean       // load id's full parent chain
-  descendants?: number      // load N levels of descendants (recursive CTE)
+  children?: boolean        // hydrate id's immediate children into cache
+  ancestors?: boolean       // hydrate id's full parent chain into cache
+  descendants?: number      // hydrate N levels of descendants (recursive CTE)
 }): Promise<BlockData | null>
 ```
 
-`repo.load(id)` with no opts loads just the row itself. The opts are flags telling the loader which neighborhoods to populate alongside.
-
-The facade's sync `childIds` getter checks the marker; if unset, throws `ChildrenNotLoadedError(id)`. This is the only honest contract — the cache cannot distinguish a leaf from "I haven't asked yet." Reactive children access goes through `useHandle(repo.children(id))` instead of the facade.
+`repo.load(id)` with no opts loads just the row itself. The opts are
+flags telling the loader which neighborhoods to populate alongside.
+`repo.load` is for warming the per-row cache; `repo.children(id)` is
+for the reactive children handle (own SQL + own invalidation).
 
 The single-block sugar above (`set`, `setContent`, `delete`) is the only mutating surface on `Block`. Composite operations across multiple blocks (indent, outdent, move, split, merge) are not on `Block` — call them via `repo.mutate.indent({ id: block.id })` or `repo.tx`. Rationale: those operations need broader context (UI state for outdent's `topLevel`, etc.) that doesn't fit cleanly on a per-block facade.
 
@@ -2001,7 +2014,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - New `repo.tx(fn, opts)` on `db.writeTransaction`. Tx primitives per §5.3 v4.27: `tx.get` (async), `tx.peek` (sync), `tx.create`, `tx.createOrGet` (throws `DeletedConflictError` / `DeterministicIdCrossWorkspaceError` per §10.4), `tx.update` (data fields only — no parentId/orderKey/workspaceId/deleted), `tx.delete` (soft-delete), `tx.restore` (typed un-soft-delete + optional patch), `tx.move` (the only entry point for parent_id mutation; runs the engine cycle check), `tx.setProperty` / `tx.getProperty` (codec'd), `tx.run`, `tx.childrenOf`, `tx.parentOf`, `tx.afterCommit`. No `tx.query`.
 - Engine enforces v4.27 / v4.30 invariants at the primitive level: cycle validation in `tx.move` (§4.7 Layer 1, throws `CycleError`); single-workspace per tx (§5.3, throws `WorkspaceMismatchError`); workspace-pin guard in `tx.createOrGet`'s conflict branch (throws `DeterministicIdCrossWorkspaceError`); `tx.afterCommit` requires a workspace to be pinned by a prior write (throws `WorkspaceNotPinnedError` otherwise). Parent existence + same-workspace are storage-layer (local trigger + server FK; §4.1.1); soft-deleted-parent rejection is a kernel mutator UX rule (§4.7 Layer 1 v4.30).
 - `BlockData` type updated: no `childIds` field.
-- `Block` facade: `block.childIds` is a sync getter computed from cache (sibling lookup); `block.children` returns sync `Block` array; `block.parent` sync.
+- `Block` facade: `block.childIds` and `block.children` return identity-stable `LoaderHandle`s backed by `repo.childIds(id)` / `repo.children(id)` (handle-cached SQL, parent-edge invalidation). `block.parent` is sync and returns `repo.block(parentId)` (the caller `.load()`s it if it wants data).
 - Properties stored flat: domain `BlockData.properties` is `Record<string, unknown>` (codec-encoded values), corresponding to the `properties_json` column. Property descriptors live as plain `xxxProp` exports for now (facet wrapping in Phase 3).
 - **Tree CTEs land in Phase 1** (moved from former Phase 5): `SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL` per §11. The depth-100 + visited-id guards are baked in from day one; the cycle-validation `isDescendantOf` query relies on these. Kernel tree access (`block.children`, `block.parent`, `repo.move`'s validation, `repo.subtree(...)` data loader, `visitBlocks`'s loader, `getRootBlock`) all use these CTEs from Phase 1.
 - Tree mutations rewritten as kernel functions on `repo` (not on `Block`): `repo.indent(id)`, `repo.outdent(id, opts)`, `repo.move(id, opts)`, `repo.delete(id)`, `repo.createChild(parentId, opts)`, `repo.split(id, at)`, `repo.merge(a, b)`, `repo.insertChildren(parentId, items)`. Each runs inside `repo.tx` and uses the structural primitives — `tx.move(childId, { parentId, orderKey })` for re-parenting, `tx.create` / `tx.createOrGet` for new rows, `tx.delete` for soft-delete (camelCase domain shape per §4.1.1).
@@ -2035,12 +2048,11 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 **Scope**:
 - `HandleStore` with identity-stable lookup and ref-count GC.
 - Handle factories: `repo.block(id)`, `repo.children(id)`, `repo.subtree(id)`, `repo.ancestors(id)`, `repo.backlinks(id)` return handles. Each calls `ctx.depend(...)` per §5.5 so invalidation works correctly.
-- `repo.load(id, opts?)` with `{ children?, ancestors?, descendants?: number }` populates the cache neighborhood and (for `children: true`) sets the `allChildrenLoaded` marker.
+- `repo.load(id, opts?)` with `{ children?, ancestors?, descendants?: number }` hydrates the requested per-row neighborhood into the cache. Reactive collection state is owned by the `LoaderHandle`s for `repo.children(id)` / `repo.childIds(id)` / `repo.subtree(id)`, not by per-parent markers on the cache.
 - `useHandle(handle)` uses `useSyncExternalStore` + Suspense.
 - `useBlockData`, `useChildren`, `useSubtree`, `useBacklinks`, `useParents` rewrite as 1-line sugar over `useHandle`.
 - `useDataWithSelector` deleted; `useHandle(handle, { selector })`.
 - All `await block.data()`-style sites become `await repo.load(id)` + sync access (with appropriate `opts` for the neighborhoods the caller will read).
-- Cache loaded-range markers (`allChildrenLoaded` per parent) — set by `repo.load(id, { children: true })` and `repo.subtree(...)`'s loader; cleared by row_events tail when a sync-applied row's parent_id matches a tracked parent.
 - React component migration: Suspense boundaries placed where loading-states live.
 
 **Acceptance**:
@@ -2048,7 +2060,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - `useBacklinks`, `useParents` etc. no longer use ad-hoc `useEffect` reload.
 - `Handle<BlockData | null>` distinguishes loading vs. not-found via `status()`.
 - `repo.children(id)` returns a handle whose value updates when sync brings in a new child of `id` (verified via test: write a row to local SQLite mimicking sync apply, expect the children handle to fire and re-resolve).
-- `repo.load(id, { children: true })` sets `allChildrenLoaded`; subsequent `block.childIds` is sync without throwing; absent the load, `block.childIds` throws `ChildrenNotLoadedError`.
+- `block.childIds` / `block.children` return the same `LoaderHandle`s that `repo.childIds(id)` / `repo.children(id)` return — identity-stable across calls and shared with `useChildIds` / `useHandle` consumers.
 - row_events tail filters to `source = 'sync'` only — local writes invalidate via TxEngine fast path, no double-invalidation observable.
 
 ### Phase 3 — Named mutators + post-commit processors as facets
@@ -2122,7 +2134,7 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 11. **Single-workspace per tx** (v4.24): every write inside a single `repo.tx` targets the same `workspace_id`. The engine pins `meta.workspaceId` from the first write and throws `WorkspaceMismatchError` on any subsequent write whose target row's workspace_id differs. `command_events.workspace_id` and `CommittedEvent.workspaceId` are unambiguously this single value.
 12. **`tx.afterCommit` doesn't run on rollback**: scheduled jobs only fire if the parent tx commits.
 13. **`block.data` is sync after load**: after `repo.tx` resolves, any `block.data` read sees the post-tx state — the cache update happens before the promise resolves.
-14. **No `block.data.childIds`**: `BlockData` matches the row shape; `childIds` is computed on `Block` from the cache. Storage source-of-truth is `parent_id + order_key`.
+14. **No `block.data.childIds`**: `BlockData` matches the row shape; child relationships live in the `parent_id + order_key` columns and are surfaced via the `repo.children(id)` / `repo.childIds(id)` handles (which `block.children` / `block.childIds` delegate to).
 15. **Reference parsing is eventually consistent**: `references_json` lags content by the parseReferences debounce window (~100ms typical). Code that reads backlinks accepts this.
 
 ---
@@ -2290,7 +2302,7 @@ The acceptance criteria below describe properties of the **current spec state**.
 - [ ] **Cycle protocol** (§4.7, §11): two layers + detection-only telemetry. Layer 1 = engine-side cycle validation on `tx.move` only (`isDescendantOf` check, throws `CycleError`); FK/triggers can't catch cycles structurally so the engine is load-bearing here. `tx.update`'s patch type doesn't carry `parentId` so it can't bypass; cycle is checked on every parent_id mutation regardless of caller (kernel mutator, plugin mutator, domain helper, or direct `repo.tx`). Layer 2 = depth-100 + visited-id (`!hex/` path-INSTR) guards on every recursive CTE; cyclic results are cleanly truncated and dedup'd. Sync-introduced cycles fire `repo.events.cycleDetected` with `{ workspaceId, startIds, txIdsInvolved }` (operators enumerate members via direct SQL — see §4.7 runbook); no automatic repair, no `ChangeScope.Repair`, no `repairTreeInvariants`, no `canWrite`.
 - [ ] **Workspace invariants** (v4.30 layered story): server-side composite FK enforces `(workspace_id, parent_id) → blocks (workspace_id, id)` (§4.1.1) — canonical guarantee for sync. Local trigger enforces parent-existence + same-workspace for local writes made through `repo.tx` (gated on `tx_context.source IS NOT NULL`); **does not** filter on `deleted = 0` (aligns with server). The Tx primitives don't re-validate parent-existence/workspace — those land as translated `ParentNotFoundError` / `WorkspaceMismatchError` from the trigger/FK. Soft-deleted-parent rejection (`ParentDeletedError`) lives in kernel mutators only (UX rule, not storage invariant). Engine pins `meta.workspaceId` from first write and throws `WorkspaceMismatchError` on cross-workspace writes inside one tx (§5.3, §15 #11).
 - [ ] **Tree CTEs in Phase 1** (§13.1): `SUBTREE_SQL`, `ANCESTORS_SQL`, `IS_DESCENDANT_OF_SQL`, `CHILDREN_SQL` ship from day one with depth-100 + `!hex/` visited-id guards. Phase 5 shrinks to queriesFacet packaging + a 1000-block benchmark.
-- [ ] **Reactivity** (§9): two-source handle invalidation (TxEngine fast path + row_events tail filtered to `source = 'sync'`); parent-edge dependencies for tree handles; children-completeness markers + `ChildrenNotLoadedError` for the sync `Block` facade (§5.2).
+- [ ] **Reactivity** (§9): two-source handle invalidation (TxEngine fast path + row_events tail filtered to `source = 'sync'`); parent-edge dependencies for tree handles. Collection state (children / subtree / etc.) lives entirely on `LoaderHandle`s — `BlockCache` holds per-row snapshots only, no parent-children index, no `allChildrenLoaded` marker. `block.childIds` / `block.children` delegate to `repo.childIds(id)` / `repo.children(id)` (§5.2).
 - [ ] **Reference parsing** (§7): follow-up processor watching `blocks.content` field-writes; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` for the orphan cleanup; cleanup-eligibility filter at schedule time uses each wrapper's `inserted` boolean (covers fresh-insert AND tombstone-restore via `createOrRestoreTargetBlock`'s catch-and-restore). Date-shaped aliases are routed to `ensureDailyNoteTarget`, whose results never enter the cleanup list. `[[Inbox]]`-into-existing-page race (§7.5) does not delete pre-existing pages.
 - [ ] **Read-only mode** (§10.3, §15 #1): `repo.tx` rejects `BlockDefault` / `References`; `UiState` always allowed.
 - [ ] **Codecs at boundaries only** (§5.6, §15 #6): `codec.encode` / `codec.decode` runs at `block.set` / `block.get` / `tx.setProperty` / `tx.getProperty` — four sites. Storage and cache hold encoded shape.

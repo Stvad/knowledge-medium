@@ -2,62 +2,89 @@ import { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
 import { selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp, isCollapsedProp } from '@/data/properties'
 
-/** Returns visible block ids in document order under the panel's
- *  top-level block. Walks the subtree depth-first, skipping the
- *  children of any collapsed block (except the top-level block itself,
- *  which always exposes its children regardless of its own collapsed
- *  state).
- *
- *  Reads from cache after a single subtree hydration. Falls back to
- *  the empty list if the subtree isn't reachable. */
-export async function getAllVisibleBlockIdsInOrder(
-  topLevelBlock: Block,
-): Promise<string[]> {
-  const repo = topLevelBlock.repo
-  await repo.load(topLevelBlock.id, {descendants: true})
-
-  const out: string[] = []
-  const walk = (block: Block, isTopLevel: boolean) => {
-    out.push(block.id)
-    const collapsed = block.peekProperty(isCollapsedProp) ?? false
-    // The top-level block always exposes children even if collapsed —
-    // collapsing the root would hide everything from the panel.
-    if (collapsed && !isTopLevel) return
-    if (!repo.cache.areChildrenLoaded(block.id)) return
-    for (const child of block.children) walk(child, false)
-  }
-  walk(topLevelBlock, true)
-  return out
+/** True if `block` is collapsed *and* the caller cares (i.e. it isn't
+ *  the panel's top-level block — the top always exposes children even
+ *  if its own collapsed flag is set). Reads the property synchronously
+ *  from cache; assumes the row has been loaded. */
+const isExpanded = (block: Block, topLevelBlockId: string): boolean => {
+  if (block.id === topLevelBlockId) return true
+  return !(block.peekProperty(isCollapsedProp) ?? false)
 }
 
-/** Returns the visible block immediately after `current` in document
- *  order under `topLevelBlockId`. Returns null if `current` is the
- *  last visible block. */
+/** Returns the next visible block in document order under
+ *  `topLevelBlockId`, walking *relatively* — descend into the first
+ *  child if `current` is expanded and has children, otherwise climb
+ *  ancestors looking for a next sibling. Stops at the panel boundary
+ *  (`topLevelBlockId`); returns null when `current` is the last
+ *  visible block.
+ *
+ *  Touches O(depth) blocks (one SQL per parent's child list, all small
+ *  + handle-cached) instead of materializing the panel's full
+ *  visible-id list. Works correctly inside panels with arbitrary
+ *  topLevelBlockId because no global "active panel" state is consulted. */
 export const nextVisibleBlock = async (
   current: Block,
   topLevelBlockId: string,
 ): Promise<Block | null> => {
   const repo = current.repo
-  const topLevelBlock = repo.block(topLevelBlockId)
-  const orderedIds = await getAllVisibleBlockIdsInOrder(topLevelBlock)
-  const idx = orderedIds.indexOf(current.id)
-  if (idx === -1 || idx === orderedIds.length - 1) return null
-  return repo.block(orderedIds[idx + 1])
+  await current.load()
+
+  // Step into the first child if expanded.
+  if (isExpanded(current, topLevelBlockId)) {
+    const childIds = await current.childIds.load()
+    if (childIds.length > 0) return repo.block(childIds[0])
+  }
+
+  // Climb ancestors looking for a next sibling. Stop at top-level.
+  let walker: Block = current
+  while (walker.id !== topLevelBlockId) {
+    const data = walker.peek()
+    if (!data || data.parentId === null) return null
+    const parentId = data.parentId
+    const parent = repo.block(parentId)
+    await parent.load()
+    const siblingIds = await parent.childIds.load()
+    const idx = siblingIds.indexOf(walker.id)
+    if (idx !== -1 && idx + 1 < siblingIds.length) {
+      return repo.block(siblingIds[idx + 1])
+    }
+    walker = parent
+  }
+  return null
 }
 
-/** Returns the visible block immediately before `current` in document
- *  order under `topLevelBlockId`. Returns null if `current` is the
- *  first visible block (typically the top-level itself). */
+/** Returns the previous visible block in document order under
+ *  `topLevelBlockId`. Mirror of `nextVisibleBlock`: if `current` has a
+ *  previous sibling, descend into that sibling's last visible
+ *  descendant; otherwise return the parent. Stops at `topLevelBlockId`
+ *  (returns null when `current` is the panel's top-level block). */
 export const previousVisibleBlock = async (
   current: Block,
   topLevelBlockId: string,
 ): Promise<Block | null> => {
+  if (current.id === topLevelBlockId) return null
   const repo = current.repo
-  const topLevelBlock = repo.block(topLevelBlockId)
-  const orderedIds = await getAllVisibleBlockIdsInOrder(topLevelBlock)
-  const idx = orderedIds.indexOf(current.id)
-  if (idx <= 0) return null
-  return repo.block(orderedIds[idx - 1])
+  await current.load()
+
+  const data = current.peek()
+  if (!data || data.parentId === null) return null
+  const parentId = data.parentId
+
+  const parent = repo.block(parentId)
+  await parent.load()
+  const siblingIds = await parent.childIds.load()
+  const idx = siblingIds.indexOf(current.id)
+
+  if (idx > 0) {
+    // Descend into the previous sibling's last visible descendant.
+    return getLastVisibleDescendant(repo.block(siblingIds[idx - 1]))
+  }
+  // No previous sibling — the parent is the previous visible block,
+  // unless the parent is *above* topLevelBlockId (which we never
+  // returned next-into anyway). When current is a direct child of
+  // topLevelBlockId, parent === topLevelBlockId, which is itself the
+  // first visible block in the panel.
+  return parent
 }
 
 /** Last visible descendant of `block` (deepest, last child of last
@@ -66,21 +93,24 @@ export const previousVisibleBlock = async (
  *  has no expanded children. */
 export const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
   const repo = block.repo
-  await repo.load(block.id, {descendants: true})
+  await block.load()
   let current = block
   while (true) {
+    // The starting block always exposes its children; nested blocks
+    // honor the collapsed flag.
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
     if (collapsed && current.id !== block.id) return current
-    if (!repo.cache.areChildrenLoaded(current.id)) return current
-    const children = current.children
-    if (children.length === 0) return current
-    current = children[children.length - 1]
+    const childIds = await current.childIds.load()
+    if (childIds.length === 0) return current
+    current = repo.block(childIds[childIds.length - 1])
+    await current.load()
   }
 }
 
 /** Walks ancestors via cache snapshots and returns the topmost block
  *  reachable. Used by some shortcut handlers that need to jump to
- *  the workspace root. */
+ *  the workspace root. Cache-only; the caller is expected to have
+ *  hydrated the chain via `repo.load(id, {ancestors: true})` first. */
 export const getRootBlock = (block: Block): Block => {
   const repo = block.repo
   let current: Block = block
@@ -147,34 +177,68 @@ export async function validateSelectionHierarchy(
   return Array.from(validatedIds)
 }
 
-/** Range selection between two block ids inside the visible-blocks
- *  document order. Returns the range, validated for hierarchy rules.
- *  Falls back to whichever endpoint is found if either is missing
- *  from the visible list. */
+/** Walk visible blocks from `startBlockId` toward `endBlockId` using
+ *  the relative-navigation primitives. Direction is auto-detected by
+ *  trying forward first, then backward — endpoints are interchangeable
+ *  per the original `getBlocksInRange` contract. Returns the inclusive
+ *  range of ids in document order, validated for hierarchy rules.
+ *
+ *  Falls back to whichever endpoint is reachable when the other one
+ *  isn't visible from the start (matches the legacy behavior of
+ *  `getBlocksInRange` when one endpoint was missing from the visible
+ *  list). */
 export async function getBlocksInRange(
   startBlockId: string,
   endBlockId: string,
-  orderedVisibleBlockIds: string[],
+  topLevelBlockId: string,
   repo: Repo,
 ): Promise<string[]> {
-  const startIndex = orderedVisibleBlockIds.indexOf(startBlockId)
-  const endIndex = orderedVisibleBlockIds.indexOf(endBlockId)
-
-  if (startIndex === -1 || endIndex === -1) {
-    console.warn(
-      '[getBlocksInRange] Start or end block ID not found in visible blocks list.',
-      {startBlockId, endBlockId, orderedVisibleBlockIds},
-    )
-    const range: string[] = []
-    if (startIndex !== -1) range.push(startBlockId)
-    if (endIndex !== -1 && startBlockId !== endBlockId) range.push(endBlockId)
-    return validateSelectionHierarchy(Array.from(new Set(range)), repo)
+  if (startBlockId === endBlockId) {
+    return validateSelectionHierarchy([startBlockId], repo)
   }
 
-  const [minIndex, maxIndex] = [Math.min(startIndex, endIndex), Math.max(startIndex, endIndex)]
-  const rangeIds = orderedVisibleBlockIds.slice(minIndex, maxIndex + 1)
+  const start = repo.block(startBlockId)
+  const end = repo.block(endBlockId)
 
-  return validateSelectionHierarchy(rangeIds, repo)
+  const collectForward = async (): Promise<string[] | null> => {
+    const ids: string[] = [startBlockId]
+    let walker: Block | null = start
+    while (walker) {
+      walker = await nextVisibleBlock(walker, topLevelBlockId)
+      if (!walker) return null
+      ids.push(walker.id)
+      if (walker.id === endBlockId) return ids
+    }
+    return null
+  }
+
+  const collectBackward = async (): Promise<string[] | null> => {
+    const ids: string[] = [startBlockId]
+    let walker: Block | null = start
+    while (walker) {
+      walker = await previousVisibleBlock(walker, topLevelBlockId)
+      if (!walker) return null
+      ids.unshift(walker.id)
+      if (walker.id === endBlockId) return ids
+    }
+    return null
+  }
+
+  const forward = await collectForward()
+  const range = forward ?? await collectBackward()
+  if (range) return validateSelectionHierarchy(range, repo)
+
+  // Either endpoint isn't reachable from the other under the current
+  // panel; preserve the legacy fallback of returning whichever
+  // endpoints we know exist.
+  console.warn(
+    '[getBlocksInRange] endpoints not connected via visible navigation.',
+    {startBlockId, endBlockId, topLevelBlockId},
+  )
+  const fallback: string[] = []
+  if (start.peek()) fallback.push(startBlockId)
+  if (end.peek() && startBlockId !== endBlockId) fallback.push(endBlockId)
+  return validateSelectionHierarchy(Array.from(new Set(fallback)), repo)
 }
 
 /** Extends selection to include blocks in range between current
@@ -196,8 +260,7 @@ export async function extendSelection(
   const currentAnchor = currentState?.anchorBlockId || focusedBlockId
   if (!currentAnchor) return
 
-  const orderedIds = await getAllVisibleBlockIdsInOrder(repo.block(topLevelBlockId))
-  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, orderedIds, repo)
+  const rangeIds = await getBlocksInRange(currentAnchor, targetBlockId, topLevelBlockId, repo)
 
   await uiStateBlock.set(selectionStateProp, {
     selectedBlockIds: rangeIds,

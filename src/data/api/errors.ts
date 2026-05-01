@@ -23,15 +23,6 @@ export class BlockNotFoundError extends DataLayerError {
   }
 }
 
-export class ChildrenNotLoadedError extends DataLayerError {
-  constructor(public readonly id: string) {
-    super(
-      `children of ${id} are not loaded — call repo.load(${id}, { children: true }) ` +
-      `or use useHandle(repo.children(${id})) for reactive access`,
-    )
-  }
-}
-
 // ──── Tx primitives ────
 
 export class DuplicateIdError extends DataLayerError {

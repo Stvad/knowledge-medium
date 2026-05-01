@@ -82,14 +82,14 @@ describe('seedTutorial', () => {
     await env.repo.load(tutorialId, {descendants: true})
 
     const tutorial = env.repo.block(tutorialId)
-    const children = tutorial.children
+    const childIds = await tutorial.childIds.load()
     // Three direct children: intro, sample, extensions parent
-    expect(children.length).toBe(3)
+    expect(childIds.length).toBe(3)
 
-    const intro = children[0]
+    const intro = env.repo.block(childIds[0])
     expect(intro.peek()?.content).toBe(TUTORIAL_README)
 
-    const sample = children[1]
+    const sample = env.repo.block(childIds[1])
     expect(sample.peek()?.content).toBe('A block that uses the hello-renderer extension')
     expect(sample.peekProperty(rendererProp)).toBe('hello-renderer')
   })
@@ -98,7 +98,8 @@ describe('seedTutorial', () => {
     const tutorialId = await seedTutorial(env.repo, WS)
     await env.repo.load(tutorialId, {descendants: true})
 
-    const extensionsParent = env.repo.block(tutorialId).children[2]
+    const childIds = await env.repo.block(tutorialId).childIds.load()
+    const extensionsParent = env.repo.block(childIds[2])
     expect(extensionsParent.peek()?.content).toBe('extensions')
     expect(extensionsParent.peekProperty(aliasesProp)).toEqual(['extensions'])
   })
@@ -107,8 +108,10 @@ describe('seedTutorial', () => {
     const tutorialId = await seedTutorial(env.repo, WS)
     await env.repo.load(tutorialId, {descendants: true})
 
-    const extensionsParent = env.repo.block(tutorialId).children[2]
-    const extBlocks = extensionsParent.children
+    const tutorialChildIds = await env.repo.block(tutorialId).childIds.load()
+    const extensionsParent = env.repo.block(tutorialChildIds[2])
+    const extBlockIds = await extensionsParent.childIds.load()
+    const extBlocks = extBlockIds.map(id => env.repo.block(id))
 
     expect(extBlocks).toHaveLength(exampleExtensions.length)
     for (const block of extBlocks) {

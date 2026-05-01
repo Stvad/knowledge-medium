@@ -61,24 +61,23 @@ const reorderBlock = async (repo: Repo, block: Block, direction: -1 | 1): Promis
   const data = block.peek() ?? await block.load()
   if (!data || data.parentId === null) return
 
-  await repo.load(data.parentId, {children: true})
-  const siblings = repo.cache.childrenOf(data.parentId)
-  const idx = siblings.findIndex(s => s.id === block.id)
+  const siblingIds = await repo.childIds(data.parentId).load()
+  const idx = siblingIds.indexOf(block.id)
   if (idx === -1) return
 
   const target = idx + direction
-  if (target < 0 || target >= siblings.length) return
+  if (target < 0 || target >= siblingIds.length) return
 
   // Target sibling we want to land before/after. For direction=-1
-  // (move up), we want to land BEFORE siblings[target]. For
-  // direction=+1, we want to land AFTER siblings[target].
-  const targetSibling = siblings[target]
+  // (move up), we want to land BEFORE siblingIds[target]. For
+  // direction=+1, we want to land AFTER siblingIds[target].
+  const targetSiblingId = siblingIds[target]
   await repo.mutate.move({
     id: block.id,
     parentId: data.parentId,
     position: direction === -1
-      ? {kind: 'before', siblingId: targetSibling.id}
-      : {kind: 'after', siblingId: targetSibling.id},
+      ? {kind: 'before', siblingId: targetSiblingId}
+      : {kind: 'after', siblingId: targetSiblingId},
   })
 }
 
