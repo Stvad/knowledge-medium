@@ -53,6 +53,7 @@ export {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContentSurfacePropsFacet,
+  blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
   enterBlockEditMode,
   focusBlock,
@@ -68,6 +69,9 @@ export {
   type BlockContentSurfaceContribution,
   type BlockContentSurfaceProps,
   type BlockInteractionContext,
+  type BlockLayout,
+  type BlockLayoutContribution,
+  type BlockLayoutSlots,
   type ShortcutActivationContribution,
   type ShortcutSurfaceContext,
 } from '@/extensions/blockInteraction.ts'

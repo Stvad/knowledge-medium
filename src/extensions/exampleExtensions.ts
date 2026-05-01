@@ -216,11 +216,61 @@ export default [
 ]
 `
 
+const SPLIT_LAYOUT_SOURCE = `import {
+  blockLayoutFacet,
+  ChangeScope,
+  codecs,
+  defineProperty,
+} from '@/extensions/api.js'
+
+// blockLayoutFacet contributions arrange the four slots (Content,
+// Properties, Children, Footer) inside a block's body. Each slot is
+// already wrapped in its own ErrorBoundary + interaction provider
+// boundary, so swapping the layout doesn't change shortcut-surface
+// scoping or accidentally nest descendant blocks inside the parent's
+// content surface.
+//
+// Compose with content renderers freely: a block can have a custom
+// 'renderer: hello-renderer' AND a custom layout — the layout just
+// arranges the slots; the slots' insides are still resolved through
+// the rest of the registry.
+
+const layoutProp = defineProperty('user:layout', {
+  codec: codecs.string,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'string',
+})
+
+const SplitLayout = ({ Content, Children, Properties, Footer }) => (
+  <div>
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <Content />
+        {Properties && <Properties />}
+      </div>
+      <div style={{ flex: 1, minWidth: 0, borderLeft: '1px solid #444', paddingLeft: 12 }}>
+        <Children />
+      </div>
+    </div>
+    <Footer />
+  </div>
+)
+
+// Apply side-by-side layout to any block whose 'user:layout' property
+// is 'split'. Returning null for everything else lets ordinary blocks
+// fall through to the default vertical layout.
+export default blockLayoutFacet.of((ctx) => {
+  if (ctx.block.peekProperty(layoutProp) !== 'split') return null
+  return SplitLayout
+})
+`
+
 export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
   {id: 'hello-renderer', source: HELLO_RENDERER_SOURCE},
   {id: 'fold-all-action', source: FOLD_ALL_ACTION_SOURCE},
   {id: 'emoji-react', source: EMOJI_REACT_SOURCE},
   {id: 'kudos-facet', source: KUDOS_FACET_SOURCE},
+  {id: 'split-layout', source: SPLIT_LAYOUT_SOURCE},
 ]
 
 export const TUTORIAL_README = `Welcome — this is a malleable thought medium.
@@ -231,6 +281,7 @@ Below are example **extension blocks** (\`type: extension\`) that show the kinds
 - **fold-all-action** — an action with a default keyboard shortcut.
 - **emoji-react** — a multi-facet plugin (decorating content renderer + click handler + action).
 - **kudos-facet** — defines a brand-new facet and decorates the content with a banner.
+- **split-layout** — replaces the block layout for blocks tagged \`user:layout = split\`, placing content and children side by side.
 
 To author your own:
 1. Create a block with property \`type = extension\`.

@@ -1,4 +1,4 @@
-import type { HTMLAttributes, MouseEvent } from 'react'
+import type { ComponentType, HTMLAttributes, MouseEvent } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '@/data/internals/block'
 import {
@@ -84,6 +84,32 @@ export type BlockChildrenFooterContribution =
 export type BlockChildrenFooterResolver =
   (context: BlockInteractionContext) => readonly BlockRenderer[]
 
+// Block layout — arranges the four slots (content, properties, children,
+// footer) inside a block's body. The default vertical layout lives in
+// `DefaultBlockLayout`; plugins contribute alternatives by returning a
+// layout component for blocks they want to redress (e.g. a video block
+// in notes view rendering content+children side-by-side).
+//
+// Each slot the layout receives is already wrapped in its own ErrorBoundary
+// + interaction context boundary, so swapping the layout doesn't change
+// shortcut-surface scoping or accidentally nest a child block inside the
+// parent's content surface.
+export interface BlockLayoutSlots {
+  block: Block
+  Content: ComponentType
+  Properties: ComponentType | null
+  Children: ComponentType
+  Footer: ComponentType
+}
+
+export type BlockLayout = ComponentType<BlockLayoutSlots>
+
+export type BlockLayoutContribution =
+  (context: BlockInteractionContext) => BlockLayout | null | undefined | false
+
+export type BlockLayoutResolver =
+  (context: BlockInteractionContext) => BlockLayout | undefined
+
 export const blockChildrenFooterFacet = defineFacet<
   BlockChildrenFooterContribution,
   BlockChildrenFooterResolver
@@ -99,6 +125,16 @@ export const blockChildrenFooterFacet = defineFacet<
   },
   empty: () => () => [],
   validate: isFunction<BlockChildrenFooterContribution>,
+})
+
+export const blockLayoutFacet = defineFacet<
+  BlockLayoutContribution,
+  BlockLayoutResolver
+>({
+  id: 'core.block-layout',
+  combine: combineLastContributionResult<BlockInteractionContext, BlockLayout>(),
+  empty: () => () => undefined,
+  validate: isFunction<BlockLayoutContribution>,
 })
 
 export type ShortcutSurface =

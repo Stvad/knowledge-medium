@@ -1,12 +1,18 @@
 import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.ts'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
+import {
+  DefaultBlockLayout,
+  DefaultBlockRenderer,
+} from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useData, usePropertyValue } from '@/hooks/block.ts'
-import { BlockChildren } from '@/components/BlockComponent.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
+import type {
+  BlockLayout,
+  BlockLayoutContribution,
+} from '@/extensions/blockInteraction.ts'
 import {
   currentTimeRequestEventName,
   CurrentTimeRequestEventDetail,
@@ -66,43 +72,22 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     <div
       ref={containerRef}
       className={inNotesView
-        ? 'fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row'
+        ? 'flex h-full w-full items-center justify-center bg-black'
         : 'group/video-player relative aspect-video'
       }
     >
-      <section className={inNotesView
-        ? 'flex h-[56vh] w-screen items-center justify-center bg-black md:h-screen md:w-[80vw]'
-        : 'h-full w-full'
-      }>
-        <div className={inNotesView ? 'aspect-video w-full max-h-full' : 'h-full w-full'}>
-          <ReactPlayer
-            ref={player}
-            src={blockData.content}
-            playing={isPlaying}
-            controls
-            width="100%"
-            height="100%"
-          />
-        </div>
-      </section>
+      <div className={inNotesView ? 'aspect-video w-full max-h-full' : 'h-full w-full'}>
+        <ReactPlayer
+          ref={player}
+          src={blockData.content}
+          playing={isPlaying}
+          controls
+          width="100%"
+          height="100%"
+        />
+      </div>
 
-      {inNotesView ? (
-        <aside className="h-[44vh] w-screen overflow-y-auto border-t border-border bg-background p-3 md:h-screen md:w-[20vw] md:border-l md:border-t-0">
-          <div className="sticky top-0 z-10 mb-2 flex justify-end bg-background/95 pb-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label="Close video notes view"
-              title="Close video notes view"
-              onClick={() => setView('default')}
-            >
-              <PanelRightClose className="h-4 w-4"/>
-            </Button>
-          </div>
-          <BlockChildren block={block}/>
-        </aside>
-      ) : (
+      {!inNotesView && (
         <Button
           type="button"
           variant="secondary"
@@ -119,10 +104,54 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   )
 }
 
-const VideoPlayerChildrenRenderer = ({block}: BlockRendererProps) => {
-  const [view] = usePropertyValue(block, videoPlayerViewProp)
-  if (view === 'notes') return null
-  return <BlockChildren block={block}/>
+/**
+ * Layout for the video block itself. Subscribes to the view property so a
+ * toggle on the *parent layout* re-renders without forcing every consumer to
+ * re-resolve the layout facet. Falls through to the default vertical layout
+ * unless the block is in notes view, where it lays out content+children
+ * side-by-side as a fullscreen overlay.
+ */
+const VideoPlayerLayout: BlockLayout = (slots) => {
+  const [view, setView] = usePropertyValue(slots.block, videoPlayerViewProp)
+
+  if (view !== 'notes') {
+    return <DefaultBlockLayout {...slots}/>
+  }
+
+  const {Content, Children} = slots
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row">
+      <section className="flex h-[56vh] w-screen items-center justify-center bg-black md:h-screen md:w-[80vw]">
+        <Content/>
+      </section>
+      <aside className="h-[44vh] w-screen overflow-y-auto border-t border-border bg-background p-3 md:h-screen md:w-[20vw] md:border-l md:border-t-0">
+        <div className="sticky top-0 z-10 mb-2 flex justify-end bg-background/95 pb-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Close video notes view"
+            title="Close video notes view"
+            onClick={() => setView('default')}
+          >
+            <PanelRightClose className="h-4 w-4"/>
+          </Button>
+        </div>
+        <Children/>
+      </aside>
+    </div>
+  )
+}
+
+/**
+ * Only contribute a layout for the actual video block — child note blocks
+ * inherit `videoPlayerBlockId` from the surrounding NestedBlockContext, so we
+ * gate on `block.id === videoPlayerBlockId` to leave child layouts alone.
+ */
+export const videoPlayerLayoutContribution: BlockLayoutContribution = ctx => {
+  const videoBlockId = ctx.blockContext?.videoPlayerBlockId
+  if (videoBlockId !== ctx.block.id) return null
+  return VideoPlayerLayout
 }
 
 export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
@@ -130,7 +159,6 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
     <DefaultBlockRenderer
       {...props}
       ContentRenderer={VideoPlayerContentRenderer}
-      ChildrenRenderer={VideoPlayerChildrenRenderer}
     />
   </NestedBlockContextProvider>
 

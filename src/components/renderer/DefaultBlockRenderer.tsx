@@ -3,6 +3,7 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible.tsx'
+import type { ComponentType } from 'react'
 import {
   showPropertiesProp,
   isCollapsedProp,
@@ -49,14 +50,17 @@ import {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContentSurfacePropsFacet,
+  blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
+  type BlockLayout,
+  type BlockLayoutSlots,
 } from '@/extensions/blockInteraction.ts'
 import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
+import { useBlockInteractionContext } from '@/extensions/blockInteractionContext.tsx'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
-  ChildrenRenderer?: BlockRenderer;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -230,12 +234,37 @@ const UpdateIndicator = ({block}: { block: Block }) => {
 }
 
 
+/**
+ * Default vertical block layout — the layout used when no `blockLayoutFacet`
+ * contribution opts in. Reads `inFocus` from the surrounding
+ * BlockInteractionProvider so plugins that want a different focus highlight
+ * (or none at all) can swap the entire layout without touching slot guts.
+ */
+export const DefaultBlockLayout: BlockLayout = ({Content, Properties, Children, Footer}) => {
+  const ctx = useBlockInteractionContext()
+  const inFocus = ctx?.inFocus ?? false
+
+  return (
+    <>
+      <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
+        <Content/>
+        {Properties && <Properties/>}
+      </div>
+
+      <CollapsibleContent>
+        <Children/>
+      </CollapsibleContent>
+
+      <Footer/>
+    </>
+  )
+}
+
 export function DefaultBlockRenderer(
   {
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
-    ChildrenRenderer = BlockChildren,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
@@ -318,6 +347,11 @@ export function DefaultBlockRenderer(
     () => resolveChildrenFooterSections(blockInteractionContext),
     [blockInteractionContext, resolveChildrenFooterSections],
   )
+  const resolveBlockLayout = runtime.read(blockLayoutFacet)
+  const Layout = useMemo(
+    () => resolveBlockLayout(blockInteractionContext) ?? DefaultBlockLayout,
+    [blockInteractionContext, resolveBlockLayout],
+  )
 
   useActionContextActivations(shortcutActivations)
 
@@ -346,6 +380,66 @@ export function DefaultBlockRenderer(
       <BlockBullet block={block}/>
     </div>
 
+  // Content slot: the content surface div + its surface props + the
+  // resolved/decorated ContentRenderer. Stable across renders unless one
+  // of the underlying inputs (block, decorated renderer, surface props)
+  // actually changed.
+  const ContentSlot = useMemo<ComponentType>(() => {
+    const Slot = () => (
+      <div
+        {...contentSurfaceProps}
+        className={`block-content${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
+        ref={contentContainerRef}
+      >
+        <ErrorBoundary FallbackComponent={FallbackComponent}>
+          {/* ContentRenderer comes from the registry-driven
+              decorate(blockContentDecoratorsFacet) memo above —
+              stable identity per blockInteractionContext, not a
+              fresh component each render. */}
+          {/* eslint-disable-next-line react-hooks/static-components */}
+          <ContentRenderer block={block}/>
+        </ErrorBoundary>
+      </div>
+    )
+    Slot.displayName = 'BlockContentSlot'
+    return Slot
+  }, [block, ContentRenderer, contentSurfaceProps])
+
+  const PropertiesSlot = useMemo<ComponentType | null>(() => {
+    if (!showProperties) return null
+    const Slot = () => <BlockProperties block={block}/>
+    Slot.displayName = 'BlockPropertiesSlot'
+    return Slot
+  }, [block, showProperties])
+
+  const ChildrenSlot = useMemo<ComponentType>(() => {
+    const Slot = () => <BlockChildren block={block}/>
+    Slot.displayName = 'BlockChildrenSlot'
+    return Slot
+  }, [block])
+
+  const FooterSlot = useMemo<ComponentType>(() => {
+    const Slot = () => (
+      <>
+        {childrenFooterSections.map((SectionRenderer, index) => (
+          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+            <SectionRenderer block={block}/>
+          </ErrorBoundary>
+        ))}
+      </>
+    )
+    Slot.displayName = 'BlockFooterSlot'
+    return Slot
+  }, [block, childrenFooterSections])
+
+  const layoutSlots = useMemo<BlockLayoutSlots>(() => ({
+    block,
+    Content: ContentSlot,
+    Properties: PropertiesSlot,
+    Children: ChildrenSlot,
+    Footer: FooterSlot,
+  }), [block, ContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot])
+
   return (
     <div>
       {isTopLevel && <Breadcrumbs block={block}/>}
@@ -365,40 +459,14 @@ export function DefaultBlockRenderer(
         {!isTopLevel && blockControls()}
 
         <div className="block-body flex-grow relative flex flex-col">
-          <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
-            <UpdateIndicator block={block}/>
-
-            <div
-              {...contentSurfaceProps}
-              className={`block-content${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
-              ref={contentContainerRef}
-            >
-              <ErrorBoundary FallbackComponent={FallbackComponent}>
-                <BlockInteractionProvider context={blockInteractionContext}>
-                  {/* ContentRenderer comes from the registry-driven
-                      decorate(blockContentDecoratorsFacet) memo above —
-                      stable identity per blockInteractionContext, not a
-                      fresh component each render. */}
-                  {/* eslint-disable-next-line react-hooks/static-components */}
-                  <ContentRenderer block={block}/>
-                </BlockInteractionProvider>
-              </ErrorBoundary>
-            </div>
-
-            {showProperties && (
-              <BlockProperties block={block}/>
-            )}
-          </div>
-
-          <CollapsibleContent>
-            <ChildrenRenderer block={block}/>
-          </CollapsibleContent>
-
-          {childrenFooterSections.map((SectionRenderer, index) => (
-            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-              <SectionRenderer block={block}/>
-            </ErrorBoundary>
-          ))}
+          <UpdateIndicator block={block}/>
+          <BlockInteractionProvider context={blockInteractionContext}>
+            {/* Layout is resolved from blockLayoutFacet — its identity is
+                stable per blockInteractionContext (the resolver memo
+                above), not a fresh component each render. */}
+            {/* eslint-disable-next-line react-hooks/static-components */}
+            <Layout {...layoutSlots}/>
+          </BlockInteractionProvider>
         </div>
 
         {hasChildren && isMobile && !isTopLevel && (
