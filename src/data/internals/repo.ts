@@ -46,7 +46,7 @@ import {
 } from './rowEventsTail'
 import { UndoManager, type UndoEntry } from './undoManager'
 import type { TxImpl } from './txEngine'
-import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
+import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
 import {
   SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL,
   SELECT_ALIASES_IN_WORKSPACE_SQL,
@@ -504,6 +504,38 @@ export class Repo {
           }
           this.cache.markChildrenLoaded(id)
           return out
+        },
+      }),
+    )
+  }
+
+  /** Reactive child-id list of `id`, ordered `(order_key, id)`.
+   *  Identity-stable across calls; GC'd via HandleStore once
+   *  subscribers drain.
+   *
+   *  Differs from `repo.children` in two ways:
+   *    - declares ONLY a `parent-edge` dep on `id` — no per-row deps,
+   *      so child content / property updates don't invalidate this
+   *      handle. Right shape for callers that only care about the
+   *      structural list (e.g. BlockChildren rendering one
+   *      LazyBlockComponent per id).
+   *    - lighter SQL (`SELECT id …`), no row-parse, no cache
+   *      hydration. Block facades hydrate themselves on first read,
+   *      so this is purely a perf win.
+   *
+   *  See `useChildIds` / `useHasChildren` for the React surface.
+   *  Phase 4's queriesFacet will promote this to `repo.query.childIds`
+   *  alongside the rest of the kernel handles. */
+  childIds(id: string): LoaderHandle<string[]> {
+    const key = handleKey('childIds', {id})
+    return this.handleStore.getOrCreate(key, () =>
+      new LoaderHandle<string[]>({
+        store: this.handleStore,
+        key,
+        loader: async (ctx) => {
+          ctx.depend({kind: 'parent-edge', parentId: id})
+          const rows = await this.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+          return rows.map(r => r.id)
         },
       }),
     )

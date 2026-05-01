@@ -32,3 +32,14 @@ Then we move `recentBlockIdsProp` (and any other "preference"-shaped UiState pro
 **Why now in a follow-up**: the legacy implementation synced UiState writes when not read-only. The redesign deliberately changed this — the change is correct, but it does drop the "recents sync across devices" affordance that legacy users might miss. This is the place to pick that back up cleanly without retrofitting UiState's semantics.
 
 **Origin**: design discussion during stage 1.6.B / 1.6.C, where the reviewer flagged that `Block.set(uiSchema, value)` was uploading content scope (P2 finding, fixed in 1.6 commit 6). The fix preserves the spec (UiState = local-ephemeral always) and defers the recents-syncing question here.
+
+## Id-only collection handles for `subtree` / `ancestors` / `backlinks`
+
+`repo.childIds(id)` was added alongside `repo.children(id)` to give callers that only need the structural list a handle whose only dep is `parent-edge` — child property updates don't invalidate it, and the loader is a lighter `SELECT id` query. `useChildIds` and `useHasChildren` were rewritten on top of it; the symptom that motivated the split was an UI-state child mutation cascading a `useChildren`-driven re-render through `LayoutRenderer`.
+
+The same id-only shape would work for the other three list-handle factories in `Repo` (`subtree`, `ancestors`, `backlinks`) for the same reason: their React consumers all use `Block` facades for per-row reactivity, so the per-id `row` deps the handles currently declare are redundant — the row-grain subscriptions on each Block already cover content updates. But the leverage drops sharply:
+- `subtreeIds` — same shape of win in principle (row dep × many descendants), but no current hot consumer. Probably worth waiting for an actual callsite.
+- `ancestorIds` — Breadcrumbs is the only consumer; chains are typically O(depth) shallow and the breadcrumb labels need block content anyway.
+- `backlinkIds` — Backlinks UI also renders each backlink's content; row deps are bounded by the backlinks list size.
+
+Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet` (per `tasks/data-layer-redesign.md` §13.4) is the canonical place for these — `repo.childIds` will migrate alongside `repo.children` to `repo.query.childIds` with no callsite changes downstream of the hooks.

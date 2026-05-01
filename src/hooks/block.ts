@@ -240,21 +240,21 @@ export const usePropertyValue = useProperty
 // Collection hooks (LoaderHandles)
 // ════════════════════════════════════════════════════════════════════
 
+const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
+
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
- *  while the children handle is loading or for a leaf block; the
- *  `repo.children(id)` handle re-resolves on local writes (TxEngine
- *  fast path) and sync arrivals (row_events tail).
+ *  while the handle is loading or for a leaf block.
  *
- *  The handle invalidates on any descendant property change (it
- *  declares a `row` dep per child so consumers that read child fields
- *  stay reactive — see `repo.children`). Using a selector here means
- *  unrelated child-property updates (focus moves on a UI-state child,
- *  content edits, etc.) bail out at `useHandle`'s structural-equality
- *  check, so consumers that only care about the id list don't bounce. */
+ *  Backed by `repo.childIds(id)` rather than `repo.children(id)` —
+ *  declares only a `parent-edge` dep, so unrelated child mutations
+ *  (focus moves on a UI-state child, content edits, etc.) don't
+ *  invalidate the handle at all. The list-shape consumers
+ *  (`BlockChildren`, `LayoutRenderer`'s panel iteration) are the hot
+ *  path that motivated the split. */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.children(block.id), {
-    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => d.id),
-  })
+  useHandle(block.repo.childIds(block.id), {
+    selector: ids => ids ?? EMPTY_STRING_ARRAY,
+  }) as string[]
 
 /** Reactive child Block facades. Same structural-equality bail-out
  *  story as `useChildIds` — `repo.block(id)` is identity-stable, so the
@@ -271,11 +271,14 @@ export const useChildren = (block: Block): Block[] => {
   })
 }
 
-/** Whether the block has children. Selector keeps re-renders pinned to
- *  the boolean — content edits inside a child don't bounce this hook. */
+/** Whether the block has children. Backed by `repo.childIds` so child
+ *  content edits don't even invalidate the handle (vs. the prior
+ *  `repo.children`-backed shape, which fired on every descendant row
+ *  change and only bailed at the React boundary via the boolean
+ *  selector). */
 export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.children(block.id), {
-    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).length > 0,
+  useHandle(block.repo.childIds(block.id), {
+    selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
 
 /** Reactive parent chain (root → … → immediate parent), excluding

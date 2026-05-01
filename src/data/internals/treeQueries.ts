@@ -104,3 +104,12 @@ export const CHILDREN_SQL = `
    WHERE parent_id = ? AND deleted = 0
    ORDER BY order_key, id
 `
+
+/** Same as CHILDREN_SQL but returns only `id` — for the child-id-only
+ *  handle (`repo.childIds`) which doesn't need to hydrate the full row
+ *  and only declares structural deps (`parent-edge`). */
+export const CHILDREN_IDS_SQL = `
+  SELECT id FROM blocks
+   WHERE parent_id = ? AND deleted = 0
+   ORDER BY order_key, id
+`
