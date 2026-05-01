@@ -391,6 +391,58 @@ describe('importRoam', () => {
     expect(restored?.content).toBe('')
   })
 
+  it('chunks descendants across multiple txs without breaking parent links', async () => {
+    // A four-deep chain so the descendant phase sees three rows
+    // (parent + mid + leaf — page row is written in the frontmatter
+    // tx). Setting descendantChunkSize=2 splits parent+mid into
+    // chunk 0 and leaf into chunk 1; the leaf's parent must be
+    // committed before its insert fires the workspace-invariant
+    // trigger.
+    const chainExport: RoamExport = [
+      {
+        title: 'page-chain',
+        uid: 'pageChain',
+        children: [
+          {
+            string: 'parent',
+            uid: 'chainParent',
+            children: [
+              {
+                string: 'mid',
+                uid: 'chainMid',
+                children: [
+                  {
+                    string: 'leaf',
+                    uid: 'chainLeaf',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    const progress: string[] = []
+    const summary = await importRoam(chainExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+      descendantChunkSize: 2,
+      onProgress: msg => progress.push(msg),
+    })
+
+    expect(summary.blocksWritten).toBe(3)
+    // Two descendant chunks: 2 + 1.
+    const chunkLogs = progress.filter(m => m.startsWith('Wrote descendants'))
+    expect(chunkLogs).toEqual(['Wrote descendants 2/3', 'Wrote descendants 3/3'])
+
+    const parent = await readBlock(roamBlockId(WORKSPACE, 'chainParent'))
+    const mid = await readBlock(roamBlockId(WORKSPACE, 'chainMid'))
+    const leaf = await readBlock(roamBlockId(WORKSPACE, 'chainLeaf'))
+    expect(parent?.parent_id).toBe(roamBlockId(WORKSPACE, 'pageChain'))
+    expect(mid?.parent_id).toBe(roamBlockId(WORKSPACE, 'chainParent'))
+    expect(leaf?.parent_id).toBe(roamBlockId(WORKSPACE, 'chainMid'))
+  })
+
   it('dry-run reports counts without writing rows', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

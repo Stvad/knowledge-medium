@@ -30,6 +30,22 @@ import type { RoamExport } from './types'
 
 type AliasIdMap = ReadonlyMap<string, string>
 
+/** How many descendant rows to write per tx. Trade-off:
+ *  - Smaller chunks → smaller TxEngine snapshot Map per commit and
+ *    faster handle-invalidation pass after each commit, but more
+ *    per-tx overhead (BEGIN/COMMIT, command_events row, undo entry,
+ *    one PowerSync upload tx per chunk).
+ *  - Larger chunks → fewer commit-time costs amortised over more
+ *    rows, but the snapshot Map and the post-commit O(snapshots)
+ *    work blow up on huge imports.
+ *
+ *  5K is a balance for the 150-MB-class graphs the optimisation
+ *  targets — empirically the snapshot pass starts to feel sluggish
+ *  past ~10K-20K, and per-tx fixed cost dominates below ~1K. Tune
+ *  later if profiling moves the needle. Not exposed as an option
+ *  for now; callers don't need a knob, they need it fast. */
+const DESCENDANT_CHUNK_SIZE = 5000
+
 interface PageReconciliation {
   /** Plan-side blockId; matches data.parentId for direct children. */
   plannedId: string
@@ -47,6 +63,10 @@ export interface RoamImportOptions {
   dryRun?: boolean
   /** Surface progress / decisions for long imports. */
   onProgress?: (msg: string) => void
+  /** Override the default descendant-tx chunk size. Provided so tests
+   *  can exercise multi-chunk behaviour without generating thousands
+   *  of rows; production callers should leave this unset. */
+  descendantChunkSize?: number
 }
 
 export interface RoamImportSummary {
@@ -136,10 +156,29 @@ export const importRoam = async (
     await getOrCreateDailyNote(repo, options.workspaceId, iso)
   }
 
-  // 5. Write alias seats + placeholders + pages + descendants in one
-  //    big tx. Re-parenting (planned → final) is applied to each
-  //    descendant's `parentId` before tx.createOrGet so the row
-  //    lands under the right parent without a follow-up move.
+  // 5. Write the import in two phases — one frontmatter tx (alias
+  //    seats + placeholders + pages) followed by chunked descendant
+  //    txs. Two reasons we don't ship one giant tx:
+  //
+  //    Memory: TxEngine accumulates a snapshot per write in an
+  //    in-memory Map until commit. A 150-MB Roam graph hits millions
+  //    of rows; the snapshots map (plus the post-commit
+  //    handle-invalidation walk that's O(snapshots)) would dominate
+  //    heap and stall the UI on commit.
+  //
+  //    Progress: a single tx is all-or-nothing — the user has no idea
+  //    how far in we are, and a crash 90 % through means restarting
+  //    from zero. Chunked txs commit incrementally so re-runs land on
+  //    populated rows (idempotent via createOrGet / DeletedConflict
+  //    restore) and the `onProgress` callback can show meaningful
+  //    counts.
+  //
+  //    What we lose: cross-chunk atomicity. If the descendant phase
+  //    fails halfway, the workspace is left with frontmatter + a
+  //    prefix of descendants. That's recoverable (re-running the
+  //    import upserts the rest at the same ids); a millions-row tx
+  //    that fails and rolls back is also recoverable but at much
+  //    higher cost in time + memory. Net favourable.
   let pagesCreated = 0
   let pagesMerged = 0
   let aliasBlocksCreated = 0
@@ -197,22 +236,34 @@ export const importRoam = async (
       if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
       await upsertImportedBlock(tx, recon.page.data)
     }
+  }, {scope: ChangeScope.BlockDefault, description: 'roam import: pages'})
 
-    // 5d. Descendants. The planner emits them in post-order (leaves
-    //     before parents); we iterate in reverse so each descendant's
-    //     parent is already in the table when its insert fires the
-    //     workspace-invariant trigger. Page ancestors were written
-    //     in 5c; intermediate descendants come from this loop.
-    for (let i = plan.descendants.length - 1; i >= 0; i--) {
-      const desc = plan.descendants[i]
-      const data = applyReparent(desc.data, reparentMap)
-      await upsertImportedBlock(tx, data)
-    }
-  }, {scope: ChangeScope.BlockDefault, description: 'roam import'})
-
-  log(`Wrote ${plan.placeholders.length} placeholders, ${plan.descendants.length} descendants, ` +
+  log(`Wrote frontmatter: ${plan.placeholders.length} placeholders, ` +
     `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes, ` +
     `${aliasBlocksCreated} alias seats`)
+
+  // 5d. Descendants in chunks. Planner emits them in post-order
+  //     (leaves before parents); we walk in reverse so each
+  //     descendant's parent is already committed (either from
+  //     frontmatter tx above, or from an earlier descendant chunk).
+  //     A parent + child split across two chunks is safe — the
+  //     parent commits first, the child sees it via the workspace-
+  //     invariant trigger's committed-state read.
+  const total = plan.descendants.length
+  const chunkSize = options.descendantChunkSize ?? DESCENDANT_CHUNK_SIZE
+  let written = 0
+  for (let chunkStart = total - 1; chunkStart >= 0; chunkStart -= chunkSize) {
+    const chunkEnd = Math.max(0, chunkStart - chunkSize + 1)
+    await repo.tx(async tx => {
+      for (let i = chunkStart; i >= chunkEnd; i--) {
+        const desc = plan.descendants[i]
+        const data = applyReparent(desc.data, reparentMap)
+        await upsertImportedBlock(tx, data)
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
+    written += chunkStart - chunkEnd + 1
+    log(`Wrote descendants ${written}/${total}`)
+  }
 
   return {
     pagesCreated,
