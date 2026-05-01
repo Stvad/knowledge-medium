@@ -21,10 +21,10 @@ import {
 } from '@/data/api'
 import { aliasesProp, typeProp } from '@/data/properties'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
+import { computeAliasSeatId } from '@/data/internals/targets'
 import { parseRelativeDate } from '@/utils/relativeDate'
 import { parseReferences } from '@/utils/referenceParser'
 import type { Repo } from '@/data/internals/repo'
-import { v4 as uuidv4 } from 'uuid'
 import { planImport, type PreparedPage, type RoamImportPlan } from './plan'
 import type { RoamExport } from './types'
 
@@ -88,13 +88,13 @@ export const importRoam = async (
   const reparentMap = buildReparentMap(reconciliations)
 
   // 2. Build alias → blockId map for every alias mentioned in content.
-  //    Done before we patch references so the patch sees the final ids.
+  //    Pure planning — no DB writes here. Seat-materialisation for
+  //    unowned aliases happens inside the main tx in step 5b.
   const aliasResolution = await resolveAliases(
     plan.aliasesUsed,
     reconciliations,
     repo,
     options.workspaceId,
-    options.dryRun ?? false,
   )
 
   // 3. Patch references[] on every block with the alias rows.
@@ -112,7 +112,10 @@ export const importRoam = async (
       pagesDaily: reconciliations.filter(r => r.page.isDaily).length,
       blocksWritten: plan.descendants.length,
       aliasesResolved: aliasResolution.aliasIdMap.size,
-      aliasBlocksCreated: aliasResolution.aliasBlocksCreated,
+      // dryRun keeps historical 0 — we'd attempt seat creation for
+      // every aliasesNeedingSeat entry but can't tell up-front which
+      // would be a fresh insert vs a live-row hit.
+      aliasBlocksCreated: 0,
       placeholdersCreated: plan.placeholders.length,
       diagnostics: plan.diagnostics,
       durationMs: Date.now() - start,
@@ -121,26 +124,49 @@ export const importRoam = async (
   }
 
   // 4. Make sure the daily-note rows referenced by daily-page
-  //    reconciliations exist. getOrCreateDailyNote opens its own tx
-  //    and is idempotent — safe to call concurrently across imports.
-  for (const recon of reconciliations) {
-    if (recon.page.isDaily) {
-      await mergeIntoDailyNote(repo, options.workspaceId, recon.page)
-    }
+  //    reconciliations OR by daily-shaped aliases used in content
+  //    exist. getOrCreateDailyNote opens its own tx, sets up the
+  //    journal-page parent link, and is idempotent — first call per
+  //    iso writes, subsequent calls hit the repo cache. Folding into
+  //    the main import tx would require duplicating the journal
+  //    creation logic, and dailies are typically O(years) not
+  //    O(unique_aliases), so the gain isn't worth the duplication.
+  const dailyIsos = collectDailyIsos(reconciliations, aliasResolution.aliasIdMap, plan.aliasesUsed)
+  for (const iso of dailyIsos) {
+    await getOrCreateDailyNote(repo, options.workspaceId, iso)
   }
 
-  // 5. Write placeholders + descendants + non-daily pages in one
+  // 5. Write alias seats + placeholders + pages + descendants in one
   //    big tx. Re-parenting (planned → final) is applied to each
   //    descendant's `parentId` before tx.createOrGet so the row
   //    lands under the right parent without a follow-up move.
   let pagesCreated = 0
   let pagesMerged = 0
+  let aliasBlocksCreated = 0
   const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
   await repo.tx(async tx => {
-    // 5a. Placeholder stand-ins. Idempotent — re-running is a no-op
+    // 5a. Alias-target seats for unowned aliases. Same idempotent
+    //     shape as parseReferencesProcessor's ensureAliasTarget — at
+    //     the deterministic id, with `aliases: [alias]` on insert /
+    //     restore. A live row at the seat (e.g. created earlier by
+    //     parseReferences when the user typed `[[alias]]` before
+    //     importing) is left alone; tombstones restore. The legacy
+    //     code wrote `content: alias` so the imported alias-block had
+    //     a visible title — preserved here for UI parity (user types
+    //     `[[Foo]]` → empty stub; Roam imports `[[Foo]]` → "Foo"
+    //     content for findability).
+    for (const alias of aliasResolution.aliasesNeedingSeat) {
+      const result = await ensureAliasSeat(tx, {
+        alias,
+        workspaceId: options.workspaceId,
+      })
+      if (result.inserted) aliasBlocksCreated += 1
+    }
+
+    // 5b. Placeholder stand-ins. Idempotent — re-running is a no-op
     //     against a live row, and a future import that contains the
     //     real block upserts onto the same row via upsertImportedBlock
-    //     (5c). On a tombstone we restore with the empty stub so
+    //     (5d). On a tombstone we restore with the empty stub so
     //     references[] in other blocks can still resolve.
     for (const placeholder of plan.placeholders) {
       await ensurePlaceholderRow(tx, {
@@ -149,7 +175,7 @@ export const importRoam = async (
       })
     }
 
-    // 5b. Non-daily pages. Pages must land BEFORE descendants — the
+    // 5c. Non-daily pages. Pages must land BEFORE descendants — the
     //     workspace-invariant trigger requires parent rows to exist
     //     at insert time, and descendants are emitted leaves-first
     //     (post-order) so their parents (intermediate blocks + the
@@ -172,11 +198,11 @@ export const importRoam = async (
       await upsertImportedBlock(tx, recon.page.data)
     }
 
-    // 5c. Descendants. The planner emits them in post-order (leaves
+    // 5d. Descendants. The planner emits them in post-order (leaves
     //     before parents); we iterate in reverse so each descendant's
     //     parent is already in the table when its insert fires the
     //     workspace-invariant trigger. Page ancestors were written
-    //     in 5b; intermediate descendants come from this loop.
+    //     in 5c; intermediate descendants come from this loop.
     for (let i = plan.descendants.length - 1; i >= 0; i--) {
       const desc = plan.descendants[i]
       const data = applyReparent(desc.data, reparentMap)
@@ -185,7 +211,8 @@ export const importRoam = async (
   }, {scope: ChangeScope.BlockDefault, description: 'roam import'})
 
   log(`Wrote ${plan.placeholders.length} placeholders, ${plan.descendants.length} descendants, ` +
-    `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes`)
+    `${pagesCreated} new pages, ${pagesMerged} merged, ${pagesDaily} daily-notes, ` +
+    `${aliasBlocksCreated} alias seats`)
 
   return {
     pagesCreated,
@@ -193,11 +220,61 @@ export const importRoam = async (
     pagesDaily,
     blocksWritten: plan.descendants.length,
     aliasesResolved: aliasResolution.aliasIdMap.size,
-    aliasBlocksCreated: aliasResolution.aliasBlocksCreated,
+    aliasBlocksCreated,
     placeholdersCreated: plan.placeholders.length,
     diagnostics: plan.diagnostics,
     durationMs: Date.now() - start,
     dryRun: false,
+  }
+}
+
+/** Distinct ISO dates that need a daily-note row before the main tx
+ *  commits — the union of (imported daily pages, daily-shaped aliases
+ *  referenced in content). Deduplicated so a 1000-block import that
+ *  references `[[2026-04-28]]` 500 times calls getOrCreateDailyNote
+ *  once per unique date, not once per occurrence. */
+const collectDailyIsos = (
+  recons: PageReconciliation[],
+  aliasIdMap: AliasIdMap,
+  aliasesUsed: ReadonlySet<string>,
+): string[] => {
+  const isos = new Set<string>()
+  for (const r of recons) {
+    if (r.page.isDaily && r.page.iso) isos.add(r.page.iso)
+  }
+  for (const alias of aliasesUsed) {
+    const parsed = parseRelativeDate(alias)
+    if (parsed && aliasIdMap.has(alias)) isos.add(parsed.iso)
+  }
+  return [...isos]
+}
+
+/** Idempotent seat materialisation for unowned aliases — at the
+ *  deterministic `computeAliasSeatId(alias, ws)` location. Mirrors
+ *  ensureAliasTarget's shape but writes `content: alias` (visible
+ *  title for UI) instead of empty content. A live row at the seat is
+ *  left alone; tombstones restore as a fresh stub. */
+const ensureAliasSeat = async (
+  tx: Tx,
+  {alias, workspaceId}: {alias: string; workspaceId: string},
+): Promise<{ id: string; inserted: boolean }> => {
+  const id = computeAliasSeatId(alias, workspaceId)
+  const properties = {[aliasesProp.name]: aliasesProp.codec.encode([alias])}
+  try {
+    const result = await tx.createOrGet({
+      id,
+      workspaceId,
+      parentId: null,
+      orderKey: 'a0',
+      content: alias,
+      properties,
+    })
+    return result
+  } catch (err) {
+    if (!(err instanceof DeletedConflictError)) throw err
+    await tx.restore(id, {content: alias, properties, references: []})
+    await tx.move(id, {parentId: null, orderKey: 'a0'})
+    return {id, inserted: true}
   }
 }
 
@@ -243,18 +320,40 @@ const applyReparent = (data: BlockData, reparent: Map<string, string>): BlockDat
 
 interface AliasResolution {
   aliasIdMap: Map<string, string>
-  aliasBlocksCreated: number
+  /** Aliases whose seat row needs to be materialised inside the main
+   *  import tx. Each entry is an alias whose lookup missed against the
+   *  live workspace, so `aliasIdMap.get(alias) === computeAliasSeatId(
+   *  alias, workspaceId)`. Excludes imported-page hits, daily-note
+   *  hits, and existing-block hits — those don't need a new row. */
+  aliasesNeedingSeat: string[]
 }
 
+/**
+ * Pure planning step: build the alias → blockId map without writing
+ * anything. Daily-shaped aliases resolve via `dailyNoteBlockId`
+ * (deterministic; the row gets materialised lazily by
+ * `getOrCreateDailyNote`); existing blocks resolve via the now-indexed
+ * `findBlockByAliasInWorkspace`; everything else points at the
+ * deterministic alias seat (`computeAliasSeatId`) which the main
+ * import tx will materialise idempotently.
+ *
+ * Why not open per-alias txs anymore: a 5K-alias Roam export spawned
+ * 5K side-txs, each firing post-commit processors, row-events tail,
+ * handle invalidation, and (in production) one PowerSync upload
+ * round-trip. The deterministic-seat scheme matches what
+ * parseReferencesProcessor produces, so the seats unify with any
+ * pre-existing typed `[[alias]]` stubs and the main-tx
+ * parseReferences post-commit becomes a no-op (planned references
+ * already match what the processor would compute).
+ */
 const resolveAliases = async (
   aliases: ReadonlySet<string>,
   recons: PageReconciliation[],
   repo: Repo,
   workspaceId: string,
-  dryRun: boolean,
 ): Promise<AliasResolution> => {
   const aliasIdMap = new Map<string, string>()
-  let aliasBlocksCreated = 0
+  const aliasesNeedingSeat: string[] = []
 
   // First, alias = imported-page-title shortcuts to that page's final id
   // (covers references between imported pages, including merge-into
@@ -271,14 +370,11 @@ const resolveAliases = async (
 
     const parsedDate = parseRelativeDate(alias)
     if (parsedDate) {
-      // Daily-shaped alias resolves to its deterministic id. In dryRun
-      // we report the would-be id without materialising the row.
-      if (dryRun) {
-        aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
-        continue
-      }
-      const dailyBlock = await getOrCreateDailyNote(repo, workspaceId, parsedDate.iso)
-      aliasIdMap.set(alias, dailyBlock.id)
+      // Daily-shaped alias → deterministic id. The row is materialised
+      // by getOrCreateDailyNote in step 4 (which also links to the
+      // workspace's journal page); we just predict the id here so
+      // references[] can be patched in-memory before that call.
+      aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
       continue
     }
 
@@ -288,32 +384,17 @@ const resolveAliases = async (
       continue
     }
 
-    if (dryRun) {
-      // Reserve a placeholder id so references[] stay computed; the actual
-      // alias-block won't be created.
-      continue
-    }
-
-    // Create a new alias-target block in its own short tx so the row
-    // is committable independently of the main import tx (parseRefs
-    // post-commit processor needs a live workspace and we want it
-    // running here).
-    const newId = uuidv4()
-    await repo.tx(async tx => {
-      await tx.create({
-        id: newId,
-        workspaceId,
-        parentId: null,
-        orderKey: 'a0',
-        content: alias,
-        properties: {[aliasesProp.name]: aliasesProp.codec.encode([alias])},
-      })
-    }, {scope: ChangeScope.BlockDefault, description: `roam import: alias target ${alias}`})
-    aliasIdMap.set(alias, newId)
-    aliasBlocksCreated += 1
+    // Unowned alias — point at the deterministic seat
+    // (`computeAliasSeatId`). The seat row will be created in the main
+    // import tx; if it already exists (from a prior import OR a
+    // typed-`[[alias]]` parseReferences run that landed at the same
+    // seat), createOrGet leaves it alone. Either way, references in
+    // imported content resolve to the same id across runs.
+    aliasIdMap.set(alias, computeAliasSeatId(alias, workspaceId))
+    aliasesNeedingSeat.push(alias)
   }
 
-  return {aliasIdMap, aliasBlocksCreated}
+  return {aliasIdMap, aliasesNeedingSeat}
 }
 
 const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
@@ -330,19 +411,6 @@ const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
     seen.add(key)
     data.references.push({id, alias: ref.alias})
   }
-}
-
-const mergeIntoDailyNote = async (
-  repo: Repo,
-  workspaceId: string,
-  page: PreparedPage,
-) => {
-  if (!page.iso) throw new Error('Daily page is missing iso date')
-  // Materialize the daily note row (idempotent). The descendants are
-  // created later in the main import tx with parentId already pointing
-  // at this row (the planner used dailyNoteBlockId as the plannedId,
-  // so reparentMap leaves them alone).
-  await getOrCreateDailyNote(repo, workspaceId, page.iso)
 }
 
 /**
