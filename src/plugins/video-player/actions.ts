@@ -14,20 +14,30 @@ import type {
   BaseShortcutDependencies,
 } from '@/shortcuts/types.ts'
 import {
-  blurVideoPlayer,
   focusVideoPlayer,
   requestCurrentTime,
 } from './events.ts'
 import { videoPlayerViewProp } from './view.ts'
 
 export const VIDEO_PLAYER_CONTEXT = 'video-player'
-export type VideoPlayerFocusTarget = 'children' | 'player'
+
+export const isVideoFocusToggleKeyboardEvent = (
+  event: Pick<KeyboardEvent, 'key' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>,
+): boolean => {
+  const key = event.key.toLowerCase()
+  const primaryModifier = event.metaKey || event.ctrlKey
+
+  return (
+    primaryModifier && event.shiftKey && !event.altKey && key === 'f'
+  ) || (
+    event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && key === 'v'
+  )
+}
 
 export interface VideoPlayerShortcutDependencies extends BaseShortcutDependencies {
   block: Block
   videoBlock: Block
   editorView?: EditorView
-  focusTarget?: VideoPlayerFocusTarget
 }
 
 const isVideoPlayerShortcutDependencies = (
@@ -41,12 +51,6 @@ const isVideoPlayerShortcutDependencies = (
   deps.block instanceof Block &&
   'videoBlock' in deps &&
   deps.videoBlock instanceof Block &&
-  (
-    !('focusTarget' in deps) ||
-    deps.focusTarget === undefined ||
-    deps.focusTarget === 'children' ||
-    deps.focusTarget === 'player'
-  ) &&
   (
     !('editorView' in deps) ||
     deps.editorView === undefined ||
@@ -105,19 +109,6 @@ const createTimestampNote = async (
   if (newId) setFocusedBlockId(uiStateBlock, newId)
 }
 
-const focusFirstVideoChild = async (deps: VideoPlayerShortcutDependencies): Promise<void> => {
-  const {videoBlock, uiStateBlock} = deps
-
-  blurVideoPlayer(videoBlock.id)
-  await videoBlock.repo.load(videoBlock.id, {children: true})
-
-  const children = videoBlock.repo.cache.areChildrenLoaded(videoBlock.id)
-    ? videoBlock.repo.cache.childrenOf(videoBlock.id)
-    : []
-  const targetBlockId = children[0]?.id ?? videoBlock.id
-  setFocusedBlockId(uiStateBlock, targetBlockId)
-}
-
 const focusNativeVideoPlayer = async (deps: VideoPlayerShortcutDependencies): Promise<void> => {
   focusVideoPlayer(deps.videoBlock.id)
   await deps.uiStateBlock.set(focusedBlockIdProp, undefined)
@@ -161,15 +152,10 @@ const toggleVideoFocus: ActionConfig = {
   handler: async (deps) => {
     if (!isVideoPlayerShortcutDependencies(deps)) return
 
-    if (deps.focusTarget === 'player') {
-      await focusFirstVideoChild(deps)
-      return
-    }
-
     await focusNativeVideoPlayer(deps)
   },
   defaultBinding: {
-    keys: ['cmd+shift+f', 'ctrl+shift+f'],
+    keys: ['cmd+shift+f', 'ctrl+shift+f', 'alt+v'],
     eventOptions: {
       preventDefault: true,
     },
@@ -207,20 +193,6 @@ export const videoPlayerShortcutActivation: ShortcutActivationContribution = con
   const dependencies: Omit<VideoPlayerShortcutDependencies, 'uiStateBlock'> = {
     block: context.block,
     videoBlock: context.repo.block(videoBlockId),
-    focusTarget: 'children',
-  }
-
-  if (context.surface === 'video-player-native') {
-    const playerFocused = (context as typeof context & { playerFocused?: unknown }).playerFocused
-    if (context.block.id !== videoBlockId || playerFocused !== true) return null
-
-    return [{
-      context: VIDEO_PLAYER_CONTEXT,
-      dependencies: {
-        ...dependencies,
-        focusTarget: 'player',
-      },
-    }]
   }
 
   if (context.surface === 'codemirror') {

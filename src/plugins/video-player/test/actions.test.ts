@@ -5,6 +5,7 @@ import type { Repo } from '@/data/internals/repo'
 import type { BlockInteractionContext, ShortcutSurfaceContext } from '@/extensions/blockInteraction.ts'
 import {
   formatVideoTimestamp,
+  isVideoFocusToggleKeyboardEvent,
   VIDEO_PLAYER_CONTEXT,
   videoPlayerShortcutActivation,
 } from '../actions.ts'
@@ -46,7 +47,6 @@ describe('video player actions', () => {
       dependencies: {
         block: noteBlock,
         videoBlock,
-        focusTarget: 'children',
       },
     }])
   })
@@ -65,27 +65,6 @@ describe('video player actions', () => {
         block: noteBlock,
         videoBlock,
         editorView,
-        focusTarget: 'children',
-      },
-    }])
-  })
-
-  it('keeps the video-player context active while the native player surface has focus', () => {
-    const nativePlayerContext = {
-      ...baseContext,
-      block: videoBlock,
-      surface: 'video-player-native',
-      playerFocused: true,
-    } as ShortcutSurfaceContext & { playerFocused: true }
-
-    const activation = videoPlayerShortcutActivation(nativePlayerContext)
-
-    expect(activation).toEqual([{
-      context: VIDEO_PLAYER_CONTEXT,
-      dependencies: {
-        block: videoBlock,
-        videoBlock,
-        focusTarget: 'player',
       },
     }])
   })
@@ -97,5 +76,29 @@ describe('video player actions', () => {
       surface: 'codemirror',
       editorView: {} as EditorView,
     } satisfies ShortcutSurfaceContext)).toBeNull()
+  })
+
+  it('recognizes focus-toggle shortcuts used by the action and native video handler', () => {
+    expect(isVideoFocusToggleKeyboardEvent({
+      key: 'f',
+      metaKey: true,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: true,
+    })).toBe(true)
+    expect(isVideoFocusToggleKeyboardEvent({
+      key: 'v',
+      metaKey: false,
+      ctrlKey: false,
+      altKey: true,
+      shiftKey: false,
+    })).toBe(true)
+    expect(isVideoFocusToggleKeyboardEvent({
+      key: 'v',
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: false,
+    })).toBe(false)
   })
 })
