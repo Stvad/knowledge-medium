@@ -17,9 +17,6 @@
  *     of the user page
  *   - getPanelsBlock: ensures a 'panels' child of the ui-state
  *   - isMainPanel: content === 'main'
- *   - getActivePanelBlock: prefers a panel with focusedBlockId; falls
- *     back to one with topLevelBlockId; returns undefined when
- *     neither exists
  *   - getSelectionStateSnapshot: returns peekProperty value, defaults
  *     to the schema default when absent
  *   - resetBlockSelection: no-op when already empty, clears when set
@@ -32,13 +29,10 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/internals/repo'
 import {
   aliasesProp,
-  focusedBlockIdProp,
   selectionStateProp,
-  topLevelBlockIdProp,
 } from '@/data/properties'
 import {
   MAIN_PANEL_NAME,
-  getActivePanelBlock,
   getPanelsBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
@@ -186,86 +180,6 @@ describe('isMainPanel', () => {
     }), {scope: ChangeScope.BlockDefault})
     await env.repo.load('p2')
     expect(isMainPanel(env.repo.block('p2'))).toBe(false)
-  })
-})
-
-describe('getActivePanelBlock', () => {
-  it('returns undefined when no panel has a focused or top-level block', async () => {
-    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const panels = await getPanelsBlock(uiState)
-
-    // Create a panel under panels but with no focus / topLevel.
-    await env.repo.tx(tx => tx.create({
-      id: 'panel-empty',
-      workspaceId: WS,
-      parentId: panels.id,
-      orderKey: 'a0',
-      content: 'main',
-    }), {scope: ChangeScope.BlockDefault})
-
-    const active = await getActivePanelBlock(uiState)
-    expect(active).toBeUndefined()
-  })
-
-  it('returns the first panel with a focused block', async () => {
-    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const panels = await getPanelsBlock(uiState)
-
-    await env.repo.tx(async tx => {
-      await tx.create({
-        id: 'panel-noset', workspaceId: WS, parentId: panels.id,
-        orderKey: 'a0', content: 'p1',
-      })
-      await tx.create({
-        id: 'panel-focused', workspaceId: WS, parentId: panels.id,
-        orderKey: 'a1', content: 'p2',
-        properties: {[focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('block-x')},
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    const active = await getActivePanelBlock(uiState)
-    expect(active?.id).toBe('panel-focused')
-  })
-
-  it('falls back to a panel with topLevelBlockId when none has focus', async () => {
-    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const panels = await getPanelsBlock(uiState)
-
-    await env.repo.tx(async tx => {
-      await tx.create({
-        id: 'panel-empty', workspaceId: WS, parentId: panels.id,
-        orderKey: 'a0', content: 'p1',
-      })
-      await tx.create({
-        id: 'panel-toplevel', workspaceId: WS, parentId: panels.id,
-        orderKey: 'a1', content: 'p2',
-        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('block-y')},
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    const active = await getActivePanelBlock(uiState)
-    expect(active?.id).toBe('panel-toplevel')
-  })
-
-  it('prefers focused panel over a top-level fallback when both exist', async () => {
-    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const panels = await getPanelsBlock(uiState)
-
-    await env.repo.tx(async tx => {
-      await tx.create({
-        id: 'panel-toplevel', workspaceId: WS, parentId: panels.id,
-        orderKey: 'a0', content: 'p1',
-        properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('top')},
-      })
-      await tx.create({
-        id: 'panel-focused', workspaceId: WS, parentId: panels.id,
-        orderKey: 'a1', content: 'p2',
-        properties: {[focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('focus')},
-      })
-    }, {scope: ChangeScope.BlockDefault})
-
-    const active = await getActivePanelBlock(uiState)
-    expect(active?.id).toBe('panel-focused')
   })
 })
 

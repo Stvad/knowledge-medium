@@ -1,6 +1,6 @@
 // Authoring sources for the example extensions seeded into a fresh
 // tutorial workspace and inserted on demand by the
-// `insert_example_extensions` action.
+// `insert_example_extensions` NORMAL_MODE action.
 //
 // Each entry is an ESM module text whose `default` export is an
 // AppExtension — see dynamicExtensions.ts for the contract. Imports
@@ -55,7 +55,6 @@ const FOLD_ALL_ACTION_SOURCE = `import {
   actionsFacet,
   ActionContextTypes,
   ChangeScope,
-  getActivePanelBlock,
   isCollapsedProp,
   topLevelBlockIdProp,
 } from '@/extensions/api.js'
@@ -63,9 +62,9 @@ const FOLD_ALL_ACTION_SOURCE = `import {
 // Toggle collapse on every visible descendant of the top-level block.
 // Demonstrates a single action contribution with a default keybinding.
 //
-// GLOBAL action handlers receive the user-level ui-state block; the
-// per-panel topLevelBlockId / focusedBlockId live on each panel's own
-// block under ui-state/panels. getActivePanelBlock walks there for us.
+// NORMAL_MODE handlers receive the panel's ui-state block (panel-bound)
+// directly as uiStateBlock, so the per-panel topLevelBlockId is reachable
+// without walking into ui-state/panels.
 //
 // Note on key syntax: this app uses hotkeys-js, which has no 'mod'
 // alias — list cmd and ctrl variants explicitly for cross-platform
@@ -73,13 +72,10 @@ const FOLD_ALL_ACTION_SOURCE = `import {
 export default actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
-  context: ActionContextTypes.GLOBAL,
+  context: ActionContextTypes.NORMAL_MODE,
   defaultBinding: { keys: ['cmd+shift+f', 'ctrl+shift+f'] },
   handler: async ({ uiStateBlock }) => {
-    const panel = await getActivePanelBlock(uiStateBlock)
-    if (!panel) return
-    await panel.load()
-    const topLevelId = panel.peekProperty(topLevelBlockIdProp)
+    const topLevelId = uiStateBlock.peekProperty(topLevelBlockIdProp)
     if (!topLevelId) return
 
     const repo = uiStateBlock.repo

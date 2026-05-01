@@ -95,7 +95,7 @@ export {
 // --- Block / data primitives ---
 export { Block } from '@/data/internals/block'
 export { Repo } from '@/data/internals/repo'
-export { getActivePanelBlock, getPanelsBlock } from '@/data/globalState.ts'
+export { getPanelsBlock } from '@/data/globalState.ts'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.
 export { defineProperty, codecs, ChangeScope } from '@/data/api'

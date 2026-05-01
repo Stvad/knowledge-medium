@@ -35,7 +35,6 @@ describe('@/extensions/api — public surface', () => {
     // Block / data primitives
     'Block',
     'Repo',
-    'getActivePanelBlock',
     // PropertySchema authoring surface (replaces legacy boolProp /
     // numberProperty / stringProperty / uiChangeScope)
     'defineProperty',
