@@ -63,48 +63,55 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   LIMIT ?
 `
 
-/** Distinct alias values in a workspace, optionally filtered substring.
- *  The flat alias property is a JSON array of strings; `json_each` walks
- *  the array, GROUP BY collapses dupes across blocks. */
+/** Distinct alias values in a workspace, optionally substring-filtered.
+ *  Reads `block_aliases` (the trigger-maintained side index in
+ *  clientSchema.ts) instead of scanning `json_each(properties_json,
+ *  '$.alias')` per query. The case-insensitive filter rides
+ *  `idx_block_aliases_ws_alias_lower`; the case-preserving GROUP BY
+ *  collapses duplicate aliases that appear on multiple blocks. The
+ *  `MIN(b.created_at)` ordering keeps the historical "oldest-first"
+ *  sort even though the index itself doesn't carry timestamps. */
 export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
-  SELECT alias.value AS alias
-  FROM blocks
-  JOIN json_each(blocks.properties_json, '$.alias') AS alias
-  WHERE blocks.workspace_id = ?
-    AND blocks.deleted = 0
-    AND (? = '' OR LOWER(alias.value) LIKE '%' || LOWER(?) || '%')
-  GROUP BY alias.value
-  ORDER BY MIN(blocks.created_at), alias.value
+  SELECT ba.alias AS alias
+  FROM block_aliases ba
+  JOIN blocks b ON b.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND b.deleted = 0
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+  GROUP BY ba.alias
+  ORDER BY MIN(b.created_at), ba.alias
 `
 
 /** Single-block lookup by exact alias (used by createOrRestore wrappers
  *  and call-site alias jumps). Returns the oldest match (deterministic
  *  tie-break on workspaces with two blocks accidentally claiming the
- *  same alias). */
+ *  same alias). Lookups go through `idx_block_aliases_ws_alias`; the
+ *  blocks JOIN reads the row by primary key. */
 export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   SELECT ${buildQualifiedBlockColumnsSql('blocks')}
-  FROM blocks
-  JOIN json_each(blocks.properties_json, '$.alias') AS alias
-  WHERE blocks.workspace_id = ?
+  FROM block_aliases ba
+  JOIN blocks ON blocks.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND ba.alias = ?
     AND blocks.deleted = 0
-    AND alias.value = ?
   ORDER BY blocks.created_at
   LIMIT 1
 `
 
 /** Alias-prefix match used by QuickFind / autocomplete; one row per
- *  (alias, block) pair. */
+ *  (alias, block) pair. Same index plan as the distinct-aliases query
+ *  above: filter on alias_lower, JOIN blocks for content + ordering. */
 export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   SELECT
-    alias.value AS alias,
-    blocks.id AS blockId,
-    blocks.content AS content
-  FROM blocks
-  JOIN json_each(blocks.properties_json, '$.alias') AS alias
-  WHERE blocks.workspace_id = ?
-    AND blocks.deleted = 0
-    AND (? = '' OR LOWER(alias.value) LIKE '%' || LOWER(?) || '%')
-  ORDER BY blocks.created_at, alias.value
+    ba.alias AS alias,
+    b.id AS blockId,
+    b.content AS content
+  FROM block_aliases ba
+  JOIN blocks b ON b.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND b.deleted = 0
+    AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
+  ORDER BY b.created_at, ba.alias
   LIMIT ?
 `
 

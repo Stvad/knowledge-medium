@@ -63,24 +63,28 @@ import {
   ensureDailyNoteTarget,
   isDateAlias,
 } from './targets'
-import { aliasesProp } from './coreProperties'
 
 /** Resolve `alias` to an existing target block id in `workspaceId`,
  *  or null if no live row carries this alias yet. Reads committed
  *  state via `ctx.db` (the processor runs after the originating tx
- *  has committed, so committed reads are correct). */
+ *  has committed, so committed reads are correct). Goes through
+ *  `block_aliases` (the trigger-maintained index in clientSchema.ts),
+ *  which keeps this lookup O(log n) instead of scanning the workspace
+ *  partition. The `b.deleted = 0` filter is defensive — triggers wipe
+ *  index rows on soft-delete already. */
 const lookupAliasTarget = async (
   db: ProcessorReadDb,
   workspaceId: string,
   alias: string,
 ): Promise<string | null> => {
-  // json_each over properties.alias; matches when any element equals alias.
   const row = await db.getOptional<{ id: string }>(
     `SELECT b.id
-     FROM blocks b, json_each(json_extract(b.properties_json, '$.${aliasesProp.name}')) je
-     WHERE b.workspace_id = ?
+     FROM block_aliases ba
+     JOIN blocks b ON b.id = ba.block_id
+     WHERE ba.workspace_id = ?
+       AND ba.alias = ?
        AND b.deleted = 0
-       AND je.value = ?
+     ORDER BY b.created_at
      LIMIT 1`,
     [workspaceId, alias],
   )
