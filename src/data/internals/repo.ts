@@ -513,29 +513,51 @@ export class Repo {
    *  Identity-stable across calls; GC'd via HandleStore once
    *  subscribers drain.
    *
-   *  Differs from `repo.children` in two ways:
-   *    - declares ONLY a `parent-edge` dep on `id` — no per-row deps,
-   *      so child content / property updates don't invalidate this
-   *      handle. Right shape for callers that only care about the
-   *      structural list (e.g. BlockChildren rendering one
-   *      LazyBlockComponent per id).
-   *    - lighter SQL (`SELECT id …`), no row-parse, no cache
-   *      hydration. Block facades hydrate themselves on first read,
-   *      so this is purely a perf win.
+   *  Differs from `repo.children` in its dep declarations: only
+   *  `parent-edge` on `id`, never per-row. Child content / property
+   *  updates therefore don't invalidate this handle — the right shape
+   *  for callers that only care about the structural list (e.g.
+   *  `BlockChildren` rendering one LazyBlockComponent per id).
    *
-   *  See `useChildIds` / `useHasChildren` for the React surface.
+   *  By default the loader still runs the full `CHILDREN_SQL` and
+   *  hydrates each child row into the cache (matching `repo.children`'s
+   *  side effect, including the `allChildrenLoaded` marker). That
+   *  bulk hydration is what keeps the recursive render path fast —
+   *  without it every LazyBlockComponent that mounts on intersection
+   *  would pay its own `block.load()` round-trip and the page would
+   *  visibly pop in block-by-block. The win over `repo.children` is
+   *  purely in the dep set, not in the SQL.
+   *
+   *  Pass `{hydrate: false}` for the lean shape (lighter `SELECT id`,
+   *  no cache hydration). Currently no in-tree caller wants that —
+   *  the option exists for future ones (e.g. counting / id-only
+   *  scans) and gets its own handle slot in the store so it doesn't
+   *  collide with the hydrating variant.
+   *
    *  Phase 4's queriesFacet will promote this to `repo.query.childIds`
    *  alongside the rest of the kernel handles. */
-  childIds(id: string): LoaderHandle<string[]> {
-    const key = handleKey('childIds', {id})
+  childIds(id: string, opts?: {hydrate?: boolean}): LoaderHandle<string[]> {
+    const hydrate = opts?.hydrate ?? true
+    const key = handleKey('childIds', {id, hydrate})
     return this.handleStore.getOrCreate(key, () =>
       new LoaderHandle<string[]>({
         store: this.handleStore,
         key,
         loader: async (ctx) => {
           ctx.depend({kind: 'parent-edge', parentId: id})
-          const rows = await this.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
-          return rows.map(r => r.id)
+          if (!hydrate) {
+            const rows = await this.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+            return rows.map(r => r.id)
+          }
+          const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
+          const ids: string[] = []
+          for (const r of rows) {
+            const data = parseBlockRow(r)
+            this.cache.applySyncSnapshot(data)
+            ids.push(data.id)
+          }
+          this.cache.markChildrenLoaded(id)
+          return ids
         },
       }),
     )

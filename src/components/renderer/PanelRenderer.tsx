@@ -8,7 +8,7 @@ import { useSelectionState, MAIN_PANEL_NAME } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
-import { useEffect, useMemo } from 'react'
+import { useMemo } from 'react'
 import { usePropertyValue, useContent } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
 
@@ -19,32 +19,6 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const isMainPanel = blockContent === MAIN_PANEL_NAME
 
   const repo = useRepo();
-
-  // One-shot subtree preload per panel page. Hydrates every descendant
-  // of `topLevelBlockId` into the cache (and marks `allChildrenLoaded`
-  // for each parent en route) in a single recursive-CTE query.
-  // Without this, every BlockComponent that mounts via
-  // LazyBlockComponent's intersection observer would trigger its own
-  // `block.load()` round-trip — N+1 SQL queries as the user scrolls,
-  // visibly "popping in" block by block.
-  //
-  // We use `repo.loadSubtree` (one-shot, fire-and-forget) rather than
-  // subscribing to the `repo.subtree(id)` handle: the handle declares
-  // a `row` dep per descendant and would re-run SUBTREE_SQL on every
-  // descendant property change (focus moves, content edits, etc.) —
-  // exactly the kind of cascade we just spent two commits eliminating.
-  // The cache-row subscriptions on each Block facade carry the per-row
-  // reactivity from here on; the subtree preload is purely about
-  // warming the cache once per page navigation.
-  //
-  // Note: SUBTREE_SQL doesn't respect `isCollapsed` — it pulls every
-  // descendant regardless of UI fold state. For deep pages with most
-  // subtrees collapsed, this over-loads. See `tasks/follow-ups.md`
-  // (collapsed-aware preload) for the eventual refinement.
-  useEffect(() => {
-    if (!topLevelBlockId) return
-    void repo.loadSubtree(topLevelBlockId)
-  }, [repo, topLevelBlockId])
 
   // Memoize dependencies for MULTI_SELECT_MODE
   const multiSelectDeps = useMemo(() => {
