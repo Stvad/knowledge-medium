@@ -3,6 +3,7 @@ import {
   ActionContextTypes,
   BaseShortcutDependencies,
   ActionConfig,
+  BlockShortcutDependencies,
   MultiSelectModeDependencies,
   CodeMirrorEditModeDependencies,
   ActionTrigger,
@@ -29,6 +30,7 @@ import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.ts'
 import { selectionStateProp } from '@/data/properties'
 import { applyToAllBlocksInSelection, makeMultiSelect } from './utils'
 import {
+  BlockAction,
   bindBlockActionContext,
   createSharedBlockActions,
   extendSelectionDown,
@@ -50,7 +52,7 @@ import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { buildAppHash, writeAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
-import { getActivePanelBlock, isMainPanel } from '@/data/globalState.ts'
+import { isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
@@ -137,6 +139,80 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock)
   const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock)
+
+  // Block-bound actions that operate on the focused/edited block in a
+  // panel. Declared as BlockActions and bound below to both NORMAL_MODE
+  // and EDIT_MODE_CM — in either context `block` is the active block
+  // and `uiStateBlock` is the panel block (panel-bound).
+  const zoomInBlock: BlockAction = {
+    id: 'zoom_in',
+    description: 'Zoom into focused block',
+    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      if (isMainPanel(uiStateBlock)) {
+        const workspaceId = repo.activeWorkspaceId
+        if (!workspaceId) return
+        writeAppHash(workspaceId, block.id)
+      } else {
+        await uiStateBlock.set(topLevelBlockIdProp, block.id)
+      }
+    },
+    defaultBinding: {
+      keys: ['cmd+.', 'ctrl+.'],
+    },
+  }
+
+  const zoomOutBlock: BlockAction = {
+    id: 'zoom_out',
+    description: 'Zoom out to parent of current view',
+    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+      const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+      if (!topLevelBlockId) return
+
+      await repo.load(topLevelBlockId, {ancestors: true})
+      const parent = repo.block(topLevelBlockId).parent
+      if (!parent) return
+
+      if (isMainPanel(uiStateBlock)) {
+        const workspaceId = repo.activeWorkspaceId
+        if (!workspaceId) return
+        writeAppHash(workspaceId, parent.id)
+      } else {
+        await uiStateBlock.set(topLevelBlockIdProp, parent.id)
+      }
+    },
+    defaultBinding: {
+      keys: ['cmd+,', 'ctrl+,'],
+    },
+  }
+
+  const openFocusedInPanelBlock: BlockAction = {
+    id: 'open_focused_in_panel',
+    description: 'Open focused block in a side panel',
+    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      window.dispatchEvent(new CustomEvent('open-panel', {
+        detail: {blockId: block.id, sourcePanelId: uiStateBlock.id},
+      }))
+    },
+    defaultBinding: {
+      keys: ['cmd+shift+.', 'ctrl+shift+.'],
+    },
+  }
+
+  const insertExampleExtensionsBlock: BlockAction = {
+    id: 'insert_example_extensions',
+    description: 'Insert example extensions under current block',
+    handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
+      const created = await insertExampleExtensionsUnder(block)
+      if (created[0]) await uiStateBlock.set(focusedBlockIdProp, created[0].id)
+    },
+  }
+
+  const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomInBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
+  ]
 
   // CodeMirror versions of move actions
   const moveBlockUpCM: ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> = {
@@ -343,95 +419,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       },
     },
     {
-      id: 'insert_example_extensions',
-      description: 'Insert example extensions under current block',
-      context: ActionContextTypes.GLOBAL,
-      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
-        const panel = await getActivePanelBlock(uiStateBlock)
-        if (!panel) return
-        await panel.load()
-        const parentId =
-          panel.peekProperty(focusedBlockIdProp) ??
-          panel.peekProperty(topLevelBlockIdProp)
-        if (!parentId) return
-
-        const created = await insertExampleExtensionsUnder(repo.block(parentId))
-        if (created[0]) await panel.set(focusedBlockIdProp, created[0].id)
-      },
-    },
-    {
-      id: 'zoom_in',
-      description: 'Zoom into focused block',
-      context: ActionContextTypes.GLOBAL,
-      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
-        const panel = await getActivePanelBlock(uiStateBlock)
-        if (!panel) return
-        await panel.load()
-
-        const focusedBlockId = panel.peekProperty(focusedBlockIdProp)
-        if (!focusedBlockId) return
-
-        if (isMainPanel(panel)) {
-          const workspaceId = repo.activeWorkspaceId
-          if (!workspaceId) return
-          writeAppHash(workspaceId, focusedBlockId)
-        } else {
-          await panel.set(topLevelBlockIdProp, focusedBlockId)
-        }
-      },
-      defaultBinding: {
-        keys: ['cmd+.', 'ctrl+.'],
-      },
-    },
-    {
-      id: 'zoom_out',
-      description: 'Zoom out to parent of current view',
-      context: ActionContextTypes.GLOBAL,
-      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
-        const panel = await getActivePanelBlock(uiStateBlock)
-        if (!panel) return
-        await panel.load()
-
-        const topLevelBlockId = panel.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
-
-        await repo.load(topLevelBlockId, {ancestors: true})
-        const parent = repo.block(topLevelBlockId).parent
-        if (!parent) return
-
-        if (isMainPanel(panel)) {
-          const workspaceId = repo.activeWorkspaceId
-          if (!workspaceId) return
-          writeAppHash(workspaceId, parent.id)
-        } else {
-          await panel.set(topLevelBlockIdProp, parent.id)
-        }
-      },
-      defaultBinding: {
-        keys: ['cmd+,', 'ctrl+,'],
-      },
-    },
-    {
-      id: 'open_focused_in_panel',
-      description: 'Open focused block in a side panel',
-      context: ActionContextTypes.GLOBAL,
-      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
-        const panel = await getActivePanelBlock(uiStateBlock)
-        if (!panel) return
-        await panel.load()
-
-        const focusedBlockId = panel.peekProperty(focusedBlockIdProp)
-        if (!focusedBlockId) return
-
-        window.dispatchEvent(new CustomEvent('open-panel', {
-          detail: {blockId: focusedBlockId, sourcePanelId: panel.id},
-        }))
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+.', 'ctrl+shift+.'],
-      },
-    },
-    {
       id: 'navigate_back',
       description: 'Go back in navigation history',
       context: ActionContextTypes.GLOBAL,
@@ -634,6 +621,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, indentBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, outdentBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: 'edit.cm'}),
     moveBlockUpCM,
     moveBlockDownCM,
     extendSelectionDownEdit,
@@ -736,6 +727,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
   return {
     globalActions,
+    normalModeActions,
     editModeCMActions,
     multiSelectModeActions,
   }
@@ -744,12 +736,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   const {
     globalActions,
+    normalModeActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
   return [
     ...globalActions,
+    ...normalModeActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
@@ -758,18 +752,20 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
 export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
     globalActions,
+    normalModeActions,
     editModeCMActions,
     multiSelectModeActions,
   } = getDefaultActionGroups({repo})
 
-  const nonVimActions = [
+  const actions = [
     ...globalActions,
+    ...normalModeActions,
     ...editModeCMActions,
     ...multiSelectModeActions,
   ] as ActionConfig[]
 
   return [
     defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
-    nonVimActions.map(action => actionsFacet.of(action)),
+    actions.map(action => actionsFacet.of(action)),
   ]
 }

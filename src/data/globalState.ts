@@ -37,7 +37,6 @@ import {
   type BlockSelectionState,
   focusedBlockIdProp,
   isEditingProp,
-  topLevelBlockIdProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle } from '@/hooks/block'
 
@@ -197,33 +196,6 @@ export const MAIN_PANEL_NAME = 'main'
 
 export const isMainPanel = (panel: Block): boolean =>
   panel.peek()?.content === MAIN_PANEL_NAME
-
-/** Resolve the panel ui-state block the user is most likely working
- *  in. GLOBAL action handlers receive the user-level UI-state block,
- *  where per-panel state — focused/topLevel block ids — is *not*
- *  stored. Per-panel state lives on each panel block under
- *  ui-state/panels, so any GLOBAL handler that wants to act on "the
- *  current view" needs to walk to the right panel first.
- *
- *  Picks the first panel with a focused block; falls back to the
- *  first panel that has a topLevelBlockId so the helper still resolves
- *  on a fresh page where the user hasn't focused anything yet. */
-export const getActivePanelBlock = async (
-  uiStateBlock: Block,
-): Promise<Block | undefined> => {
-  const panelsBlock = await getPanelsBlock(uiStateBlock)
-  await uiStateBlock.repo.load(panelsBlock.id, {children: true})
-  const panels = panelsBlock.children
-  let fallback: Block | undefined
-  for (const panel of panels) {
-    await panel.load()
-    const focused = panel.peekProperty(focusedBlockIdProp)
-    const topLevel = panel.peekProperty(topLevelBlockIdProp)
-    if (focused) return panel
-    if (!fallback && topLevel) fallback = panel
-  }
-  return fallback
-}
 
 // ──── React hooks ────
 
