@@ -14,6 +14,7 @@ import { videoPlayerPlugin } from '@/plugins/video-player'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { backlinksPlugin } from '@/plugins/backlinks'
+import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { kernelDataExtension } from '@/data/internals/kernelDataExtension.ts'
 import {
@@ -62,6 +63,7 @@ export function AppRuntimeProvider({
     vimNormalModePlugin({repo}),
     videoPlayerPlugin,
     backlinksPlugin,
+    updateIndicatorPlugin,
   ], [repo])
 
   const baseRuntime = useMemo(() =>

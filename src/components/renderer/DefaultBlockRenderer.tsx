@@ -8,16 +8,14 @@ import {
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
-  previousLoadTimeProp,
   setFocusedBlockId,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
-import { useRef, ClipboardEvent, useState, useMemo, useEffect } from 'react'
+import { useRef, ClipboardEvent, useMemo, useEffect } from 'react'
 import { Block } from '@/data/internals/block'
 import {
   useUIStateProperty,
-  useUserProperty,
   useUIStateBlock,
   useIsSelected,
   useInFocus,
@@ -40,7 +38,7 @@ import {
 import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
 import { useBlockContext } from '@/context/block.tsx'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
-import { useHasChildren, usePropertyValue, useData } from '@/hooks/block.ts'
+import { useHasChildren, usePropertyValue } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import {
   blockChildrenFooterFacet,
@@ -219,31 +217,6 @@ const ExpandButton = ({block}: { block: Block }) => {
   )
 }
 
-
-/** "Updated by other user" badge. Exported so it can be wired in as a
- *  default content decorator from `defaultRenderers`. */
-export const UpdateIndicator = ({block}: { block: Block }) => {
-  const [seen, setSeen] = useState(false)
-  const inFocus = useInFocus(block.id)
-  const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
-  const blockData = useData(block)
-
-  useEffect(() => {
-    if (inFocus && !seen) {
-      setSeen(true)
-    }
-  }, [inFocus, seen])
-
-  if (!blockData) return null
-
-  const updatedByOtherUser = blockData?.updatedBy !== block.repo.user.id && blockData.updatedAt > (previousLoadTime ?? 0)
-  const shouldShowUpdateIndicator = updatedByOtherUser && !seen
-
-  return shouldShowUpdateIndicator && (
-    <div className="absolute right-1 top-1 h-2 w-2 rounded-full bg-blue-400"
-         title={`Updated by ${blockData.updatedBy} on ${new Date(blockData.updatedAt).toLocaleString()}`}/>
-  )
-}
 
 
 /**
