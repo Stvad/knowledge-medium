@@ -26,6 +26,12 @@ export interface PreparedPage {
    *  the page block, since each PreparedBlock carries its own
    *  parentId derived from the planner's traversal. */
   childIds: string[]
+  /** Roam attributes hoisted from `key::value` direct children of
+   *  the page. For non-daily, non-merging pages these are already
+   *  baked into `data.properties`; for daily / merging pages the
+   *  orchestrator applies them to the live row with fill-if-missing
+   *  semantics so existing values aren't clobbered. */
+  promotedFromChildren: Record<string, unknown>
 }
 
 export interface PreparedBlock {
@@ -98,6 +104,31 @@ const detectInlineAttribute = (rawContent: string): {key: string, value: string}
   return {key: match[1], value: match[2]}
 }
 
+/** Roam authors a property on the parent by writing a `key::value`
+ *  child block; surface the same shape on our side by hoisting it
+ *  onto the parent's properties. First-write-wins among siblings. */
+const collectPromotedAttributes = (
+  children: ReadonlyArray<RoamBlock>,
+): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const child of children) {
+    const inline = detectInlineAttribute(child.string)
+    if (!inline) continue
+    const propName = `${NS_PREFIX}:${inline.key}`
+    if (out[propName] === undefined) out[propName] = inline.value
+  }
+  return out
+}
+
+/** A `key::value` child with no descendants of its own — pure
+ *  property shorthand. We hoist its value onto the parent and drop
+ *  the block entirely. Children-bearing attribute blocks stay so
+ *  their subtree remains reachable. */
+const isStandaloneAttributeBlock = (block: RoamBlock): boolean => {
+  if (!detectInlineAttribute(block.string)) return false
+  return (block.children?.length ?? 0) === 0
+}
+
 const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> => {
   const fromBlockProps = (block[':block/props'] ?? block.props ?? {}) as Record<string, unknown>
   return {...fromBlockProps, ...getExtraRoamProps(block)}
@@ -149,8 +180,12 @@ const buildBlock = (
 
   const childIds: string[] = []
   const children = block.children ?? []
+  // Use the original index for the order key so skipped attribute
+  // blocks just leave a gap rather than reshuffling siblings.
   for (let i = 0; i < children.length; i++) {
-    childIds.push(buildBlock(ctx, children[i], id, i, pushDescendant))
+    const child = children[i]
+    if (isStandaloneAttributeBlock(child)) continue
+    childIds.push(buildBlock(ctx, child, id, i, pushDescendant))
   }
 
   const data = composeBlockData({
@@ -164,6 +199,7 @@ const buildBlock = (
     roamRefUids: collectUidRefs(block),
     createdAt: cloneTimestamp(block['create-time'], Date.now()),
     updatedAt: cloneTimestamp(block['edit-time'] ?? block['create-time'], Date.now()),
+    promotedFromChildren: collectPromotedAttributes(children),
   })
 
   pushDescendant({data, roamUid: block.uid})
@@ -189,10 +225,15 @@ interface ComposeArgs {
   createdAt: number
   updatedAt: number
   extraProperties?: Record<string, unknown>
+  /** Roam `key::value` children of this block, hoisted onto its
+   *  properties. Lower precedence than `roamProps` and
+   *  `extraProperties` so an explicit value on the block itself
+   *  isn't clobbered. */
+  promotedFromChildren?: Record<string, unknown>
 }
 
 const composeBlockData = (args: ComposeArgs): BlockData => {
-  const {ctx, id, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties} = args
+  const {ctx, id, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties, promotedFromChildren} = args
 
   const rewritten = rewriteRoamContent(rawString, ctx.uidMap)
   for (const u of rewritten.unresolvedBlockUids) ctx.unresolvedBlockUids.add(u)
@@ -213,19 +254,9 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     .map(mapped => ({id: mapped, alias: mapped}))
 
   const properties: Record<string, unknown> = {
+    ...(promotedFromChildren ?? {}),
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
-  }
-
-  // Simple `key::value` blocks land as both content (preserves display)
-  // and a `roam:<key>` property (queryable). Complex shapes
-  // (multi-line, mixed-with-content, multi-attr) are pass-through.
-  const inlineAttr = detectInlineAttribute(rawString)
-  if (inlineAttr) {
-    const propName = `${NS_PREFIX}:${inlineAttr.key}`
-    if (properties[propName] === undefined) {
-      properties[propName] = inlineAttr.value
-    }
   }
 
   const data: BlockData = {
@@ -334,8 +365,11 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     const childIds: string[] = []
     const pageChildren = page.children ?? []
     for (let i = 0; i < pageChildren.length; i++) {
-      childIds.push(buildBlock(ctx, pageChildren[i], pageBlockId, i, pushDescendant))
+      const child = pageChildren[i]
+      if (isStandaloneAttributeBlock(child)) continue
+      childIds.push(buildBlock(ctx, child, pageBlockId, i, pushDescendant))
     }
+    const promotedFromChildren = collectPromotedAttributes(pageChildren)
 
     if (daily) {
       preparedPages.push({
@@ -345,6 +379,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
         isDaily: true,
         iso: daily.iso,
         childIds,
+        promotedFromChildren,
       })
       continue
     }
@@ -369,6 +404,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
         [aliasesProp.name]: aliasesProp.codec.encode([page.title]),
         [typeProp.name]: typeProp.codec.encode('page'),
       },
+      promotedFromChildren,
     })
 
     preparedPages.push({
@@ -378,6 +414,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       isDaily: false,
       data: pageData,
       childIds,
+      promotedFromChildren,
     })
   }
 
