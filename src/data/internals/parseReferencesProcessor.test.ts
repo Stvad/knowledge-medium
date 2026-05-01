@@ -26,7 +26,7 @@ import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from './repo'
-import { computeAliasTargetId, computeDailyNoteId } from './targets'
+import { computeAliasSeatId, computeDailyNoteId } from './targets'
 
 interface Harness {
   h: TestDb
@@ -73,7 +73,7 @@ afterEach(async () => {
 
 const WS = 'ws-1'
 
-const aliasId = (alias: string) => computeAliasTargetId(alias, WS)
+const aliasId = (alias: string) => computeAliasSeatId(alias, WS)
 const dailyId = (date: string) => computeDailyNoteId(date, WS)
 
 /** Run all pending processors to completion (synchronous + delayed). */

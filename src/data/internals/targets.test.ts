@@ -5,7 +5,7 @@
  * Roam importer.
  *
  * Coverage:
- *   - computeAliasTargetId: stable per (workspaceId, alias); workspace-
+ *   - computeAliasSeatId: stable per (workspaceId, alias); workspace-
  *     scoped (same alias in different workspaces → different ids)
  *   - computeDailyNoteId: stable per (workspaceId, iso); namespace
  *     matches dailyNotes.DAILY_NOTE_NS (server migration parity)
@@ -33,7 +33,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/internals/repo'
 import {
-  computeAliasTargetId,
+  computeAliasSeatId,
   computeDailyNoteId,
   createOrRestoreTargetBlock,
   ensureAliasTarget,
@@ -69,19 +69,19 @@ let env: Harness
 beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
-describe('computeAliasTargetId', () => {
+describe('computeAliasSeatId', () => {
   it('is stable for a given (workspaceId, alias)', () => {
-    expect(computeAliasTargetId('foo', WS)).toBe(computeAliasTargetId('foo', WS))
+    expect(computeAliasSeatId('foo', WS)).toBe(computeAliasSeatId('foo', WS))
   })
 
   it('differs across workspaces for the same alias', () => {
-    expect(computeAliasTargetId('foo', 'ws-a'))
-      .not.toBe(computeAliasTargetId('foo', 'ws-b'))
+    expect(computeAliasSeatId('foo', 'ws-a'))
+      .not.toBe(computeAliasSeatId('foo', 'ws-b'))
   })
 
   it('differs across aliases in the same workspace', () => {
-    expect(computeAliasTargetId('foo', WS))
-      .not.toBe(computeAliasTargetId('bar', WS))
+    expect(computeAliasSeatId('foo', WS))
+      .not.toBe(computeAliasSeatId('bar', WS))
   })
 })
 
@@ -125,7 +125,7 @@ describe('isDateAlias', () => {
 describe('createOrRestoreTargetBlock — insert path', () => {
   it('inserts a fresh row, returns {inserted: true}, fires callback', async () => {
     const callbackCalls: string[] = []
-    const id = computeAliasTargetId('fresh', WS)
+    const id = computeAliasSeatId('fresh', WS)
 
     const result = await env.repo.tx(async tx => {
       return createOrRestoreTargetBlock(tx, {
@@ -151,7 +151,7 @@ describe('createOrRestoreTargetBlock — insert path', () => {
 
 describe('createOrRestoreTargetBlock — live-row hit', () => {
   it('returns {inserted: false} and does NOT fire callback', async () => {
-    const id = computeAliasTargetId('live', WS)
+    const id = computeAliasSeatId('live', WS)
 
     // Pre-create the row.
     await env.repo.tx(tx => tx.create({
@@ -188,7 +188,7 @@ describe('createOrRestoreTargetBlock — live-row hit', () => {
 
 describe('createOrRestoreTargetBlock — tombstone path', () => {
   it('restores tombstoned row, applies freshContent, fires callback, returns inserted=true', async () => {
-    const id = computeAliasTargetId('tombstone', WS)
+    const id = computeAliasSeatId('tombstone', WS)
 
     // Pre-create + soft-delete the row.
     await env.repo.tx(tx => tx.create({
@@ -226,7 +226,7 @@ describe('createOrRestoreTargetBlock — tombstone path', () => {
 
 describe('createOrRestoreTargetBlock — workspace mismatch', () => {
   it('surfaces DeterministicIdCrossWorkspaceError (does not swallow)', async () => {
-    const id = computeAliasTargetId('shared', 'ws-a')
+    const id = computeAliasSeatId('shared', 'ws-a')
 
     // Pre-seed in ws-a.
     await env.repo.tx(tx => tx.create({
@@ -257,7 +257,7 @@ describe('ensureAliasTarget', () => {
       return ensureAliasTarget(tx, 'foo', WS)
     }, {scope: ChangeScope.BlockDefault})
 
-    expect(result.id).toBe(computeAliasTargetId('foo', WS))
+    expect(result.id).toBe(computeAliasSeatId('foo', WS))
     expect(result.inserted).toBe(true)
 
     const row = await env.h.db.get<{properties_json: string}>(

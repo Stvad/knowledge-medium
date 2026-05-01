@@ -57,7 +57,7 @@ import {
   parseBlockRefs,
 } from '@/utils/referenceParser'
 import {
-  computeAliasTargetId,
+  computeAliasSeatId,
   computeDailyNoteId,
   ensureAliasTarget,
   ensureDailyNoteTarget,
@@ -152,7 +152,7 @@ const buildSourcePlan = async (
     // Will be created by ensureAliasTarget in the write phase. The id
     // is deterministic from (alias, workspaceId), so we can predict it
     // here for the references column.
-    const id = computeAliasTargetId(mark.alias, source.workspaceId)
+    const id = computeAliasSeatId(mark.alias, source.workspaceId)
     aliasRefs.push({id, alias: mark.alias})
     aliasesToEnsure.push(mark.alias)
   }

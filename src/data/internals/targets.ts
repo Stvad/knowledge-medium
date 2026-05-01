@@ -93,10 +93,10 @@ export const createOrRestoreTargetBlock = async (
 
 // ──── Deterministic-id namespaces (UUIDv5) ────
 
-/** Namespace for alias-target ids. Shared with the legacy
+/** Namespace for alias-seat ids. Shared with the legacy
  *  `aliasBlockId` if there was one; for v1 we anchor a new namespace
  *  here. The input format is `${workspaceId}:${alias}` so two
- *  workspaces typing the same alias get distinct target rows. */
+ *  workspaces typing the same alias get distinct seats. */
 const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
 
 /** Namespace for daily-note target ids. Mirrors
@@ -105,7 +105,17 @@ const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
  *  aliases compute the same id as the existing daily-notes flow. */
 const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
-const computeAliasTargetId = (alias: string, workspaceId: string): string =>
+/** Stable id for the **stub-block seat** that auto-materialises when
+ *  nobody owns `alias` in `workspaceId` yet. NOT "the canonical id of
+ *  the block named alias" — a real block claiming the alias keeps its
+ *  own (random) id and lookup-first finds it. The seat id is only
+ *  used by callers that resolve an unowned alias and want to either
+ *  point a reference at a deterministic spot (parseReferences) or
+ *  insert/restore the stub there idempotently (Roam import,
+ *  ensureAliasTarget). Two clients computing this for the same
+ *  `(alias, workspaceId)` get the same id, so the seats converge
+ *  through PowerSync without a duplicate-block merge. */
+const computeAliasSeatId = (alias: string, workspaceId: string): string =>
   uuidv5(`${workspaceId}:${alias}`, ALIAS_NS)
 
 const computeDailyNoteId = (date: string, workspaceId: string): string =>
@@ -120,16 +130,22 @@ export const isDateAlias = (alias: string): boolean =>
 
 // ──── Layer 2 — per-domain wrappers ────
 
-/** Ensure an alias-target block exists for `alias` in `workspaceId`.
- *  Inserts at workspace-root with an empty content; sets `aliases`
- *  property to `[alias]` on insert/restore. Returns `{id, inserted}`. */
+/** Ensure a stub-block seat exists for `alias` in `workspaceId`. The
+ *  seat is the deterministic id `computeAliasSeatId(alias, ws)` —
+ *  NOT a canonical id for "the block named alias". Callers should
+ *  always lookup-first (a real block claiming the alias has its own
+ *  id and that's what references should resolve to); this helper is
+ *  only invoked when the lookup misses, to materialise the stub the
+ *  reference will point at. Inserts at workspace-root with empty
+ *  content; sets `aliases` property to `[alias]` on insert/restore.
+ *  Returns `{id, inserted}`. */
 export const ensureAliasTarget = async (
   tx: Tx,
   alias: string,
   workspaceId: string,
 ): Promise<{ id: string; inserted: boolean }> =>
   createOrRestoreTargetBlock(tx, {
-    id: computeAliasTargetId(alias, workspaceId),
+    id: computeAliasSeatId(alias, workspaceId),
     workspaceId,
     parentId: null,
     orderKey: keyAtEnd(),
@@ -161,4 +177,4 @@ export const ensureDailyNoteTarget = async (
 
 // Re-exports so tests + other callers can use the deterministic-id
 // helpers without re-importing them from internal namespaces.
-export { computeAliasTargetId, computeDailyNoteId }
+export { computeAliasSeatId, computeDailyNoteId }
