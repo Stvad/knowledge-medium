@@ -79,6 +79,17 @@ export type BlockContentSurfaceContribution =
 export type BlockContentSurfaceResolver =
   (context: BlockInteractionContext) => BlockContentSurfaceProps
 
+// Slot for sections rendered above a block's body — top-level breadcrumbs
+// live here by default. Mirrors `blockChildrenFooterFacet` exactly: each
+// contribution returns a renderer (or null/undefined/false to opt out
+// for this block); the layout renders all returned components in
+// contribution order.
+export type BlockHeaderContribution =
+  (context: BlockInteractionContext) => BlockRenderer | null | undefined | false
+
+export type BlockHeaderResolver =
+  (context: BlockInteractionContext) => readonly BlockRenderer[]
+
 // Slot for sections rendered after a block's children — Roam-style "Linked
 // References" lives here. Each contribution returns a renderer (or null/
 // undefined/false to opt out for this block); the DefaultBlockRenderer
@@ -131,10 +142,8 @@ export interface BlockLayoutSlots {
   Footer: ComponentType
   /** Bullet + expand-collapse affordances; renders nothing when not appropriate (top-level). */
   Controls: ComponentType
-  /** Top-level breadcrumb trail; returns `null` for non-top-level blocks. */
-  Breadcrumbs: ComponentType
-  /** "Updated by other user" badge; returns `null` when there's nothing to flag. */
-  UpdateIndicator: ComponentType
+  /** Above-body sections contributed via `blockHeaderFacet` (top-level breadcrumbs by default). */
+  Header: ComponentType
   /** Shell-level attributes + handlers the typical block wrapper bears. */
   shellProps: BlockShellProps
 }
@@ -146,6 +155,23 @@ export type BlockLayoutContribution =
 
 export type BlockLayoutResolver =
   (context: BlockInteractionContext) => BlockLayout | undefined
+
+export const blockHeaderFacet = defineFacet<
+  BlockHeaderContribution,
+  BlockHeaderResolver
+>({
+  id: 'core.block-header',
+  combine: contributions => context => {
+    const result: BlockRenderer[] = []
+    for (const contribution of contributions) {
+      const renderer = contribution(context)
+      if (renderer) result.push(renderer)
+    }
+    return result
+  },
+  empty: () => () => [],
+  validate: isFunction<BlockHeaderContribution>,
+})
 
 export const blockChildrenFooterFacet = defineFacet<
   BlockChildrenFooterContribution,

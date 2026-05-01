@@ -27,7 +27,6 @@ import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
-import { Breadcrumbs } from '@/components/Breadcrumbs.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import {
@@ -49,6 +48,7 @@ import {
   blockContentDecoratorsFacet,
   blockContentRendererFacet,
   blockContentSurfacePropsFacet,
+  blockHeaderFacet,
   blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
   type BlockLayout,
@@ -220,7 +220,9 @@ const ExpandButton = ({block}: { block: Block }) => {
 }
 
 
-const UpdateIndicator = ({block}: { block: Block }) => {
+/** "Updated by other user" badge. Exported so it can be wired in as a
+ *  default content decorator from `defaultRenderers`. */
+export const UpdateIndicator = ({block}: { block: Block }) => {
   const [seen, setSeen] = useState(false)
   const inFocus = useInFocus(block.id)
   const [previousLoadTime] = useUserProperty(previousLoadTimeProp)
@@ -257,7 +259,7 @@ const UpdateIndicator = ({block}: { block: Block }) => {
 export const DefaultBlockLayout: BlockLayout = ({
   block,
   Content, Properties, Children, Footer,
-  Controls, Breadcrumbs, UpdateIndicator,
+  Controls, Header,
   shellProps,
 }) => {
   const ctx = useBlockInteractionContext()
@@ -268,7 +270,7 @@ export const DefaultBlockLayout: BlockLayout = ({
 
   return (
     <div>
-      <Breadcrumbs/>
+      <Header/>
 
       <Collapsible
         {...shellProps}
@@ -278,7 +280,6 @@ export const DefaultBlockLayout: BlockLayout = ({
         <Controls/>
 
         <div className="block-body flex-grow relative flex flex-col">
-          <UpdateIndicator/>
           <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
             <Content/>
             {Properties && <Properties/>}
@@ -377,6 +378,11 @@ export function DefaultBlockRenderer(
   const childrenFooterSections = useMemo(
     () => resolveChildrenFooterSections(blockInteractionContext),
     [blockInteractionContext, resolveChildrenFooterSections],
+  )
+  const resolveHeaderSections = runtime.read(blockHeaderFacet)
+  const headerSections = useMemo(
+    () => resolveHeaderSections(blockInteractionContext),
+    [blockInteractionContext, resolveHeaderSections],
   )
   const resolveBlockLayout = runtime.read(blockLayoutFacet)
   const Layout = useMemo(
@@ -492,21 +498,19 @@ export function DefaultBlockRenderer(
     return Slot
   }, [block])
 
-  const BreadcrumbsSlot = useMemo<ComponentType>(() => {
-    const Slot = () => {
-      const ictx = useBlockInteractionContext()
-      if (!ictx?.isTopLevel) return null
-      return <Breadcrumbs block={block}/>
-    }
-    Slot.displayName = 'BlockBreadcrumbsSlot'
+  const HeaderSlot = useMemo<ComponentType>(() => {
+    const Slot = () => (
+      <>
+        {headerSections.map((SectionRenderer, index) => (
+          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+            <SectionRenderer block={block}/>
+          </ErrorBoundary>
+        ))}
+      </>
+    )
+    Slot.displayName = 'BlockHeaderSlot'
     return Slot
-  }, [block])
-
-  const UpdateIndicatorSlot = useMemo<ComponentType>(() => {
-    const Slot = () => <UpdateIndicator block={block}/>
-    Slot.displayName = 'BlockUpdateIndicatorSlot'
-    return Slot
-  }, [block])
+  }, [block, headerSections])
 
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
@@ -525,13 +529,12 @@ export function DefaultBlockRenderer(
     Children: ChildrenSlot,
     Footer: FooterSlot,
     Controls: ControlsSlot,
-    Breadcrumbs: BreadcrumbsSlot,
-    UpdateIndicator: UpdateIndicatorSlot,
+    Header: HeaderSlot,
     shellProps,
   }), [
     block,
     ContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot,
-    ControlsSlot, BreadcrumbsSlot, UpdateIndicatorSlot,
+    ControlsSlot, HeaderSlot,
     shellProps,
   ])
 
