@@ -2,7 +2,6 @@ import type { MouseEvent, TouchEvent } from 'react'
 import {
   BlockClickContribution,
   BlockContentSurfaceContribution,
-  BlockInteractionContext,
   enterBlockEditMode,
   handleBlockSelectionClick,
   ShortcutActivationContribution,
@@ -11,18 +10,6 @@ import { ActionContextTypes } from '@/shortcuts/types.ts'
 
 export const vimBlockClickBehavior: BlockClickContribution = context =>
   event => handleBlockSelectionClick(context, event)
-
-const eventTargetsDescendantBlock = (
-  context: BlockInteractionContext,
-  event: MouseEvent | TouchEvent,
-): boolean => {
-  const target = event.target
-  if (!(target instanceof Element)) return false
-
-  const nearestBlock = target.closest<HTMLElement>('.tm-block[data-block-id]')
-  const nearestBlockId = nearestBlock?.dataset.blockId
-  return nearestBlockId !== undefined && nearestBlockId !== context.block.id
-}
 
 type TouchStart = { x: number; y: number; time: number }
 
@@ -38,7 +25,6 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
     onMouseDownCapture: (event: MouseEvent) => {
       // detail === 2 catches double-click before native text-selection kicks in
       if (event.detail !== 2) return
-      if (eventTargetsDescendantBlock(context, event)) return
       event.preventDefault()
       event.stopPropagation()
       void enterBlockEditMode(context, {x: event.clientX, y: event.clientY})
@@ -53,8 +39,6 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
       })
     },
     onTouchEnd: (event: TouchEvent) => {
-      if (eventTargetsDescendantBlock(context, event)) return
-
       const start = touchStartByBlockId.get(context.block.id)
       touchStartByBlockId.delete(context.block.id)
       const touch = event.changedTouches[0]

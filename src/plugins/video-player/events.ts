@@ -8,14 +8,8 @@ export interface CurrentTimeRequestEventDetail {
   respond: (seconds: number) => void
 }
 
-export interface FocusVideoPlayerEventDetail {
-  blockId: string
-}
-
 export const seekToEventName = 'video-seek-to'
 export const currentTimeRequestEventName = 'video-current-time-request'
-export const focusVideoPlayerEventName = 'video-focus-player'
-export const blurVideoPlayerEventName = 'video-blur-player'
 
 export const seekTo = (seconds: number, blockId: string) => {
   const event = new CustomEvent<SeekToEventDetail>(seekToEventName, {
@@ -36,16 +30,4 @@ export const requestCurrentTime = (blockId: string): number | undefined => {
   })
   window.dispatchEvent(event)
   return currentTime
-}
-
-export const focusVideoPlayer = (blockId: string) => {
-  window.dispatchEvent(new CustomEvent<FocusVideoPlayerEventDetail>(focusVideoPlayerEventName, {
-    detail: {blockId},
-  }))
-}
-
-export const blurVideoPlayer = (blockId: string) => {
-  window.dispatchEvent(new CustomEvent<FocusVideoPlayerEventDetail>(blurVideoPlayerEventName, {
-    detail: {blockId},
-  }))
 }

@@ -1,10 +1,7 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '@/data/internals/block'
-import {
-  focusedBlockIdProp,
-  setFocusedBlockId,
-} from '@/data/properties.ts'
+import { setFocusedBlockId } from '@/data/properties.ts'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
@@ -13,21 +10,15 @@ import type {
   ActionContextConfig,
   BaseShortcutDependencies,
 } from '@/shortcuts/types.ts'
-import {
-  blurVideoPlayer,
-  focusVideoPlayer,
-  requestCurrentTime,
-} from './events.ts'
+import { requestCurrentTime } from './events.ts'
 import { videoPlayerViewProp } from './view.ts'
 
 export const VIDEO_PLAYER_CONTEXT = 'video-player'
-export type VideoPlayerFocusTarget = 'children' | 'player'
 
 export interface VideoPlayerShortcutDependencies extends BaseShortcutDependencies {
   block: Block
   videoBlock: Block
   editorView?: EditorView
-  focusTarget?: VideoPlayerFocusTarget
 }
 
 const isVideoPlayerShortcutDependencies = (
@@ -41,12 +32,6 @@ const isVideoPlayerShortcutDependencies = (
   deps.block instanceof Block &&
   'videoBlock' in deps &&
   deps.videoBlock instanceof Block &&
-  (
-    !('focusTarget' in deps) ||
-    deps.focusTarget === undefined ||
-    deps.focusTarget === 'children' ||
-    deps.focusTarget === 'player'
-  ) &&
   (
     !('editorView' in deps) ||
     deps.editorView === undefined ||
@@ -105,24 +90,6 @@ const createTimestampNote = async (
   if (newId) setFocusedBlockId(uiStateBlock, newId)
 }
 
-const focusFirstVideoChild = async (deps: VideoPlayerShortcutDependencies): Promise<void> => {
-  const {videoBlock, uiStateBlock} = deps
-
-  blurVideoPlayer(videoBlock.id)
-  await videoBlock.repo.load(videoBlock.id, {children: true})
-
-  const children = videoBlock.repo.cache.areChildrenLoaded(videoBlock.id)
-    ? videoBlock.repo.cache.childrenOf(videoBlock.id)
-    : []
-  const targetBlockId = children[0]?.id ?? videoBlock.id
-  setFocusedBlockId(uiStateBlock, targetBlockId)
-}
-
-const focusNativeVideoPlayer = async (deps: VideoPlayerShortcutDependencies): Promise<void> => {
-  focusVideoPlayer(deps.videoBlock.id)
-  await deps.uiStateBlock.set(focusedBlockIdProp, undefined)
-}
-
 const insertVideoTimestamp: ActionConfig = {
   id: 'video.insert_timestamp',
   description: 'Insert current video timestamp',
@@ -154,28 +121,6 @@ const insertVideoTimestamp: ActionConfig = {
   },
 }
 
-const toggleVideoFocus: ActionConfig = {
-  id: 'video.toggle_focus',
-  description: 'Toggle focus between video and notes',
-  context: VIDEO_PLAYER_CONTEXT,
-  handler: async (deps) => {
-    if (!isVideoPlayerShortcutDependencies(deps)) return
-
-    if (deps.focusTarget === 'player') {
-      await focusFirstVideoChild(deps)
-      return
-    }
-
-    await focusNativeVideoPlayer(deps)
-  },
-  defaultBinding: {
-    keys: ['cmd+shift+f', 'ctrl+shift+f'],
-    eventOptions: {
-      preventDefault: true,
-    },
-  },
-}
-
 const toggleVideoNotesView: ActionConfig = {
   id: 'video.toggle_notes_view',
   description: 'Toggle video notes view',
@@ -196,7 +141,6 @@ const toggleVideoNotesView: ActionConfig = {
 
 export const videoPlayerActions: readonly ActionConfig[] = [
   insertVideoTimestamp,
-  toggleVideoFocus,
   toggleVideoNotesView,
 ]
 
@@ -207,20 +151,6 @@ export const videoPlayerShortcutActivation: ShortcutActivationContribution = con
   const dependencies: Omit<VideoPlayerShortcutDependencies, 'uiStateBlock'> = {
     block: context.block,
     videoBlock: context.repo.block(videoBlockId),
-    focusTarget: 'children',
-  }
-
-  if (context.surface === 'video-player-native') {
-    const playerFocused = (context as typeof context & { playerFocused?: unknown }).playerFocused
-    if (context.block.id !== videoBlockId || playerFocused !== true) return null
-
-    return [{
-      context: VIDEO_PLAYER_CONTEXT,
-      dependencies: {
-        ...dependencies,
-        focusTarget: 'player',
-      },
-    }]
   }
 
   if (context.surface === 'codemirror') {
