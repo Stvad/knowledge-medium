@@ -38,6 +38,7 @@ import {
   LoaderHandle,
   handleKey,
   snapshotsToChangeNotification,
+  type ResolveContext,
 } from './handleStore'
 import {
   startRowEventsTail,
@@ -150,15 +151,44 @@ export class Repo {
   readonly instanceId: number = Repo.nextInstanceId++
 
   /** Hydrate a list of `BlockRow`s into the cache + return parsed
-   *  BlockData[]. Internal helper for the kernel queries. */
-  private hydrateRows(rows: BlockRow[]): BlockData[] {
+   *  BlockData[]. Internal helper for the kernel queries. When `ctx`
+   *  is supplied, also declares a per-row dep so handle invalidations
+   *  fire on row updates. */
+  private hydrateRows(rows: BlockRow[], ctx?: ResolveContext): BlockData[] {
     const out: BlockData[] = []
     for (const r of rows) {
       const data = parseBlockRow(r)
       this.cache.applySyncSnapshot(data)
+      if (ctx) ctx.depend({kind: 'row', id: data.id})
       out.push(data)
     }
     return out
+  }
+
+  /** Run `CHILDREN_SQL` for `parentId`, hydrate every row into cache,
+   *  and set the `allChildrenLoaded(parentId)` marker. Shared by the
+   *  `repo.load(id, {children: true})` opts path, `repo.children(id)`
+   *  handle, and the hydrating variant of `repo.childIds(id)`. */
+  private async hydrateChildren(parentId: string, ctx?: ResolveContext): Promise<BlockData[]> {
+    const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [parentId])
+    const out = this.hydrateRows(rows, ctx)
+    this.cache.markChildrenLoaded(parentId)
+    return out
+  }
+
+  /** Build a collection handle: identity-stable per (kind, params),
+   *  GC'd by HandleStore. Wraps the `getOrCreate` + `new LoaderHandle`
+   *  boilerplate shared by `children`, `childIds`, `subtree`,
+   *  `ancestors`, `backlinks`. */
+  private collectionHandle<T>(
+    kind: string,
+    params: Record<string, unknown>,
+    loader: (ctx: ResolveContext) => Promise<T>,
+  ): LoaderHandle<T> {
+    const key = handleKey(kind, params)
+    return this.handleStore.getOrCreate(key, () =>
+      new LoaderHandle<T>({store: this.handleStore, key, loader}),
+    )
   }
 
   /** Typed-dispatch sugar. `repo.mutate.indent({id})` opens a 1-mutator
@@ -305,11 +335,7 @@ export class Repo {
     const data = parseBlockRow(row)
     this.cache.applySyncSnapshot(data)
 
-    if (opts?.children) {
-      const childRows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-      for (const r of childRows) this.cache.applySyncSnapshot(parseBlockRow(r))
-      this.cache.markChildrenLoaded(id)
-    }
+    if (opts?.children) await this.hydrateChildren(id)
 
     if (opts?.ancestors) {
       // Pass id twice — ANCESTORS_SQL uses it as both start and skip.
@@ -448,17 +474,10 @@ export class Repo {
    *  Handle<BlockData[]>. */
   async loadSubtree(rootId: string, opts?: {includeRoot?: boolean}): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [rootId])
+    const all = this.hydrateRows(rows)
+    for (const data of all) this.cache.markChildrenLoaded(data.id)
     const includeRoot = opts?.includeRoot ?? true
-    const out: BlockData[] = []
-    const seen = new Set<string>()
-    for (const r of rows) {
-      const data = parseBlockRow(r)
-      this.cache.applySyncSnapshot(data)
-      seen.add(data.id)
-      if (includeRoot || data.id !== rootId) out.push(data)
-    }
-    for (const id of seen) this.cache.markChildrenLoaded(id)
-    return out
+    return includeRoot ? all : all.filter(d => d.id !== rootId)
   }
 
   /** Ancestor chain up from `id` (excludes `id` itself). Hydrates
@@ -487,26 +506,10 @@ export class Repo {
    *  `repo.load(id, {children: true})`. Block.childIds therefore reads
    *  honestly after the handle's first load resolves. */
   children(id: string): LoaderHandle<BlockData[]> {
-    const key = handleKey('children', {id})
-    return this.handleStore.getOrCreate(key, () =>
-      new LoaderHandle<BlockData[]>({
-        store: this.handleStore,
-        key,
-        loader: async (ctx) => {
-          ctx.depend({kind: 'parent-edge', parentId: id})
-          const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-          const out: BlockData[] = []
-          for (const r of rows) {
-            const data = parseBlockRow(r)
-            this.cache.applySyncSnapshot(data)
-            ctx.depend({kind: 'row', id: data.id})
-            out.push(data)
-          }
-          this.cache.markChildrenLoaded(id)
-          return out
-        },
-      }),
-    )
+    return this.collectionHandle('children', {id}, async (ctx) => {
+      ctx.depend({kind: 'parent-edge', parentId: id})
+      return this.hydrateChildren(id, ctx)
+    })
   }
 
   /** Reactive child-id list of `id`, ordered `(order_key, id)`.
@@ -536,29 +539,15 @@ export class Repo {
    *  alongside the rest of the kernel handles. */
   childIds(id: string, opts?: {hydrate?: boolean}): LoaderHandle<string[]> {
     const hydrate = opts?.hydrate ?? false
-    const key = handleKey('childIds', {id, hydrate})
-    return this.handleStore.getOrCreate(key, () =>
-      new LoaderHandle<string[]>({
-        store: this.handleStore,
-        key,
-        loader: async (ctx) => {
-          ctx.depend({kind: 'parent-edge', parentId: id})
-          if (!hydrate) {
-            const rows = await this.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
-            return rows.map(r => r.id)
-          }
-          const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-          const ids: string[] = []
-          for (const r of rows) {
-            const data = parseBlockRow(r)
-            this.cache.applySyncSnapshot(data)
-            ids.push(data.id)
-          }
-          this.cache.markChildrenLoaded(id)
-          return ids
-        },
-      }),
-    )
+    return this.collectionHandle('childIds', {id, hydrate}, async (ctx) => {
+      ctx.depend({kind: 'parent-edge', parentId: id})
+      if (!hydrate) {
+        const rows = await this.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+        return rows.map(r => r.id)
+      }
+      const out = await this.hydrateChildren(id)
+      return out.map(d => d.id)
+    })
   }
 
   /** Reactive subtree rooted at `id`, includeRoot=true (spec §11).
@@ -579,33 +568,20 @@ export class Repo {
    *    - `row` on every visited id — covers content / property updates
    *      and root deletion. */
   subtree(id: string): LoaderHandle<BlockData[]> {
-    const key = handleKey('subtree', {id})
-    return this.handleStore.getOrCreate(key, () =>
-      new LoaderHandle<BlockData[]>({
-        store: this.handleStore,
-        key,
-        loader: async (ctx) => {
-          // Upfront deps — declared before SQL so empty-result and
-          // mid-load invalidations have something to match against.
-          // Re-declared per-row below; HandleStore tolerates duplicates.
-          ctx.depend({kind: 'row', id})
-          ctx.depend({kind: 'parent-edge', parentId: id})
-          const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
-          const out: BlockData[] = []
-          const seen = new Set<string>()
-          for (const r of rows) {
-            const data = parseBlockRow(r)
-            this.cache.applySyncSnapshot(data)
-            seen.add(data.id)
-            ctx.depend({kind: 'row', id: data.id})
-            ctx.depend({kind: 'parent-edge', parentId: data.id})
-            out.push(data)
-          }
-          for (const visited of seen) this.cache.markChildrenLoaded(visited)
-          return out
-        },
-      }),
-    )
+    return this.collectionHandle('subtree', {id}, async (ctx) => {
+      // Upfront deps — declared before SQL so empty-result and
+      // mid-load invalidations have something to match against.
+      // Re-declared per-row below; HandleStore tolerates duplicates.
+      ctx.depend({kind: 'row', id})
+      ctx.depend({kind: 'parent-edge', parentId: id})
+      const rows = await this.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+      const out = this.hydrateRows(rows, ctx)
+      for (const data of out) {
+        ctx.depend({kind: 'parent-edge', parentId: data.id})
+        this.cache.markChildrenLoaded(data.id)
+      }
+      return out
+    })
   }
 
   /** Reactive ancestor chain (excludes `id` itself). For the one-shot
@@ -615,25 +591,11 @@ export class Repo {
    *    - `row` on `id` — its `parent_id` change rewrites the chain.
    *    - `row` on every ancestor — its `parent_id` change does too. */
   ancestors(id: string): LoaderHandle<BlockData[]> {
-    const key = handleKey('ancestors', {id})
-    return this.handleStore.getOrCreate(key, () =>
-      new LoaderHandle<BlockData[]>({
-        store: this.handleStore,
-        key,
-        loader: async (ctx) => {
-          ctx.depend({kind: 'row', id})
-          const rows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
-          const out: BlockData[] = []
-          for (const r of rows) {
-            const data = parseBlockRow(r)
-            this.cache.applySyncSnapshot(data)
-            ctx.depend({kind: 'row', id: data.id})
-            out.push(data)
-          }
-          return out
-        },
-      }),
-    )
+    return this.collectionHandle('ancestors', {id}, async (ctx) => {
+      ctx.depend({kind: 'row', id})
+      const rows = await this.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
+      return this.hydrateRows(rows, ctx)
+    })
   }
 
   /** Reactive backlinks for `id` — every block in `id`'s workspace
@@ -652,35 +614,21 @@ export class Repo {
    *
    *  Returns `[]` when the source block is missing. */
   backlinks(id: string): LoaderHandle<BlockData[]> {
-    const key = handleKey('backlinks', {id})
-    return this.handleStore.getOrCreate(key, () =>
-      new LoaderHandle<BlockData[]>({
-        store: this.handleStore,
-        key,
-        loader: async (ctx) => {
-          ctx.depend({kind: 'row', id})
-          // Resolve workspace: cache first (cheap), then load.
-          const cachedSnap = this.cache.getSnapshot(id)
-          const workspaceId = cachedSnap?.workspaceId
-            ?? (await this.load(id))?.workspaceId
-            ?? this._activeWorkspaceId
-          if (!workspaceId) return []
-          ctx.depend({kind: 'workspace', workspaceId})
-          const rows = await this.db.getAll<BlockRow>(
-            SELECT_BACKLINKS_FOR_BLOCK_SQL,
-            [workspaceId, id, id],
-          )
-          const out: BlockData[] = []
-          for (const r of rows) {
-            const data = parseBlockRow(r)
-            this.cache.applySyncSnapshot(data)
-            ctx.depend({kind: 'row', id: data.id})
-            out.push(data)
-          }
-          return out
-        },
-      }),
-    )
+    return this.collectionHandle('backlinks', {id}, async (ctx) => {
+      ctx.depend({kind: 'row', id})
+      // Resolve workspace: cache first (cheap), then load.
+      const cachedSnap = this.cache.getSnapshot(id)
+      const workspaceId = cachedSnap?.workspaceId
+        ?? (await this.load(id))?.workspaceId
+        ?? this._activeWorkspaceId
+      if (!workspaceId) return []
+      ctx.depend({kind: 'workspace', workspaceId})
+      const rows = await this.db.getAll<BlockRow>(
+        SELECT_BACKLINKS_FOR_BLOCK_SQL,
+        [workspaceId, id, id],
+      )
+      return this.hydrateRows(rows, ctx)
+    })
   }
 
   /** Async existence check — cache-first, falls back to a single SQL
