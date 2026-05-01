@@ -29,6 +29,13 @@ export class BlockCache {
    *  missing" (peek → null) per spec §5.2. Cleared on setSnapshot
    *  (the row exists now). */
   private readonly missingIds = new Set<string>()
+  /** Parent-id → child-ids index. Maintained on every snapshot
+   *  insert / delete / parent-change so `childrenOf` can answer in
+   *  O(children) instead of scanning the full snapshot map. Holds
+   *  soft-deleted rows too — `childrenOf` filters those at read time
+   *  (the cache keeps tombstones around for undo/devtools per spec
+   *  §5.2). */
+  private readonly childrenByParent = new Map<string, Set<string>>()
 
   getSnapshot(id: string): BlockData | undefined {
     return this.snapshots.get(id)
@@ -57,6 +64,15 @@ export class BlockCache {
       return false
     }
 
+    // Maintain parent-children index. If the snapshot is new or its
+    // parentId moved, update the index before storing the new snapshot.
+    if (!existing) {
+      this.addToParentIndex(snapshot.parentId, snapshot.id)
+    } else if (existing.parentId !== snapshot.parentId) {
+      this.removeFromParentIndex(existing.parentId, snapshot.id)
+      this.addToParentIndex(snapshot.parentId, snapshot.id)
+    }
+
     this.snapshots.set(snapshot.id, deepFreeze(snapshot))
     // Row is now known-present — clear any prior confirmed-missing state.
     this.missingIds.delete(snapshot.id)
@@ -80,7 +96,9 @@ export class BlockCache {
   }
 
   deleteSnapshot(id: string): boolean {
+    const existing = this.snapshots.get(id)
     if (!this.snapshots.delete(id)) return false
+    if (existing) this.removeFromParentIndex(existing.parentId, id)
 
     this.notify(id)
     return true
@@ -188,11 +206,19 @@ export class BlockCache {
    *  doesn't verify the marker because (a) `block.childIds` does it
    *  in the throw path, and (b) sometimes — e.g. inside a tx —
    *  callers want a best-effort sibling list and accept the
-   *  partial-cache risk. */
+   *  partial-cache risk.
+   *
+   *  Reads from `childrenByParent` so the cost is O(children) instead
+   *  of a full O(snapshots) scan — important for tree-walks like
+   *  `getAllVisibleBlockIdsInOrder` which call this once per visited
+   *  block. */
   childrenOf(parentId: string): BlockData[] {
+    const childIds = this.childrenByParent.get(parentId)
+    if (!childIds || childIds.size === 0) return []
     const out: BlockData[] = []
-    for (const data of this.snapshots.values()) {
-      if (data.parentId === parentId && !data.deleted) out.push(data)
+    for (const id of childIds) {
+      const data = this.snapshots.get(id)
+      if (data && !data.deleted) out.push(data)
     }
     out.sort((a, b) => {
       if (a.orderKey < b.orderKey) return -1
@@ -200,5 +226,25 @@ export class BlockCache {
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     })
     return out
+  }
+
+  // ──── Parent-children index maintenance ────
+
+  private addToParentIndex(parentId: string | null, childId: string): void {
+    if (parentId === null) return
+    let set = this.childrenByParent.get(parentId)
+    if (!set) {
+      set = new Set()
+      this.childrenByParent.set(parentId, set)
+    }
+    set.add(childId)
+  }
+
+  private removeFromParentIndex(parentId: string | null, childId: string): void {
+    if (parentId === null) return
+    const set = this.childrenByParent.get(parentId)
+    if (!set) return
+    set.delete(childId)
+    if (set.size === 0) this.childrenByParent.delete(parentId)
   }
 }

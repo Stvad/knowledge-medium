@@ -342,4 +342,45 @@ describe('BlockCache childrenOf', () => {
   it('returns empty when no children match', () => {
     expect(new BlockCache().childrenOf('parent')).toEqual([])
   })
+
+  it('moves a child between parents when its parentId changes', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(child('a', 'p1', 'a0'))
+    expect(cache.childrenOf('p1').map(c => c.id)).toEqual(['a'])
+    expect(cache.childrenOf('p2')).toEqual([])
+
+    cache.setSnapshot(child('a', 'p2', 'a0'))
+    expect(cache.childrenOf('p1')).toEqual([])
+    expect(cache.childrenOf('p2').map(c => c.id)).toEqual(['a'])
+  })
+
+  it('drops a child from its parent when the snapshot is deleted', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(child('a', 'parent', 'a0'))
+    cache.setSnapshot(child('b', 'parent', 'a1'))
+    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a', 'b'])
+
+    cache.deleteSnapshot('a')
+    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['b'])
+  })
+
+  it('hides a soft-deleted child but resurrects it on un-delete', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(child('a', 'parent', 'a0'))
+    cache.setSnapshot(child('b', 'parent', 'a1'))
+    cache.setSnapshot(child('a', 'parent', 'a0', true))
+    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['b'])
+
+    cache.setSnapshot(child('a', 'parent', 'a0', false))
+    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a', 'b'])
+  })
+
+  it('ignores root-level (parentId === null) snapshots', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(child('root', null, 'a0'))
+    cache.setSnapshot(child('a', 'parent', 'a0'))
+    expect(cache.childrenOf('parent').map(c => c.id)).toEqual(['a'])
+    // root has no parent — childrenOf shouldn't surface it under any key.
+    expect(cache.childrenOf('root')).toEqual([])
+  })
 })
