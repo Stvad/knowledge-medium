@@ -6,7 +6,7 @@ import { AppExtension } from '@/extensions/facet.ts'
 import {
   blockEditingContentRenderer,
   plainOutlinerBlockClickBehavior,
-} from './interactions.ts'
+} from './interactions.tsx'
 
 export const plainOutlinerPlugin: AppExtension = [
   blockContentRendererFacet.of(blockEditingContentRenderer, {source: 'plain-outliner'}),

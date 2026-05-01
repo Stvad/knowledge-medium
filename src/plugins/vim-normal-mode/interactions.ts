@@ -7,6 +7,8 @@ import {
   ShortcutActivationContribution,
 } from '@/extensions/blockInteraction.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
+import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
+import { Block } from '@/data/internals/block'
 
 export const vimBlockClickBehavior: BlockClickContribution = context =>
   event => handleBlockSelectionClick(context, event)
@@ -18,11 +20,16 @@ const touchStartByBlockId = new Map<string, TouchStart>()
 const isTap = (start: TouchStart, end: TouchStart) =>
   Math.abs(end.x - start.x) <= 10 && Math.abs(end.y - start.y) <= 10 && (end.time - start.time) <= 300
 
+const isBlockInEditMode = (uiStateBlock: Block, blockId: string): boolean =>
+  uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
+  Boolean(uiStateBlock.peekProperty(isEditingProp))
+
 export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = context => {
-  if (context.inEditMode) return null
+  const {block, uiStateBlock} = context
 
   return {
     onMouseDownCapture: (event: MouseEvent) => {
+      if (isBlockInEditMode(uiStateBlock, block.id)) return
       // detail === 2 catches double-click before native text-selection kicks in
       if (event.detail !== 2) return
       event.preventDefault()
@@ -30,17 +37,19 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
       void enterBlockEditMode(context, {x: event.clientX, y: event.clientY})
     },
     onTouchStart: (event: TouchEvent) => {
+      if (isBlockInEditMode(uiStateBlock, block.id)) return
       const touch = event.touches[0]
       if (!touch) return
-      touchStartByBlockId.set(context.block.id, {
+      touchStartByBlockId.set(block.id, {
         x: touch.clientX,
         y: touch.clientY,
         time: Date.now(),
       })
     },
     onTouchEnd: (event: TouchEvent) => {
-      const start = touchStartByBlockId.get(context.block.id)
-      touchStartByBlockId.delete(context.block.id)
+      if (isBlockInEditMode(uiStateBlock, block.id)) return
+      const start = touchStartByBlockId.get(block.id)
+      touchStartByBlockId.delete(block.id)
       const touch = event.changedTouches[0]
       if (!start || !touch) return
 

@@ -7,7 +7,7 @@ import {
   BlockInteractionContext,
 } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { blockEditingContentRenderer } from '../interactions.ts'
+import { blockEditingContentRenderer } from '../interactions.tsx'
 
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
@@ -34,17 +34,36 @@ const context = {
 } satisfies BlockInteractionContext
 
 describe('plain outliner interactions', () => {
-  it('chooses block content renderers through a renderer facet', () => {
+  it('returns a dispatcher that resolves to neither raw slot directly', () => {
+    // Resolution-time output is now stable per (block, registry) — a
+    // dispatcher component that picks Primary vs Secondary at render
+    // time. The specific runtime selection is exercised end-to-end by
+    // the renderer; here we just assert the dispatch indirection so the
+    // resolver no longer toggles its return identity on inEditMode.
     const runtime = resolveFacetRuntimeSync([
       blockContentRendererFacet.of(blockEditingContentRenderer),
     ])
 
     const resolveRenderer = runtime.read(blockContentRendererFacet)
+    const renderer = resolveRenderer(context)
 
-    expect(resolveRenderer(context)).toBe(PrimaryRenderer)
-    expect(resolveRenderer({
+    expect(renderer).toBeDefined()
+    expect(renderer).not.toBe(PrimaryRenderer)
+    expect(renderer).not.toBe(SecondaryRenderer)
+    expect((renderer as { displayName?: string }).displayName).toBe('BlockEditingDispatcher')
+  })
+
+  it('falls through to the primary slot when no secondary is registered', () => {
+    const runtime = resolveFacetRuntimeSync([
+      blockContentRendererFacet.of(blockEditingContentRenderer),
+    ])
+
+    const resolveRenderer = runtime.read(blockContentRendererFacet)
+    const renderer = resolveRenderer({
       ...context,
-      inEditMode: true,
-    })).toBe(SecondaryRenderer)
+      contentRenderers: [{id: 'primary', renderer: PrimaryRenderer}],
+    })
+
+    expect(renderer).toBe(PrimaryRenderer)
   })
 })

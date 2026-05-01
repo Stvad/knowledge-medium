@@ -38,16 +38,6 @@ describe('vim normal mode interactions', () => {
     expect(props.onTouchEnd).toBeDefined()
   })
 
-  it('contributes nothing in edit mode', () => {
-    const runtime = resolveFacetRuntimeSync([
-      blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),
-    ])
-
-    const props = runtime.read(blockContentSurfacePropsFacet)({...context, inEditMode: true})
-
-    expect(props).toEqual({})
-  })
-
   it('defines Vim normal mode as a shortcut surface activation', () => {
     const runtime = resolveFacetRuntimeSync([
       shortcutSurfaceActivationsFacet.of(vimNormalModeActivation),
