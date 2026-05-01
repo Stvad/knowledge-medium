@@ -243,20 +243,32 @@ export const usePropertyValue = useProperty
 /** Reactive child-id list (in `(orderKey, id)` order). Returns `[]`
  *  while the children handle is loading or for a leaf block; the
  *  `repo.children(id)` handle re-resolves on local writes (TxEngine
- *  fast path) and sync arrivals (row_events tail). */
-export const useChildIds = (block: Block): string[] => {
-  const data = useHandle(block.repo.children(block.id))
-  return useMemo(() => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => d.id), [data])
-}
+ *  fast path) and sync arrivals (row_events tail).
+ *
+ *  The handle invalidates on any descendant property change (it
+ *  declares a `row` dep per child so consumers that read child fields
+ *  stay reactive — see `repo.children`). Using a selector here means
+ *  unrelated child-property updates (focus moves on a UI-state child,
+ *  content edits, etc.) bail out at `useHandle`'s structural-equality
+ *  check, so consumers that only care about the id list don't bounce. */
+export const useChildIds = (block: Block): string[] =>
+  useHandle(block.repo.children(block.id), {
+    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => d.id),
+  })
 
-/** Reactive child Block facades. */
+/** Reactive child Block facades. Same structural-equality bail-out
+ *  story as `useChildIds` — `repo.block(id)` is identity-stable, so the
+ *  Block[] returned compares equal across re-fires when the id list is
+ *  unchanged, and `useHandle` hands back the previously-committed
+ *  reference. Critical for callers like `LayoutRenderer` whose JSX
+ *  builds context-provider overrides per panel; without ref stability
+ *  here, every UI-state child mutation would propagate a fresh context
+ *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
-  const data = useHandle(block.repo.children(block.id))
   const repo = block.repo
-  return useMemo(
-    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
-    [data, repo],
-  )
+  return useHandle(block.repo.children(block.id), {
+    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+  })
 }
 
 /** Whether the block has children. Selector keeps re-renders pinned to
@@ -270,33 +282,27 @@ export const useHasChildren = (block: Block): boolean =>
  *  `block` itself. `repo.ancestors()` walks leaf-to-root, so reverse
  *  for the breadcrumb-friendly order callers expect. */
 export const useParents = (block: Block): Block[] => {
-  const data = useHandle(block.repo.ancestors(block.id))
   const repo = block.repo
-  return useMemo(
-    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
-    [data, repo],
-  )
+  return useHandle(block.repo.ancestors(block.id), {
+    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
+  })
 }
 
 /** Reactive backlinks — every block in `block`'s workspace whose
  *  `references` field points at `block.id`. */
 export const useBacklinks = (block: Block): Block[] => {
-  const data = useHandle(block.repo.backlinks(block.id))
   const repo = block.repo
-  return useMemo(
-    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
-    [data, repo],
-  )
+  return useHandle(block.repo.backlinks(block.id), {
+    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+  })
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
  *  Phase 2.D for parity with the four `repo.X` factories; existing
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
-  const data = useHandle(block.repo.subtree(block.id))
   const repo = block.repo
-  return useMemo(
-    () => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
-    [data, repo],
-  )
+  return useHandle(block.repo.subtree(block.id), {
+    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+  })
 }
