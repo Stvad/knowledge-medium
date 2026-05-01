@@ -15,7 +15,7 @@ import {
 import { Repo } from '@/data/internals/repo'
 import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.ts'
 import type { ActionContextActivation } from '@/shortcuts/types.ts'
-import type { BlockRenderer } from '@/types.ts'
+import type { BlockContextType, BlockRenderer } from '@/types.ts'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.ts'
 
 export interface BlockContentRendererSlot {
@@ -32,6 +32,7 @@ export interface BlockInteractionContext {
   inEditMode: boolean
   isSelected: boolean
   isTopLevel: boolean
+  blockContext?: BlockContextType
   contentRenderers?: readonly BlockContentRendererSlot[]
 }
 

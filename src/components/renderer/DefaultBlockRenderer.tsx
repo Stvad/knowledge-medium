@@ -56,6 +56,7 @@ import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
   EditContentRenderer?: BlockRenderer;
+  ChildrenRenderer?: BlockRenderer;
 }
 
 /** Todo plausibly the following 2 things should be "actions" too
@@ -225,10 +226,12 @@ export function DefaultBlockRenderer(
     block,
     ContentRenderer: DefaultContentRenderer = MarkdownContentRenderer,
     EditContentRenderer = CodeMirrorContentRenderer,
+    ChildrenRenderer = BlockChildren,
   }: DefaultBlockRendererProps,
 ) {
   const repo = useRepo()
   const runtime = useAppRuntime()
+  const blockContext = useBlockContext()
   const uiStateBlock = useUIStateBlock()
   const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
@@ -253,6 +256,7 @@ export function DefaultBlockRenderer(
     inEditMode,
     isSelected,
     isTopLevel,
+    blockContext,
     contentRenderers: [
       {
         id: 'primary',
@@ -272,6 +276,7 @@ export function DefaultBlockRenderer(
     inEditMode,
     isSelected,
     isTopLevel,
+    blockContext,
     DefaultContentRenderer,
     EditContentRenderer,
   ])
@@ -377,7 +382,7 @@ export function DefaultBlockRenderer(
           </div>
 
           <CollapsibleContent>
-            <BlockChildren block={block}/>
+            <ChildrenRenderer block={block}/>
           </CollapsibleContent>
 
           {childrenFooterSections.map((SectionRenderer, index) => (

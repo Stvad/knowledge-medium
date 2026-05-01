@@ -2,20 +2,26 @@ import ReactPlayer from 'react-player'
 import { BlockRendererProps, BlockRenderer } from '@/types.ts'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { useEffect, useRef, useState } from 'react'
-import { ActionContextType as OriginalActionContextType } from '@/shortcuts/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useData } from '@/hooks/block.ts'
-import { seekToEventName, SeekToEventDetail } from './events.ts'
-
-declare global {
-  export type ActionContextType = OriginalActionContextType | 'last-video-player'
-}
+import { useData, usePropertyValue } from '@/hooks/block.ts'
+import { BlockChildren } from '@/components/BlockComponent.tsx'
+import { Button } from '@/components/ui/button.tsx'
+import { PanelRightClose, PanelRightOpen } from 'lucide-react'
+import {
+  currentTimeRequestEventName,
+  CurrentTimeRequestEventDetail,
+  seekToEventName,
+  SeekToEventDetail,
+} from './events.ts'
+import { videoPlayerViewProp } from './view.ts'
 
 const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const blockData = useData(block)
+  const [view, setView] = usePropertyValue(block, videoPlayerViewProp)
   const player = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
+  const inNotesView = view === 'notes'
 
   const focusPlayer = () => {
     if (containerRef.current) {
@@ -39,20 +45,84 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     return () => window.removeEventListener(seekToEventName, handleSeekTo as EventListener)
   }, [block.id])
 
+  useEffect(() => {
+    const handleCurrentTimeRequest = (event: CustomEvent<CurrentTimeRequestEventDetail>) => {
+      if (event.detail.blockId === block.id && player.current) {
+        event.detail.respond(player.current.currentTime)
+      }
+    }
+
+    window.addEventListener(currentTimeRequestEventName, handleCurrentTimeRequest as EventListener)
+
+    return () => window.removeEventListener(
+      currentTimeRequestEventName,
+      handleCurrentTimeRequest as EventListener,
+    )
+  }, [block.id])
+
   if (!blockData) return null
 
   return (
-    <div ref={containerRef} className="aspect-video">
-      <ReactPlayer
-        ref={player}
-        src={blockData.content}
-        playing={isPlaying}
-        controls
-        width="100%"
-        height="100%"
-      />
+    <div
+      ref={containerRef}
+      className={inNotesView
+        ? 'fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row'
+        : 'group/video-player relative aspect-video'
+      }
+    >
+      <section className={inNotesView
+        ? 'flex h-[56vh] w-screen items-center justify-center bg-black md:h-screen md:w-[80vw]'
+        : 'h-full w-full'
+      }>
+        <div className={inNotesView ? 'aspect-video w-full max-h-full' : 'h-full w-full'}>
+          <ReactPlayer
+            ref={player}
+            src={blockData.content}
+            playing={isPlaying}
+            controls
+            width="100%"
+            height="100%"
+          />
+        </div>
+      </section>
+
+      {inNotesView ? (
+        <aside className="h-[44vh] w-screen overflow-y-auto border-t border-border bg-background p-3 md:h-screen md:w-[20vw] md:border-l md:border-t-0">
+          <div className="sticky top-0 z-10 mb-2 flex justify-end bg-background/95 pb-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              aria-label="Close video notes view"
+              title="Close video notes view"
+              onClick={() => setView('default')}
+            >
+              <PanelRightClose className="h-4 w-4"/>
+            </Button>
+          </div>
+          <BlockChildren block={block}/>
+        </aside>
+      ) : (
+        <Button
+          type="button"
+          variant="secondary"
+          size="icon"
+          aria-label="Open video notes view"
+          title="Open video notes view"
+          className="absolute right-2 top-2 opacity-0 shadow-md transition-opacity group-hover/video-player:opacity-100 focus-visible:opacity-100"
+          onClick={() => setView('notes')}
+        >
+          <PanelRightOpen className="h-4 w-4"/>
+        </Button>
+      )}
     </div>
   )
+}
+
+const VideoPlayerChildrenRenderer = ({block}: BlockRendererProps) => {
+  const [view] = usePropertyValue(block, videoPlayerViewProp)
+  if (view === 'notes') return null
+  return <BlockChildren block={block}/>
 }
 
 export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
@@ -60,6 +130,7 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
     <DefaultBlockRenderer
       {...props}
       ContentRenderer={VideoPlayerContentRenderer}
+      ChildrenRenderer={VideoPlayerChildrenRenderer}
     />
   </NestedBlockContextProvider>
 
