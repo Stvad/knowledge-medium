@@ -7,6 +7,7 @@ import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
 import { useChildIds } from '@/hooks/block.ts'
+import { LazyBlockComponent } from './LazyBlockComponent.tsx'
 
 interface BlockComponentProps {
   blockId: string;
@@ -41,9 +42,13 @@ export function BlockComponent({blockId}: BlockComponentProps) {
  * youtube context seems more immediately meaningful/actionable
  */
 export const BlockChildren = ({block}: { block: Block }) => {
+  // LazyBlockComponent renders an empty placeholder until the block is
+  // about to enter the viewport, then mounts the real BlockComponent.
+  // For trees of thousands of blocks this drops initial-mount cost from
+  // O(N) to O(visible-window) without flattening the tree.
   return <>
     {useChildIds(block).map((childId) => (
-      <BlockComponent
+      <LazyBlockComponent
         key={childId}
         blockId={childId}
       />
