@@ -250,9 +250,16 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  (focus moves on a UI-state child, content edits, etc.) don't
  *  invalidate the handle at all. The list-shape consumers
  *  (`BlockChildren`, `LayoutRenderer`'s panel iteration) are the hot
- *  path that motivated the split. */
+ *  path that motivated the split.
+ *
+ *  Opts into `{hydrate: true}` so the loader runs the full
+ *  CHILDREN_SQL and hydrates each child row into the cache. Without
+ *  this, every LazyBlockComponent that mounts on intersection would
+ *  pay its own `block.load()` round-trip and the page would visibly
+ *  pop in block-by-block. The lean variant on `repo.childIds` is for
+ *  non-rendering callers (counting / id-only scans). */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.childIds(block.id), {
+  useHandle(block.repo.childIds(block.id, {hydrate: true}), {
     selector: ids => ids ?? EMPTY_STRING_ARRAY,
   }) as string[]
 
@@ -275,9 +282,15 @@ export const useChildren = (block: Block): Block[] => {
  *  content edits don't even invalidate the handle (vs. the prior
  *  `repo.children`-backed shape, which fired on every descendant row
  *  change and only bailed at the React boundary via the boolean
- *  selector). */
+ *  selector).
+ *
+ *  Shares `useChildIds`'s hydrating handle slot (`{hydrate: true}`)
+ *  rather than spinning up a separate lean handle for the same parent
+ *  — every block that renders a bullet (BlockBullet) also renders its
+ *  children (BlockChildren), so the two hooks subscribe to the same
+ *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.childIds(block.id), {
+  useHandle(block.repo.childIds(block.id, {hydrate: true}), {
     selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
 

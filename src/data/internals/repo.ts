@@ -519,25 +519,23 @@ export class Repo {
    *  for callers that only care about the structural list (e.g.
    *  `BlockChildren` rendering one LazyBlockComponent per id).
    *
-   *  By default the loader still runs the full `CHILDREN_SQL` and
-   *  hydrates each child row into the cache (matching `repo.children`'s
-   *  side effect, including the `allChildrenLoaded` marker). That
-   *  bulk hydration is what keeps the recursive render path fast —
-   *  without it every LazyBlockComponent that mounts on intersection
-   *  would pay its own `block.load()` round-trip and the page would
-   *  visibly pop in block-by-block. The win over `repo.children` is
-   *  purely in the dep set, not in the SQL.
+   *  Default is the lean shape: `SELECT id`, no row parse, no cache
+   *  hydration. Honest about what the function name says.
    *
-   *  Pass `{hydrate: false}` for the lean shape (lighter `SELECT id`,
-   *  no cache hydration). Currently no in-tree caller wants that —
-   *  the option exists for future ones (e.g. counting / id-only
-   *  scans) and gets its own handle slot in the store so it doesn't
-   *  collide with the hydrating variant.
+   *  Pass `{hydrate: true}` to opt into the full-row variant: runs
+   *  `CHILDREN_SQL`, `applySyncSnapshot` per row, marks
+   *  `allChildrenLoaded` — same side-effect shape as `repo.children`.
+   *  The React hooks (`useChildIds`, `useHasChildren`) opt in because
+   *  the consumers downstream of them (LazyBlockComponent → Block
+   *  facade → useData) need the cache warm to avoid an N+1
+   *  `block.load()` round-trip per visible child. Different `hydrate`
+   *  values get their own handle slot in the store, so an opt-in and
+   *  opt-out caller don't share state.
    *
    *  Phase 4's queriesFacet will promote this to `repo.query.childIds`
    *  alongside the rest of the kernel handles. */
   childIds(id: string, opts?: {hydrate?: boolean}): LoaderHandle<string[]> {
-    const hydrate = opts?.hydrate ?? true
+    const hydrate = opts?.hydrate ?? false
     const key = handleKey('childIds', {id, hydrate})
     return this.handleStore.getOrCreate(key, () =>
       new LoaderHandle<string[]>({
