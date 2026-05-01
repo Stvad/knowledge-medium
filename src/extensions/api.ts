@@ -72,6 +72,7 @@ export {
   type BlockLayout,
   type BlockLayoutContribution,
   type BlockLayoutSlots,
+  type BlockShellProps,
   type ShortcutActivationContribution,
   type ShortcutSurfaceContext,
 } from '@/extensions/blockInteraction.ts'

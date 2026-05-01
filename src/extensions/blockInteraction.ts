@@ -1,4 +1,9 @@
-import type { ComponentType, HTMLAttributes, MouseEvent } from 'react'
+import type {
+  ClipboardEvent,
+  ComponentType,
+  HTMLAttributes,
+  MouseEvent,
+} from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '@/data/internals/block'
 import {
@@ -84,22 +89,54 @@ export type BlockChildrenFooterContribution =
 export type BlockChildrenFooterResolver =
   (context: BlockInteractionContext) => readonly BlockRenderer[]
 
-// Block layout — arranges the four slots (content, properties, children,
-// footer) inside a block's body. The default vertical layout lives in
-// `DefaultBlockLayout`; plugins contribute alternatives by returning a
-// layout component for blocks they want to redress (e.g. a video block
-// in notes view rendering content+children side-by-side).
+// Block layout — owns the entire shape of a block as rendered (the
+// outer wrapper, controls placement, collapse behavior, and where the
+// content/children/footer slots sit). The default vertical layout lives
+// in `DefaultBlockLayout`; plugins contribute alternatives by returning
+// a layout component for blocks they want to redress.
 //
-// Each slot the layout receives is already wrapped in its own ErrorBoundary
-// + interaction context boundary, so swapping the layout doesn't change
-// shortcut-surface scoping or accidentally nest a child block inside the
-// parent's content surface.
+// Each slot the layout receives is already wrapped in its own
+// ErrorBoundary + interaction context boundary, so swapping the layout
+// doesn't change shortcut-surface scoping or accidentally nest a child
+// block inside the parent's content surface.
+//
+// Slots are defined by the framework — even when a layout chooses not
+// to render one, the slot still exists as a function it can ignore.
+// `Properties` is `null` when the block has them hidden; the layout
+// uses `{Properties && <Properties/>}` to skip rendering.
+//
+// Shell concerns the *typical* block wrapper bears (click/paste handler
+// dispatch, the canonical `data-block-id` / `data-editing` attributes,
+// the focusable tabIndex) are exposed as `shellProps`. The default
+// layout splats them onto its outer Collapsible; custom layouts apply
+// where appropriate or ignore entirely (a fullscreen overlay layout
+// has no need for any of them).
+export interface BlockShellProps {
+  'data-block-id': string
+  'data-editing': 'true' | 'false'
+  tabIndex: number
+  onClick?: (event: MouseEvent<HTMLElement>) => void
+  onPaste?: (event: ClipboardEvent<HTMLElement>) => void
+}
+
 export interface BlockLayoutSlots {
   block: Block
+  /** Block content surface — content renderer + surface props + error boundary. */
   Content: ComponentType
+  /** Block properties (metadata key/value pairs); `null` when hidden. */
   Properties: ComponentType | null
+  /** Block children subtree (raw `BlockChildren`; layout decides whether to wrap in CollapsibleContent). */
   Children: ComponentType
+  /** After-children sections contributed via `blockChildrenFooterFacet`. */
   Footer: ComponentType
+  /** Bullet + expand-collapse affordances; renders nothing when not appropriate (top-level). */
+  Controls: ComponentType
+  /** Top-level breadcrumb trail; returns `null` for non-top-level blocks. */
+  Breadcrumbs: ComponentType
+  /** "Updated by other user" badge; returns `null` when there's nothing to flag. */
+  UpdateIndicator: ComponentType
+  /** Shell-level attributes + handlers the typical block wrapper bears. */
+  shellProps: BlockShellProps
 }
 
 export type BlockLayout = ComponentType<BlockLayoutSlots>

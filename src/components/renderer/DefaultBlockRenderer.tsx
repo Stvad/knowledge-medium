@@ -2,7 +2,7 @@ import { BlockRendererProps, BlockRenderer } from '@/types.ts'
 import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible.tsx'
+import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
 import type { ComponentType } from 'react'
 import {
   showPropertiesProp,
@@ -13,7 +13,7 @@ import {
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
-import { useRef, ClipboardEvent, useState, useMemo, Ref, useEffect } from 'react'
+import { useRef, ClipboardEvent, useState, useMemo, useEffect } from 'react'
 import { Block } from '@/data/internals/block'
 import {
   useUIStateProperty,
@@ -27,7 +27,6 @@ import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
-import { useHoverDirty } from 'react-use'
 import { Breadcrumbs } from '@/components/Breadcrumbs.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
 import { FallbackComponent } from '@/components/util/error.tsx'
@@ -54,6 +53,7 @@ import {
   shortcutSurfaceActivationsFacet,
   type BlockLayout,
   type BlockLayoutSlots,
+  type BlockShellProps,
 } from '@/extensions/blockInteraction.ts'
 import { BlockInteractionProvider } from '@/extensions/BlockInteractionProvider.tsx'
 import { useBlockInteractionContext } from '@/extensions/blockInteractionContext.tsx'
@@ -180,33 +180,43 @@ const BlockBullet = ({block}: { block: Block }) => {
   )
 }
 
-const ExpandButton = ({block, collapsibleRef}: { block: Block, collapsibleRef: Ref<HTMLDivElement | null> }) => {
+/** The expand/collapse button. Visibility is driven by the surrounding
+ *  block wrapper's hover state via Tailwind group-hover (so the layout
+ *  must apply `group/block` to whatever element should trigger the
+ *  reveal). Decoupled from the Collapsible primitive — the underlying
+ *  `isCollapsedProp` is the source of truth, and the layout's
+ *  Collapsible (if any) reads it via its `open` prop. */
+const ExpandButton = ({block}: { block: Block }) => {
   const [isCollapsed, setIsCollapsed] = usePropertyValue(block, isCollapsedProp)
   const isMobile = useIsMobile()
   const hasChildren = useHasChildren(block)
 
-  // @ts-expect-error Seems like a library type error
-  const isHovering = useHoverDirty(collapsibleRef)
+  // - mobile: always visible (touch UIs have no hover affordance)
+  // - desktop with children: hidden until the parent block-group is hovered
+  // - desktop leaf: invisible placeholder so layout doesn't reflow on
+  //   children appearing/disappearing
+  const visibilityClass = isMobile
+    ? 'opacity-100'
+    : hasChildren
+      ? 'opacity-0 group-hover/block:opacity-100'
+      : 'opacity-0'
 
-  return <CollapsibleTrigger
-    asChild
-    onClick={(e) => {
-      e.stopPropagation()
-      setIsCollapsed(!isCollapsed)
-    }}>
+  return (
     <Button
       variant="ghost"
       size="sm"
-      className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity 
-          ${hasChildren && isHovering || isMobile ? 'opacity-100' : 'opacity-0'} 
-          ${isMobile ? 'w-6' : 'w-3'}`
-      }
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation()
+        setIsCollapsed(!isCollapsed)
+      }}
+      className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity ${visibilityClass} ${isMobile ? 'w-6' : 'w-3'}`}
     >
-        <span className="text-lg text-muted-foreground">
-          {isCollapsed ? '▸' : '▾'}
-        </span>
+      <span className="text-lg text-muted-foreground">
+        {isCollapsed ? '▸' : '▾'}
+      </span>
     </Button>
-  </CollapsibleTrigger>
+  )
 }
 
 
@@ -235,28 +245,53 @@ const UpdateIndicator = ({block}: { block: Block }) => {
 
 
 /**
- * Default vertical block layout — the layout used when no `blockLayoutFacet`
- * contribution opts in. Reads `inFocus` from the surrounding
- * BlockInteractionProvider so plugins that want a different focus highlight
- * (or none at all) can swap the entire layout without touching slot guts.
+ * Default block layout — owns the entire shape of a block as rendered
+ * (Collapsible wrapper, controls placement, body flow, focus highlight).
+ * Plugins contribute alternatives via `blockLayoutFacet` for blocks they
+ * want to redress (e.g. the video-player notes view).
+ *
+ * The `group/block` class is what makes hover-driven affordances like
+ * `ExpandButton` show up — any layout that wants those affordances to
+ * reveal on parent hover should mark its outer wrapper similarly.
  */
-export const DefaultBlockLayout: BlockLayout = ({Content, Properties, Children, Footer}) => {
+export const DefaultBlockLayout: BlockLayout = ({
+  block,
+  Content, Properties, Children, Footer,
+  Controls, Breadcrumbs, UpdateIndicator,
+  shellProps,
+}) => {
   const ctx = useBlockInteractionContext()
   const inFocus = ctx?.inFocus ?? false
+  const isTopLevel = ctx?.isTopLevel ?? false
+  const isSelected = ctx?.isSelected ?? false
+  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   return (
-    <>
-      <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
-        <Content/>
-        {Properties && <Properties/>}
-      </div>
+    <div>
+      <Breadcrumbs/>
 
-      <CollapsibleContent>
-        <Children/>
-      </CollapsibleContent>
+      <Collapsible
+        {...shellProps}
+        open={!isCollapsed || isTopLevel}
+        className={`tm-block group/block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
+      >
+        <Controls/>
 
-      <Footer/>
-    </>
+        <div className="block-body flex-grow relative flex flex-col">
+          <UpdateIndicator/>
+          <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
+            <Content/>
+            {Properties && <Properties/>}
+          </div>
+
+          <CollapsibleContent>
+            <Children/>
+          </CollapsibleContent>
+
+          <Footer/>
+        </div>
+      </Collapsible>
+    </div>
   )
 }
 
@@ -273,17 +308,13 @@ export function DefaultBlockRenderer(
   const uiStateBlock = useUIStateBlock()
   const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
-  const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
-  const collapsibleRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
-  const isMobile = useIsMobile()
   const isTopLevel = block.id === topLevelBlockId
 
   const isSelected = useIsSelected(block.id)
   const inFocus = useInFocus(block.id)
-  const hasChildren = useHasChildren(block)
 
   const blockInteractionContext = useMemo(() => ({
     block,
@@ -361,7 +392,12 @@ export function DefaultBlockRenderer(
     if (element && !isElementProperlyVisible(element)) element.scrollIntoView({behavior: 'instant', block: 'nearest'})
   }, [inFocus])
 
-  const handlePaste = async (e: ClipboardEvent<HTMLDivElement>) => {
+  // Stable across renders (latest closure picked up via closure capture
+  // of `inFocus`/`block`/etc.; no need for useCallback because the
+  // shellProps memo below captures handlePaste's identity for the layout's
+  // benefit). pasteMultilineText is async; React swallows the promise via
+  // the void cast in the wrapper.
+  const handlePaste = async (e: ClipboardEvent<HTMLElement>) => {
     if (!inFocus) return
     // todo this plausibly should be a global handler and not on the block
 
@@ -373,12 +409,6 @@ export function DefaultBlockRenderer(
       setFocusedBlockId(uiStateBlock, pasted[0].id)
     }
   }
-
-  const blockControls = () =>
-    <div className="block-controls flex items-center ">
-      {!isMobile && <ExpandButton block={block} collapsibleRef={collapsibleRef}/>}
-      <BlockBullet block={block}/>
-    </div>
 
   // Content slot: the content surface div + its surface props + the
   // resolved/decorated ContentRenderer. Stable across renders unless one
@@ -432,50 +462,86 @@ export function DefaultBlockRenderer(
     return Slot
   }, [block, childrenFooterSections])
 
+  // Controls slot: bullet + expand affordances. Self-aware of top-level
+  // (returns null since top-level blocks have no bullet) and of mobile
+  // (renders the expand button as a top-right floater rather than inline
+  // because mobile screens don't have desktop's horizontal real estate).
+  const ControlsSlot = useMemo<ComponentType>(() => {
+    const Slot = () => {
+      const ictx = useBlockInteractionContext()
+      const isMobile = useIsMobile()
+      const hasChildren = useHasChildren(block)
+
+      if (ictx?.isTopLevel) return null
+
+      return (
+        <>
+          <div className="block-controls flex items-center">
+            {!isMobile && <ExpandButton block={block}/>}
+            <BlockBullet block={block}/>
+          </div>
+          {isMobile && hasChildren && (
+            <div className="absolute right-1 top-0">
+              <ExpandButton block={block}/>
+            </div>
+          )}
+        </>
+      )
+    }
+    Slot.displayName = 'BlockControlsSlot'
+    return Slot
+  }, [block])
+
+  const BreadcrumbsSlot = useMemo<ComponentType>(() => {
+    const Slot = () => {
+      const ictx = useBlockInteractionContext()
+      if (!ictx?.isTopLevel) return null
+      return <Breadcrumbs block={block}/>
+    }
+    Slot.displayName = 'BlockBreadcrumbsSlot'
+    return Slot
+  }, [block])
+
+  const UpdateIndicatorSlot = useMemo<ComponentType>(() => {
+    const Slot = () => <UpdateIndicator block={block}/>
+    Slot.displayName = 'BlockUpdateIndicatorSlot'
+    return Slot
+  }, [block])
+
+  const shellProps = useMemo<BlockShellProps>(() => ({
+    'data-block-id': block.id,
+    'data-editing': inEditMode ? 'true' : 'false',
+    tabIndex: 0,
+    onClick: handleBlockClick
+      ? (event) => { void handleBlockClick(event) }
+      : undefined,
+    onPaste: (event) => { void handlePaste(event) },
+  }), [block.id, inEditMode, handleBlockClick, handlePaste])
+
   const layoutSlots = useMemo<BlockLayoutSlots>(() => ({
     block,
     Content: ContentSlot,
     Properties: PropertiesSlot,
     Children: ChildrenSlot,
     Footer: FooterSlot,
-  }), [block, ContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot])
+    Controls: ControlsSlot,
+    Breadcrumbs: BreadcrumbsSlot,
+    UpdateIndicator: UpdateIndicatorSlot,
+    shellProps,
+  }), [
+    block,
+    ContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot,
+    ControlsSlot, BreadcrumbsSlot, UpdateIndicatorSlot,
+    shellProps,
+  ])
 
   return (
-    <div>
-      {isTopLevel && <Breadcrumbs block={block}/>}
-
-      <Collapsible
-        open={!isCollapsed || isTopLevel}
-        className={`tm-block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
-        data-editing={inEditMode ? 'true' : 'false'}
-        data-block-id={block.id}
-        tabIndex={0}
-        onPaste={handlePaste}
-        ref={collapsibleRef}
-        onClick={(event) => {
-          void handleBlockClick?.(event)
-        }}
-      >
-        {!isTopLevel && blockControls()}
-
-        <div className="block-body flex-grow relative flex flex-col">
-          <UpdateIndicator block={block}/>
-          <BlockInteractionProvider context={blockInteractionContext}>
-            {/* Layout is resolved from blockLayoutFacet — its identity is
-                stable per blockInteractionContext (the resolver memo
-                above), not a fresh component each render. */}
-            {/* eslint-disable-next-line react-hooks/static-components */}
-            <Layout {...layoutSlots}/>
-          </BlockInteractionProvider>
-        </div>
-
-        {hasChildren && isMobile && !isTopLevel && (
-          <div className="absolute right-1 top-0 ">
-            {<ExpandButton block={block} collapsibleRef={collapsibleRef}/>}
-          </div>
-        )}
-
-      </Collapsible>
-    </div>
+    <BlockInteractionProvider context={blockInteractionContext}>
+      {/* Layout is resolved from blockLayoutFacet — its identity is
+          stable per blockInteractionContext (the resolver memo above),
+          not a fresh component each render. */}
+      {/* eslint-disable-next-line react-hooks/static-components */}
+      <Layout {...layoutSlots}/>
+    </BlockInteractionProvider>
   )
 }
