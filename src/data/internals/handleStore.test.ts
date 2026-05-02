@@ -578,6 +578,44 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     expect(runs).toBe(2)
   })
 
+  it('load() during a post-invalidate inflight reload returns the fresh load, not the stale cached value', async () => {
+    // Regression for the parseReferencesProcessor §7.5 race: the
+    // processor calls `aliasLookup(...).load()` after a tx that just
+    // tombstoned the looked-up row. handleStore.invalidate fires
+    // synchronously on commit and kicks runLoader, but `await tx` only
+    // waits for the commit, not for the reload to settle. If load()
+    // short-circuits to the pre-invalidate cached value while the
+    // reload is still inflight, the processor sees stale state and
+    // skips the corrective write.
+    const store = makeStore()
+    let release!: () => void
+    let nextResult = 'first'
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<string>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'r1' })
+          // Second load (post-invalidate) blocks until released so we
+          // can call load() while inflight is set.
+          if (nextResult === 'second') {
+            await new Promise<void>((r) => { release = r })
+          }
+          return nextResult
+        },
+      }),
+    )
+    expect(await h.load()).toBe('first')
+
+    nextResult = 'second'
+    store.invalidate({ rowIds: ['r1'] }) // kicks runLoader; inflight=p2
+
+    // load() must return p2 (post-invalidate), not the cached 'first'.
+    const racing = h.load()
+    release()
+    expect(await racing).toBe('second')
+  })
+
   it('failed load with mid-load invalidate reruns on next attempt', async () => {
     const store = makeStore()
     let runs = 0

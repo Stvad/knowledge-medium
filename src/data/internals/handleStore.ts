@@ -339,10 +339,20 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     if (this.disposed) {
       return Promise.reject(new Error(`Handle ${this.key} has been disposed`))
     }
+    // An inflight load means the cached value is *known stale* — it was
+    // either never set (cold load) or was invalidated and a fresh fetch
+    // is in progress. Return the inflight so awaiters see post-
+    // invalidation truth. Callers who specifically want "give me the
+    // current cached value, don't wait" should use `peek()`. Without
+    // this preference, a `repo.tx` → `handleStore.invalidate(...)`
+    // sequence can hand the next `await handle.load()` a pre-commit
+    // snapshot — e.g. a processor reading a query handle right after a
+    // commit that just tombstoned the looked-up row would see it as
+    // live and skip the restore (parseReferencesProcessor §7.5 race).
+    if (this.inflight) return this.inflight
     if (this.status_ === 'ready' && this.value !== undefined) {
       return Promise.resolve(this.value)
     }
-    if (this.inflight) return this.inflight
     return this.runLoader()
   }
 
@@ -525,9 +535,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   invalidate(): void {
     if (this.disposed) return
     this.store.metrics.loaderInvalidations++
-    // Force a re-resolve. Readers see the stale value via peek() until
-    // the new load completes — status stays 'ready' so the UI doesn't
-    // flash a Suspense fallback for in-place updates.
+    // Force a re-resolve. Readers calling `peek()` see the stale value
+    // until the new load completes — status stays 'ready' so the UI
+    // doesn't flash a Suspense fallback for in-place updates. Readers
+    // calling `load()` get the inflight reload (post-invalidation
+    // truth) — see the load()-prefers-inflight comment above.
     if (this.inflight) {
       // A load is already running; it may have read stale data from
       // SQL before the invalidating commit landed. Mark the run as
