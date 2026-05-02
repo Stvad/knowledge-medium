@@ -55,9 +55,8 @@ const dueDateProp = defineProperty<Date | undefined>('tasks:due-date', {
   kind: 'date',
 })
 
-const TaskDueDateEditor: PropertyEditor<Date | undefined> = (
-  {value: _value, onChange: _onChange, block: _block},
-): JSX.Element => createElement('input', {type: 'date'})
+const TaskDueDateEditor: PropertyEditor<Date | undefined> = (): JSX.Element =>
+  createElement('input', {type: 'date'})
 
 const dueDateUi = definePropertyUi<Date | undefined>({
   name: 'tasks:due-date',

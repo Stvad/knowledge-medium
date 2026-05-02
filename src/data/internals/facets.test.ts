@@ -225,8 +225,7 @@ describe('facet variance — typed plugin contributions register without widenin
     const typedUi = definePropertyUi<Date | undefined>({
       name: 'tasks:due-date',
       label: 'Due date',
-      Editor: ({value: _value, onChange: _onChange, block: _block}): JSX.Element =>
-        createElement('span', null, null),
+      Editor: (): JSX.Element => createElement('span', null, null),
     })
     const runtime = resolveFacetRuntimeSync([
       propertyUiFacet.of(typedUi, {source: 'plugin'}),
