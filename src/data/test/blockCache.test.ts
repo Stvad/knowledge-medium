@@ -289,5 +289,47 @@ describe('BlockCache confirmed-missing markers (spec §5.2)', () => {
     cache.setSnapshot(snap())
     expect(cache.isMissing('block-1')).toBe(false)
   })
+
+  it('markMissing also drops any cached snapshot so Block.peek/data observe the deletion', () => {
+    // Regression: a stale snapshot lingering behind the missing marker
+    // would keep Block.peek / Block.data / repo.exists returning the
+    // old row state because they consult the snapshot map first.
+    const cache = new BlockCache()
+    cache.setSnapshot(snap({content: 'lives'}))
+    expect(cache.getSnapshot('block-1')?.content).toBe('lives')
+
+    expect(cache.markMissing('block-1')).toBe(true)
+    expect(cache.getSnapshot('block-1')).toBeUndefined()
+    expect(cache.hasSnapshot('block-1')).toBe(false)
+    expect(cache.isMissing('block-1')).toBe(true)
+  })
+
+  it('markMissing notifies once when both the marker and the snapshot transition together', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap())
+    const listener = vi.fn()
+    cache.subscribe('block-1', listener)
+
+    expect(cache.markMissing('block-1')).toBe(true)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('markMissing notifies when only the snapshot was stale (marker already set)', () => {
+    // The marker can already be set (e.g. from a prior load) while a
+    // sync arrival re-populated the snapshot. The next markMissing
+    // call must still wipe the snapshot AND notify so subscribers
+    // observe the row going away.
+    const cache = new BlockCache()
+    cache.markMissing('block-1')
+    cache.setSnapshot(snap()) // setSnapshot clears the marker
+    cache.markMissing('block-1') // re-mark to set up the regression case
+    cache.setSnapshot(snap({content: 'stale'})) // snapshot back, marker cleared again
+    // Re-mark missing; the snapshot is the stale one we want gone.
+    const listener = vi.fn()
+    cache.subscribe('block-1', listener)
+    expect(cache.markMissing('block-1')).toBe(true)
+    expect(cache.getSnapshot('block-1')).toBeUndefined()
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
 })
 

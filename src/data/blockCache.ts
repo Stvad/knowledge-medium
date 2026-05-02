@@ -139,9 +139,19 @@ export class BlockCache {
    *  Notifies subscribers on the first transition into missing — a
    *  subscribed Block facade re-renders when its row is confirmed
    *  gone. Repeat calls (already missing) are no-ops to avoid
-   *  spurious re-renders. */
+   *  spurious re-renders.
+   *
+   *  Also drops any cached snapshot for this id. Block.peek/data,
+   *  status(), and repo.exists all consult the snapshot map first; if
+   *  a stale snapshot remained behind a freshly-set missing marker,
+   *  the facade would keep returning the old row state and never
+   *  observe the deletion. Notifies once even when both sides changed
+   *  — subscribers don't care which transition fired, only that they
+   *  should re-read. */
   markMissing(id: string): boolean {
-    if (this.missingIds.has(id)) return false
+    const hadMarker = this.missingIds.has(id)
+    const hadSnapshot = this.snapshots.delete(id)
+    if (hadMarker && !hadSnapshot) return false
     this.missingIds.add(id)
     this.notify(id)
     return true
