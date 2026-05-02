@@ -1,6 +1,6 @@
 import { v5 as uuidv5 } from 'uuid'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
-import { parseRelativeDate } from '@/utils/relativeDate'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamPage } from './types'
 
 // Fixed namespace for Roam-import block ids. Picking it once and never
@@ -26,8 +26,12 @@ export interface DailyPageInfo {
 //   - Roam marks daily pages with `:log/id` (epoch-ms midnight UTC).
 //   - Roam's daily-page uid is `MM-DD-YYYY`; we accept that as the
 //     primary signal.
-//   - We also accept titles that chrono-node parses to a single date
-//     (Roam's "April 28th, 2026" long form).
+//   - We also accept titles in literal daily-page form (ISO or Roam
+//     long form, e.g. "April 28th, 2026"). Strict literal-only here —
+//     a permissive natural-language parser would treat a page literally
+//     titled "today"/"may"/"friday" as a daily note keyed to the
+//     current day, which is wrong (Roam keeps those as regular pages)
+//     and would also stomp the day's daily on import.
 export const resolveDailyPage = (
   workspaceId: string,
   page: RoamPage,
@@ -42,7 +46,7 @@ export const resolveDailyPage = (
     if (iso) return {iso, blockId: dailyNoteBlockId(workspaceId, iso)}
   }
 
-  const parsed = parseRelativeDate(page.title)
+  const parsed = parseLiteralDailyPageTitle(page.title)
   if (parsed) {
     return {iso: parsed.iso, blockId: dailyNoteBlockId(workspaceId, parsed.iso)}
   }

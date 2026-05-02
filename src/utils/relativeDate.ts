@@ -1,5 +1,5 @@
 import * as chrono from 'chrono-node'
-import { formatIsoDate } from '@/utils/dailyPage'
+import { formatIsoDate, formatRoamDate } from '@/utils/dailyPage'
 
 export interface ParsedRelativeDate {
   iso: string
@@ -43,4 +43,39 @@ export const parseRelativeDate = (
   if (year < 1000 || year > 9999) return null
 
   return {iso: formatIsoDate(date), date}
+}
+
+/**
+ * Strict variant of `parseRelativeDate` for storage-time decisions
+ * (currently: Roam import deciding which `[[wiki-link]]` aliases should
+ * be rewired to a daily-note id, and which Roam pages without a
+ * `:log/id` should be treated as dailies).
+ *
+ * Returns a parse result iff `input` is a *literal* daily-page title —
+ * either ISO ("2026-04-28") or the Roam long form ("April 28th, 2026").
+ * Relative-time keywords like "today" / "now" / "friday" / "may" /
+ * "noon" / "next week" are intentionally rejected here; those still
+ * resolve via `parseRelativeDate` for autocomplete + navigation, but
+ * must NOT collapse references to a calendar id at import time. (Roam
+ * itself doesn't do that — `[[today]]` is a regular page named
+ * "today", not an alias for the day's daily.) The earlier behavior
+ * pulled every historical `[[today]]` / `[[now]]` / `[[friday]]` into
+ * the *current* day's backlinks after a re-import.
+ *
+ * Implementation: parse via `parseRelativeDate`, then verify the input
+ * roundtrips through one of the two canonical formatters. Anything
+ * that chrono *could* parse (relative or fuzzy) but that isn't already
+ * in canonical form is rejected — including malformed-but-coercible
+ * literals like "2026-13-01" (chrono would happily reinterpret).
+ */
+export const parseLiteralDailyPageTitle = (
+  input: string,
+  now: Date = new Date(),
+): ParsedRelativeDate | null => {
+  const parsed = parseRelativeDate(input, now)
+  if (!parsed) return null
+  const trimmed = input.trim()
+  if (trimmed === parsed.iso) return parsed
+  if (trimmed === formatRoamDate(parsed.date)) return parsed
+  return null
 }

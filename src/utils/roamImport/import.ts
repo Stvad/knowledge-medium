@@ -22,7 +22,7 @@ import {
 import { aliasesProp, typeProp } from '@/data/properties'
 import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
 import { computeAliasSeatId } from '@/data/internals/targets'
-import { parseRelativeDate } from '@/utils/relativeDate'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import { parseReferences } from '@/utils/referenceParser'
 import type { Repo } from '@/data/internals/repo'
 import { planImport, type PreparedPage, type RoamImportPlan } from './plan'
@@ -383,8 +383,8 @@ const collectDailyIsos = (
     if (!r.page.isDaily || !r.page.iso) continue
     if (!VALID_ISO.test(r.page.iso)) {
       // Should not happen — the three upstream paths
-      // (`isoFromDateUid`, `isoFromLogId`, `parseRelativeDate`) all
-      // clamp to 4-digit years already. This branch is a defensive
+      // (`isoFromDateUid`, `isoFromLogId`, `parseLiteralDailyPageTitle`)
+      // all clamp to 4-digit years already. This branch is a defensive
       // safety net so a future regression at any of those sources
       // doesn't crash the entire import.
       diagnostics.push(
@@ -398,7 +398,11 @@ const collectDailyIsos = (
     isos.add(r.page.iso)
   }
   for (const alias of aliasesUsed) {
-    const parsed = parseRelativeDate(alias)
+    // Must match the literal-only filter resolveAliases uses — otherwise
+    // we'd materialise daily-note rows for aliases we never rewired to a
+    // daily-note id (e.g. `[[today]]`), wasting work and creating empty
+    // daily-page rows that nothing references.
+    const parsed = parseLiteralDailyPageTitle(alias)
     if (!parsed || !aliasIdMap.has(alias)) continue
     if (!VALID_ISO.test(parsed.iso)) {
       diagnostics.push(`Alias "${alias}" parsed to non-standard ISO "${parsed.iso}" — skipping.`)
@@ -533,12 +537,20 @@ const resolveAliases = async (
     if (importedHit) {
       aliasIdMap.set(alias, importedHit)
     } else {
-      const parsedDate = parseRelativeDate(alias)
+      const parsedDate = parseLiteralDailyPageTitle(alias)
       if (parsedDate) {
         // Daily-shaped alias → deterministic id. The row is materialised
         // by getOrCreateDailyNote in step 4 (which also links to the
         // workspace's journal page); we just predict the id here so
         // references[] can be patched in-memory before that call.
+        //
+        // Strict literal-only check (not parseRelativeDate): chrono.casual
+        // resolves "today" / "now" / "may" / "friday" to the *current*
+        // day, so a permissive parser would rewire every historical
+        // `[[today]]` into today's daily-note id at import time and
+        // bloat today's backlinks with every block that ever mentioned
+        // a relative-time word. Roam's own behavior is that `[[today]]`
+        // is a regular page named "today", not the day's daily.
         aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
       } else {
         const existing = await repo.findBlockByAliasInWorkspace(workspaceId, alias)
