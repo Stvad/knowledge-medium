@@ -31,9 +31,9 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     const env = await setupBenchEnv()
     const tree = await populateBalanced(env.db, 4, 2)
     // Pre-create the handle so the hot path is purely Map.get.
-    env.repo.children(tree.rootId)
-    const r = await bench('repo.children(id) identity hit (warm)', async () => {
-      env.repo.children(tree.rootId)
+    env.repo.query.children({id: tree.rootId})
+    const r = await bench('repo.query.children({id}) identity hit (warm)', async () => {
+      env.repo.query.children({id: tree.rootId})
     }, {warmup: 100, iters: 10000, totalTimeoutMs: 30_000})
     out.push(r)
     await env.cleanup()
@@ -134,7 +134,7 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     // Hydrate the cache so the handle's children loader operates on
     // populated cache state (avoids cold-load noise per iter).
     await env.repo.load(tree.rootId, {children: true})
-    const handle = env.repo.children(tree.rootId)
+    const handle = env.repo.query.children({id: tree.rootId})
     await handle.load()
     let nextFire: (() => void) | null = null
     handle.subscribe(() => { nextFire?.(); nextFire = null })
@@ -246,11 +246,11 @@ export const runHandleBenches = async (): Promise<BenchResult[]> => {
     let handleFired = 0
     let nextFire: (() => void) | null = null
     for (const id of chain.ids) env.cache.subscribe(id, () => { cacheFired++ })
-    const ancH = env.repo.ancestors(chain.leafId)
+    const ancH = env.repo.query.ancestors({id: chain.leafId})
     await ancH.load()
     ancH.subscribe(() => { handleFired++; nextFire?.(); nextFire = null })
     const parentId = chain.ids.length >= 2 ? chain.ids[chain.ids.length - 2] : chain.leafId
-    const ch = env.repo.children(parentId)
+    const ch = env.repo.query.children({id: parentId})
     await ch.load()
     ch.subscribe(() => { handleFired++; nextFire?.(); nextFire = null })
 
