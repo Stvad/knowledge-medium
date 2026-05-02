@@ -51,8 +51,12 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
           <DialogDescription>{workspace.name}</DialogDescription>
         </DialogHeader>
         <div className="space-y-6">
-          <RenameSection workspace={workspace} disabled={!isOwner} />
-          <MembersSection workspace={workspace} canManage={isOwner} />
+          {/* `key={workspace.id}` remounts both subsections when the
+              user switches to a different workspace; freshly-mounted
+              `useState` initializers do the form-reset job so neither
+              subsection needs a setState-in-effect on workspace change. */}
+          <RenameSection key={workspace.id} workspace={workspace} disabled={!isOwner} />
+          <MembersSection key={workspace.id} workspace={workspace} canManage={isOwner} />
           {isOwner && <DangerSection workspace={workspace} onDeleted={() => { onOpenChange(false); onDeleted() }} />}
           {!isOwner && isViewer && (
             <p className="text-sm text-muted-foreground">
@@ -71,17 +75,12 @@ export function WorkspaceSettingsDialog({workspace, open, onOpenChange, onDelete
 }
 
 function RenameSection({workspace, disabled}: {workspace: Workspace, disabled: boolean}) {
+  // Form state resets via `key={workspace.id}` at the call site —
+  // switching workspaces remounts this component with fresh state.
   const [name, setName] = useState(workspace.name)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
-
-  // Reset form when the workspace changes.
-  useEffect(() => {
-    setName(workspace.name)
-    setError(null)
-    setInfo(null)
-  }, [workspace.id, workspace.name])
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -139,7 +138,13 @@ function MembersSection({workspace, canManage}: {workspace: Workspace, canManage
     }
   }, [workspace.id])
 
-  useEffect(() => { void refreshMembers() }, [refreshMembers])
+  // Fetch-on-mount of an external resource (Supabase RPC). The
+  // setState lives behind an `await`, so it doesn't actually cascade
+  // synchronously, but the lint rule's heuristic still flags it.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshMembers()
+  }, [refreshMembers])
 
   const invite = async (event: FormEvent) => {
     event.preventDefault()

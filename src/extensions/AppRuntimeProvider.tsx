@@ -81,12 +81,15 @@ export function AppRuntimeProvider({
     return () => window.removeEventListener(appRuntimeUpdateEvent, reloadRuntime as EventListener)
   }, [])
 
+  // Sync state-from-prop pattern: when `baseRuntime` changes (rare —
+  // only on `repo` swap or generation reload) the held `runtime` must
+  // follow. The same effect also pushes that runtime into the Repo
+  // registries. The async effect below will replace it once dynamic
+  // plugins resolve, but the sync runtime keeps kernel + static plugin
+  // mutators / processors live during that gap.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setRuntime(baseRuntime)
-    // Push the synchronous (kernel + static plugins) runtime into the
-    // Repo registries. The async effect below will replace it once
-    // dynamic plugins resolve, but the sync runtime keeps kernel +
-    // static plugin mutators / processors live during that gap.
     repo.setFacetRuntime(baseRuntime)
   }, [baseRuntime, repo])
 

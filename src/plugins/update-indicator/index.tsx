@@ -15,7 +15,6 @@ const updateIndicatorDecorator: BlockContentDecoratorContribution = () => Inner 
       <UpdateIndicator block={props.block}/>
       {/* Inner is the registry-resolved/decorated renderer; identity is
           stable per blockInteractionContext. */}
-      {/* eslint-disable-next-line react-hooks/static-components */}
       <Inner {...props}/>
     </div>
   )

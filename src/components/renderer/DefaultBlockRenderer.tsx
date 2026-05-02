@@ -409,7 +409,6 @@ export function DefaultBlockRenderer(
                 decorate(blockContentDecoratorsFacet) memo above —
                 stable identity per blockInteractionContext, not a
                 fresh component each render. */}
-            {/* eslint-disable-next-line react-hooks/static-components */}
             <ContentRenderer block={block}/>
           </ErrorBoundary>
         </div>

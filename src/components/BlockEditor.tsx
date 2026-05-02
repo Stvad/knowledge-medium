@@ -75,7 +75,6 @@ export const BlockEditor = ({
   // when it observes `live === incoming` — i.e. when the cache
   // genuinely confirms our write.
   const pushChange = useRef(
-    // eslint-disable-next-line react-hooks/refs
     debounce((value: string) => {
       void block.setContent(value)
     }, 300),
@@ -173,7 +172,7 @@ export const BlockEditor = ({
     })
     lastCommittedContent.current = incoming
     lastAdoptedUpdatedAt.current = incomingUpdatedAt
-  }, [blockData, editorView])
+  }, [blockData, editorView, block.id])
 
   useEffect(() => {
     if (!isEditing || focusedBlockId !== block.id || !editorView) return

@@ -22,7 +22,11 @@ export const usePendingInvitations = () => {
     }
   }, [])
 
+  // Fetch-on-mount of an external resource (Supabase RPC). The
+  // setState calls inside `refresh` live behind an `await`, but the
+  // lint heuristic still flags the kickoff.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh()
   }, [refresh])
 

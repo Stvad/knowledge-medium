@@ -59,8 +59,12 @@ export function QuickFind() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [value, setValue] = useState('')
-  const [aliases, setAliases] = useState<AliasMatch[]>([])
-  const [blocks, setBlocks] = useState<BlockMatch[]>([])
+  const [aliasResults, setAliasResults] = useState<AliasMatch[]>([])
+  const [blockResults, setBlockResults] = useState<BlockMatch[]>([])
+  // Mask stale fetch results when the query is empty so the effect
+  // above doesn't need to setState on the empty path.
+  const aliases = query.trim() ? aliasResults : []
+  const blocks = query.trim() ? blockResults : []
   const [recents, setRecents] = useState<RecentItem[]>([])
 
   useEffect(() => {
@@ -82,11 +86,11 @@ export function QuickFind() {
     if (!open) return
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    if (!query.trim()) {
-      setAliases([])
-      setBlocks([])
-      return
-    }
+    // Empty-query path: no fetch is needed. We don't reset state here
+    // — the displayed `aliases` / `blocks` below mask stale results
+    // when the query is empty, which keeps this effect free of the
+    // set-state-in-effect anti-pattern.
+    if (!query.trim()) return
 
     let cancelled = false
     const timer = setTimeout(async () => {
@@ -103,8 +107,8 @@ export function QuickFind() {
         blockMatches.push({blockId: block.id, content: block.content})
       }
 
-      setAliases(aliasRows)
-      setBlocks(blockMatches)
+      setAliasResults(aliasRows)
+      setBlockResults(blockMatches)
     }, DEBOUNCE_MS)
 
     return () => {
