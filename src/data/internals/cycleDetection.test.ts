@@ -2,18 +2,27 @@
 /**
  * Phase 5 acceptance — sync-induced cycle detection (§4.7).
  *
- * Two assertions per the spec's §13.5 acceptance bullet:
- *   1. `repo.subtree(rootId)` over a 2-cycle returns each member exactly
- *      once (no UNION-ALL duplicate explosion). The CTE-level guard is
- *      what does the work; tests around it live in treeQueries.test.ts.
- *      Repeated here against the public surface (`repo.query.subtree`)
+ * Two assertions per the spec's Phase 5 acceptance bullet:
+ *   1. `repo.query.subtree(rootId)` over a 2-cycle returns each member
+ *      exactly once (no UNION-ALL duplicate explosion). The CTE-level
+ *      guard does the work; CTE-level coverage lives in
+ *      treeQueries.test.ts. Repeated here against the public surface
  *      because that's the consumer-facing contract.
- *   2. `repo.events.cycleDetected` fires once per affected workspace
- *      with the right shape — `startIds` enumerates each affected id
- *      that closes back on itself.
+ *   2. Cycle detection fires per drain pass with non-empty results,
+ *      surfaces a `console.warn` (the operator-facing channel), and
+ *      hands the same payload to a test `onCycleDetected` callback so
+ *      tests can assert shape without grepping log output.
+ *
+ * Why test against `onCycleDetected` rather than a `repo.events` pub/
+ * sub: there are no in-product subscribers in v1 — the alpha policy is
+ * "console.warn for operators; manual fix via the §4.7 SQL runbook" —
+ * so a pub/sub surface on `Repo` would be plumbing for nobody. The
+ * callback option exists on the tail for tests + future telemetry
+ * hooks; if a third caller needs it, that's the right time to build a
+ * subscriber surface.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CycleDetectedEvent } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -85,13 +94,16 @@ describe('cycle detection (§4.7)', () => {
     await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
 
     const events: CycleDetectedEvent[] = []
-    env.repo.events.cycleDetected.subscribe(e => events.push(e))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
     // Start the tail consuming from the highest existing id so the
     // initial seed inserts (which DO write row_events with source=sync,
     // but with no parent_id transitions) don't appear as cycle
     // candidates. We want exactly the upcoming UPDATE rows in the scan.
-    env.repo.startRowEventsTail({ throttleMs: 0 })
+    env.repo.startRowEventsTail({
+      throttleMs: 0,
+      onCycleDetected: e => events.push(e),
+    })
     await env.repo.flushRowEventsTail() // settle the catch-up read
 
     // Two concurrent sync-applied moves close the loop:
@@ -111,7 +123,7 @@ describe('cycle detection (§4.7)', () => {
     // about: (a) at least one event fired, (b) every event names
     // ws-1, (c) txIdsInvolved is empty (the trigger writes tx_id =
     // NULL on sync writes), (d) the union of startIds covers both
-    // affected rows.
+    // affected rows, (e) console.warn is emitted alongside.
     expect(events.length).toBeGreaterThanOrEqual(1)
     const allStartIds = new Set<string>()
     for (const ev of events) {
@@ -123,6 +135,13 @@ describe('cycle detection (§4.7)', () => {
       for (const id of ev.startIds) allStartIds.add(id)
     }
     expect(Array.from(allStartIds).sort()).toEqual(['A', 'B'])
+    // Operator-facing channel — fires the same number of times as
+    // onCycleDetected, with the workspace + startIds in the message.
+    expect(warn.mock.calls.length).toBe(events.length)
+    for (const call of warn.mock.calls) {
+      expect(String(call[0])).toMatch(/cycleDetected ws=ws-1/)
+    }
+    warn.mockRestore()
   })
 
   it('repo.query.subtree on a cyclic root returns each member exactly once', async () => {
@@ -144,24 +163,35 @@ describe('cycle detection (§4.7)', () => {
     await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
 
     const events: CycleDetectedEvent[] = []
-    env.repo.events.cycleDetected.subscribe(e => events.push(e))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    env.repo.startRowEventsTail({ throttleMs: 0 })
+    env.repo.startRowEventsTail({
+      throttleMs: 0,
+      onCycleDetected: e => events.push(e),
+    })
     await env.repo.flushRowEventsTail()
 
     await movePartySync('B', 'A')
     await env.repo.flushRowEventsTail()
 
     expect(events).toEqual([])
+    // Filter for our cycle channel — other warnings (e.g. tail drain
+    // diagnostics) shouldn't make this test flaky.
+    const cycleWarns = warn.mock.calls.filter(c =>
+      String(c[0]).includes('cycleDetected'),
+    )
+    expect(cycleWarns).toEqual([])
+    warn.mockRestore()
   })
 
   it('does not fire on pure content edits', async () => {
     await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
 
     const events: CycleDetectedEvent[] = []
-    env.repo.events.cycleDetected.subscribe(e => events.push(e))
-
-    env.repo.startRowEventsTail({ throttleMs: 0 })
+    env.repo.startRowEventsTail({
+      throttleMs: 0,
+      onCycleDetected: e => events.push(e),
+    })
     await env.repo.flushRowEventsTail()
 
     await env.h.db.execute(
@@ -171,27 +201,5 @@ describe('cycle detection (§4.7)', () => {
 
     await env.repo.flushRowEventsTail()
     expect(events).toEqual([])
-  })
-
-  it('subscriber that throws does not break subsequent listeners', async () => {
-    await seedSync({ id: 'A', parentId: null, orderKey: 'a0' })
-    await seedSync({ id: 'B', parentId: null, orderKey: 'a1' })
-
-    const seen: string[] = []
-    env.repo.events.cycleDetected.subscribe(() => { throw new Error('boom') })
-    env.repo.events.cycleDetected.subscribe(e => { seen.push(e.workspaceId) })
-
-    env.repo.startRowEventsTail({ throttleMs: 0 })
-    await env.repo.flushRowEventsTail()
-    await movePartySync('A', 'B')
-    await movePartySync('B', 'A')
-    await env.repo.flushRowEventsTail()
-
-    // Drain pass count varies (see the same-test-suite note above);
-    // contract: the working listener fires every time the cycle scan
-    // emits, regardless of what the throwing listener does, and every
-    // event is for ws-1.
-    expect(seen.length).toBeGreaterThanOrEqual(1)
-    expect(seen.every(ws => ws === 'ws-1')).toBe(true)
   })
 })

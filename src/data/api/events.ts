@@ -1,8 +1,10 @@
-/** Engine-emitted events. Subscribed via `repo.events.<name>`.
- *  v1 only emits `cycleDetected` from the row_events tail when sync-
- *  applied parent_id mutations close a loop. See spec §4.7. */
-
-import type { Unsubscribe } from './handle'
+/** Engine-emitted event shapes. v1 only emits `cycleDetected` from the
+ *  row_events tail when sync-applied parent_id mutations close a loop;
+ *  it surfaces as a `console.warn` (operators grep logs) plus an
+ *  optional `onCycleDetected` callback on `RowEventsTailOptions` for
+ *  tests / future telemetry hooks. No pub/sub plumbing lives on `Repo`
+ *  itself in v1 — there are no in-product subscribers and the alpha
+ *  policy is "operator runs the §4.7 SQL runbook to fix manually". */
 
 export interface CycleDetectedEvent {
   workspaceId: string
@@ -12,18 +14,6 @@ export interface CycleDetectedEvent {
   /** tx_ids of the row_events that triggered detection. Empty for the
    *  pure-sync case (the row_events trigger writes tx_id = NULL when
    *  source IS NULL, which is always true for PowerSync's CRUD-apply
-   *  path); the field exists for completeness and future
-   *  local-write-detected cycles. */
+   *  path); the field exists for completeness. */
   txIdsInvolved: string[]
-}
-
-/** Tiny pub/sub primitive. Subscribers fire in registration order;
- *  exceptions are caught + logged so one bad listener doesn't poison
- *  the rest. Synchronous — emit returns once every listener has run. */
-export interface EventChannel<T> {
-  subscribe(listener: (event: T) => void): Unsubscribe
-}
-
-export interface RepoEvents {
-  cycleDetected: EventChannel<CycleDetectedEvent>
 }

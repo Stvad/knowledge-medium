@@ -55,7 +55,6 @@ import {
   type RowEventsTail,
   type RowEventsTailOptions,
 } from './rowEventsTail'
-import { createRepoEvents, type InternalRepoEvents } from './repoEvents'
 import { UndoManager, type UndoEntry } from './undoManager'
 import type { TxImpl } from './txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
@@ -217,12 +216,6 @@ export class Repo {
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
   private rowEventsTail: RowEventsTail | null = null
-  /** Engine-emitted events (spec §4.7). Today only `cycleDetected`
-   *  fires, from the row_events tail when sync-applied parent_id
-   *  mutations close a loop. Subscribers register via
-   *  `repo.events.cycleDetected.subscribe(listener)`; they receive
-   *  one event per affected workspace per drain pass. */
-  readonly events: InternalRepoEvents = createRepoEvents()
   /** Backing field for `activeWorkspaceId` (see getter/setter below). */
   private _activeWorkspaceId: string | null = null
   /** Instance discriminator for memoization keys that need to vary
@@ -370,19 +363,11 @@ export class Repo {
    *  manual flushing. */
   startRowEventsTail(options?: RowEventsTailOptions): RowEventsTail {
     if (this.rowEventsTail) this.rowEventsTail.dispose()
-    // Default the cycle callback to the events channel emit; callers
-    // that pass their own onCycleDetected (tests inspecting raw scan
-    // hits) take precedence. Spec §4.7.
-    const optionsWithCycleEmit: RowEventsTailOptions = {
-      ...options,
-      onCycleDetected: options?.onCycleDetected
-        ?? ((event) => { this.events.cycleDetected.emit(event) }),
-    }
     this.rowEventsTail = startRowEventsTail({
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
-      options: optionsWithCycleEmit,
+      options,
     })
     return this.rowEventsTail
   }
