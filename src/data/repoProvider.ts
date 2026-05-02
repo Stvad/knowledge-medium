@@ -186,6 +186,29 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // journal mode. Re-evaluate if PowerSync ever ships a WAL-capable
   // browser VFS.
 
+  // Cache + temp-store tuning. SQLite's default `cache_size` is 2000
+  // pages = ~8 MB — fine for tiny DBs, catastrophic for users with
+  // import-heavy workspaces (250k blocks ≈ 700 MB on-disk). Each cold
+  // page becomes a synchronous OPFS read on the worker thread, so a
+  // page-open's load + ancestors + children + backlinks queries all
+  // serialize behind cold-page I/O. Raising the cache to 256 MiB lets
+  // the hot index + active-page footprint live in worker RAM, dropping
+  // most reads to memory speed after a brief warmup.
+  //
+  // Negative value = absolute KiB (positive = page count, which depends
+  // on page_size). 262144 KiB = 256 MiB.
+  //
+  // Trade: ~256 MiB resident browser memory while the app is open. On
+  // small DBs SQLite only allocates pages it touches, so steady-state
+  // memory tracks the actual working set (much less than the cap).
+  //
+  // `temp_store = MEMORY` keeps temp B-trees (DISTINCT, ORDER BY,
+  // recursive CTEs) off OPFS — they're transient and don't need to
+  // survive a crash, and the OPFS VFS doesn't perform well as a temp
+  // store anyway.
+  await powerSyncDb.execute('PRAGMA cache_size = -262144')
+  await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
+
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
