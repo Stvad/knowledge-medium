@@ -28,7 +28,7 @@
  *     doesn't depend on it)
  */
 
-import { PowerSyncDatabase, Schema } from '@powersync/web'
+import { PowerSyncDatabase, Schema, WASQLiteVFS } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
 import {
   BLOCKS_RAW_TABLE,
@@ -61,9 +61,12 @@ appSchema.withRawTables({
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
+// v4 = OPFS migration. Old IDB-backed kmp-v3-* databases are abandoned
+// (alpha, no migration). OPFSCoopSyncVFS stores each database as a real
+// file at OPFS root.
 export const dbFilenameForUser = (userId: string) => {
   const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
-  return `kmp-v3-${sanitized}.db`  // v3 = post-redesign schema
+  return `kmp-v4-${sanitized}.db`
 }
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
@@ -71,14 +74,18 @@ const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
 let connectChain: Promise<void> = Promise.resolve()
 
+// OPFSCoopSyncVFS uses OPFS sync access handles (much faster than
+// IndexedDB) and requires a dedicated worker. Single-tab today;
+// CoopSync still works correctly if a second tab opens later.
 const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
   database: {
     dbFilename: dbFilenameForUser(userId),
+    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
   },
   flags: {
     enableMultiTabs: false,
-    useWebWorker: false,
+    useWebWorker: true,
   },
 })
 
