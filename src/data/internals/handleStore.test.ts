@@ -648,6 +648,167 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
   })
 })
 
+describe('Invalidations on subscriber-less handles defer re-resolve', () => {
+  // Background: a `.load()`-only caller (alias autocomplete, bench
+  // queries, processor lookups) retains the handle for the duration
+  // of the await, then releases it. The handle stays in the registry
+  // for gcTimeMs. Pre-fix, every invalidation that hit during that
+  // window kicked off a fresh `runLoader()` for nobody — burning
+  // SQLite-connection time and pacing concurrent write transactions
+  // (this is why typing Enter felt sluggish for ~5s after closing
+  // alias autocomplete: ~640ms `aliasesInWorkspace` reads queueing
+  // behind the write that triggered them).
+  //
+  // Fix: handles with `listeners.size === 0` and no inflight load
+  // record the invalidation as `stale = true` and skip the eager
+  // run. The next `.load()` bypasses the cached-value short-circuit;
+  // a fresh subscriber triggers a refresh in `subscribe()`.
+
+  it('invalidate on a ready handle with zero subscribers does NOT run the loader', async () => {
+    const store = makeStore()
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return runs
+        },
+      }),
+    )
+    // Drive a one-shot load (the alias-autocomplete shape).
+    expect(await h.load()).toBe(1)
+    expect(runs).toBe(1)
+    expect(h.peek()).toBe(1)
+
+    // Invalidate while nobody is subscribed and no load is inflight.
+    // Pre-fix this would synchronously start runLoader → runs=2.
+    store.invalidate({ rowIds: ['r1'] })
+
+    // Settle any microtasks; the loader must NOT have run again.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(1)
+    expect(store.metrics.loaderInvalidationsDeferred).toBe(1)
+    expect(store.metrics.loaderRuns).toBe(1)
+  })
+
+  it('next load() after a deferred invalidation re-resolves (no cache hit)', async () => {
+    const store = makeStore()
+    let n = 1
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return n
+        },
+      }),
+    )
+    expect(await h.load()).toBe(1)
+    n = 2
+    store.invalidate({ rowIds: ['r1'] }) // deferred (no listeners)
+    expect(runs).toBe(1)
+
+    // .load() must see the stale flag and re-run, returning n=2.
+    expect(await h.load()).toBe(2)
+    expect(runs).toBe(2)
+  })
+
+  it('subscribe() after a deferred invalidation triggers a refresh', async () => {
+    const store = makeStore()
+    let n = 1
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return n
+        },
+      }),
+    )
+    expect(await h.load()).toBe(1)
+    n = 2
+    store.invalidate({ rowIds: ['r1'] }) // deferred — no eager run
+    expect(runs).toBe(1)
+
+    const fired: number[] = []
+    h.subscribe((v) => fired.push(v))
+    // The new subscriber should see fresh data, not the stale 1.
+    await vi.waitFor(() => expect(fired).toEqual([2]))
+    expect(runs).toBe(2)
+  })
+
+  it('invalidate on a handle WITH subscribers still re-resolves eagerly', async () => {
+    // Defense against accidentally breaking the subscriber path.
+    const store = makeStore()
+    let n = 1
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return n
+        },
+      }),
+    )
+    const fired: number[] = []
+    h.subscribe((v) => fired.push(v))
+    await vi.waitFor(() => expect(runs).toBe(1))
+
+    n = 2
+    store.invalidate({ rowIds: ['r1'] })
+    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+    expect(runs).toBe(2)
+    expect(store.metrics.loaderInvalidationsDeferred).toBe(0)
+  })
+
+  it('mid-load invalidate followed by all-subscribers-leaving defers the post-settle reload', async () => {
+    // The mid-load reinvalidate path also has to honor the
+    // no-subscribers gate, otherwise late-arriving changes during a
+    // load would still schedule a microtask reload after the last
+    // listener detached.
+    const store = makeStore()
+    let release!: () => void
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          if (runs === 1) await new Promise<void>((r) => { release = r })
+          return runs
+        },
+      }),
+    )
+    const unsub = h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    store.invalidate({ rowIds: ['r1'] }) // mid-load → pendingReinvalidate
+    unsub() // last subscriber leaves while load is still pending
+    release()
+
+    // Settle the in-flight load + microtask queue.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(1)
+    expect(store.metrics.loaderInvalidationsDeferred).toBeGreaterThanOrEqual(1)
+  })
+})
+
 describe('Dynamic deps declared after SQL — change-during-load queue', () => {
   // Reviewer P2: row-returning handles (`repo.children`, `repo.subtree`,
   // etc.) only know which row deps to declare AFTER the SQL returns. A
@@ -839,6 +1000,7 @@ describe('HandleStore metrics counters', () => {
       reloadsAfterSettle: 0,
       notifiesSkippedByDiff: 0,
       notifiesFired: 0,
+      loaderInvalidationsDeferred: 0,
     })
   })
 

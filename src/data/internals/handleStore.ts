@@ -151,6 +151,13 @@ export class HandleStoreMetrics {
   notifiesSkippedByDiff = 0
   /** `notify(value)` calls that actually walked the listener set. */
   notifiesFired = 0
+  /** Invalidations that hit a handle with zero subscribers and no
+   *  inflight load — the handle was marked stale instead of eagerly
+   *  re-running its loader. The next `.load()` will re-resolve. This
+   *  counter exists to verify the optimisation is firing in workloads
+   *  where slow `.load()`-only queries (e.g. alias autocomplete) used
+   *  to thrash on every block write. */
+  loaderInvalidationsDeferred = 0
 
   reset(): void {
     this.invalidations = 0
@@ -162,6 +169,7 @@ export class HandleStoreMetrics {
     this.reloadsAfterSettle = 0
     this.notifiesSkippedByDiff = 0
     this.notifiesFired = 0
+    this.loaderInvalidationsDeferred = 0
   }
 
   /** Frozen plain-object snapshot. Safe to keep as a baseline for
@@ -177,6 +185,7 @@ export class HandleStoreMetrics {
       reloadsAfterSettle: this.reloadsAfterSettle,
       notifiesSkippedByDiff: this.notifiesSkippedByDiff,
       notifiesFired: this.notifiesFired,
+      loaderInvalidationsDeferred: this.loaderInvalidationsDeferred,
     })
   }
 }
@@ -316,6 +325,16 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  the handle would settle with stale `BlockData[]`. */
   private changesDuringLoad: ChangeNotification[] = []
 
+  /** Set when an invalidation lands on a handle with zero subscribers
+   *  and no inflight load. Eagerly re-running the loader for nobody is
+   *  pure waste — and worse, the run blocks write transactions on the
+   *  same SQLite connection (alias-autocomplete saw ~640ms reads
+   *  pacing block-creation writes). Instead we mark stale; the next
+   *  `.load()` bypasses the cached-value short-circuit and re-resolves.
+   *  Subscribed handles ignore this flag — they still re-run eagerly
+   *  so listeners stay in sync. */
+  private stale = false
+
   constructor(args: {
     store: HandleStore
     key: string
@@ -350,7 +369,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // commit that just tombstoned the looked-up row would see it as
     // live and skip the restore (parseReferencesProcessor §7.5 race).
     if (this.inflight) return this.inflight
-    if (this.status_ === 'ready' && this.value !== undefined) {
+    if (this.status_ === 'ready' && this.value !== undefined && !this.stale) {
       return Promise.resolve(this.value)
     }
     return this.runLoader()
@@ -375,6 +394,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     this.store.metrics.loaderRuns++
     this.pendingReinvalidate = false
     this.changesDuringLoad = []
+    this.stale = false
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
     this.retain() // count the inflight load against GC
@@ -437,17 +457,26 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
         // returned may already be stale. Re-run via a microtask so the
-        // promise that React awaited can resolve first.
+        // promise that React awaited can resolve first — but only if
+        // someone is actually subscribed. With zero listeners, mark
+        // stale and skip the reload; the next `.load()` will re-resolve
+        // off the stale flag, and we save a slow query (and the
+        // SQLite-connection contention it causes) when nobody cares.
         if (this.pendingReinvalidate && !this.disposed) {
           this.pendingReinvalidate = false
-          this.store.metrics.reloadsAfterSettle++
-          queueMicrotask(() => {
-            if (this.disposed) return
-            // No-op if a fresher load is already in flight (subscribe
-            // path or another invalidate scheduled it).
-            if (this.inflight) return
-            void this.runLoader().catch(() => {/* error on handle */})
-          })
+          if (this.listeners.size === 0) {
+            this.stale = true
+            this.store.metrics.loaderInvalidationsDeferred++
+          } else {
+            this.store.metrics.reloadsAfterSettle++
+            queueMicrotask(() => {
+              if (this.disposed) return
+              // No-op if a fresher load is already in flight (subscribe
+              // path or another invalidate scheduled it).
+              if (this.inflight) return
+              void this.runLoader().catch(() => {/* error on handle */})
+            })
+          }
         }
         return value
       },
@@ -465,15 +494,22 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           this.release()
           // A pending reinvalidate against an errored load is still
           // worth honoring — the state changed, and the next attempt
-          // may succeed.
+          // may succeed. But if nobody is subscribed, mark stale and
+          // defer the retry to the next `.load()` (same reasoning as
+          // the success path).
           if (this.pendingReinvalidate) {
             this.pendingReinvalidate = false
-            this.store.metrics.reloadsAfterSettle++
-            queueMicrotask(() => {
-              if (this.disposed) return
-              if (this.inflight) return
-              void this.runLoader().catch(() => {/* error on handle */})
-            })
+            if (this.listeners.size === 0) {
+              this.stale = true
+              this.store.metrics.loaderInvalidationsDeferred++
+            } else {
+              this.store.metrics.reloadsAfterSettle++
+              queueMicrotask(() => {
+                if (this.disposed) return
+                if (this.inflight) return
+                void this.runLoader().catch(() => {/* error on handle */})
+              })
+            }
           }
         }
         throw err
@@ -492,8 +528,14 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     }
     this.listeners.add(listener)
     this.retain()
-    // First subscriber kicks off a load if we're idle.
-    if (this.status_ === 'idle' && !this.inflight) {
+    // First subscriber kicks off a load if we're idle, OR if the handle
+    // was marked stale while sitting at refCount=0 (a deferred
+    // invalidation skipped the eager reload). Without this, the new
+    // subscriber would only ever see the stale cached value via
+    // peek()/read() — load()'s stale check fixes the await-path, but
+    // subscribers depend on the eager push, so we trigger a refresh
+    // here too.
+    if ((this.status_ === 'idle' || this.stale) && !this.inflight) {
       void this.load().catch(() => {/* error stored on the handle */})
     }
     return () => {
@@ -549,6 +591,16 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       // up the latest state in one go).
       this.store.metrics.midLoadInvalidations++
       this.pendingReinvalidate = true
+      return
+    }
+    // No subscribers waiting on push notifications? Don't burn a slow
+    // SQL query for nobody. Mark stale; the next `.load()` will see
+    // the flag and re-resolve. This is what keeps a stale-but-still-
+    // GC-window-alive `aliasesInWorkspace` handle from reloading on
+    // every block write the user makes after closing autocomplete.
+    if (this.listeners.size === 0) {
+      this.stale = true
+      this.store.metrics.loaderInvalidationsDeferred++
       return
     }
     void this.runLoader().catch(() => {/* error on handle */})
