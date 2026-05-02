@@ -56,6 +56,7 @@ import { isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
+import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
 import { showProgressBanner } from '@/utils/roamImport/progressBanner.ts'
 import type { RoamExport } from '@/utils/roamImport/types.ts'
 import { downloadBlob, exportRawSqliteDb } from '@/utils/exportSqliteDb.ts'
@@ -119,6 +120,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   // as the rest of the default actions — the hook gets installed once
   // per Repo.
   ensureRoamImportWindowHook(repo)
+  // Same lifecycle for the metrics console hook — surfaces
+  // `__omniliner.metrics.print()` / `.reset()` / `.snapshot()` and
+  // `__omniliner.repo` for ad-hoc cold-start investigation.
+  ensureMetricsConsoleHook(repo)
 
   const {
     indentBlock,
