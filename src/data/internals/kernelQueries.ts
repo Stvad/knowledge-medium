@@ -1,10 +1,14 @@
 /**
- * Kernel queries — raw SQL helpers used by Repo for outside-tx reads
- * (UI hooks, search, alias lookup, backlinks, type filters).
+ * Kernel queries — raw SQL constants + `defineQuery` facet contributions
+ * for outside-tx reads (UI hooks, search, alias lookup, backlinks, type
+ * filters, tree walks).
  *
- * Phase-1 scope: plain `Repo.findX(...)` methods + standalone SQL
- * constants. Phase 4 wraps these in `queriesFacet` contributions
- * (`repo.query.X(args).load()`); the SQL underneath stays the same.
+ * Surface: SQL constants up top (used by tests, kept stable for plugin
+ * authors who want the same queries without going through the facet),
+ * then `KERNEL_QUERIES` (Phase 4 chunk B) — the bundle that the kernel
+ * data extension and the Repo's construction-time registration consume.
+ * Each `defineQuery` wraps a SQL constant and re-declares the same
+ * dependencies the legacy `repo.X(id)` factories on `Repo` did.
  *
  * Property-shape note: the new `BlockData.properties` is flat
  * `{name: encodedValue}`, NOT the legacy `{name: {name, type, value}}`
@@ -13,7 +17,10 @@
  * The legacy `'$.alias.value'` paths don't exist anymore.
  */
 
-import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
+import { z } from 'zod'
+import { defineQuery, type AnyQuery } from '@/data/api'
+import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
+import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
 
 export const SELECT_BLOCK_BY_ID_SQL = `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}
@@ -132,4 +139,323 @@ export interface AliasMatch {
   alias: string
   blockId: string
   content: string
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Phase 4 chunk B — kernel queries as `queriesFacet` contributions
+// ════════════════════════════════════════════════════════════════════
+//
+// Each query mirrors the dep declarations from the corresponding
+// `repo.X(id)` factory on `Repo` (which Phase 1 / 2 already wrote
+// correctly). Once chunk C lands, those factories become thin shims —
+// then deleted entirely — and `repo.query.X(...)` is the only surface.
+//
+// `db` in `QueryCtx` is `unknown` from the api layer (so the api
+// module isn't bound to PowerSync's type surface); resolvers narrow
+// it to a small read-only shape locally. Reuses `ProcessorReadDb`'s
+// shape for ergonomics — same operations, same intent (committed-state
+// reads, no `execute`, no `writeTransaction`).
+
+interface QueryReadDb {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+}
+
+const asReadDb = (db: unknown): QueryReadDb => db as QueryReadDb
+
+/** Local cast: `BlockRow` has typed fields; `QueryCtx.hydrateBlocks`
+ *  takes the looser `Record<string, unknown>` shape so the api module
+ *  doesn't depend on the row schema. The cast is safe — `hydrateBlocks`
+ *  flows directly into `parseBlockRow` which expects `BlockRow`. */
+const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
+  rows as unknown as ReadonlyArray<Record<string, unknown>>
+
+// Result schemas: the dispatcher does NOT validate query results at
+// runtime (only args). These shapes exist for type inference + plugin
+// contract documentation; loose `z.array(z.unknown())` / `z.unknown()`
+// keeps definition-time cheap without buying false safety.
+const blockDataArraySchema = z.array(z.unknown())
+const blockDataOrNullSchema = z.unknown()
+
+// ──── Tree queries ────
+
+/** Subtree rooted at `id`, includeRoot=true (spec §11). Identity-stable
+ *  via the dispatcher's handle-store key. Dep declaration mirrors the
+ *  legacy `repo.subtree(id)` factory in `repo.ts`. */
+export const subtreeQuery = defineQuery<{id: string}, unknown>({
+  name: 'core.subtree',
+  argsSchema: z.object({id: z.string()}),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({id}, ctx) => {
+    // Upfront deps — declared before SQL so the empty-result case (root
+    // missing on first load) and any mid-load invalidations have
+    // something to match against. Re-declared per-row below; HandleStore
+    // tolerates duplicates.
+    ctx.depend({kind: 'row', id})
+    ctx.depend({kind: 'parent-edge', parentId: id})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+    const out = ctx.hydrateBlocks(asBlockRows(rows))
+    for (const data of out) {
+      ctx.depend({kind: 'parent-edge', parentId: data.id})
+    }
+    return out
+  },
+})
+
+/** Ancestor chain (excludes `id` itself). */
+export const ancestorsQuery = defineQuery<{id: string}, unknown>({
+  name: 'core.ancestors',
+  argsSchema: z.object({id: z.string()}),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({id}, ctx) => {
+    ctx.depend({kind: 'row', id})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(ANCESTORS_SQL, [id, id])
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+/** Direct children of `id`, ordered `(order_key, id)`. */
+export const childrenQuery = defineQuery<{id: string}, unknown>({
+  name: 'core.children',
+  argsSchema: z.object({id: z.string()}),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({id}, ctx) => {
+    ctx.depend({kind: 'parent-edge', parentId: id})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(CHILDREN_SQL, [id])
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+/** Child-id list of `id` (lean shape). With `hydrate: true`, also runs
+ *  the full row SELECT and primes the cache — the consumer-facing
+ *  variant the React hooks use to avoid N+1 row loads on mount. */
+export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string[]>({
+  name: 'core.childIds',
+  argsSchema: z.object({id: z.string(), hydrate: z.boolean().optional()}),
+  resultSchema: z.array(z.string()),
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({id, hydrate = false}, ctx) => {
+    ctx.depend({kind: 'parent-edge', parentId: id})
+    if (!hydrate) {
+      const rows = await asReadDb(ctx.db).getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+      return rows.map(r => r.id)
+    }
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(CHILDREN_SQL, [id])
+    return ctx.hydrateBlocks(asBlockRows(rows)).map(d => d.id)
+  },
+})
+
+// ──── Reference / search queries ────
+
+/** Backlinks: every block in `workspaceId` whose `references_json`
+ *  contains an entry with `id = ?`. Workspace is required — callers
+ *  that previously relied on the row-cache resolution (`repo.backlinks(id)`
+ *  factory) pass it explicitly now. */
+export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, unknown>({
+  name: 'core.backlinks',
+  argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId, id}, ctx) => {
+    ctx.depend({kind: 'row', id})
+    if (!workspaceId || !id) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+      SELECT_BACKLINKS_FOR_BLOCK_SQL, [workspaceId, id, id],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+/** Live blocks in `workspaceId` whose `type` property equals `type`. */
+export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, unknown>({
+  name: 'core.byType',
+  argsSchema: z.object({workspaceId: z.string(), type: z.string()}),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId, type}, ctx) => {
+    if (!workspaceId) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, type],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+/** Substring-match content search. Empty `query` returns []. */
+export const searchByContentQuery = defineQuery<
+  {workspaceId: string; query: string; limit?: number},
+  unknown
+>({
+  name: 'core.searchByContent',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    query: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId, query, limit = 50}, ctx) => {
+    if (!query) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+      SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, limit],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+/** First child of `parentId` whose content matches exactly. */
+export const firstChildByContentQuery = defineQuery<
+  {parentId: string; content: string},
+  unknown
+>({
+  name: 'core.firstChildByContent',
+  argsSchema: z.object({parentId: z.string(), content: z.string()}),
+  resultSchema: blockDataOrNullSchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({parentId, content}, ctx) => {
+    ctx.depend({kind: 'parent-edge', parentId})
+    const row = await asReadDb(ctx.db).getOptional<BlockRow>(
+      SELECT_FIRST_CHILD_BY_CONTENT_SQL, [parentId, content],
+    )
+    if (row === null) return null
+    return ctx.hydrateBlocks(asBlockRows([row]))[0] ?? null
+  },
+})
+
+// ──── Alias queries ────
+
+/** Distinct alias values in a workspace, optionally substring-filtered. */
+export const aliasesInWorkspaceQuery = defineQuery<
+  {workspaceId: string; filter?: string},
+  string[]
+>({
+  name: 'core.aliasesInWorkspace',
+  argsSchema: z.object({workspaceId: z.string(), filter: z.string().optional()}),
+  resultSchema: z.array(z.string()),
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId, filter = ''}, ctx) => {
+    if (!workspaceId) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    const rows = await asReadDb(ctx.db).getAll<{alias: string}>(
+      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter],
+    )
+    return rows.map(r => r.alias)
+  },
+})
+
+/** Alias autocomplete: one row per `(alias, blockId)` pair. */
+export const aliasMatchesQuery = defineQuery<
+  {workspaceId: string; filter: string; limit?: number},
+  AliasMatch[]
+>({
+  name: 'core.aliasMatches',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    filter: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: z.array(z.object({
+    alias: z.string(),
+    blockId: z.string(),
+    content: z.string(),
+  })),
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId, filter, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    return asReadDb(ctx.db).getAll<AliasMatch>(
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, limit],
+    )
+  },
+})
+
+/** Single-block lookup by exact alias in a workspace. */
+export const aliasLookupQuery = defineQuery<
+  {workspaceId: string; alias: string},
+  unknown
+>({
+  name: 'core.aliasLookup',
+  argsSchema: z.object({workspaceId: z.string(), alias: z.string()}),
+  resultSchema: blockDataOrNullSchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId, alias}, ctx) => {
+    if (!workspaceId || !alias) return null
+    ctx.depend({kind: 'workspace', workspaceId})
+    const row = await asReadDb(ctx.db).getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL, [workspaceId, alias],
+    )
+    if (row === null) return null
+    return ctx.hydrateBlocks(asBlockRows([row]))[0] ?? null
+  },
+})
+
+// ──── Dynamic-plugin discovery ────
+
+/** Workspace's `type: 'extension'` blocks (spec §8 Stage 2 — Phase 4
+ *  switches `dynamicExtensionsExtension` from the legacy `byType` call
+ *  to this dedicated query). Mechanically `byType('extension')`; lives
+ *  as its own kernel query so callers can register against a stable
+ *  name without depending on the convention. */
+export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, unknown>({
+  name: 'core.findExtensionBlocks',
+  argsSchema: z.object({workspaceId: z.string()}),
+  resultSchema: blockDataArraySchema,
+  coarseScope: {tables: ['blocks']},
+  resolve: async ({workspaceId}, ctx) => {
+    if (!workspaceId) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, 'extension'],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+// ──── Bundle ────
+
+/** All kernel queries — registered at construction time when
+ *  `RepoOptions.registerKernelQueries` is true (default), and
+ *  contributed to the FacetRuntime via `kernelDataExtension`. */
+export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
+  subtreeQuery,
+  ancestorsQuery,
+  childrenQuery,
+  childIdsQuery,
+  backlinksQuery,
+  byTypeQuery,
+  searchByContentQuery,
+  firstChildByContentQuery,
+  aliasesInWorkspaceQuery,
+  aliasMatchesQuery,
+  aliasLookupQuery,
+  findExtensionBlocksQuery,
+]
+
+// ──── Type registry augmentation ────
+
+/** Register every kernel query with `QueryRegistry` so call sites
+ *  using `repo.query.<name>(args)` and `repo.query['core.<name>'](args)`
+ *  get precise arg + result types without `as` casts. Plugins extend the
+ *  same interface from their own module per §12.1. */
+declare module '@/data/api' {
+  interface QueryRegistry {
+    'core.subtree': typeof subtreeQuery
+    'core.ancestors': typeof ancestorsQuery
+    'core.children': typeof childrenQuery
+    'core.childIds': typeof childIdsQuery
+    'core.backlinks': typeof backlinksQuery
+    'core.byType': typeof byTypeQuery
+    'core.searchByContent': typeof searchByContentQuery
+    'core.firstChildByContent': typeof firstChildByContentQuery
+    'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
+    'core.aliasMatches': typeof aliasMatchesQuery
+    'core.aliasLookup': typeof aliasLookupQuery
+    'core.findExtensionBlocks': typeof findExtensionBlocksQuery
+  }
 }

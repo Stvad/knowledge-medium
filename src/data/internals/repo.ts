@@ -39,6 +39,7 @@ import type { BlockCache } from '@/data/blockCache'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './kernelMutators'
 import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
+import { KERNEL_QUERIES } from './kernelQueries'
 import { mutatorsFacet, postCommitProcessorsFacet, queriesFacet } from './facets'
 import { ProcessorRunner } from './processorRunner'
 import { Block } from './block'
@@ -159,9 +160,7 @@ export interface RepoOptions {
    *  time so `repo.query.subtree({id})` etc. work immediately without a
    *  `setFacetRuntime` call. Set false when a test wants to populate
    *  the query registry explicitly. Mirrors `registerKernelMutators` /
-   *  `registerKernelProcessors`. The kernel-query bundle itself lands
-   *  in Phase 4 chunk B; until then the registry stays empty even with
-   *  this flag on. */
+   *  `registerKernelProcessors`. */
   registerKernelQueries?: boolean
   /** When true (default), the row_events tail subscription is started
    *  at construction time so sync-applied writes propagate into the
@@ -329,12 +328,8 @@ export class Repo {
     if (opts.registerKernelProcessors ?? true) {
       for (const p of KERNEL_PROCESSORS) this.processors.set(p.name, p)
     }
-    // Kernel-query registration parity flag with mutators / processors
-    // (Phase 4 chunk A — chunk B fills KERNEL_QUERIES). Reading the
-    // option here keeps the construction-time wiring stable so chunk B
-    // is just adding the bundle import, not changing the lifecycle.
     if (opts.registerKernelQueries ?? true) {
-      // KERNEL_QUERIES bundle imported in chunk B.
+      for (const q of KERNEL_QUERIES) this.queries.set(q.name, q)
     }
     // Initialize the processor runner. The runner needs a Repo
     // reference for opening processor txs; passing `this` is safe
