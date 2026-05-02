@@ -30,10 +30,11 @@
  * O(handles × deps).
  */
 
-import type { BlockData } from '@/data/api'
+import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import type { BlockCache } from '@/data/blockCache'
 import type { PowerSyncDb } from './commitPipeline'
 import type { ChangeNotification, HandleStore } from './handleStore'
+import { cycleScanSql } from './treeQueries'
 
 /** Shape of a single `row_events` row we care about. */
 interface RowEventRow {
@@ -42,6 +43,7 @@ interface RowEventRow {
   kind: string // 'insert' | 'update' | 'delete'
   before_json: string | null
   after_json: string | null
+  tx_id: string | null
 }
 
 /** Row_events tail throttle window in ms (spec §9.3, §16.13). */
@@ -53,6 +55,12 @@ export interface RowEventsTailOptions {
    *  this to start the tail from id=0 (consume historical rows too). */
   initialLastId?: number
   onError?: (err: unknown) => void
+  /** Fired once per drain pass when the bounded cycle scan finds at
+   *  least one affected id closing back on itself. One event per
+   *  workspace involved (single-workspace per cycle by construction
+   *  — server FK + invariant trigger keep parent_id mutations within
+   *  a workspace). Spec §4.7. */
+  onCycleDetected?: (event: CycleDetectedEvent) => void
 }
 
 export interface RowEventsTail {
@@ -79,6 +87,7 @@ export const startRowEventsTail = (args: {
   const onError = options?.onError ?? ((err) => {
     console.warn('[Repo] row_events tail error:', err)
   })
+  const onCycleDetected = options?.onCycleDetected
 
   let lastId = 0
   let disposed = false
@@ -91,7 +100,7 @@ export const startRowEventsTail = (args: {
   const drain = async (): Promise<void> => {
     if (disposed) return
     const rows = await db.getAll<RowEventRow>(
-      `SELECT id, block_id, kind, before_json, after_json
+      `SELECT id, block_id, kind, before_json, after_json, tx_id
          FROM row_events
         WHERE id > ? AND source = 'sync'
         ORDER BY id ASC`,
@@ -102,6 +111,14 @@ export const startRowEventsTail = (args: {
     const rowIds = new Set<string>()
     const parentIds = new Set<string>()
     const workspaceIds = new Set<string>()
+
+    /** Per-workspace bookkeeping for the §4.7 cycle scan. We only need
+     *  to scan rows whose parent_id changed (a fresh insert with no
+     *  descendants can't close a loop on its own; a content-only edit
+     *  doesn't change reachability). The scan itself is bounded to
+     *  these starting ids — cheap regardless of DB size. */
+    const cycleAffectedByWs = new Map<string, Set<string>>()
+    const cycleTxIdsByWs = new Map<string, Set<string>>()
 
     for (const r of rows) {
       lastId = Math.max(lastId, r.id)
@@ -135,6 +152,34 @@ export const startRowEventsTail = (args: {
         if (afterParent !== null) parentIds.add(afterParent)
       }
 
+      // Cycle-scan candidate selection: live row whose parent_id
+      // actually moved. Inserts and deletes can't close cycles on
+      // their own — only an UPDATE that re-points an existing chain
+      // can. The block's *current* workspace is what matters for the
+      // event grouping (post-write reachability is what we're scanning).
+      if (
+        onCycleDetected
+        && beforeLive
+        && afterLive
+        && beforeParent !== afterParent
+        && after?.workspaceId
+      ) {
+        let bucket = cycleAffectedByWs.get(after.workspaceId)
+        if (!bucket) {
+          bucket = new Set()
+          cycleAffectedByWs.set(after.workspaceId, bucket)
+        }
+        bucket.add(r.block_id)
+        if (r.tx_id) {
+          let txBucket = cycleTxIdsByWs.get(after.workspaceId)
+          if (!txBucket) {
+            txBucket = new Set()
+            cycleTxIdsByWs.set(after.workspaceId, txBucket)
+          }
+          txBucket.add(r.tx_id)
+        }
+      }
+
       // Cache update: sync writes don't go through commitPipeline's
       // post-commit cache walk. Without this, Block.subscribe listeners
       // wouldn't fire on remote changes. Routed through
@@ -151,6 +196,34 @@ export const startRowEventsTail = (args: {
         // branch is the safety net for any edge case where the trigger
         // fires without an after row.
         cache.deleteSnapshot(r.block_id)
+      }
+    }
+
+    // §4.7 detection-only telemetry. Run the bounded scan once per
+    // workspace whose sync-applied parent_id mutations might have
+    // closed a loop. The scan is engine-truncation-safe (depth-100 +
+    // visited-id guard inline) so even pathological data can't hang
+    // it. Emit one event per workspace with non-empty results.
+    if (onCycleDetected && cycleAffectedByWs.size > 0) {
+      for (const [workspaceId, ids] of cycleAffectedByWs) {
+        const idList = Array.from(ids)
+        try {
+          const sql = cycleScanSql(idList.length)
+          const hits = await db.getAll<{ start_id: string }>(sql, idList)
+          if (hits.length === 0) continue
+          const startIds = hits.map(h => h.start_id).sort()
+          const txIdsInvolved = Array.from(
+            cycleTxIdsByWs.get(workspaceId) ?? [],
+          ).sort()
+          console.warn(
+            `[Repo] cycleDetected ws=${workspaceId} startIds=${JSON.stringify(startIds)}`,
+          )
+          onCycleDetected({ workspaceId, startIds, txIdsInvolved })
+        } catch (err) {
+          // Don't let a scan failure abort handle invalidation below
+          // — surface via onError and continue.
+          onError(err)
+        }
       }
     }
 

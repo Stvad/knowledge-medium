@@ -97,6 +97,36 @@ export const IS_DESCENDANT_OF_SQL = `
   SELECT 1 AS hit FROM chain WHERE id = ? LIMIT 1
 `
 
+/** Bounded scan over a set of affected ids — for each id, walks up
+ *  parent_id and reports the id back if its chain closes onto itself.
+ *  Used by the row_events tail to surface sync-introduced cycles
+ *  (§4.7 detection-only telemetry). Returns 0..N rows; each row's
+ *  `start_id` is one affected id participating in a cycle.
+ *
+ *  Parameter shape: pass `idCount` `?` placeholders bound to the ids
+ *  to scan. Caller is responsible for matching the count.
+ *
+ *  Why scoped to affected ids (not all blocks): cycle scans are O(n)
+ *  per starting row and we don't need to find every cycle in the DB
+ *  — only the ones the just-applied sync writes might have closed. */
+export const cycleScanSql = (idCount: number): string => {
+  if (idCount <= 0) throw new Error('cycleScanSql: idCount must be >= 1')
+  const placeholders = Array(idCount).fill('?').join(',')
+  return `
+    WITH RECURSIVE chain(start_id, id, parent_id, depth) AS (
+      SELECT id, id, parent_id, 0
+        FROM blocks
+       WHERE id IN (${placeholders}) AND deleted = 0
+      UNION ALL
+      SELECT chain.start_id, b.id, b.parent_id, chain.depth + 1
+        FROM chain
+        JOIN blocks AS b ON b.id = chain.parent_id
+       WHERE b.deleted = 0 AND chain.depth < 100
+    )
+    SELECT DISTINCT start_id FROM chain WHERE depth > 0 AND id = start_id
+  `
+}
+
 /** Direct children of a parent, ordered `(order_key, id)`, filtered
  *  `deleted = 0`. */
 export const CHILDREN_SQL = `
