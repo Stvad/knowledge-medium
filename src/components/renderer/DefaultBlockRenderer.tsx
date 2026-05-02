@@ -323,9 +323,16 @@ export function DefaultBlockRenderer(
     EditContentRenderer,
   ])
 
+  // Memoize on resolveContext so contributions that synthesize a fresh
+  // component each call (e.g. plain-outliner's edit-mode dispatcher) don't
+  // hand back a new identity every render and remount the entire content
+  // subtree underneath. The runtime.read result is itself cached per
+  // facet runtime, so the resolver function is already stable.
   const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
-  const baseContentRenderer =
-    resolveBlockContentRenderer(resolveContext) ?? DefaultContentRenderer
+  const baseContentRenderer = useMemo(
+    () => resolveBlockContentRenderer(resolveContext) ?? DefaultContentRenderer,
+    [resolveBlockContentRenderer, resolveContext, DefaultContentRenderer],
+  )
   const decorateContent = runtime.read(blockContentDecoratorsFacet)
   const ContentRenderer = useMemo(
     () => decorateContent(resolveContext, baseContentRenderer),
