@@ -255,23 +255,42 @@ function PropertyRow({
   onDelete,
 }: PropertyRowProps) {
   const Editor = customEditor
+  // Renaming = changing the storage key. Only safe for ad-hoc / unknown
+  // schemas: a registered schema's name is the join key into
+  // propertySchemasFacet / propertyUiFacet, so renaming "tasks:due-date"
+  // to "Due date" would orphan the codec/editor binding. Make the field
+  // display-only when a real schema is registered; keep the underlying
+  // key (`name`) as the input's value so plugin-supplied UI labels
+  // ("Due date") never accidentally persist as the new key on blur.
+  const renameAllowed = schemaUnknown && !readOnly
   return (
     <div className="space-y-2">
       <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-start">
         <div className="w-full sm:w-1/3 space-y-1">
           <div className="flex gap-1">
-            <Input
-              className="text-xs md:text-sm flex-1"
-              defaultValue={labelText}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault()
-                  onRename(e.currentTarget.value)
-                }
-              }}
-              onBlur={(e) => onRename(e.target.value)}
-              disabled={readOnly}
-            />
+            {renameAllowed ? (
+              <Input
+                className="text-xs md:text-sm flex-1"
+                // Value = the storage key, not the UI label. For ad-hoc
+                // properties these match (no UI contribution sets a
+                // separate label), so this matches what the user sees.
+                defaultValue={name}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    onRename(e.currentTarget.value)
+                  }
+                }}
+                onBlur={(e) => onRename(e.target.value)}
+              />
+            ) : (
+              // Registered schema → label is display-only. Show the
+              // contributed label (or the key when no contribution sets
+              // one); the raw key is also surfaced below when distinct.
+              <div className="flex h-9 flex-1 items-center px-3 text-xs md:text-sm text-foreground">
+                {labelText}
+              </div>
+            )}
           </div>
           <div className="text-xs text-muted-foreground">
             {kindLabel}
