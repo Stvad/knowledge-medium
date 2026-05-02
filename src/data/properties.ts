@@ -15,6 +15,7 @@
  * via `block.set(schema, value)`.
  */
 import { Block } from '@/data/internals/block'
+import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,
   codecs,
@@ -172,7 +173,7 @@ export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlock
  *  processor can reference it without circling back through this
  *  module). Kept here so call-site migrations can import every
  *  descriptor from a single path. */
-export { aliasesProp } from '@/data/internals/coreProperties'
+export { aliasesProp }
 
 // ──── Helpers ────
 
@@ -206,3 +207,38 @@ export const requestEditorFocus = (uiStateBlock: Block): void => {
 
 // Re-export PropertySchema for callers who want to type-narrow.
 export type { PropertySchema }
+
+// ──── Kernel bundle ────
+
+/** Every kernel-owned `PropertySchema` in one array. Consumed by
+ *  `kernelDataExtension` to register them with `propertySchemasFacet`
+ *  so non-React surfaces (the property panel's schema lookup, future
+ *  CLI / server-side audit, plugin authors inspecting the registry)
+ *  see the kernel descriptors uniformly.
+ *
+ *  Heterogeneous `PropertySchema<T>` shapes flatten through
+ *  `PropertySchema<unknown>` for storage in the array — the precise
+ *  per-schema types stay at the export sites and reach typed callers
+ *  via the schema reference (`block.set(typeProp, ...)` etc.). */
+export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
+  // UI-state schemas
+  showPropertiesProp,
+  isCollapsedProp,
+  isEditingProp,
+  topLevelBlockIdProp,
+  focusedBlockIdProp,
+  editorSelection,
+  editorFocusRequestProp,
+  recentBlockIdsProp,
+  selectionStateProp,
+  // BlockDefault schemas
+  typeProp,
+  rendererProp,
+  rendererNameProp,
+  extensionDisabledProp,
+  previousLoadTimeProp,
+  currentLoadTimeProp,
+  createdAtProp,
+  sourceBlockIdProp,
+  aliasesProp,
+] as ReadonlyArray<PropertySchema<unknown>>

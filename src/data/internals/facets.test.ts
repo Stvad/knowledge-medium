@@ -9,15 +9,19 @@
  *     registrations DO NOT carry over (the runtime is the snapshot)
  *   - a plugin mutator registered via the runtime is dispatchable via
  *     repo.run('plugin:foo', args) and via repo.mutate['plugin:foo']
+ *   - kernelDataExtension contributes kernel property schemas through
+ *     propertySchemasFacet (Phase 3 — chunk A)
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { ChangeScope, defineMutator, MutatorNotRegisteredError } from '@/data/api'
+import { ChangeScope, defineMutator, defineProperty, codecs, MutatorNotRegisteredError } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { mutatorsFacet } from './facets'
+import { kernelDataExtension } from './kernelDataExtension'
+import { mutatorsFacet, propertySchemasFacet } from './facets'
+import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { Repo } from './repo'
 
 let h: TestDb
@@ -123,5 +127,63 @@ describe('setFacetRuntime + mutatorsFacet', () => {
     // Kernel mutator NOT in the runtime — dispatch fails.
     await expect(repo.run('core.setContent', {id: 'p1', content: 'x'}))
       .rejects.toThrow(MutatorNotRegisteredError)
+  })
+})
+
+describe('propertySchemasFacet — kernel registration', () => {
+  it('kernelDataExtension contributes every KERNEL_PROPERTY_SCHEMAS entry', () => {
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    const registered = runtime.read(propertySchemasFacet)
+    expect(registered.size).toBe(KERNEL_PROPERTY_SCHEMAS.length)
+    for (const schema of KERNEL_PROPERTY_SCHEMAS) {
+      // Identity-equal: facet stores the same instance.
+      expect(registered.get(schema.name)).toBe(schema)
+    }
+  })
+
+  it('plugin schema layered onto kernel coexists by name', () => {
+    const pluginSchema = defineProperty<string | undefined>('plugin:foo', {
+      codec: codecs.optional(codecs.string),
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'string',
+    })
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      propertySchemasFacet.of(pluginSchema, {source: 'plugin'}),
+    ])
+    const registered = runtime.read(propertySchemasFacet)
+    expect(registered.get('plugin:foo')).toBe(pluginSchema)
+    // Kernel entries still present.
+    for (const schema of KERNEL_PROPERTY_SCHEMAS) {
+      expect(registered.get(schema.name)).toBe(schema)
+    }
+  })
+
+  it('duplicate-name registration logs a warning and last-wins', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const a = defineProperty<string | undefined>('plugin:dup', {
+        codec: codecs.optional(codecs.string),
+        defaultValue: undefined,
+        changeScope: ChangeScope.BlockDefault,
+        kind: 'string',
+      })
+      const b = defineProperty<string | undefined>('plugin:dup', {
+        codec: codecs.optional(codecs.string),
+        defaultValue: undefined,
+        changeScope: ChangeScope.BlockDefault,
+        kind: 'string',
+      })
+      const runtime = resolveFacetRuntimeSync([
+        propertySchemasFacet.of(a, {source: 'test'}),
+        propertySchemasFacet.of(b, {source: 'test'}),
+      ])
+      const registered = runtime.read(propertySchemasFacet)
+      expect(registered.get('plugin:dup')).toBe(b)
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
   })
 })
