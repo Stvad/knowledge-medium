@@ -36,6 +36,7 @@ import {
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
   CREATE_WORKSPACES_TABLE_SQL,
@@ -214,6 +215,7 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL)
 
   // ── workspaces + workspace_members ──
   await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
