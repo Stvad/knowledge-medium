@@ -397,51 +397,51 @@ export function DefaultBlockRenderer(
   // of the underlying inputs (block, decorated renderer, surface props)
   // actually changed.
   const ContentSlot = useMemo<ComponentType>(() => {
-    const Slot = () => (
-      <div
-        {...contentSurfaceProps}
-        className={`block-content${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
-        ref={contentContainerRef}
-      >
-        <ErrorBoundary FallbackComponent={FallbackComponent}>
-          {/* ContentRenderer comes from the registry-driven
-              decorate(blockContentDecoratorsFacet) memo above —
-              stable identity per blockInteractionContext, not a
-              fresh component each render. */}
-          {/* eslint-disable-next-line react-hooks/static-components */}
-          <ContentRenderer block={block}/>
-        </ErrorBoundary>
-      </div>
-    )
-    Slot.displayName = 'BlockContentSlot'
-    return Slot
+    return function BlockContentSlot() {
+      return (
+        <div
+          {...contentSurfaceProps}
+          className={`block-content${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
+          ref={contentContainerRef}
+        >
+          <ErrorBoundary FallbackComponent={FallbackComponent}>
+            {/* ContentRenderer comes from the registry-driven
+                decorate(blockContentDecoratorsFacet) memo above —
+                stable identity per blockInteractionContext, not a
+                fresh component each render. */}
+            {/* eslint-disable-next-line react-hooks/static-components */}
+            <ContentRenderer block={block}/>
+          </ErrorBoundary>
+        </div>
+      )
+    }
   }, [block, ContentRenderer, contentSurfaceProps])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null
-    const Slot = () => <BlockProperties block={block}/>
-    Slot.displayName = 'BlockPropertiesSlot'
-    return Slot
+    return function BlockPropertiesSlot() {
+      return <BlockProperties block={block}/>
+    }
   }, [block, showProperties])
 
   const ChildrenSlot = useMemo<ComponentType>(() => {
-    const Slot = () => <BlockChildren block={block}/>
-    Slot.displayName = 'BlockChildrenSlot'
-    return Slot
+    return function BlockChildrenSlot() {
+      return <BlockChildren block={block}/>
+    }
   }, [block])
 
   const FooterSlot = useMemo<ComponentType>(() => {
-    const Slot = () => (
-      <>
-        {childrenFooterSections.map((SectionRenderer, index) => (
-          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-            <SectionRenderer block={block}/>
-          </ErrorBoundary>
-        ))}
-      </>
-    )
-    Slot.displayName = 'BlockFooterSlot'
-    return Slot
+    return function BlockFooterSlot() {
+      return (
+        <>
+          {childrenFooterSections.map((SectionRenderer, index) => (
+            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+              <SectionRenderer block={block}/>
+            </ErrorBoundary>
+          ))}
+        </>
+      )
+    }
   }, [block, childrenFooterSections])
 
   // Controls slot: bullet + expand affordances. Self-aware of top-level
@@ -449,7 +449,7 @@ export function DefaultBlockRenderer(
   // (renders the expand button as a top-right floater rather than inline
   // because mobile screens don't have desktop's horizontal real estate).
   const ControlsSlot = useMemo<ComponentType>(() => {
-    const Slot = () => {
+    return function BlockControlsSlot() {
       const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
@@ -470,22 +470,20 @@ export function DefaultBlockRenderer(
         </>
       )
     }
-    Slot.displayName = 'BlockControlsSlot'
-    return Slot
   }, [block])
 
   const HeaderSlot = useMemo<ComponentType>(() => {
-    const Slot = () => (
-      <>
-        {headerSections.map((SectionRenderer, index) => (
-          <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
-            <SectionRenderer block={block}/>
-          </ErrorBoundary>
-        ))}
-      </>
-    )
-    Slot.displayName = 'BlockHeaderSlot'
-    return Slot
+    return function BlockHeaderSlot() {
+      return (
+        <>
+          {headerSections.map((SectionRenderer, index) => (
+            <ErrorBoundary key={index} FallbackComponent={FallbackComponent}>
+              <SectionRenderer block={block}/>
+            </ErrorBoundary>
+          ))}
+        </>
+      )
+    }
   }, [block, headerSections])
 
   const shellProps = useMemo<BlockShellProps>(() => ({

@@ -8,6 +8,7 @@ import {
   blockContentDecoratorsFacet,
   BlockContentDecoratorContribution,
   BlockInteractionContext,
+  BlockResolveContext,
   ShortcutActivationContribution,
   shortcutSurfaceActivationsFacet,
 } from '@/extensions/blockInteraction.ts'
@@ -144,7 +145,7 @@ describe('block interaction facets', () => {
 
   it('passes the block-interaction context to each decorator contribution', () => {
     const inner: BlockRenderer = () => null
-    const seen: BlockInteractionContext[] = []
+    const seen: BlockResolveContext[] = []
     const observer: BlockContentDecoratorContribution = (ctx) => {
       seen.push(ctx)
       return null

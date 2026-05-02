@@ -89,6 +89,7 @@ const assertOpfsAvailable = (): Promise<void> => {
             'This browser is blocking local storage access (OPFS), which Knowledge Medium needs to keep your data on this device. ' +
             'This usually means you\'re in private/incognito browsing on Firefox or Safari, where OPFS is disabled. ' +
             'Try a regular (non-private) window, or use Chrome — Chrome incognito allows OPFS.',
+            {cause: err},
           )
         }
         throw err
