@@ -1030,6 +1030,15 @@ export class Repo {
         store: this.handleStore,
         key,
         loader: async (ctx) => {
+          // Auto-declare deps for every table named in `coarseScope.tables`
+          // (reviewer P2: the documented coarse-scope field was a no-op
+          // before — only explicit `ctx.depend(...)` calls inside resolve
+          // counted). Empty-result table-scan resolvers now inherit a
+          // table-coarse fallback for free; explicit dependencies still
+          // refine on top.
+          for (const table of q.coarseScope?.tables ?? []) {
+            ctx.depend({kind: 'table', table})
+          }
           const raw = await q.resolve(validated, {
             db: this.db,
             repo: this,
