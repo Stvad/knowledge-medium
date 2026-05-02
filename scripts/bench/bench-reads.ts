@@ -5,11 +5,16 @@
  *   - repo.load(id) cold → single SQL.
  *   - repo.load(id, {children/ancestors/descendants}) at varying scale.
  *   - Raw SUBTREE_SQL / ANCESTORS_SQL / IS_DESCENDANT_OF_SQL / CHILDREN_SQL.
- *   - repo.subtree(id) cold (Handle) — verifies the §2 #7 single-query
- *     promise: subtree of 1000 blocks 5 levels deep should be 1 SQL call.
+ *   - repo.query.subtree({id}) cold (Handle) — verifies the §2 #7
+ *     single-query promise: subtree of 1000 blocks 5 levels deep should
+ *     be 1 SQL call.
  *   - "Cold-start journal page": ancestors+descendants neighborhood load
  *     for a typical page, count SQL roundtrips (the Phase 2 acceptance
  *     proxy for "open daily note → minimal queries").
+ *
+ * Post-Phase-4 note: legacy `repo.subtree(id)` / `repo.ancestors(id)` /
+ * `repo.children(id)` factories were deleted in chunk C-2; everything
+ * routes through `repo.query.X({...})` now.
  */
 
 import {
@@ -147,25 +152,25 @@ export const runReadBenches = async (): Promise<BenchResult[]> => {
     await env.cleanup()
   }
 
-  // ──── repo.subtree(id) handle: cold load + warm peek ────
+  // ──── repo.query.subtree({id}) handle: cold load + warm peek ────
   {
     const env = await setupBenchEnv({instrumented: true})
     const tree = await populateBalanced(env.db, 4, 4)  // 1+4+16+64+256 = 341
     env.counters!.reset()
-    const r = await bench(`repo.subtree(id) cold load (n=${tree.totalNodes})`, async () => {
+    const r = await bench(`repo.query.subtree({id}) cold load (n=${tree.totalNodes})`, async () => {
       // Force fresh handle each time (otherwise we hit identity cache).
       env.repo.handleStore.clear()
       for (const id of tree.ids) env.cache.deleteSnapshot(id)
-      await env.repo.subtree(tree.rootId).load()
+      await env.repo.query.subtree({id: tree.rootId}).load()
     }, {warmup: 1, iters: 5})
     const snap = env.counters!.snapshot()
     r.metadata = {sql: (snap.total / r.iterations).toFixed(1), n: tree.totalNodes}
     out.push(r)
 
     // Warm peek path — same handle, same value, no IO.
-    const handle = env.repo.subtree(tree.rootId)
+    const handle = env.repo.query.subtree({id: tree.rootId})
     await handle.load()
-    const r2 = await bench(`repo.subtree(id).peek() warm (n=${tree.totalNodes})`, async () => {
+    const r2 = await bench(`repo.query.subtree({id}).peek() warm (n=${tree.totalNodes})`, async () => {
       handle.peek()
     }, {warmup: 5, iters: 5000, totalTimeoutMs: 30_000})
     r2.metadata = {n: tree.totalNodes}
@@ -182,7 +187,7 @@ export const runReadBenches = async (): Promise<BenchResult[]> => {
     // the query count, not the row count).
     const tree = await populateBalanced(env.db, 4, 5)
     env.counters!.reset()
-    await env.repo.subtree(tree.rootId).load()
+    await env.repo.query.subtree({id: tree.rootId}).load()
     const snap = env.counters!.snapshot()
     // Synthesize a result row purely to surface the count.
     out.push({
@@ -213,8 +218,8 @@ export const runReadBenches = async (): Promise<BenchResult[]> => {
     env.counters!.reset()
     const tStart = performance.now()
     await env.repo.load(pageId, {ancestors: true, descendants: true})
-    await env.repo.subtree(pageId).load()
-    await env.repo.ancestors(pageId).load()
+    await env.repo.query.subtree({id: pageId}).load()
+    await env.repo.query.ancestors({id: pageId}).load()
     const elapsed = performance.now() - tStart
     const snap = env.counters!.snapshot()
     out.push({
