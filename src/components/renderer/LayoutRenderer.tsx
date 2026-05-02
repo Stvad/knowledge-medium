@@ -9,7 +9,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
 import { v5 as uuidv5 } from 'uuid'
-import { topLevelBlockIdProp, typeProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, topLevelBlockIdProp, typeProp } from '@/data/properties.ts'
 import { useChildren } from '@/hooks/block.ts'
 
 // Mirrors UI_CHILD_NS in globalState.ts. Used to derive a deterministic
@@ -61,8 +61,10 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const isMobile = useIsMobile()
 
   useEffect(() => {
-    // Stamp `type='panel'` and `topLevelBlockId=block.id` on the main
-    // panel block so the panel renderer recognizes it. Both writes go
+    // Stamp `type='panel'`, `topLevelBlockId=block.id`, and
+    // `focusedBlockId=block.id` on the main panel block so the panel
+    // renderer recognizes it and keyboard navigation has a panel-local
+    // focus target after URL navigation. These writes go
     // through a UiState-scoped tx — typeProp's schema declares
     // BlockDefault as its default, but the panel-infrastructure write
     // is engine-routing-only and shouldn't reach the upload queue.
@@ -71,6 +73,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     void repo.tx(async tx => {
       await tx.setProperty(mainPanelBlock.id, typeProp, 'panel')
       await tx.setProperty(mainPanelBlock.id, topLevelBlockIdProp, block.id)
+      await tx.setProperty(mainPanelBlock.id, focusedBlockIdProp, block.id)
     }, {scope: ChangeScope.UiState, description: 'init main panel'})
   }, [block.id, mainPanelBlock, repo])
 
@@ -97,9 +100,10 @@ export function LayoutRenderer({block}: BlockRendererProps) {
       await repo.tx(async tx => {
         const existing = await tx.get(panelId)
         if (existing && !existing.deleted) {
-          // Existing panel — re-stamp topLevelBlockId so it focuses
-          // on the requested block.
+          // Existing panel — re-stamp both the displayed block and
+          // panel-local focus so navigation keys are immediately active.
           await tx.setProperty(panelId, topLevelBlockIdProp, blockToOpenId)
+          await tx.setProperty(panelId, focusedBlockIdProp, blockToOpenId)
           return
         }
         if (existing && existing.deleted) {
@@ -115,6 +119,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         }
         await tx.setProperty(panelId, typeProp, 'panel')
         await tx.setProperty(panelId, topLevelBlockIdProp, blockToOpenId)
+        await tx.setProperty(panelId, focusedBlockIdProp, blockToOpenId)
       }, {scope: ChangeScope.UiState, description: 'open panel'})
     }
 
