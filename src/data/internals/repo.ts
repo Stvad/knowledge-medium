@@ -51,6 +51,11 @@ import {
   type ResolveContext,
 } from './handleStore'
 import {
+  DbMetrics,
+  QueryMetrics,
+  wrapDbWithMetrics,
+} from './timingMetrics'
+import {
   startRowEventsTail,
   type RowEventsTail,
   type RowEventsTailOptions,
@@ -212,6 +217,13 @@ export class Repo {
    *  call `handleStore.invalidate({…})` to fan out to dep-matching
    *  handles. */
   readonly handleStore: HandleStore = new HandleStore()
+  /** Per-PowerSyncDb-call timings (getAll / getOptional / get /
+   *  execute / writeTransaction). Populated by the metrics-wrapping
+   *  proxy installed around `this.db` at construction. */
+  readonly dbMetrics = new DbMetrics()
+  /** Per-query-name resolve timings. The dispatcher records each
+   *  `loader(ctx)` invocation here keyed by the query's full name. */
+  readonly queryMetrics = new QueryMetrics()
   /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
@@ -285,7 +297,15 @@ export class Repo {
   readonly query: QueryProxy
 
   constructor(opts: RepoOptions) {
-    this.db = opts.db
+    // Wrap the raw PowerSyncDb so every read/write call goes through
+    // the timing proxy. Internal Repo code, processors, runTx, and the
+    // row_events tail all consume `this.db` — they all get the wrapped
+    // surface for free. External callers that hold the original
+    // `opts.db` reference are NOT instrumented; pass `repo.db` if you
+    // want timings (or use `repo.runQuery` / `repo.tx` which already
+    // route through it). The wrapper has the same shape, so existing
+    // type contracts hold.
+    this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as PowerSyncDb
     this.cache = opts.cache
     this.user = opts.user
     this.isReadOnly = opts.isReadOnly ?? false
@@ -388,8 +408,8 @@ export class Repo {
     if (this.rowEventsTail) await this.rowEventsTail.flush()
   }
 
-  /** Frozen snapshot of internal data-layer counters (perf-baseline
-   *  follow-up #4). Returns plain-number aggregates from:
+  /** Frozen snapshot of internal data-layer counters + timings
+   *  (perf-baseline follow-up #4). Returns four subsections:
    *
    *    - `handleStore` — invalidate fan-out (`invalidations`,
    *      `handlesWalked`, `handlesMatched`) and per-LoaderHandle
@@ -400,35 +420,57 @@ export class Repo {
    *      (`setSnapshotCalls`, `setSnapshotDedupHits/Misses`,
    *      `applySyncSnapshotCalls`, `applySyncSnapshotRejected`,
    *      `notifies`).
+   *    - `queries` — per-query-name resolve timings keyed by full
+   *      name (e.g. `core.subtree`, `plugin:tasks/dueSoon`). Each
+   *      entry is a `TimingSnapshot` with `calls`, mean, p50/p95/p99,
+   *      min/max, and totalMs. Empty until a query runs.
+   *    - `db` — aggregate PowerSyncDb call timings split by method
+   *      (`getAll`, `getOptional`, `get`, `execute`, `writeTransaction`).
+   *      `writeTransaction` records full wall-clock for the tx; the
+   *      tx-internal SQL calls also count against their respective
+   *      buckets — so a single `mutate.X` typically registers one
+   *      `writeTransaction` sample plus several inner-SQL samples.
    *
-   *  All counters are monotonic from the last `resetMetrics()` (or
-   *  Repo construction). Each call returns a fresh frozen object so
-   *  callers can keep two snapshots and diff them.
+   *  Plain counters are monotonic from the last `resetMetrics()` (or
+   *  Repo construction). Timing reservoirs hold the last 256 samples
+   *  for percentile estimation; their `calls` field is unbounded.
+   *
+   *  Each call returns a fresh frozen object so callers can keep two
+   *  snapshots and diff them.
    *
    *  Useful as:
    *    - regression detection in production (`handlesWalked /
-   *      invalidations` should drop to ~`handlesMatched / invalidations`
-   *      once the inverted-index optimisation lands),
-   *    - integration-test assertions (mutate.setContent wrote N times,
-   *      did dedup hit?), and
-   *    - in-app debug panels that surface "this page has X handles
-   *      registered, Y invalidations, Z loader runs since open." */
+   *      invalidations` should drop once the inverted-index lands;
+   *      `queries['core.backlinks'].p95Ms` should drop once the
+   *      backlinks index lands),
+   *    - cold-start investigation (open a page, `repo.metrics()`,
+   *      see which queries dominated and how many SQL roundtrips
+   *      they incurred),
+   *    - in-app debug panels that surface latency distributions
+   *      without needing a Playwright + profiler harness. */
   metrics(): Readonly<{
     handleStore: Readonly<Record<string, number>>
     blockCache: Readonly<Record<string, number>>
+    queries: Readonly<Record<string, ReturnType<QueryMetrics['snapshot']>[string]>>
+    db: ReturnType<DbMetrics['snapshot']>
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
       blockCache: this.cache.metrics.snapshot(),
+      queries: this.queryMetrics.snapshot(),
+      db: this.dbMetrics.snapshot(),
     })
   }
 
-  /** Zero every counter in `repo.metrics()`. Use to mark a baseline
-   *  before measuring a discrete operation (e.g. a benchmark iteration
-   *  or a UI interaction in a soak test). */
+  /** Zero every counter and reservoir in `repo.metrics()`. Use to
+   *  mark a baseline before measuring a discrete operation (e.g. a
+   *  benchmark iteration, a UI interaction in a soak test, or a
+   *  cold-start "open page → metrics" investigation). */
   resetMetrics(): void {
     this.handleStore.metrics.reset()
     this.cache.metrics.reset()
+    this.queryMetrics.reset()
+    this.dbMetrics.reset()
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -787,19 +829,30 @@ export class Repo {
         store: this.handleStore,
         key,
         loader: async (ctx) => {
-          const raw = await q.resolve(validated, {
-            db: this.db,
-            repo: this,
-            hydrateBlocks: (rows) => this.hydrateRows(rows as unknown as ReadonlyArray<BlockRow>, ctx),
-            depend: (dep) => ctx.depend(dep),
-          })
-          // Result-schema parse at the boundary — symmetry with argsSchema
-          // and the documented contract (Query.resultSchema is required).
-          // For loose kernel schemas (`z.array(z.unknown())`) this is a
-          // pass-through; for strict plugin schemas it's the safety net
-          // that prevents a malformed resolver from publishing to the
-          // handle's subscribers + Suspense throwers.
-          return q.resultSchema.parse(raw)
+          // Time the resolve for `repo.metrics().queries[fullName]`.
+          // Counts cold loads + every re-resolve from invalidate; that
+          // matches "ms to settle" — the unit a debug panel cares
+          // about. argsSchema.parse and resultSchema.parse run inside
+          // the timed window because they're part of the dispatch
+          // path's wall-clock cost.
+          const t0 = performance.now()
+          try {
+            const raw = await q.resolve(validated, {
+              db: this.db,
+              repo: this,
+              hydrateBlocks: (rows) => this.hydrateRows(rows as unknown as ReadonlyArray<BlockRow>, ctx),
+              depend: (dep) => ctx.depend(dep),
+            })
+            // Result-schema parse at the boundary — symmetry with argsSchema
+            // and the documented contract (Query.resultSchema is required).
+            // For loose kernel schemas (`z.array(z.unknown())`) this is a
+            // pass-through; for strict plugin schemas it's the safety net
+            // that prevents a malformed resolver from publishing to the
+            // handle's subscribers + Suspense throwers.
+            return q.resultSchema.parse(raw)
+          } finally {
+            this.queryMetrics.record(fullName, performance.now() - t0)
+          }
         },
       }))
     }

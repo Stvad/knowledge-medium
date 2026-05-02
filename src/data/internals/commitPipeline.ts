@@ -81,6 +81,10 @@ export interface PowerSyncDb {
     handler: PowerSyncDbChangeHandler,
     options?: PowerSyncDbChangeOptions,
   ): () => void
+  /** Release the underlying connection (OPFS sync access handle on
+   *  web, file handle in node). Used by `exportSqliteDb` when
+   *  swapping the live .db file out from under the worker. */
+  close(): Promise<void>
 }
 
 export interface RunTxParams<R> {

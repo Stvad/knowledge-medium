@@ -21,6 +21,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
+import { ChangeScope } from '@/data/api'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/internals/repo'
 
@@ -131,12 +132,17 @@ describe('repo.instanceId', () => {
 })
 
 describe('repo.metrics() / resetMetrics()', () => {
-  it('exposes handleStore and blockCache subsections; both start at zero', () => {
+  it('exposes all four subsections; all start empty / at zero', () => {
     const m = env.repo.metrics()
-    expect(Object.keys(m).sort()).toEqual(['blockCache', 'handleStore'])
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'queries'])
     expect(Object.isFrozen(m)).toBe(true)
     expect(m.handleStore.invalidations).toBe(0)
     expect(m.blockCache.setSnapshotCalls).toBe(0)
+    // queries: empty map (no query has run yet).
+    expect(Object.keys(m.queries)).toEqual([])
+    // db: every method bucket is initialised with zero samples.
+    expect(m.db.getAll.calls).toBe(0)
+    expect(m.db.writeTransaction.calls).toBe(0)
   })
 
   it('snapshots are independent across reset (prior snapshot keeps its values)', () => {
@@ -172,5 +178,57 @@ describe('repo.metrics() / resetMetrics()', () => {
     expect(after.handleStore.invalidations).toBe(1)
     expect(after.handleStore.handlesWalked).toBe(1)
     expect(after.handleStore.handlesMatched).toBe(1)
+  })
+
+  it('records per-query resolve timings keyed by full query name', async () => {
+    env.repo.resetMetrics()
+    await env.repo.query.children({id: 'x1'}).load()
+    await env.repo.query.children({id: 'x2'}).load()
+    await env.repo.query.subtree({id: 'x1'}).load()
+
+    const m = env.repo.metrics()
+    expect(m.queries['core.children'].calls).toBe(2)
+    expect(m.queries['core.subtree'].calls).toBe(1)
+    // Each entry is a plain TimingSnapshot with non-negative timings.
+    expect(m.queries['core.children'].meanMs).toBeGreaterThanOrEqual(0)
+    expect(m.queries['core.children'].sampleCount).toBe(2)
+  })
+
+  it('records db method timings end-to-end (read calls + writeTransaction wall + inner SQL)', async () => {
+    // Drive a write through repo.tx directly — keeps the test free of
+    // mutator-graph preconditions (createChild requires the parent to
+    // exist, etc.) while still exercising the wrapped writeTransaction
+    // path. The empty-tx case still opens / closes a transaction.
+    env.repo.resetMetrics()
+    await env.repo.tx(async () => {
+      // No-op tx; we just want writeTransaction wall-clock to land
+      // somewhere observable.
+    }, {scope: ChangeScope.BlockDefault})
+
+    const afterWrite = env.repo.metrics()
+    expect(afterWrite.db.writeTransaction.calls).toBeGreaterThanOrEqual(1)
+    // Inner execute counts: the tx pipeline writes at least the
+    // tx_context row + command_events row, both via execute().
+    expect(afterWrite.db.execute.calls).toBeGreaterThanOrEqual(1)
+
+    // A read-only path: repo.load(id) on an unknown id still hits
+    // SQL once via getOptional. Confirms reads outside writeTransaction
+    // also flow through the timed proxy.
+    env.repo.resetMetrics()
+    await env.repo.load('definitely-not-a-real-id')
+    const afterRead = env.repo.metrics()
+    expect(afterRead.db.getAll.calls + afterRead.db.getOptional.calls + afterRead.db.get.calls)
+      .toBeGreaterThanOrEqual(1)
+    expect(afterRead.db.writeTransaction.calls).toBe(0)
+  })
+
+  it('resetMetrics() clears query and db reservoirs too', async () => {
+    await env.repo.query.children({id: 'reset-test'}).load()
+    expect(env.repo.metrics().queries['core.children'].calls).toBeGreaterThan(0)
+    env.repo.resetMetrics()
+    const after = env.repo.metrics()
+    expect(Object.keys(after.queries)).toEqual([])
+    expect(after.db.getAll.calls).toBe(0)
+    expect(after.db.writeTransaction.calls).toBe(0)
   })
 })
