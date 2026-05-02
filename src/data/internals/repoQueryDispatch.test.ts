@@ -206,6 +206,83 @@ describe('repo.runQuery dynamic dispatch', () => {
   })
 })
 
+describe('setFacetRuntime swap invalidates cached query handles (P2 #1)', () => {
+  it('a same-name swap dispatches through the new resolver, not the old one', async () => {
+    // V1 of the plugin query.
+    const v1 = defineQuery<{x: number}, string>({
+      name: 'plugin:swap',
+      argsSchema: z.object({x: z.number()}),
+      resultSchema: z.string(),
+      resolve: async ({x}, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return `v1:${x}`
+      },
+    })
+    repo.__setQueriesForTesting([v1])
+    const handleV1 = repo.query['plugin:swap']({x: 1})
+    await expect(handleV1.load()).resolves.toBe('v1:1')
+
+    // V2 — different instance, different resolver string.
+    const v2 = defineQuery<{x: number}, string>({
+      name: 'plugin:swap',
+      argsSchema: z.object({x: z.number()}),
+      resultSchema: z.string(),
+      resolve: async ({x}, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return `v2:${x}`
+      },
+    })
+    repo.__setQueriesForTesting([v2])
+
+    // Same args — should resolve via v2, NOT v1's cached handle.
+    const handleV2 = repo.query['plugin:swap']({x: 1})
+    expect(handleV2).not.toBe(handleV1)
+    await expect(handleV2.load()).resolves.toBe('v2:1')
+  })
+
+  it('an unchanged kernel query keeps its handle identity across swaps', () => {
+    // Same Query instance through both setFacetRuntime calls — generation
+    // does NOT bump; handle identity preserved.
+    const stable = makeEchoQuery('plugin:stable')
+    repo.__setQueriesForTesting([stable])
+    const before = repo.query['plugin:stable']({value: 'k'})
+    repo.__setQueriesForTesting([stable])
+    const after = repo.query['plugin:stable']({value: 'k'})
+    expect(after).toBe(before)
+  })
+
+  it('a query removed and re-added with a new instance dispatches via the new instance', async () => {
+    const v1 = defineQuery<{x: number}, string>({
+      name: 'plugin:gone',
+      argsSchema: z.object({x: z.number()}),
+      resultSchema: z.string(),
+      resolve: async ({x}, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return `gone-v1:${x}`
+      },
+    })
+    repo.__setQueriesForTesting([v1])
+    await expect(repo.query['plugin:gone']({x: 5}).load()).resolves.toBe('gone-v1:5')
+
+    // Remove it.
+    repo.__setQueriesForTesting([])
+    expect(() => repo.query['plugin:gone']({x: 5})).toThrow(QueryNotRegisteredError)
+
+    // Re-add with a fresh instance.
+    const v2 = defineQuery<{x: number}, string>({
+      name: 'plugin:gone',
+      argsSchema: z.object({x: z.number()}),
+      resultSchema: z.string(),
+      resolve: async ({x}, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return `gone-v2:${x}`
+      },
+    })
+    repo.__setQueriesForTesting([v2])
+    await expect(repo.query['plugin:gone']({x: 5}).load()).resolves.toBe('gone-v2:5')
+  })
+})
+
 describe('setFacetRuntime swaps the query registry', () => {
   it('replaces queries so previously-resolvable names become QueryNotRegisteredError', () => {
     const q = makeEchoQuery('plugin:echo')

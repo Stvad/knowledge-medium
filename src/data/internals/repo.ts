@@ -192,6 +192,17 @@ export class Repo {
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
+  /** Per-query-name generation counter. Bumped by `setFacetRuntime`
+   *  (and `__setQueriesForTesting`) whenever a name's registered Query
+   *  instance changes — including when a name is added or removed. The
+   *  generation is folded into the query handle-store key so cached
+   *  handles that closed over the OLD resolver no longer collide with
+   *  fresh lookups, which produce a new LoaderHandle bound to the NEW
+   *  resolver. Old handles GC after their subscribers detach (the
+   *  HandleStore's normal ref-count path). Reviewer P2: prevents
+   *  same-name plugin updates from continuing to dispatch through the
+   *  pre-swap resolver / argsSchema. */
+  private queryGenerations: Map<string, number> = new Map()
   private readonly processorRunner: ProcessorRunner
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
    *  `repo.tx` records every undoable commit here; `repo.undo` /
@@ -921,7 +932,27 @@ export class Repo {
   setFacetRuntime(runtime: FacetRuntime): void {
     this.mutators = new Map(runtime.read(mutatorsFacet))
     this.processors = new Map(runtime.read(postCommitProcessorsFacet))
-    this.queries = new Map(runtime.read(queriesFacet))
+    const newQueries = new Map(runtime.read(queriesFacet))
+    this.swapQueries(newQueries)
+  }
+
+  /** Replace the query registry, bumping the per-name generation
+   *  counter for every name whose registered Query instance changed
+   *  (including newly-added and removed names). This invalidates the
+   *  handle-store keys for those queries so subsequent dispatch
+   *  produces fresh `LoaderHandle`s bound to the new resolvers. */
+  private swapQueries(newQueries: Map<string, AnyQuery>): void {
+    for (const [name, newQ] of newQueries) {
+      if (this.queries.get(name) !== newQ) {
+        this.queryGenerations.set(name, (this.queryGenerations.get(name) ?? 0) + 1)
+      }
+    }
+    for (const oldName of this.queries.keys()) {
+      if (!newQueries.has(oldName)) {
+        this.queryGenerations.set(oldName, (this.queryGenerations.get(oldName) ?? 0) + 1)
+      }
+    }
+    this.queries = newQueries
   }
 
   /** Wait until the post-commit processor framework has nothing
@@ -989,7 +1020,12 @@ export class Repo {
       // shortcut (`repo.query.subtree`) and the literal full-name access
       // (`repo.query['core.subtree']`) hit the same handle slot.
       const fullName = q.name
-      const key = handleKey(`query:${fullName}`, validated)
+      const gen = this.queryGenerations.get(fullName) ?? 0
+      // Folding the per-name generation into the key means a swap
+      // (setFacetRuntime replacing this query's instance) produces a
+      // distinct handle slot — old handles GC after subscribers
+      // detach; new lookups bind to the new resolver.
+      const key = handleKey(`query:${fullName}@${gen}`, validated)
       return this.handleStore.getOrCreate(key, () => new LoaderHandle({
         store: this.handleStore,
         key,
@@ -1014,9 +1050,11 @@ export class Repo {
 
   /** Test-only escape hatch parallel to `__setMutatorsForTesting`.
    *  Bypasses the FacetRuntime so unit tests can register a single
-   *  query without standing up a full kernel runtime. */
+   *  query without standing up a full kernel runtime. Routes through
+   *  `swapQueries` so generation bookkeeping stays consistent with
+   *  the production `setFacetRuntime` path. */
   __setQueriesForTesting(queries: ReadonlyArray<AnyQuery>): void {
-    this.queries = new Map(queries.map(q => [q.name, q]))
+    this.swapQueries(new Map(queries.map(q => [q.name, q])))
   }
 }
 
