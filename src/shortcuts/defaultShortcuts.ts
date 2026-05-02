@@ -699,11 +699,19 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
         if (!prevVisible || prevVisible.id === topLevelBlockId) return
 
+        // Roam rule: refuse when both blocks have children — the children
+        // would have to be reconciled in a way the user didn't ask for.
+        // (Either side having children alone is fine: from's children move
+        // under into; into's existing children stay put.)
+        await Promise.all([block.load(), prevVisible.load()])
+        const fromChildIds = await block.childIds.load()
+        const intoChildIds = await prevVisible.childIds.load()
+        if (fromChildIds.length > 0 && intoChildIds.length > 0) return
+
         // CodeMirror's backspace at pos 0 is a no-op, but stop the event
         // anyway to avoid any chance of double-handling.
         trigger.preventDefault()
 
-        await prevVisible.load()
         const intoContentBefore = prevVisible.peek()?.content ?? ''
         const joinOffset = intoContentBefore.length
         const prevId = prevVisible.id
