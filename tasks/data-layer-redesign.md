@@ -1365,7 +1365,7 @@ Follow-up keeps the existing UX, removes typing latency entirely, and avoids the
 |---|---|
 | Trigger on content change | `postCommitProcessorsFacet.of({ name: 'core.parseReferences', watches: { kind: 'field', table: 'blocks', fields: ['content'] } })`. Field-watching is correctness-critical: any tx that writes `blocks.content` triggers ref parsing, including plugin mutators that bypass the `setContent` kernel mutator. Engine debounces invocations per-block (default 100ms) so a typing burst on one block resolves to a single processor run. (No `mode` field — v4.20 dropped same-tx mode, follow-up is the only behavior; see §16.2.) |
 | Parse refs | Inside `apply`, call `parseRefs(content)` helper. |
-| Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, raw SQL via `ctx.db.getAll(ALIAS_LOOKUP_SQL, [workspaceId, alias])` in Phase 3 (no queriesFacet yet), switching to `repo.query.aliasLookup({...}).load()` in Phase 4 (same SQL, queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
+| Resolve aliases | Plain query against committed state — `ctx.tx.get` for known ids; for alias-by-name lookup, `repo.query.aliasLookup({workspaceId, alias}).load()` (Phase 4 chunk B; same SQL the Phase-3 inline `ctx.db.getAll` ran, just routed through the queriesFacet wrapper). The processor runs *after* the user's tx commits, so committed-state queries are correct. |
 | Create missing alias-target | Two-layer helper in `src/data/internals/targets/`. **Layer 1 — `createOrRestoreTargetBlock(tx, args): Promise<{ id: string; inserted: boolean }>`** is the lower-level reusable primitive (v4.31): handles the deterministic-id-with-restore pattern in one place. Args: `{ id, workspaceId, parentId, orderKey, freshContent, onInsertedOrRestored?: (tx, id) => void }`. It calls `tx.createOrGet({ id, workspaceId, parentId, orderKey, content: freshContent })`; on success-and-`inserted` it invokes the optional callback for any additional writes (e.g. property writes). On `DeletedConflictError` it runs `tx.restore(id, { content: freshContent })` + the callback, returning `{ id, inserted: true }`. `DeterministicIdCrossWorkspaceError` is not caught (kernel ids encode workspace; surfacing it loudly catches genuine bugs). The same primitive is also used by Roam import (§13.1, `ensureRoamImportTarget`). **Layer 2 — `ensureAliasTarget(tx, alias, workspaceId)`** and **`ensureDailyNoteTarget(tx, date, workspaceId)`** are policy-specific wrappers used by parseReferences: each computes its own deterministic id, picks `freshContent` (empty string for both v1 callers), and supplies an `onInsertedOrRestored` callback that writes the alias list via `tx.setProperty(id, aliasesProp, [alias])`. **Neither wrapper is a registered Mutator** — registering them via `mutatorsFacet` would expose `repo.mutate.ensureAliasTarget(...)` from any scope, bypassing the parseReferences flow. The Layer 1 primitive isn't a Mutator either; it's a private helper exported only to the small set of callers that own deterministic ids. The wrappers return `{ id, inserted: boolean }` (`inserted: true` covers both fresh-insert and tombstone-restore) — the boolean drives cleanup eligibility (see Self-destruct row). |
 | Daily-note deterministic id | `ensureDailyNoteTarget(tx, date, workspaceId)` computes a deterministic id for date-shaped aliases (alphanumeric encoding — no `/` — so it doesn't conflict with §11.1's path encoding) and dispatches to `createOrRestoreTargetBlock`. Two clients creating concurrently → same id; `tx.createOrGet` ensures convergence: one client gets `inserted: true` (insert), the other gets `inserted: false` (live-row hit) and reads the existing live row from SQL. The tombstone-restore path applies to daily notes too: typing `[[2026-04-29]]` after the daily note was previously soft-deleted hits `DeletedConflictError` and `createOrRestoreTargetBlock` runs `tx.restore` + the wrapper's `onInsertedOrRestored`. **Date alias targets are NEVER added to `newlyInsertedAliasTargetIds`** (see Self-destruct row) — daily notes persist regardless of whether a referencing block is removed within 4s, and a restored daily note is also exempted (the date-shape filter applies regardless of how the row became live). parseReferences distinguishes date vs. non-date aliases at parse time and dispatches to the matching wrapper. |
 | Update `references` field | `tx.update(sourceId, { references: refs }, { skipMetadata: true })` where `refs: BlockReference[]` (each `{ id, alias }` from the parsed wikilinks). `skipMetadata` prevents the bookkeeping write from bumping `updatedAt` / `updatedBy`. The processor's tx uses `scope: ChangeScope.References` so it doesn't enter the document undo stack. |
@@ -1486,16 +1486,10 @@ Stage 1  AppRuntimeProvider mounts (synchronous, same React render)
                         repo.query.X(...).load() with no behavior change.
 
 Stage 2  AppRuntimeProvider effect: discover & load dynamic plugins
-         Phase 4+ (queriesFacet exists):
            → blocks = await repo.query.findExtensionBlocks(...).load()
-         Phases 1-3 (queriesFacet not yet introduced; see §13):
-           → blocks = await findExtensionBlocksLegacy(repo)
-             — a transitional helper that calls today's existing
-             dynamic-renderer discovery code path (raw SQL via PowerSync,
-             no facet wrapping). Phase 4 wraps this same SQL into a
-             queriesFacet contribution and the discovery call switches
-             to repo.query.findExtensionBlocks. No behavior change at
-             the switchover; this is a packaging migration.
+         (Phase 4 chunk B introduced the dedicated query; chunk C
+          deleted the legacy raw-SQL `repo.findBlocksByType('extension')`
+          call site.)
          → contribs = await Promise.all(blocks.map(compileExtension))
          → fullRuntime = mergeFacetRuntimes(staticRuntime, contribs)
          → repo.setFacetRuntime(fullRuntime)
@@ -2069,7 +2063,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - `mutatorsFacet`, `postCommitProcessorsFacet` defined per §6.
 - Repo lifecycle (`setFacetRuntime`) implemented per §8.
 - Kernel mutators registered (names finalize during phase): `setContent`, `setProperty`, `indent`, `outdent`, `move`, `split`, `merge`, `delete`, `insertChildren`, `createChild`, `createSiblingAbove`, `createSiblingBelow`, `setOrderKey`. The `repo.indent(id)` etc. kernel functions from Phase 1 become `repo.mutate.indent({ id })` (sugar over a 1-mutator tx). **Note:** `createOrRestoreTargetBlock` and its wrappers (`ensureAliasTarget`, `ensureDailyNoteTarget`, `ensureRoamImportTarget`) are NOT registered Mutators — they're plain helpers called from `core.parseReferences`'s `apply` and the Roam import orchestrator (see §7 mapping table, §13.1). Registering any of them would expose them as `repo.mutate.X(...)` from any caller, bypassing the parseReferences flow that the cleanup processor's `inserted`-driven schedule-time filter (§7.5) relies on.
-- Reference parsing migrated to `core.parseReferences` as a follow-up processor per §7 (post-commit; only mode that exists since v4.20). Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. **Until queriesFacet ships in Phase 4**, the processor uses raw SQL via `ctx.db` for: (a) alias-by-name lookup, (b) "any block references this id" scan inside the cleanup processor. Phase 4 wraps the same SQL into the kernel queries `aliasLookup` and `backlinks` (Phase 4 query list, §13.4) — same SQL, queriesFacet wrapper. Call sites switch from `ctx.db.getAll(SQL, ...)` to `repo.query.aliasLookup({...}).load()` and `repo.query.backlinks({...}).load()` with no behavior change. (Insertion-vs-conflict identity comes from `tx.createOrGet`'s `inserted` boolean per v4.20 — no row_events scan needed at any phase.)
+- Reference parsing migrated to `core.parseReferences` as a follow-up processor per §7 (post-commit; only mode that exists since v4.20). Lifts today's helper into a facet contribution; uses `tx.afterCommit('core.cleanupOrphanAliases', …)` to schedule the orphan-cleanup follow-up. During Phase 3, the processor used raw SQL via `ctx.db` for: (a) alias-by-name lookup, (b) "any block references this id" scan inside the cleanup processor. Phase 4 chunk C migrated those call sites to `repo.query.aliasLookup({...}).load()` and `repo.query.backlinks({workspaceId, id}).load()` (the cleanup processor's scheduled args grew a `workspaceId` field — backlinks is workspace-scoped). Insertion-vs-conflict identity comes from `tx.createOrGet`'s `inserted` boolean per v4.20 — no row_events scan needed at any phase.
 - `repo.mutate.X` accessor surface (typed via module augmentation) and `repo.run('name', args)` (runtime-validated, dynamic).
 - `propertySchemasFacet` for data-layer descriptors (codec + default + kind; still flat in storage; facet wraps the existing descriptor exports). `propertyUiFacet` for the React-side editor/renderer/label/category contributions (v4.31 split — see §5.6 + §6). Kernel ships the default-per-kind editors via `propertyUiFacet`'s defaults so primitive-typed plugin properties render correctly without a custom contribution.
 
@@ -2078,24 +2072,31 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - A new plugin can register a mutator and call site invokes via `repo.mutate['plugin:foo']({...})` typed.
 - `repo.setFacetRuntime` snapshot semantics hold.
 
-### Phase 4 — Queries facet
+### Phase 4 — Queries facet ✓ landed
 
 **Scope**:
-- `queriesFacet` defined.
-- Kernel queries migrated: `subtree`, `ancestors`, `backlinks`, `byType`, `searchByContent`, `firstChildByContent`, `aliasesInWorkspace`, `aliasMatches`, `firstRootBlock`, `aliasLookup`.
-- `repo.query.X(args)` accessor surface (typed via module augmentation) and `repo.runQuery('name', args)`.
+- `queriesFacet` defined (chunk B; `queriesFacet` was scaffolded earlier per §6 but not registered against until B).
+- Kernel queries migrated: `subtree`, `ancestors`, `children`, `childIds`, `backlinks`, `byType`, `searchByContent`, `firstChildByContent`, `aliasesInWorkspace`, `aliasMatches`, `aliasLookup`, `findExtensionBlocks`. (`firstRootBlock` from the original list dropped as out-of-scope; `children` / `childIds` added because the legacy reactive factories on `Repo` collapsed into the queries facet during chunk C.)
+- `repo.query.X(args)` accessor surface (typed via module augmentation) and `repo.runQuery('name', args)`. Per-name generation counter folded into the dispatcher's handle-store key so a `setFacetRuntime` swap that replaces a query under the same name produces a fresh `LoaderHandle` bound to the new resolver (reviewer P2 fix).
+- Dispatcher boundaries: `argsSchema.parse(args)` on input AND `resultSchema.parse(raw)` on output (reviewer P2 fix). Kernel queries ship typed pass-through `Schema<BlockData[]>` / `Schema<BlockData | null>` adapters so the runtime cost is zero while the public TypeScript surface from `QueryRegistry` stays precise.
+- `coarseScope.tables` auto-declares `{kind:'table', table}` deps on every dispatch (reviewer P2 fix). `snapshotsToChangeNotification` (TxEngine fast path) and the `row_events` tail both emit `tables: ['blocks']` on any block write so coarse-scope deps actually fire.
+- All call sites migrated to `repo.query.X({...})` (chunk C-1): React hooks, `Block.childIds` / `Block.children`, parseReferencesProcessor's inline SQL helpers, dynamicExtensions, QuickFind, CodeMirrorContentRenderer, copy / shortcut handlers, agentRuntime bridge, roamImport.
+- Legacy `repo.findX` methods + `repo.subtree`/`ancestors`/`children`/`childIds`/`backlinks` reactive factories + `repo.loadSubtree`/`loadAncestors` deleted (chunk C-2). `repo.query.X({...})` is the only kernel-query surface.
+- `loadSubtree`'s `{includeRoot: false}` option dropped — two callers (exampleExtensions, useAgentRuntimeBridge) updated to filter the root at the consumer boundary.
 
-**Acceptance**:
+**Acceptance** ✓:
 - Plugin can register a query and call site invokes via `useHandle(repo.query['plugin:foo'](args))` typed.
+- Identity stable across calls; GC after subscribers detach; structural diffing prevents spurious notifications (covered by `kernelQueries.test.ts` per-query invalidation suites + `repoQueryDispatch.test.ts` identity contracts).
+- Stale-resolver protection: `setFacetRuntime` swap with a same-name plugin update dispatches via the new resolver, not the cached handle's old closure.
 
 ### Phase 5 — Tree-query benchmarks + last call-site sweep
 
 **Note (v4.24)**: the bulk of what was Phase 5 — `SUBTREE_SQL` / `ANCESTORS_SQL` / `IS_DESCENDANT_OF_SQL` / `CHILDREN_SQL`, the `visitBlocks` rewrite, the `getRootBlock` rewrite — moved into Phase 1, because once `child_ids_json` is gone there's no way to do tree mutations, deletes, cycle validation, imports, or subtree loads without these helpers anyway. The CTEs are also load-bearing for §4.7 Layer 1 cycle validation, which is engine-side from Phase 1. Trying to land them later would require a temporary JS-side fallback, which is exactly the kind of half-finished implementation we're trying not to ship.
 
-**What's left here**: kernel queries `subtree`, `ancestors`, `isDescendantOf` get the queriesFacet wrapper Phase 4 ships (this is the packaging migration only — the SQL underneath is what Phase 1 already wrote). Plus a benchmarking pass to verify the design's "tree walks push to SQL" goal (#7 in §2):
+**What's left here**: `subtree` and `ancestors` got the queriesFacet wrapper as part of Phase 4 chunk B. `isDescendantOf` is the only remaining query item — it's used by `tx.move`'s engine-side cycle validation (inside a tx, not outside), which doesn't fit the queries-are-out-of-tx invariant cleanly. Decide during Phase 5 whether to wrap it as a query or leave it as a private engine helper. Plus a benchmarking pass to verify the design's "tree walks push to SQL" goal (#7 in §2):
 
 **Scope**:
-- queriesFacet contributions for `subtree`, `ancestors`, `isDescendantOf` (Phase 4 packaging applied to the Phase 1 SQL — same CTEs, just wrapped).
+- (Optional) queriesFacet contribution for `isDescendantOf`, or document its tx-time usage as the reason it stays a raw SQL helper.
 - Final sweep for any remaining `await block.parent()`-style chained walks; replace with `repo.query.ancestors({id}).load()` or in-memory subtree iteration.
 
 **Acceptance**:
