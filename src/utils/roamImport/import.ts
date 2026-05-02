@@ -20,8 +20,9 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp, typeProp } from '@/data/properties'
-import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
 import { computeAliasSeatId } from '@/data/internals/targets'
+import { keyAtEnd, keysBetween } from '@/data/internals/orderKey'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import { parseReferences } from '@/utils/referenceParser'
 import type { Repo } from '@/data/internals/repo'
@@ -325,6 +326,30 @@ export const importRoam = async (
   }
   if (total > 0) log(`All ${total} descendants written (${sinceLastPhase()})`)
 
+  // 6. Append a one-block import log under today's daily-note. Diagnostics
+  //    that the planner / orchestrator surfaced (deep property nesting,
+  //    placeholders, etc.) become sub-bullets so the user has a
+  //    findable record of anything weird without grepping the console.
+  //    Per-import failure isolation: a broken log write (e.g. corrupt
+  //    daily-note row) shouldn't fail the whole import — the data has
+  //    already landed. Catch and surface via the progress callback.
+  try {
+    await writeImportLog(repo, options.workspaceId, {
+      pagesCreated,
+      pagesMerged,
+      pagesDaily,
+      blocksWritten: plan.descendants.length,
+      placeholdersCreated: plan.placeholders.length,
+      aliasBlocksCreated,
+      durationMs: Date.now() - start,
+      diagnostics: plan.diagnostics,
+    })
+    log(`Wrote import-log block to today's daily (${sinceLastPhase()})`)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    log(`Could not write import-log block: ${message}`)
+  }
+
   return {
     pagesCreated,
     pagesMerged,
@@ -337,6 +362,76 @@ export const importRoam = async (
     durationMs: Date.now() - start,
     dryRun: false,
   }
+}
+
+interface ImportLogStats {
+  pagesCreated: number
+  pagesMerged: number
+  pagesDaily: number
+  blocksWritten: number
+  placeholdersCreated: number
+  aliasBlocksCreated: number
+  durationMs: number
+  diagnostics: ReadonlyArray<string>
+}
+
+/**
+ * Append a one-parent + N-children block to today's daily-note that
+ * records the just-finished import. Header summarises counts; each
+ * diagnostic becomes a sub-bullet.
+ *
+ * The header is parented under the daily-note row at the end of its
+ * existing children (via `keyAtEnd`). The user's existing bullets
+ * keep their order; the log lands below them. Sub-bullets get jittered
+ * keys via `keysBetween(null, null, n)` since the header is fresh
+ * (no neighbors yet).
+ */
+const writeImportLog = async (
+  repo: Repo,
+  workspaceId: string,
+  stats: ImportLogStats,
+): Promise<void> => {
+  const iso = todayIso()
+  // Make sure today's daily-note row exists. Idempotent — if today's
+  // import already touched it, this is a cache hit.
+  await getOrCreateDailyNote(repo, workspaceId, iso)
+  const dailyId = dailyNoteBlockId(workspaceId, iso)
+
+  const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
+  const headerContent =
+    `Roam import ${stamp}: ` +
+    `${stats.pagesCreated} new pages, ${stats.pagesMerged} merged, ` +
+    `${stats.pagesDaily} daily, ${stats.blocksWritten} blocks ` +
+    `(${stats.placeholdersCreated} placeholders, ` +
+    `${stats.aliasBlocksCreated} alias seats, ` +
+    `${stats.diagnostics.length} notes, ` +
+    `${(stats.durationMs / 1000).toFixed(1)}s)`
+
+  await repo.tx(async tx => {
+    const existing = await tx.childrenOf(dailyId, workspaceId)
+    const lastKey = existing.length > 0
+      ? existing[existing.length - 1].orderKey
+      : null
+    const headerOrderKey = keyAtEnd(lastKey)
+
+    const headerId = await tx.create({
+      workspaceId,
+      parentId: dailyId,
+      orderKey: headerOrderKey,
+      content: headerContent,
+    })
+
+    if (stats.diagnostics.length === 0) return
+    const childKeys = keysBetween(null, null, stats.diagnostics.length)
+    for (let i = 0; i < stats.diagnostics.length; i++) {
+      await tx.create({
+        workspaceId,
+        parentId: headerId,
+        orderKey: childKeys[i],
+        content: stats.diagnostics[i],
+      })
+    }
+  }, {scope: ChangeScope.BlockDefault, description: 'roam import: log'})
 }
 
 // Render a remaining-seconds estimate as e.g. "12s", "1m20s", "1h05m".

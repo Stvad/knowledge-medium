@@ -26,7 +26,7 @@ import { aliasesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/internals/repo'
-import { dailyNoteBlockId, journalBlockId } from '@/data/dailyNotes'
+import { dailyNoteBlockId, journalBlockId, todayIso } from '@/data/dailyNotes'
 import { computeAliasSeatId } from '@/data/internals/targets'
 import { importRoam } from '../import'
 import { roamBlockId } from '../ids'
@@ -498,6 +498,63 @@ describe('importRoam', () => {
     expect(parent?.parent_id).toBe(roamBlockId(WORKSPACE, 'pageChain'))
     expect(mid?.parent_id).toBe(roamBlockId(WORKSPACE, 'chainParent'))
     expect(leaf?.parent_id).toBe(roamBlockId(WORKSPACE, 'chainMid'))
+  })
+
+  it('writes a post-import log block on today\'s daily-note with diagnostics as sub-bullets', async () => {
+    // Export with two URL siblings (case 2 → list) and a deeply
+    // nested attribute that triggers the "depth > 2" diagnostic.
+    const noisyExport: RoamExport = [
+      {
+        title: 'noisy-page',
+        uid: 'noisyPage',
+        children: [
+          {string: 'URL::https://a.example', uid: 'u1'},
+          {string: 'URL::https://b.example', uid: 'u2'},
+          {
+            string: 'parent',
+            uid: 'parent1',
+            children: [{
+              string: 'A::a',
+              uid: 'A1',
+              children: [{
+                string: 'B::b',
+                uid: 'B1',
+                children: [{string: 'C::c', uid: 'C1'}],
+              }],
+            }],
+          },
+        ],
+      },
+    ]
+    const summary = await importRoam(noisyExport, env.repo, {
+      workspaceId: WORKSPACE, currentUserId: USER_ID,
+    })
+    expect(summary.diagnostics.length).toBeGreaterThan(0)
+
+    const dailyId = dailyNoteBlockId(WORKSPACE, todayIso())
+    // Find the import-log header — direct child of today's daily whose
+    // content starts with "Roam import".
+    const dailyChildren = await env.h.db.getAll<{
+      id: string
+      content: string
+      order_key: string
+    }>(
+      'SELECT id, content, order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [dailyId],
+    )
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+    expect(header!.content).toContain(`${summary.diagnostics.length} notes`)
+
+    // Sub-bullets — one per diagnostic, in source order.
+    const subs = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [header!.id],
+    )
+    expect(subs.length).toBe(summary.diagnostics.length)
+    for (let i = 0; i < summary.diagnostics.length; i++) {
+      expect(subs[i].content).toBe(summary.diagnostics[i])
+    }
   })
 
   it('dry-run reports counts without writing rows', async () => {

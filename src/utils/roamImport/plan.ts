@@ -89,12 +89,10 @@ const namespacedKey = (key: string): string => {
   return `${NS_PREFIX}:${cleaned}`
 }
 
-// "Simple" Roam inline attribute: a block whose content is exactly
-// `key:: value`, single-line, with key matching `[A-Za-z][\w-]*`.
-// Anything more complex (multi-line bodies, attribute mixed inline with
-// other content, multi-attribute blocks) is intentionally left alone —
-// those need a richer model, which is out of scope for this importer
-// pass.
+// "Simple" Roam inline attribute: a block whose content matches
+// `key:: value` (single-line, key = `[A-Za-z][\w-]*`). Multi-line
+// bodies or anything that doesn't match the shape are out of scope
+// for promotion and pass through untouched as plain blocks.
 const SIMPLE_ATTR_RE = /^([A-Za-z][\w-]*)::\s*(.*)$/
 
 const detectInlineAttribute = (rawContent: string | undefined): {key: string, value: string} | null => {
@@ -104,29 +102,177 @@ const detectInlineAttribute = (rawContent: string | undefined): {key: string, va
   return {key: match[1], value: match[2]}
 }
 
-/** Roam authors a property on the parent by writing a `key::value`
- *  child block; surface the same shape on our side by hoisting it
- *  onto the parent's properties. First-write-wins among siblings. */
-const collectPromotedAttributes = (
-  children: ReadonlyArray<RoamBlock>,
-): Record<string, string> => {
-  const out: Record<string, string> = {}
-  for (const child of children) {
-    const inline = detectInlineAttribute(child.string)
-    if (!inline) continue
-    const propName = `${NS_PREFIX}:${inline.key}`
-    if (out[propName] === undefined) out[propName] = inline.value
-  }
+// `[[X]]` tokens with whitespace / `,` / `;` separators between them,
+// the whole string nothing else. Used to recognise scalar property
+// values that should be exploded into a list of page references —
+// e.g. `isa::[[person]] [[friend]]` becomes `isa: ['[[person]]', '[[friend]]']`.
+const PAGE_TOKEN_RE = /\[\[([^\]]+)\]\]/g
+const PAGE_LIST_VALUE_RE = /^[\s,;]*(\[\[[^\]]+\]\][\s,;]*)+$/
+
+const explodePageTokens = (value: string): string[] | null => {
+  if (!PAGE_LIST_VALUE_RE.test(value)) return null
+  const out: string[] = []
+  PAGE_TOKEN_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = PAGE_TOKEN_RE.exec(value)) !== null) out.push(`[[${m[1]}]]`)
+  // Single token: not really a "list", let the caller keep the scalar.
+  if (out.length < 2) return null
   return out
 }
 
-/** A `key::value` child with no descendants of its own — pure
- *  property shorthand. We hoist its value onto the parent and drop
- *  the block entirely. Children-bearing attribute blocks stay so
- *  their subtree remains reachable. */
-const isStandaloneAttributeBlock = (block: RoamBlock): boolean => {
-  if (!detectInlineAttribute(block.string)) return false
-  return (block.children?.length ?? 0) === 0
+/**
+ * Promotion result for a parent block's direct children.
+ *
+ *   - `promoted` is the namespaced property bag to merge onto the
+ *     parent. Single-value entries are scalars; multi-value entries
+ *     are arrays (case 2: same-key siblings, case 4: list-children of
+ *     an attr block).
+ *   - `droppedDirect` lists direct-child uids that were fully consumed
+ *     (standalone attrs, or attr blocks whose entire subtree bubbled).
+ *   - `effectiveChildren` per-uid overrides the children list of a
+ *     kept attr block — sub-attr children that bubbled up are removed,
+ *     non-attr children stay.
+ *   - `diagnostics` surfaces unusual structures (e.g. attr nesting
+ *     deeper than two levels) so the post-import log can flag them.
+ */
+interface PromotionResult {
+  promoted: Record<string, unknown>
+  droppedDirect: Set<string>
+  effectiveChildren: Map<string, RoamBlock[]>
+  diagnostics: string[]
+  /** Uids of blocks whose values were pulled into `promoted` (directly
+   *  or via the recursive bubble-up). Tracked so a deeper promotion
+   *  pass can skip them and avoid re-bubbling onto intermediate blocks
+   *  along an `attr → attr` chain. */
+  bubbled: Set<string>
+}
+
+/** Walk a parent's direct children and compute case-1/2/3/4 promotion.
+ *  See `PromotionResult` for the output shape.
+ *
+ *  `alreadyBubbled` is a set of uids whose values were already pulled
+ *  up by an ancestor's promotion pass. The page-level pass bubbles
+ *  attrs through unbroken `attr → attr` chains all the way up; without
+ *  this guard, the recursive buildBlock-time promotion of an
+ *  intermediate kept attr block would re-bubble the same descendants
+ *  onto itself and produce duplicate property entries on every block
+ *  along the chain. */
+const computePromotedFromChildren = (
+  children: ReadonlyArray<RoamBlock>,
+  alreadyBubbled: ReadonlySet<string>,
+): PromotionResult => {
+  const accumulator = new Map<string, unknown[]>()
+  const droppedDirect = new Set<string>()
+  const effectiveChildren = new Map<string, RoamBlock[]>()
+  const diagnostics: string[] = []
+  const newlyBubbled = new Set<string>()
+
+  const push = (key: string, value: unknown) => {
+    const propName = `${NS_PREFIX}:${key}`
+    const list = accumulator.get(propName) ?? []
+    list.push(value)
+    accumulator.set(propName, list)
+  }
+
+  // Returns true when `block` is fully consumed and can be dropped
+  // from the tree. `depth` is the bubbling distance from the original
+  // parent (0 = direct child of parent).
+  const consume = (block: RoamBlock, depth: number): boolean => {
+    if (alreadyBubbled.has(block.uid) || newlyBubbled.has(block.uid)) return false
+    const attr = detectInlineAttribute(block.string)
+    if (!attr) return false
+
+    if (depth >= 2) {
+      diagnostics.push(
+        `Attribute "${attr.key}" hoisted from depth ${depth + 1} (uid ${block.uid}) — ` +
+        `unusual nesting; review the source structure.`,
+      )
+    }
+
+    newlyBubbled.add(block.uid)
+    if (attr.value.trim() !== '') push(attr.key, attr.value)
+
+    const subs = block.children ?? []
+    if (subs.length === 0) return true
+
+    const kept: RoamBlock[] = []
+    for (const sub of subs) {
+      if (detectInlineAttribute(sub.string)) {
+        // Sub-attr: try to bubble it up to the original parent.
+        const consumed = consume(sub, depth + 1)
+        if (!consumed) kept.push(sub)
+      } else {
+        // Non-attr sub-bullet: contributes its raw string as another
+        // value for the enclosing attr's key (case 4). Block stays as
+        // a descendant so the tree shape is preserved alongside the
+        // queryable property.
+        push(attr.key, sub.string ?? '')
+        kept.push(sub)
+      }
+    }
+
+    if (kept.length === 0) return true
+    if (kept.length < subs.length) effectiveChildren.set(block.uid, kept)
+    return false
+  }
+
+  for (const child of children) {
+    if (!detectInlineAttribute(child.string)) continue
+    if (consume(child, 0)) droppedDirect.add(child.uid)
+  }
+
+  // Finalize: scalar for length-1, list for length>1, then post-process
+  // any scalar that's a sequence of `[[X]]` tokens into a page list (case 3).
+  const promoted: Record<string, unknown> = {}
+  for (const [key, values] of accumulator) {
+    if (values.length === 1) {
+      const single = values[0]
+      if (typeof single === 'string') {
+        const exploded = explodePageTokens(single)
+        promoted[key] = exploded ?? single
+      } else {
+        promoted[key] = single
+      }
+    } else {
+      // Multi-value: keep each string item but flatten any page-token
+      // strings so a mix like ['[[a]] [[b]]', '[[c]]'] becomes
+      // ['[[a]]', '[[b]]', '[[c]]'].
+      const flat: unknown[] = []
+      for (const v of values) {
+        if (typeof v === 'string') {
+          const exploded = explodePageTokens(v)
+          if (exploded) flat.push(...exploded)
+          else flat.push(v)
+        } else {
+          flat.push(v)
+        }
+      }
+      promoted[key] = flat
+    }
+  }
+
+  return {promoted, droppedDirect, effectiveChildren, diagnostics, bubbled: newlyBubbled}
+}
+
+// Collect every `[[X]]` token nested inside a property value. Used to
+// register page-link targets from property values into ctx.aliasesUsed
+// so the seat-creation pipeline materialises them just like content
+// references would.
+const collectAliasesFromPropertyValues = (
+  promoted: Record<string, unknown>,
+): string[] => {
+  const out = new Set<string>()
+  const visit = (v: unknown) => {
+    if (typeof v === 'string') {
+      PAGE_TOKEN_RE.lastIndex = 0
+      let m: RegExpExecArray | null
+      while ((m = PAGE_TOKEN_RE.exec(v)) !== null) out.add(m[1])
+    } else if (Array.isArray(v)) {
+      for (const item of v) visit(item)
+    }
+  }
+  for (const v of Object.values(promoted)) visit(v)
+  return [...out]
 }
 
 const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> => {
@@ -166,7 +312,22 @@ interface BuildContext {
   uidMap: Map<string, string>
   aliasesUsed: Set<string>
   unresolvedBlockUids: Set<string>
+  diagnostics: string[]
+  /** Per-uid override of `block.children`. When a kept attr block has
+   *  some of its sub-attr children bubbled to its parent, the bubbled
+   *  ones disappear from this list — `buildBlock` reads from the
+   *  override so the recursion doesn't re-process bubbled grandchildren
+   *  (which would double-promote them). */
+  effectiveChildren: Map<string, RoamBlock[]>
+  /** Uids whose values were already pulled into a higher-level block's
+   *  promoted properties. `computePromotedFromChildren` skips children
+   *  whose uid is in this set so kept intermediate attr blocks (along
+   *  an `attr → attr` chain) don't re-bubble the same descendants. */
+  bubbledUids: Set<string>
 }
+
+const childrenOf = (ctx: BuildContext, block: RoamBlock): RoamBlock[] =>
+  ctx.effectiveChildren.get(block.uid) ?? block.children ?? []
 
 const buildBlock = (
   ctx: BuildContext,
@@ -178,14 +339,20 @@ const buildBlock = (
   const id = ctx.uidMap.get(block.uid)
   if (!id) throw new Error(`Roam uid not in uidMap: ${block.uid}`)
 
-  const childIds: string[] = []
-  const children = block.children ?? []
+  const children = childrenOf(ctx, block)
+  const promotion = computePromotedFromChildren(children, ctx.bubbledUids)
+  for (const d of promotion.diagnostics) ctx.diagnostics.push(d)
+  for (const [uid, kept] of promotion.effectiveChildren) {
+    ctx.effectiveChildren.set(uid, kept)
+  }
+  for (const uid of promotion.bubbled) ctx.bubbledUids.add(uid)
+
   // Use the original index for the order key so skipped attribute
   // blocks just leave a gap rather than reshuffling siblings.
   for (let i = 0; i < children.length; i++) {
     const child = children[i]
-    if (isStandaloneAttributeBlock(child)) continue
-    childIds.push(buildBlock(ctx, child, id, i, pushDescendant))
+    if (promotion.droppedDirect.has(child.uid)) continue
+    buildBlock(ctx, child, id, i, pushDescendant)
   }
 
   const data = composeBlockData({
@@ -199,7 +366,7 @@ const buildBlock = (
     roamRefUids: collectUidRefs(block),
     createdAt: cloneTimestamp(block['create-time'], Date.now()),
     updatedAt: cloneTimestamp(block['edit-time'] ?? block['create-time'], Date.now()),
-    promotedFromChildren: collectPromotedAttributes(children),
+    promotedFromChildren: promotion.promoted,
   })
 
   pushDescendant({data, roamUid: block.uid})
@@ -257,6 +424,14 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     ...(promotedFromChildren ?? {}),
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
+  }
+
+  // Property values can carry `[[X]]` page tokens (case 3 explosion or
+  // hoisted-as-string values like `author::[[stvad]]`). Register those
+  // aliases so the orchestrator's seat-creation pipeline materialises
+  // their target rows just like content references would.
+  for (const alias of collectAliasesFromPropertyValues(properties)) {
+    ctx.aliasesUsed.add(alias)
   }
 
   const data: BlockData = {
@@ -344,16 +519,19 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     return {blockId, roamUid}
   })
 
+  const diagnostics: string[] = []
   const ctx: BuildContext = {
     options,
     uidMap,
     aliasesUsed: new Set(),
     unresolvedBlockUids: new Set(),
+    diagnostics,
+    effectiveChildren: new Map(),
+    bubbledUids: new Set(),
   }
 
   const preparedPages: PreparedPage[] = []
   const descendants: PreparedBlock[] = []
-  const diagnostics: string[] = []
 
   const pushDescendant = (b: PreparedBlock) => descendants.push(b)
 
@@ -364,12 +542,18 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
 
     const childIds: string[] = []
     const pageChildren = page.children ?? []
+    const pagePromotion = computePromotedFromChildren(pageChildren, ctx.bubbledUids)
+    for (const d of pagePromotion.diagnostics) diagnostics.push(d)
+    for (const [uid, kept] of pagePromotion.effectiveChildren) {
+      ctx.effectiveChildren.set(uid, kept)
+    }
+    for (const uid of pagePromotion.bubbled) ctx.bubbledUids.add(uid)
     for (let i = 0; i < pageChildren.length; i++) {
       const child = pageChildren[i]
-      if (isStandaloneAttributeBlock(child)) continue
+      if (pagePromotion.droppedDirect.has(child.uid)) continue
       childIds.push(buildBlock(ctx, child, pageBlockId, i, pushDescendant))
     }
-    const promotedFromChildren = collectPromotedAttributes(pageChildren)
+    const promotedFromChildren = pagePromotion.promoted
 
     if (daily) {
       preparedPages.push({
