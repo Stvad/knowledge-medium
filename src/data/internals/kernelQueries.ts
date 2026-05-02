@@ -197,7 +197,6 @@ export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.subtree',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({id}, ctx) => {
     // Upfront deps — declared before SQL so the empty-result case (root
     // missing on first load) and any mid-load invalidations have
@@ -219,7 +218,6 @@ export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.ancestors',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'row', id})
     const rows = await asReadDb(ctx.db).getAll<BlockRow>(ANCESTORS_SQL, [id, id])
@@ -232,7 +230,6 @@ export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.children',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     const rows = await asReadDb(ctx.db).getAll<BlockRow>(CHILDREN_SQL, [id])
@@ -247,7 +244,6 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
   name: 'core.childIds',
   argsSchema: z.object({id: z.string(), hydrate: z.boolean().optional()}),
   resultSchema: z.array(z.string()),
-  coarseScope: {tables: ['blocks']},
   resolve: async ({id, hydrate = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
@@ -269,7 +265,6 @@ export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, Blo
   name: 'core.backlinks',
   argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId, id}, ctx) => {
     ctx.depend({kind: 'row', id})
     if (!workspaceId || !id) return []
@@ -286,7 +281,6 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
   name: 'core.byType',
   argsSchema: z.object({workspaceId: z.string(), type: z.string()}),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId, type}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
@@ -309,7 +303,6 @@ export const searchByContentQuery = defineQuery<
     limit: z.number().optional(),
   }),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId, query, limit = 50}, ctx) => {
     if (!query) return []
     ctx.depend({kind: 'workspace', workspaceId})
@@ -328,7 +321,6 @@ export const firstChildByContentQuery = defineQuery<
   name: 'core.firstChildByContent',
   argsSchema: z.object({parentId: z.string(), content: z.string()}),
   resultSchema: blockDataOrNullSchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({parentId, content}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId})
     const row = await asReadDb(ctx.db).getOptional<BlockRow>(
@@ -349,7 +341,6 @@ export const aliasesInWorkspaceQuery = defineQuery<
   name: 'core.aliasesInWorkspace',
   argsSchema: z.object({workspaceId: z.string(), filter: z.string().optional()}),
   resultSchema: z.array(z.string()),
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId, filter = ''}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
@@ -376,7 +367,6 @@ export const aliasMatchesQuery = defineQuery<
     blockId: z.string(),
     content: z.string(),
   })),
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId, filter, limit = 50}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
@@ -394,7 +384,6 @@ export const aliasLookupQuery = defineQuery<
   name: 'core.aliasLookup',
   argsSchema: z.object({workspaceId: z.string(), alias: z.string()}),
   resultSchema: blockDataOrNullSchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId, alias}, ctx) => {
     if (!workspaceId || !alias) return null
     ctx.depend({kind: 'workspace', workspaceId})
@@ -417,7 +406,6 @@ export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, Block
   name: 'core.findExtensionBlocks',
   argsSchema: z.object({workspaceId: z.string()}),
   resultSchema: blockDataArraySchema,
-  coarseScope: {tables: ['blocks']},
   resolve: async ({workspaceId}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})

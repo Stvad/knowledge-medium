@@ -96,8 +96,10 @@ describe('repo.children(id)', () => {
     const deps = h.__depsForTest()
     expect(depIds(deps, 'parent-edge')).toEqual(['p'])
     expect(depIds(deps, 'row').sort()).toEqual(['c1', 'c2'])
-    // Table dep auto-declared from coarseScope.tables (reviewer P2 fix).
-    expect(deps.some(d => d.kind === 'table' && d.table === 'blocks')).toBe(true)
+    // No table dep — children declares precise parent-edge + per-row
+    // deps; coarseScope.tables auto-declare was reverted because it
+    // made every blocks write globally invalidate every mounted handle.
+    expect(deps.some(d => d.kind === 'table')).toBe(false)
   })
 
   it('handleStore.invalidate({parentIds:[id]}) re-resolves the handle', async () => {
@@ -232,8 +234,10 @@ describe('repo.query.backlinks({workspaceId, id})', () => {
     const deps = h.__depsForTest()
     expect(depIds(deps, 'row').sort()).toEqual(['linker', 't'])
     expect(depIds(deps, 'workspace')).toEqual(['ws-1'])
-    // Table dep auto-declared from coarseScope.tables (reviewer P2 fix).
-    expect(deps.some(d => d.kind === 'table' && d.table === 'blocks')).toBe(true)
+    // No table dep — backlinks declares precise row + workspace deps;
+    // the workspace dep is the proper coarse filter for cross-workspace
+    // isolation without globally invalidating on every blocks write.
+    expect(deps.some(d => d.kind === 'table')).toBe(false)
   })
 })
 

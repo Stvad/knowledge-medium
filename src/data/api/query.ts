@@ -31,10 +31,21 @@ export interface Query<Args, Result> {
   readonly argsSchema: Schema<Args>
   readonly resultSchema: Schema<Result>
   readonly resolve: (args: Args, ctx: QueryCtx) => Promise<Result>
-  /** Coarse pre-filter for the invalidation engine. Optional; without it
-   *  the engine subscribes to all `blocks` / `row_events` changes for
-   *  this handle. Dynamic deps from `resolve` always take precedence for
-   *  precision. v4.28: only `tables` is supported. */
+  /** Intent-marker for the invalidation engine. Currently a no-op at
+   *  runtime — declared here so plugin authors can document the tables
+   *  a query depends on, and so a future prefilter implementation has a
+   *  field to read.
+   *
+   *  Why not auto-declare table deps from this field: precise queries
+   *  (children/subtree/ancestors/backlinks/...) already declare
+   *  parent-edge / row / workspace deps that cover their cases. Adding a
+   *  table-coarse OR-dep on top means every blocks write anywhere
+   *  matches, re-running SQL/hydration on every mounted handle (the hot
+   *  path for `useChildIds` etc.). Plugin queries that genuinely need a
+   *  coarse table-scan dep declare it explicitly:
+   *  `ctx.depend({kind:'table', table:'blocks'})`.
+   *
+   *  v4.28: only `tables` is supported. */
   readonly coarseScope?: { tables?: string[] }
 }
 

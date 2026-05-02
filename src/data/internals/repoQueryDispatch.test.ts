@@ -311,12 +311,16 @@ describe('setFacetRuntime swaps the query registry', () => {
   })
 })
 
-describe('coarseScope.tables auto-declares table deps (reviewer P2)', () => {
-  it('a query with coarseScope.tables but no ctx.depend gets table deps anyway', async () => {
-    // Pre-fix shape: this query resolved without declaring any dep,
-    // and the documented coarseScope.tables field was a no-op. The
-    // handle would never invalidate from any change, since it had
-    // zero registered deps.
+describe('coarseScope.tables is intent-marker only (no auto-declare)', () => {
+  // The dispatcher used to convert `coarseScope.tables` into
+  // `{kind:'table'}` deps so empty-result resolvers had a fallback. That
+  // made every precise handle (children/subtree/...) match every blocks
+  // write globally, re-running SQL on every mounted handle. Now
+  // coarseScope is documentation-only — see the field's doc-comment in
+  // src/data/api/query.ts. Plugin queries that genuinely need a coarse
+  // table-scan dep declare it explicitly via ctx.depend.
+
+  it('coarseScope.tables alone declares NO deps — resolver must use ctx.depend', async () => {
     const tableOnly = defineQuery<Record<string, never>, number>({
       name: 'plugin:tableOnly',
       argsSchema: z.object({}),
@@ -328,17 +332,33 @@ describe('coarseScope.tables auto-declares table deps (reviewer P2)', () => {
     repo.__setQueriesForTesting([tableOnly])
     const handle = repo.query['plugin:tableOnly']({})
     await expect(handle.load()).resolves.toBe(42)
-    // Inspect the dep set the dispatcher auto-declared.
     const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
-    expect(deps).toContainEqual({kind: 'table', table: 'blocks'})
+    expect(deps).toEqual([])
   })
 
-  it('table deps from coarseScope merge with explicit ctx.depend calls', async () => {
+  it('explicit ctx.depend({kind:"table"}) DOES register a table dep', async () => {
+    const explicitTable = defineQuery<Record<string, never>, number>({
+      name: 'plugin:explicitTable',
+      argsSchema: z.object({}),
+      resultSchema: z.number(),
+      resolve: async (_args, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return 1
+      },
+    })
+    repo.__setQueriesForTesting([explicitTable])
+    const handle = repo.query['plugin:explicitTable']({})
+    await handle.load()
+    const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
+    expect(deps).toEqual([{kind: 'table', table: 'blocks'}])
+  })
+
+  it('coarseScope set + explicit deps: only the explicit deps register', async () => {
     const mixed = defineQuery<{id: string}, number>({
       name: 'plugin:mixed',
       argsSchema: z.object({id: z.string()}),
       resultSchema: z.number(),
-      coarseScope: {tables: ['blocks']},
+      coarseScope: {tables: ['blocks']}, // documentation-only
       resolve: async ({id}, ctx) => {
         ctx.depend({kind: 'row', id})
         return 1
@@ -348,26 +368,7 @@ describe('coarseScope.tables auto-declares table deps (reviewer P2)', () => {
     const handle = repo.query['plugin:mixed']({id: 'x'})
     await handle.load()
     const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
-    expect(deps).toContainEqual({kind: 'table', table: 'blocks'})
-    expect(deps).toContainEqual({kind: 'row', id: 'x'})
-  })
-
-  it('queries without coarseScope keep their explicit-only dep set', async () => {
-    const explicitOnly = defineQuery<{id: string}, number>({
-      name: 'plugin:explicit',
-      argsSchema: z.object({id: z.string()}),
-      resultSchema: z.number(),
-      // No coarseScope at all.
-      resolve: async ({id}, ctx) => {
-        ctx.depend({kind: 'row', id})
-        return 0
-      },
-    })
-    repo.__setQueriesForTesting([explicitOnly])
-    const handle = repo.query['plugin:explicit']({id: 'y'})
-    await handle.load()
-    const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
-    expect(deps).toEqual([{kind: 'row', id: 'y'}])
+    expect(deps).toEqual([{kind: 'row', id: 'x'}])
   })
 })
 
