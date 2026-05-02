@@ -41,6 +41,13 @@ export const BlockEditor = ({
   // (c) an arrival that would clobber edits the user has typed past
   // their last commit (skip; the next debounced commit reconciles).
   const lastCommittedContent = useRef(blockData?.content ?? '')
+  // Highest `updatedAt` we've adopted from blockData. Ratchets forward
+  // monotonically so a stale snapshot (older or same-ms with different
+  // content) can't clobber the editor — the cache layer has its own LWW
+  // gate via applySyncSnapshot, this is defense-in-depth at the React
+  // layer for paths that bypass it (e.g. blockData arriving via React
+  // batching after a stale-but-published snapshot).
+  const lastAdoptedUpdatedAt = useRef(blockData?.updatedAt ?? 0)
   const uiStateBlock = useUIStateBlock()
   const focusedBlockId = useHandle(uiStateBlock, {
     selector: doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
@@ -78,16 +85,29 @@ export const BlockEditor = ({
 
   useEffect(() => {
     if (!blockData || !editorView) return
+    // Ratchet the high-water `updatedAt` on every observation — including
+    // our own committed-echoes that fall through to the early return
+    // below. This is what makes the staleness check below trustworthy:
+    // without it, a stale snapshot whose `updatedAt` is older than our
+    // own latest commit (but newer than the previous external adoption)
+    // would slip through.
+    const incomingUpdatedAt = blockData.updatedAt
     const live = editorView.state.doc.toString()
     const incoming = blockData.content
-    if (live === incoming) return
+    if (live === incoming) {
+      if (incomingUpdatedAt > lastAdoptedUpdatedAt.current) {
+        lastAdoptedUpdatedAt.current = incomingUpdatedAt
+      }
+      return
+    }
+    // Stale snapshot (older or equal-ms with different content). The
+    // cache's LWW gate normally catches this, but a same-ms collision
+    // window can squeeze a stale snapshot through to React; refuse to
+    // roll back.
+    if (incomingUpdatedAt <= lastAdoptedUpdatedAt.current) return
     // User has typed past the last commit — adopting `incoming` here
     // would discard those characters. Skip; the user's next debounced
-    // commit will catch the editor up. The cache layer (BlockCache.
-    // applySyncSnapshot) already filters stale sync echoes by
-    // updatedAt, so anything reaching us with a different content
-    // really is either our own committed echo or a genuine external
-    // change.
+    // commit will catch the editor up.
     if (live !== lastCommittedContent.current) return
     // Clamp the existing selection to the new doc length before dispatch.
     // An external change can shorten the doc below the cursor; passing the
@@ -108,6 +128,7 @@ export const BlockEditor = ({
       selection: clampedSelection,
     })
     lastCommittedContent.current = incoming
+    lastAdoptedUpdatedAt.current = incomingUpdatedAt
   }, [blockData, editorView])
 
   useEffect(() => {

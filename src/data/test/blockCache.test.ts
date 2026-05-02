@@ -164,12 +164,26 @@ describe('BlockCache applySyncSnapshot (LWW)', () => {
     expect(cache.getSnapshot('block-1')?.content).toBe('newer')
   })
 
-  it('accepts an equal-time snapshot (echo of own commit; fingerprint dedupes)', () => {
+  it('rejects an equal-time snapshot (LWW gate is `<=`, not `<`)', () => {
     const cache = new BlockCache()
     cache.setSnapshot(snap({content: 'x', updatedAt: 100}))
-    // Echo of our own commit lands with the same updatedAt; fingerprint
-    // dedup inside setSnapshot keeps it a no-op rather than re-firing.
+    // Same-updatedAt-same-content is a no-op either way (was previously
+    // a fingerprint-dedup no-op; now an LWW reject). The strict `<=`
+    // exists so equal-updatedAt-DIFFERENT-content can't clobber the
+    // cache via an in-flight sync read that overlapped a same-ms write
+    // — covered by the test below.
     expect(cache.applySyncSnapshot(snap({content: 'x', updatedAt: 100}))).toBe(false)
+    expect(cache.getSnapshot('block-1')?.content).toBe('x')
+  })
+
+  it('rejects an equal-time snapshot with DIFFERENT content (clobber guard)', () => {
+    const cache = new BlockCache()
+    // Simulates: local commit lands with updatedAt=100, content='B'.
+    // An in-flight sync read that captured content='A' at the same ms
+    // arrives later — `<` would let it clobber, `<=` rejects.
+    cache.setSnapshot(snap({content: 'B', updatedAt: 100}))
+    expect(cache.applySyncSnapshot(snap({content: 'A', updatedAt: 100}))).toBe(false)
+    expect(cache.getSnapshot('block-1')?.content).toBe('B')
   })
 
   it('does not notify subscribers when an older snapshot is rejected', () => {

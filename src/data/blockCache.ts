@@ -124,18 +124,26 @@ export class BlockCache {
   }
 
   /** LWW-gated snapshot write for sync-arrival paths (row_events tail,
-   *  re-reads from SQL inside `repo.load`). Rejects an incoming
-   *  snapshot whose `updatedAt` is older than what's already cached —
-   *  PowerSync can deliver an older row state during the upload window
-   *  while the local commit pipeline has already advanced the cache,
-   *  and re-reading the SQLite row after a sync-clobber would
-   *  otherwise reintroduce the stale state. Equal `updatedAt` accepts
-   *  (covers the common echo-of-our-own-write case, which is a no-op
-   *  via fingerprint dedup inside `setSnapshot`). */
+   *  re-reads from SQL inside `repo.load`, query hydrate-rows). Rejects
+   *  an incoming snapshot whose `updatedAt` is NOT STRICTLY NEWER than
+   *  what's already cached — PowerSync can deliver an older row state
+   *  during the upload window while the local commit pipeline has
+   *  already advanced the cache, and re-reading the SQLite row after a
+   *  sync-clobber would otherwise reintroduce the stale state.
+   *
+   *  Why `<=` not `<`: under rapid local typing, two writes can share
+   *  `Date.now()` ms (and processor writes with `skipMetadata: true`
+   *  preserve the prior `updatedAt`, multiplying the collision
+   *  surface). An in-flight query that reads SQL between two such
+   *  same-ms writes can fire `applySyncSnapshot` LATER with the
+   *  earlier-but-equal-ms content — `<` would accept it and clobber
+   *  the cache with stale content. `<=` rejects equal-ms snapshots;
+   *  same-`updatedAt`-same-content rounds to a no-op anyway via
+   *  fingerprint dedup, so this only blocks the harmful clobber. */
   applySyncSnapshot(snapshot: BlockData): boolean {
     this.metrics.applySyncSnapshotCalls++
     const existing = this.snapshots.get(snapshot.id)
-    if (existing && snapshot.updatedAt < existing.updatedAt) {
+    if (existing && snapshot.updatedAt <= existing.updatedAt) {
       this.metrics.applySyncSnapshotRejected++
       return false
     }
