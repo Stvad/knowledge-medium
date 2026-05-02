@@ -127,43 +127,36 @@ const explodePageTokens = (value: string): string[] | null => {
  *     parent. Single-value entries are scalars; multi-value entries
  *     are arrays (case 2: same-key siblings, case 4: list-children of
  *     an attr block).
- *   - `droppedDirect` lists direct-child uids that were fully consumed
- *     (standalone attrs, or attr blocks whose entire subtree bubbled).
- *   - `effectiveChildren` per-uid overrides the children list of a
- *     kept attr block — sub-attr children that bubbled up are removed,
- *     non-attr children stay.
+ *   - `bubbled` lists uids whose values were pulled into `promoted`
+ *     (directly or recursively through an attr → attr chain). A
+ *     deeper promotion pass on a kept intermediate block consults
+ *     this set so it doesn't re-bubble the same descendants onto
+ *     itself and produce duplicate property entries.
  *   - `diagnostics` surfaces unusual structures (e.g. attr nesting
  *     deeper than two levels) so the post-import log can flag them.
  */
 interface PromotionResult {
   promoted: Record<string, unknown>
-  droppedDirect: Set<string>
-  effectiveChildren: Map<string, RoamBlock[]>
   diagnostics: string[]
-  /** Uids of blocks whose values were pulled into `promoted` (directly
-   *  or via the recursive bubble-up). Tracked so a deeper promotion
-   *  pass can skip them and avoid re-bubbling onto intermediate blocks
-   *  along an `attr → attr` chain. */
   bubbled: Set<string>
 }
 
 /** Walk a parent's direct children and compute case-1/2/3/4 promotion.
- *  See `PromotionResult` for the output shape.
+ *  No tree edits — every source block survives as a descendant of its
+ *  original parent. The promotion is purely additive: we collect
+ *  property values onto the parent (and recursively up through attr
+ *  chains) and let the original Roam blocks remain as-is for browsing,
+ *  backlinks via their content, and re-import idempotency.
  *
  *  `alreadyBubbled` is a set of uids whose values were already pulled
- *  up by an ancestor's promotion pass. The page-level pass bubbles
- *  attrs through unbroken `attr → attr` chains all the way up; without
- *  this guard, the recursive buildBlock-time promotion of an
- *  intermediate kept attr block would re-bubble the same descendants
- *  onto itself and produce duplicate property entries on every block
- *  along the chain. */
+ *  up by an ancestor's promotion pass. Without it, an intermediate
+ *  kept attr block (along an `attr → attr` chain) would re-bubble the
+ *  same descendants onto itself when buildBlock recurses into it. */
 const computePromotedFromChildren = (
   children: ReadonlyArray<RoamBlock>,
   alreadyBubbled: ReadonlySet<string>,
 ): PromotionResult => {
   const accumulator = new Map<string, unknown[]>()
-  const droppedDirect = new Set<string>()
-  const effectiveChildren = new Map<string, RoamBlock[]>()
   const diagnostics: string[] = []
   const newlyBubbled = new Set<string>()
 
@@ -174,13 +167,12 @@ const computePromotedFromChildren = (
     accumulator.set(propName, list)
   }
 
-  // Returns true when `block` is fully consumed and can be dropped
-  // from the tree. `depth` is the bubbling distance from the original
-  // parent (0 = direct child of parent).
-  const consume = (block: RoamBlock, depth: number): boolean => {
-    if (alreadyBubbled.has(block.uid) || newlyBubbled.has(block.uid)) return false
+  // `depth` is the bubbling distance from the original parent
+  // (0 = direct child of parent).
+  const consume = (block: RoamBlock, depth: number): void => {
+    if (alreadyBubbled.has(block.uid) || newlyBubbled.has(block.uid)) return
     const attr = detectInlineAttribute(block.string)
-    if (!attr) return false
+    if (!attr) return
 
     if (depth >= 2) {
       diagnostics.push(
@@ -192,34 +184,20 @@ const computePromotedFromChildren = (
     newlyBubbled.add(block.uid)
     if (attr.value.trim() !== '') push(attr.key, attr.value)
 
-    const subs = block.children ?? []
-    if (subs.length === 0) return true
-
-    const kept: RoamBlock[] = []
-    for (const sub of subs) {
+    for (const sub of block.children ?? []) {
       if (detectInlineAttribute(sub.string)) {
-        // Sub-attr: try to bubble it up to the original parent.
-        const consumed = consume(sub, depth + 1)
-        if (!consumed) kept.push(sub)
+        // Sub-attr: bubble it up to the original parent through the
+        // attr chain. Recurses arbitrarily deep; depth-> 2 logs above.
+        consume(sub, depth + 1)
       } else {
         // Non-attr sub-bullet: contributes its raw string as another
-        // value for the enclosing attr's key (case 4). Block stays as
-        // a descendant so the tree shape is preserved alongside the
-        // queryable property.
+        // value for the enclosing attr's key (case 4).
         push(attr.key, sub.string ?? '')
-        kept.push(sub)
       }
     }
-
-    if (kept.length === 0) return true
-    if (kept.length < subs.length) effectiveChildren.set(block.uid, kept)
-    return false
   }
 
-  for (const child of children) {
-    if (!detectInlineAttribute(child.string)) continue
-    if (consume(child, 0)) droppedDirect.add(child.uid)
-  }
+  for (const child of children) consume(child, 0)
 
   // Finalize: scalar for length-1, list for length>1, then post-process
   // any scalar that's a sequence of `[[X]]` tokens into a page list (case 3).
@@ -251,16 +229,17 @@ const computePromotedFromChildren = (
     }
   }
 
-  return {promoted, droppedDirect, effectiveChildren, diagnostics, bubbled: newlyBubbled}
+  return {promoted, diagnostics, bubbled: newlyBubbled}
 }
 
 // Collect every `[[X]]` token nested inside a property value. Used to
 // register page-link targets from property values into ctx.aliasesUsed
-// so the seat-creation pipeline materialises them just like content
-// references would, AND by the post-resolution patcher so a dropped
-// attribute like `author::[[stvad]]` survives as a backlink edge after
-// the surviving block writes.
-export const collectAliasesFromPropertyValues = (
+// so the seat-creation pipeline materialises them. The original attr
+// blocks survive in the tree and carry their own content-side
+// references[] entries — this helper just makes sure the seat exists
+// even when a property value reaches the parent without a corresponding
+// `[[X]]` token in the parent's own content.
+const collectAliasesFromPropertyValues = (
   promoted: Record<string, unknown>,
 ): string[] => {
   const out = new Set<string>()
@@ -315,21 +294,13 @@ interface BuildContext {
   aliasesUsed: Set<string>
   unresolvedBlockUids: Set<string>
   diagnostics: string[]
-  /** Per-uid override of `block.children`. When a kept attr block has
-   *  some of its sub-attr children bubbled to its parent, the bubbled
-   *  ones disappear from this list — `buildBlock` reads from the
-   *  override so the recursion doesn't re-process bubbled grandchildren
-   *  (which would double-promote them). */
-  effectiveChildren: Map<string, RoamBlock[]>
   /** Uids whose values were already pulled into a higher-level block's
    *  promoted properties. `computePromotedFromChildren` skips children
-   *  whose uid is in this set so kept intermediate attr blocks (along
-   *  an `attr → attr` chain) don't re-bubble the same descendants. */
+   *  whose uid is in this set so an intermediate attr block on the
+   *  bubble chain doesn't re-promote the same descendants when
+   *  buildBlock recurses into it. */
   bubbledUids: Set<string>
 }
-
-const childrenOf = (ctx: BuildContext, block: RoamBlock): RoamBlock[] =>
-  ctx.effectiveChildren.get(block.uid) ?? block.children ?? []
 
 const buildBlock = (
   ctx: BuildContext,
@@ -341,20 +312,18 @@ const buildBlock = (
   const id = ctx.uidMap.get(block.uid)
   if (!id) throw new Error(`Roam uid not in uidMap: ${block.uid}`)
 
-  const children = childrenOf(ctx, block)
+  const children = block.children ?? []
   const promotion = computePromotedFromChildren(children, ctx.bubbledUids)
   for (const d of promotion.diagnostics) ctx.diagnostics.push(d)
-  for (const [uid, kept] of promotion.effectiveChildren) {
-    ctx.effectiveChildren.set(uid, kept)
-  }
   for (const uid of promotion.bubbled) ctx.bubbledUids.add(uid)
 
-  // Use the original index for the order key so skipped attribute
-  // blocks just leave a gap rather than reshuffling siblings.
+  // Every original block is preserved in the tree; the importer no
+  // longer drops attribute blocks on promotion. Backlinks come through
+  // each block's own content (parseReferences sees `[[X]]` in
+  // `author::[[X]]` and writes a references[] row) and properties get
+  // hoisted as queryable mirrors.
   for (let i = 0; i < children.length; i++) {
-    const child = children[i]
-    if (promotion.droppedDirect.has(child.uid)) continue
-    buildBlock(ctx, child, id, i, pushDescendant)
+    buildBlock(ctx, children[i], id, i, pushDescendant)
   }
 
   const data = composeBlockData({
@@ -528,7 +497,6 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     aliasesUsed: new Set(),
     unresolvedBlockUids: new Set(),
     diagnostics,
-    effectiveChildren: new Map(),
     bubbledUids: new Set(),
   }
 
@@ -546,14 +514,9 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     const pageChildren = page.children ?? []
     const pagePromotion = computePromotedFromChildren(pageChildren, ctx.bubbledUids)
     for (const d of pagePromotion.diagnostics) diagnostics.push(d)
-    for (const [uid, kept] of pagePromotion.effectiveChildren) {
-      ctx.effectiveChildren.set(uid, kept)
-    }
     for (const uid of pagePromotion.bubbled) ctx.bubbledUids.add(uid)
     for (let i = 0; i < pageChildren.length; i++) {
-      const child = pageChildren[i]
-      if (pagePromotion.droppedDirect.has(child.uid)) continue
-      childIds.push(buildBlock(ctx, child, pageBlockId, i, pushDescendant))
+      childIds.push(buildBlock(ctx, pageChildren[i], pageBlockId, i, pushDescendant))
     }
     const promotedFromChildren = pagePromotion.promoted
 

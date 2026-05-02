@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collectAliasesFromPropertyValues, planImport } from '../plan'
+import { planImport } from '../plan'
 import { roamBlockId } from '../ids'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import { aliasesProp, typeProp } from '@/data/properties'
@@ -196,7 +196,7 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('Another')).toBe(true)
   })
 
-  it('hoists simple inline `key::value` children onto the parent and drops them', () => {
+  it('hoists simple inline `key::value` children onto the parent while keeping the source blocks', () => {
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
@@ -210,13 +210,14 @@ describe('planImport', () => {
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 
     const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
-    // Standalone attr blocks are dropped — the property lives on the parent.
-    expect(byUid('b1')).toBeUndefined()
-    expect(byUid('b2')).toBeUndefined()
-    // Non-attr / multi-line blocks survive.
+    // Every source block survives; promotion is purely additive on the
+    // parent's properties bag.
+    expect(byUid('b1')?.content).toBe('URL::https://example.com/foo')
+    expect(byUid('b2')?.content).toBe('author:: [[@stvad:matrix.org]]')
     expect(byUid('b3')?.content).toBe('plain bullet, no attr')
     expect(byUid('b4')?.content).toBe('URL::https://example.com\nfollowed by extra notes')
-    // The page (parent) carries the hoisted attributes.
+    // The page (parent) still carries the hoisted attributes — the
+    // tree-preservation change doesn't affect the property values.
     const page = plan.pages.find(p => p.roamUid === 'pUid')
     expect(page?.data?.properties['roam:URL']).toBe('https://example.com/foo')
     expect(page?.data?.properties['roam:author']).toBe('[[@stvad:matrix.org]]')
@@ -224,8 +225,10 @@ describe('planImport', () => {
       'roam:URL': 'https://example.com/foo',
       'roam:author': '[[@stvad:matrix.org]]',
     })
-    // childIds skip the dropped attr blocks.
+    // childIds includes every direct child of the page (no skips now).
     expect(page?.childIds).toEqual([
+      roamBlockId(WORKSPACE, 'b1'),
+      roamBlockId(WORKSPACE, 'b2'),
       roamBlockId(WORKSPACE, 'b3'),
       roamBlockId(WORKSPACE, 'b4'),
     ])
@@ -312,11 +315,12 @@ describe('planImport', () => {
 
   // ──── Property-promotion cases ────
 
-  it('case 1: hoists sub-attribute children of an attr block to the grandparent', () => {
-    // The URL block has only attribute children — author and timestamp
-    // describe the URL. Per the user-stated rule, all three values
-    // (URL, author, timestamp) collapse onto the parent and the URL
-    // block itself is dropped because it has no surviving children.
+  it('case 1: hoists sub-attribute children of an attr block to the grandparent and keeps the source blocks', () => {
+    // URL has only attribute children — author and timestamp describe
+    // the URL. All three values land on the parent's property bag.
+    // Every source block survives in the tree so backlinks (e.g. the
+    // `[[stvad]]` token in the author block's content) keep working
+    // through the block's own references[] entry.
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
@@ -339,19 +343,23 @@ describe('planImport', () => {
     expect(parent?.properties['roam:URL']).toBe('https://matrix.to/example')
     expect(parent?.properties['roam:author']).toBe('[[stvad]]')
     expect(parent?.properties['roam:timestamp']).toBe('5/1/2026, 2:44:23 AM PDT')
-    // URL block and its attribute children all drop out of the tree.
-    expect(byUid('urlUid')).toBeUndefined()
-    expect(byUid('authorUid')).toBeUndefined()
-    expect(byUid('tsUid')).toBeUndefined()
-    // Page-value `[[stvad]]` makes its way into aliasesUsed so the
-    // alias seat for `stvad` gets created at import time.
+    // Source blocks all survive with their original content + parenting.
+    expect(byUid('urlUid')?.content).toBe('URL::https://matrix.to/example')
+    expect(byUid('urlUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'parentUid'))
+    expect(byUid('authorUid')?.content).toBe('author::[[stvad]]')
+    expect(byUid('authorUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'urlUid'))
+    expect(byUid('tsUid')?.content).toBe('timestamp::5/1/2026, 2:44:23 AM PDT')
+    expect(byUid('tsUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'urlUid'))
+    // bubbledUids prevents intermediate blocks from re-bubbling — the
+    // URL block doesn't claim author/timestamp as its own properties.
+    expect(byUid('urlUid')?.properties['roam:author']).toBeUndefined()
+    expect(byUid('urlUid')?.properties['roam:timestamp']).toBeUndefined()
+    // `[[stvad]]` reaches aliasesUsed (the author block's content scan
+    // catches it) so the alias seat is materialised at import time.
     expect(plan.aliasesUsed.has('stvad')).toBe(true)
   })
 
-  it('case 1 mixed: keeps an attr block when it has non-attr children but still bubbles its sub-attrs', () => {
-    // URL has one attribute child (author) and one plain bullet. Per
-    // the user-stated rule, author bubbles to the grandparent; the
-    // URL block survives carrying just its non-attr child.
+  it('case 1 mixed: bubbles sub-attrs to the grandparent while the source blocks (and the plain note) stay in place', () => {
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
@@ -371,15 +379,15 @@ describe('planImport', () => {
 
     const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
     const parent = byUid('parentUid')
-    // URL gets a list because the plain note also contributes (case 4
-    // behaviour applies to mixed children).
+    // URL gets a list because the plain note also contributes via case-4.
     expect(parent?.properties['roam:URL']).toEqual(['https://example.com', 'plain note'])
     expect(parent?.properties['roam:author']).toBe('stvad')
-    // URL block kept; its children list is reduced to just the plain note.
-    const urlBlock = byUid('urlUid')
-    expect(urlBlock).toBeDefined()
-    expect(byUid('authorUid')).toBeUndefined()
+    // Every source block survives, including author (no longer dropped).
+    expect(byUid('urlUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'parentUid'))
+    expect(byUid('authorUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'urlUid'))
     expect(byUid('noteUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'urlUid'))
+    // The URL block doesn't redo its own promotion either.
+    expect(byUid('urlUid')?.properties['roam:author']).toBeUndefined()
   })
 
   it('case 1 deep nesting logs a diagnostic but still bubbles', () => {
@@ -433,10 +441,11 @@ describe('planImport', () => {
       'https://www.lesswrong.com/x',
       'https://matrix.to/x',
     ])
-    // All three standalone attr blocks dropped.
-    expect(byUid('u1')).toBeUndefined()
-    expect(byUid('u2')).toBeUndefined()
-    expect(byUid('u3')).toBeUndefined()
+    // All three source blocks survive as descendants of the parent.
+    expect(byUid('u1')?.content).toBe('URL::https://read.readwise.io/x')
+    expect(byUid('u2')?.content).toBe('URL::https://www.lesswrong.com/x')
+    expect(byUid('u3')?.content).toBe('URL::https://matrix.to/x')
+    expect(byUid('u1')?.parentId).toBe(roamBlockId(WORKSPACE, 'parentUid'))
   })
 
   it('case 3: explodes a `[[X]] [[Y]]` scalar value into a list of bracketed pages', () => {
@@ -505,8 +514,9 @@ describe('planImport', () => {
   it('case 4 with attr children: treats children as case-1 sub-attrs (not as list values)', () => {
     // `email::` has TWO attribute children (work, home). Per case 4
     // sub-rule "treat as case 1 if children are themselves attrs" —
-    // we hoist work/home to the grandparent and do NOT create an
-    // email property at all (the inline value was empty too).
+    // we hoist work/home to the grandparent. The empty inline `email`
+    // value contributes nothing to the property bag. All source blocks
+    // survive in the tree.
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
@@ -529,10 +539,10 @@ describe('planImport', () => {
     expect(parent?.properties['roam:work']).toBe('a@b.com')
     expect(parent?.properties['roam:home']).toBe('c@d.com')
     expect(parent?.properties['roam:email']).toBeUndefined()
-    // The whole subtree drops out — no remaining children to keep.
-    expect(byUid('emailUid')).toBeUndefined()
-    expect(byUid('w')).toBeUndefined()
-    expect(byUid('h')).toBeUndefined()
+    // Every source block survives.
+    expect(byUid('emailUid')?.parentId).toBe(roamBlockId(WORKSPACE, 'parentUid'))
+    expect(byUid('w')?.parentId).toBe(roamBlockId(WORKSPACE, 'emailUid'))
+    expect(byUid('h')?.parentId).toBe(roamBlockId(WORKSPACE, 'emailUid'))
   })
 
   it('combines case 2 + case 4: same-key inline siblings merge with children-list values', () => {
@@ -565,33 +575,3 @@ describe('planImport', () => {
   })
 })
 
-describe('collectAliasesFromPropertyValues', () => {
-  // Pinned export so the import-time patcher can reuse the same scan
-  // to backfill references[] for aliases buried in property values
-  // (e.g. `author::[[stvad]]`). Without this scan, an attribute drop
-  // during promotion would also drop the backlink edge.
-
-  it('returns aliases nested inside string values', () => {
-    expect(collectAliasesFromPropertyValues({author: 'see [[stvad]] for context'}))
-      .toEqual(['stvad'])
-  })
-
-  it('returns aliases nested inside list-shaped property values', () => {
-    expect(collectAliasesFromPropertyValues({tags: ['[[alpha]]', 'plain', '[[beta]]']}))
-      .toEqual(['alpha', 'beta'])
-  })
-
-  it('deduplicates aliases that appear multiple times across values', () => {
-    expect(collectAliasesFromPropertyValues({
-      author: '[[stvad]]',
-      coauthor: 'and [[stvad]] again',
-      tags: ['[[stvad]]', '[[other]]'],
-    }))
-      .toEqual(expect.arrayContaining(['stvad', 'other']))
-  })
-
-  it('returns an empty array when no values carry tokens', () => {
-    expect(collectAliasesFromPropertyValues({n: 7, s: 'plain text', list: [1, 2]}))
-      .toEqual([])
-  })
-})
