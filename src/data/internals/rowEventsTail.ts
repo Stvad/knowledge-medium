@@ -94,6 +94,25 @@ export const startRowEventsTail = (args: {
   let unsubscribe: (() => void) | null = null
   let initComplete = false
 
+  // A drain in flight when the underlying PowerSync DB closes (test
+  // teardown closing the db without stopping the tail; production
+  // tab-close / signOut) rejects from `db.getAll(...)` with
+  // ConnectionClosedError. That's a benign shutdown signal — there's
+  // no longer anyone to invalidate handles for. Auto-dispose so the
+  // chained drains stop, and skip the onError call so we don't spam
+  // the test reporter.
+  const reportError = (err: unknown): void => {
+    if (disposed || isConnectionClosedError(err)) {
+      disposed = true
+      if (unsubscribe) {
+        unsubscribe()
+        unsubscribe = null
+      }
+      return
+    }
+    onError(err)
+  }
+
   /** Inner drain — reads + processes rows with id > lastId. Used by
    *  both the init-time catch-up read AND the subscription's onChange
    *  handler. Does NOT await `ready` (callers ensure ordering). */
@@ -237,8 +256,8 @@ export const startRowEventsTail = (args: {
           onCycleDetected({ workspaceId, startIds, txIdsInvolved })
         } catch (err) {
           // Don't let a scan failure abort handle invalidation below
-          // — surface via onError and continue.
-          onError(err)
+          // — surface via reportError and continue.
+          reportError(err)
         }
       }
     }
@@ -342,9 +361,9 @@ export const startRowEventsTail = (args: {
             // will re-drain anything that arrived later.
             return
           }
-          void processOnce().catch((err) => onError(err))
+          void processOnce().catch((err) => reportError(err))
         },
-        onError: (err) => onError(err),
+        onError: (err) => reportError(err),
       },
       { tables: ['row_events'], throttleMs },
     )
@@ -355,7 +374,7 @@ export const startRowEventsTail = (args: {
     }
     await drain()
     initComplete = true
-  })().catch((err) => { onError(err) })
+  })().catch((err) => { reportError(err) })
 
   return {
     dispose() {
@@ -369,6 +388,16 @@ export const startRowEventsTail = (args: {
     flush: () => processOnce(),
     lastId: () => lastId,
   }
+}
+
+/** PowerSync raises this from queued `db.getAll` / `db.getOptional`
+ *  calls when the underlying connection closes mid-flight. Identified
+ *  by name to avoid taking a runtime dep on `@powersync/common` here
+ *  (the tail's `PowerSyncDb` type is structural). */
+const isConnectionClosedError = (err: unknown): boolean => {
+  if (!err || typeof err !== 'object') return false
+  const name = (err as { name?: unknown }).name
+  return name === 'ConnectionClosedError'
 }
 
 const safeParseBlockData = (json: string): BlockData | null => {
