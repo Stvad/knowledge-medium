@@ -53,3 +53,33 @@ Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet`
 - **Tighter overscan / prefetch**: bump `OVERSCAN_PX` in `LazyBlockComponent` or have `BlockChildren` warm a few levels of `repo.childIds` ahead of intersection, so by the time a row mounts its data is already in cache.
 
 Cheap wins first (skeleton + maybe overscan); reach for `useTransition` if it still feels jumpy.
+
+## Backlinks dep tightening (post `block_references`)
+
+`block_references` (added with the perf fix) makes the SQL fast, but `backlinksQuery` still declares `{kind:'workspace', workspaceId}` — a UI-state focus change on a block in the same workspace fans out to every backlinks handle on the page and triggers a re-resolve. After the SQL fix the re-resolve itself is cheap (~1 ms vs 250-1500 ms), but it's still wasted work + a needless React notify cycle.
+
+Two shapes:
+
+- **Per-target signal (`{kind:'backlink-target', id}`).** New dep kind. The TxEngine fast path computes the symmetric difference of `references_json` target ids per touched row at commit time and adds them to `change.backlinkTargets`; the row_events tail does the same on sync apply. The backlinks handle for `target=X` re-fires only when X is in that set. Precise — focus/edit-mode/properties writes produce empty `backlinkTargets` and skip the handle entirely. Cost: snapshot diff hook in the engine + a new dep kind in `handleStore.ts`. ~100 lines.
+- **Coarse table dep (`{kind:'table', table:'block_references'}`).** Cheaper. The fast path adds `block_references` to `change.tables` whenever a tracked write changed `references_json`. Backlinks handles redeclare to the new dep. Wider than option A — every reference change fires every backlinks handle on the page, but at least focus/edit/properties writes stop triggering it. ~30 lines.
+
+Recommend A; B is the if-we-need-it-yesterday variant. Either is the natural follow-up to the `block_references` perf fix.
+
+## Periodic `row_events` trim
+
+`row_events` is the per-row audit + invalidation log. Trigger-written, never trimmed — it grew to 262 MB / 304k rows on the import-heavy DB. The fast path doesn't need history; the row_events tail consumes by ascending `id` and only needs rows newer than its high-watermark. Long-tail entries are dead weight on disk and on backup/export.
+
+Fix shape: at startup (or on a low-priority idle hook), `DELETE FROM row_events WHERE id < (MAX(id) - K)` for some K (e.g. 50 000), or `WHERE created_at < ?` with a 7-day window. Either runs in one statement and the index on `id` is the auto PK. Optional: bound `command_events` with the same shape (4 403 rows, ~negligible today, but the same unbounded shape).
+
+Note: PowerSync's CRUD-apply path still writes a row_event per sync write, so even a fully-synced read-only client will accumulate. Worth doing.
+
+## Drop unflushed `ps_crud` for local-only mode (and reduce import bloat)
+
+`ps_crud` is PowerSync's outgoing upload queue. The Roam import (run with `source='user'`) enqueued 304k rows ≈ 204 MB. If the user runs in `localOnly` mode (no remote sync) those entries can never drain; if remote sync is on but the import was massive, the queue still bloats local storage until it drains.
+
+Two angles:
+
+- **Cleanup option** — when `localOnly` is active, expose a `discardPendingUploads()` action that truncates `ps_crud` (PowerSync's API may have a helper for this; otherwise raw `DELETE FROM ps_crud` is fine since nothing reads it locally). Frees ~200 MB on this DB.
+- **Don't enqueue during import in the first place** — the upload trigger gates on `tx_context.source = 'user'`. Adding a fourth source value `'import'` (or letting the import set source to `'local-ephemeral'` with a temporary scope override) keeps the row_events audit happy while skipping `ps_crud`. Cleanest variant: add `'import'` source, both `row_events` and upload triggers learn to ignore it. The Roam import wraps its txs with `source: 'import'`. Then both `row_events` AND `ps_crud` stay small even on bulk import. Less-clean variant: drop the upload trigger before import, recreate after.
+
+The "don't enqueue" path also helps the `row_events` problem above — an `'import'` source that skips row_events trims an additional ~250 MB of audit-log bloat from the import.

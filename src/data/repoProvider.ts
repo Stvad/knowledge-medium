@@ -44,7 +44,11 @@ import {
   WORKSPACES_RAW_TABLE,
   WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
-import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
+import {
+  CLIENT_SCHEMA_STATEMENTS,
+  backfillBlockAliasesIfEmpty,
+  backfillBlockReferencesIfEmpty,
+} from '@/data/internals/clientSchema'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({
@@ -193,23 +197,26 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
-  // ── tx_context, row_events, command_events, block_aliases + 10
-  // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
-  // Statements include CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT
-  // EXISTS / CREATE TRIGGER IF NOT EXISTS so re-running is a no-op
-  // against an already-bootstrapped dev database.
+  // ── tx_context, row_events, command_events, block_aliases,
+  // block_references + 13 triggers ── (5 audit/upload, 2 workspace-
+  // invariant, 3 alias-index, 3 reference-index.) Statements include
+  // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
+  // TRIGGER IF NOT EXISTS so re-running is a no-op against an
+  // already-bootstrapped dev database.
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await powerSyncDb.execute(stmt)
   }
 
-  // One-shot block_aliases backfill for users upgrading from the
+  // One-shot side-index backfills for users upgrading from a
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
-  // probe.
-  await backfillBlockAliasesIfEmpty({
-    execute: sql => powerSyncDb.execute(sql),
+  // probe of `client_schema_state`.
+  const backfillDb = {
+    execute: (sql: string) => powerSyncDb.execute(sql),
     getOptional: async <T,>(sql: string) => {
       const row = await powerSyncDb.getOptional<T>(sql)
       return row ?? null
     },
-  })
+  }
+  await backfillBlockAliasesIfEmpty(backfillDb)
+  await backfillBlockReferencesIfEmpty(backfillDb)
 }

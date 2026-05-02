@@ -30,22 +30,22 @@ export const SELECT_BLOCK_BY_ID_SQL = `
 `
 
 /** Backlinks: blocks whose `references_json` array contains an entry
- *  with `id = ?`. Excludes the target itself + tombstones; `references_json !=
- *  '[]'` lets the partial index `idx_blocks_workspace_with_references` carry
- *  the scan. */
+ *  with `id = ?`. Reads through the trigger-maintained `block_references`
+ *  edge index — `(target_id, workspace_id)` keyed lookup, then PK join
+ *  back to `blocks` for the row payload. Soft-deleted source rows have
+ *  no edges (the UPDATE trigger wipes them on `deleted 0 → 1`); `b.deleted = 0`
+ *  is belt-and-suspenders. The legacy SQL (json_each-scan over every
+ *  block in the workspace whose `references_json != '[]'`) was 250-1500 ms
+ *  on big workspaces; the indexed lookup is sub-millisecond. */
 export const SELECT_BACKLINKS_FOR_BLOCK_SQL = `
-  SELECT ${SELECT_BLOCK_COLUMNS_SQL}
-  FROM blocks
-  WHERE blocks.workspace_id = ?
-    AND blocks.deleted = 0
-    AND blocks.id != ?
-    AND blocks.references_json != '[]'
-    AND EXISTS (
-      SELECT 1
-      FROM json_each(blocks.references_json) AS ref
-      WHERE json_extract(ref.value, '$.id') = ?
-    )
-  ORDER BY blocks.updated_at DESC, blocks.id
+  SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
+  FROM block_references br
+  JOIN blocks b ON b.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND b.id != ?
+    AND br.target_id = ?
+    AND b.deleted = 0
+  ORDER BY b.updated_at DESC, b.id
 `
 
 /** Type filter — flat-property shape (`$.type`, not `$.type.value`). */
