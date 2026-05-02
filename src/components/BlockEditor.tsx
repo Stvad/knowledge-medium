@@ -14,6 +14,7 @@ import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { useData, useHandle } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 import { EditorView } from '@codemirror/view'
+import { EditorSelection } from '@codemirror/state'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
 
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
@@ -88,9 +89,23 @@ export const BlockEditor = ({
     // really is either our own committed echo or a genuine external
     // change.
     if (live !== lastCommittedContent.current) return
+    // Clamp the existing selection to the new doc length before dispatch.
+    // An external change can shorten the doc below the cursor; passing the
+    // raw selection then trips CodeMirror's "Selection points outside of
+    // document" check. Omitting selection isn't an option either — the
+    // cursor sits inside the replaced range [0, live.length], so default
+    // mapping collapses it to 0.
+    const newLength = incoming.length
+    const oldSelection = editorView.state.selection
+    const clampedSelection = EditorSelection.create(
+      oldSelection.ranges.map(r =>
+        EditorSelection.range(Math.min(r.anchor, newLength), Math.min(r.head, newLength)),
+      ),
+      oldSelection.mainIndex,
+    )
     editorView.dispatch({
       changes: {from: 0, to: live.length, insert: incoming},
-      selection: editorView.state.selection,
+      selection: clampedSelection,
     })
     lastCommittedContent.current = incoming
   }, [blockData, editorView])
