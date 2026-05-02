@@ -61,7 +61,7 @@ appSchema.withRawTables({
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
-const dbFilenameForUser = (userId: string) => {
+export const dbFilenameForUser = (userId: string) => {
   const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
   return `kmp-v3-${sanitized}.db`  // v3 = post-redesign schema
 }

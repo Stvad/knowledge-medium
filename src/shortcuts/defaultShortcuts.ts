@@ -58,6 +58,7 @@ import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
 import { showProgressBanner } from '@/utils/roamImport/progressBanner.ts'
 import type { RoamExport } from '@/utils/roamImport/types.ts'
+import { downloadBlob, exportRawSqliteDb } from '@/utils/exportSqliteDb.ts'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -429,6 +430,22 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         }
 
         input.click()
+      },
+    },
+    {
+      id: 'export_sqlite_db',
+      description: 'Download raw SQLite database (.db)',
+      context: ActionContextTypes.GLOBAL,
+      handler: async () => {
+        const banner = showProgressBanner('Exporting SQLite database…')
+        try {
+          const {blob, filename} = await exportRawSqliteDb(repo)
+          downloadBlob(blob, filename)
+          banner.done(`Exported ${filename} (${(blob.size / 1024 / 1024).toFixed(1)} MiB)`)
+        } catch (err) {
+          console.error('[export-db] failed:', err)
+          banner.fail(`SQLite export failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
       },
     },
     {
