@@ -416,14 +416,21 @@ export const aliasLookupQuery = defineQuery<
  *  switches `dynamicExtensionsExtension` from the legacy `byType` call
  *  to this dedicated query). Mechanically `byType('extension')`; lives
  *  as its own kernel query so callers can register against a stable
- *  name without depending on the convention. */
+ *  name without depending on the convention.
+ *
+ *  No reactive dep: the only consumer (AppRuntimeProvider) calls
+ *  `.load()` once at FacetRuntime build time and feeds the result into
+ *  `resolveFacetRuntime`. Nothing observes the handle after that, so a
+ *  `workspace` dep would just churn the loader on every workspace write
+ *  without changing any observable behavior — installing or removing
+ *  an extension already requires a manual reload (page refresh today;
+ *  follow-up: dedicated command). */
 export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, BlockData[]>({
   name: 'core.findExtensionBlocks',
   argsSchema: z.object({workspaceId: z.string()}),
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId}, ctx) => {
     if (!workspaceId) return []
-    ctx.depend({kind: 'workspace', workspaceId})
     const rows = await asReadDb(ctx.db).getAll<BlockRow>(
       SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, 'extension'],
     )
