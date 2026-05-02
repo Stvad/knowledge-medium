@@ -1,223 +1,61 @@
+/**
+ * Property panel — implements the §5.6.1 lookup chain:
+ *
+ *   1. Look up the schema in `propertySchemasFacet`.
+ *   2. Look up the matching `PropertyUiContribution` in `propertyUiFacet`.
+ *   3. If schema is known: decode the encoded value via `schema.codec`,
+ *      render via `uiContribution?.Editor` falling back to the kernel
+ *      default editor for `schema.kind`.
+ *   4. If schema is unknown: infer kind from the JSON value, build an
+ *      ad-hoc schema, render via the default editor for that kind. Show
+ *      a "schema not registered" hint so users know edits may not
+ *      round-trip cleanly through the original plugin's codec.
+ *
+ *  All editor primitives (per-kind switch, list editor, ad-hoc schema
+ *  builder, kind inference) live in `propertyEditors/defaults.tsx`.
+ */
+
+import { useMemo, useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import { Block } from '@/data/internals/block'
-import { ChangeScope, codecs, type PropertySchema } from '@/data/api'
+import {
+  ChangeScope,
+  type AnyPropertySchema,
+  type PropertyEditor,
+  type PropertyKind,
+} from '@/data/api'
+import { useData } from '@/hooks/block.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { propertySchemasFacet, propertyUiFacet } from '@/data/internals/facets.ts'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
-import { useState } from 'react'
-import { X, Plus, Trash2 } from 'lucide-react'
-import { useData } from '@/hooks/block.ts'
+import {
+  DefaultPropertyValueEditor,
+  adhocSchema,
+  defaultValueForKind,
+  resolvePropertyDisplay,
+} from './propertyEditors/defaults'
 
 interface BlockPropertiesProps {
   block: Block
 }
 
-/** Lossy kind inference from a JSON-encoded property value. Used by
- *  the UI when no PropertySchema is registered for a property name —
- *  the kind drives which editor to render. Phase 3's propertyUiFacet
- *  provides the principled answer; this is the §5.6.1
- *  unknown-schema-fallback. */
-type Kind = 'string' | 'number' | 'boolean' | 'list' | 'object'
-
-const inferKind = (value: unknown): Kind => {
-  if (Array.isArray(value)) return 'list'
-  if (typeof value === 'boolean') return 'boolean'
-  if (typeof value === 'number') return 'number'
-  if (typeof value === 'object' && value !== null) return 'object'
-  return 'string'
-}
-
-/** Build an ad-hoc PropertySchema for a property whose actual schema
- *  isn't registered. Uses an unsafe-identity codec because JSON-encoded
- *  shape == decoded shape for primitive properties. The schema's
- *  `changeScope` is BlockDefault — UI-state properties live in
- *  globalState.ts and never go through this editor. */
-const adhocSchema = (name: string, kind: Kind): PropertySchema<unknown> => ({
-  name,
-  codec: kind === 'list'
-    ? codecs.list(codecs.unsafeIdentity<unknown>()) as unknown as PropertySchema<unknown>['codec']
-    : codecs.unsafeIdentity<unknown>(),
-  defaultValue: kindDefault(kind),
-  changeScope: ChangeScope.BlockDefault,
-  kind,
-})
-
-const kindDefault = (kind: Kind): unknown => {
-  switch (kind) {
-    case 'string':  return ''
-    case 'number':  return 0
-    case 'boolean': return false
-    case 'list':    return [] as unknown[]
-    case 'object':  return {}
-  }
-}
-
-// ──── List editor ────
-
-function ListPropertyEditor({
-  value,
-  onChange,
-  readOnly,
-}: {
-  value: unknown[]
-  onChange: (next: unknown[]) => void
-  readOnly: boolean
-}) {
-  const [newItem, setNewItem] = useState('')
-  const items = value.map(v => typeof v === 'string' ? v : String(v))
-
-  const addItem = () => {
-    if (newItem.trim()) {
-      onChange([...items, newItem.trim()])
-      setNewItem('')
-    }
-  }
-
-  const removeItem = (index: number) => {
-    onChange(items.filter((_, i) => i !== index))
-  }
-
-  const updateItem = (index: number, next: string) => {
-    onChange(items.map((item, i) => i === index ? next : item))
-  }
-
-  return (
-    <div className="space-y-2">
-      {items.map((item, index) => (
-        <div key={index} className="flex gap-2 items-center">
-          <Input
-            value={item}
-            onChange={(e) => updateItem(index, e.target.value)}
-            className="text-xs md:text-sm"
-            placeholder="Enter value..."
-            disabled={readOnly}
-          />
-          {!readOnly && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => removeItem(index)}
-              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-      ))}
-      {!readOnly && (
-        <div className="flex gap-2 items-center">
-          <Input
-            value={newItem}
-            onChange={(e) => setNewItem(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                addItem()
-              }
-            }}
-            className="text-xs md:text-sm"
-            placeholder="Add new item..."
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={addItem}
-            className="h-8 w-8 p-0"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ──── Per-kind value editor ────
-
-function PropertyValueEditor({
-  kind,
-  value,
-  onChange,
-  readOnly,
-}: {
-  kind: Kind
-  value: unknown
-  onChange: (next: unknown) => void
-  readOnly: boolean
-}) {
-  if (kind === 'list') {
-    return (
-      <ListPropertyEditor
-        value={Array.isArray(value) ? value : []}
-        onChange={onChange}
-        readOnly={readOnly}
-      />
-    )
-  }
-
-  if (kind === 'boolean') {
-    return (
-      <select
-        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        value={String(value ?? false)}
-        onChange={(e) => onChange(e.target.value === 'true')}
-        disabled={readOnly}
-      >
-        <option value="true">true</option>
-        <option value="false">false</option>
-      </select>
-    )
-  }
-
-  if (kind === 'number') {
-    return (
-      <Input
-        type="number"
-        className="text-xs md:text-sm"
-        value={value === undefined || value === null ? '' : String(value)}
-        onChange={(e) => {
-          const n = parseFloat(e.target.value)
-          onChange(Number.isNaN(n) ? undefined : n)
-        }}
-        disabled={readOnly}
-      />
-    )
-  }
-
-  if (kind === 'object') {
-    return (
-      <Input
-        className="text-xs md:text-sm font-mono"
-        value={JSON.stringify(value ?? {})}
-        onChange={(e) => {
-          try {
-            onChange(JSON.parse(e.target.value))
-          } catch {
-            // Ignore malformed JSON during typing; the editor restores
-            // on next render if the user navigates away.
-          }
-        }}
-        disabled={readOnly}
-      />
-    )
-  }
-
-  // Default to string input.
-  return (
-    <Input
-      className="text-xs md:text-sm"
-      value={value === undefined || value === null ? '' : String(value)}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={readOnly}
-    />
-  )
-}
-
 // ──── Add-new-property form ────
 
-function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: Kind) => void}) {
+/** Kinds the user can pick when adding a brand-new property by hand.
+ *  Excludes `date` because the JSON-shape inference can't recover dates
+ *  on read (they round-trip as strings); date-typed properties should be
+ *  contributed by a plugin with a real `PropertySchema` so the codec
+ *  handles encode/decode. */
+type AddableKind = Exclude<PropertyKind, 'date' | 'object'> | 'object'
+
+const ADDABLE_KINDS: ReadonlyArray<AddableKind> = ['string', 'number', 'boolean', 'list', 'object']
+
+function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: AddableKind) => void}) {
   const [isOpen, setIsOpen] = useState(false)
   const [propertyName, setPropertyName] = useState('')
-  const [propertyKind, setPropertyKind] = useState<Kind>('string')
+  const [propertyKind, setPropertyKind] = useState<AddableKind>('string')
 
   const handleAdd = () => {
     if (!propertyName.trim()) return
@@ -261,12 +99,11 @@ function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: Kind) => void}) {
         <select
           className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm"
           value={propertyKind}
-          onChange={(e) => setPropertyKind(e.target.value as Kind)}
+          onChange={(e) => setPropertyKind(e.target.value as AddableKind)}
         >
-          <option value="string">String</option>
-          <option value="number">Number</option>
-          <option value="boolean">Boolean</option>
-          <option value="list">List</option>
+          {ADDABLE_KINDS.map(k => (
+            <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>
+          ))}
         </select>
       </div>
       <div className="flex gap-2">
@@ -285,13 +122,25 @@ function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: Kind) => void}) {
 
 export function BlockProperties({block}: BlockPropertiesProps) {
   const blockData = useData(block)
-  if (!blockData) return null
+  const runtime = useAppRuntime()
+  // Read both registries once per render — combine() is memoised inside
+  // FacetRuntime, so re-read is cheap (Map identity-stable across the
+  // same runtime).
+  const schemas = runtime.read(propertySchemasFacet)
+  const uis = runtime.read(propertyUiFacet)
 
-  const properties = blockData.properties || {}
+  const properties = useMemo(() => blockData?.properties ?? {}, [blockData?.properties])
+
+  if (!blockData) return null
   const readOnly = block.repo.isReadOnly
 
-  const setRaw = (name: string, kind: Kind, decodedValue: unknown) => {
-    void block.set(adhocSchema(name, kind), decodedValue)
+  /** Encode + persist via the resolved schema. Decoded values come from
+   *  the editor; the schema's codec encodes them on write. */
+  const writeProperty = (
+    schema: AnyPropertySchema,
+    decodedValue: unknown,
+  ) => {
+    void block.set(schema, decodedValue)
   }
 
   const renameProperty = async (oldName: string, newName: string) => {
@@ -317,8 +166,8 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     }, {scope: ChangeScope.BlockDefault, description: `delete property ${name}`})
   }
 
-  const addProperty = (name: string, kind: Kind) => {
-    setRaw(name, kind, kindDefault(kind))
+  const addProperty = (name: string, kind: AddableKind) => {
+    writeProperty(adhocSchema(name, kind), defaultValueForKind(kind))
   }
 
   return (
@@ -336,52 +185,152 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         <Input value={blockData.updatedBy} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
 
-      {Object.entries(properties).map(([key, value]) => {
-        const kind = inferKind(value)
+      {Object.entries(properties).map(([key, encodedValue]) => {
+        const display = resolvePropertyDisplay({name: key, encodedValue, schemas, uis})
+        // Decode if a real schema is registered; otherwise the encoded
+        // shape IS the editor's value (ad-hoc schema uses unsafeIdentity).
+        const value = display.isKnown
+          ? safeDecode(display.schema, encodedValue)
+          : encodedValue
+        const decodeFailed = display.isKnown && value === DECODE_FAILED
+        const ui = uis.get(key)
+        const labelText = ui?.label ?? key
         return (
-          <div key={key} className="space-y-2">
-            <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-start">
-              <div className="w-full sm:w-1/3 space-y-1">
-                <div className="flex gap-1">
-                  <Input
-                    className="text-xs md:text-sm flex-1"
-                    defaultValue={key}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault()
-                        void renameProperty(key, e.currentTarget.value)
-                      }
-                    }}
-                    onBlur={(e) => void renameProperty(key, e.target.value)}
-                    disabled={readOnly}
-                  />
-                </div>
-                <div className="text-xs text-muted-foreground">{kind}</div>
-              </div>
-              <div className="flex-1">
-                <PropertyValueEditor
-                  kind={kind}
-                  value={value}
-                  onChange={(next) => setRaw(key, kind, next)}
-                  readOnly={readOnly}
-                />
-              </div>
-              {!readOnly && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => void deleteProperty(key)}
-                  className="h-9 w-9 p-0 text-destructive hover:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
-          </div>
+          <PropertyRow
+            key={key}
+            name={key}
+            labelText={labelText}
+            kindLabel={display.kind}
+            schemaUnknown={!display.isKnown}
+            decodeFailed={decodeFailed}
+            value={decodeFailed ? encodedValue : value}
+            customEditor={display.customEditor}
+            block={block}
+            kind={display.kind}
+            readOnly={readOnly}
+            onChange={(next) => writeProperty(display.schema, next)}
+            onRename={(newName) => void renameProperty(key, newName)}
+            onDelete={() => void deleteProperty(key)}
+          />
         )
       })}
 
       {!readOnly && <AddPropertyForm onAdd={addProperty} />}
     </div>
   )
+}
+
+// ──── Per-property row ────
+
+interface PropertyRowProps {
+  name: string
+  labelText: string
+  kindLabel: PropertyKind
+  schemaUnknown: boolean
+  decodeFailed: boolean
+  value: unknown
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  customEditor: PropertyEditor<any> | undefined
+  block: Block
+  kind: PropertyKind
+  readOnly: boolean
+  onChange: (next: unknown) => void
+  onRename: (newName: string) => void
+  onDelete: () => void
+}
+
+function PropertyRow({
+  name,
+  labelText,
+  kindLabel,
+  schemaUnknown,
+  decodeFailed,
+  value,
+  customEditor,
+  block,
+  kind,
+  readOnly,
+  onChange,
+  onRename,
+  onDelete,
+}: PropertyRowProps) {
+  const Editor = customEditor
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-start">
+        <div className="w-full sm:w-1/3 space-y-1">
+          <div className="flex gap-1">
+            <Input
+              className="text-xs md:text-sm flex-1"
+              defaultValue={labelText}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  onRename(e.currentTarget.value)
+                }
+              }}
+              onBlur={(e) => onRename(e.target.value)}
+              disabled={readOnly}
+            />
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {kindLabel}
+            {schemaUnknown && (
+              <span className="ml-1 text-amber-600" title="No PropertySchema registered for this name; using JSON-shape inference.">
+                · schema not registered
+              </span>
+            )}
+            {decodeFailed && (
+              <span className="ml-1 text-destructive" title="Stored value didn't match the schema's codec; rendering raw value.">
+                · decode failed
+              </span>
+            )}
+          </div>
+          {labelText !== name && (
+            <div className="text-xs text-muted-foreground/60 truncate" title={name}>
+              {name}
+            </div>
+          )}
+        </div>
+        <div className="flex-1">
+          {Editor !== undefined && !decodeFailed ? (
+            <Editor value={value} onChange={onChange} block={block} />
+          ) : (
+            <DefaultPropertyValueEditor
+              kind={kind}
+              value={value}
+              onChange={onChange}
+              readOnly={readOnly}
+            />
+          )}
+        </div>
+        {!readOnly && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onDelete}
+            className="h-9 w-9 p-0 text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ──── Codec-decode helper ────
+
+const DECODE_FAILED = Symbol('decode-failed')
+
+/** Decode an encoded value through `schema.codec.decode`, returning a
+ *  sentinel symbol when the codec throws. The panel falls back to the
+ *  raw encoded shape + a "decode failed" hint so a single bad row
+ *  doesn't blank out the whole panel. */
+const safeDecode = (schema: AnyPropertySchema, encoded: unknown): unknown => {
+  try {
+    return schema.codec.decode(encoded)
+  } catch {
+    return DECODE_FAILED
+  }
 }

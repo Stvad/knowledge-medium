@@ -12,9 +12,9 @@ import { defineFacet } from '@/extensions/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
-  PropertySchema,
-  PropertyUiContribution,
-  Query,
+  AnyPropertySchema,
+  AnyPropertyUiContribution,
+  AnyQuery,
 } from '@/data/api'
 
 /** Key the registry by `Mutator.name`; duplicates log a warning and
@@ -43,10 +43,10 @@ export const mutatorsFacet = defineFacet<AnyMutator, ReadonlyMap<string, AnyMuta
  *  reference them at compile time without runtime breakage when no
  *  contributions exist. Wired up in stages 1.5+. */
 
-export const queriesFacet = defineFacet<Query<unknown, unknown>, ReadonlyMap<string, Query<unknown, unknown>>>({
+export const queriesFacet = defineFacet<AnyQuery, ReadonlyMap<string, AnyQuery>>({
   id: 'data.queries',
   combine: (values) => {
-    const out = new Map<string, Query<unknown, unknown>>()
+    const out = new Map<string, AnyQuery>()
     for (const q of values) {
       if (out.has(q.name)) {
         console.warn(
@@ -60,10 +60,10 @@ export const queriesFacet = defineFacet<Query<unknown, unknown>, ReadonlyMap<str
   empty: () => new Map(),
 })
 
-export const propertySchemasFacet = defineFacet<PropertySchema<unknown>, ReadonlyMap<string, PropertySchema<unknown>>>({
+export const propertySchemasFacet = defineFacet<AnyPropertySchema, ReadonlyMap<string, AnyPropertySchema>>({
   id: 'data.propertySchemas',
   combine: (values) => {
-    const out = new Map<string, PropertySchema<unknown>>()
+    const out = new Map<string, AnyPropertySchema>()
     for (const s of values) {
       if (out.has(s.name)) {
         console.warn(
@@ -77,10 +77,10 @@ export const propertySchemasFacet = defineFacet<PropertySchema<unknown>, Readonl
   empty: () => new Map(),
 })
 
-export const propertyUiFacet = defineFacet<PropertyUiContribution<unknown>, ReadonlyMap<string, PropertyUiContribution<unknown>>>({
+export const propertyUiFacet = defineFacet<AnyPropertyUiContribution, ReadonlyMap<string, AnyPropertyUiContribution>>({
   id: 'data.propertyUi',
   combine: (values) => {
-    const out = new Map<string, PropertyUiContribution<unknown>>()
+    const out = new Map<string, AnyPropertyUiContribution>()
     for (const c of values) {
       if (out.has(c.name)) {
         console.warn(

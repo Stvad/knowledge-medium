@@ -15,12 +15,21 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { ChangeScope, defineMutator, defineProperty, codecs, MutatorNotRegisteredError } from '@/data/api'
+import {
+  ChangeScope,
+  codecs,
+  defineMutator,
+  defineProperty,
+  definePropertyUi,
+  defineQuery,
+  MutatorNotRegisteredError,
+} from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from './kernelDataExtension'
-import { mutatorsFacet, propertySchemasFacet } from './facets'
+import { mutatorsFacet, propertySchemasFacet, propertyUiFacet, queriesFacet } from './facets'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { Repo } from './repo'
 
@@ -185,5 +194,58 @@ describe('propertySchemasFacet — kernel registration', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe('facet variance — typed plugin contributions register without widening', () => {
+  // Reviewer P2: prior to AnyQuery / AnyPropertyUiContribution / AnyPropertySchema,
+  // typed plugin contributions failed to register because the facet's
+  // contribution type (`Query<unknown, unknown>` / `PropertyUiContribution<unknown>`
+  // / `PropertySchema<unknown>`) is contravariant in the parameter and so a typed
+  // plugin shape couldn't be assigned. These tests pin the variance escape.
+
+  it('queriesFacet accepts a typed plugin Query<{x:number}, string>', () => {
+    const typedQuery = defineQuery<{x: number}, string>({
+      name: 'plugin:typedQuery',
+      argsSchema: z.object({x: z.number()}),
+      resultSchema: z.string(),
+      resolve: async ({x}, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return String(x)
+      },
+    })
+    const runtime = resolveFacetRuntimeSync([
+      queriesFacet.of(typedQuery, {source: 'plugin'}),
+    ])
+    const registered = runtime.read(queriesFacet)
+    expect(registered.get('plugin:typedQuery')).toBe(typedQuery)
+  })
+
+  it('propertyUiFacet accepts a typed PropertyUiContribution<Date | undefined>', () => {
+    const typedUi = definePropertyUi<Date | undefined>({
+      name: 'tasks:due-date',
+      label: 'Due date',
+      Editor: ({value: _value, onChange: _onChange, block: _block}): JSX.Element =>
+        createElement('span', null, null),
+    })
+    const runtime = resolveFacetRuntimeSync([
+      propertyUiFacet.of(typedUi, {source: 'plugin'}),
+    ])
+    const registered = runtime.read(propertyUiFacet)
+    expect(registered.get('tasks:due-date')).toBe(typedUi)
+  })
+
+  it('propertySchemasFacet accepts a typed PropertySchema<Date | undefined>', () => {
+    const typedSchema = defineProperty<Date | undefined>('tasks:due-date', {
+      codec: codecs.optional(codecs.date),
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'date',
+    })
+    const runtime = resolveFacetRuntimeSync([
+      propertySchemasFacet.of(typedSchema, {source: 'plugin'}),
+    ])
+    const registered = runtime.read(propertySchemasFacet)
+    expect(registered.get('tasks:due-date')).toBe(typedSchema)
   })
 })

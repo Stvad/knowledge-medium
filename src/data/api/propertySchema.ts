@@ -80,3 +80,19 @@ export const defineProperty = <T>(
 export const definePropertyUi = <T>(
   contribution: PropertyUiContribution<T>,
 ): PropertyUiContribution<T> => contribution
+
+/** Variance-erased schema type for storage in heterogeneous collections
+ *  (`propertySchemasFacet`'s contributions, etc.). `PropertySchema<T>`
+ *  is invariant in `T` through `defaultValue` and `codec`, so typed
+ *  plugin schemas can't widen to `PropertySchema<unknown>`. The `any`
+ *  escape mirrors `AnyMutator` / `AnyPostCommitProcessor`. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPropertySchema = PropertySchema<any>
+
+/** Variance-erased UI-contribution type for storage in
+ *  `propertyUiFacet`'s contributions. `PropertyEditor<T>` /
+ *  `PropertyRenderer<T>` are contravariant in `T` (they accept
+ *  `value: T`), so typed plugin contributions can't widen to
+ *  `PropertyUiContribution<unknown>`. Same `any`-escape pattern. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyPropertyUiContribution = PropertyUiContribution<any>

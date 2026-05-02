@@ -43,6 +43,20 @@ export interface Query<Args, Result> {
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 export interface QueryRegistry { /* augmented per plugin */ }
 
+/** Variance-erased query type for storage in heterogeneous collections
+ *  (the engine's query registry, `queriesFacet`'s contributions, etc).
+ *
+ *  Same rationale as `AnyMutator`: `Query<Args, Result>` is contravariant
+ *  in `Args` (the resolver's args parameter) and so a typed plugin
+ *  query can't be assigned to `Query<unknown, unknown>` under
+ *  `strictFunctionTypes`. The conventional escape is `any`, which opts
+ *  out of variance for the registry slot while keeping per-query types
+ *  intact at definition sites. Concrete callers (`repo.query.X`,
+ *  `repo.runQuery('name', ...)`) recover precise types via the
+ *  `QueryRegistry` augmentation. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyQuery = Query<any, any>
+
 export const defineQuery = <Args, Result>(
   query: Query<Args, Result>,
 ): Query<Args, Result> => query
