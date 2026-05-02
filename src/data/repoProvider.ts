@@ -74,6 +74,30 @@ const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
 let connectChain: Promise<void> = Promise.resolve()
 
+// Firefox and Safari block OPFS in private browsing — `getDirectory()`
+// throws SecurityError. Probe once and surface a useful message before
+// PowerSync gets to fail with the opaque internal error.
+let opfsProbe: Promise<void> | null = null
+const assertOpfsAvailable = (): Promise<void> => {
+  if (!opfsProbe) {
+    opfsProbe = (async () => {
+      try {
+        await navigator.storage.getDirectory()
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'SecurityError') {
+          throw new Error(
+            'This browser is blocking local storage access (OPFS), which Knowledge Medium needs to keep your data on this device. ' +
+            'This usually means you\'re in private/incognito browsing on Firefox or Safari, where OPFS is disabled. ' +
+            'Try a regular (non-private) window, or use Chrome — Chrome incognito allows OPFS.',
+          )
+        }
+        throw err
+      }
+    })()
+  }
+  return opfsProbe
+}
+
 // OPFSCoopSyncVFS uses OPFS sync access handles (much faster than
 // IndexedDB) and requires a dedicated worker. Single-tab today;
 // CoopSync still works correctly if a second tab opens later. We pass
@@ -109,6 +133,7 @@ export const ensurePowerSyncReady = async (
   userId: string,
   useRemoteSync: boolean = hasRemoteSyncConfig,
 ) => {
+  await assertOpfsAvailable()
   const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
