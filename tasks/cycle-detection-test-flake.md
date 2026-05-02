@@ -1,5 +1,22 @@
 # Flaky cycle detection tests in full-suite runs
 
+## Post-mortem
+
+**Root cause (one sentence):** Two compounding races in the row_events tail — `cycleScanSql` reported only `start_id` so a per-row drain could miss its co-conspirator (drain A scans `idList=[A]` against a snapshot where B's parent move hasn't landed yet, finds nothing; drain B with `idList=[B]` reports `[B]` and the `[A,B]` union is never assembled), and `processOnce` ran fire-and-forget so `flushRowEventsTail()` was not a settle barrier — the test's `expect` could fire while pending onChange-driven drains were still in flight, then those drains' `console.warn`s leaked into a later test's `vi.spyOn` and turned a "no cycle" test into a "cycle reported" failure.
+
+**Fix shape:**
+
+- [src/data/internals/treeQueries.ts:`cycleScanSql`](../src/data/internals/treeQueries.ts) — added a `cyclic` CTE that selects the cycle-closing start ids, then the outer query joins back and returns *every* `chain.id` reached from a cyclic start. Column alias stays `start_id` so callers don't change. Now any single drain that catches the closure reports the full cycle, regardless of which member's mutation triggered the drain.
+- [src/data/internals/rowEventsTail.ts:`processOnce`](../src/data/internals/rowEventsTail.ts) — replaced the per-call async function with a serialized chain (`chain.then(...)`). All `processOnce` invocations enqueue at the chain tail and never run concurrently. The chain promise returned by `flush()` resolves only after every drain enqueued before it has finished — including any onChange-triggered drains that fired during the caller's preceding writes. Side effect: also closes the lastId-race (two concurrent drains processing the same `id > lastId` row).
+
+**Diff stat:** `2 files changed, 53 insertions(+), 10 deletions(-)`.
+
+**Verification:** 50/50 isolated `yarn test --run src/data/internals/cycleDetection.test.ts`, 25/25 full-suite runs with zero `cycleDetection.test.ts` failures. The other intermittents observed in those 25 runs (`kernelQueries.test.ts > subtree: a new descendant invalidates`, `parseReferencesProcessor.test.ts > re-typing [[foo]]`) use `repo.tx` fast-path plus a `setTimeout(10)` wait — a different family of load-sensitive timer race, unrelated to the row_events tail and out of scope for this brief.
+
+**Things ruled out along the way:** test isolation / parallelism (each `createTestDb` makes a fresh tmpdir, fresh PowerSync, fresh worker pool — no shared resource); reader-snapshot lag from PowerSync's reader pool (initial hypothesis — added a `writeTransaction` wrap, the wrap's *own* lock-acquisition can sneak in *between* test moves so the scan still saw a stale view, dropped that fix); `cycleScanSql`'s missing visited-id guard (depth-100 cap is sufficient, the brief's adjacent comment about "visited-id guard inline" is slightly inaccurate but pre-existing and not in scope).
+
+---
+
 ## What you're investigating
 
 Two tests in [src/data/internals/cycleDetection.test.ts](../src/data/internals/cycleDetection.test.ts) intermittently fail when the full suite runs (`yarn test --run`) but pass cleanly when the file is run in isolation:

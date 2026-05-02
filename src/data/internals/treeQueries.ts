@@ -98,13 +98,26 @@ export const IS_DESCENDANT_OF_SQL = `
 `
 
 /** Bounded scan over a set of affected ids — for each id, walks up
- *  parent_id and reports the id back if its chain closes onto itself.
- *  Used by the row_events tail to surface sync-introduced cycles
- *  (§4.7 detection-only telemetry). Returns 0..N rows; each row's
- *  `start_id` is one affected id participating in a cycle.
+ *  parent_id and, if its chain closes onto itself, reports every id
+ *  visited along that closing chain (i.e. every member of the cycle
+ *  the input id is part of). Used by the row_events tail to surface
+ *  sync-introduced cycles (§4.7 detection-only telemetry).
  *
  *  Parameter shape: pass `idCount` `?` placeholders bound to the ids
  *  to scan. Caller is responsible for matching the count.
+ *
+ *  Why report every cycle member, not just the input id that closed:
+ *  drains can split per-row when sync-applied writes arrive in
+ *  separate `db.onChange` ticks. For a 2-cycle A↔B introduced by two
+ *  sync writes (A.parent←B, then B.parent←A), the drain that sees
+ *  the first write scans `idList=[A]` against pre-second-write state
+ *  and finds nothing; only the second drain (idList=[B], post-both-
+ *  writes) sees the cycle. Reporting just `start_id` would emit
+ *  `[B]` and lose A. Reporting the full cycle (`[A, B]`) gives
+ *  consumers a complete view from any single drain that catches the
+ *  closure, regardless of which member's mutation triggered the
+ *  drain. The column alias stays `start_id` so the surface caller
+ *  reads (`hits.map(h => h.start_id)`) is unchanged.
  *
  *  Why scoped to affected ids (not all blocks): cycle scans are O(n)
  *  per starting row and we don't need to find every cycle in the DB
@@ -122,8 +135,13 @@ export const cycleScanSql = (idCount: number): string => {
         FROM chain
         JOIN blocks AS b ON b.id = chain.parent_id
        WHERE b.deleted = 0 AND chain.depth < 100
+    ),
+    cyclic AS (
+      SELECT DISTINCT start_id FROM chain WHERE depth > 0 AND id = start_id
     )
-    SELECT DISTINCT start_id FROM chain WHERE depth > 0 AND id = start_id
+    SELECT DISTINCT chain.id AS start_id
+      FROM chain
+      JOIN cyclic ON cyclic.start_id = chain.start_id
   `
 }
 

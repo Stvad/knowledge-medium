@@ -290,11 +290,36 @@ export const startRowEventsTail = (args: {
   // `ready`'s IIFE calls processOnce. Both references resolve at call
   // time (after init completes — see `initComplete` gate), by which
   // point both bindings are initialized.
-  const processOnce = async (): Promise<void> => {
-    if (disposed) return
-    await ready
-    if (disposed) return
-    await drain()
+  //
+  // Drains serialize via `chain`: each `processOnce` enqueues its drain
+  // at the tail of a single promise chain, so two drains never run
+  // concurrently. Two reasons matter:
+  //
+  //   1. Concurrent drains race on `lastId`. Without serialization, a
+  //      drain that reads `id > lastId` before the prior drain bumps
+  //      `lastId` ends up processing the same row twice — duplicate
+  //      cache writes, duplicate handle invalidations, duplicate cycle
+  //      events.
+  //
+  //   2. `flush()` (used by tests, undo replay, reviewer P2 race
+  //      coverage) needs to be a real settle barrier. Returning the
+  //      shared chain promise means awaiting `flush()` awaits every
+  //      drain enqueued before it — including any onChange-triggered
+  //      drains that fired during the caller's preceding writes. The
+  //      pre-serialization shape returned a fresh `processOnce` promise
+  //      that did not wait on those, so `await flush()` could resolve
+  //      with prior drains' work still in flight, and a sync-applied
+  //      cycle event could fire after the test's `expect`.
+  let chain: Promise<void> = Promise.resolve()
+  const processOnce = (): Promise<void> => {
+    const next = chain.then(async () => {
+      if (disposed) return
+      await ready
+      if (disposed) return
+      await drain()
+    }, () => {})
+    chain = next
+    return next
   }
 
   const ready = (async (): Promise<void> => {
