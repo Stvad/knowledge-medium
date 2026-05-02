@@ -2,10 +2,9 @@
  * Download a raw `.db` snapshot of the live PowerSync SQLite database.
  *
  * With OPFSCoopSyncVFS the database is a real file at OPFS root, so we
- * just read it directly. (When journal_mode is `delete` — the current
- * default — the .db file is the authoritative state. Should we ever
- * switch to WAL, run `PRAGMA wal_checkpoint(TRUNCATE)` first to flush
- * the -wal sidecar into the main file.)
+ * just read it directly. The journal mode is rollback (`delete`) — see
+ * the WAL note in repoProvider.ts — so the .db file is the
+ * authoritative state and nothing has to be checkpointed first.
  */
 
 import type { Repo } from '@/data/internals/repo'

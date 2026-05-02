@@ -28,7 +28,7 @@
  *     doesn't depend on it)
  */
 
-import { PowerSyncDatabase, Schema, WASQLiteVFS } from '@powersync/web'
+import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
 import {
   BLOCKS_RAW_TABLE,
@@ -76,13 +76,16 @@ let connectChain: Promise<void> = Promise.resolve()
 
 // OPFSCoopSyncVFS uses OPFS sync access handles (much faster than
 // IndexedDB) and requires a dedicated worker. Single-tab today;
-// CoopSync still works correctly if a second tab opens later.
+// CoopSync still works correctly if a second tab opens later. We pass
+// an explicit `WASQLiteOpenFactory` instead of plain settings because
+// the `vfs` option lives on the factory's option type, not on the
+// generic `SQLOpenOptions` accepted by `database: {…}`.
 const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
-  database: {
+  database: new WASQLiteOpenFactory({
     dbFilename: dbFilenameForUser(userId),
     vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-  },
+  }),
   flags: {
     enableMultiTabs: false,
     useWebWorker: true,
@@ -146,6 +149,12 @@ export const ensurePowerSyncReady = async (
 
 const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.init()
+
+  // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
+  // VFSes implement xShmMap (the wal-index shared-memory primitive
+  // SQLite needs for native WAL), so SQLite silently keeps rollback
+  // journal mode. Re-evaluate if PowerSync ever ships a WAL-capable
+  // browser VFS.
 
   // ── blocks + its indexes ──
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
