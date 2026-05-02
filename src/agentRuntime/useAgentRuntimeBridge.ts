@@ -30,7 +30,7 @@ interface AgentRuntimeContext {
   sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
   block: (id: string) => Block
   getBlock: (id: string) => Promise<BlockData | null>
-  getSubtree: (rootId?: string, includeRoot?: boolean) => Promise<BlockData[]>
+  getSubtree: (rootId?: string) => Promise<BlockData[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   actions: readonly ActionConfig[]
@@ -278,7 +278,10 @@ const executeCommand = async (
       const rootId = command.rootId === undefined
         ? undefined
         : requireString(command.rootId, 'rootId')
-      return context.getSubtree(rootId, Boolean(command.includeRoot))
+      // includeRoot dropped in Phase 4 — agent always receives the
+      // root + descendants. Callers that don't want the root filter
+      // it out themselves.
+      return context.getSubtree(rootId)
     }
 
     case 'create-block':
@@ -538,8 +541,8 @@ export function useAgentRuntimeBridge({
         sql: (sql, params, mode) => runSql(currentRepo, sql, params, mode),
         block: id => currentRepo.block(id),
         getBlock: id => currentRepo.load(id),
-        getSubtree: (rootId, includeRoot) =>
-          currentRepo.loadSubtree(rootId ?? currentLandingBlock.id, {includeRoot}),
+        getSubtree: (rootId) =>
+          currentRepo.loadSubtree(rootId ?? currentLandingBlock.id),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
         actions: readRuntimeActions(currentRuntime),
