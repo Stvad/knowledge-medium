@@ -63,10 +63,20 @@ export const BlockEditor = ({
   // body runs on debounce-fire (not during render), so the ref writes
   // inside are safe even though the new react-hooks rule flags the
   // closure-construction itself.
+  //
+  // Note: `lastCommittedContent` is NOT updated here. Doing so used to
+  // open a race — between this synchronous ref write and the tx
+  // actually committing, a re-render driven by a PRIOR (still in-flight)
+  // commit's late notification would arrive with `incoming` = the prior
+  // content but `lastCommittedContent` already optimistically advanced
+  // to the value we just queued, so the "user typed past" guard
+  // wouldn't trip and the editor would clobber back to the prior value.
+  // Instead, the adoption useEffect advances `lastCommittedContent`
+  // when it observes `live === incoming` — i.e. when the cache
+  // genuinely confirms our write.
   const pushChange = useRef(
     // eslint-disable-next-line react-hooks/refs
     debounce((value: string) => {
-      lastCommittedContent.current = value
       void block.setContent(value)
     }, 300),
   ).current
@@ -109,6 +119,12 @@ export const BlockEditor = ({
       })
     }
     if (live === incoming) {
+      // Cache has confirmed the editor's current value — either our own
+      // committed write echoing back, or coincidentally identical
+      // external state. Advance the "last committed" marker so the
+      // user-typed-past guard below can be trusted: it can't trip on a
+      // value the cache has already absorbed.
+      lastCommittedContent.current = incoming
       if (incomingUpdatedAt > lastAdoptedUpdatedAt.current) {
         lastAdoptedUpdatedAt.current = incomingUpdatedAt
       }
