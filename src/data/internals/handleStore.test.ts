@@ -787,3 +787,138 @@ describe('Dynamic deps declared after SQL — change-during-load queue', () => {
     expect(runs).toBe(1)
   })
 })
+
+describe('HandleStore metrics counters', () => {
+  it('starts at zero', () => {
+    const store = makeStore()
+    expect(store.metrics.snapshot()).toEqual({
+      invalidations: 0,
+      handlesWalked: 0,
+      handlesMatched: 0,
+      loaderInvalidations: 0,
+      loaderRuns: 0,
+      midLoadInvalidations: 0,
+      reloadsAfterSettle: 0,
+      notifiesSkippedByDiff: 0,
+      notifiesFired: 0,
+    })
+  })
+
+  it('counts loaderRuns on cold load', async () => {
+    const store = makeStore()
+    const { loader } = collectingLoader([1, 2])
+    const h = store.getOrCreate('q', () => new LoaderHandle({ store, key: 'q', loader }))
+    await h.load()
+    expect(store.metrics.loaderRuns).toBe(1)
+  })
+
+  it('counts handlesWalked + handlesMatched on invalidate (one match in N)', async () => {
+    const store = makeStore()
+    // Three handles: A and B depend on row r1; C on row r2. Invalidating
+    // r1 walks all three but matches only two.
+    for (const [k, depId] of [['a', 'r1'], ['b', 'r1'], ['c', 'r2']] as const) {
+      const { loader } = collectingLoader(k, [{ kind: 'row', id: depId }])
+      const h = store.getOrCreate(k, () => new LoaderHandle({ store, key: k, loader }))
+      await h.load()
+    }
+    store.metrics.reset()
+    store.invalidate({ rowIds: ['r1'] })
+    expect(store.metrics.invalidations).toBe(1)
+    expect(store.metrics.handlesWalked).toBe(3)
+    expect(store.metrics.handlesMatched).toBe(2)
+    expect(store.metrics.loaderInvalidations).toBe(2)
+  })
+
+  it('does not count empty-store / empty-change invalidate calls', () => {
+    const store = makeStore()
+    // Empty store
+    store.invalidate({ rowIds: ['x'] })
+    expect(store.metrics.invalidations).toBe(0)
+    expect(store.metrics.handlesWalked).toBe(0)
+  })
+
+  it('counts midLoadInvalidations + reloadsAfterSettle when invalidate hits inflight', async () => {
+    const store = makeStore()
+    let release: () => void = () => {}
+    let calls = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          calls++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          // Block on first call so we can fire invalidate while inflight.
+          if (calls === 1) await new Promise<void>((r) => { release = r })
+          return calls
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    // Wait until the load is actually inflight before invalidating —
+    // store.invalidate dispatches synchronously, so racing it with a
+    // not-yet-started loader would test the no-load path instead.
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+    store.invalidate({ rowIds: ['r1'] })
+    expect(store.metrics.midLoadInvalidations).toBe(1)
+    expect(store.metrics.reloadsAfterSettle).toBe(0) // not until settle
+    release()
+    await vi.waitFor(() => expect(calls).toBe(2)) // settle + queued reload
+    expect(store.metrics.reloadsAfterSettle).toBe(1)
+    expect(store.metrics.loaderRuns).toBe(2)
+  })
+
+  it('counts notifiesFired vs notifiesSkippedByDiff via structural dedup', async () => {
+    const store = makeStore()
+    let value: number[] = [1, 2, 3]
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number[]>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return value.slice() // fresh array, same contents → equality match
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    expect(store.metrics.notifiesFired).toBe(1) // first load always notifies
+
+    // Re-resolve with structurally-equal value: dedup suppresses notify.
+    store.invalidate({ rowIds: ['r1'] })
+    await vi.waitFor(() => expect(store.metrics.loaderRuns).toBe(2))
+    expect(store.metrics.notifiesSkippedByDiff).toBe(1)
+    expect(store.metrics.notifiesFired).toBe(1) // unchanged
+
+    // Now produce a different value and confirm notify fires again.
+    value = [1, 2, 3, 4]
+    store.invalidate({ rowIds: ['r1'] })
+    await vi.waitFor(() => expect(store.metrics.notifiesFired).toBe(2))
+    expect(store.metrics.notifiesSkippedByDiff).toBe(1) // unchanged
+  })
+
+  it('reset() zeros every counter; snapshot returns frozen plain object', async () => {
+    const store = makeStore()
+    const { loader } = collectingLoader('x', [{ kind: 'row', id: 'r1' }])
+    const h = store.getOrCreate('q', () => new LoaderHandle({ store, key: 'q', loader }))
+    await h.load()
+    store.invalidate({ rowIds: ['r1'] })
+    expect(store.metrics.loaderRuns).toBeGreaterThan(0)
+
+    const before = store.metrics.snapshot()
+    expect(Object.isFrozen(before)).toBe(true)
+    expect(() => {
+      // @ts-expect-error verify the snapshot is read-only at runtime
+      before.invalidations = 999
+    }).toThrow()
+
+    store.metrics.reset()
+    const after = store.metrics.snapshot()
+    expect(after.invalidations).toBe(0)
+    expect(after.handlesWalked).toBe(0)
+    expect(after.loaderRuns).toBe(0)
+    // Prior snapshot is unaffected by reset.
+    expect(before.loaderRuns).toBeGreaterThan(0)
+  })
+})

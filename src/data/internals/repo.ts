@@ -388,6 +388,49 @@ export class Repo {
     if (this.rowEventsTail) await this.rowEventsTail.flush()
   }
 
+  /** Frozen snapshot of internal data-layer counters (perf-baseline
+   *  follow-up #4). Returns plain-number aggregates from:
+   *
+   *    - `handleStore` — invalidate fan-out (`invalidations`,
+   *      `handlesWalked`, `handlesMatched`) and per-LoaderHandle
+   *      lifecycle (`loaderInvalidations`, `loaderRuns`,
+   *      `midLoadInvalidations`, `reloadsAfterSettle`,
+   *      `notifiesFired`, `notifiesSkippedByDiff`).
+   *    - `blockCache` — write/notify activity
+   *      (`setSnapshotCalls`, `setSnapshotDedupHits/Misses`,
+   *      `applySyncSnapshotCalls`, `applySyncSnapshotRejected`,
+   *      `notifies`).
+   *
+   *  All counters are monotonic from the last `resetMetrics()` (or
+   *  Repo construction). Each call returns a fresh frozen object so
+   *  callers can keep two snapshots and diff them.
+   *
+   *  Useful as:
+   *    - regression detection in production (`handlesWalked /
+   *      invalidations` should drop to ~`handlesMatched / invalidations`
+   *      once the inverted-index optimisation lands),
+   *    - integration-test assertions (mutate.setContent wrote N times,
+   *      did dedup hit?), and
+   *    - in-app debug panels that surface "this page has X handles
+   *      registered, Y invalidations, Z loader runs since open." */
+  metrics(): Readonly<{
+    handleStore: Readonly<Record<string, number>>
+    blockCache: Readonly<Record<string, number>>
+  }> {
+    return Object.freeze({
+      handleStore: this.handleStore.metrics.snapshot(),
+      blockCache: this.cache.metrics.snapshot(),
+    })
+  }
+
+  /** Zero every counter in `repo.metrics()`. Use to mark a baseline
+   *  before measuring a discrete operation (e.g. a benchmark iteration
+   *  or a UI interaction in a soak test). */
+  resetMetrics(): void {
+    this.handleStore.metrics.reset()
+    this.cache.metrics.reset()
+  }
+
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
    *  on the returned facade (`block.data`, `block.peek()`, etc.) is gated
    *  by what's in cache; call `block.load()` or `repo.load(id)` first

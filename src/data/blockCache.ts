@@ -13,6 +13,52 @@ const deepFreeze = <T>(value: T): T => {
 const blockFingerprint = (blockData: BlockData | undefined) =>
   blockData ? JSON.stringify(blockData) : ''
 
+/** Counter object for BlockCache write/notify activity (perf-baseline
+ *  follow-up #4). One instance per BlockCache; increments inline in
+ *  the hot path. Snapshot via `snapshot()` for a frozen plain-object
+ *  view consumers can diff between samples. */
+export class BlockCacheMetrics {
+  /** Total `setSnapshot(...)` calls (every entry, every path). Includes
+   *  calls reached through `applySyncSnapshot`. */
+  setSnapshotCalls = 0
+  /** `setSnapshot` calls where the incoming fingerprint matched the
+   *  cached one — dedup hit, no listeners walked. */
+  setSnapshotDedupHits = 0
+  /** `setSnapshot` calls that actually wrote and notified. */
+  setSnapshotDedupMisses = 0
+  /** Total `applySyncSnapshot(...)` calls (sync-arrival LWW path). */
+  applySyncSnapshotCalls = 0
+  /** `applySyncSnapshot` calls rejected because the incoming
+   *  `updatedAt` was older than what's already cached. */
+  applySyncSnapshotRejected = 0
+  /** Total internal `notify(id)` invocations across all paths
+   *  (setSnapshot writes, deleteSnapshot, markMissing, clearMissing).
+   *  Counts the call, not the per-listener fan-out. */
+  notifies = 0
+
+  reset(): void {
+    this.setSnapshotCalls = 0
+    this.setSnapshotDedupHits = 0
+    this.setSnapshotDedupMisses = 0
+    this.applySyncSnapshotCalls = 0
+    this.applySyncSnapshotRejected = 0
+    this.notifies = 0
+  }
+
+  /** Frozen plain-object snapshot — safe to keep as a baseline for
+   *  diffing between samples. */
+  snapshot(): Readonly<Record<string, number>> {
+    return Object.freeze({
+      setSnapshotCalls: this.setSnapshotCalls,
+      setSnapshotDedupHits: this.setSnapshotDedupHits,
+      setSnapshotDedupMisses: this.setSnapshotDedupMisses,
+      applySyncSnapshotCalls: this.applySyncSnapshotCalls,
+      applySyncSnapshotRejected: this.applySyncSnapshotRejected,
+      notifies: this.notifies,
+    })
+  }
+}
+
 /** In-memory mirror of the per-row state of `blocks`. Holds:
  *
  *    - per-id BlockData snapshots (with subscriber list)
@@ -35,6 +81,10 @@ export class BlockCache {
    *  missing" (peek → null) per spec §5.2. Cleared on setSnapshot
    *  (the row exists now). */
   private readonly missingIds = new Set<string>()
+  /** Mutable counters for cache write/notify activity. Increments
+   *  inline in the hot path; consumers snapshot via `metrics.snapshot()`
+   *  through `repo.metrics()`. */
+  readonly metrics = new BlockCacheMetrics()
 
   getSnapshot(id: string): BlockData | undefined {
     return this.snapshots.get(id)
@@ -57,12 +107,15 @@ export class BlockCache {
    *  true if listeners were notified (i.e. the snapshot actually
    *  changed by fingerprint). */
   setSnapshot(snapshot: BlockData): boolean {
+    this.metrics.setSnapshotCalls++
     const existing = this.snapshots.get(snapshot.id)
 
     if (existing && blockFingerprint(existing) === blockFingerprint(snapshot)) {
+      this.metrics.setSnapshotDedupHits++
       return false
     }
 
+    this.metrics.setSnapshotDedupMisses++
     this.snapshots.set(snapshot.id, deepFreeze(snapshot))
     // Row is now known-present — clear any prior confirmed-missing state.
     this.missingIds.delete(snapshot.id)
@@ -80,8 +133,12 @@ export class BlockCache {
    *  (covers the common echo-of-our-own-write case, which is a no-op
    *  via fingerprint dedup inside `setSnapshot`). */
   applySyncSnapshot(snapshot: BlockData): boolean {
+    this.metrics.applySyncSnapshotCalls++
     const existing = this.snapshots.get(snapshot.id)
-    if (existing && snapshot.updatedAt < existing.updatedAt) return false
+    if (existing && snapshot.updatedAt < existing.updatedAt) {
+      this.metrics.applySyncSnapshotRejected++
+      return false
+    }
     return this.setSnapshot(snapshot)
   }
 
@@ -127,6 +184,7 @@ export class BlockCache {
   }
 
   private notify(id: string): void {
+    this.metrics.notifies++
     this.listeners.get(id)?.forEach(listener => listener())
   }
 

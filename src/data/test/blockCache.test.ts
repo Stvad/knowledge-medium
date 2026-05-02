@@ -333,3 +333,82 @@ describe('BlockCache confirmed-missing markers (spec §5.2)', () => {
   })
 })
 
+describe('BlockCache metrics counters', () => {
+  it('starts at zero', () => {
+    const cache = new BlockCache()
+    expect(cache.metrics.snapshot()).toEqual({
+      setSnapshotCalls: 0,
+      setSnapshotDedupHits: 0,
+      setSnapshotDedupMisses: 0,
+      applySyncSnapshotCalls: 0,
+      applySyncSnapshotRejected: 0,
+      notifies: 0,
+    })
+  })
+
+  it('counts setSnapshot calls split by fingerprint dedup', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap({content: 'a'}))            // miss (first write)
+    cache.setSnapshot(snap({content: 'a'}))            // hit (same fingerprint)
+    cache.setSnapshot(snap({content: 'b'}))            // miss (new content)
+    cache.setSnapshot(snap({content: 'b'}))            // hit
+    expect(cache.metrics.setSnapshotCalls).toBe(4)
+    expect(cache.metrics.setSnapshotDedupHits).toBe(2)
+    expect(cache.metrics.setSnapshotDedupMisses).toBe(2)
+    // Notifies fire only on misses (dedup hits skip notify).
+    expect(cache.metrics.notifies).toBe(2)
+  })
+
+  it('counts applySyncSnapshot rejection (older updatedAt) without recursing into setSnapshot', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap({updatedAt: 100}))
+    expect(cache.metrics.applySyncSnapshotCalls).toBe(0)
+
+    // Reject path: older updatedAt; should not increment setSnapshotCalls.
+    const setBefore = cache.metrics.setSnapshotCalls
+    expect(cache.applySyncSnapshot(snap({updatedAt: 50}))).toBe(false)
+    expect(cache.metrics.applySyncSnapshotCalls).toBe(1)
+    expect(cache.metrics.applySyncSnapshotRejected).toBe(1)
+    expect(cache.metrics.setSnapshotCalls).toBe(setBefore)
+
+    // Accept path: newer updatedAt; setSnapshotCalls should increment too
+    // (applySyncSnapshot delegates to setSnapshot on accept).
+    expect(cache.applySyncSnapshot(snap({updatedAt: 200, content: 'newer'}))).toBe(true)
+    expect(cache.metrics.applySyncSnapshotCalls).toBe(2)
+    expect(cache.metrics.applySyncSnapshotRejected).toBe(1) // unchanged
+    expect(cache.metrics.setSnapshotCalls).toBe(setBefore + 1)
+  })
+
+  it('counts notifies on deleteSnapshot / markMissing / clearMissing', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap()) // 1 notify
+    cache.deleteSnapshot(snap().id) // 2 notifies
+    cache.markMissing('block-1') // 3 notifies (transition)
+    cache.markMissing('block-1') // no-op (already missing) — no notify
+    cache.clearMissing('block-1') // 4 notifies
+    cache.clearMissing('block-1') // no-op — no notify
+    expect(cache.metrics.notifies).toBe(4)
+  })
+
+  it('reset() zeros every counter; snapshot returns frozen plain object', () => {
+    const cache = new BlockCache()
+    cache.setSnapshot(snap())
+    cache.applySyncSnapshot(snap({content: 'x', updatedAt: 100}))
+    expect(cache.metrics.setSnapshotCalls).toBeGreaterThan(0)
+
+    const before = cache.metrics.snapshot()
+    expect(Object.isFrozen(before)).toBe(true)
+    expect(() => {
+      // @ts-expect-error verify snapshot is read-only at runtime
+      before.notifies = 999
+    }).toThrow()
+
+    cache.metrics.reset()
+    const after = cache.metrics.snapshot()
+    expect(after.setSnapshotCalls).toBe(0)
+    expect(after.notifies).toBe(0)
+    // Prior snapshot is unaffected.
+    expect(before.setSnapshotCalls).toBeGreaterThan(0)
+  })
+})
+

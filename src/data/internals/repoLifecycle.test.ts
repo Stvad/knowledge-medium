@@ -129,3 +129,48 @@ describe('repo.instanceId', () => {
     expect(typeof env.repo.instanceId).toBe('number')
   })
 })
+
+describe('repo.metrics() / resetMetrics()', () => {
+  it('exposes handleStore and blockCache subsections; both start at zero', () => {
+    const m = env.repo.metrics()
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'handleStore'])
+    expect(Object.isFrozen(m)).toBe(true)
+    expect(m.handleStore.invalidations).toBe(0)
+    expect(m.blockCache.setSnapshotCalls).toBe(0)
+  })
+
+  it('snapshots are independent across reset (prior snapshot keeps its values)', () => {
+    env.repo.cache.setSnapshot({
+      id: 'block-1', workspaceId: 'ws', parentId: null, orderKey: 'a',
+      content: '', properties: {}, references: [],
+      createdAt: 0, updatedAt: 0, createdBy: 'u', updatedBy: 'u', deleted: false,
+    })
+    const before = env.repo.metrics()
+    expect(before.blockCache.setSnapshotCalls).toBe(1)
+
+    env.repo.resetMetrics()
+    const after = env.repo.metrics()
+    expect(after.blockCache.setSnapshotCalls).toBe(0)
+    // The earlier snapshot retains its values — frozen and detached.
+    expect(before.blockCache.setSnapshotCalls).toBe(1)
+  })
+
+  it('reflects HandleStore activity end-to-end', async () => {
+    // Drive a real LoaderHandle through the store via repo.query.
+    // (We don't need any data; the dispatcher creates the handle and
+    // running .load() triggers loaderRuns.)
+    const handle = env.repo.query.children({id: 'nonexistent-id'})
+    await handle.load() // empty children list — succeeds with []
+
+    const m = env.repo.metrics()
+    expect(m.handleStore.loaderRuns).toBe(1)
+
+    // Direct invalidate that matches the parent-edge dep declared by
+    // the children loader. Walks 1 handle, matches 1.
+    env.repo.handleStore.invalidate({parentIds: ['nonexistent-id']})
+    const after = env.repo.metrics()
+    expect(after.handleStore.invalidations).toBe(1)
+    expect(after.handleStore.handlesWalked).toBe(1)
+    expect(after.handleStore.handlesMatched).toBe(1)
+  })
+})

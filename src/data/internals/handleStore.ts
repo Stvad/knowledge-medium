@@ -101,11 +101,94 @@ interface RegisteredHandle {
   observeDuringLoad: (change: ChangeNotification) => void
 }
 
+/** Mutable counter object for handle-related metrics (perf-baseline
+ *  follow-up #4). One instance per HandleStore; LoaderHandles read it
+ *  through `store.metrics` so handle-level events (loader runs,
+ *  mid-load invalidations, structural-diff dedup) aggregate across the
+ *  full lifetime of the store rather than being lost when handles GC.
+ *
+ *  Counters are plain `number` fields and increment inline; the cost
+ *  is sub-nanosecond in the hot path. Snapshot via `snapshot()` for a
+ *  frozen plain-object view consumers can diff between samples. */
+export class HandleStoreMetrics {
+  // ──── HandleStore.invalidate fan-out ────
+  /** Total invalidate(...) calls that did not early-return. The
+   *  empty-store + empty-change short-circuits are NOT counted (those
+   *  are the cost-free path; counting them would inflate the average
+   *  walk-per-call ratio). */
+  invalidations = 0
+  /** Total handles iterated across all invalidate calls. With the
+   *  current linear walk this equals `invalidations × handles.size`
+   *  on average; with the inverted-index optimisation it should drop
+   *  to `handlesMatched`. Watching this in production is the fastest
+   *  way to verify the optimisation has the intended effect. */
+  handlesWalked = 0
+  /** Total handles whose `matches(change)` returned true. */
+  handlesMatched = 0
+
+  // ──── LoaderHandle lifecycle ────
+  /** Total `LoaderHandle.invalidate()` calls. Equals `handlesMatched`
+   *  unless callers invalidate handles directly (e.g. tests). */
+  loaderInvalidations = 0
+  /** Total `runLoader()` invocations — actual loader function calls
+   *  against SQL. Smaller than `loaderInvalidations` because:
+   *    - mid-load invalidations are coalesced via `pendingReinvalidate`
+   *      (they don't kick a fresh runLoader, they piggyback on the
+   *      already-inflight settle path),
+   *    - the cold `load()` from `subscribe()` also bumps this. */
+  loaderRuns = 0
+  /** `LoaderHandle.invalidate()` calls that arrived while a load was
+   *  inflight — these flip `pendingReinvalidate` instead of starting
+   *  a new runLoader. */
+  midLoadInvalidations = 0
+  /** Microtask-scheduled reloads triggered by `pendingReinvalidate`
+   *  during the settle path. Pairs with `midLoadInvalidations` (each
+   *  midLoad event eventually produces at most one reload, modulo
+   *  coalescing). */
+  reloadsAfterSettle = 0
+  /** `notify(value)` calls where the structural diff (spec §9.4)
+   *  determined the value was unchanged → listener walk skipped. */
+  notifiesSkippedByDiff = 0
+  /** `notify(value)` calls that actually walked the listener set. */
+  notifiesFired = 0
+
+  reset(): void {
+    this.invalidations = 0
+    this.handlesWalked = 0
+    this.handlesMatched = 0
+    this.loaderInvalidations = 0
+    this.loaderRuns = 0
+    this.midLoadInvalidations = 0
+    this.reloadsAfterSettle = 0
+    this.notifiesSkippedByDiff = 0
+    this.notifiesFired = 0
+  }
+
+  /** Frozen plain-object snapshot. Safe to keep as a baseline for
+   *  diffing — does not share state with the live counter. */
+  snapshot(): Readonly<Record<string, number>> {
+    return Object.freeze({
+      invalidations: this.invalidations,
+      handlesWalked: this.handlesWalked,
+      handlesMatched: this.handlesMatched,
+      loaderInvalidations: this.loaderInvalidations,
+      loaderRuns: this.loaderRuns,
+      midLoadInvalidations: this.midLoadInvalidations,
+      reloadsAfterSettle: this.reloadsAfterSettle,
+      notifiesSkippedByDiff: this.notifiesSkippedByDiff,
+      notifiesFired: this.notifiesFired,
+    })
+  }
+}
+
 /** Identity-stable registry of handles. */
 export class HandleStore {
   private readonly handles = new Map<string, RegisteredHandle>()
   private readonly gcTimeMs: number
   private readonly schedule: (cb: () => void, ms: number) => () => void
+  /** Metrics counters. LoaderHandle bumps handle-level fields through
+   *  this same object so all aggregates share one snapshot. */
+  readonly metrics = new HandleStoreMetrics()
 
   constructor(opts?: HandleStoreOptions) {
     this.gcTimeMs = opts?.gcTimeMs ?? DEFAULT_GC_TIME_MS
@@ -162,10 +245,15 @@ export class HandleStore {
     // their fresh load already accounts for this change) while loading
     // handles record the change for post-settle replay (correct: needed
     // for late-declared deps to catch the change).
+    this.metrics.invalidations++
     const snapshot = Array.from(this.handles.values())
     for (const h of snapshot) {
+      this.metrics.handlesWalked++
       h.observeDuringLoad(change)
-      if (h.matches(change)) h.invalidate()
+      if (h.matches(change)) {
+        this.metrics.handlesMatched++
+        h.invalidate()
+      }
     }
   }
 
@@ -274,6 +362,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // Reset pending-reinvalidate at run start. Anything that arrives
     // during this run sets the flag; we re-run after settle. Same for
     // the queue of changes recorded against post-load deps.
+    this.store.metrics.loaderRuns++
     this.pendingReinvalidate = false
     this.changesDuringLoad = []
     this.status_ = this.value === undefined ? 'loading' : this.status_
@@ -329,6 +418,11 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // value to compare against — always notify.
         if (!hadPrior || priorValue === undefined || !this.equality(priorValue, value)) {
           this.notify(value)
+        } else {
+          // Equality match against prior value: notify suppressed.
+          // Counts even when the listener set is empty — the dedup
+          // decision happened, we measure the decision, not the walk.
+          this.store.metrics.notifiesSkippedByDiff++
         }
         this.release() // drop the inflight ref
         // If invalidations arrived during this load, the data we just
@@ -336,6 +430,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // promise that React awaited can resolve first.
         if (this.pendingReinvalidate && !this.disposed) {
           this.pendingReinvalidate = false
+          this.store.metrics.reloadsAfterSettle++
           queueMicrotask(() => {
             if (this.disposed) return
             // No-op if a fresher load is already in flight (subscribe
@@ -363,6 +458,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
           // may succeed.
           if (this.pendingReinvalidate) {
             this.pendingReinvalidate = false
+            this.store.metrics.reloadsAfterSettle++
             queueMicrotask(() => {
               if (this.disposed) return
               if (this.inflight) return
@@ -428,6 +524,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   invalidate(): void {
     if (this.disposed) return
+    this.store.metrics.loaderInvalidations++
     // Force a re-resolve. Readers see the stale value via peek() until
     // the new load completes — status stays 'ready' so the UI doesn't
     // flash a Suspense fallback for in-place updates.
@@ -438,6 +535,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       // the current promise resolves. Multiple invalidations during
       // one load coalesce into a single rerun (the next loader picks
       // up the latest state in one go).
+      this.store.metrics.midLoadInvalidations++
       this.pendingReinvalidate = true
       return
     }
@@ -488,6 +586,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
 
   private notify(value: T): void {
     if (this.listeners.size === 0) return
+    this.store.metrics.notifiesFired++
     // Structural-diff against the prior value cheaply: if the value
     // didn't actually change (re-resolve produced an equal result),
     // skip the listener walk.
