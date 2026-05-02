@@ -314,7 +314,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
         await repo.load(uiStateBlock.id, {ancestors: true})
         const root = getRootBlock(repo.block(uiStateBlock.id))
-        const blocks = await repo.loadSubtree(root.id)
+        const blocks = await repo.query.subtree({id: root.id}).load()
         const data = JSON.stringify({blocks}, null, 2)
 
         const downloadLink = document.createElement('a')

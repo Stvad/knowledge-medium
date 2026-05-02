@@ -175,14 +175,14 @@ export class Block implements Handle<BlockData | null> {
 
   // ──── Tree relatives ────
 
-  /** Reactive child-id list. Delegates to `repo.childIds(this.id)` —
+  /** Reactive child-id list. Delegates to `repo.query.childIds({id})` —
    *  the LoaderHandle owns SQL + caching + invalidation, so call sites
    *  never need to ask the BlockCache about children directly.
    *  Imperative call sites do `await block.childIds.load()`; reactive
    *  ones use `useChildIds(block)` (which subscribes to the same
    *  handle). */
   get childIds(): LoaderHandle<string[]> {
-    return this.repo.childIds(this.id)
+    return this.repo.query.childIds({id: this.id})
   }
 
   /** Reactive children-rows list. Same shape as `childIds` but loads
@@ -191,7 +191,7 @@ export class Block implements Handle<BlockData | null> {
    *  extra `repo.block(id).load()` per child. Callers wanting Block
    *  facades do `(await block.children.load()).map(d => repo.block(d.id))`. */
   get children(): LoaderHandle<BlockData[]> {
-    return this.repo.children(this.id)
+    return this.repo.query.children({id: this.id})
   }
 
   /** Parent as Block, or null only if this block has no parent

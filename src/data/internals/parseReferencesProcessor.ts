@@ -49,7 +49,6 @@ import {
   type BlockReference,
   type CommittedEvent,
   type ProcessorCtx,
-  type ProcessorReadDb,
   type Tx,
 } from '@/data/api'
 import {
@@ -63,33 +62,6 @@ import {
   ensureDailyNoteTarget,
   isDateAlias,
 } from './targets'
-
-/** Resolve `alias` to an existing target block id in `workspaceId`,
- *  or null if no live row carries this alias yet. Reads committed
- *  state via `ctx.db` (the processor runs after the originating tx
- *  has committed, so committed reads are correct). Goes through
- *  `block_aliases` (the trigger-maintained index in clientSchema.ts),
- *  which keeps this lookup O(log n) instead of scanning the workspace
- *  partition. The `b.deleted = 0` filter is defensive — triggers wipe
- *  index rows on soft-delete already. */
-const lookupAliasTarget = async (
-  db: ProcessorReadDb,
-  workspaceId: string,
-  alias: string,
-): Promise<string | null> => {
-  const row = await db.getOptional<{ id: string }>(
-    `SELECT b.id
-     FROM block_aliases ba
-     JOIN blocks b ON b.id = ba.block_id
-     WHERE ba.workspace_id = ?
-       AND ba.alias = ?
-       AND b.deleted = 0
-     ORDER BY b.created_at
-     LIMIT 1`,
-    [workspaceId, alias],
-  )
-  return row?.id ?? null
-}
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */
@@ -113,10 +85,10 @@ interface SourcePlan {
 
 /** Read phase: parse refs, resolve existing alias targets via committed-
  *  state lookup, and produce a SourcePlan describing what the write
- *  phase needs to do. No tx opened here — `db` is the bare PowerSync
- *  surface, reads see committed state from the originating tx. */
+ *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
+ *  hits committed state. */
 const buildSourcePlan = async (
-  db: ProcessorReadDb,
+  ctx: ProcessorCtx,
   source: BlockData,
 ): Promise<SourcePlan> => {
   const aliasMarks = parseAliasMarks(source.content)
@@ -144,9 +116,11 @@ const buildSourcePlan = async (
     // codec round-trip when an existing target already carries the
     // alias (e.g. typing `[[Inbox]]` for an Inbox someone else made
     // via the create-page UI; §7.5 race).
-    const existing = await lookupAliasTarget(db, source.workspaceId, mark.alias)
+    const existing = await ctx.repo.query
+      .aliasLookup({workspaceId: source.workspaceId, alias: mark.alias})
+      .load()
     if (existing !== null) {
-      aliasRefs.push({id: existing, alias: mark.alias})
+      aliasRefs.push({id: existing.id, alias: mark.alias})
       continue
     }
     // Will be created by ensureAliasTarget in the write phase. The id
@@ -222,22 +196,29 @@ export const parseReferencesProcessor = definePostCommitProcessor({
       if (row.after === null) continue
       // Skip soft-deletes (after.deleted === true) — same reason.
       if (row.after.deleted) continue
-      plans.push(await buildSourcePlan(ctx.db, row.after))
+      plans.push(await buildSourcePlan(ctx, row.after))
     }
     if (!plans.some(planNeedsWrite)) return
 
     // Write phase — single tx, atomic for refs + targets + afterCommit.
     await ctx.repo.tx(async tx => {
       const allNewlyInserted: string[] = []
+      let workspaceForCleanup: string | null = null
       for (const plan of plans) {
         if (!planNeedsWrite(plan)) continue
         const inserted = await applySourcePlan(tx, plan)
         allNewlyInserted.push(...inserted)
+        // All sources in one tx share a workspace per spec invariant 11
+        // — pin the first non-null and use it for cleanup scheduling.
+        workspaceForCleanup ??= plan.workspaceId
       }
-      if (allNewlyInserted.length > 0) {
+      if (allNewlyInserted.length > 0 && workspaceForCleanup !== null) {
         tx.afterCommit(
           'core.cleanupOrphanAliases',
-          { newlyInsertedAliasTargetIds: allNewlyInserted },
+          {
+            workspaceId: workspaceForCleanup,
+            newlyInsertedAliasTargetIds: allNewlyInserted,
+          },
           { delayMs: 4000 },
         )
       }
@@ -251,10 +232,12 @@ export const parseReferencesProcessor = definePostCommitProcessor({
 // ──── core.cleanupOrphanAliases ────
 
 const cleanupArgsSchema = z.object({
+  workspaceId: z.string(),
   newlyInsertedAliasTargetIds: z.array(z.string()),
 })
 
 interface CleanupArgs {
+  workspaceId: string
   newlyInsertedAliasTargetIds: string[]
 }
 
@@ -264,35 +247,24 @@ declare module '@/data/api' {
   }
 }
 
-/** Returns true iff `id` is referenced by any live block's
- *  `references_json` entry. */
-const anyBlockReferences = async (
-  db: ProcessorReadDb,
-  id: string,
-): Promise<boolean> => {
-  const row = await db.getOptional<{ id: string }>(
-    `SELECT b.id
-     FROM blocks b, json_each(b.references_json) je
-     WHERE b.deleted = 0
-       AND json_extract(je.value, '$.id') = ?
-     LIMIT 1`,
-    [id],
-  )
-  return row !== null
-}
-
 export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupArgs>({
   name: 'core.cleanupOrphanAliases',
   watches: { kind: 'explicit' },
   scheduledArgsSchema: cleanupArgsSchema,
   apply: async (event: CommittedEvent<CleanupArgs>, ctx: ProcessorCtx) => {
     const ids = event.scheduledArgs?.newlyInsertedAliasTargetIds ?? []
-    if (ids.length === 0) return
+    const workspaceId = event.scheduledArgs?.workspaceId ?? ''
+    if (ids.length === 0 || !workspaceId) return
 
     // Read phase — gather actual orphans without holding a writer slot.
+    // `repo.query.backlinks` returns BlockData[] for blocks in the same
+    // workspace whose `references_json` entries point at `id`. The
+    // workspace-scoped check is correct because per spec invariant 11
+    // refs do not cross workspaces in this app.
     const orphans: string[] = []
     for (const id of ids) {
-      if (!(await anyBlockReferences(ctx.db, id))) orphans.push(id)
+      const refs = await ctx.repo.query.backlinks({workspaceId, id}).load()
+      if (refs.length === 0) orphans.push(id)
     }
     if (orphans.length === 0) return
 

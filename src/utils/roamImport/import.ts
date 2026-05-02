@@ -552,7 +552,7 @@ const reconcilePages = async (
       // there's no reparenting.
       out.push({plannedId: page.blockId, finalId: page.blockId, page, merging: false})
     } else {
-      const existing = await repo.findBlockByAliasInWorkspace(workspaceId, page.title)
+      const existing = await repo.query.aliasLookup({workspaceId, alias: page.title}).load()
       if (existing) {
         out.push({plannedId: page.blockId, finalId: existing.id, page, merging: true})
       } else {
@@ -648,7 +648,7 @@ const resolveAliases = async (
         // is a regular page named "today", not the day's daily.
         aliasIdMap.set(alias, dailyNoteBlockId(workspaceId, parsedDate.iso))
       } else {
-        const existing = await repo.findBlockByAliasInWorkspace(workspaceId, alias)
+        const existing = await repo.query.aliasLookup({workspaceId, alias}).load()
         if (existing) {
           aliasIdMap.set(alias, existing.id)
         } else {

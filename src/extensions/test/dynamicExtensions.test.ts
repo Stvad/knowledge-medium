@@ -45,9 +45,16 @@ const disabledProperty = (value: boolean): Record<string, unknown> => ({
   [extensionDisabledProp.name]: value,
 })
 
-// Stub repo that just returns the supplied blocks for findBlocksByType.
+// Stub repo that just returns the supplied blocks for the
+// findExtensionBlocks query (Phase 4 chunk C migrated from
+// findBlocksByType). The query proxy is stubbed to return a handle
+// whose `.load()` resolves to the canned block list.
 const makeRepo = (blocks: BlockData[]): Repo => ({
-  findBlocksByType: async () => blocks,
+  query: {
+    findExtensionBlocks: () => ({
+      load: async () => blocks,
+    }),
+  },
 }) as unknown as Repo
 
 // Stub compile that returns a canned module per block content.
@@ -266,8 +273,8 @@ describe('dynamicExtensionsExtension — system:disabled', () => {
 
 describe('dynamicExtensionsExtension — safeMode', () => {
   it('returns empty without querying the repo', async () => {
-    const findBlocksByType = vi.fn(async () => [])
-    const repo = {findBlocksByType} as unknown as Repo
+    const findExtensionBlocks = vi.fn(() => ({load: async () => []}))
+    const repo = {query: {findExtensionBlocks}} as unknown as Repo
 
     const ext = dynamicExtensionsExtension({
       repo,
@@ -278,7 +285,7 @@ describe('dynamicExtensionsExtension — safeMode', () => {
     const runtime = await resolveFacetRuntime(ext)
 
     expect(runtime.read(labelsFacet)).toEqual([])
-    expect(findBlocksByType).not.toHaveBeenCalled()
+    expect(findExtensionBlocks).not.toHaveBeenCalled()
   })
 })
 
@@ -347,9 +354,9 @@ describe('dynamicExtensionsExtension — failure isolation', () => {
 })
 
 describe('dynamicExtensionsExtension — workspace scoping', () => {
-  it('passes the workspaceId through to repo.findBlocksByType', async () => {
-    const findBlocksByType = vi.fn(async () => [])
-    const repo = {findBlocksByType} as unknown as Repo
+  it('passes the workspaceId through to repo.query.findExtensionBlocks', async () => {
+    const findExtensionBlocks = vi.fn(() => ({load: async () => []}))
+    const repo = {query: {findExtensionBlocks}} as unknown as Repo
 
     const ext = dynamicExtensionsExtension({
       repo,
@@ -359,6 +366,6 @@ describe('dynamicExtensionsExtension — workspace scoping', () => {
     })
     await resolveFacetRuntime(ext)
 
-    expect(findBlocksByType).toHaveBeenCalledWith('ws-target', 'extension')
+    expect(findExtensionBlocks).toHaveBeenCalledWith({workspaceId: 'ws-target'})
   })
 })

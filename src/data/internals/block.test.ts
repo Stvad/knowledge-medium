@@ -180,9 +180,9 @@ describe('Block.childIds / children / parent', () => {
     expect(ids).toEqual(['c1', 'c2'])
   })
 
-  it('childIds is identity-stable with repo.childIds', () => {
+  it('childIds is identity-stable with repo.query.childIds', () => {
     const b = new Block(env.repo, 'p')
-    expect(b.childIds).toBe(env.repo.childIds('p'))
+    expect(b.childIds).toBe(env.repo.query.childIds({id: 'p'}))
   })
 
   it('children returns the repo.children handle with full BlockData rows', async () => {

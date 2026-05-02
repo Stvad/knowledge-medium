@@ -296,7 +296,10 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
     await expect(env.repo.tx(async tx => {
       await tx.create({id: 'src-bad', workspaceId: WS, parentId: null, orderKey: 'a0'})
       // Wrong shape — newlyInsertedAliasTargetIds should be string[].
-      tx.afterCommit('core.cleanupOrphanAliases', {newlyInsertedAliasTargetIds: 42 as unknown as string[]})
+      tx.afterCommit('core.cleanupOrphanAliases', {
+        workspaceId: WS,
+        newlyInsertedAliasTargetIds: 42 as unknown as string[],
+      })
     }, {scope: ChangeScope.BlockDefault})).rejects.toThrow()
     // The tx rolled back — src-bad doesn't exist.
     expect(await env.read('src-bad')).toBeNull()

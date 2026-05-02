@@ -91,8 +91,8 @@ export function QuickFind() {
     let cancelled = false
     const timer = setTimeout(async () => {
       const [aliasRows, blockRows] = await Promise.all([
-        repo.findAliasMatchesInWorkspace(workspaceId, query, SEARCH_LIMIT),
-        repo.searchBlocksByContent(workspaceId, query, SEARCH_LIMIT),
+        repo.query.aliasMatches({workspaceId, filter: query, limit: SEARCH_LIMIT}).load(),
+        repo.query.searchByContent({workspaceId, query, limit: SEARCH_LIMIT}).load(),
       ])
       if (cancelled) return
 
@@ -153,7 +153,7 @@ export function QuickFind() {
     const trimmed = alias.trim()
     if (!trimmed) return
 
-    const existing = await repo.findBlockByAliasInWorkspace(workspaceId, trimmed)
+    const existing = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
     if (existing) {
       jumpToBlock(existing.id)
       return

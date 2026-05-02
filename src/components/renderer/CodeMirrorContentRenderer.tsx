@@ -19,7 +19,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
         console.warn('No active workspace for alias search')
         return []
       }
-      const aliases = await repo.getAliasesInWorkspace(workspaceId, filter)
+      const aliases = await repo.query.aliasesInWorkspace({workspaceId, filter}).load()
 
       // If the user is typing a date phrase ("fri", "next mon", "april 28"),
       // surface the resolved long-form date as the top suggestion. Picking
@@ -41,7 +41,7 @@ export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
       if (!workspaceId) return []
       // Cap at 12 — autocompletion popovers stop being useful after that and
       // a wider scan just hurts perceived latency on every keystroke.
-      const blocks = await repo.searchBlocksByContent(workspaceId, filter, 12)
+      const blocks = await repo.query.searchByContent({workspaceId, query: filter, limit: 12}).load()
       return blocks.map(b => ({id: b.id, content: b.content}))
     }
   }, [repo])

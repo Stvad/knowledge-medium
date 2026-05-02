@@ -542,7 +542,7 @@ export function useAgentRuntimeBridge({
         block: id => currentRepo.block(id),
         getBlock: id => currentRepo.load(id),
         getSubtree: (rootId) =>
-          currentRepo.loadSubtree(rootId ?? currentLandingBlock.id),
+          currentRepo.query.subtree({id: rootId ?? currentLandingBlock.id}).load(),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
         actions: readRuntimeActions(currentRuntime),

@@ -259,7 +259,7 @@ const EMPTY_STRING_ARRAY: readonly string[] = Object.freeze([])
  *  pop in block-by-block. The lean variant on `repo.childIds` is for
  *  non-rendering callers (counting / id-only scans). */
 export const useChildIds = (block: Block): string[] =>
-  useHandle(block.repo.childIds(block.id, {hydrate: true}), {
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
     selector: ids => ids ?? EMPTY_STRING_ARRAY,
   }) as string[]
 
@@ -273,7 +273,7 @@ export const useChildIds = (block: Block): string[] =>
  *  value to the entire block subtree. */
 export const useChildren = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.children(block.id), {
+  return useHandle(block.repo.query.children({id: block.id}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }
@@ -290,7 +290,7 @@ export const useChildren = (block: Block): Block[] => {
  *  children (BlockChildren), so the two hooks subscribe to the same
  *  parent in lockstep and there's nothing to gain by splitting them. */
 export const useHasChildren = (block: Block): boolean =>
-  useHandle(block.repo.childIds(block.id, {hydrate: true}), {
+  useHandle(block.repo.query.childIds({id: block.id, hydrate: true}), {
     selector: ids => (ids ?? EMPTY_STRING_ARRAY).length > 0,
   })
 
@@ -299,18 +299,30 @@ export const useHasChildren = (block: Block): boolean =>
  *  for the breadcrumb-friendly order callers expect. */
 export const useParents = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.ancestors(block.id), {
+  return useHandle(block.repo.query.ancestors({id: block.id}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
   })
 }
 
 /** Reactive backlinks — every block in `block`'s workspace whose
- *  `references` field points at `block.id`. */
+ *  `references` field points at `block.id`. The new `core.backlinks`
+ *  query takes `workspaceId` as an arg (no implicit cache resolution
+ *  inside the loader); we resolve it here from `useData(block)`,
+ *  falling back to `repo.activeWorkspaceId` when the block isn't
+ *  loaded yet — same fallback chain the legacy `repo.backlinks(id)`
+ *  factory used. The query's resolver short-circuits on empty
+ *  `workspaceId` to `[]`, so the no-workspace case still produces a
+ *  stable empty handle without a SQL hit. */
 export const useBacklinks = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.backlinks(block.id), {
-    selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
-  })
+  const data = useData(block)
+  const workspaceId = data?.workspaceId ?? repo.activeWorkspaceId ?? ''
+  return useHandle(
+    repo.query.backlinks({workspaceId, id: block.id}),
+    {
+      selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
+    },
+  )
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in
@@ -318,7 +330,7 @@ export const useBacklinks = (block: Block): Block[] => {
  *  call sites can adopt incrementally. */
 export const useSubtree = (block: Block): Block[] => {
   const repo = block.repo
-  return useHandle(block.repo.subtree(block.id), {
+  return useHandle(block.repo.query.subtree({id: block.id}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
 }

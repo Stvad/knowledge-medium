@@ -60,7 +60,7 @@ export const dynamicExtensionsExtension = (
 
   let extensionBlocks: BlockData[]
   try {
-    extensionBlocks = await repo.findBlocksByType(workspaceId, 'extension')
+    extensionBlocks = await repo.query.findExtensionBlocks({workspaceId}).load()
   } catch (error) {
     console.error('Failed to query extension blocks', error)
     return []

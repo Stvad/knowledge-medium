@@ -41,7 +41,9 @@ const disabled = (value: boolean): Record<string, unknown> => ({
 })
 
 const makeRepo = (blocks: BlockData[]): Repo => ({
-  findBlocksByType: async () => blocks,
+  query: {
+    findExtensionBlocks: () => ({load: async () => blocks}),
+  },
 }) as unknown as Repo
 
 let cache: CompileCache
