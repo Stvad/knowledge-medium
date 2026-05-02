@@ -10,7 +10,7 @@ import {
 } from './types'
 import { Block } from '@/data/internals/block'
 import { Repo } from '@/data/internals/repo'
-import { createChild as createChildMutator } from '@/data/internals/kernelMutators'
+import { createChild as createChildMutator, merge as mergeMutator } from '@/data/internals/kernelMutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,
@@ -59,7 +59,7 @@ import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
 import { showProgressBanner } from '@/utils/roamImport/progressBanner.ts'
 import type { RoamExport } from '@/utils/roamImport/types.ts'
-import { downloadBlob, exportRawSqliteDb } from '@/utils/exportSqliteDb.ts'
+import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -454,6 +454,41 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       },
     },
     {
+      id: 'import_sqlite_db',
+      description: 'Replace database with uploaded SQLite file (.db)',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        const input = document.createElement('input')
+        input.type = 'file'
+        input.accept = '.db,application/vnd.sqlite3,application/octet-stream'
+
+        input.onchange = async (e) => {
+          const file = (e.target as HTMLInputElement).files?.[0]
+          if (!file) return
+
+          const sizeMiB = (file.size / 1024 / 1024).toFixed(1)
+          const ok = window.confirm(
+            `Replace this device's database with "${file.name}" (${sizeMiB} MiB)?\n\n` +
+            `Any local data not already synced to the server will be lost. ` +
+            `The page will reload after the import.`,
+          )
+          if (!ok) return
+
+          const banner = showProgressBanner(`Importing SQLite database (${sizeMiB} MiB)…`)
+          try {
+            await importRawSqliteDb(repo, file)
+            banner.update('Import complete — reloading…')
+            window.location.reload()
+          } catch (err) {
+            console.error('[import-db] failed:', err)
+            banner.fail(`SQLite import failed: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
+
+        input.click()
+      },
+    },
+    {
       id: 'navigate_back',
       description: 'Go back in navigation history',
       context: ActionContextTypes.GLOBAL,
@@ -633,20 +668,59 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
     {
       id: 'delete_empty_block_cm',
-      description: 'Delete empty block on backspace (CodeMirror)',
+      description: 'Backspace at block start: delete empty / merge into previous (CodeMirror)',
       context: ActionContextTypes.EDIT_MODE_CM,
-      handler: async (deps: CodeMirrorEditModeDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-        const blockData = await repo.load(block.id)
-        if (!(blockData?.content === '')) return
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock} = deps
+        if (!block || !uiStateBlock || !editorView) return
+
+        // Only act when the cursor is at position 0 with no selection;
+        // otherwise codemirror's default backspace handles it.
+        const sel = editorView.state.selection.main
+        if (!(sel.empty && sel.from === 0)) return
 
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
+        // Live content from the editor — SQL may lag (pushChange is debounced).
+        const liveContent = editorView.state.doc.toString()
+
+        // Empty block: delete it and move focus up.
+        if (liveContent === '') {
+          const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+          await block.delete()
+          if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
+          return
+        }
+
+        // Non-empty block: merge into the previous visible block (Roam-style).
+        // Refuse if there is none, or if the previous visible block is the
+        // panel's top-level block (don't merge into the page/view header).
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
-        await block.delete()
-        if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
+        if (!prevVisible || prevVisible.id === topLevelBlockId) return
+
+        // CodeMirror's backspace at pos 0 is a no-op, but stop the event
+        // anyway to avoid any chance of double-handling.
+        trigger.preventDefault()
+
+        await prevVisible.load()
+        const intoContentBefore = prevVisible.peek()?.content ?? ''
+        const joinOffset = intoContentBefore.length
+        const prevId = prevVisible.id
+
+        // Single tx: flush the editor's live content into `from` first so
+        // core.merge concatenates the latest text, then run the merge.
+        // tx.run sees writes from the same tx via SQL.
+        await repo.tx(async tx => {
+          await tx.update(block.id, {content: liveContent})
+          await tx.run(mergeMutator, {intoId: prevId, fromId: block.id})
+        }, {scope: ChangeScope.BlockDefault, description: 'merge into previous block'})
+
+        await uiStateBlock.set(editorSelection, {
+          blockId: prevId,
+          start: joinOffset,
+        })
+        setFocusedBlockId(uiStateBlock, prevId)
       },
       defaultBinding: {
         keys: 'backspace',
