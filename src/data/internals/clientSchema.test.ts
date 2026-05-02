@@ -34,9 +34,11 @@ import {
   CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
+  ALIAS_BACKFILL_MARKER_KEY,
   BACKFILL_BLOCK_ALIASES_SQL,
   CLIENT_SCHEMA_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_NAMES,
+  backfillBlockAliasesIfEmpty,
 } from './clientSchema'
 
 interface TestDb {
@@ -507,5 +509,65 @@ describe('block_aliases backfill', () => {
     h.insertBlock({id: 'b1', properties_json: '{"alias":["Foo"]}'})
     h.db.exec(BACKFILL_BLOCK_ALIASES_SQL)
     expect(aliasRows(h.db)).toHaveLength(1)
+  })
+
+  describe('backfillBlockAliasesIfEmpty marker gate', () => {
+    // The runner adapts node:sqlite's synchronous DatabaseSync to the
+    // async {execute, getOptional} interface backfillBlockAliasesIfEmpty
+    // expects in production (PowerSync's db handle).
+    const runBackfill = async () => {
+      await backfillBlockAliasesIfEmpty({
+        execute: async (sql) => h.db.exec(sql),
+        getOptional: async <T,>(sql: string) => {
+          const row = h.db.prepare(sql).get() as T | undefined
+          return row ?? null
+        },
+      })
+    }
+    const markerExists = (): boolean =>
+      h.db
+        .prepare(`SELECT 1 FROM client_schema_state WHERE key = '${ALIAS_BACKFILL_MARKER_KEY}'`)
+        .get() !== undefined
+
+    it('records the completion marker even when there are no aliases to backfill', async () => {
+      // Empty workspace path: no blocks, nothing to insert into
+      // block_aliases. Without the marker, the LIMIT 1 probe of
+      // block_aliases would still report empty on every restart and
+      // re-scan blocks indefinitely.
+      expect(markerExists()).toBe(false)
+      await runBackfill()
+      expect(markerExists()).toBe(true)
+      expect(aliasRows(h.db)).toHaveLength(0)
+    })
+
+    it('short-circuits on subsequent runs once the marker is present', async () => {
+      await runBackfill()
+      // Insert a block with aliases AFTER the marker is set; trigger
+      // populates block_aliases as usual. Then drop block_aliases to
+      // simulate "user removed every alias" and re-run the gate. The
+      // marker should keep us from re-scanning, leaving block_aliases
+      // empty (instead of repopulating from blocks).
+      h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: '{"alias":["Foo"]}'})
+      h.db.exec('DELETE FROM block_aliases')
+      await runBackfill()
+      expect(aliasRows(h.db)).toHaveLength(0)
+    })
+
+    it('runs the backfill exactly once across multiple invocations', async () => {
+      // Pre-existing blocks (upgrade path) — first call materialises
+      // block_aliases, second call is a no-op gated by the marker.
+      h.insertBlock({id: 'b1', workspace_id: 'ws1', properties_json: '{"alias":["Foo"]}'})
+      h.db.exec('DELETE FROM block_aliases')
+
+      await runBackfill()
+      expect(aliasRows(h.db).map(r => r.alias)).toEqual(['Foo'])
+
+      // Second call: the marker is set, so the SELECT short-circuits
+      // before the BACKFILL SQL runs. We can verify by deleting the
+      // alias row and checking it stays gone after the second call.
+      h.db.exec('DELETE FROM block_aliases')
+      await runBackfill()
+      expect(aliasRows(h.db)).toHaveLength(0)
+    })
   })
 })

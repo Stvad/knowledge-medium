@@ -149,6 +149,24 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL = `
   ON block_aliases (workspace_id, alias)
 `
 
+/** Tiny key/value table for one-shot schema-bootstrapping markers
+ *  (currently only the alias backfill). Local-only — the markers
+ *  describe the state of a derived index on this device, not anything
+ *  the server cares about.
+ *
+ *  Why a dedicated table instead of "is block_aliases empty?": a
+ *  legitimately empty workspace, or a workspace whose user removed
+ *  every alias, would otherwise re-trigger the full backfill scan on
+ *  every launch — which is exactly what the LIMIT 1 short-circuit was
+ *  meant to avoid. The marker captures "we ran the backfill once for
+ *  this schema version" directly. */
+export const CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS client_schema_state (
+    key           TEXT PRIMARY KEY,
+    completed_at  INTEGER NOT NULL
+  )
+`
+
 /** Case-insensitive substring/prefix path: QuickFind +
  *  `getAliasesInWorkspace` autocomplete. */
 export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
@@ -455,18 +473,33 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
 `
 
 /** One-shot backfill from `blocks.properties_json`. Called after the
- *  CLIENT_SCHEMA_STATEMENTS run, gated on `block_aliases` being empty
+ *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
  *  startup with this schema, and steady-state startups are a single
- *  cheap LIMIT 1 read. New installations also no-op (no blocks ⇒
- *  nothing to backfill).
+ *  cheap PK lookup. New installations also no-op (no blocks ⇒
+ *  nothing to backfill, marker still recorded so subsequent starts
+ *  short-circuit).
+ *
+ *  Marker key vs derived state: an earlier shape probed `block_aliases`
+ *  for any row, treating non-empty as proof the backfill ran. That
+ *  conflated "backfill complete" with "this workspace has any aliases
+ *  at all", so a workspace with zero alias-bearing blocks (or one that
+ *  later had every alias removed) re-ran the full table scan on every
+ *  launch. The dedicated marker captures the intent directly.
  *
  *  Why not part of CLIENT_SCHEMA_STATEMENTS: the SELECT scans the
  *  blocks table, which is multi-million rows on big workspaces.
  *  Running unconditionally on every app start would defeat the index
  *  the user just paid for. */
-export const SELECT_BLOCK_ALIASES_NONEMPTY_SQL = `
-  SELECT 1 FROM block_aliases LIMIT 1
+export const ALIAS_BACKFILL_MARKER_KEY = 'block_aliases_backfill_v1'
+
+export const SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${ALIAS_BACKFILL_MARKER_KEY}'
+`
+
+export const RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${ALIAS_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
 `
 
 export const BACKFILL_BLOCK_ALIASES_SQL = `
@@ -495,6 +528,7 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCK_ALIASES_TABLE_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,
+  CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
@@ -534,7 +568,11 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
 export const backfillBlockAliasesIfEmpty = async (
   db: { execute: (sql: string) => Promise<unknown>; getOptional: <T>(sql: string) => Promise<T | null> },
 ): Promise<void> => {
-  const existing = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_NONEMPTY_SQL)
-  if (existing !== null) return
+  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)
+  if (done !== null) return
   await db.execute(BACKFILL_BLOCK_ALIASES_SQL)
+  // Record completion regardless of whether any rows were inserted —
+  // an empty workspace is fully backfilled too, and we don't want to
+  // re-scan blocks on every start in that case.
+  await db.execute(RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL)
 }
