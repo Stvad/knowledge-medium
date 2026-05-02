@@ -34,6 +34,7 @@ export type Dependency =
   | { kind: 'parent-edge'; parentId: string }
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'table'; table: string }
+  | { kind: 'backlink-target'; id: string }
 
 /** Set of changes the store walks against handle dependencies. The
  *  fast path (TxEngine post-commit) and the slow path (row_events tail)
@@ -46,6 +47,13 @@ export interface ChangeNotification {
   parentIds?: ReadonlySet<string> | readonly string[]
   workspaceIds?: ReadonlySet<string> | readonly string[]
   tables?: ReadonlySet<string> | readonly string[]
+  /** Target ids whose incoming-edge set changed — i.e. some block in
+   *  the workspace gained or lost a reference pointing at this id.
+   *  Computed as the symmetric difference of `references_json` target
+   *  ids per touched row (with soft-delete / restore treated as
+   *  "all edges" lost / gained respectively). Drives `backlink-target`
+   *  deps. Empty for tx batches that didn't change any references. */
+  backlinkTargets?: ReadonlySet<string> | readonly string[]
 }
 
 /** Context handed to a handle's loader. The loader calls `depend(...)`
@@ -134,7 +142,8 @@ export class HandleStore {
       (!change.rowIds || sizeOf(change.rowIds) === 0) &&
       (!change.parentIds || sizeOf(change.parentIds) === 0) &&
       (!change.workspaceIds || sizeOf(change.workspaceIds) === 0) &&
-      (!change.tables || sizeOf(change.tables) === 0)
+      (!change.tables || sizeOf(change.tables) === 0) &&
+      (!change.backlinkTargets || sizeOf(change.backlinkTargets) === 0)
     ) {
       return
     }
@@ -509,6 +518,8 @@ const matchesDep = (dep: Dependency, change: ChangeNotification): boolean => {
       return change.workspaceIds ? has(change.workspaceIds, dep.workspaceId) : false
     case 'table':
       return change.tables ? has(change.tables, dep.table) : false
+    case 'backlink-target':
+      return change.backlinkTargets ? has(change.backlinkTargets, dep.id) : false
   }
 }
 
@@ -550,10 +561,22 @@ export const handleKey = (name: string, args?: unknown): string =>
 
 /** Per-id snapshot pair shape. Mirrors `SnapshotEntry` from
  *  `txSnapshots.ts` without importing it (handleStore stays free of
- *  internals dependencies). */
+ *  internals dependencies). `references` is included so the
+ *  `backlinkTargets` symmetric-diff path can compute "did this row's
+ *  outgoing-edge set change". */
 export interface ChangeSnapshot {
-  before: { parentId: string | null; workspaceId: string; deleted?: boolean } | null
-  after: { parentId: string | null; workspaceId: string; deleted?: boolean } | null
+  before: {
+    parentId: string | null
+    workspaceId: string
+    deleted?: boolean
+    references?: ReadonlyArray<{ id: string }>
+  } | null
+  after: {
+    parentId: string | null
+    workspaceId: string
+    deleted?: boolean
+    references?: ReadonlyArray<{ id: string }>
+  } | null
 }
 
 /** Compute a `ChangeNotification` from a tx's per-id snapshots map.
@@ -576,6 +599,13 @@ export interface ChangeSnapshot {
  *       declare `ctx.depend({kind:'table', table:'blocks'})` (the
  *       coarse fallback for table-scan resolvers, especially ones with
  *       empty results that have no per-row deps to invalidate against).
+ *    - `backlinkTargets`: target ids whose incoming-edge set changed.
+ *       Computed as symmetric difference of `before.references` and
+ *       `after.references` (treating soft-deletes/restores as "all
+ *       edges" lost/gained). A row whose `references_json` is unchanged
+ *       (or whose changes don't alter the set of distinct target ids)
+ *       contributes nothing here — content-only edits, focus-state
+ *       writes, and property edits don't invalidate backlinks handles.
  */
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
@@ -583,6 +613,7 @@ export const snapshotsToChangeNotification = (
   const rowIds = new Set<string>()
   const parentIds = new Set<string>()
   const workspaceIds = new Set<string>()
+  const backlinkTargets = new Set<string>()
   const tables = snapshots.size > 0 ? new Set<string>(['blocks']) : undefined
   for (const [id, entry] of snapshots) {
     rowIds.add(id)
@@ -612,6 +643,32 @@ export const snapshotsToChangeNotification = (
     // Pure field change with same parent_id and same liveness: rowId
     // alone covers it. No parent-edge entry — `repo.children(id)`
     // already declares row deps on each child for this case.
+
+    // Backlink-target diff: a soft-deleted (or never-live) row
+    // contributes no outgoing edges per the `block_references` trigger
+    // gate (`WHERE NEW.deleted = 0`); treat its effective ref set as
+    // empty for diff purposes. The symmetric difference is the set of
+    // targets whose incoming-edge list either gained or lost this row.
+    const beforeRefs = beforeLive ? entry.before?.references ?? [] : []
+    const afterRefs = afterLive ? entry.after?.references ?? [] : []
+    addSymmetricTargetDiff(beforeRefs, afterRefs, backlinkTargets)
   }
-  return { rowIds, parentIds, workspaceIds, tables }
+  return { rowIds, parentIds, workspaceIds, tables, backlinkTargets }
+}
+
+/** Add to `out` every target id present in exactly one of `before` /
+ *  `after`. Reorderings or alias-only changes that preserve the set of
+ *  distinct target ids contribute nothing. */
+const addSymmetricTargetDiff = (
+  before: ReadonlyArray<{ id: string }>,
+  after: ReadonlyArray<{ id: string }>,
+  out: Set<string>,
+): void => {
+  if (before.length === 0 && after.length === 0) return
+  const beforeIds = new Set<string>()
+  for (const r of before) beforeIds.add(r.id)
+  const afterIds = new Set<string>()
+  for (const r of after) afterIds.add(r.id)
+  for (const id of beforeIds) if (!afterIds.has(id)) out.add(id)
+  for (const id of afterIds) if (!beforeIds.has(id)) out.add(id)
 }

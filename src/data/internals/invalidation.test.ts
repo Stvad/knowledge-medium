@@ -151,6 +151,83 @@ describe('snapshotsToChangeNotification', () => {
     const note = snapshotsToChangeNotification(new Map())
     expect(note.tables).toBeUndefined()
   })
+
+  // ──── backlinkTargets — symmetric diff of references ────
+
+  it('backlinkTargets: new live row contributes all its target ids', () => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: null,
+        after: {parentId: null, workspaceId: 'w', references: [{id: 'tgt-a'}, {id: 'tgt-b'}]},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.backlinkTargets ?? []).sort()).toEqual(['tgt-a', 'tgt-b'])
+  })
+
+  it('backlinkTargets: soft-delete of a row with refs contributes all its prior targets', () => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: {parentId: null, workspaceId: 'w', deleted: false, references: [{id: 'tgt-x'}]},
+        after: {parentId: null, workspaceId: 'w', deleted: true, references: [{id: 'tgt-x'}]},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.backlinkTargets ?? [])).toEqual(['tgt-x'])
+  })
+
+  it('backlinkTargets: tombstone restore contributes all current targets', () => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: {parentId: null, workspaceId: 'w', deleted: true, references: [{id: 'tgt-x'}]},
+        after: {parentId: null, workspaceId: 'w', deleted: false, references: [{id: 'tgt-x'}]},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.backlinkTargets ?? [])).toEqual(['tgt-x'])
+  })
+
+  it('backlinkTargets: refs added/removed contribute only the symmetric difference', () => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: {parentId: null, workspaceId: 'w', references: [{id: 'kept'}, {id: 'removed'}]},
+        after: {parentId: null, workspaceId: 'w', references: [{id: 'kept'}, {id: 'added'}]},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.backlinkTargets ?? []).sort()).toEqual(['added', 'removed'])
+  })
+
+  it('backlinkTargets: pure content edit with unchanged references contributes nothing', () => {
+    // The whole point of the new dep — a focus/content edit that doesn't
+    // alter the set of distinct outgoing targets must not invalidate any
+    // backlinks handle.
+    const map = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: {parentId: null, workspaceId: 'w', references: [{id: 'tgt'}]},
+        after: {parentId: null, workspaceId: 'w', references: [{id: 'tgt'}]},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.backlinkTargets ?? [])).toEqual([])
+  })
+
+  it('backlinkTargets: alias-only change to the same target contributes nothing', () => {
+    // Two BlockReference entries pointing at the same target id with
+    // different aliases (Roam-style `[[Foo]]` vs `[[foo]]`) — the set of
+    // distinct target ids is the same, so the backlinks handle for that
+    // target doesn't need to re-resolve. (The block_references row set
+    // does change, but the consumer-visible result of
+    // `core.backlinks({id})` does not.)
+    const map = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: {parentId: null, workspaceId: 'w', references: [{id: 'tgt'}]},
+        after: {parentId: null, workspaceId: 'w', references: [{id: 'tgt'}, {id: 'tgt'}]},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.backlinkTargets ?? [])).toEqual([])
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════
@@ -214,6 +291,61 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await env.repo.mutate.setContent({id: 'c1', content: 'updated'})
     await vi.waitFor(() => expect(fired.length).toBe(2))
     expect(fired[1][0].content).toBe('updated')
+  })
+
+  it('backlink-target dep: handle re-resolves only when some source gains/loses a ref to this target', async () => {
+    // Seed three blocks. `target` is the id we'll subscribe backlinks
+    // for. `unrelated` is a sibling that points at a *different*
+    // target — its writes must not invalidate `target`'s backlinks
+    // handle. `src` will start with no refs, then gain a ref to
+    // target, then drop it.
+    await create('target')
+    await create('other-target')
+    await create('unrelated')
+    await env.repo.tx(tx => tx.create({
+      id: 'src',
+      workspaceId: 'ws-1',
+      parentId: null,
+      orderKey: 'src0',
+      content: '',
+    }), {scope: ChangeScope.BlockDefault})
+
+    const h = env.repo.query.backlinks({workspaceId: 'ws-1', id: 'target'})
+    const fired: number[] = []
+    h.subscribe(v => fired.push(v.length))
+    await vi.waitFor(() => expect(fired).toEqual([0]))
+
+    // Pure content edit on `unrelated` — no references_json change at
+    // all. Old workspace-dep would fire; the new dep must NOT.
+    await env.repo.mutate.setContent({id: 'unrelated', content: 'noise'})
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired).toEqual([0])
+
+    // `unrelated` gains a ref to `other-target`, NOT to `target`. The
+    // change notification's backlinkTargets is {other-target}; target's
+    // handle still must not fire.
+    await env.repo.tx(tx => tx.update('unrelated', {
+      references: [{id: 'other-target', alias: 'OT'}],
+    }), {scope: ChangeScope.BlockDefault})
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired).toEqual([0])
+
+    // Now `src` gains a ref to `target`. backlinkTargets contains
+    // 'target' → the handle re-resolves and includes src.
+    await env.repo.tx(tx => tx.update('src', {
+      references: [{id: 'target', alias: 'T'}],
+    }), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
+    expect(h.peek()?.map(b => b.id)).toEqual(['src'])
+
+    // `src` drops the ref. backlinkTargets contains 'target' →
+    // re-resolve, list is empty again.
+    await env.repo.tx(tx => tx.update('src', {references: []}), {
+      scope: ChangeScope.BlockDefault,
+    })
+    await vi.waitFor(() => expect(fired).toEqual([0, 1, 0]))
   })
 
   it('handles outside the change scope are not re-resolved', async () => {

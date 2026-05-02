@@ -4,12 +4,23 @@ import type { BlockData } from './blockData'
 /** A dependency a query declares while resolving. Drives invalidation
  *  matching (§9.2). Built-in queries declare these from their `resolve`
  *  bodies (e.g. `parent-edge` for tree handles, `row` for everything
- *  visited). Plugin queries do the same. */
+ *  visited). Plugin queries do the same.
+ *
+ *  `backlink-target`: a handle that depends on "the set of source rows
+ *  pointing at this id" — i.e. `core.backlinks({id})`. The fast path +
+ *  sync tail compute the symmetric difference of `references_json`
+ *  target ids per touched row and add the diff to
+ *  `ChangeNotification.backlinkTargets`. A change that doesn't alter
+ *  the set of targets a source references (a content edit on a source
+ *  row, a focus-state UI write) does NOT add anything to
+ *  `backlinkTargets` and so does not invalidate any backlinks handle.
+ */
 export type Dependency =
   | { kind: 'row'; id: string }
   | { kind: 'parent-edge'; parentId: string }
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'table'; table: string }
+  | { kind: 'backlink-target'; id: string }
 
 /** Resolver context. `db` is the raw PowerSync handle for committed-state
  *  reads; writes through `db` are unsupported (use `repo.tx` / `ctx.tx`).

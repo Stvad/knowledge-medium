@@ -65,6 +65,7 @@ const depIds = (deps: readonly Dependency[], kind: Dependency['kind']) =>
       if (d.kind === 'row') return d.id
       if (d.kind === 'parent-edge') return d.parentId
       if (d.kind === 'workspace') return d.workspaceId
+      if (d.kind === 'backlink-target') return d.id
       return d.table
     })
     .sort()
@@ -232,11 +233,15 @@ describe('repo.query.backlinks({workspaceId, id})', () => {
     await h.load()
     const deps = h.__depsForTest()
     expect(depIds(deps, 'row').sort()).toEqual(['linker', 't'])
-    expect(depIds(deps, 'workspace')).toEqual(['ws-1'])
-    // No table dep — backlinks declares precise row + workspace deps;
-    // the workspace dep is the proper coarse filter for cross-workspace
-    // isolation without globally invalidating on every blocks write.
+    // backlink-target is the precise per-id signal — only writes that
+    // alter some row's set of distinct outgoing target ids fan out
+    // here, so a focus-state UI write or unrelated content edit never
+    // re-fires this handle.
+    expect(depIds(deps, 'backlink-target')).toEqual(['t'])
+    // No table or workspace dep — the per-target signal makes the old
+    // workspace coarse filter unnecessary.
     expect(deps.some(d => d.kind === 'table')).toBe(false)
+    expect(deps.some(d => d.kind === 'workspace')).toBe(false)
   })
 })
 

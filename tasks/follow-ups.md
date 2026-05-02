@@ -54,17 +54,6 @@ Add when a measured hot path appears, not preemptively. Phase 4's `queriesFacet`
 
 Cheap wins first (skeleton + maybe overscan); reach for `useTransition` if it still feels jumpy.
 
-## Backlinks dep tightening (post `block_references`)
-
-`block_references` (added with the perf fix) makes the SQL fast, but `backlinksQuery` still declares `{kind:'workspace', workspaceId}` — a UI-state focus change on a block in the same workspace fans out to every backlinks handle on the page and triggers a re-resolve. After the SQL fix the re-resolve itself is cheap (~1 ms vs 250-1500 ms), but it's still wasted work + a needless React notify cycle.
-
-Two shapes:
-
-- **Per-target signal (`{kind:'backlink-target', id}`).** New dep kind. The TxEngine fast path computes the symmetric difference of `references_json` target ids per touched row at commit time and adds them to `change.backlinkTargets`; the row_events tail does the same on sync apply. The backlinks handle for `target=X` re-fires only when X is in that set. Precise — focus/edit-mode/properties writes produce empty `backlinkTargets` and skip the handle entirely. Cost: snapshot diff hook in the engine + a new dep kind in `handleStore.ts`. ~100 lines.
-- **Coarse table dep (`{kind:'table', table:'block_references'}`).** Cheaper. The fast path adds `block_references` to `change.tables` whenever a tracked write changed `references_json`. Backlinks handles redeclare to the new dep. Wider than option A — every reference change fires every backlinks handle on the page, but at least focus/edit/properties writes stop triggering it. ~30 lines.
-
-Recommend A; B is the if-we-need-it-yesterday variant. Either is the natural follow-up to the `block_references` perf fix.
-
 ## Periodic `row_events` trim
 
 `row_events` is the per-row audit + invalidation log. Trigger-written, never trimmed — it grew to 262 MB / 304k rows on the import-heavy DB. The fast path doesn't need history; the row_events tail consumes by ascending `id` and only needs rows newer than its high-watermark. Long-tail entries are dead weight on disk and on backup/export.

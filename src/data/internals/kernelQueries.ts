@@ -260,7 +260,22 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
 /** Backlinks: every block in `workspaceId` whose `references_json`
  *  contains an entry with `id = ?`. Workspace is required — callers
  *  that previously relied on the row-cache resolution (`repo.backlinks(id)`
- *  factory) pass it explicitly now. */
+ *  factory) pass it explicitly now.
+ *
+ *  Dep declaration:
+ *    - `{kind:'row', id}` — target's row dep (so a target deletion /
+ *      restore re-fires the handle).
+ *    - `{kind:'backlink-target', id}` — the precise per-target signal.
+ *      The TxEngine fast path + row_events tail compute the symmetric
+ *      difference of `references_json` target ids per touched row;
+ *      this handle re-fires only when *some* source row gained or lost
+ *      this id as a target. Pure content / property / focus-state
+ *      writes don't change anyone's set of distinct outgoing targets
+ *      and so don't invalidate this handle.
+ *    - Per-source `{kind:'row', id: source.id}` declared inside
+ *      `hydrateBlocks` for every row in the result, so an in-place
+ *      content edit of an existing source still re-fires (covers the
+ *      ORDER BY updated_at sort). */
 export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, BlockData[]>({
   name: 'core.backlinks',
   argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
@@ -268,7 +283,7 @@ export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, Blo
   resolve: async ({workspaceId, id}, ctx) => {
     ctx.depend({kind: 'row', id})
     if (!workspaceId || !id) return []
-    ctx.depend({kind: 'workspace', workspaceId})
+    ctx.depend({kind: 'backlink-target', id})
     const rows = await asReadDb(ctx.db).getAll<BlockRow>(
       SELECT_BACKLINKS_FOR_BLOCK_SQL, [workspaceId, id, id],
     )

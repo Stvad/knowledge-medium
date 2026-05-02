@@ -111,6 +111,7 @@ export const startRowEventsTail = (args: {
     const rowIds = new Set<string>()
     const parentIds = new Set<string>()
     const workspaceIds = new Set<string>()
+    const backlinkTargets = new Set<string>()
 
     /** Per-workspace bookkeeping for the §4.7 cycle scan. We only need
      *  to scan rows whose parent_id changed (a fresh insert with no
@@ -150,6 +151,21 @@ export const startRowEventsTail = (args: {
       } else if (beforeLive && afterLive && beforeParent !== afterParent) {
         if (beforeParent !== null) parentIds.add(beforeParent)
         if (afterParent !== null) parentIds.add(afterParent)
+      }
+
+      // Backlink-target diff: same shape as the fast-path computation
+      // in `snapshotsToChangeNotification`. A soft-deleted row
+      // contributes no edges per the `block_references` trigger gate;
+      // symmetric difference of effective target id sets goes here.
+      const beforeRefs = beforeLive ? before?.references ?? [] : []
+      const afterRefs = afterLive ? after?.references ?? [] : []
+      if (beforeRefs.length > 0 || afterRefs.length > 0) {
+        const beforeIds = new Set<string>()
+        for (const r of beforeRefs) beforeIds.add(r.id)
+        const afterIds = new Set<string>()
+        for (const r of afterRefs) afterIds.add(r.id)
+        for (const id of beforeIds) if (!afterIds.has(id)) backlinkTargets.add(id)
+        for (const id of afterIds) if (!beforeIds.has(id)) backlinkTargets.add(id)
       }
 
       // Cycle-scan candidate selection: live row whose parent_id
@@ -242,6 +258,7 @@ export const startRowEventsTail = (args: {
       parentIds,
       workspaceIds,
       tables: new Set(['blocks']),
+      backlinkTargets,
     }
     handleStore.invalidate(notification)
   }
