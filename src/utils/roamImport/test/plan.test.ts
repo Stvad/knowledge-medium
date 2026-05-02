@@ -89,6 +89,40 @@ describe('planImport', () => {
     expect(order).toEqual(['child1uid', 'parentuid', 'dailychild'])
   })
 
+  it('treats pages with implausible :log/id years as non-daily', () => {
+    // Real-bug repro: a Roam page with a :log/id that decodes to a
+    // 5-digit year (e.g. from a typo'd daily title that Roam still
+    // tagged with a synthetic log id) used to crash the import. The
+    // page should fall through to the regular non-daily branch.
+    // 5.75e14 ms ≈ year 20201.
+    const result = planImport([{
+      title: 'April 1st, 20201',
+      uid: 'odd-uid',
+      ':log/id': 5.75e14,
+      'create-time': 1700000000000,
+      children: [],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const page = result.pages[0]
+    expect(page.isDaily).toBe(false)
+    expect(page.data).toBeDefined()
+  })
+
+  it('treats pages whose title parses to a 5-digit year as non-daily', () => {
+    // chrono will accept "April 1st, 20201" — we reject in
+    // parseRelativeDate so the page imports as a regular page
+    // instead of crashing the daily-note path.
+    const result = planImport([{
+      title: 'April 1st, 20201',
+      uid: 'plain-uid',
+      'create-time': 1700000000000,
+      children: [],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(result.pages[0].isDaily).toBe(false)
+    expect(result.pages[0].data).toBeDefined()
+  })
+
   it('rewrites block refs and #tags in content', () => {
     const plan = planImport(minimalExport, {workspaceId: WORKSPACE, currentUserId: USER})
 

@@ -175,13 +175,30 @@ export const importRoam = async (
   //    the main import tx would require duplicating the journal
   //    creation logic, and dailies are typically O(years) not
   //    O(unique_aliases), so the gain isn't worth the duplication.
-  const dailyIsos = collectDailyIsos(reconciliations, aliasResolution.aliasIdMap, plan.aliasesUsed)
+  const dailyIsos = collectDailyIsos(
+    reconciliations,
+    aliasResolution.aliasIdMap,
+    plan.aliasesUsed,
+    plan.diagnostics,
+  )
   if (dailyIsos.length > 0) log(`Materialising ${dailyIsos.length} daily notes…`)
   // Throttle progress to every 100 dailies — emitting per-iteration
   // would flood any UI banner with redraws when an export references
   // years of dailies.
+  //
+  // Per-iso failure isolation: a single bad iso (e.g. one that slipped
+  // past the perimeter shape filter for some reason we haven't seen
+  // yet) shouldn't sink an otherwise-successful import. Catch, log to
+  // diagnostics, continue.
   for (let i = 0; i < dailyIsos.length; i++) {
-    await getOrCreateDailyNote(repo, options.workspaceId, dailyIsos[i])
+    const iso = dailyIsos[i]
+    try {
+      await getOrCreateDailyNote(repo, options.workspaceId, iso)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      plan.diagnostics.push(`Failed to materialise daily note for ${iso}: ${message}`)
+      log(`Daily note ${iso} failed: ${message} — continuing`)
+    }
     if ((i + 1) % 100 === 0 && i + 1 < dailyIsos.length) {
       log(`Daily notes ${i + 1}/${dailyIsos.length}`)
     }
@@ -338,23 +355,56 @@ const formatEta = (seconds: number): string => {
   return `${h}h${String(m).padStart(2, '0')}m`
 }
 
+// Strict ISO yyyy-mm-dd shape — same regex `dailyNotes.parseIsoParts`
+// uses. Anything that doesn't match crashes the daily-note path, so we
+// drop it at the perimeter rather than letting a single typo'd page
+// abort the entire import.
+const VALID_ISO = /^\d{4}-\d{2}-\d{2}$/
+
 /** Distinct ISO dates that need a daily-note row before the main tx
  *  commits — the union of (imported daily pages, daily-shaped aliases
  *  referenced in content). Deduplicated so a 1000-block import that
  *  references `[[2026-04-28]]` 500 times calls getOrCreateDailyNote
- *  once per unique date, not once per occurrence. */
+ *  once per unique date, not once per occurrence.
+ *
+ *  Defensive iso-shape filter at the perimeter: any iso that fails the
+ *  strict regex would crash `getOrCreateDailyNote`, killing the whole
+ *  import for one bad page. Drop it here and surface it via
+ *  `diagnostics`, mirroring how the planner handles other lossy
+ *  fallbacks. */
 const collectDailyIsos = (
   recons: PageReconciliation[],
   aliasIdMap: AliasIdMap,
   aliasesUsed: ReadonlySet<string>,
+  diagnostics: string[],
 ): string[] => {
   const isos = new Set<string>()
   for (const r of recons) {
-    if (r.page.isDaily && r.page.iso) isos.add(r.page.iso)
+    if (!r.page.isDaily || !r.page.iso) continue
+    if (!VALID_ISO.test(r.page.iso)) {
+      // Should not happen — the three upstream paths
+      // (`isoFromDateUid`, `isoFromLogId`, `parseRelativeDate`) all
+      // clamp to 4-digit years already. This branch is a defensive
+      // safety net so a future regression at any of those sources
+      // doesn't crash the entire import.
+      diagnostics.push(
+        `Daily page "${r.page.title}" (uid ${r.page.roamUid}) has non-standard ` +
+        `ISO "${r.page.iso}"; skipping daily-note materialisation. The page row ` +
+        `will still be created, but downstream steps may fail — investigate the ` +
+        `source data or upstream resolveDailyPage path.`,
+      )
+      continue
+    }
+    isos.add(r.page.iso)
   }
   for (const alias of aliasesUsed) {
     const parsed = parseRelativeDate(alias)
-    if (parsed && aliasIdMap.has(alias)) isos.add(parsed.iso)
+    if (!parsed || !aliasIdMap.has(alias)) continue
+    if (!VALID_ISO.test(parsed.iso)) {
+      diagnostics.push(`Alias "${alias}" parsed to non-standard ISO "${parsed.iso}" — skipping.`)
+      continue
+    }
+    isos.add(parsed.iso)
   }
   return [...isos]
 }

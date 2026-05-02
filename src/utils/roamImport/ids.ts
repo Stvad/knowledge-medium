@@ -65,6 +65,11 @@ const isoFromLogId = (logId: number): string | null => {
   // `:log/id` is midnight UTC of the calendar day, so reading UTC
   // components keeps us aligned across timezones.
   const yyyy = date.getUTCFullYear()
+  // Reject implausible years for the same reason parseRelativeDate
+  // does: a corrupt or oversized `:log/id` in the export can yield a
+  // 5-digit year, which then fails the strict `\d{4}-\d{2}-\d{2}`
+  // regex in dailyNotes.ts and crashes the entire import.
+  if (yyyy < 1000 || yyyy > 9999) return null
   const mm = String(date.getUTCMonth() + 1).padStart(2, '0')
   const dd = String(date.getUTCDate()).padStart(2, '0')
   return `${yyyy}-${mm}-${dd}`
