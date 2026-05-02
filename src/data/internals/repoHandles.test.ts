@@ -97,8 +97,7 @@ describe('repo.children(id)', () => {
     expect(depIds(deps, 'parent-edge')).toEqual(['p'])
     expect(depIds(deps, 'row').sort()).toEqual(['c1', 'c2'])
     // No table dep — children declares precise parent-edge + per-row
-    // deps; coarseScope.tables auto-declare was reverted because it
-    // made every blocks write globally invalidate every mounted handle.
+    // deps; the resolver doesn't ask for table-coarse invalidation.
     expect(deps.some(d => d.kind === 'table')).toBe(false)
   })
 

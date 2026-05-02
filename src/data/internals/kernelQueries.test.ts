@@ -546,7 +546,6 @@ describe('plugin queries via setFacetRuntime', () => {
       name: 'plugin:countTombstones',
       argsSchema: z.object({workspaceId: z.string()}),
       resultSchema: z.number(),
-      coarseScope: {tables: ['blocks']},
       resolve: async ({workspaceId}, ctx) => {
         ctx.depend({kind: 'workspace', workspaceId})
         const row = await (ctx.db as {getOptional: (sql: string, params?: unknown[]) => Promise<{n: number} | null>}).getOptional(

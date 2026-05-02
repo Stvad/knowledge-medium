@@ -744,14 +744,6 @@ export class Repo {
         store: this.handleStore,
         key,
         loader: async (ctx) => {
-          // `coarseScope.tables` is intent-marker only (no auto-declare).
-          // A previous version converted it to `{kind:'table'}` deps so
-          // empty-result resolvers had a fallback, but for precise queries
-          // (children/subtree/ancestors/backlinks/...) that already declare
-          // parent-edge/row/workspace deps, the table dep matched every
-          // blocks write globally and re-ran SQL on every mounted handle.
-          // Plugin queries that genuinely need a coarse table-scan dep
-          // declare it explicitly via `ctx.depend({kind:'table', table:...})`.
           const raw = await q.resolve(validated, {
             db: this.db,
             repo: this,

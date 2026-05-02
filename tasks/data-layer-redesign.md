@@ -943,20 +943,6 @@ export interface Query<Args, Result> {
    *  Dependencies are dynamic — gathered during execution from the rows the
    *  resolver actually touched — not declared statically up front. */
   readonly resolve: (args: Args, ctx: QueryCtx) => Promise<Result>
-
-  /** Optional coarse pre-filter for the invalidation engine.
-   *  If absent, the engine subscribes to all blocks/row_events changes
-   *  for this handle. Set this to limit pre-filtering work; dynamic deps
-   *  from resolve always take precedence for precision.
-   *
-   *  Only `tables` is supported (v4.28). Pre-v4.28 the type also exposed
-   *  `mutators?: string[]` as a filter, but that channel went stale when
-   *  v4.20 removed mutator-name invalidation — no `Dependency` kind matches
-   *  mutator names anywhere in the spec, so the filter had no consumer.
-   *  Field/row-shaped invalidation via `ctx.depend({kind: 'row' | 'parent-edge'
-   *  | 'workspace' | 'table'})` is the correctness path; coarseScope.tables is
-   *  the only coarse filter that pairs with it. */
-  readonly coarseScope?: { tables?: string[] }
 }
 
 interface QueryCtx {
@@ -2080,7 +2066,7 @@ This phase is the clean break. It absorbs everything that's incoherent to land s
 - `repo.query.X(args)` accessor surface (typed via module augmentation) and `repo.runQuery('name', args)`. Per-name generation counter folded into the dispatcher's handle-store key so a `setFacetRuntime` swap that replaces a query under the same name produces a fresh `LoaderHandle` bound to the new resolver (reviewer P2 fix).
 - Dispatcher boundaries: `argsSchema.parse(args)` on input AND `resultSchema.parse(raw)` on output (reviewer P2 fix). Kernel queries ship typed pass-through `Schema<BlockData[]>` / `Schema<BlockData | null>` adapters so the runtime cost is zero while the public TypeScript surface from `QueryRegistry` stays precise.
 - `snapshotsToChangeNotification` (TxEngine fast path) and the `row_events` tail both emit `tables: ['blocks']` on any block write so explicit `ctx.depend({kind:'table', table:'blocks'})` calls in resolvers actually fire (reviewer P2 fix).
-- `coarseScope.tables` is intent-marker only — no runtime auto-declare. An earlier version converted it to `{kind:'table'}` deps so empty-result resolvers had a fallback, but that made every precise handle (children/subtree/...) match every blocks write globally and re-run SQL on every mounted handle. Plugin queries that genuinely need a coarse table-scan dep declare it explicitly via `ctx.depend({kind:'table', table:'blocks'})`. See `Query.coarseScope` doc-comment for the full rationale. Kernel queries don't ship `coarseScope` since their precise deps (parent-edge / row / workspace) cover their cases.
+- `Query.coarseScope` field dropped from the public surface. Earlier versions had it as a documented prefilter hook + brief auto-declare experiment; in practice no kernel or plugin query needed it (precise `parent-edge` / `row` / `workspace` deps cover every kernel case, and the auto-declare regressed perf on hot paths like `useChildIds`). Plugin queries that genuinely need a coarse table-scan dep declare it explicitly via `ctx.depend({kind:'table', table:'blocks'})`. If a real prefilter implementation is wanted later, reintroduce as a true negative filter ("only consider these tables"), not a positive OR-dep.
 - All call sites migrated to `repo.query.X({...})` (chunk C-1): React hooks, `Block.childIds` / `Block.children`, parseReferencesProcessor's inline SQL helpers, dynamicExtensions, QuickFind, CodeMirrorContentRenderer, copy / shortcut handlers, agentRuntime bridge, roamImport.
 - Legacy `repo.findX` methods + `repo.subtree`/`ancestors`/`children`/`childIds`/`backlinks` reactive factories + `repo.loadSubtree`/`loadAncestors` deleted (chunk C-2). `repo.query.X({...})` is the only kernel-query surface.
 - `loadSubtree`'s `{includeRoot: false}` option dropped — two callers (exampleExtensions, useAgentRuntimeBridge) updated to filter the root at the consumer boundary.

@@ -311,32 +311,13 @@ describe('setFacetRuntime swaps the query registry', () => {
   })
 })
 
-describe('coarseScope.tables is intent-marker only (no auto-declare)', () => {
-  // The dispatcher used to convert `coarseScope.tables` into
-  // `{kind:'table'}` deps so empty-result resolvers had a fallback. That
-  // made every precise handle (children/subtree/...) match every blocks
-  // write globally, re-running SQL on every mounted handle. Now
-  // coarseScope is documentation-only — see the field's doc-comment in
-  // src/data/api/query.ts. Plugin queries that genuinely need a coarse
-  // table-scan dep declare it explicitly via ctx.depend.
-
-  it('coarseScope.tables alone declares NO deps — resolver must use ctx.depend', async () => {
-    const tableOnly = defineQuery<Record<string, never>, number>({
-      name: 'plugin:tableOnly',
-      argsSchema: z.object({}),
-      resultSchema: z.number(),
-      coarseScope: {tables: ['blocks']},
-      // No ctx.depend(...) inside resolve.
-      resolve: async () => 42,
-    })
-    repo.__setQueriesForTesting([tableOnly])
-    const handle = repo.query['plugin:tableOnly']({})
-    await expect(handle.load()).resolves.toBe(42)
-    const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
-    expect(deps).toEqual([])
-  })
-
-  it('explicit ctx.depend({kind:"table"}) DOES register a table dep', async () => {
+describe('explicit ctx.depend({kind:"table"}) registers a table dep', () => {
+  // Coarse table deps must come from the resolver's explicit
+  // ctx.depend call — there is no auto-declare from any Query field.
+  // This pins the contract: the only way a query gets a table dep is
+  // by asking for one. Plugin queries that need one (typically the
+  // table-scan with-empty-result case) call ctx.depend directly.
+  it('a resolver calling ctx.depend({kind:"table"}) gets that dep', async () => {
     const explicitTable = defineQuery<Record<string, never>, number>({
       name: 'plugin:explicitTable',
       argsSchema: z.object({}),
@@ -351,24 +332,6 @@ describe('coarseScope.tables is intent-marker only (no auto-declare)', () => {
     await handle.load()
     const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
     expect(deps).toEqual([{kind: 'table', table: 'blocks'}])
-  })
-
-  it('coarseScope set + explicit deps: only the explicit deps register', async () => {
-    const mixed = defineQuery<{id: string}, number>({
-      name: 'plugin:mixed',
-      argsSchema: z.object({id: z.string()}),
-      resultSchema: z.number(),
-      coarseScope: {tables: ['blocks']}, // documentation-only
-      resolve: async ({id}, ctx) => {
-        ctx.depend({kind: 'row', id})
-        return 1
-      },
-    })
-    repo.__setQueriesForTesting([mixed])
-    const handle = repo.query['plugin:mixed']({id: 'x'})
-    await handle.load()
-    const deps = (handle as unknown as {__depsForTest(): readonly Dep[]}).__depsForTest()
-    expect(deps).toEqual([{kind: 'row', id: 'x'}])
   })
 })
 
