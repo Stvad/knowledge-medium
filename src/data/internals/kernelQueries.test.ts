@@ -84,11 +84,13 @@ const create = async (args: {
   }, {scope: ChangeScope.BlockDefault})
 }
 
-// Helper for the BlockData[] shape — query result is `unknown` at the
-// type level (kernel queries deliberately keep their result schemas
-// loose; see kernelQueries.ts), but at runtime they're BlockData[].
-const asBlocks = (v: unknown): BlockData[] => v as BlockData[]
-const asBlockOrNull = (v: unknown): BlockData | null => (v as BlockData | null)
+// Result types are precise after the reviewer fix — kernel queries
+// declare `BlockData[]` / `BlockData | null` directly via typed
+// pass-through schemas (see kernelQueries.ts). These helpers
+// previously narrowed `unknown`; kept as no-op identities to keep
+// the `await ... .load()` call sites stable while we verify behavior.
+const asBlocks = (v: BlockData[] | undefined): BlockData[] => v ?? []
+const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?? null
 
 // ════════════════════════════════════════════════════════════════════
 // Per-query SQL-behavior coverage

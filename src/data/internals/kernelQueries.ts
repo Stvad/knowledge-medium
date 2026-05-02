@@ -18,7 +18,7 @@
  */
 
 import { z } from 'zod'
-import { defineQuery, type AnyQuery } from '@/data/api'
+import { defineQuery, type AnyQuery, type BlockData, type Schema } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
 
@@ -170,19 +170,30 @@ const asReadDb = (db: unknown): QueryReadDb => db as QueryReadDb
 const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
   rows as unknown as ReadonlyArray<Record<string, unknown>>
 
-// Result schemas: the dispatcher does NOT validate query results at
-// runtime (only args). These shapes exist for type inference + plugin
-// contract documentation; loose `z.array(z.unknown())` / `z.unknown()`
-// keeps definition-time cheap without buying false safety.
-const blockDataArraySchema = z.array(z.unknown())
-const blockDataOrNullSchema = z.unknown()
+// Result schemas. The dispatcher's resultSchema.parse boundary runs
+// on every load, so a strict zod schema would walk every BlockData
+// field on every subtree/children/etc. — wasteful when the SQL→
+// parseBlockRow boundary already produces fully-typed rows.
+//
+// Instead, ship typed pass-through schemas that satisfy `Schema<T>`
+// (`{parse(input): T}`) without runtime validation. The TypeScript
+// surface from QueryRegistry stays precise (reviewer P2: kernel
+// queries no longer return Promise<unknown>), while the runtime cost
+// is zero. Plugin authors with strict typing needs supply their own
+// zod schema and pay the validation cost knowingly.
+const blockDataArraySchema: Schema<BlockData[]> = {
+  parse: (input) => input as BlockData[],
+}
+const blockDataOrNullSchema: Schema<BlockData | null> = {
+  parse: (input) => input as BlockData | null,
+}
 
 // ──── Tree queries ────
 
 /** Subtree rooted at `id`, includeRoot=true (spec §11). Identity-stable
  *  via the dispatcher's handle-store key. Dep declaration mirrors the
  *  legacy `repo.subtree(id)` factory in `repo.ts`. */
-export const subtreeQuery = defineQuery<{id: string}, unknown>({
+export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.subtree',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
@@ -204,7 +215,7 @@ export const subtreeQuery = defineQuery<{id: string}, unknown>({
 })
 
 /** Ancestor chain (excludes `id` itself). */
-export const ancestorsQuery = defineQuery<{id: string}, unknown>({
+export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.ancestors',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
@@ -217,7 +228,7 @@ export const ancestorsQuery = defineQuery<{id: string}, unknown>({
 })
 
 /** Direct children of `id`, ordered `(order_key, id)`. */
-export const childrenQuery = defineQuery<{id: string}, unknown>({
+export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
   name: 'core.children',
   argsSchema: z.object({id: z.string()}),
   resultSchema: blockDataArraySchema,
@@ -254,7 +265,7 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
  *  contains an entry with `id = ?`. Workspace is required — callers
  *  that previously relied on the row-cache resolution (`repo.backlinks(id)`
  *  factory) pass it explicitly now. */
-export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, unknown>({
+export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, BlockData[]>({
   name: 'core.backlinks',
   argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
   resultSchema: blockDataArraySchema,
@@ -271,7 +282,7 @@ export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, unk
 })
 
 /** Live blocks in `workspaceId` whose `type` property equals `type`. */
-export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, unknown>({
+export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, BlockData[]>({
   name: 'core.byType',
   argsSchema: z.object({workspaceId: z.string(), type: z.string()}),
   resultSchema: blockDataArraySchema,
@@ -289,7 +300,7 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, unkn
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
   {workspaceId: string; query: string; limit?: number},
-  unknown
+  BlockData[]
 >({
   name: 'core.searchByContent',
   argsSchema: z.object({
@@ -312,7 +323,7 @@ export const searchByContentQuery = defineQuery<
 /** First child of `parentId` whose content matches exactly. */
 export const firstChildByContentQuery = defineQuery<
   {parentId: string; content: string},
-  unknown
+  BlockData | null
 >({
   name: 'core.firstChildByContent',
   argsSchema: z.object({parentId: z.string(), content: z.string()}),
@@ -378,7 +389,7 @@ export const aliasMatchesQuery = defineQuery<
 /** Single-block lookup by exact alias in a workspace. */
 export const aliasLookupQuery = defineQuery<
   {workspaceId: string; alias: string},
-  unknown
+  BlockData | null
 >({
   name: 'core.aliasLookup',
   argsSchema: z.object({workspaceId: z.string(), alias: z.string()}),
@@ -402,7 +413,7 @@ export const aliasLookupQuery = defineQuery<
  *  to this dedicated query). Mechanically `byType('extension')`; lives
  *  as its own kernel query so callers can register against a stable
  *  name without depending on the convention. */
-export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, unknown>({
+export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, BlockData[]>({
   name: 'core.findExtensionBlocks',
   argsSchema: z.object({workspaceId: z.string()}),
   resultSchema: blockDataArraySchema,
