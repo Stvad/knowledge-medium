@@ -162,7 +162,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
 
   it('children handle re-resolves when a child is added via repo.tx', async () => {
     await create('p')
-    const h = env.repo.children('p')
+    const h = env.repo.query.children({id: 'p'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
     await vi.waitFor(() => expect(fired).toEqual([0]))
@@ -176,8 +176,8 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await create('p1')
     await create('p2')
     await create('c', {parentId: 'p1', orderKey: 'a0'})
-    const h1 = env.repo.children('p1')
-    const h2 = env.repo.children('p2')
+    const h1 = env.repo.query.children({id: 'p1'})
+    const h2 = env.repo.query.children({id: 'p2'})
     const f1: number[] = []
     const f2: number[] = []
     h1.subscribe(v => f1.push(v.length))
@@ -193,7 +193,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
   it('subtree handle re-resolves when a descendant is added', async () => {
     await create('r')
     await create('a', {parentId: 'r', orderKey: 'a0'})
-    const h = env.repo.subtree('r')
+    const h = env.repo.query.subtree({id: 'r'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
     await vi.waitFor(() => expect(fired).toEqual([2])) // r + a
@@ -205,7 +205,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
   it('row dep: pure content edit fires handle even without parent-edge change', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0', content: 'first'})
-    const h = env.repo.children('p')
+    const h = env.repo.query.children({id: 'p'})
     const fired: BlockData[][] = []
     h.subscribe(v => fired.push(v))
     await vi.waitFor(() => expect(fired.length).toBe(1))
@@ -220,7 +220,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await create('p1')
     await create('p2')
     await create('a', {parentId: 'p1', orderKey: 'a0'})
-    const h2 = env.repo.children('p2')
+    const h2 = env.repo.query.children({id: 'p2'})
     const fired: number[] = []
     h2.subscribe(v => fired.push(v.length))
     await vi.waitFor(() => expect(fired).toEqual([0]))
@@ -274,7 +274,7 @@ describe('row_events tail: sync-applied invalidation', () => {
   it('source=sync row → handle re-resolves; cache is updated', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0', content: 'one'})
-    const h = env.repo.children('p')
+    const h = env.repo.query.children({id: 'p'})
     const fired: BlockData[][] = []
     h.subscribe(v => fired.push(v))
     await vi.waitFor(() => expect(fired.length).toBe(1))
@@ -307,7 +307,7 @@ describe('row_events tail: sync-applied invalidation', () => {
 
   it('local writes (source=user) do NOT fire the tail (no double invalidation)', async () => {
     await create('p')
-    const h = env.repo.children('p')
+    const h = env.repo.query.children({id: 'p'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
     await vi.waitFor(() => expect(fired).toEqual([0]))
@@ -334,7 +334,7 @@ describe('row_events tail: sync-applied invalidation', () => {
 
   it('invalidates the children handle on sync-applied parent_id assignment', async () => {
     await create('p')
-    const h = env.repo.children('p')
+    const h = env.repo.query.children({id: 'p'})
     await h.load()
 
     env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
@@ -363,7 +363,7 @@ describe('row_events tail: sync-applied invalidation', () => {
   it('does NOT re-resolve children on pure content edits (reviewer P2)', async () => {
     await create('p')
     await create('c1', {parentId: 'p', orderKey: 'a0', content: 'one'})
-    const h = env.repo.children('p')
+    const h = env.repo.query.children({id: 'p'})
     await h.load()
     const initial = h.peek()
 
@@ -388,7 +388,7 @@ describe('row_events tail: sync-applied invalidation', () => {
       expect(v?.map(b => b.id)).toEqual(['c1'])
     })
     expect(initial?.map(b => b.id)).toEqual(['c1'])
-    expect(await env.repo.childIds('p').load()).toEqual(['c1'])
+    expect(await env.repo.query.childIds({id: 'p'}).load()).toEqual(['c1'])
   })
 
   it('table-dep handle re-resolves on sync-applied write (reviewer P2)', async () => {

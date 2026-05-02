@@ -61,7 +61,7 @@ const reorderBlock = async (repo: Repo, block: Block, direction: -1 | 1): Promis
   const data = block.peek() ?? await block.load()
   if (!data || data.parentId === null) return
 
-  const siblingIds = await repo.childIds(data.parentId).load()
+  const siblingIds = await repo.query.childIds({id: data.parentId}).load()
   const idx = siblingIds.indexOf(block.id)
   if (idx === -1) return
 
