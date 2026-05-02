@@ -257,8 +257,10 @@ const computePromotedFromChildren = (
 // Collect every `[[X]]` token nested inside a property value. Used to
 // register page-link targets from property values into ctx.aliasesUsed
 // so the seat-creation pipeline materialises them just like content
-// references would.
-const collectAliasesFromPropertyValues = (
+// references would, AND by the post-resolution patcher so a dropped
+// attribute like `author::[[stvad]]` survives as a backlink edge after
+// the surviving block writes.
+export const collectAliasesFromPropertyValues = (
   promoted: Record<string, unknown>,
 ): string[] => {
   const out = new Set<string>()

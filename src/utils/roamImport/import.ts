@@ -26,7 +26,7 @@ import { keyAtEnd, keysBetween } from '@/data/internals/orderKey'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import { parseReferences } from '@/utils/referenceParser'
 import type { Repo } from '@/data/internals/repo'
-import { planImport, type PreparedPage, type RoamImportPlan } from './plan'
+import { collectAliasesFromPropertyValues, planImport, type PreparedPage, type RoamImportPlan } from './plan'
 import type { RoamExport } from './types'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -674,19 +674,31 @@ const resolveAliases = async (
 }
 
 const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
-  const parsed = parseReferences(data.content)
-  if (parsed.length === 0) return
+  // Aliases live in two places on an imported block:
+  //   1. Inline content `[[X]]` tokens — recovered via parseReferences.
+  //   2. Promoted property values like `author::[[stvad]]` — recovered
+  //      via collectAliasesFromPropertyValues. The planner already
+  //      registered these into ctx.aliasesUsed so seats exist; without
+  //      threading them into references[] here, the surviving block
+  //      would have no `{id, alias}` row → backlinks silently disappear
+  //      for every property-value alias dropped during attribute promotion.
+  const fromContent = parseReferences(data.content).map(r => r.alias)
+  const fromProperties = collectAliasesFromPropertyValues(data.properties)
+  if (fromContent.length === 0 && fromProperties.length === 0) return
 
   const seen = new Set(data.references.map(r => `${r.id}:${r.alias}`))
 
-  for (const ref of parsed) {
-    const id = aliasIdMap.get(ref.alias)
-    if (!id) continue
-    const key = `${id}:${ref.alias}`
-    if (seen.has(key)) continue
+  const append = (alias: string) => {
+    const id = aliasIdMap.get(alias)
+    if (!id) return
+    const key = `${id}:${alias}`
+    if (seen.has(key)) return
     seen.add(key)
-    data.references.push({id, alias: ref.alias})
+    data.references.push({id, alias})
   }
+
+  for (const alias of fromContent) append(alias)
+  for (const alias of fromProperties) append(alias)
 }
 
 /**

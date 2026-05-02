@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planImport } from '../plan'
+import { collectAliasesFromPropertyValues, planImport } from '../plan'
 import { roamBlockId } from '../ids'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import { aliasesProp, typeProp } from '@/data/properties'
@@ -562,5 +562,36 @@ describe('planImport', () => {
       'secondary@x.com',
       'tertiary@x.com',
     ])
+  })
+})
+
+describe('collectAliasesFromPropertyValues', () => {
+  // Pinned export so the import-time patcher can reuse the same scan
+  // to backfill references[] for aliases buried in property values
+  // (e.g. `author::[[stvad]]`). Without this scan, an attribute drop
+  // during promotion would also drop the backlink edge.
+
+  it('returns aliases nested inside string values', () => {
+    expect(collectAliasesFromPropertyValues({author: 'see [[stvad]] for context'}))
+      .toEqual(['stvad'])
+  })
+
+  it('returns aliases nested inside list-shaped property values', () => {
+    expect(collectAliasesFromPropertyValues({tags: ['[[alpha]]', 'plain', '[[beta]]']}))
+      .toEqual(['alpha', 'beta'])
+  })
+
+  it('deduplicates aliases that appear multiple times across values', () => {
+    expect(collectAliasesFromPropertyValues({
+      author: '[[stvad]]',
+      coauthor: 'and [[stvad]] again',
+      tags: ['[[stvad]]', '[[other]]'],
+    }))
+      .toEqual(expect.arrayContaining(['stvad', 'other']))
+  })
+
+  it('returns an empty array when no values carry tokens', () => {
+    expect(collectAliasesFromPropertyValues({n: 7, s: 'plain text', list: [1, 2]}))
+      .toEqual([])
   })
 })
