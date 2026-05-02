@@ -993,12 +993,21 @@ export class Repo {
       return this.handleStore.getOrCreate(key, () => new LoaderHandle({
         store: this.handleStore,
         key,
-        loader: (ctx) => q.resolve(validated, {
-          db: this.db,
-          repo: this,
-          hydrateBlocks: (rows) => this.hydrateRows(rows as unknown as ReadonlyArray<BlockRow>, ctx),
-          depend: (dep) => ctx.depend(dep),
-        }),
+        loader: async (ctx) => {
+          const raw = await q.resolve(validated, {
+            db: this.db,
+            repo: this,
+            hydrateBlocks: (rows) => this.hydrateRows(rows as unknown as ReadonlyArray<BlockRow>, ctx),
+            depend: (dep) => ctx.depend(dep),
+          })
+          // Result-schema parse at the boundary — symmetry with argsSchema
+          // and the documented contract (Query.resultSchema is required).
+          // For loose kernel schemas (`z.array(z.unknown())`) this is a
+          // pass-through; for strict plugin schemas it's the safety net
+          // that prevents a malformed resolver from publishing to the
+          // handle's subscribers + Suspense throwers.
+          return q.resultSchema.parse(raw)
+        },
       }))
     }
   }

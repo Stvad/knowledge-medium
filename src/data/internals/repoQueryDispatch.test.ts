@@ -233,6 +233,42 @@ describe('setFacetRuntime swaps the query registry', () => {
   })
 })
 
+describe('resultSchema validation at the boundary', () => {
+  it('parses the resolver result through resultSchema before publishing', async () => {
+    // Plugin returns a value the schema accepts — pass-through.
+    const okQuery = defineQuery<{n: number}, number>({
+      name: 'plugin:okSchema',
+      argsSchema: z.object({n: z.number()}),
+      resultSchema: z.number(),
+      resolve: async ({n}, ctx) => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return n
+      },
+    })
+    repo.__setQueriesForTesting([okQuery])
+    await expect(repo.query['plugin:okSchema']({n: 7}).load()).resolves.toBe(7)
+  })
+
+  it('rejects when the resolver returns a value that violates resultSchema', async () => {
+    // Schema demands a number; resolver lies and returns a string. The
+    // dispatcher's resultSchema.parse boundary is the safety net for
+    // dynamic plugins where TS can't catch this.
+    const badQuery = defineQuery<Record<string, never>, number>({
+      name: 'plugin:badSchema',
+      argsSchema: z.object({}),
+      // Strict: number expected.
+      resultSchema: z.number(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      resolve: async (_args, ctx): Promise<any> => {
+        ctx.depend({kind: 'table', table: 'blocks'})
+        return 'not a number'
+      },
+    })
+    repo.__setQueriesForTesting([badQuery])
+    await expect(repo.query['plugin:badSchema']({}).load()).rejects.toThrow()
+  })
+})
+
 describe('empty-args queries', () => {
   it('dispatch + identity-stabilize when argsSchema is z.object({})', () => {
     const q = defineQuery<Record<string, never>, string>({
