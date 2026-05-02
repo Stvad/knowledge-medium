@@ -10,7 +10,7 @@
  * loop works for non-kernel contributions.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
@@ -427,10 +427,14 @@ describe('invalidation', () => {
     try {
       // Add a new grandchild — parent-edge on c1 should invalidate.
       await create({id: 'gc', parentId: 'c1', orderKey: 'a0'})
-      // Wait for the async re-resolve.
-      await new Promise(r => setTimeout(r, 10))
+      // Wait for the async re-resolve. `setTimeout(10)` was racy
+      // under full-suite parallelism — the loader's reader-pool
+      // round-trip can take longer than 10 ms when 65+ files are
+      // contending for PowerSync's worker threads.
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['r', 'c1', 'gc'])
+      })
       value = asBlocks(handle.peek())
-      expect(value.map(b => b.id)).toEqual(['r', 'c1', 'gc'])
       expect(fired.length).toBeGreaterThanOrEqual(1)
     } finally {
       unsub()
@@ -471,8 +475,7 @@ describe('invalidation', () => {
     const unsub = handle.subscribe(() => { fired.push(1) })
     try {
       await env.repo.tx(tx => tx.update('c1', {content: 'edited'}), {scope: ChangeScope.BlockDefault})
-      await new Promise(r => setTimeout(r, 10))
-      expect(fired.length).toBeGreaterThanOrEqual(1)
+      await vi.waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(1))
     } finally {
       unsub()
     }
@@ -488,9 +491,10 @@ describe('invalidation', () => {
     const unsub = handle.subscribe((v) => { fired.push(v as BlockData[]) })
     try {
       await create({id: 'b', type: 'note'})
-      await new Promise(r => setTimeout(r, 10))
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
+      })
       value = asBlocks(handle.peek())
-      expect(value.map(b => b.id).sort()).toEqual(['a', 'b'])
       expect(fired.length).toBeGreaterThanOrEqual(1)
     } finally {
       unsub()
@@ -573,8 +577,7 @@ describe('plugin queries via setFacetRuntime', () => {
     const unsub = handle.subscribe((v) => { fired.push(v as number) })
     try {
       await env.repo.tx(tx => tx.delete('goner'), {scope: ChangeScope.BlockDefault})
-      await new Promise(r => setTimeout(r, 10))
-      expect(handle.peek()).toBe(1)
+      await vi.waitFor(() => expect(handle.peek()).toBe(1))
       expect(fired.length).toBeGreaterThanOrEqual(1)
     } finally {
       unsub()

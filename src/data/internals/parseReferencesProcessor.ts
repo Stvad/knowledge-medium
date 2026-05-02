@@ -83,10 +83,28 @@ interface SourcePlan {
   referencesChanged: boolean
 }
 
+/** Direct alias→id lookup against committed state. Bypasses the
+ *  `aliasLookup` query handle on purpose: handles short-circuit
+ *  `.load()` to the cached value while a post-invalidation reload is
+ *  inflight, which under load can hand the processor a stale
+ *  `existing` (e.g. a tombstoned target still showing as live) and
+ *  cause a missed restore. The processor needs committed-state truth,
+ *  not stale-while-revalidate. */
+const ALIAS_TARGET_ID_SQL = `
+  SELECT blocks.id AS id
+  FROM block_aliases ba
+  JOIN blocks ON blocks.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND ba.alias = ?
+    AND blocks.deleted = 0
+  ORDER BY blocks.created_at
+  LIMIT 1
+`
+
 /** Read phase: parse refs, resolve existing alias targets via committed-
  *  state lookup, and produce a SourcePlan describing what the write
- *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
- *  hits committed state. */
+ *  phase needs to do. No tx opened here — direct SQL hits committed
+ *  state without a chance of cached-handle staleness. */
 const buildSourcePlan = async (
   ctx: ProcessorCtx,
   source: BlockData,
@@ -116,9 +134,10 @@ const buildSourcePlan = async (
     // codec round-trip when an existing target already carries the
     // alias (e.g. typing `[[Inbox]]` for an Inbox someone else made
     // via the create-page UI; §7.5 race).
-    const existing = await ctx.repo.query
-      .aliasLookup({workspaceId: source.workspaceId, alias: mark.alias})
-      .load()
+    const existing = await ctx.db.getOptional<{id: string}>(
+      ALIAS_TARGET_ID_SQL,
+      [source.workspaceId, mark.alias],
+    )
     if (existing !== null) {
       aliasRefs.push({id: existing.id, alias: mark.alias})
       continue

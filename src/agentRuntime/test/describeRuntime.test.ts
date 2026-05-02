@@ -6,6 +6,14 @@ import {
   getApiSurface,
 } from '@/agentRuntime/describeRuntime.ts'
 import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
+// Pre-warm `@/extensions/api` so the dynamic import inside
+// `getApiSurface()` resolves from cache. Under full-suite parallel
+// loads, the cold transform of this barrel + its transitive deps can
+// blow past the 5 s per-test timeout (file passes alone, fails ~10%
+// of the time when 65+ other test files are competing for the parent
+// Vite server's transform queue). Same `.ts` suffix as the dynamic
+// import so both share a module-cache key.
+import '@/extensions/api.ts'
 import type { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
 import type { ActionConfig } from '@/shortcuts/types.ts'
