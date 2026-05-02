@@ -423,8 +423,10 @@ export const aliasLookupQuery = defineQuery<
  *  `resolveFacetRuntime`. Nothing observes the handle after that, so a
  *  `workspace` dep would just churn the loader on every workspace write
  *  without changing any observable behavior — installing or removing
- *  an extension already requires a manual reload (page refresh today;
- *  follow-up: dedicated command). */
+ *  an extension is picked up via the `refresh_extensions` command
+ *  (`Reload extensions` in the palette / `defaultShortcuts.ts`), which
+ *  re-runs `dynamicExtensionsExtension` and re-calls
+ *  `repo.setFacetRuntime`. */
 export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, BlockData[]>({
   name: 'core.findExtensionBlocks',
   argsSchema: z.object({workspaceId: z.string()}),
