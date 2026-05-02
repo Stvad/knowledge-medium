@@ -253,10 +253,14 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await vi.waitFor(() => expect(fired.length).toBe(1))
 
     await create('table-fast-row')
-    // >=2 here because reviewer P2 #3 (separate fix) makes the
-    // matching-invalidate path schedule one extra spurious reload —
-    // the assertion tightens to `toBe(2)` once that fix lands.
-    await vi.waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(2))
+    // Exactly 2 — the matching-invalidate path no longer double-fires
+    // (reviewer P2 #3, fixed by reordering observeDuringLoad before
+    // invalidate in HandleStore).
+    await vi.waitFor(() => expect(fired.length).toBe(2))
+    // Settle to confirm no spurious extra reload arrives.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired.length).toBe(2)
   })
 })
 
@@ -420,9 +424,11 @@ describe('row_events tail: sync-applied invalidation', () => {
       ['table-dep-row'],
     )
     await env.repo.flushRowEventsTail()
-    // >=2: reviewer P2 #3 (separate fix) double-fires on matching
-    // invalidate. Tightened to `toBe(2)` after that fix lands.
-    await vi.waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(2))
+    // Exactly 2 — see the fast-path test for the matching rationale.
+    await vi.waitFor(() => expect(fired.length).toBe(2))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired.length).toBe(2)
   })
 
   it('high-watermark: only consumes new rows (id > lastId)', async () => {

@@ -465,6 +465,41 @@ describe('Dependencies + invalidate()', () => {
     resolve(1)
     await vi.waitFor(() => expect(fired).toEqual([1]))
   })
+
+  it('a matching invalidate on a ready handle runs the loader exactly once (reviewer P2 #3)', async () => {
+    // Pre-fix shape: invalidate() spun up a fresh load, then
+    // observeDuringLoad recorded the same change because inflight was
+    // now truthy. After settle, queue replay matched the freshly-
+    // collected deps and scheduled ANOTHER load — caller saw two
+    // listener notifications for one logical change.
+    //
+    // Post-fix: observeDuringLoad runs first; its inflight gate sees
+    // the pre-invalidate state (false), skips the queue. invalidate
+    // then kicks off exactly one load.
+    const store = makeStore()
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'row', id: 'r1' })
+          return runs
+        },
+      }),
+    )
+    const fired: number[] = []
+    h.subscribe((x) => fired.push(x))
+    await vi.waitFor(() => expect(runs).toBe(1))
+    store.invalidate({ rowIds: ['r1'] })
+    await vi.waitFor(() => expect(fired).toEqual([1, 2]))
+    // Settle microtasks — confirm no spurious third run scheduled.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(2)
+    expect(fired).toEqual([1, 2])
+  })
 })
 
 describe('Mid-load invalidations are not dropped (reviewer P2)', () => {

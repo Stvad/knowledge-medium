@@ -141,17 +141,22 @@ export class HandleStore {
     // Snapshot the handle list — invalidate() may resolve synchronously
     // in tests and trigger further changes; iterating a stable snapshot
     // keeps that bounded.
+    //
+    // Order matters (reviewer P2 #3): observeDuringLoad MUST run before
+    // invalidate. observeDuringLoad gates on `inflight` — if we invalidate
+    // first on a ready handle, the loader spins up and inflight becomes
+    // truthy, causing observeDuringLoad to record the same change in the
+    // queue. After the freshly-kicked-off load settles, the queued change
+    // matches the freshly-collected deps and schedules ANOTHER load even
+    // though the first reload already covered the change. Running
+    // observeDuringLoad first means ready handles skip the queue (correct:
+    // their fresh load already accounts for this change) while loading
+    // handles record the change for post-settle replay (correct: needed
+    // for late-declared deps to catch the change).
     const snapshot = Array.from(this.handles.values())
     for (const h of snapshot) {
-      if (h.matches(change)) h.invalidate()
-      // Also tell every handle about the change so any handle currently
-      // in the middle of a load can record it. After the loader settles
-      // and per-row deps are published, the handle re-checks its queue
-      // against the freshly-collected deps and reruns if any match.
-      // Closes the race where a row dep is declared by `ctx.depend(...)`
-      // *after* a commit invalidating that row has already passed
-      // through `matches` — see LoaderHandle.runLoader.
       h.observeDuringLoad(change)
+      if (h.matches(change)) h.invalidate()
     }
   }
 
