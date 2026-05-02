@@ -20,6 +20,8 @@ import type {
   AnyMutator,
   AnyPostCommitProcessor,
   BlockData,
+  Mutator,
+  MutatorRegistry,
   RepoTxOptions,
   Tx,
   User,
@@ -59,6 +61,36 @@ import {
   SELECT_FIRST_CHILD_BY_CONTENT_SQL,
   type AliasMatch,
 } from './kernelQueries'
+
+/** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
+ *  signature `(args: Args) => Promise<Result>`. Used to project
+ *  augmented `MutatorRegistry` entries into precise per-key types on
+ *  the proxy field. */
+type DispatchFor<M> = M extends Mutator<infer A, infer R>
+  ? (args: A) => Promise<R>
+  : never
+
+/** Per-key dispatcher types for every mutator known at compile time —
+ *  every `MutatorRegistry` member, plus the bare `core.<name>`-stripped
+ *  shortcut. Plugins extend this surface by augmenting the
+ *  `MutatorRegistry` interface from `@/data/api`; kernel mutators are
+ *  augmented in `kernelMutators.ts`. */
+type KnownMutateDispatch = {
+  [K in keyof MutatorRegistry]: DispatchFor<MutatorRegistry[K]>
+} & {
+  [K in keyof MutatorRegistry as K extends `core.${infer Bare}`
+    ? Bare
+    : never]: DispatchFor<MutatorRegistry[K]>
+}
+
+/** Proxy contract surface. Known keys (above) get precise typing;
+ *  unknown keys fall through the `any` index signature so dynamically
+ *  loaded plugins that haven't augmented `MutatorRegistry` are still
+ *  callable via `repo.mutate['plugin:foo'](args)`. The runtime
+ *  argsSchema validation in `dispatchMutator` stays the source of truth
+ *  for safety on those paths. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type MutateProxy = KnownMutateDispatch & { [name: string]: (args: any) => Promise<any> }
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -192,11 +224,19 @@ export class Repo {
   }
 
   /** Typed-dispatch sugar. `repo.mutate.indent({id})` opens a 1-mutator
-   *  tx with the mutator's scope and runs it. Lookup tries kernel-short
-   *  name first (`'core.indent'` for `mutate.indent`), then the literal
-   *  key (so plugin mutators registered as `'tasks:setDueDate'` are
-   *  callable as `repo.mutate['tasks:setDueDate'](args)`). */
-  readonly mutate: Record<string, (args: unknown) => Promise<unknown>>
+   *  tx with the mutator's scope and runs it. Lookup tries the literal
+   *  key first (`'tasks:setDueDate'` for plugin mutators), then
+   *  `'core.${name}'` (so the bare `repo.mutate.indent` resolves to
+   *  `'core.indent'`).
+   *
+   *  Typing surface (Phase 3 — chunk C): keys present in
+   *  `MutatorRegistry` (kernel + augmented plugins, see §12.1) get
+   *  precise `(args: Args) => Promise<Result>` types; the
+   *  `core.<name>`-stripped form is also typed. Unknown keys
+   *  (dynamically-loaded plugins that haven't augmented the registry)
+   *  fall back to a permissive `(args: any) => Promise<any>` index
+   *  signature so string-key access stays callable. */
+  readonly mutate: MutateProxy
 
   constructor(opts: RepoOptions) {
     this.db = opts.db
@@ -246,7 +286,7 @@ export class Repo {
         if (typeof prop !== 'string') return undefined
         return dispatch(prop)
       },
-    })
+    }) as MutateProxy
     // Start the row_events tail by default (spec §9.3). Tests that
     // want deterministic timing pass startRowEventsTail: false and
     // call repo.startRowEventsTail({initialLastId: 0}) themselves

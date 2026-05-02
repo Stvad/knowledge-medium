@@ -586,3 +586,27 @@ export const KERNEL_MUTATORS: ReadonlyArray<AnyMutator> = [
   split,
   merge,
 ]
+
+// ──── Type registry augmentation ────
+
+/** Register every kernel mutator with `MutatorRegistry` so call sites
+ *  using `repo.mutate.<name>(args)` and `repo.mutate['core.<name>'](args)`
+ *  get precise arg + result types without `as` casts. Plugins extend the
+ *  same interface from their own module per §12.1. */
+declare module '@/data/api' {
+  interface MutatorRegistry {
+    'core.setContent': typeof setContent
+    'core.setProperty': typeof setProperty
+    'core.delete': typeof deleteBlock
+    'core.createChild': typeof createChild
+    'core.createSiblingAbove': typeof createSiblingAbove
+    'core.createSiblingBelow': typeof createSiblingBelow
+    'core.insertChildren': typeof insertChildren
+    'core.move': typeof move
+    'core.setOrderKey': typeof setOrderKey
+    'core.indent': typeof indent
+    'core.outdent': typeof outdent
+    'core.split': typeof split
+    'core.merge': typeof merge
+  }
+}

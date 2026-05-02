@@ -69,9 +69,9 @@ const seedABC = async () => {
   await env.repo.tx(async tx => {
     await tx.create({id: 'root', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
   }, {scope: ChangeScope.BlockDefault})
-  await env.repo.mutate.createChild({parentId: 'root', id: 'A', content: 'A'}) as Promise<string>
-  await env.repo.mutate.createChild({parentId: 'root', id: 'B', content: 'B'}) as Promise<string>
-  await env.repo.mutate.createChild({parentId: 'root', id: 'C', content: 'C'}) as Promise<string>
+  await env.repo.mutate.createChild({parentId: 'root', id: 'A', content: 'A'})
+  await env.repo.mutate.createChild({parentId: 'root', id: 'B', content: 'B'})
+  await env.repo.mutate.createChild({parentId: 'root', id: 'C', content: 'C'})
 }
 
 // ──── setContent ────
@@ -162,26 +162,26 @@ describe('core.createChild', () => {
       tx => tx.create({id: 'p', workspaceId: 'ws-X', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const id = await env.repo.mutate.createChild({parentId: 'p', content: 'hello'}) as string
+    const id = await env.repo.mutate.createChild({parentId: 'p', content: 'hello'})
     const child = env.read(id)!
     expect(child).toMatchObject({parentId: 'p', workspaceId: 'ws-X', content: 'hello'})
   })
 
   it('respects position=first', async () => {
     await seedABC()
-    const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'first', position: {kind: 'first'}}) as string
+    const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'first', position: {kind: 'first'}})
     expect(await env.childIds('root')).toEqual([id, 'A', 'B', 'C'])
   })
 
   it('respects position={kind:"after", siblingId}', async () => {
     await seedABC()
-    const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'after-A', position: {kind: 'after', siblingId: 'A'}}) as string
+    const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'after-A', position: {kind: 'after', siblingId: 'A'}})
     expect(await env.childIds('root')).toEqual(['A', id, 'B', 'C'])
   })
 
   it('respects position={kind:"before", siblingId}', async () => {
     await seedABC()
-    const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'before-B', position: {kind: 'before', siblingId: 'B'}}) as string
+    const id = await env.repo.mutate.createChild({parentId: 'root', id: 'X', content: 'before-B', position: {kind: 'before', siblingId: 'B'}})
     expect(await env.childIds('root')).toEqual(['A', id, 'B', 'C'])
   })
 
@@ -199,19 +199,19 @@ describe('core.createChild', () => {
 describe('core.createSiblingAbove / createSiblingBelow', () => {
   it('createSiblingAbove inserts before the sibling under the same parent', async () => {
     await seedABC()
-    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'B', id: 'X'}) as string
+    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'B', id: 'X'})
     expect(await env.childIds('root')).toEqual(['A', id, 'B', 'C'])
   })
 
   it('createSiblingBelow inserts after the sibling under the same parent', async () => {
     await seedABC()
-    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'B', id: 'X'}) as string
+    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'B', id: 'X'})
     expect(await env.childIds('root')).toEqual(['A', 'B', id, 'C'])
   })
 
   it('createSiblingBelow at last sibling lands at end', async () => {
     await seedABC()
-    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'C', id: 'X'}) as string
+    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'C', id: 'X'})
     expect(await env.childIds('root')).toEqual(['A', 'B', 'C', id])
   })
 
@@ -221,7 +221,7 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
       await tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       await tx.create({id: 'r2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
     }, {scope: ChangeScope.BlockDefault})
-    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'r2', id: 'r-above'}) as string
+    const id = await env.repo.mutate.createSiblingAbove({siblingId: 'r2', id: 'r-above'})
     expect(await env.childIds(null)).toEqual(['r1', id, 'r2'])
   })
 
@@ -230,7 +230,7 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
       await tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       await tx.create({id: 'r2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
     }, {scope: ChangeScope.BlockDefault})
-    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'r1', id: 'r-below'}) as string
+    const id = await env.repo.mutate.createSiblingBelow({siblingId: 'r1', id: 'r-below'})
     expect(await env.childIds(null)).toEqual(['r1', id, 'r2'])
   })
 
@@ -253,7 +253,7 @@ describe('core.createSiblingAbove / createSiblingBelow', () => {
     // siblings — meaning it positions the new row at start of ws-1's
     // root-sibling list (only r1 is there). It must not consider
     // ws-2's rows (which would inject ordering noise).
-    const newId = await env.repo.mutate.createSiblingAbove({siblingId: 'r1', id: 'r-above'}) as string
+    const newId = await env.repo.mutate.createSiblingAbove({siblingId: 'r1', id: 'r-above'})
     // ws-1 root rows: new sibling first, then r1.
     const ws1Roots = (await env.h.db.getAll<{id: string}>(
       "SELECT id FROM blocks WHERE workspace_id = ? AND parent_id IS NULL AND deleted = 0 ORDER BY order_key, id",
@@ -274,7 +274,7 @@ describe('core.insertChildren', () => {
     const ids = await env.repo.mutate.insertChildren({
       parentId: 'p',
       items: [{id: 'i1'}, {id: 'i2'}, {id: 'i3'}],
-    }) as string[]
+    })
     expect(ids).toEqual(['i1', 'i2', 'i3'])
     expect(await env.childIds('p')).toEqual(['i1', 'i2', 'i3'])
   })
@@ -285,7 +285,7 @@ describe('core.insertChildren', () => {
       parentId: 'root',
       items: [{id: 'i1'}, {id: 'i2'}],
       position: {kind: 'before', siblingId: 'B'},
-    }) as string[]
+    })
     expect(await env.childIds('root')).toEqual(['A', ids[0], ids[1], 'B', 'C'])
   })
 
@@ -294,7 +294,7 @@ describe('core.insertChildren', () => {
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const ids = await env.repo.mutate.insertChildren({parentId: 'p', items: []}) as string[]
+    const ids = await env.repo.mutate.insertChildren({parentId: 'p', items: []})
     expect(ids).toEqual([])
     expect(await env.childIds('p')).toEqual([])
   })
@@ -406,7 +406,7 @@ describe('core.outdent', () => {
   it('moves a child up under the grandparent right after the parent', async () => {
     // root → A → A1; root → B
     await seedABC()
-    const a1 = await env.repo.mutate.createChild({parentId: 'A', id: 'A1'}) as string
+    const a1 = await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
     expect(env.read(a1)!.parentId).toBe('A')
     const moved = await env.repo.mutate.outdent({id: 'A1'})
     expect(moved).toBe(true)
@@ -429,7 +429,7 @@ describe('core.outdent', () => {
     // Without the boundary, A1 (a direct child of A) would normally
     // outdent to root. Passing topLevelBlockId=A keeps A1 inside.
     await seedABC()
-    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'}) as string
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
     const moved = await env.repo.mutate.outdent({id: 'A1', topLevelBlockId: 'A'})
     expect(moved).toBe(false)
     expect(env.read('A1')!.parentId).toBe('A')
@@ -439,8 +439,8 @@ describe('core.outdent', () => {
     // A → A1 → A1a; passing topLevelBlockId=A allows outdent of A1a
     // (since its parent A1 ≠ topLevelBlockId).
     await seedABC()
-    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'}) as string
-    await env.repo.mutate.createChild({parentId: 'A1', id: 'A1a'}) as string
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
+    await env.repo.mutate.createChild({parentId: 'A1', id: 'A1a'})
     const moved = await env.repo.mutate.outdent({id: 'A1a', topLevelBlockId: 'A'})
     expect(moved).toBe(true)
     expect(env.read('A1a')!.parentId).toBe('A')
@@ -455,9 +455,9 @@ describe('core.split', () => {
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
-    const orig = await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'helloworld'}) as string
+    const orig = await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'helloworld'})
     void orig
-    const newId = await env.repo.mutate.split({id: 'orig', before: 'hello', after: 'world'}) as string
+    const newId = await env.repo.mutate.split({id: 'orig', before: 'hello', after: 'world'})
     expect(env.read('orig')!.content).toBe('hello')
     expect(env.read(newId)!.content).toBe('world')
     expect(await env.childIds('p')).toEqual(['orig', newId])
@@ -469,7 +469,7 @@ describe('core.split', () => {
       {scope: ChangeScope.BlockDefault},
     )
     await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'abc'})
-    const newId = await env.repo.mutate.split({id: 'orig', before: '', after: 'abc'}) as string
+    const newId = await env.repo.mutate.split({id: 'orig', before: '', after: 'abc'})
     expect(env.read('orig')!.content).toBe('')
     expect(env.read(newId)!.content).toBe('abc')
   })
@@ -487,7 +487,7 @@ describe('core.split', () => {
       id: 'orig',
       before: 'live-prefix',
       after: 'live-suffix',
-    }) as string
+    })
     expect(env.read('orig')!.content).toBe('live-prefix')
     expect(env.read(newId)!.content).toBe('live-suffix')
   })

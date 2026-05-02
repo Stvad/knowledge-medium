@@ -145,8 +145,8 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
 
         const hasUncollapsedChildren = hasChildren && !isCollapsed
         const newId = hasUncollapsedChildren || isTopLevel
-          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}}) as string
-          : await repo.mutate.createSiblingBelow({siblingId: block.id}) as string
+          ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}})
+          : await repo.mutate.createSiblingBelow({siblingId: block.id})
         if (newId) {
           setFocusedBlockId(uiStateBlock, newId)
           setIsEditing(uiStateBlock, true)
@@ -248,7 +248,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       id: 'create_block_above_and_edit',
       description: 'Create block above and enter edit mode',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-        const newId = await repo.mutate.createSiblingAbove({siblingId: block.id}) as string
+        const newId = await repo.mutate.createSiblingAbove({siblingId: block.id})
         if (!newId) return
         setFocusedBlockId(uiStateBlock, newId)
         setIsEditing(uiStateBlock, true)

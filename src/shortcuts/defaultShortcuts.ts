@@ -521,7 +521,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const cursorPos = selection.head
 
         const createSiblingBelow = async () => {
-          const newId = await repo.mutate.createSiblingBelow({siblingId: block.id}) as string
+          const newId = await repo.mutate.createSiblingBelow({siblingId: block.id})
           if (newId) setFocusedBlockId(uiStateBlock, newId)
         }
 
@@ -538,7 +538,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           const newId = await repo.mutate.createChild({
             parentId: block.id,
             position: {kind: 'first'},
-          }) as string
+          })
           if (newId) setFocusedBlockId(uiStateBlock, newId)
         }
         // Repeated empty blocks creation - outdents the new block.
@@ -546,7 +546,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // (parent === topLevelBlockId) or already at workspace root —
         // fall back to creating a sibling below.
         else if (editorView.state.doc.length === 0) {
-          const moved = await repo.mutate.outdent({id: block.id, topLevelBlockId}) as boolean
+          const moved = await repo.mutate.outdent({id: block.id, topLevelBlockId})
           if (!moved) await createSiblingBelow()
         }
         // Cursor at end, no children or they are collapsed
