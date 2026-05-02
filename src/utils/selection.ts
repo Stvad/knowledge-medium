@@ -90,16 +90,14 @@ export const previousVisibleBlock = async (
 /** Last visible descendant of `block` (deepest, last child of last
  *  child, etc.). Used by keyboard navigation that needs to land on
  *  the bottom of an expanded subtree. Returns the input block if it
- *  has no expanded children. */
+ *  is collapsed or has no children. */
 export const getLastVisibleDescendant = async (block: Block): Promise<Block> => {
   const repo = block.repo
   await block.load()
   let current = block
   while (true) {
-    // The starting block always exposes its children; nested blocks
-    // honor the collapsed flag.
     const collapsed = current.peekProperty(isCollapsedProp) ?? false
-    if (collapsed && current.id !== block.id) return current
+    if (collapsed) return current
     const childIds = await current.childIds.load()
     if (childIds.length === 0) return current
     current = repo.block(childIds[childIds.length - 1])
