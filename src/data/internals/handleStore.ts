@@ -85,6 +85,12 @@ interface RegisteredHandle {
   /** Called when the last subscriber drops or a load completes; if
    *  refCount reaches zero, schedules dispose. */
   release: () => void
+  /** Called for every change that flows through `store.invalidate(...)`,
+   *  regardless of whether `matches` returned true. The handle records
+   *  changes that arrived while a load is in flight so they can be
+   *  re-checked against the freshly-collected deps once the loader
+   *  settles. No-op when the handle isn't currently loading. */
+  observeDuringLoad: (change: ChangeNotification) => void
 }
 
 /** Identity-stable registry of handles. */
@@ -138,6 +144,14 @@ export class HandleStore {
     const snapshot = Array.from(this.handles.values())
     for (const h of snapshot) {
       if (h.matches(change)) h.invalidate()
+      // Also tell every handle about the change so any handle currently
+      // in the middle of a load can record it. After the loader settles
+      // and per-row deps are published, the handle re-checks its queue
+      // against the freshly-collected deps and reruns if any match.
+      // Closes the race where a row dep is declared by `ctx.depend(...)`
+      // *after* a commit invalidating that row has already passed
+      // through `matches` — see LoaderHandle.runLoader.
+      h.observeDuringLoad(change)
     }
   }
 
@@ -190,6 +204,16 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *  pick up the post-invalidation state. */
   private pendingReinvalidate = false
 
+  /** Changes observed while this load is in flight. Recorded
+   *  unconditionally (not gated on `matches`) so deps that the loader
+   *  declares LATER — e.g. per-row deps published by `hydrateRows` after
+   *  SQL returns — can be checked against the queue once the loader
+   *  settles. Without this, a child-row commit landing between SQL
+   *  read and per-row `ctx.depend(...)` would slip past `matches`
+   *  (only the upfront `parent-edge` dep is known at that point) and
+   *  the handle would settle with stale `BlockData[]`. */
+  private changesDuringLoad: ChangeNotification[] = []
+
   constructor(args: {
     store: HandleStore
     key: string
@@ -234,8 +258,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
    *      still has a sensible matching baseline. */
   private runLoader(): Promise<T> {
     // Reset pending-reinvalidate at run start. Anything that arrives
-    // during this run sets the flag; we re-run after settle.
+    // during this run sets the flag; we re-run after settle. Same for
+    // the queue of changes recorded against post-load deps.
     this.pendingReinvalidate = false
+    this.changesDuringLoad = []
     this.status_ = this.value === undefined ? 'loading' : this.status_
     this.error = undefined
     this.retain() // count the inflight load against GC
@@ -265,6 +291,20 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
         // Replace live deps with the freshly-collected set (drops any
         // priorDeps the loader didn't re-declare).
         this.deps = collected
+        // Re-walk the queued changes against the now-final dep set.
+        // Any change that arrived after a row dep was published will
+        // already have flipped `pendingReinvalidate` via `invalidate()`;
+        // this step covers the OPPOSITE order — change first, dep
+        // second — which `matches` couldn't see at the time.
+        if (!this.pendingReinvalidate) {
+          for (const change of this.changesDuringLoad) {
+            if (this.matchesAgainst(collected, change)) {
+              this.pendingReinvalidate = true
+              break
+            }
+          }
+        }
+        this.changesDuringLoad = []
         this.value = value
         this.status_ = 'ready'
         this.error = undefined
@@ -295,7 +335,10 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
       (err) => {
         if (!this.disposed) {
           // Roll back to the priorDeps — collected was incomplete.
+          // The queued changes are discarded along with the partial
+          // deps; a successful retry will rebuild both from scratch.
           this.deps = priorDeps
+          this.changesDuringLoad = []
           this.status_ = 'error'
           this.error = err
           this.inflight = null
@@ -351,11 +394,22 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
   // ──── RegisteredHandle surface (HandleStore-facing) ────
 
   matches(change: ChangeNotification): boolean {
-    if (this.deps.length === 0) return false
-    for (const dep of this.deps) {
+    return this.matchesAgainst(this.deps, change)
+  }
+
+  private matchesAgainst(deps: readonly Dependency[], change: ChangeNotification): boolean {
+    if (deps.length === 0) return false
+    for (const dep of deps) {
       if (matchesDep(dep, change)) return true
     }
     return false
+  }
+
+  observeDuringLoad(change: ChangeNotification): void {
+    // Only worth recording while a load is actually in flight.
+    // Capacity isn't bounded by design — invalidations are infrequent
+    // relative to load duration, and the queue clears on every settle.
+    if (this.inflight) this.changesDuringLoad.push(change)
   }
 
   invalidate(): void {
@@ -408,6 +462,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     }
     this.listeners.clear()
     this.deps = []
+    this.changesDuringLoad = []
     this.value = undefined
     this.status_ = 'idle'
     this.inflight = null

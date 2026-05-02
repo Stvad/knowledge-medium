@@ -574,3 +574,181 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
     expect(h.peek()).toBe(7)
   })
 })
+
+describe('Dynamic deps declared after SQL — change-during-load queue', () => {
+  // Reviewer P2: row-returning handles (`repo.children`, `repo.subtree`,
+  // etc.) only know which row deps to declare AFTER the SQL returns. A
+  // commit that lands between SQL read and per-row `ctx.depend(...)`
+  // doesn't match the upfront `parent-edge` dep, so without a queue it
+  // slips past `matches` entirely and the handle settles with stale
+  // BlockData[] keyed off the pre-commit SQL snapshot.
+  //
+  // The fix has the store deliver every change to in-flight handles
+  // via observeDuringLoad; on settle, the handle re-walks the queue
+  // against the freshly-collected deps and reruns if any match.
+
+  it('change matching a post-SQL row dep triggers a rerun even when no upfront dep matches', async () => {
+    // The exact race: SQL reads at time T, returns pre-commit rows.
+    // Commit at T+1 invalidates one of those rows. Per-row dep is
+    // declared at T+2 — after the invalidation already passed through
+    // matches(). Without the queue, the handle settles with the
+    // stale T-time data.
+    //
+    // We model "SQL data captured at T" by reading `currentValue` into
+    // a local BEFORE the await, then returning that local AFTER the
+    // await. The loader's published value reflects the pre-await read.
+    const store = makeStore()
+    let releaseSql!: () => void
+    let currentValue = 'v1'
+    let runs = 0
+    const h = store.getOrCreate('children:p', () =>
+      new LoaderHandle<string>({
+        store,
+        key: 'children:p',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          // Simulate SQL: read the row's value into a local at this point.
+          const captured = currentValue
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseSql = r })
+          }
+          // Per-row dep declared AFTER the await — same shape as
+          // hydrateRows' `ctx.depend({kind:'row', id:childA})` after
+          // CHILDREN_SQL returns.
+          ctx.depend({ kind: 'row', id: 'childA' })
+          return captured
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+
+    // Mid-load: invalidation hits for childA AFTER its SQL row was
+    // captured but BEFORE its per-row dep was declared. Upfront deps
+    // are just `parent-edge:p`, so `matches` returns false. Without
+    // the queue, this change is dropped on the floor.
+    currentValue = 'v2'
+    store.invalidate({ rowIds: ['childA'] })
+
+    releaseSql()
+    // First run settles with stale 'v1' — the queue then triggers a
+    // rerun that captures the post-commit 'v2'.
+    await vi.waitFor(() => expect(runs).toBe(2))
+    await vi.waitFor(() => expect(h.peek()).toBe('v2'))
+  })
+
+  it('change that does not match any post-load dep does NOT trigger a rerun', async () => {
+    // Negative case: the queue must only fire reruns when a queued
+    // change actually matches a dep the loader ended up declaring.
+    // Otherwise every invalidation in the system would force every
+    // in-flight handle to rerun.
+    const store = makeStore()
+    let releaseSql!: () => void
+    let runs = 0
+    const h = store.getOrCreate('children:p', () =>
+      new LoaderHandle<string>({
+        store,
+        key: 'children:p',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseSql = r })
+          }
+          ctx.depend({ kind: 'row', id: 'childA' })
+          return 'v1'
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+
+    // Unrelated row change — neither parent-edge:p nor row:childA matches.
+    store.invalidate({ rowIds: ['unrelated'] })
+
+    releaseSql()
+    await vi.waitFor(() => expect(h.status()).toBe('ready'))
+    // Drain the microtask queue to confirm no second run was scheduled.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(1)
+  })
+
+  it('coalesces queued changes alongside upfront-matched changes (single rerun)', async () => {
+    const store = makeStore()
+    let releaseSql!: () => void
+    let value = 1
+    let runs = 0
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseSql = r })
+          }
+          ctx.depend({ kind: 'row', id: 'childA' })
+          return value
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+
+    // One match against the upfront dep (sets pendingReinvalidate via
+    // invalidate()), one queued match (would set pendingReinvalidate
+    // again on settle). Together they must produce ONE rerun, not two.
+    value = 2
+    store.invalidate({ parentIds: ['p'] }) // matches upfront → pendingReinvalidate = true
+    store.invalidate({ rowIds: ['childA'] }) // queued → matches post-load dep
+
+    releaseSql()
+    await vi.waitFor(() => expect(runs).toBe(2))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(2)
+  })
+
+  it('queue is discarded on load failure (deps were rolled back too)', async () => {
+    const store = makeStore()
+    let releaseSql!: () => void
+    let runs = 0
+    let shouldFail = true
+    const h = store.getOrCreate('q', () =>
+      new LoaderHandle<number>({
+        store,
+        key: 'q',
+        loader: async (ctx) => {
+          runs++
+          ctx.depend({ kind: 'parent-edge', parentId: 'p' })
+          if (runs === 1) {
+            await new Promise<void>((r) => { releaseSql = r })
+          }
+          // Per-row dep would have been declared after the await on a
+          // success path; on the failure path we throw before reaching it.
+          if (shouldFail) throw new Error('boom')
+          ctx.depend({ kind: 'row', id: 'childA' })
+          return 7
+        },
+      }),
+    )
+    h.subscribe(() => {})
+    await vi.waitFor(() => expect(h.status()).toBe('loading'))
+
+    // Queue a change that would have matched a (never-declared) row dep.
+    store.invalidate({ rowIds: ['childA'] })
+    releaseSql()
+    await vi.waitFor(() => expect(h.status()).toBe('error'))
+
+    // The errored load discards `changesDuringLoad` along with the
+    // partial deps. A future rerun must not fire spuriously off the
+    // queue from the failed run.
+    shouldFail = false
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(runs).toBe(1)
+  })
+})
