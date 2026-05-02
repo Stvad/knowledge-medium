@@ -159,7 +159,17 @@ export const startRowEventsTail = (args: {
     // a `parent-edge` dep, so a parent_id landing in `parentIds` here
     // triggers re-resolve on the matching handle. No cache-level
     // marker to clear (collection state lives on the handle).
-    const notification: ChangeNotification = { rowIds, parentIds, workspaceIds }
+    //
+    // `tables: ['blocks']` mirrors the fast path — query handles that
+    // declare a coarse `{kind:'table', table:'blocks'}` dep need this
+    // notification to re-run on sync-applied writes (without it, the
+    // table-coarse fallback never fires from the sync path; reviewer P2).
+    const notification: ChangeNotification = {
+      rowIds,
+      parentIds,
+      workspaceIds,
+      tables: new Set(['blocks']),
+    }
     handleStore.invalidate(notification)
   }
 

@@ -565,6 +565,12 @@ export interface ChangeSnapshot {
  *       content / property edits don't fire parent-edge deps.
  *    - `workspaceIds`: every workspace_id touched (covers backlinks
  *       handles' coarse workspace dep).
+ *    - `tables`: `['blocks']` whenever there's at least one snapshot
+ *       (every snapshot here represents a `blocks` write — the engine
+ *       only writes to that table). Required for query handles that
+ *       declare `ctx.depend({kind:'table', table:'blocks'})` (the
+ *       coarse fallback for table-scan resolvers, especially ones with
+ *       empty results that have no per-row deps to invalidate against).
  */
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
@@ -572,6 +578,7 @@ export const snapshotsToChangeNotification = (
   const rowIds = new Set<string>()
   const parentIds = new Set<string>()
   const workspaceIds = new Set<string>()
+  const tables = snapshots.size > 0 ? new Set<string>(['blocks']) : undefined
   for (const [id, entry] of snapshots) {
     rowIds.add(id)
     if (entry.before?.workspaceId) workspaceIds.add(entry.before.workspaceId)
@@ -601,5 +608,5 @@ export const snapshotsToChangeNotification = (
     // alone covers it. No parent-edge entry — `repo.children(id)`
     // already declares row deps on each child for this case.
   }
-  return { rowIds, parentIds, workspaceIds }
+  return { rowIds, parentIds, workspaceIds, tables }
 }

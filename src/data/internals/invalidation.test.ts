@@ -26,6 +26,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from './repo'
 import {
+  LoaderHandle,
   snapshotsToChangeNotification,
   type ChangeSnapshot,
 } from './handleStore'
@@ -134,6 +135,22 @@ describe('snapshotsToChangeNotification', () => {
     const note = snapshotsToChangeNotification(map)
     expect(Array.from(note.workspaceIds!).sort()).toEqual(['w1', 'w2'])
   })
+
+  it('tables: emits ["blocks"] for any non-empty snapshot map (reviewer P2)', () => {
+    // Without this, query handles declaring `{kind:'table', table:'blocks'}`
+    // never re-resolve from the TxEngine fast path. Empty-result table-scan
+    // queries (no per-row deps captured) are the canonical case.
+    const map = new Map<string, ChangeSnapshot>([
+      ['a', {before: null, after: {parentId: null, workspaceId: 'w'}}],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.tables ?? [])).toEqual(['blocks'])
+  })
+
+  it('tables: undefined for an empty snapshot map (no spurious table notification)', () => {
+    const note = snapshotsToChangeNotification(new Map())
+    expect(note.tables).toBeUndefined()
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════
@@ -214,6 +231,32 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(fired).toEqual([0])
+  })
+
+  it('table-dep handle re-resolves on local repo.tx write (reviewer P2)', async () => {
+    // Mirror of the row_events tail test, but for the fast path. A
+    // table-only dep needs `tables: ['blocks']` in the fast-path
+    // notification or it never fires for local writes either.
+    let v = 0
+    const handle = env.repo.handleStore.getOrCreate('test:table-fast', () =>
+      new LoaderHandle<number>({
+        store: env.repo.handleStore,
+        key: 'test:table-fast',
+        loader: async (ctx) => {
+          ctx.depend({kind: 'table', table: 'blocks'})
+          return ++v
+        },
+      }),
+    )
+    const fired: number[] = []
+    handle.subscribe((x) => fired.push(x))
+    await vi.waitFor(() => expect(fired.length).toBe(1))
+
+    await create('table-fast-row')
+    // >=2 here because reviewer P2 #3 (separate fix) makes the
+    // matching-invalidate path schedule one extra spurious reload —
+    // the assertion tightens to `toBe(2)` once that fix lands.
+    await vi.waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(2))
   })
 })
 
@@ -342,6 +385,44 @@ describe('row_events tail: sync-applied invalidation', () => {
     })
     expect(initial?.map(b => b.id)).toEqual(['c1'])
     expect(await env.repo.childIds('p').load()).toEqual(['c1'])
+  })
+
+  it('table-dep handle re-resolves on sync-applied write (reviewer P2)', async () => {
+    // A handle with ONLY a `{kind:'table', table:'blocks'}` dep — the
+    // canonical empty-result table-scan case (no per-row dep was ever
+    // captured). Without `tables: ['blocks']` on the tail's
+    // notification, the dep would never match and the handle would
+    // stay stale on sync writes.
+    let v = 0
+    const handle = env.repo.handleStore.getOrCreate('test:table-dep', () =>
+      new LoaderHandle<number>({
+        store: env.repo.handleStore,
+        key: 'test:table-dep',
+        loader: async (ctx) => {
+          ctx.depend({kind: 'table', table: 'blocks'})
+          return ++v
+        },
+      }),
+    )
+    const fired: number[] = []
+    handle.subscribe((x) => fired.push(x))
+    await vi.waitFor(() => expect(fired.length).toBe(1))
+
+    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+    await env.h.db.execute(
+      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
+    )
+    await env.h.db.execute(
+      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
+                            properties_json, references_json, created_at,
+                            updated_at, created_by, updated_by, deleted)
+       VALUES (?, 'ws-1', NULL, 'a0', '', '{}', '[]', 0, 0, 'remote', 'remote', 0)`,
+      ['table-dep-row'],
+    )
+    await env.repo.flushRowEventsTail()
+    // >=2: reviewer P2 #3 (separate fix) double-fires on matching
+    // invalidate. Tightened to `toBe(2)` after that fix lands.
+    await vi.waitFor(() => expect(fired.length).toBeGreaterThanOrEqual(2))
   })
 
   it('high-watermark: only consumes new rows (id > lastId)', async () => {
