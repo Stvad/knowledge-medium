@@ -94,6 +94,20 @@ export const BlockEditor = ({
     const incomingUpdatedAt = blockData.updatedAt
     const live = editorView.state.doc.toString()
     const incoming = blockData.content
+    const __dbg = (window as unknown as {__editorAdoptDebug?: unknown[]}).__editorAdoptDebug
+    if (Array.isArray(__dbg)) {
+      __dbg.push({
+        t: performance.now().toFixed(1),
+        kind: 'effect',
+        blockId: block.id,
+        live: live.length > 60 ? live.slice(0, 60) + '…' : live,
+        incoming: incoming.length > 60 ? incoming.slice(0, 60) + '…' : incoming,
+        last: lastCommittedContent.current.length > 60
+          ? lastCommittedContent.current.slice(0, 60) + '…' : lastCommittedContent.current,
+        incomingUA: incomingUpdatedAt,
+        lastAdoptedUA: lastAdoptedUpdatedAt.current,
+      })
+    }
     if (live === incoming) {
       if (incomingUpdatedAt > lastAdoptedUpdatedAt.current) {
         lastAdoptedUpdatedAt.current = incomingUpdatedAt
@@ -104,7 +118,10 @@ export const BlockEditor = ({
     // cache's LWW gate normally catches this, but a same-ms collision
     // window can squeeze a stale snapshot through to React; refuse to
     // roll back.
-    if (incomingUpdatedAt <= lastAdoptedUpdatedAt.current) return
+    if (incomingUpdatedAt <= lastAdoptedUpdatedAt.current) {
+      if (Array.isArray(__dbg)) __dbg.push({t: performance.now().toFixed(1), kind: 'reject-stale-ua', blockId: block.id})
+      return
+    }
     // User has typed past the last commit — adopting `incoming` here
     // would discard those characters. Skip; the user's next debounced
     // commit will catch the editor up.
@@ -123,6 +140,17 @@ export const BlockEditor = ({
       ),
       oldSelection.mainIndex,
     )
+    if (Array.isArray(__dbg)) {
+      __dbg.push({
+        t: performance.now().toFixed(1),
+        kind: 'ADOPT-DISPATCH',
+        blockId: block.id,
+        live: live.length > 60 ? live.slice(0, 60) + '…' : live,
+        incoming: incoming.length > 60 ? incoming.slice(0, 60) + '…' : incoming,
+        incomingUA: incomingUpdatedAt,
+        prevAdoptedUA: lastAdoptedUpdatedAt.current,
+      })
+    }
     editorView.dispatch({
       changes: {from: 0, to: live.length, insert: incoming},
       selection: clampedSelection,
