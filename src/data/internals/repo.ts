@@ -19,20 +19,27 @@ import type { FacetRuntime } from '@/extensions/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyQuery,
   BlockData,
   Mutator,
   MutatorRegistry,
+  Query,
+  QueryRegistry,
   RepoTxOptions,
   Tx,
   User,
 } from '@/data/api'
-import { ChangeScope, MutatorNotRegisteredError } from '@/data/api'
+import {
+  ChangeScope,
+  MutatorNotRegisteredError,
+  QueryNotRegisteredError,
+} from '@/data/api'
 import { runTx, type PowerSyncDb } from './commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './kernelMutators'
 import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
-import { mutatorsFacet, postCommitProcessorsFacet } from './facets'
+import { mutatorsFacet, postCommitProcessorsFacet, queriesFacet } from './facets'
 import { ProcessorRunner } from './processorRunner'
 import { Block } from './block'
 import {
@@ -92,6 +99,32 @@ type KnownMutateDispatch = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type MutateProxy = KnownMutateDispatch & { [name: string]: (args: any) => Promise<any> }
 
+/** Convert a `Query<Args, Result>` into the `repo.query` dispatcher
+ *  signature `(args: Args) => LoaderHandle<Result>`. Mirrors
+ *  `DispatchFor` for mutators. Returning the concrete `LoaderHandle<R>`
+ *  (not just `Handle<R>`) keeps consistency with the existing
+ *  `repo.subtree(id)` / `repo.children(id)` factories. */
+type DispatchQueryFor<Q> = Q extends Query<infer A, infer R>
+  ? (args: A) => LoaderHandle<R>
+  : never
+
+type KnownQueryDispatch = {
+  [K in keyof QueryRegistry]: DispatchQueryFor<QueryRegistry[K]>
+} & {
+  [K in keyof QueryRegistry as K extends `core.${infer Bare}`
+    ? Bare
+    : never]: DispatchQueryFor<QueryRegistry[K]>
+}
+
+/** Proxy contract surface for `repo.query`. Mirrors `MutateProxy`:
+ *  known keys (kernel + augmented plugins per `QueryRegistry`) get
+ *  precise typing; unknown string keys fall through the `any` index
+ *  so dynamically-loaded plugins are still callable via
+ *  `repo.query['plugin:foo'](args)`. The argsSchema validation in
+ *  `dispatchQuery` is the runtime safety boundary for those paths. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
+
 export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
@@ -122,6 +155,14 @@ export interface RepoOptions {
    *  firing on every content write would add follow-up txs the engine
    *  test isn't asserting on). */
   registerKernelProcessors?: boolean
+  /** When true (default), kernel queries are registered at construction
+   *  time so `repo.query.subtree({id})` etc. work immediately without a
+   *  `setFacetRuntime` call. Set false when a test wants to populate
+   *  the query registry explicitly. Mirrors `registerKernelMutators` /
+   *  `registerKernelProcessors`. The kernel-query bundle itself lands
+   *  in Phase 4 chunk B; until then the registry stays empty even with
+   *  this flag on. */
+  registerKernelQueries?: boolean
   /** When true (default), the row_events tail subscription is started
    *  at construction time so sync-applied writes propagate into the
    *  cache + invalidate handles (spec §9.3). Set false in unit tests
@@ -151,6 +192,7 @@ export class Repo {
   private readonly newTxSeq: () => number
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
+  private queries: Map<string, AnyQuery> = new Map()
   private readonly processorRunner: ProcessorRunner
   /** Per-scope undo / redo stacks (spec §10 step 7, §17 line 2228).
    *  `repo.tx` records every undoable commit here; `repo.undo` /
@@ -185,8 +227,9 @@ export class Repo {
   /** Hydrate a list of `BlockRow`s into the cache + return parsed
    *  BlockData[]. Internal helper for the kernel queries. When `ctx`
    *  is supplied, also declares a per-row dep so handle invalidations
-   *  fire on row updates. */
-  private hydrateRows(rows: BlockRow[], ctx?: ResolveContext): BlockData[] {
+   *  fire on row updates. Accepts readonly so it pairs cleanly with
+   *  the `QueryCtx.hydrateBlocks` plumbing in `dispatchQuery`. */
+  private hydrateRows(rows: ReadonlyArray<BlockRow>, ctx?: ResolveContext): BlockData[] {
     const out: BlockData[] = []
     for (const r of rows) {
       const data = parseBlockRow(r)
@@ -238,6 +281,24 @@ export class Repo {
    *  signature so string-key access stays callable. */
   readonly mutate: MutateProxy
 
+  /** Typed query dispatch. `repo.query.subtree({id})` returns an
+   *  identity-stable `LoaderHandle<R>` (the same instance for the same
+   *  args, GC'd via HandleStore). Lookup tries the literal `name` first
+   *  (`'core.subtree'` or `'plugin:foo'`), then `'core.${name}'` so the
+   *  bare `repo.query.subtree` resolves to `'core.subtree'`. Args are
+   *  validated against `Query.argsSchema` on every call.
+   *
+   *  Typing surface mirrors `repo.mutate`: keys present in
+   *  `QueryRegistry` (kernel + augmented plugins) get precise
+   *  `(args: Args) => LoaderHandle<Result>` types; the
+   *  `core.<name>`-stripped form is also typed. Unknown keys
+   *  (dynamically-loaded plugins that haven't augmented the registry)
+   *  fall back to a permissive `(args: any) => LoaderHandle<any>` index
+   *  signature so string-key access stays callable. The runtime
+   *  `argsSchema` validation in `dispatchQuery` is the safety boundary
+   *  for those paths. */
+  readonly query: QueryProxy
+
   constructor(opts: RepoOptions) {
     this.db = opts.db
     this.cache = opts.cache
@@ -268,6 +329,13 @@ export class Repo {
     if (opts.registerKernelProcessors ?? true) {
       for (const p of KERNEL_PROCESSORS) this.processors.set(p.name, p)
     }
+    // Kernel-query registration parity flag with mutators / processors
+    // (Phase 4 chunk A — chunk B fills KERNEL_QUERIES). Reading the
+    // option here keeps the construction-time wiring stable so chunk B
+    // is just adding the bundle import, not changing the lifecycle.
+    if (opts.registerKernelQueries ?? true) {
+      // KERNEL_QUERIES bundle imported in chunk B.
+    }
     // Initialize the processor runner. The runner needs a Repo
     // reference for opening processor txs; passing `this` is safe
     // because runner methods only use it post-construction (during
@@ -287,6 +355,18 @@ export class Repo {
         return dispatch(prop)
       },
     }) as MutateProxy
+    // Same Proxy shape as `mutate`, dispatching to `dispatchQuery`.
+    // Each name access returns a fresh dispatcher closure; the closure
+    // does the registry lookup + argsSchema validation + handleStore
+    // getOrCreate on call. Identity stability is provided by the
+    // handle-store key, not by memoizing the dispatcher itself.
+    const dispatchQ = this.dispatchQuery.bind(this)
+    this.query = new Proxy({} as Record<string, (args: unknown) => LoaderHandle<unknown>>, {
+      get: (_target, prop) => {
+        if (typeof prop !== 'string') return undefined
+        return dispatchQ(prop)
+      },
+    }) as QueryProxy
     // Start the row_events tail by default (spec §9.3). Tests that
     // want deterministic timing pass startRowEventsTail: false and
     // call repo.startRowEventsTail({initialLastId: 0}) themselves
@@ -830,6 +910,13 @@ export class Repo {
     return this.dispatchMutator(name)(args) as Promise<R>
   }
 
+  /** Dynamic query dispatch — `repo.query[name]` for runtime-loaded
+   *  plugins. Resolves the query, runs `.load()`, and returns the
+   *  result. The same `core.${name}` shortcut as the proxy applies. */
+  async runQuery<R = unknown>(name: string, args: unknown): Promise<R> {
+    return this.dispatchQuery(name)(args).load() as Promise<R>
+  }
+
   /** Update the data-layer registries from a FacetRuntime. Spec §8.
    *  Reads `mutatorsFacet` and `postCommitProcessorsFacet` contributions
    *  (other data-layer facets land in later stages). Replaces the
@@ -839,6 +926,7 @@ export class Repo {
   setFacetRuntime(runtime: FacetRuntime): void {
     this.mutators = new Map(runtime.read(mutatorsFacet))
     this.processors = new Map(runtime.read(postCommitProcessorsFacet))
+    this.queries = new Map(runtime.read(queriesFacet))
   }
 
   /** Wait until the post-commit processor framework has nothing
@@ -887,6 +975,44 @@ export class Repo {
    *  `registerKernel: false` constructor flag plus `setFacetRuntime`. */
   __setMutatorsForTesting(mutators: ReadonlyArray<AnyMutator>): void {
     this.mutators = new Map(mutators.map(m => [m.name, m]))
+  }
+
+  /** Build the dispatcher closure for a query name. Same resolution
+   *  order as `dispatchMutator`: literal name first, then
+   *  `'core.${name}'`. The returned closure validates args via the
+   *  query's `argsSchema`, then `getOrCreate`s an identity-stable
+   *  `LoaderHandle` keyed by `(queryName, args)`. The loader wraps the
+   *  query's `resolve` with a `QueryCtx` that forwards `depend` to the
+   *  handle's `ResolveContext` and exposes `db` / `repo` /
+   *  `hydrateBlocks`. */
+  private dispatchQuery(name: string): (args: unknown) => LoaderHandle<unknown> {
+    return (args: unknown) => {
+      const q = this.queries.get(name) ?? this.queries.get(`core.${name}`)
+      if (!q) throw new QueryNotRegisteredError(name)
+      const validated = q.argsSchema.parse(args) as never
+      // Use the registry-stored full name in the key so the bare-name
+      // shortcut (`repo.query.subtree`) and the literal full-name access
+      // (`repo.query['core.subtree']`) hit the same handle slot.
+      const fullName = q.name
+      const key = handleKey(`query:${fullName}`, validated)
+      return this.handleStore.getOrCreate(key, () => new LoaderHandle({
+        store: this.handleStore,
+        key,
+        loader: (ctx) => q.resolve(validated, {
+          db: this.db,
+          repo: this,
+          hydrateBlocks: (rows) => this.hydrateRows(rows as unknown as ReadonlyArray<BlockRow>, ctx),
+          depend: (dep) => ctx.depend(dep),
+        }),
+      }))
+    }
+  }
+
+  /** Test-only escape hatch parallel to `__setMutatorsForTesting`.
+   *  Bypasses the FacetRuntime so unit tests can register a single
+   *  query without standing up a full kernel runtime. */
+  __setQueriesForTesting(queries: ReadonlyArray<AnyQuery>): void {
+    this.queries = new Map(queries.map(q => [q.name, q]))
   }
 }
 
