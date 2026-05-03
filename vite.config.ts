@@ -32,10 +32,11 @@ export default defineConfig(({command}) => {
                  * tags that point at /react and don't resolve via import maps.
                  *
                  * Keep the actual entry script regardless of whether the app is deployed at / or under a subpath.
+                 * Vite may emit a small index.js entry wrapper which imports src/main.js.
                  */
                 transformIndexHtml(html: string) {
                     return html.replace(/<script\s+type="module" crossorigin .*?src="([^"]*)".*?><\/script>\s*/g, (match, src) => {
-                        return /(^|\/)src\/main\.js(?:$|[?#])/.test(src) ? match : '';
+                        return /(^|\/)(index|src\/main)\.js(?:$|[?#])/.test(src) ? match : '';
                     })
                 },
             },
