@@ -343,7 +343,7 @@ export class Repo {
     // dispatch). The runner reads its registry per-tx from the snapshot
     // baked into TxResult — we don't sync a registry into the runner
     // here.
-    this.processorRunner = new ProcessorRunner(this, opts.db)
+    this.processorRunner = new ProcessorRunner(this, this.db)
     this.undoManager = new UndoManager()
     // Bind dispatchMutator to `this` so the Proxy's get trap doesn't
     // need to alias `this` to a local. Each name lookup returns a
@@ -668,12 +668,11 @@ export class Repo {
     if (result.snapshots.size > 0) {
       this.handleStore.invalidate(snapshotsToChangeNotification(result.snapshots))
     }
-    // Step 9 of the §10 pipeline — dispatch field-watch + explicit
+    // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the
     // runner so a buggy processor can't poison the caller's resolve.
-    // Awaited so synchronously-fired processors land before the
-    // caller sees the resolved promise; delayed (delayMs > 0) jobs
-    // run after.
+    // Dispatch is intentionally fire-and-forget; callers that need
+    // deterministic processor completion can await `awaitProcessors()`.
     void this.processorRunner.dispatch({
       txId: result.txId,
       user: result.user,
