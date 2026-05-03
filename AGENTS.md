@@ -2,6 +2,9 @@ when workin in a git repository, unless otherwise stated:
 - commit after each requested change
 - commit only changes you've done
 
+verification:
+- use `yarn run check` for verification unless otherwise stated
+
 secret handling:
 - do not read `.env`, `.env.*`, or other local secret files unless the user explicitly asks for it
 - do not print, echo, cat, grep, or otherwise reveal secrets or secret-bearing files in chat or command output
