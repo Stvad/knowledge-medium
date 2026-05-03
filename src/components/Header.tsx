@@ -3,6 +3,8 @@ import { ThemeToggle } from './ui/theme-toggle'
 import { useSignOut, useUser } from '@/components/Login'
 import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher'
 import { PendingInvitations } from '@/components/workspace/PendingInvitations'
+import { toggleCommandPaletteEvent } from '@/plugins/command-palette/events.ts'
+import { toggleQuickFindEvent } from '@/plugins/quick-find/events.ts'
 
 
 export function Header() {
@@ -20,7 +22,7 @@ export function Header() {
         <button
           className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => {
-            window.dispatchEvent(new CustomEvent('toggle-quick-find'))
+            window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
           }}
           title="Find or create page or block"
         >
@@ -33,7 +35,7 @@ export function Header() {
         <button
           className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => {
-            window.dispatchEvent(new CustomEvent('toggle-command-palette'))
+            window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
           }}
         >
           <span>Command</span>

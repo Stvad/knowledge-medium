@@ -13,6 +13,7 @@ import { useRunAction } from '@/shortcuts/runAction.ts'
 import { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
 import { Kbd } from '@/components/ui/kbd'
 import { groupBy } from 'lodash'
+import { toggleCommandPaletteEvent } from './events.ts'
 
 const formatShortcutKeys = (bindings: readonly ShortcutBinding[]): string[] => {
   if (!bindings || bindings.length === 0) {
@@ -34,8 +35,8 @@ export function CommandPalette() {
     const handleToggle = () => {
       setOpen((currentOpen) => !currentOpen)
     }
-    window.addEventListener('toggle-command-palette', handleToggle)
-    return () => window.removeEventListener('toggle-command-palette', handleToggle)
+    window.addEventListener(toggleCommandPaletteEvent, handleToggle)
+    return () => window.removeEventListener(toggleCommandPaletteEvent, handleToggle)
   }, [])
 
   const {actions, activeContexts, bindingsFor} = useAvailableActions()

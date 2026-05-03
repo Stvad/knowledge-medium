@@ -27,10 +27,10 @@ import { writeAppHash } from '@/utils/routing.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
+import { toggleQuickFindEvent } from './events.ts'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
-const QUICK_FIND_TOGGLE_EVENT = 'toggle-quick-find'
 
 interface AliasMatch {
   alias: string
@@ -78,8 +78,8 @@ export function QuickFind() {
         return next
       })
     }
-    window.addEventListener(QUICK_FIND_TOGGLE_EVENT, handleToggle)
-    return () => window.removeEventListener(QUICK_FIND_TOGGLE_EVENT, handleToggle)
+    window.addEventListener(toggleQuickFindEvent, handleToggle)
+    return () => window.removeEventListener(toggleQuickFindEvent, handleToggle)
   }, [])
 
   useEffect(() => {
@@ -341,5 +341,3 @@ export function QuickFind() {
     </Dialog>
   )
 }
-
-export const toggleQuickFindEvent = QUICK_FIND_TOGGLE_EVENT

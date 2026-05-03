@@ -277,29 +277,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
     {
-      id: 'command_palette',
-      description: 'Open command palette',
-      context: ActionContextTypes.GLOBAL,
-      handler: () => {
-        window.dispatchEvent(new CustomEvent('toggle-command-palette'))
-      },
-      defaultBinding: {
-        keys: ['cmd+k', 'ctrl+k'],
-      },
-      hideFromCommandPallet: true,
-    },
-    {
-      id: 'quick_find',
-      description: 'Find or create page or block',
-      context: ActionContextTypes.GLOBAL,
-      handler: () => {
-        window.dispatchEvent(new CustomEvent('toggle-quick-find'))
-      },
-      defaultBinding: {
-        keys: ['cmd+p', 'ctrl+p', 'cmd+shift+k', 'ctrl+shift+k'],
-      },
-    },
-    {
       id: 'open_today',
       description: "Open today's daily note",
       context: ActionContextTypes.GLOBAL,
