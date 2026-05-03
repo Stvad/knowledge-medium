@@ -140,20 +140,6 @@ export const extensionDisabledProp = defineProperty<boolean>('system:disabled', 
   kind: 'boolean',
 })
 
-export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
-  codec: codecs.optional(codecs.number),
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
-})
-
-export const currentLoadTimeProp = defineProperty<number | undefined>('currentLoadTime', {
-  codec: codecs.optional(codecs.number),
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
-})
-
 export const createdAtProp = defineProperty<number | undefined>('createdAt', {
   codec: codecs.optional(codecs.number),
   defaultValue: undefined,
@@ -236,8 +222,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   rendererProp,
   rendererNameProp,
   extensionDisabledProp,
-  previousLoadTimeProp,
-  currentLoadTimeProp,
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,

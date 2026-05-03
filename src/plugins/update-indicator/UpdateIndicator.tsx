@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { Block } from '../../data/block'
 import { useInFocus, useUserProperty } from '@/data/globalState'
-import { previousLoadTimeProp } from '@/data/properties.ts'
 import { useData } from '@/hooks/block.ts'
+import { previousLoadTimeProp } from './loadTimes.ts'
 
 export const UpdateIndicator = ({block}: { block: Block }) => {
   const inFocus = useInFocus(block.id)

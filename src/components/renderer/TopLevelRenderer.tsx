@@ -4,23 +4,6 @@ import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
-import { memoize } from 'lodash'
-import { ChangeScope } from '@/data/api'
-import { Block } from '../../data/block'
-import { useUserBlock } from '@/data/globalState.ts'
-import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
-
-// todo this is kind of a random place for this, I think a more principled
-// way to do this is to have on-load hook and fire this there.
-// Memoized per Block instance — fires once per render (memoize() with
-// constant key returns the same Promise).
-const updateLoadTimes = memoize((block: Block) => {
-  void block.repo.tx(async tx => {
-    const previous = block.peekProperty(currentLoadTimeProp) ?? 0
-    await tx.setProperty(block.id, previousLoadTimeProp, previous)
-    await tx.setProperty(block.id, currentLoadTimeProp, Date.now())
-  }, {scope: ChangeScope.UiState, description: 'update load times'})
-}, () => true)
 
 /**
  * This is like this to avoid re-rending on context changing bc of new object creation
@@ -29,8 +12,6 @@ const updateLoadTimes = memoize((block: Block) => {
 const CONTEXT_OVERRIDE = {topLevel: false}
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
-  const userBlock = useUserBlock()
-  updateLoadTimes(userBlock)
   /**
    * todo think about composition
    * I actually want the below thing to pick the renderer itself, but if my logic is
