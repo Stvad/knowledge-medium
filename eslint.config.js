@@ -27,13 +27,9 @@ export default tseslint.config(
         'warn',
         { allowConstantExport: true },
       ],
-      // The React Compiler rules folded into react-hooks v7. Most are
-      // clean and treated as errors. `set-state-in-effect` stays as a
-      // warning: the codebase has a handful of legitimate sync-to-prop
-      // and async-load patterns that would each need a small refactor
-      // (useState-with-key, derived-state, useSyncExternalStore) to
-      // resolve cleanly.
-      'react-hooks/set-state-in-effect': 'warn',
+      // The React Compiler rules folded into react-hooks v7 are treated
+      // as errors so new compiler-incompatible patterns fail CI.
+      'react-hooks/set-state-in-effect': 'error',
     },
   },
 )
