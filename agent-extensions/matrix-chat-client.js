@@ -9,14 +9,19 @@ import {
   getOrCreateDailyNote,
   todayIso,
 } from '@/data/dailyNotes.js'
-import { keyAtEnd } from '@/data/internals/orderKey.js'
+import { keyAtEnd, keysBetween } from '@/data/internals/orderKey.js'
 
 const VERSION = 1
 const GLOBAL_KEY = '__knowledgeMediumMatrixMessages'
+const MATRIX_JS_SDK_URL = 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 const CONFIG_KEY = 'knowledge-medium:matrix-messages:config:v1'
 const STATE_KEY_PREFIX = 'knowledge-medium:matrix-messages:state:v1'
 const TAG_BLOCK_CONTENT = '[[matrix-messages]]'
 const POLL_ERROR_DELAY_MS = 5_000
+
+let sdkLoadPromise = null
+let sdkImportWarningShown = false
+let sdkSyncWarningShown = false
 
 const normalizeBaseUrl = value => value.replace(/\/+$/, '')
 
@@ -82,28 +87,81 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
   }, {once: true})
 })
 
+const syncFilter = config => ({
+  room: {
+    rooms: [config.roomId],
+    timeline: {
+      types: ['m.room.message'],
+      limit: 30,
+    },
+    state: {types: []},
+    ephemeral: {types: []},
+    account_data: {types: []},
+  },
+  presence: {types: []},
+  account_data: {types: []},
+})
+
+const buildSyncQueryParams = (config, since) => {
+  const queryParams = {
+    timeout: since ? '30000' : '0',
+    filter: JSON.stringify(syncFilter(config)),
+  }
+  if (since) queryParams.since = since
+  return queryParams
+}
+
 const buildSyncUrl = (config, since) => {
   const url = new URL(`${normalizeBaseUrl(config.baseUrl)}/_matrix/client/v3/sync`)
-  url.searchParams.set('timeout', since ? '30000' : '0')
-  if (since) url.searchParams.set('since', since)
-  url.searchParams.set('filter', JSON.stringify({
-    room: {
-      rooms: [config.roomId],
-      timeline: {
-        types: ['m.room.message'],
-        limit: 30,
-      },
-      state: {types: []},
-      ephemeral: {types: []},
-      account_data: {types: []},
-    },
-    presence: {types: []},
-    account_data: {types: []},
-  }))
+  const queryParams = buildSyncQueryParams(config, since)
+  for (const [key, value] of Object.entries(queryParams)) {
+    url.searchParams.set(key, value)
+  }
   return url
 }
 
-const fetchMatrixSync = async (config, since, signal) => {
+const loadMatrixSdk = async () => {
+  sdkLoadPromise ??= import(MATRIX_JS_SDK_URL)
+  return sdkLoadPromise
+}
+
+const createMatrixClient = async config => {
+  try {
+    const sdk = await loadMatrixSdk()
+    if (typeof sdk.createClient !== 'function') return null
+    return sdk.createClient({
+      baseUrl: normalizeBaseUrl(config.baseUrl),
+      accessToken: config.accessToken,
+    })
+  } catch (error) {
+    sdkLoadPromise = null
+    if (!sdkImportWarningShown) {
+      sdkImportWarningShown = true
+      console.warn('[matrix-messages] matrix-js-sdk import failed; falling back to fetch', error)
+    }
+    return null
+  }
+}
+
+const fetchMatrixSync = async (config, since, signal, matrixClient) => {
+  if (matrixClient?.http?.authedRequest) {
+    try {
+      return await matrixClient.http.authedRequest(
+        'GET',
+        '/sync',
+        buildSyncQueryParams(config, since),
+        undefined,
+        {abortSignal: signal},
+      )
+    } catch (error) {
+      if (signal.aborted) throw error
+      if (!sdkSyncWarningShown) {
+        sdkSyncWarningShown = true
+        console.warn('[matrix-messages] matrix-js-sdk sync failed; falling back to fetch', error)
+      }
+    }
+  }
+
   const response = await window.fetch(buildSyncUrl(config, since), {
     headers: {
       authorization: `Bearer ${config.accessToken}`,
@@ -129,26 +187,177 @@ const eventTimestamp = event => {
   return typeof ts === 'number' && Number.isFinite(ts) ? ts : Date.now()
 }
 
-const oneLine = value => String(value ?? '').replace(/\s+/g, ' ').trim()
+const escapeRegex = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-const formatMessageContent = event => {
-  const content = event.content && typeof event.content === 'object' ? event.content : {}
-  const sender = oneLine(event.sender || 'unknown')
-  const body = oneLine(content.body || content.url || '')
-  const msgtype = oneLine(content.msgtype || 'm.room.message')
-  const stamp = new Date(eventTimestamp(event)).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+const unwrapLinks = value => {
+  let text = String(value ?? '')
+  text = text.replace(
+    /\[(.*?)]\(https:\/\/roamresearch\.com\/#\/app\/[^/]+\/page\/[a-zA-Z-_0-9]+?\)/g,
+    '$1',
+  )
 
-  if (msgtype === 'm.emote') return `[${stamp}] * ${sender} ${body}`
-  if (msgtype !== 'm.text' && msgtype !== 'm.notice') {
-    return `[${stamp}] ${sender} (${msgtype}): ${body}`
+  const origin = window.location?.origin
+  if (origin) {
+    text = text.replace(new RegExp(`\\[(.*?)]\\(${escapeRegex(origin)}\\/[^)]*\\)`, 'g'), '$1')
   }
-  return `[${stamp}] ${sender}: ${body}`
+
+  return text
 }
 
-const appendMatrixMessage = async (repo, config, event) => {
+const homeserverOrigin = config => {
+  try {
+    return new URL(normalizeBaseUrl(config.baseUrl)).origin
+  } catch {
+    return normalizeBaseUrl(config.baseUrl)
+  }
+}
+
+const mxcToHttpUrl = (mxcUrl, config, matrixClient) => {
+  if (typeof mxcUrl !== 'string' || !mxcUrl.startsWith('mxc://')) return mxcUrl || ''
+
+  const sdkUrl = matrixClient?.mxcUrlToHttp?.(
+    mxcUrl,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    true,
+    false,
+  )
+  if (sdkUrl) return sdkUrl
+
+  const mxcUrlWithoutScheme = mxcUrl.slice('mxc://'.length)
+  return `${homeserverOrigin(config)}/_matrix/media/v3/download/${mxcUrlWithoutScheme}`
+}
+
+const getMediaLabel = (content, fallback) =>
+  String(content.body || content.filename || fallback).trim() || fallback
+
+const getMessageText = (event, config, matrixClient) => {
+  const content = event.content && typeof event.content === 'object' ? event.content : {}
+  const msgtype = typeof content.msgtype === 'string' ? content.msgtype : 'm.room.message'
+
+  if (msgtype === 'm.audio') {
+    return `{{[[audio]]: ${mxcToHttpUrl(content.url, config, matrixClient)} }}`
+  }
+
+  if (msgtype === 'm.image') {
+    return `![${getMediaLabel(content, 'image')}](${mxcToHttpUrl(content.url, config, matrixClient)})`
+  }
+
+  if (msgtype === 'm.file' || msgtype === 'm.video') {
+    return `[${getMediaLabel(content, msgtype)}](${mxcToHttpUrl(content.url, config, matrixClient)})`
+  }
+
+  if (msgtype === 'm.emote') return `* ${unwrapLinks(content.body)}`
+  return unwrapLinks(content.body || content.url || msgtype)
+}
+
+const parseMarkdownToBlockDefinitions = markdownText => {
+  const source = String(markdownText ?? '')
+  const lines = source.split(/\r?\n/).filter(line => line.trim() !== '')
+  const blocks = parseLines([...lines])
+  return blocks && blocks.length ? blocks : [{content: source.trim() || '(empty message)'}]
+}
+
+const parseLines = (lines, level = 0) => {
+  const blocks = []
+
+  while (lines.length > 0) {
+    const line = lines[0]
+
+    if (isListItem(line)) {
+      const {leadingSpaces, content} = parseListItem(line)
+      if (!isValidIndentation(leadingSpaces)) return null
+
+      const indentationLevel = leadingSpaces / 2
+      if (indentationLevel < level) break
+
+      if (indentationLevel > level) {
+        if (!blocks.length) return null
+        const nestedBlocks = parseLines(lines, indentationLevel)
+        if (!nestedBlocks) return null
+        const parent = blocks[blocks.length - 1]
+        parent.children = [...(parent.children ?? []), ...nestedBlocks]
+        continue
+      }
+
+      lines.shift()
+      blocks.push({content})
+      continue
+    }
+
+    if (!blocks.length) return null
+    appendContinuationLine(blocks[blocks.length - 1], line)
+    lines.shift()
+  }
+
+  return blocks
+}
+
+const isListItem = line => /^(\s*)-\s+/.test(line)
+
+const parseListItem = line => {
+  const listItemMatch = line.match(/^(\s*)-\s+(.*)/)
+  if (!listItemMatch) throw new Error('Invalid list item format')
+  return {
+    leadingSpaces: listItemMatch[1].length,
+    content: listItemMatch[2],
+  }
+}
+
+const isValidIndentation = spaces => spaces % 2 === 0
+
+const appendContinuationLine = (block, line) => {
+  block.content += `\n${line.trim()}`
+}
+
+const createBlocksFromEvent = (event, config, matrixClient) => {
+  const text = getMessageText(event, config, matrixClient)
+  const blocksFromText = parseMarkdownToBlockDefinitions(text)
+  const metadataBlock = {
+    content: `URL::https://matrix.to/#/${config.roomId}/${event.event_id}`,
+    children: [
+      {content: `author::[[${event.sender || 'unknown'}]]`},
+      {
+        content: `timestamp::${new Date(eventTimestamp(event)).toLocaleString(undefined, {
+          timeZoneName: 'short',
+        })}`,
+      },
+    ],
+  }
+
+  const lastBlock = blocksFromText[blocksFromText.length - 1]
+  lastBlock.children = [...(lastBlock.children ?? []), metadataBlock]
+  return blocksFromText
+}
+
+const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, rootProperties) => {
+  if (!blockDefinitions.length) return
+
+  const existingChildren = await tx.childrenOf(parentId, workspaceId)
+  const orderKeys = keysBetween(
+    existingChildren.at(-1)?.orderKey ?? null,
+    null,
+    blockDefinitions.length,
+  )
+
+  for (const [index, block] of blockDefinitions.entries()) {
+    const id = await tx.create({
+      workspaceId,
+      parentId,
+      orderKey: orderKeys[index],
+      content: block.content,
+      properties: index === 0 && rootProperties ? rootProperties : undefined,
+    })
+
+    if (Array.isArray(block.children) && block.children.length) {
+      await createBlockTree(tx, workspaceId, id, block.children)
+    }
+  }
+}
+
+const appendMatrixMessage = async (repo, config, event, matrixClient) => {
   const eventId = typeof event.event_id === 'string' ? event.event_id : null
   if (!eventId) return
 
@@ -179,18 +388,18 @@ const appendMatrixMessage = async (repo, config, event) => {
     )
     if (alreadyPosted) return
 
-    await tx.create({
+    await createBlockTree(
+      tx,
       workspaceId,
-      parentId: tagBlockId,
-      orderKey: keyAtEnd(messageChildren.at(-1)?.orderKey ?? null),
-      content: formatMessageContent(event),
-      properties: {
+      tagBlockId,
+      createBlocksFromEvent(event, config, matrixClient),
+      {
         'matrix:eventId': eventId,
         'matrix:roomId': config.roomId,
         'matrix:sender': typeof event.sender === 'string' ? event.sender : '',
         'matrix:originServerTs': eventTimestamp(event),
       },
-    })
+    )
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
 }
 
@@ -237,15 +446,16 @@ const manager = () => {
 
 const pollLoop = async (repo, config, signal, runtime) => {
   let nextBatch = loadNextBatch(config)
+  const matrixClient = await createMatrixClient(config)
 
   while (!signal.aborted) {
     try {
-      const syncBody = await fetchMatrixSync(config, nextBatch, signal)
+      const syncBody = await fetchMatrixSync(config, nextBatch, signal, matrixClient)
       const events = nextBatch ? roomEventsFromSync(syncBody, config.roomId) : []
 
       for (const event of events) {
         if (event?.type !== 'm.room.message') continue
-        await appendMatrixMessage(repo, config, event)
+        await appendMatrixMessage(repo, config, event, matrixClient)
       }
 
       if (typeof syncBody?.next_batch === 'string') {
