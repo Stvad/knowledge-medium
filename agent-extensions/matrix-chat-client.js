@@ -10,6 +10,7 @@ import {
   todayIso,
 } from '@/data/dailyNotes.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
+import { computePromotedFromChildren } from '@/utils/roamImport/plan.js'
 import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 const VERSION = 1
@@ -247,9 +248,45 @@ const appendContinuationLine = (block, line) => {
 
 const matrixEventUrl = (roomId, eventId) => `https://matrix.to/#/${roomId}/${eventId}`
 
+const mergeProperties = (...propertyBags) => {
+  const merged = {}
+  for (const bag of propertyBags) {
+    if (!bag || typeof bag !== 'object') continue
+    Object.assign(merged, bag)
+  }
+  return Object.keys(merged).length ? merged : undefined
+}
+
+const blockPathUid = path => `matrix-message:${path.join('.')}`
+
+const toRoamBlock = (block, path) => ({
+  uid: blockPathUid(path),
+  string: block.content,
+  children: (block.children ?? []).map((child, index) => toRoamBlock(child, [...path, index])),
+})
+
+const withPromotedRoamProperties = (blocks, bubbled = new Set(), path = []) =>
+  blocks.map((block, index) => {
+    const blockPath = [...path, index]
+    const children = Array.isArray(block.children) ? block.children : []
+    const promotion = computePromotedFromChildren(
+      children.map((child, childIndex) => toRoamBlock(child, [...blockPath, childIndex])),
+      bubbled,
+    )
+
+    for (const uid of promotion.bubbled) bubbled.add(uid)
+
+    const promotedChildren = withPromotedRoamProperties(children, bubbled, blockPath)
+    return {
+      ...block,
+      properties: mergeProperties(block.properties, promotion.promoted),
+      children: promotedChildren.length ? promotedChildren : undefined,
+    }
+  })
+
 const createBlocksFromEvent = (event, matrixClient) => {
   const text = getMessageText(event, matrixClient)
-  return parseMarkdownToBlockDefinitions(text)
+  return withPromotedRoamProperties(parseMarkdownToBlockDefinitions(text))
 }
 
 const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, rootProperties) => {
@@ -268,7 +305,7 @@ const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, root
       parentId,
       orderKey: orderKeys[index],
       content: block.content,
-      properties: index === 0 && rootProperties ? rootProperties : undefined,
+      properties: mergeProperties(block.properties, index === 0 ? rootProperties : undefined),
     })
 
     if (Array.isArray(block.children) && block.children.length) {

@@ -135,7 +135,7 @@ const explodePageTokens = (value: string): string[] | null => {
  *   - `diagnostics` surfaces unusual structures (e.g. attr nesting
  *     deeper than two levels) so the post-import log can flag them.
  */
-interface PromotionResult {
+export interface PromotionResult {
   promoted: Record<string, unknown>
   diagnostics: string[]
   bubbled: Set<string>
@@ -152,7 +152,7 @@ interface PromotionResult {
  *  up by an ancestor's promotion pass. Without it, an intermediate
  *  kept attr block (along an `attr → attr` chain) would re-bubble the
  *  same descendants onto itself when buildBlock recurses into it. */
-const computePromotedFromChildren = (
+export const computePromotedFromChildren = (
   children: ReadonlyArray<RoamBlock>,
   alreadyBubbled: ReadonlySet<string>,
 ): PromotionResult => {
