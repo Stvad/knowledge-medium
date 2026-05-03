@@ -116,18 +116,6 @@ export class BlockCache {
     }
 
     this.metrics.setSnapshotDedupMisses++
-    const dbg = (globalThis as unknown as {__cacheDebug?: {ids: Set<string>; log: unknown[]}}).__cacheDebug
-    if (dbg && dbg.ids.has(snapshot.id)) {
-      dbg.log.push({
-        t: typeof performance !== 'undefined' ? performance.now().toFixed(1) : '0',
-        kind: 'setSnapshot',
-        id: snapshot.id,
-        prevContent: existing?.content,
-        prevUA: existing?.updatedAt,
-        newContent: snapshot.content.length > 60 ? snapshot.content.slice(0, 60) + '…' : snapshot.content,
-        newUA: snapshot.updatedAt,
-      })
-    }
     this.snapshots.set(snapshot.id, deepFreeze(snapshot))
     // Row is now known-present — clear any prior confirmed-missing state.
     this.missingIds.delete(snapshot.id)
@@ -157,18 +145,6 @@ export class BlockCache {
     const existing = this.snapshots.get(snapshot.id)
     if (existing && snapshot.updatedAt <= existing.updatedAt) {
       this.metrics.applySyncSnapshotRejected++
-      const dbg = (globalThis as unknown as {__cacheDebug?: {ids: Set<string>; log: unknown[]}}).__cacheDebug
-      if (dbg && dbg.ids.has(snapshot.id)) {
-        dbg.log.push({
-          t: typeof performance !== 'undefined' ? performance.now().toFixed(1) : '0',
-          kind: 'applySyncSnapshot-REJECT',
-          id: snapshot.id,
-          existingContent: existing.content,
-          existingUA: existing.updatedAt,
-          incomingContent: snapshot.content.length > 60 ? snapshot.content.slice(0, 60) + '…' : snapshot.content,
-          incomingUA: snapshot.updatedAt,
-        })
-      }
       return false
     }
     return this.setSnapshot(snapshot)
