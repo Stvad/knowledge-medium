@@ -10,18 +10,14 @@ import {
   todayIso,
 } from '@/data/dailyNotes.js'
 import { keyAtEnd, keysBetween } from '@/data/internals/orderKey.js'
+import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 const VERSION = 1
 const GLOBAL_KEY = '__knowledgeMediumMatrixMessages'
-const MATRIX_JS_SDK_URL = 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 const CONFIG_KEY = 'knowledge-medium:matrix-messages:config:v1'
 const STATE_KEY_PREFIX = 'knowledge-medium:matrix-messages:state:v1'
 const TAG_BLOCK_CONTENT = '[[matrix-messages]]'
 const POLL_ERROR_DELAY_MS = 5_000
-
-let sdkLoadPromise = null
-let sdkImportWarningShown = false
-let sdkSyncWarningShown = false
 
 const normalizeBaseUrl = value => value.replace(/\/+$/, '')
 
@@ -111,71 +107,20 @@ const buildSyncQueryParams = (config, since) => {
   return queryParams
 }
 
-const buildSyncUrl = (config, since) => {
-  const url = new URL(`${normalizeBaseUrl(config.baseUrl)}/_matrix/client/v3/sync`)
-  const queryParams = buildSyncQueryParams(config, since)
-  for (const [key, value] of Object.entries(queryParams)) {
-    url.searchParams.set(key, value)
-  }
-  return url
-}
-
-const loadMatrixSdk = async () => {
-  sdkLoadPromise ??= import(MATRIX_JS_SDK_URL)
-  return sdkLoadPromise
-}
-
-const createMatrixClient = async config => {
-  try {
-    const sdk = await loadMatrixSdk()
-    if (typeof sdk.createClient !== 'function') return null
-    return sdk.createClient({
-      baseUrl: normalizeBaseUrl(config.baseUrl),
-      accessToken: config.accessToken,
-    })
-  } catch (error) {
-    sdkLoadPromise = null
-    if (!sdkImportWarningShown) {
-      sdkImportWarningShown = true
-      console.warn('[matrix-messages] matrix-js-sdk import failed; falling back to fetch', error)
-    }
-    return null
-  }
-}
-
-const fetchMatrixSync = async (config, since, signal, matrixClient) => {
-  if (matrixClient?.http?.authedRequest) {
-    try {
-      return await matrixClient.http.authedRequest(
-        'GET',
-        '/sync',
-        buildSyncQueryParams(config, since),
-        undefined,
-        {abortSignal: signal},
-      )
-    } catch (error) {
-      if (signal.aborted) throw error
-      if (!sdkSyncWarningShown) {
-        sdkSyncWarningShown = true
-        console.warn('[matrix-messages] matrix-js-sdk sync failed; falling back to fetch', error)
-      }
-    }
-  }
-
-  const response = await window.fetch(buildSyncUrl(config, since), {
-    headers: {
-      authorization: `Bearer ${config.accessToken}`,
-    },
-    signal,
+const createMatrixClient = config =>
+  matrixSdk.createClient({
+    baseUrl: normalizeBaseUrl(config.baseUrl),
+    accessToken: config.accessToken,
   })
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`Matrix sync failed with ${response.status}: ${body.slice(0, 240)}`)
-  }
-
-  return response.json()
-}
+const fetchMatrixSync = (config, since, signal, matrixClient) =>
+  matrixClient.http.authedRequest(
+    'GET',
+    '/sync',
+    buildSyncQueryParams(config, since),
+    undefined,
+    {abortSignal: signal},
+  )
 
 const roomEventsFromSync = (syncBody, roomId) => {
   const events = syncBody?.rooms?.join?.[roomId]?.timeline?.events
@@ -204,18 +149,10 @@ const unwrapLinks = value => {
   return text
 }
 
-const homeserverOrigin = config => {
-  try {
-    return new URL(normalizeBaseUrl(config.baseUrl)).origin
-  } catch {
-    return normalizeBaseUrl(config.baseUrl)
-  }
-}
-
-const mxcToHttpUrl = (mxcUrl, config, matrixClient) => {
+const mxcToHttpUrl = (mxcUrl, matrixClient) => {
   if (typeof mxcUrl !== 'string' || !mxcUrl.startsWith('mxc://')) return mxcUrl || ''
 
-  const sdkUrl = matrixClient?.mxcUrlToHttp?.(
+  return matrixClient.mxcUrlToHttp(
     mxcUrl,
     undefined,
     undefined,
@@ -223,30 +160,26 @@ const mxcToHttpUrl = (mxcUrl, config, matrixClient) => {
     false,
     true,
     false,
-  )
-  if (sdkUrl) return sdkUrl
-
-  const mxcUrlWithoutScheme = mxcUrl.slice('mxc://'.length)
-  return `${homeserverOrigin(config)}/_matrix/media/v3/download/${mxcUrlWithoutScheme}`
+  ) || ''
 }
 
 const getMediaLabel = (content, fallback) =>
   String(content.body || content.filename || fallback).trim() || fallback
 
-const getMessageText = (event, config, matrixClient) => {
+const getMessageText = (event, matrixClient) => {
   const content = event.content && typeof event.content === 'object' ? event.content : {}
   const msgtype = typeof content.msgtype === 'string' ? content.msgtype : 'm.room.message'
 
   if (msgtype === 'm.audio') {
-    return `{{[[audio]]: ${mxcToHttpUrl(content.url, config, matrixClient)} }}`
+    return `{{[[audio]]: ${mxcToHttpUrl(content.url, matrixClient)} }}`
   }
 
   if (msgtype === 'm.image') {
-    return `![${getMediaLabel(content, 'image')}](${mxcToHttpUrl(content.url, config, matrixClient)})`
+    return `![${getMediaLabel(content, 'image')}](${mxcToHttpUrl(content.url, matrixClient)})`
   }
 
   if (msgtype === 'm.file' || msgtype === 'm.video') {
-    return `[${getMediaLabel(content, msgtype)}](${mxcToHttpUrl(content.url, config, matrixClient)})`
+    return `[${getMediaLabel(content, msgtype)}](${mxcToHttpUrl(content.url, matrixClient)})`
   }
 
   if (msgtype === 'm.emote') return `* ${unwrapLinks(content.body)}`
@@ -313,18 +246,10 @@ const appendContinuationLine = (block, line) => {
 }
 
 const createBlocksFromEvent = (event, config, matrixClient) => {
-  const text = getMessageText(event, config, matrixClient)
+  const text = getMessageText(event, matrixClient)
   const blocksFromText = parseMarkdownToBlockDefinitions(text)
   const metadataBlock = {
     content: `URL::https://matrix.to/#/${config.roomId}/${event.event_id}`,
-    children: [
-      {content: `author::[[${event.sender || 'unknown'}]]`},
-      {
-        content: `timestamp::${new Date(eventTimestamp(event)).toLocaleString(undefined, {
-          timeZoneName: 'short',
-        })}`,
-      },
-    ],
   }
 
   const lastBlock = blocksFromText[blocksFromText.length - 1]
@@ -396,8 +321,8 @@ const appendMatrixMessage = async (repo, config, event, matrixClient) => {
       {
         'matrix:eventId': eventId,
         'matrix:roomId': config.roomId,
-        'matrix:sender': typeof event.sender === 'string' ? event.sender : '',
-        'matrix:originServerTs': eventTimestamp(event),
+        'matrix:author': typeof event.sender === 'string' ? event.sender : '',
+        'matrix:timestamp': eventTimestamp(event),
       },
     )
   }, {scope: ChangeScope.BlockDefault, description: 'matrix message ingest'})
@@ -406,6 +331,7 @@ const appendMatrixMessage = async (repo, config, event, matrixClient) => {
 const createManager = () => ({
   version: VERSION,
   abortController: null,
+  matrixClient: null,
   status: 'stopped',
   lastError: null,
 
@@ -418,15 +344,20 @@ const createManager = () => ({
 
     this.stop()
     const abortController = new AbortController()
+    const matrixClient = createMatrixClient(config)
     this.abortController = abortController
+    this.matrixClient = matrixClient
     this.status = 'running'
     this.lastError = null
 
-    void pollLoop(repo, config, abortController.signal, this)
+    void pollLoop(repo, config, abortController.signal, matrixClient, this)
     return true
   },
 
   stop() {
+    this.matrixClient?.http?.abort?.()
+    this.matrixClient?.stopClient?.()
+    this.matrixClient = null
     if (this.abortController) {
       this.abortController.abort()
       this.abortController = null
@@ -444,9 +375,8 @@ const manager = () => {
   return next
 }
 
-const pollLoop = async (repo, config, signal, runtime) => {
+const pollLoop = async (repo, config, signal, matrixClient, runtime) => {
   let nextBatch = loadNextBatch(config)
-  const matrixClient = await createMatrixClient(config)
 
   while (!signal.aborted) {
     try {
