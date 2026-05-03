@@ -85,15 +85,13 @@ const agentExtensionsParentAlias = 'Agent-installed extensions'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
-const maxAttemptsBeforeIdle = 6
+const maxFastAttemptsBeforeQuiet = 6
+const quietRetryMs = 60_000
 
 export const agentRuntimeBridgeRestartEvent = 'agent-runtime-bridge:restart'
 
 const bridgeUrl = () =>
   (import.meta.env.VITE_AGENT_RUNTIME_URL?.trim() || defaultBridgeUrl).replace(/\/+$/, '')
-
-const delay = (ms: number) =>
-  new Promise(resolve => window.setTimeout(resolve, ms))
 
 const isString = (value: unknown): value is string =>
   typeof value === 'string'
@@ -629,34 +627,47 @@ export function useAgentRuntimeBridge({
     const baseUrl = bridgeUrl()
     let retryMs = retryBaseMs
     let attempts = 0
-    let restartResolve: (() => void) | null = null
+    let wakeResolve: (() => void) | null = null
+    let bridgeUnavailableLogged = false
     // Tokens were just edited (mint / revoke). The poll loop checks
     // this on each iteration to push a fresh registration through
     // before the next long-poll, so newly minted tokens become valid
     // for the agent CLI without a page reload.
     let tokensDirty = false
 
-    const waitForRestart = () => new Promise<void>(resolve => {
-      restartResolve = resolve
+    const waitForWakeOrTimeout = (ms: number) => new Promise<void>(resolve => {
+      let settled = false
+      let timeout: number | null = null
+      const finish = () => {
+        if (settled) return
+        settled = true
+        if (timeout !== null) window.clearTimeout(timeout)
+        if (wakeResolve === finish) wakeResolve = null
+        resolve()
+      }
+
+      timeout = window.setTimeout(finish, ms)
+      wakeResolve = finish
     })
 
-    const handleRestart = () => {
+    const wakeBridgeLoop = (markTokensDirty = false) => {
       attempts = 0
       retryMs = retryBaseMs
-      tokensDirty = true
-      if (restartResolve) {
-        restartResolve()
-        restartResolve = null
+      if (markTokensDirty) tokensDirty = true
+      if (wakeResolve) {
+        wakeResolve()
+        wakeResolve = null
       }
+    }
+
+    const handleRestart = () => {
+      wakeBridgeLoop(true)
     }
 
     const handleTokensChanged = () => {
       tokensDirty = true
-      // Wake the idle wait if we're paused on bridge-unavailable.
-      if (restartResolve) {
-        restartResolve()
-        restartResolve = null
-      }
+      // Wake quiet reconnects if we're waiting on bridge-unavailable.
+      wakeBridgeLoop()
       // Push a registration immediately so the bridge accepts the new
       // token without waiting out the in-flight long-poll (~25 s). The
       // poll loop's own register() call will also fire, but redundantly
@@ -665,8 +676,19 @@ export function useAgentRuntimeBridge({
       register().catch(() => { /* loop will retry */ })
     }
 
+    const handleVisibilityChanged = () => {
+      if (document.visibilityState === 'visible') wakeBridgeLoop()
+    }
+
+    const handleWakeEvent = () => {
+      wakeBridgeLoop()
+    }
+
     window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
+    window.addEventListener('focus', handleWakeEvent)
+    window.addEventListener('online', handleWakeEvent)
+    document.addEventListener('visibilitychange', handleVisibilityChanged)
 
     const context = (): AgentRuntimeContext => {
       const {
@@ -749,6 +771,11 @@ export function useAgentRuntimeBridge({
           }
           await register()
 
+          if (bridgeUnavailableLogged) {
+            console.info(`Agent runtime bridge reconnected at ${baseUrl}.`)
+            bridgeUnavailableLogged = false
+          }
+
           const nextUrl = new URL(`${baseUrl}/runtime/commands/next`)
           nextUrl.searchParams.set('clientId', clientId)
           nextUrl.searchParams.set('timeoutMs', String(longPollMs))
@@ -784,17 +811,21 @@ export function useAgentRuntimeBridge({
           }
 
           attempts += 1
-          if (attempts >= maxAttemptsBeforeIdle) {
-            console.info(
-              `Agent runtime bridge unavailable at ${baseUrl}; pausing reconnects. ` +
-              `Run "Restart agent runtime bridge" from the command palette to retry.`,
-            )
-            await waitForRestart()
+          if (attempts >= maxFastAttemptsBeforeQuiet) {
+            if (!bridgeUnavailableLogged) {
+              console.info(
+                `Agent runtime bridge unavailable at ${baseUrl}; ` +
+                `retrying quietly every ${quietRetryMs / 1000} seconds.`,
+              )
+              bridgeUnavailableLogged = true
+            }
+            await waitForWakeOrTimeout(quietRetryMs)
             if (abortController.signal.aborted) return
             continue
           }
 
-          await delay(retryMs)
+          await waitForWakeOrTimeout(retryMs)
+          if (abortController.signal.aborted) return
           retryMs = Math.min(retryMs * 2, retryMaxMs)
         }
       }
@@ -806,9 +837,12 @@ export function useAgentRuntimeBridge({
       abortController.abort()
       window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
       window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
-      if (restartResolve) {
-        restartResolve()
-        restartResolve = null
+      window.removeEventListener('focus', handleWakeEvent)
+      window.removeEventListener('online', handleWakeEvent)
+      document.removeEventListener('visibilitychange', handleVisibilityChanged)
+      if (wakeResolve) {
+        wakeResolve()
+        wakeResolve = null
       }
     }
   }, [clientId])
