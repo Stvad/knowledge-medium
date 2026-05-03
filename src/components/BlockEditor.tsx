@@ -81,19 +81,8 @@ export const BlockEditor = ({
   ).current
 
   const pushSelection = useRef(
-    debounce((selection: EditorSelectionState) => {
-      // Skip if focus has already moved to another block. Cross-block
-      // navigation actions (Up/Down/Backspace-merge) write the target
-      // block's `editorSelection` and then change `focusedBlockId`; this
-      // BlockEditor unmounts and `flushDebouncers` fires a pending
-      // pushSelection synchronously. Without this guard that fire would
-      // overwrite the navigation's selection with a stale entry pointing
-      // back at this (now unfocused) block, so the new editor's focus
-      // effect bails on `selection.blockId !== block.id` and the cursor
-      // lands at position 0 instead of the column the user came from.
-      if (uiStateBlock.peekProperty(focusedBlockIdProp) !== selection.blockId) return
-      void uiStateBlock.set(editorSelection, selection)
-    }, 150),
+    debounce((selection: EditorSelectionState) =>
+      void uiStateBlock.set(editorSelection, selection), 150),
   ).current
 
   const flushDebouncers = useCallback(() => {
