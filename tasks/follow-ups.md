@@ -72,3 +72,15 @@ Two angles:
 - **Don't enqueue during import in the first place** — the upload trigger gates on `tx_context.source = 'user'`. Adding a fourth source value `'import'` (or letting the import set source to `'local-ephemeral'` with a temporary scope override) keeps the row_events audit happy while skipping `ps_crud`. Cleanest variant: add `'import'` source, both `row_events` and upload triggers learn to ignore it. The Roam import wraps its txs with `source: 'import'`. Then both `row_events` AND `ps_crud` stay small even on bulk import. Less-clean variant: drop the upload trigger before import, recreate after.
 
 The "don't enqueue" path also helps the `row_events` problem above — an `'import'` source that skips row_events trims an additional ~250 MB of audit-log bloat from the import.
+
+## Move agent-runtime tokens from localStorage to user-page blocks
+
+Today (commit `90a9047`) agent tokens live in localStorage keyed by `(userId, workspaceId)`, managed by `AgentTokenStore` in [src/agentRuntime/agentTokens.ts](src/agentRuntime/agentTokens.ts). localStorage isn't actually more secure than a block on the user page — same-origin is the boundary either way — and a block fits the "everything is a block" model better (undoable, exportable, manageable inline on the user page).
+
+Blockers to land first:
+
+1. **A persistent device-local block scope.** Existing `local-ui` is per-session-ephemeral; tokens need persisted-but-non-syncing. New scope must (a) write to OPFS, (b) never enqueue into `ps_crud`, (c) avoid `row_events` if that audit is also gated to local. Add an engine guard so blocks marked `kind=agent-token` can't have their scope upgraded by an `update_block` tx — defends against accidental edits flipping a token into a synced row.
+2. **Renderer for `kind: agent-token`.** Read-only display of label + createdAt + a Revoke button. Hide from QuickFind / autocomplete / outline rendering so the user doesn't stumble into them.
+3. **Multi-device sanity check.** Confirm that a synced user page on Device B doesn't crash when its child set is partially device-local on A.
+
+Once #1 lands, the migration is small: swap `AgentTokenStore` for a thin wrapper around `repo.tx({scope: DeviceLocal})` + `repo.query.children({parentId: userPage.id, kind: 'agent-token'})`. Bridge handshake and CLI stay identical.
