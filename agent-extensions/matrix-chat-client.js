@@ -245,16 +245,11 @@ const appendContinuationLine = (block, line) => {
   block.content += `\n${line.trim()}`
 }
 
-const createBlocksFromEvent = (event, config, matrixClient) => {
-  const text = getMessageText(event, matrixClient)
-  const blocksFromText = parseMarkdownToBlockDefinitions(text)
-  const metadataBlock = {
-    content: `URL::https://matrix.to/#/${config.roomId}/${event.event_id}`,
-  }
+const matrixEventUrl = (roomId, eventId) => `https://matrix.to/#/${roomId}/${eventId}`
 
-  const lastBlock = blocksFromText[blocksFromText.length - 1]
-  lastBlock.children = [...(lastBlock.children ?? []), metadataBlock]
-  return blocksFromText
+const createBlocksFromEvent = (event, matrixClient) => {
+  const text = getMessageText(event, matrixClient)
+  return parseMarkdownToBlockDefinitions(text)
 }
 
 const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, rootProperties) => {
@@ -317,10 +312,11 @@ const appendMatrixMessage = async (repo, config, event, matrixClient) => {
       tx,
       workspaceId,
       tagBlockId,
-      createBlocksFromEvent(event, config, matrixClient),
+      createBlocksFromEvent(event, matrixClient),
       {
         'matrix:eventId': eventId,
         'matrix:roomId': config.roomId,
+        'matrix:url': matrixEventUrl(config.roomId, eventId),
         'matrix:author': typeof event.sender === 'string' ? event.sender : '',
         'matrix:timestamp': eventTimestamp(event),
       },
