@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { Block } from '@/data/internals/block'
+import type { Block } from '../../../data/block'
 import type { BlockData, BlockRendererProps } from '@/types.ts'
 
 // Importing the renderer pulls in DefaultBlockRenderer → radix-ui →

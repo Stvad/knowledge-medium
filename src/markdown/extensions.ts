@@ -1,4 +1,4 @@
-import type { Block } from '@/data/internals/block'
+import type { Block } from '../data/block'
 import { defineFacet, isFunction } from '@/extensions/facet.ts'
 import type { BlockContextType } from '@/types.ts'
 import type { Components } from 'react-markdown'

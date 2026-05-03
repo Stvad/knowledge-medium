@@ -18,7 +18,7 @@ import { ChangeScope } from '@/data/api'
 import { aliasesProp, typeProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '@/data/repo'
 import {
   DAILY_NOTE_NS,
   JOURNAL_NS,

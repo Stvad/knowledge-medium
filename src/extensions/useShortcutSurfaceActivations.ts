@@ -7,7 +7,7 @@ import type {
 } from '@/extensions/blockInteraction.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useActionContextActivations } from '@/shortcuts/useActionContext.ts'
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 import { useRepo } from '@/context/repo.tsx'
 import { useBlockContext } from '@/context/block.tsx'
 import {

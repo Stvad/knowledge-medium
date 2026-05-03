@@ -1,4 +1,4 @@
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 import { useRenderer } from '../hooks/useRendererRegistry.tsx'
 import { useBlockContext } from '@/context/block.tsx'
 import { useRepo } from '@/context/repo.tsx'

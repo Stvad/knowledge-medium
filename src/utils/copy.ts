@@ -1,6 +1,6 @@
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 import { ClipboardData } from '../types'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from '../data/repo'
 import { selectionStateProp } from '@/data/properties.ts'
 
 const createIndentedContent = (content: string, depth: number): string => {

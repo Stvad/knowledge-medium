@@ -1,6 +1,6 @@
 import { defineFacet } from '@/extensions/facet.ts'
 import type { FacetRuntime } from '@/extensions/facet.ts'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from '../data/repo'
 import { ActionConfig, ActionContextConfig, ActionContextType } from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
 

@@ -26,11 +26,11 @@ import {
   QueryNotRegisteredError,
   type Query,
 } from '@/data/api'
-import type { Dependency as Dep } from './handleStore'
+import type { Dependency as Dep } from '../internals/handleStore'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { queriesFacet } from './facets'
-import { Repo } from './repo'
+import { queriesFacet } from '../facets'
+import { Repo } from '../repo'
 
 let h: TestDb
 let cache: BlockCache

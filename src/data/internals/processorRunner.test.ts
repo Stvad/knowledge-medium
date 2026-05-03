@@ -30,7 +30,7 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../repo'
 
 const WS = 'ws-1'
 

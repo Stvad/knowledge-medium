@@ -8,7 +8,7 @@ import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
 import { ChangeScope } from '@/data/api'
-import { Block } from '@/data/internals/block'
+import { Block } from '../../data/block'
 import { useUserBlock } from '@/data/globalState.ts'
 import { previousLoadTimeProp, currentLoadTimeProp } from '@/data/properties.ts'
 

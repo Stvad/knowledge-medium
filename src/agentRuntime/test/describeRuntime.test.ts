@@ -14,7 +14,7 @@ import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 // Vite server's transform queue). Same `.ts` suffix as the dynamic
 // import so both share a module-cache key.
 import '@/extensions/api.ts'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from '../../data/repo'
 import type { ActionConfig } from '@/shortcuts/types.ts'
 
 beforeEach(() => {

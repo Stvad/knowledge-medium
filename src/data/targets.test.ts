@@ -31,7 +31,7 @@ import {
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from './repo'
 import {
   computeAliasSeatId,
   computeDailyNoteId,
@@ -39,7 +39,7 @@ import {
   ensureAliasTarget,
   ensureDailyNoteTarget,
   isDateAlias,
-} from '@/data/internals/targets'
+} from '@/data/targets'
 import { dailyNoteBlockId, DAILY_NOTE_NS } from '@/data/dailyNotes'
 
 const WS = 'ws-1'

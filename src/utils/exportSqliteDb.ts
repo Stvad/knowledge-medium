@@ -14,7 +14,7 @@
  * keeps using the same dbFilename, we just swap what's inside.
  */
 
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from '../data/repo'
 import { dbFilenameForUser } from '@/data/repoProvider'
 
 export async function exportRawSqliteDb(repo: Repo): Promise<{ blob: Blob; filename: string }> {

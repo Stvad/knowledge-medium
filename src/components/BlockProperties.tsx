@@ -17,7 +17,7 @@
 
 import { useMemo, useState } from 'react'
 import { Trash2 } from 'lucide-react'
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 import {
   ChangeScope,
   type AnyPropertySchema,
@@ -26,7 +26,7 @@ import {
 } from '@/data/api'
 import { useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { propertySchemasFacet, propertyUiFacet } from '@/data/internals/facets.ts'
+import { propertySchemasFacet, propertyUiFacet } from '../data/facets.ts'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'

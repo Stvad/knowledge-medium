@@ -1,5 +1,5 @@
-import { Block } from '@/data/internals/block'
-import { Repo } from '@/data/internals/repo'
+import { Block } from '../data/block'
+import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/globalState.ts'
 import {
   editorSelection,

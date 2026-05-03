@@ -14,7 +14,7 @@
  * `defaultValue` is the single source of truth, callers pass values
  * via `block.set(schema, value)`.
  */
-import { Block } from '@/data/internals/block'
+import { Block } from './block'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,

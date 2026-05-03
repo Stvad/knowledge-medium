@@ -28,10 +28,10 @@ import {
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { kernelDataExtension } from './kernelDataExtension'
-import { mutatorsFacet, propertySchemasFacet, propertyUiFacet, queriesFacet } from './facets'
+import { kernelDataExtension } from '../kernelDataExtension'
+import { mutatorsFacet, propertySchemasFacet, propertyUiFacet, queriesFacet } from '../facets'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
-import { Repo } from './repo'
+import { Repo } from '../repo'
 
 let h: TestDb
 let cache: BlockCache

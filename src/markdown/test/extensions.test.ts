@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Block } from '@/data/internals/block'
+import type { Block } from '../../data/block'
 import {
   resolveMarkdownRenderConfig,
 } from '@/markdown/extensions.ts'

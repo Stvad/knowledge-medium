@@ -47,7 +47,7 @@ import {
 import type { AfterCommitJob } from './txEngine'
 import type { SnapshotsMap } from './txSnapshots'
 import type { PowerSyncDb } from './commitPipeline'
-import type { Repo } from './repo'
+import type { Repo } from '../repo'
 
 /** Tx-grain inputs the runner needs to decide what fires + with which
  *  changedRows. Built by the commit pipeline from the snapshots map +

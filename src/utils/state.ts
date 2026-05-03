@@ -1,6 +1,6 @@
 import { ChangeScope } from '@/data/api'
-import { Block } from '@/data/internals/block'
-import type { Repo } from '@/data/internals/repo'
+import { Block } from '../data/block'
+import type { Repo } from '../data/repo'
 import type { ParsedBlock } from '@/utils/markdownParser.ts'
 
 /** Import a parsed block tree into the repo as one atomic

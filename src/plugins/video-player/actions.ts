@@ -1,6 +1,6 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
-import { Block } from '@/data/internals/block'
+import { Block } from '../../data/block'
 import { setFocusedBlockId } from '@/data/properties.ts'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'

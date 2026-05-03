@@ -1,8 +1,8 @@
 import { ChangeScope } from '@/data/api'
-import { Block } from '@/data/internals/block'
-import type { Repo } from '@/data/internals/repo'
+import { Block } from '../data/block'
+import type { Repo } from '../data/repo'
 import { parseMarkdownToBlocks } from '@/utils/markdownParser.ts'
-import { keysBetween } from '@/data/internals/orderKey.ts'
+import { keysBetween } from '../data/orderKey.ts'
 
 /** Paste markdown text as a sibling subtree relative to a target
  *  block. The target's parent receives the new tree as children;

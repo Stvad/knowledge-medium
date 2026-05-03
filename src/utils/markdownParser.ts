@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid'
-import { keyAtEnd } from '@/data/internals/orderKey.ts'
+import { keyAtEnd } from '../data/orderKey.ts'
 
 /** Lightweight intermediate shape produced by the markdown parser.
  *  Holds only the fields the importer actually needs — id, content,

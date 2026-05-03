@@ -9,7 +9,7 @@ import {
   getOrCreateDailyNote,
   todayIso,
 } from '@/data/dailyNotes.js'
-import { keyAtEnd, keysBetween } from '@/data/internals/orderKey.js'
+import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
 import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 const VERSION = 1

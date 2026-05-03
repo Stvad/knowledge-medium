@@ -12,7 +12,7 @@ import {
   type FacetContribution,
 } from '@/extensions/facet'
 import { extensionDisabledProp } from '@/data/properties'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 
 // Test-local facet so contributions don't pollute / collide with the

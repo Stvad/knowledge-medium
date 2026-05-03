@@ -17,7 +17,7 @@ import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
-import { kernelDataExtension } from '@/data/internals/kernelDataExtension.ts'
+import { kernelDataExtension } from '../data/kernelDataExtension.ts'
 import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,

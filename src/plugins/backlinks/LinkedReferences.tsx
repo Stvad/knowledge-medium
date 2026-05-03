@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Block } from '@/data/internals/block'
+import { Block } from '../../data/block'
 import { BlockRendererProps } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BreadcrumbList } from '@/components/BreadcrumbList.tsx'

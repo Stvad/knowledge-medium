@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Block } from '@/data/internals/block'
+import { Block } from '../../data/block'
 import { useInFocus, useUserProperty } from '@/data/globalState'
 import { previousLoadTimeProp } from '@/data/properties.ts'
 import { useData } from '@/hooks/block.ts'

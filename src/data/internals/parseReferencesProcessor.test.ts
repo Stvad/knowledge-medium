@@ -25,8 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from './repo'
-import { computeAliasSeatId, computeDailyNoteId } from './targets'
+import { Repo } from '../repo'
+import { computeAliasSeatId, computeDailyNoteId } from '../targets'
 
 interface Harness {
   h: TestDb

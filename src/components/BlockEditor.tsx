@@ -1,5 +1,5 @@
 import CodeMirror, { ReactCodeMirrorRef, ReactCodeMirrorProps } from '@uiw/react-codemirror'
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 import {
   editorSelection,
   focusedBlockIdProp,

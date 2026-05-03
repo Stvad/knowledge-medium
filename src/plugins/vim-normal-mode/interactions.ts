@@ -8,7 +8,7 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
-import { Block } from '@/data/internals/block'
+import { Block } from '../../data/block'
 
 export const vimBlockClickBehavior: BlockClickContribution = context =>
   event => handleBlockSelectionClick(context, event)

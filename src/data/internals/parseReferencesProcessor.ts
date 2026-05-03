@@ -61,7 +61,7 @@ import {
   ensureAliasTarget,
   ensureDailyNoteTarget,
   isDateAlias,
-} from './targets'
+} from '../targets'
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */

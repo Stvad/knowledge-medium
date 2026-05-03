@@ -1,5 +1,5 @@
-import { Block } from '@/data/internals/block'
-import type { Repo } from '@/data/internals/repo'
+import { Block } from '../data/block'
+import type { Repo } from '../data/repo'
 import { selectionStateProp, topLevelBlockIdProp, focusedBlockIdProp, isCollapsedProp } from '@/data/properties'
 
 /** True if `block` is collapsed *and* the caller cares (i.e. it isn't

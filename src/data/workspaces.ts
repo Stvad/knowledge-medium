@@ -7,7 +7,7 @@ import type {
   WorkspaceMemberWithEmail,
   WorkspaceRole,
 } from '@/types'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from './repo'
 import {
   parseWorkspaceMemberRow,
   parseWorkspaceRow,

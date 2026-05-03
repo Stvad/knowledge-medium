@@ -2,7 +2,7 @@ import type { BlockData } from './blockData'
 // Type-only — no runtime cycle. Keeps `ProcessorCtx.repo` honest (full
 // Repo capability surface for processors) without inventing a narrow
 // shadow interface.
-import type { Repo } from '../internals/repo'
+import type { Repo } from '../repo'
 import type { Schema } from './schema'
 import type { User } from './user'
 

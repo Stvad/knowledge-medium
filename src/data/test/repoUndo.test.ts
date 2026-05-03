@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, ReadOnlyError } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from './repo'
+import { Repo } from '../repo'
 
 const WS = 'ws-1'
 

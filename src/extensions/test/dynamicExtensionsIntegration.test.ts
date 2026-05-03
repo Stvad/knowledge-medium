@@ -11,7 +11,7 @@ import {
   type AppExtension,
 } from '@/extensions/facet'
 import { extensionDisabledProp } from '@/data/properties'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 
 const integrationFacet = defineFacet<{label: string}, string[]>({

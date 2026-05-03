@@ -32,7 +32,7 @@ import {
   type Unsubscribe,
 } from '@/data/api'
 import type { Repo } from './repo'
-import type { LoaderHandle } from './handleStore'
+import type { LoaderHandle } from './internals/handleStore'
 
 export class Block implements Handle<BlockData | null> {
   readonly id: string

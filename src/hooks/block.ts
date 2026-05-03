@@ -36,7 +36,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import type { BlockData, Handle, PropertySchema } from '@/data/api'
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 

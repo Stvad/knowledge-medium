@@ -18,7 +18,7 @@
  * (`__omniliner.repo.handleStore.size()`) work without a hook.
  */
 
-import { Repo } from '@/data/internals/repo'
+import { Repo } from './repo'
 
 interface MetricsConsoleAPI {
   /** Raw frozen snapshot — same shape as `repo.metrics()`. */

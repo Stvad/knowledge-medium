@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope } from '@/data/api'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../repo'
 
 interface Harness {
   h: TestDb

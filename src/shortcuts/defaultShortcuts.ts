@@ -8,8 +8,8 @@ import {
   CodeMirrorEditModeDependencies,
   ActionTrigger,
 } from './types'
-import { Block } from '@/data/internals/block'
-import { Repo } from '@/data/internals/repo'
+import { Block } from '@/data/block'
+import { Repo } from '@/data/repo'
 import { createChild as createChildMutator, merge as mergeMutator } from '@/data/internals/kernelMutators'
 import { ChangeScope } from '@/data/api'
 import {

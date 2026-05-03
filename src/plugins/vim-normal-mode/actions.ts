@@ -1,4 +1,4 @@
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../../data/repo'
 import {
   isCollapsedProp,
   setFocusedBlockId,

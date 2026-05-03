@@ -34,7 +34,7 @@
 import { v5 as uuidv5 } from 'uuid'
 import { DeletedConflictError, type Tx } from '@/data/api'
 import { keyAtEnd } from './orderKey'
-import { aliasesProp } from './coreProperties'
+import { aliasesProp } from './internals/coreProperties'
 
 /** Layer 1 args. */
 export interface CreateOrRestoreArgs {

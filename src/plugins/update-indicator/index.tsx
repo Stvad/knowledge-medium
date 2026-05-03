@@ -10,7 +10,7 @@ import { UpdateIndicator } from './UpdateIndicator.tsx'
 // layout slot means custom layouts compose with it for free — they don't
 // need to remember to render an indicator anywhere themselves.
 const updateIndicatorDecorator: BlockContentDecoratorContribution = () => Inner => {
-  const Decorated: React.FC<{ block: import('@/data/internals/block').Block }> = (props) => (
+  const Decorated: React.FC<{ block: import('../../data/block').Block }> = (props) => (
     <div className="relative">
       <UpdateIndicator block={props.block}/>
       {/* Inner is the registry-resolved/decorated renderer; identity is

@@ -1,4 +1,4 @@
-import { Block } from '@/data/internals/block'
+import { Block } from '../data/block'
 import { BreadcrumbList } from '@/components/BreadcrumbList.tsx'
 import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'

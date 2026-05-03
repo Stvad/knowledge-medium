@@ -32,9 +32,9 @@
  */
 
 import { mutatorsFacet, postCommitProcessorsFacet, propertySchemasFacet, queriesFacet } from './facets'
-import { KERNEL_MUTATORS } from './kernelMutators'
-import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
-import { KERNEL_QUERIES } from './kernelQueries'
+import { KERNEL_MUTATORS } from './internals/kernelMutators'
+import { KERNEL_PROCESSORS } from './internals/parseReferencesProcessor'
+import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import type { AppExtension } from '@/extensions/facet'
 

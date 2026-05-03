@@ -24,7 +24,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { aliasesProp, typeProp, rendererProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../data/repo'
 import { seedTutorial } from '@/initData'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions'
 

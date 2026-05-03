@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
-import type { Repo } from '@/data/internals/repo'
+import type { Repo } from './data/repo'
 import { typeProp, rendererProp, aliasesProp } from '@/data/properties'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
 

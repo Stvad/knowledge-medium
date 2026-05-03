@@ -25,7 +25,7 @@ import {
   type Tx,
 } from '@/data/api'
 import { BlockNotFoundError, ParentDeletedError } from '@/data/api'
-import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from './orderKey'
+import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from '../orderKey'
 
 // ──── Common helpers ────
 

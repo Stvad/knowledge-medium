@@ -105,8 +105,8 @@ export {
 } from '@/shortcuts/blockActions.ts'
 
 // --- Block / data primitives ---
-export { Block } from '@/data/internals/block'
-export { Repo } from '@/data/internals/repo'
+export { Block } from '../data/block'
+export { Repo } from '../data/repo'
 export { getPanelsBlock } from '@/data/globalState.ts'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.

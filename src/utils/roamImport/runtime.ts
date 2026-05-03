@@ -5,7 +5,7 @@
 //   const json = JSON.parse(await (await fetch('/tmp/roam.json')).text())
 //   return await window.__omniliner.roamImport.run(json)
 
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../../data/repo'
 import { importRoam, type RoamImportOptions, type RoamImportSummary } from './import'
 import { planImport } from './plan'
 import type { RoamExport } from './types'

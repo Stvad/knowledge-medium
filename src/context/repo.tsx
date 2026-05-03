@@ -1,7 +1,7 @@
 import { createContext, ReactNode, use, useContext } from 'react'
 import { PowerSyncContext } from '@powersync/react'
 import type { AbstractPowerSyncDatabase } from '@powersync/common'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../data/repo'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'

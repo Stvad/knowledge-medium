@@ -22,9 +22,9 @@ import {
 import { aliasesProp, typeProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { kernelDataExtension } from './kernelDataExtension'
-import { queriesFacet } from './facets'
-import { Repo } from './repo'
+import { kernelDataExtension } from '../kernelDataExtension'
+import { queriesFacet } from '../facets'
+import { Repo } from '../repo'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'

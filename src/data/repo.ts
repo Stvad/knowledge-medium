@@ -34,14 +34,14 @@ import {
   MutatorNotRegisteredError,
   QueryNotRegisteredError,
 } from '@/data/api'
-import { runTx, type PowerSyncDb } from './commitPipeline'
+import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
-import { KERNEL_MUTATORS } from './kernelMutators'
-import { KERNEL_PROCESSORS } from './parseReferencesProcessor'
-import { KERNEL_QUERIES } from './kernelQueries'
+import { KERNEL_MUTATORS } from './internals/kernelMutators'
+import { KERNEL_PROCESSORS } from './internals/parseReferencesProcessor'
+import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { mutatorsFacet, postCommitProcessorsFacet, queriesFacet } from './facets'
-import { ProcessorRunner } from './processorRunner'
+import { ProcessorRunner } from './internals/processorRunner'
 import { Block } from './block'
 import {
   HandleStore,
@@ -49,21 +49,21 @@ import {
   handleKey,
   snapshotsToChangeNotification,
   type ResolveContext,
-} from './handleStore'
+} from './internals/handleStore'
 import {
   DbMetrics,
   QueryMetrics,
   wrapDbWithMetrics,
-} from './timingMetrics'
+} from './internals/timingMetrics'
 import {
   startRowEventsTail,
   type RowEventsTail,
   type RowEventsTailOptions,
-} from './rowEventsTail'
-import { UndoManager, type UndoEntry } from './undoManager'
-import type { TxImpl } from './txEngine'
-import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
-import { SELECT_BLOCK_BY_ID_SQL } from './kernelQueries'
+} from './internals/rowEventsTail'
+import { UndoManager, type UndoEntry } from './internals/undoManager'
+import type { TxImpl } from './internals/txEngine'
+import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
+import { SELECT_BLOCK_BY_ID_SQL } from './internals/kernelQueries'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project

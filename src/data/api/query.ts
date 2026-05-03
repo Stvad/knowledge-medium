@@ -3,7 +3,7 @@ import type { BlockData } from './blockData'
 // Type-only — no runtime cycle. Mirrors ProcessorCtx.repo's pattern so
 // query resolvers that need to compose existing data-layer surfaces do
 // not have to cast from unknown.
-import type { Repo } from '../internals/repo'
+import type { Repo } from '../repo'
 
 /** A dependency a query declares while resolving. Drives invalidation
  *  matching (§9.2). Built-in queries declare these from their `resolve`

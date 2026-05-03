@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '@/data/internals/repo'
+import { Repo } from '../repo'
 import {
   aliasesProp,
   selectionStateProp,

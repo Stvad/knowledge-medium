@@ -28,8 +28,8 @@ import {
   type PropertySchema,
   type User,
 } from '@/data/api'
-import { Block } from '@/data/internals/block'
-import type { Repo } from '@/data/internals/repo'
+import { Block } from './block'
+import type { Repo } from './repo'
 import type { BlockContextType } from '@/types'
 import {
   aliasesProp,
