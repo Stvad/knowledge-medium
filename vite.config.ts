@@ -81,7 +81,14 @@ export default defineConfig(({command}) => {
         build: {
             rollupOptions: {
                 //     // Mark react and react-dom as external to rely on the import map
-                external: ['react', 'react-dom', 'react/jsx-runtime', 'react-dom/client'],
+                external: [
+                    'react',
+                    'react/compiler-runtime',
+                    'react/jsx-dev-runtime',
+                    'react/jsx-runtime',
+                    'react-dom',
+                    'react-dom/client',
+                ],
                 // input: '/src/main.tsx',
                 // input: {
                 //     index: path.resolve(__dirname, 'index.html'),
