@@ -4,6 +4,8 @@ import ReactDOM from 'react-dom'
 import { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
+import { aliasesProp, extensionDisabledProp, typeProp } from '@/data/properties.ts'
+import { keyAtEnd } from '@/data/internals/orderKey.ts'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { describeRuntime } from '@/agentRuntime/describeRuntime.ts'
@@ -34,6 +36,7 @@ interface AgentRuntimeContext {
   getSubtree: (rootId?: string) => Promise<BlockData[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
+  installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
   actions: readonly ActionConfig[]
   renderers: ReturnType<typeof blockRenderersFacet.empty>
   refreshAppRuntime: typeof refreshAppRuntime
@@ -58,6 +61,20 @@ interface UpdateBlockInput {
   replaceProperties?: boolean
 }
 
+interface InstallExtensionInput {
+  source: string
+  label?: string
+  parentId?: string
+  id?: string
+  disabled?: boolean
+}
+
+interface InstallExtensionResult {
+  id: string
+  inserted: boolean
+  label: string | null
+}
+
 interface UseAgentRuntimeBridgeOptions {
   repo: Repo
   landingBlock: Block
@@ -66,6 +83,7 @@ interface UseAgentRuntimeBridgeOptions {
 }
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
+const agentExtensionsParentAlias = 'Agent-installed extensions'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
@@ -246,6 +264,104 @@ const updateRuntimeBlock = async (
   return repo.load(input.id)
 }
 
+const extensionAliasValues = (data: BlockData | null): string[] => {
+  const value = data?.properties[aliasesProp.name]
+  return Array.isArray(value) && value.every(isString) ? value : []
+}
+
+const extensionBlockProperties = (
+  existing: BlockProperties | undefined,
+  label: string | null,
+  disabled: boolean | undefined,
+): BlockProperties => {
+  const aliases = new Set<string>(Array.isArray(existing?.[aliasesProp.name])
+    ? (existing?.[aliasesProp.name] as unknown[]).filter(isString)
+    : [])
+  if (label) aliases.add(label)
+
+  return {
+    ...(existing ?? {}),
+    [typeProp.name]: typeProp.codec.encode('extension'),
+    ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
+    ...(disabled !== undefined ? {[extensionDisabledProp.name]: extensionDisabledProp.codec.encode(disabled)} : {}),
+  }
+}
+
+const resolveWorkspaceId = async (repo: Repo, landingBlock: Block): Promise<string> => {
+  if (repo.activeWorkspaceId) return repo.activeWorkspaceId
+  const cached = landingBlock.peek()
+  if (cached?.workspaceId) return cached.workspaceId
+  const loaded = await repo.load(landingBlock.id)
+  if (loaded?.workspaceId) return loaded.workspaceId
+  throw new Error('install-extension requires an active workspace')
+}
+
+const installRuntimeExtension = async (
+  repo: Repo,
+  landingBlock: Block,
+  input: InstallExtensionInput,
+): Promise<InstallExtensionResult> => {
+  const source = input.source.trimEnd()
+  if (!source) throw new Error('install-extension requires non-empty source')
+
+  const label = input.label?.trim() || null
+  const workspaceId = await resolveWorkspaceId(repo, landingBlock)
+  const existingExtensions = await repo.query.findExtensionBlocks({workspaceId}).load()
+  const existing = input.id
+    ? existingExtensions.find(block => block.id === input.id) ?? null
+    : label
+      ? existingExtensions.find(block => extensionAliasValues(block).includes(label)) ?? null
+      : null
+
+  if (existing) {
+    await repo.tx(async tx => {
+      const current = await tx.get(existing.id)
+      if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
+      await tx.update(existing.id, {
+        content: source,
+        properties: extensionBlockProperties(current.properties, label, input.disabled),
+      })
+    }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
+    refreshAppRuntime()
+    return {id: existing.id, inserted: false, label}
+  }
+
+  const parentIdFromInput = input.parentId?.trim() || null
+  const defaultParent = parentIdFromInput
+    ? null
+    : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load()
+
+  let installedId = input.id?.trim() || ''
+  await repo.tx(async tx => {
+    let parentId = parentIdFromInput ?? defaultParent?.id ?? null
+    if (!parentId) {
+      const rootSiblings = await tx.childrenOf(null, workspaceId)
+      parentId = await tx.create({
+        workspaceId,
+        parentId: null,
+        orderKey: keyAtEnd(rootSiblings.at(-1)?.orderKey ?? null),
+        content: agentExtensionsParentAlias,
+        properties: {
+          [aliasesProp.name]: aliasesProp.codec.encode([agentExtensionsParentAlias]),
+        },
+      })
+    }
+
+    const siblings = await tx.childrenOf(parentId, workspaceId)
+    installedId = await tx.create({
+      id: installedId || undefined,
+      workspaceId,
+      parentId,
+      orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null),
+      content: source,
+      properties: extensionBlockProperties(undefined, label, input.disabled),
+    })
+  }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
+
+  refreshAppRuntime()
+  return {id: installedId, inserted: true, label}
+}
+
 const executeCommand = async (
   command: AgentRuntimeCommand,
   context: AgentRuntimeContext,
@@ -327,6 +443,23 @@ const executeCommand = async (
       })
     }
 
+    case 'install-extension':
+      return context.installExtension({
+        source: requireString(command.source, 'source'),
+        label: command.label === undefined
+          ? undefined
+          : requireString(command.label, 'label'),
+        parentId: command.parentId === undefined
+          ? undefined
+          : requireString(command.parentId, 'parentId'),
+        id: command.id === undefined
+          ? undefined
+          : requireString(command.id, 'id'),
+        disabled: command.disabled === undefined
+          ? undefined
+          : Boolean(command.disabled),
+      })
+
     case 'eval':
       return executeArbitraryCode(requireString(command.code, 'code'), context)
 
@@ -361,6 +494,7 @@ const {
   getSubtree,
   createBlock,
   updateBlock,
+  installExtension,
   actions,
   renderers,
   refreshAppRuntime,
@@ -568,6 +702,7 @@ export function useAgentRuntimeBridge({
           currentRepo.query.subtree({id: rootId ?? currentLandingBlock.id}).load(),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
+        installExtension: input => installRuntimeExtension(currentRepo, currentLandingBlock, input),
         actions: readRuntimeActions(currentRuntime),
         renderers: currentRuntime.read(blockRenderersFacet),
         refreshAppRuntime,

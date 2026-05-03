@@ -25,6 +25,7 @@ Usage:
   yarn agent subtree [rootId] [--include-root]
   yarn agent create-block <json>
   yarn agent update-block <json>
+  yarn agent install-extension <file> [label]
   yarn agent eval <code>
   yarn agent eval --file <path>
   yarn agent raw <json>
@@ -199,6 +200,18 @@ const commandFromArgs = async args => {
         type: 'update-block',
         ...parseJson(rest.join(' '), 'update-block json'),
       }
+
+    case 'install-extension': {
+      const [file, ...labelParts] = rest
+      if (!file) throw new Error('install-extension requires <file>')
+      const source = await fs.readFile(file, 'utf8')
+      const basename = path.basename(file).replace(/\.[^.]+$/, '')
+      return {
+        type: 'install-extension',
+        source,
+        label: labelParts.join(' ').trim() || basename,
+      }
+    }
 
     case 'eval': {
       if (rest[0] === '--file') {
