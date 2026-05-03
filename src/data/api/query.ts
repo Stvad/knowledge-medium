@@ -1,5 +1,9 @@
 import type { Schema } from './schema'
 import type { BlockData } from './blockData'
+// Type-only — no runtime cycle. Mirrors ProcessorCtx.repo's pattern so
+// query resolvers that need to compose existing data-layer surfaces do
+// not have to cast from unknown.
+import type { Repo } from '../internals/repo'
 
 /** A dependency a query declares while resolving. Drives invalidation
  *  matching (§9.2). Built-in queries declare these from their `resolve`
@@ -22,16 +26,24 @@ export type Dependency =
   | { kind: 'table'; table: string }
   | { kind: 'backlink-target'; id: string }
 
-/** Resolver context. `db` is the raw PowerSync handle for committed-state
- *  reads; writes through `db` are unsupported (use `repo.tx` / `ctx.tx`).
- *  The actual `PowerSyncDatabase` type is import-only — kept loose here so
- *  the data-layer api module isn't bound to PowerSync's type surface. */
+/** Read-only SQL surface available to a query resolver. Sees committed
+ *  state at resolve time. Intentionally narrower than `PowerSyncDatabase`
+ *  — no `execute`, no `writeTransaction` — so the type prevents
+ *  accidental writes through this handle. */
+export interface QueryReadDb {
+  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
+  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
+  get<T>(sql: string, params?: unknown[]): Promise<T>
+}
+
+/** Resolver context. `db` is the committed-state read surface; writes
+ *  through `db` are unsupported. `repo` is the owning Repo instance for
+ *  composing existing query/read surfaces when a resolver needs them. */
 export interface QueryCtx {
-  /** Raw SQL reads against committed state. Treat as opaque from the
-   *  api module's perspective; concrete callers narrow to
-   *  `PowerSyncDatabase` at the resolver definition site. */
-  db: unknown
-  repo: unknown
+  /** Raw SQL reads against committed state. The narrow shape is
+   *  deliberate: `.execute()` / `.writeTransaction()` are absent. */
+  db: QueryReadDb
+  repo: Repo
   hydrateBlocks(rows: ReadonlyArray<Record<string, unknown>>): BlockData[]
   /** Declare a dependency; engine uses these to invalidate this handle. */
   depend(dep: Dependency): void

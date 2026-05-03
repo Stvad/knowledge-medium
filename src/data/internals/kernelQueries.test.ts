@@ -552,7 +552,7 @@ describe('plugin queries via setFacetRuntime', () => {
       resultSchema: z.number(),
       resolve: async ({workspaceId}, ctx) => {
         ctx.depend({kind: 'workspace', workspaceId})
-        const row = await (ctx.db as {getOptional: (sql: string, params?: unknown[]) => Promise<{n: number} | null>}).getOptional(
+        const row = await ctx.db.getOptional<{n: number}>(
           'SELECT COUNT(*) AS n FROM blocks WHERE workspace_id = ? AND deleted = 1',
           [workspaceId],
         )

@@ -150,19 +150,6 @@ export interface AliasMatch {
 // correctly). Once chunk C lands, those factories become thin shims —
 // then deleted entirely — and `repo.query.X(...)` is the only surface.
 //
-// `db` in `QueryCtx` is `unknown` from the api layer (so the api
-// module isn't bound to PowerSync's type surface); resolvers narrow
-// it to a small read-only shape locally. Reuses `ProcessorReadDb`'s
-// shape for ergonomics — same operations, same intent (committed-state
-// reads, no `execute`, no `writeTransaction`).
-
-interface QueryReadDb {
-  getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
-  getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
-}
-
-const asReadDb = (db: unknown): QueryReadDb => db as QueryReadDb
-
 /** Local cast: `BlockRow` has typed fields; `QueryCtx.hydrateBlocks`
  *  takes the looser `Record<string, unknown>` shape so the api module
  *  doesn't depend on the row schema. The cast is safe — `hydrateBlocks`
@@ -204,7 +191,7 @@ export const subtreeQuery = defineQuery<{id: string}, BlockData[]>({
     // tolerates duplicates.
     ctx.depend({kind: 'row', id})
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await asReadDb(ctx.db).getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
+    const rows = await ctx.db.getAll<BlockRow & {depth: number}>(SUBTREE_SQL, [id])
     const out = ctx.hydrateBlocks(asBlockRows(rows))
     for (const data of out) {
       ctx.depend({kind: 'parent-edge', parentId: data.id})
@@ -220,7 +207,7 @@ export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
   resultSchema: blockDataArraySchema,
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'row', id})
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(ANCESTORS_SQL, [id, id])
+    const rows = await ctx.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
@@ -232,7 +219,7 @@ export const childrenQuery = defineQuery<{id: string}, BlockData[]>({
   resultSchema: blockDataArraySchema,
   resolve: async ({id}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
 })
@@ -247,10 +234,10 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
   resolve: async ({id, hydrate = false}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId: id})
     if (!hydrate) {
-      const rows = await asReadDb(ctx.db).getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
+      const rows = await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [id])
       return rows.map(r => r.id)
     }
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(CHILDREN_SQL, [id])
+    const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
     return ctx.hydrateBlocks(asBlockRows(rows)).map(d => d.id)
   },
 })
@@ -284,7 +271,7 @@ export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, Blo
     ctx.depend({kind: 'row', id})
     if (!workspaceId || !id) return []
     ctx.depend({kind: 'backlink-target', id})
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+    const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BACKLINKS_FOR_BLOCK_SQL, [workspaceId, id, id],
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
@@ -299,7 +286,7 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
   resolve: async ({workspaceId, type}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+    const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, type],
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
@@ -321,7 +308,7 @@ export const searchByContentQuery = defineQuery<
   resolve: async ({workspaceId, query, limit = 50}, ctx) => {
     if (!query) return []
     ctx.depend({kind: 'workspace', workspaceId})
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+    const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, limit],
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
@@ -338,7 +325,7 @@ export const firstChildByContentQuery = defineQuery<
   resultSchema: blockDataOrNullSchema,
   resolve: async ({parentId, content}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId})
-    const row = await asReadDb(ctx.db).getOptional<BlockRow>(
+    const row = await ctx.db.getOptional<BlockRow>(
       SELECT_FIRST_CHILD_BY_CONTENT_SQL, [parentId, content],
     )
     if (row === null) return null
@@ -359,7 +346,7 @@ export const aliasesInWorkspaceQuery = defineQuery<
   resolve: async ({workspaceId, filter = ''}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
-    const rows = await asReadDb(ctx.db).getAll<{alias: string}>(
+    const rows = await ctx.db.getAll<{alias: string}>(
       SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter],
     )
     return rows.map(r => r.alias)
@@ -385,7 +372,7 @@ export const aliasMatchesQuery = defineQuery<
   resolve: async ({workspaceId, filter, limit = 50}, ctx) => {
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
-    return asReadDb(ctx.db).getAll<AliasMatch>(
+    return ctx.db.getAll<AliasMatch>(
       SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, limit],
     )
   },
@@ -402,7 +389,7 @@ export const aliasLookupQuery = defineQuery<
   resolve: async ({workspaceId, alias}, ctx) => {
     if (!workspaceId || !alias) return null
     ctx.depend({kind: 'workspace', workspaceId})
-    const row = await asReadDb(ctx.db).getOptional<BlockRow>(
+    const row = await ctx.db.getOptional<BlockRow>(
       SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL, [workspaceId, alias],
     )
     if (row === null) return null
@@ -433,7 +420,7 @@ export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, Block
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId}, ctx) => {
     if (!workspaceId) return []
-    const rows = await asReadDb(ctx.db).getAll<BlockRow>(
+    const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, 'extension'],
     )
     return ctx.hydrateBlocks(asBlockRows(rows))

@@ -25,16 +25,13 @@
  */
 
 import { isEqual } from 'lodash'
-import type { Handle, HandleStatus, Unsubscribe } from '@/data/api'
+import type { Dependency, Handle, HandleStatus, Unsubscribe } from '@/data/api'
 
 /** Dependency kinds (spec §9.2). A handle whose `Dependency` matches an
- *  incoming `ChangeNotification` is invalidated and re-resolved. */
-export type Dependency =
-  | { kind: 'row'; id: string }
-  | { kind: 'parent-edge'; parentId: string }
-  | { kind: 'workspace'; workspaceId: string }
-  | { kind: 'table'; table: string }
-  | { kind: 'backlink-target'; id: string }
+ *  incoming `ChangeNotification` is invalidated and re-resolved. The
+ *  concrete union lives in the public query API because query resolvers
+ *  declare these deps through `QueryCtx.depend(...)`. */
+export type { Dependency } from '@/data/api'
 
 /** Set of changes the store walks against handle dependencies. The
  *  fast path (TxEngine post-commit) and the slow path (row_events tail)
