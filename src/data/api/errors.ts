@@ -67,17 +67,18 @@ export class CycleError extends DataLayerError {
   }
 }
 
-/** Surfaces from the storage layer (local trigger or server composite FK)
- *  when a write references a non-existent parent_id. The engine catches the
- *  underlying SQLITE_CONSTRAINT and translates it. */
+/** Thrown by the tx engine's parent preflight when a write references a
+ *  non-existent parent_id. The storage layer still backs this invariant, but
+ *  its local trigger collapses missing-parent and cross-workspace failures
+ *  into one SQLITE constraint message. */
 export class ParentNotFoundError extends DataLayerError {
   constructor(public readonly parentId: string) {
     super(`parent block ${parentId} does not exist`)
   }
 }
 
-/** Storage-layer rejection: a write places a child under a parent in a
- *  different workspace. Catches via translated SQLITE_CONSTRAINT. */
+/** Thrown by the tx engine's parent preflight when a write places a child
+ *  under a parent in a different workspace. */
 export class ParentWorkspaceMismatchError extends DataLayerError {
   constructor(
     public readonly parentId: string,

@@ -26,6 +26,8 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ParentNotFoundError,
+  ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
   ReadOnlyError,
   WorkspaceMismatchError,
@@ -188,6 +190,26 @@ describe('tx.create', () => {
       {scope: ChangeScope.BlockDefault},
     )).rejects.toThrow(DuplicateIdError)
   })
+
+  it('throws ParentNotFoundError when parent_id is missing', async () => {
+    await expect(env.repo.tx(
+      tx => tx.create({id: 'dangling-child', workspaceId: 'ws-1', parentId: 'missing-parent', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentNotFoundError)
+    expect(env.cache.getSnapshot('dangling-child')).toBeUndefined()
+  })
+
+  it('throws ParentWorkspaceMismatchError when parent is in another workspace', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'other-ws-parent', workspaceId: 'ws-A', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.create({id: 'cross-ws-child', workspaceId: 'ws-B', parentId: 'other-ws-parent', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentWorkspaceMismatchError)
+    expect(env.cache.getSnapshot('cross-ws-child')).toBeUndefined()
+  })
 })
 
 // ──── tx.createOrGet ────
@@ -235,6 +257,14 @@ describe('tx.createOrGet', () => {
       tx => tx.createOrGet({id: 'det-4', workspaceId: 'ws-B', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )).rejects.toThrow(DeterministicIdCrossWorkspaceError)
+  })
+
+  it('throws ParentNotFoundError on insert path when parent_id is missing', async () => {
+    await expect(env.repo.tx(
+      tx => tx.createOrGet({id: 'det-missing-parent', workspaceId: 'ws-1', parentId: 'missing-parent', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentNotFoundError)
+    expect(env.cache.getSnapshot('det-missing-parent')).toBeUndefined()
   })
 
   it('does NOT pin workspace on a live-row hit, so tx.afterCommit still throws WorkspaceNotPinnedError', async () => {
@@ -386,6 +416,26 @@ describe('tx.move (cycle validation, §4.7 Layer 1)', () => {
       tx => tx.move('mv-A', {parentId: 'mv-A', orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )).rejects.toThrow(CycleError)
+  })
+
+  it('throws ParentNotFoundError when target parent_id is missing', async () => {
+    await expect(env.repo.tx(
+      tx => tx.move('mv-A', {parentId: 'missing-parent', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentNotFoundError)
+    expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
+  })
+
+  it('throws ParentWorkspaceMismatchError when target parent is in another workspace', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'mv-other-ws-parent', workspaceId: 'ws-2', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await expect(env.repo.tx(
+      tx => tx.move('mv-A', {parentId: 'mv-other-ws-parent', orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )).rejects.toThrow(ParentWorkspaceMismatchError)
+    expect(env.cache.getSnapshot('mv-A')!.parentId).toBe('mv-root')
   })
 })
 

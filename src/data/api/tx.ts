@@ -54,10 +54,11 @@ export interface Tx {
   // ──── Lifecycle ────
 
   /** Insert a new block. Throws `DuplicateIdError` on PK conflict.
-   *  Parent existence + same-workspace come from the storage layer
-   *  (translated to `ParentNotFoundError` / `ParentWorkspaceMismatchError`);
-   *  soft-deleted-parent is a kernel-mutator UX rule and does NOT fire
-   *  on raw `tx.create` — see §4.7 Layer 1 (v4.30). */
+   *  The engine preflights non-null parents and throws
+   *  `ParentNotFoundError` / `ParentWorkspaceMismatchError` before the
+   *  storage trigger's collapsed parent/workspace constraint can surface.
+   *  Soft-deleted-parent is a kernel-mutator UX rule and does NOT fire on
+   *  raw `tx.create` — see §4.7 Layer 1 (v4.30). */
   create(data: NewBlockData, opts?: TxWriteOpts): Promise<string>
 
   /** Insert OR fetch the live row at a deterministic id. **No tombstone
@@ -65,7 +66,8 @@ export interface Tx {
    *  `DeterministicIdCrossWorkspaceError` if the existing row is in a
    *  different workspace; throws `DeletedConflictError` if the existing
    *  row is soft-deleted. The shared `createOrRestoreTargetBlock` helper
-   *  (§7, §13.1) catches `DeletedConflictError` and runs `tx.restore`. */
+   *  (§7, §13.1) catches `DeletedConflictError` and runs `tx.restore`.
+   *  The insert path uses the same parent preflight as `tx.create`. */
   createOrGet(
     data: NewBlockData & { id: string },
     opts?: TxWriteOpts,
@@ -91,9 +93,11 @@ export interface Tx {
 
   // ──── Tree moves (structural) ────
 
-  /** Move a row to a new `(parentId, orderKey)`. Engine runs
-   *  `isDescendantOf(target.parentId, id)` and throws `CycleError` if the
-   *  new parent would be a descendant of `id` — load-bearing because FK
+  /** Move a row to a new `(parentId, orderKey)`. For non-null parents the
+   *  engine first throws `ParentNotFoundError` /
+   *  `ParentWorkspaceMismatchError` when the target parent is invalid, then
+   *  runs `isDescendantOf(target.parentId, id)` and throws `CycleError` if
+   *  the new parent would be a descendant of `id` — load-bearing because FK
    *  and triggers can't structurally catch cycles. `target.parentId = null`
    *  re-roots the row (workspace root). */
   move(

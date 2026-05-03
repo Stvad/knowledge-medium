@@ -85,9 +85,8 @@ const requireLiveParent = async (tx: Tx, parentId: string | null): Promise<void>
   if (parentId === null) return
   const parent = await tx.get(parentId)
   if (parent === null) {
-    // Parent existence will surface from the storage layer as a
-    // translated error — let it through. (Alternative: throw a kernel
-    // ParentNotFoundError here; deferred until we observe a need.)
+    // Parent existence will surface from the tx engine's parent preflight
+    // when the mutator reaches tx.create/tx.move.
     return
   }
   if (parent.deleted) throw new ParentDeletedError(parentId)

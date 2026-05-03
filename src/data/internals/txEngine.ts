@@ -46,6 +46,8 @@ import {
   DuplicateIdError,
   MutatorNotRegisteredError,
   NotDeletedError,
+  ParentNotFoundError,
+  ParentWorkspaceMismatchError,
   ProcessorNotRegisteredError,
   WorkspaceMismatchError,
   WorkspaceNotPinnedError,
@@ -134,6 +136,8 @@ const SELECT_ROOT_SIBLINGS_SQL =
   `SELECT ${COLUMN_LIST} FROM blocks WHERE parent_id IS NULL AND deleted = 0 AND workspace_id = ? ORDER BY order_key, id`
 const SELECT_PARENT_SQL =
   `SELECT p.* FROM blocks AS c JOIN blocks AS p ON p.id = c.parent_id WHERE c.id = ? AND p.deleted = 0`
+const SELECT_PARENT_WORKSPACE_SQL =
+  `SELECT workspace_id FROM blocks WHERE id = ?`
 const INSERT_SQL = `INSERT INTO blocks (${COLUMN_LIST}) VALUES (${COLUMN_PLACEHOLDERS})`
 
 export class TxImpl implements Tx {
@@ -170,6 +174,7 @@ export class TxImpl implements Tx {
 
   async create(data: NewBlockData, opts?: TxWriteOpts): Promise<string> {
     this.checkWorkspace(data.workspaceId)
+    await this.requireParentInWorkspace(data.parentId, data.workspaceId)
     const id = data.id ?? this.ctx.newId()
     const row = this.buildNewBlockRow(id, data, opts)
     try {
@@ -191,6 +196,7 @@ export class TxImpl implements Tx {
     const existing = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [data.id])
 
     if (existing === null) {
+      await this.requireParentInWorkspace(data.parentId, data.workspaceId)
       const row = this.buildNewBlockRow(data.id, data, opts)
       await this.ctx.txDb.execute(INSERT_SQL, blockToRowParams(row))
       this.pinWorkspace(data.workspaceId)
@@ -305,11 +311,11 @@ export class TxImpl implements Tx {
   ): Promise<void> {
     const before = await this.requireExisting(id)
     this.checkWorkspace(before.workspaceId)
+    await this.requireParentInWorkspace(target.parentId, before.workspaceId)
 
-    // §4.7 Layer 1: only engine-enforced check on parent_id mutation.
-    // FK and triggers can't structurally catch cycles, so this is
-    // load-bearing. Skipped when the target parent is null (re-rooting
-    // can't introduce a cycle) or unchanged.
+    // §4.7 Layer 1: FK and triggers can't structurally catch cycles, so
+    // this engine check is load-bearing. Skipped when the target parent is
+    // null (re-rooting can't introduce a cycle) or unchanged.
     if (
       target.parentId !== null &&
       target.parentId !== before.parentId &&
@@ -618,6 +624,21 @@ export class TxImpl implements Tx {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_BY_ID_SQL, [id])
     if (row === null) throw new BlockNotFoundError(id)
     return parseBlockRow(row)
+  }
+
+  private async requireParentInWorkspace(
+    parentId: string | null,
+    childWorkspaceId: string,
+  ): Promise<void> {
+    if (parentId === null) return
+    const parent = await this.ctx.txDb.getOptional<{workspace_id: string}>(
+      SELECT_PARENT_WORKSPACE_SQL,
+      [parentId],
+    )
+    if (parent === null) throw new ParentNotFoundError(parentId)
+    if (parent.workspace_id !== childWorkspaceId) {
+      throw new ParentWorkspaceMismatchError(parentId, parent.workspace_id, childWorkspaceId)
+    }
   }
 }
 
