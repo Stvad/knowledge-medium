@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { AgentTokenStore } from '@/agentRuntime/agentTokens.ts'
+import { AgentTokenStore } from '../tokens.ts'
 import { ClientLocalSettings } from '@/utils/ClientLocalSettings.ts'
 
 // Production code only uses get/set/remove via ClientLocalSettings;

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import net from 'node:net'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const serverScript = path.resolve(here, '../../../scripts/agent-runtime-server.mjs')
+const serverScript = path.resolve(here, '../../../../scripts/agent-runtime-server.mjs')
 
 const pickPort = (): Promise<number> => new Promise((resolve, reject) => {
   const probe = net.createServer()

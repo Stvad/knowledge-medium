@@ -11,10 +11,10 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { useRepo } from '@/context/repo.tsx'
 import {
-  AgentToken,
   agentTokenStore,
   notifyAgentTokensChanged,
-} from '@/agentRuntime/agentTokens.ts'
+} from './tokens.ts'
+import type { AgentToken } from './tokens.ts'
 
 export const openAgentTokensDialogEvent = 'agent-runtime-bridge:open-tokens-dialog'
 

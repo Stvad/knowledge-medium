@@ -1,6 +1,6 @@
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
-import { Repo } from '../data/repo'
+import { Repo } from '@/data/repo'
 
 export interface DescribeRuntimeContext {
   repo: Repo

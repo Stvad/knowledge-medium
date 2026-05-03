@@ -4,7 +4,7 @@ import {
   describeFacets,
   describeRuntime,
   getApiSurface,
-} from '@/agentRuntime/describeRuntime.ts'
+} from '../describeRuntime.ts'
 import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 // Pre-warm `@/extensions/api` so the dynamic import inside
 // `getApiSurface()` resolves from cache. Under full-suite parallel
@@ -14,7 +14,7 @@ import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 // Vite server's transform queue). Same `.ts` suffix as the dynamic
 // import so both share a module-cache key.
 import '@/extensions/api.ts'
-import type { Repo } from '../../data/repo'
+import type { Repo } from '@/data/repo'
 import type { ActionConfig } from '@/shortcuts/types.ts'
 
 beforeEach(() => {

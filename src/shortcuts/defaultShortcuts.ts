@@ -52,8 +52,10 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { buildAppHash, parseAppHash, writeAppHash } from '@/utils/routing.ts'
-import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
-import { openAgentTokensDialogEvent } from '@/agentRuntime/AgentTokensDialog.tsx'
+import {
+  agentRuntimeBridgeRestartEvent,
+  openAgentTokensDialogEvent,
+} from '@/plugins/agent-runtime'
 import { isMainPanel } from '@/data/globalState.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'

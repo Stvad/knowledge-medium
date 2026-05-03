@@ -7,8 +7,6 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { appEffectsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
-import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
-import { AgentTokensDialogMount } from '@/agentRuntime/AgentTokensDialog.tsx'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
 import { videoPlayerPlugin } from '@/plugins/video-player'
@@ -16,6 +14,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
+import { agentRuntimePlugin, AgentTokensDialogMount } from '@/plugins/agent-runtime'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { kernelDataExtension } from '../data/kernelDataExtension.ts'
 import {
@@ -65,6 +64,7 @@ export function AppRuntimeProvider({
     videoPlayerPlugin,
     backlinksPlugin,
     updateIndicatorPlugin,
+    agentRuntimePlugin,
   ], [repo])
 
   const baseRuntime = useMemo(() =>
@@ -193,12 +193,6 @@ export function AppRuntimeProvider({
       cleanups.length = 0
     }
   }, [repo, runtime, safeMode, workspaceId])
-
-  useAgentRuntimeBridge({
-    repo,
-    runtime,
-    safeMode,
-  })
 
   return (
     <AppRuntimeContextProvider value={runtime}>
