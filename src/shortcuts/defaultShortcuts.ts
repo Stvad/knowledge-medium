@@ -621,18 +621,28 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId || !isOnFirstVisualLine(editorView)) return
 
+        // Capture caret x and call preventDefault BEFORE the async hop. The
+        // hotkeys-js handler runs during the bubble phase but the browser's
+        // default ArrowUp on the contenteditable still fires (we ask for
+        // preventDefault: false because preventing it unconditionally would
+        // also block intra-block arrow movement). Once we await, the browser
+        // collapses the editor caret to position 0, so a later
+        // `getCaretRect(editorView)` would read x at the editor's left edge
+        // and the new block's cursor would land at column 0 instead of the
+        // visual column the user came from. preventDefault here, before any
+        // await, suppresses the native move just in time. ArrowDown mirrors
+        // this — without it, the caret collapses to doc end and the next
+        // block lands past its first line's end.
+        const caretX = getCaretRect(editorView)?.left
+        trigger.preventDefault()
+
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
         if (!prevVisible) return
 
-        /**
-         * Otherwise the new CodeMirror instance still gets an "up" event and bad things happen =\
-         * I don't like that we have to do this, somewhat breaks encapsulation
-         */
-        trigger.preventDefault()
         await uiStateBlock.set(editorSelection, {
           blockId: prevVisible.id,
           line: 'last',
-          x: getCaretRect(editorView)?.left,
+          x: caretX,
         })
 
         setFocusedBlockId(uiStateBlock, prevVisible.id)
@@ -655,18 +665,22 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId || !isOnLastVisualLine(editorView)) return
 
+        // Capture caret x and call preventDefault BEFORE the async hop —
+        // see move_up_from_cm_start for the full rationale. Without this,
+        // the browser's native ArrowDown collapses the editor caret to doc
+        // end before we read the rect, so x ends up at the right edge of
+        // the source block's last line and the next block's cursor lands
+        // past the end of its first visual line instead of at the column
+        // the user came from.
+        const caretX = getCaretRect(editorView)?.left
+        trigger.preventDefault()
+
         const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
         if (!nextVisible) return
 
-        /**
-         * Otherwise the new CodeMirror instance still gets an "up" event and bad things happen =\
-         * I don't like that we have to do this, somewhat breaks encapsulation
-         */
-        trigger.preventDefault()
-
         await uiStateBlock.set(editorSelection, {
           blockId: nextVisible.id,
-          x: getCaretRect(editorView)?.left,
+          x: caretX,
         })
 
         setFocusedBlockId(uiStateBlock, nextVisible.id)
