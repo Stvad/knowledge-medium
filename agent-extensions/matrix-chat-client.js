@@ -2,6 +2,7 @@ import {
   ActionContextTypes,
   ChangeScope,
   actionsFacet,
+  appEffectsFacet,
 } from '@/extensions/api.js'
 import {
   dailyNoteBlockId,
@@ -289,41 +290,47 @@ const configureFromPrompts = repo => {
   manager().start(repo)
 }
 
-export default (context) => {
-  const runtime = manager()
-  const config = loadConfig()
-  if (config?.autoStart) runtime.start(context.repo)
-
-  return [
-    actionsFacet.of({
-      id: 'user.matrix.configure',
-      description: 'Configure Matrix message ingest',
-      context: ActionContextTypes.GLOBAL,
-      handler: async ({uiStateBlock}) => configureFromPrompts(uiStateBlock.repo),
-    }, {source: 'matrix-chat-client'}),
-
-    actionsFacet.of({
-      id: 'user.matrix.start',
-      description: 'Start Matrix message ingest',
-      context: ActionContextTypes.GLOBAL,
-      handler: async ({uiStateBlock}) => manager().start(uiStateBlock.repo),
-    }, {source: 'matrix-chat-client'}),
-
-    actionsFacet.of({
-      id: 'user.matrix.stop',
-      description: 'Stop Matrix message ingest',
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => manager().stop(),
-    }, {source: 'matrix-chat-client'}),
-
-    actionsFacet.of({
-      id: 'user.matrix.reset-position',
-      description: 'Reset Matrix message ingest position',
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        const config = loadConfig()
-        if (config) clearNextBatch(config)
-      },
-    }, {source: 'matrix-chat-client'}),
-  ]
+const matrixMessageEffect = {
+  id: 'user.matrix.poller',
+  start: ({repo}) => {
+    const runtime = manager()
+    const config = loadConfig()
+    if (config?.autoStart) runtime.start(repo)
+    return () => runtime.stop()
+  },
 }
+
+export default [
+  appEffectsFacet.of(matrixMessageEffect, {source: 'matrix-chat-client'}),
+
+  actionsFacet.of({
+    id: 'user.matrix.configure',
+    description: 'Configure Matrix message ingest',
+    context: ActionContextTypes.GLOBAL,
+    handler: async ({uiStateBlock}) => configureFromPrompts(uiStateBlock.repo),
+  }, {source: 'matrix-chat-client'}),
+
+  actionsFacet.of({
+    id: 'user.matrix.start',
+    description: 'Start Matrix message ingest',
+    context: ActionContextTypes.GLOBAL,
+    handler: async ({uiStateBlock}) => manager().start(uiStateBlock.repo),
+  }, {source: 'matrix-chat-client'}),
+
+  actionsFacet.of({
+    id: 'user.matrix.stop',
+    description: 'Stop Matrix message ingest',
+    context: ActionContextTypes.GLOBAL,
+    handler: async () => manager().stop(),
+  }, {source: 'matrix-chat-client'}),
+
+  actionsFacet.of({
+    id: 'user.matrix.reset-position',
+    description: 'Reset Matrix message ingest position',
+    context: ActionContextTypes.GLOBAL,
+    handler: async () => {
+      const config = loadConfig()
+      if (config) clearNextBatch(config)
+    },
+  }, {source: 'matrix-chat-client'}),
+]

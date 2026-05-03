@@ -1,6 +1,24 @@
 import { defineFacet } from '@/extensions/facet.ts'
+import type { FacetRuntime } from '@/extensions/facet.ts'
+import type { Repo } from '@/data/internals/repo'
 import { ActionConfig, ActionContextConfig, ActionContextType } from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
+
+export interface AppEffectContext {
+  repo: Repo
+  runtime: FacetRuntime
+  workspaceId: string
+  safeMode: boolean
+}
+
+export type AppEffectCleanup = () => void | Promise<void>
+
+export interface AppEffect {
+  id: string
+  start: (
+    context: AppEffectContext,
+  ) => void | AppEffectCleanup | Promise<void | AppEffectCleanup>
+}
 
 export interface RendererContribution {
   id: string
@@ -65,6 +83,16 @@ export const blockRenderersFacet = defineFacet<RendererContribution, RendererReg
 export const actionsFacet = defineFacet<ActionConfig, readonly ActionConfig[]>({
   id: 'core.actions',
   validate: isActionConfig,
+})
+
+export const isAppEffect = (value: unknown): value is AppEffect =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.start === 'function'
+
+export const appEffectsFacet = defineFacet<AppEffect, readonly AppEffect[]>({
+  id: 'core.app-effects',
+  validate: isAppEffect,
 })
 
 export const isActionContextConfig = (value: unknown): value is ActionContextConfig =>

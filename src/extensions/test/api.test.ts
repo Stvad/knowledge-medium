@@ -15,6 +15,7 @@ describe('@/extensions/api — public surface', () => {
     // Blessed core facets
     'actionsFacet',
     'actionContextsFacet',
+    'appEffectsFacet',
     'blockRenderersFacet',
     // Block-interaction facets
     'blockChildrenFooterFacet',

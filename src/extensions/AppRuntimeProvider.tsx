@@ -6,6 +6,7 @@ import { AppExtension, FacetResolveContext, resolveFacetRuntime, resolveFacetRun
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
+import { appEffectsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
 import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
 import { AgentTokensDialogMount } from '@/agentRuntime/AgentTokensDialog.tsx'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
@@ -139,6 +140,59 @@ export function AppRuntimeProvider({
       cancelled = true
     }
   }, [baseExtensions, errorStore, repo, runtimeContext, safeMode, workspaceId])
+
+  useEffect(() => {
+    if (!workspaceId) return
+
+    let disposed = false
+    const cleanups: Array<{effectId: string; cleanup: AppEffectCleanup}> = []
+    const effects = runtime.read(appEffectsFacet)
+
+    const runCleanup = (cleanup: AppEffectCleanup, effectId: string) => {
+      try {
+        const result = cleanup()
+        if (result instanceof Promise) {
+          result.catch(error => {
+            console.error(`App effect cleanup failed for ${effectId}`, error)
+          })
+        }
+      } catch (error) {
+        console.error(`App effect cleanup failed for ${effectId}`, error)
+      }
+    }
+
+    for (const effect of effects) {
+      try {
+        const result = effect.start({
+          repo,
+          runtime,
+          workspaceId,
+          safeMode,
+        })
+
+        Promise.resolve(result).then(cleanup => {
+          if (typeof cleanup !== 'function') return
+          if (disposed) {
+            runCleanup(cleanup, effect.id)
+            return
+          }
+          cleanups.push({effectId: effect.id, cleanup})
+        }).catch(error => {
+          console.error(`App effect failed to start for ${effect.id}`, error)
+        })
+      } catch (error) {
+        console.error(`App effect failed to start for ${effect.id}`, error)
+      }
+    }
+
+    return () => {
+      disposed = true
+      for (const {effectId, cleanup} of cleanups.toReversed()) {
+        runCleanup(cleanup, effectId)
+      }
+      cleanups.length = 0
+    }
+  }, [repo, runtime, safeMode, workspaceId])
 
   useAgentRuntimeBridge({
     repo,
