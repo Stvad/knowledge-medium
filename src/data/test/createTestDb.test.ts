@@ -2,7 +2,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createTestDb, type TestDb } from './createTestDb'
 import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema'
-import { CLIENT_SCHEMA_TRIGGER_NAMES } from '@/data/internals/clientSchema'
+import {
+  ALIAS_BACKFILL_MARKER_KEY,
+  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
+  CLIENT_SCHEMA_TRIGGER_NAMES,
+} from '@/data/internals/clientSchema'
 
 describe('createTestDb harness', () => {
   let h: TestDb
@@ -31,6 +35,28 @@ describe('createTestDb harness', () => {
     )).map(r => r.name)
     expect(names.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
     expect(names).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
+  })
+
+  it('installs production blocks indexes', async () => {
+    const names = (await h.db.getAll<{name: string}>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='blocks'",
+    )).map(r => r.name)
+    expect(names).toEqual(expect.arrayContaining([
+      'idx_blocks_parent_order',
+      'idx_blocks_workspace_active',
+      'idx_blocks_workspace_with_references',
+      'idx_blocks_workspace_type',
+    ]))
+  })
+
+  it('records side-index backfill completion markers', async () => {
+    const keys = (await h.db.getAll<{key: string}>(
+      'SELECT key FROM client_schema_state ORDER BY key',
+    )).map(r => r.key)
+    expect(keys).toEqual(expect.arrayContaining([
+      ALIAS_BACKFILL_MARKER_KEY,
+      BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
+    ]))
   })
 
   it('writeTransaction commits on success, rolls back on throw', async () => {

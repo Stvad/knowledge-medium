@@ -16,7 +16,7 @@
  *   - upload-routing triggers fire only on source = 'user'
  *   - workspace-invariant triggers reject cross-workspace + dangling
  *     parents on local writes; bypass cleanly on sync writes
- *   - all 7 trigger names exist after running CLIENT_SCHEMA_STATEMENTS
+ *   - all documented trigger names exist after running CLIENT_SCHEMA_STATEMENTS
  *
  * What this does NOT cover (deferred to later stages):
  *   - PowerSync's actual outgoing-queue behavior — we only check that the

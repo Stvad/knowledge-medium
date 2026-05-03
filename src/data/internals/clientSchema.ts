@@ -1,12 +1,11 @@
 /** Client-side SQLite schema additions on top of the PowerSync-managed
  *  `blocks` table. None of these tables are synced — they're the local
- *  mechanism for tx context, per-row audit, per-tx audit, and upload
- *  routing. The seven triggers (5 audit/upload + 2 workspace-invariant)
- *  live here too — server-side Postgres has no `powersync_crud` and no
- *  need for any of them. See data-layer-redesign §4.2 / §4.3 / §4.4 / §4.5
- *  / §4.1.1.
+ *  mechanism for tx context, per-row audit, per-tx audit, upload routing,
+ *  and local side indexes. The client-only triggers live here too —
+ *  server-side Postgres has no `powersync_crud` and no need for any of
+ *  them. See data-layer-redesign §4.2 / §4.3 / §4.4 / §4.5 / §4.1.1.
  *
- *  Run from `repoInstance.ts` after PowerSync's own schema initialization:
+ *  Run from `repoProvider.ts` after PowerSync's own schema initialization:
  *
  *      for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
  *        await db.execute(stmt)

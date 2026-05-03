@@ -2,10 +2,10 @@
  * Real-PowerSync test harness for the data-layer redesign.
  *
  * Spins up an actual `@powersync/node` `PowerSyncDatabase` with the
- * production raw-table mapping and the v2 client schema (tx_context,
- * row_events, command_events, 7 triggers). Tests for `Repo` / `Tx` /
- * tree CTEs run against this — same `db.execute` / `db.writeTransaction`
- * surface as production, same SQLite engine semantics, same triggers.
+ * production raw-table mapping and the v2 client schema. Tests for
+ * `Repo` / `Tx` / tree CTEs run against this — same `db.execute` /
+ * `db.writeTransaction` surface as production, same SQLite engine
+ * semantics, same triggers and side indexes.
  *
  * Why @powersync/node and not node:sqlite + adapter:
  *   The Tx engine relies on `db.writeTransaction(fn)` semantics — locking,
@@ -31,8 +31,13 @@ import {
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
+  CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
 } from '@/data/blockSchema'
-import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
+import {
+  CLIENT_SCHEMA_STATEMENTS,
+  backfillBlockAliasesIfEmpty,
+  backfillBlockReferencesIfEmpty,
+} from '@/data/internals/clientSchema'
 
 export interface TestDb {
   /** The real PowerSync database — same type as production. */
@@ -43,7 +48,7 @@ export interface TestDb {
 }
 
 /** Open an in-tmpdir PowerSyncDatabase with the production blocks
- *  raw-table + the v2 client schema (DDL + 7 triggers) applied. */
+ *  raw-table + the v2 client schema applied. */
 export const createTestDb = async (): Promise<TestDb> => {
   const schema = new Schema({})
   schema.withRawTables({blocks: BLOCKS_RAW_TABLE})
@@ -56,26 +61,29 @@ export const createTestDb = async (): Promise<TestDb> => {
   await db.waitForReady()
 
   // PowerSync's RawTable mapping does not auto-create the local SQLite
-  // table — production runs the DDL itself in `repoInstance.ts`. We
+  // table — production runs the DDL itself in `repoProvider.ts`. We
   // mirror that ordering: blocks table + indexes first, then the
   // client-schema add-ons (auxiliary tables + triggers).
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await db.execute(stmt)
   }
   // No-op against a fresh test DB (no blocks yet), but mirrors the
   // production startup ordering so any test that pre-seeds rows
   // before the harness opens still gets backfilled.
-  await backfillBlockAliasesIfEmpty({
-    execute: sql => db.execute(sql),
+  const backfillDb = {
+    execute: (sql: string) => db.execute(sql),
     getOptional: async <T,>(sql: string) => {
       const row = await db.getOptional<T>(sql)
       return row ?? null
     },
-  })
+  }
+  await backfillBlockAliasesIfEmpty(backfillDb)
+  await backfillBlockReferencesIfEmpty(backfillDb)
 
   return {
     db,

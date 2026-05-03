@@ -14,9 +14,10 @@
  *   - Open a `PowerSyncDatabase` keyed by user id
  *   - Run PowerSync's `init()` (sets up powersync_crud + ps_oplog)
  *   - Run the new client-side DDL: `blocks` + indexes (parent_order,
- *     workspace_active, workspace_with_references), workspaces +
- *     workspace_members tables/indexes, then `CLIENT_SCHEMA_STATEMENTS`
- *     (tx_context, row_events, command_events, the 7 v4.27 triggers)
+ *     workspace_active, workspace_with_references, workspace_type),
+ *     workspaces + workspace_members tables/indexes, then
+ *     `CLIENT_SCHEMA_STATEMENTS` (tx_context, row_events,
+ *     command_events, side indexes, and triggers)
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  *
  * What this does NOT do (vs. legacy):
