@@ -2,15 +2,16 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentTokenStore } from '@/agentRuntime/agentTokens.ts'
 import { ClientLocalSettings } from '@/utils/ClientLocalSettings.ts'
 
+// Production code only uses get/set/remove via ClientLocalSettings;
+// the Storage interface's `key()` and `length` aren't exercised, so
+// we don't bother shimming them. The cast in the consumer covers the
+// type gap.
 class MemoryStorage {
   private map = new Map<string, string>()
   getItem(key: string) { return this.map.get(key) ?? null }
   setItem(key: string, value: string) { this.map.set(key, value) }
   removeItem(key: string) { this.map.delete(key) }
   clear() { this.map.clear() }
-  // unused but required by Storage shape
-  key(_index: number) { return null }
-  get length() { return this.map.size }
 }
 
 let storage: MemoryStorage
