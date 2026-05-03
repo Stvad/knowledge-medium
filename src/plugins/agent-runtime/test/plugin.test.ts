@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { appEffectsFacet, appMountsFacet } from '@/extensions/core.ts'
+import { actionsFacet, appEffectsFacet, appMountsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { agentRuntimePlugin } from '../index.ts'
 
@@ -16,5 +16,17 @@ describe('agentRuntimePlugin', () => {
     const mounts = runtime.read(appMountsFacet)
 
     expect(mounts.map(mount => mount.id)).toContain('agent-runtime.tokens-dialog')
+  })
+
+  it('contributes agent runtime management actions', () => {
+    const runtime = resolveFacetRuntimeSync(agentRuntimePlugin)
+    const actions = runtime.read(actionsFacet)
+
+    expect(actions.map(action => action.id)).toEqual(
+      expect.arrayContaining([
+        'restart_agent_runtime_bridge',
+        'manage_agent_tokens',
+      ]),
+    )
   })
 })
