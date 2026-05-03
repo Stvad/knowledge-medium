@@ -32,11 +32,13 @@ export {
   actionsFacet,
   actionContextsFacet,
   appEffectsFacet,
+  appMountsFacet,
   blockRenderersFacet,
   createRendererRegistry,
   type AppEffect,
   type AppEffectCleanup,
   type AppEffectContext,
+  type AppMountContribution,
   type RendererContribution,
 } from '@/extensions/core.ts'
 

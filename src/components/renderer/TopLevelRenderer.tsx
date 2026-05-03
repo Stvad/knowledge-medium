@@ -2,8 +2,6 @@ import { Header } from '@/components/Header.tsx'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { CommandPalette } from '@/components/CommandPalette.tsx'
-import { QuickFind } from '@/components/QuickFind.tsx'
 import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { memoize } from 'lodash'
@@ -50,18 +48,14 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
   useActionContext(ActionContextTypes.GLOBAL)
 
   return (
-    <>
-      <CommandPalette/>
-      <QuickFind/>
-      <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
-        <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-2">
-          <Header/>
-          <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
-            <BlockComponent blockId={block.id}/>
-          </NestedBlockContextProvider>
-        </div>
+    <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
+      <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-2">
+        <Header/>
+        <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
+          <BlockComponent blockId={block.id}/>
+        </NestedBlockContextProvider>
       </div>
-    </>
+    </div>
   )
 }
 

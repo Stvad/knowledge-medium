@@ -2,19 +2,26 @@ import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { useRepo } from '@/context/repo.tsx'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
-import { AppExtension, FacetResolveContext, resolveFacetRuntime, resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import {
+  AppExtension,
+  FacetResolveContext,
+  FacetRuntime,
+  resolveFacetRuntime,
+  resolveFacetRuntimeSync,
+} from '@/extensions/facet.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
-import { appEffectsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
+import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
+import { appShellPlugin } from '@/plugins/app-shell'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
-import { agentRuntimePlugin, AgentTokensDialogMount } from '@/plugins/agent-runtime'
+import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { kernelDataExtension } from '../data/kernelDataExtension.ts'
 import {
@@ -59,6 +66,7 @@ export function AppRuntimeProvider({
     defaultRenderersExtension,
     defaultEditorInteractionExtension,
     defaultActionsExtension({repo}),
+    appShellPlugin,
     plainOutlinerPlugin,
     vimNormalModePlugin({repo}),
     videoPlayerPlugin,
@@ -199,10 +207,22 @@ export function AppRuntimeProvider({
       <ExtensionLoadErrorsProvider store={errorStore}>
         <ActiveContextsProvider>
           <HotkeyReconciler/>
-          <AgentTokensDialogMount/>
+          <AppMounts runtime={runtime}/>
           {children}
         </ActiveContextsProvider>
       </ExtensionLoadErrorsProvider>
     </AppRuntimeContextProvider>
+  )
+}
+
+function AppMounts({runtime}: {runtime: FacetRuntime}) {
+  const mounts = useMemo(() => runtime.read(appMountsFacet), [runtime])
+
+  return (
+    <>
+      {mounts.map(({id, component: Component}) => (
+        <Component key={id}/>
+      ))}
+    </>
   )
 }

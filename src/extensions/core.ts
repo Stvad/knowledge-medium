@@ -3,6 +3,7 @@ import type { FacetRuntime } from '@/extensions/facet.ts'
 import type { Repo } from '../data/repo'
 import { ActionConfig, ActionContextConfig, ActionContextType } from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
+import type { ComponentType } from 'react'
 
 export interface AppEffectContext {
   repo: Repo
@@ -18,6 +19,11 @@ export interface AppEffect {
   start: (
     context: AppEffectContext,
   ) => void | AppEffectCleanup | Promise<void | AppEffectCleanup>
+}
+
+export interface AppMountContribution {
+  id: string
+  component: ComponentType
 }
 
 export interface RendererContribution {
@@ -93,6 +99,16 @@ export const isAppEffect = (value: unknown): value is AppEffect =>
 export const appEffectsFacet = defineFacet<AppEffect, readonly AppEffect[]>({
   id: 'core.app-effects',
   validate: isAppEffect,
+})
+
+export const isAppMountContribution = (value: unknown): value is AppMountContribution =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.component === 'function'
+
+export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMountContribution[]>({
+  id: 'core.app-mounts',
+  validate: isAppMountContribution,
 })
 
 export const isActionContextConfig = (value: unknown): value is ActionContextConfig =>
