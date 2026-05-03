@@ -52,6 +52,7 @@ import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { buildAppHash, parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { agentRuntimeBridgeRestartEvent } from '@/agentRuntime/useAgentRuntimeBridge.ts'
+import { openAgentTokensDialogEvent } from '@/agentRuntime/AgentTokensDialog.tsx'
 import { isMainPanel } from '@/data/globalState.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
@@ -310,6 +311,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       context: ActionContextTypes.GLOBAL,
       handler: () => {
         window.dispatchEvent(new CustomEvent(agentRuntimeBridgeRestartEvent))
+      },
+    },
+    {
+      id: 'manage_agent_tokens',
+      description: 'Manage agent runtime tokens',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        window.dispatchEvent(new CustomEvent(openAgentTokensDialogEvent))
       },
     },
     {

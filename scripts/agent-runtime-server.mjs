@@ -5,18 +5,25 @@ import { randomUUID } from 'node:crypto'
 const port = Number(process.env.AGENT_RUNTIME_PORT ?? 8787)
 const host = process.env.AGENT_RUNTIME_HOST ?? '127.0.0.1'
 const commandTtlMs = 10 * 60 * 1000
+const clientTtlMs = 60_000
 
+// clientId -> {id, metadata, lastSeen, tokens: Set<token>, audience: {userId, workspaceId, label}|null}
 const clients = new Map()
+// commandId -> command
 const commands = new Map()
-const pendingCommandIds = []
-const waiters = new Set()
+// clientId -> [commandId, ...] — per-client FIFO of pending commands
+const pendingByClient = new Map()
+// clientId -> Set<{response, timeout}>
+const waitersByClient = new Map()
+// token -> {clientId, audience}
+const tokens = new Map()
 
 const now = () => Date.now()
 
 const jsonHeaders = {
   'access-control-allow-origin': '*',
   'access-control-allow-methods': 'GET,POST,OPTIONS',
-  'access-control-allow-headers': 'content-type',
+  'access-control-allow-headers': 'authorization,content-type',
   'access-control-max-age': '86400',
   'content-type': 'application/json',
 }
@@ -55,57 +62,137 @@ const readBody = request =>
     request.on('error', reject)
   })
 
-const cleanup = () => {
-  const expiresBefore = now() - commandTtlMs
+const extractBearer = request => {
+  const header = request.headers.authorization
+  if (!header || typeof header !== 'string') return null
+  const match = header.match(/^Bearer\s+(.+)$/i)
+  return match ? match[1].trim() : null
+}
 
+const dropClient = clientId => {
+  const client = clients.get(clientId)
+  if (client) {
+    for (const token of client.tokens) tokens.delete(token)
+  }
+  clients.delete(clientId)
+
+  // Drop pending queue and fail any waiters; commands targeting this
+  // client are marked failed so the agent CLI sees a clean error
+  // rather than a hang.
+  const pending = pendingByClient.get(clientId)
+  if (pending) {
+    for (const id of pending) {
+      const command = commands.get(id)
+      if (command && command.status === 'pending') {
+        command.status = 'failed'
+        command.completedAt = now()
+        command.result = {ok: false, error: {name: 'ClientGone', message: 'Target client disconnected'}}
+      }
+    }
+    pendingByClient.delete(clientId)
+  }
+
+  const waiters = waitersByClient.get(clientId)
+  if (waiters) {
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timeout)
+      try { sendJson(waiter.response, 200, null) } catch { /* socket closed */ }
+    }
+    waitersByClient.delete(clientId)
+  }
+}
+
+const cleanup = () => {
+  const commandExpiry = now() - commandTtlMs
   for (const [id, command] of commands) {
-    if (command.createdAt < expiresBefore && command.status !== 'pending') {
+    if (command.createdAt < commandExpiry && command.status !== 'pending') {
       commands.delete(id)
     }
   }
 
+  const clientExpiry = now() - clientTtlMs
   for (const [id, client] of clients) {
-    if (client.lastSeen < now() - 60_000) {
-      clients.delete(id)
+    if (client.lastSeen < clientExpiry) {
+      dropClient(id)
     }
   }
 }
 
-const takePendingCommand = () => {
-  while (pendingCommandIds.length) {
-    const id = pendingCommandIds.shift()
+const takePendingForClient = clientId => {
+  const queue = pendingByClient.get(clientId)
+  if (!queue) return null
+  while (queue.length) {
+    const id = queue.shift()
     const command = commands.get(id)
-    if (command?.status === 'pending') {
-      return command
-    }
+    if (command?.status === 'pending') return command
   }
-
+  if (queue.length === 0) pendingByClient.delete(clientId)
   return null
 }
 
-const notifyWaiters = () => {
+const tryDeliverToClient = clientId => {
+  const waiters = waitersByClient.get(clientId)
+  if (!waiters || waiters.size === 0) return
   for (const waiter of Array.from(waiters)) {
-    const command = takePendingCommand()
+    const command = takePendingForClient(clientId)
     if (!command) return
-
     waiters.delete(waiter)
+    if (waiters.size === 0) waitersByClient.delete(clientId)
     command.status = 'delivered'
     command.deliveredAt = now()
-    command.clientId = waiter.clientId
+    command.clientId = clientId
     clearTimeout(waiter.timeout)
     sendJson(waiter.response, 200, command.payload)
   }
 }
 
 const registerClient = (clientId, metadata = {}) => {
+  const existing = clients.get(clientId)
+  const tokenList = Array.isArray(metadata.tokens) ? metadata.tokens : []
+  const audience = metadata.audience && typeof metadata.audience === 'object'
+    ? {
+        userId: typeof metadata.audience.userId === 'string' ? metadata.audience.userId : null,
+        workspaceId: typeof metadata.audience.workspaceId === 'string' ? metadata.audience.workspaceId : null,
+      }
+    : null
+
+  // Drop tokens the client no longer authorizes
+  if (existing) {
+    for (const oldToken of existing.tokens) {
+      if (!tokenList.some(t => t?.token === oldToken)) {
+        tokens.delete(oldToken)
+      }
+    }
+  }
+
+  const tokenSet = new Set()
+  for (const entry of tokenList) {
+    if (!entry || typeof entry.token !== 'string' || !entry.token) continue
+    tokenSet.add(entry.token)
+    tokens.set(entry.token, {
+      clientId,
+      audience: {
+        userId: typeof entry.userId === 'string' ? entry.userId : audience?.userId ?? null,
+        workspaceId: typeof entry.workspaceId === 'string' ? entry.workspaceId : audience?.workspaceId ?? null,
+        label: typeof entry.label === 'string' ? entry.label : null,
+      },
+    })
+  }
+
+  // Strip token list from stored metadata so /health doesn't echo
+  // secrets back to anyone who can reach the local server.
+  const { tokens: _omit, ...publicMetadata } = metadata
+
   clients.set(clientId, {
     id: clientId,
-    metadata,
+    metadata: publicMetadata,
+    audience,
     lastSeen: now(),
+    tokens: tokenSet,
   })
 }
 
-const createCommand = payload => {
+const enqueueCommand = (clientId, payload) => {
   const id = randomUUID()
   const commandPayload = {
     ...payload,
@@ -114,6 +201,7 @@ const createCommand = payload => {
 
   const command = {
     id,
+    targetClientId: clientId,
     payload: commandPayload,
     status: 'pending',
     createdAt: now(),
@@ -124,8 +212,13 @@ const createCommand = payload => {
   }
 
   commands.set(id, command)
-  pendingCommandIds.push(id)
-  notifyWaiters()
+  let queue = pendingByClient.get(clientId)
+  if (!queue) {
+    queue = []
+    pendingByClient.set(clientId, queue)
+  }
+  queue.push(id)
+  tryDeliverToClient(clientId)
   return command
 }
 
@@ -136,9 +229,12 @@ const waitForNextCommand = (request, requestUrl, response) => {
     60_000,
   )
 
-  registerClient(clientId)
+  // Touch lastSeen so an active long-poll keeps the client alive even
+  // between explicit /clients re-registrations.
+  const client = clients.get(clientId)
+  if (client) client.lastSeen = now()
 
-  const command = takePendingCommand()
+  const command = takePendingForClient(clientId)
   if (command) {
     command.status = 'delivered'
     command.deliveredAt = now()
@@ -148,20 +244,32 @@ const waitForNextCommand = (request, requestUrl, response) => {
   }
 
   const waiter = {
-    clientId,
     response,
     timeout: setTimeout(() => {
-      waiters.delete(waiter)
+      const set = waitersByClient.get(clientId)
+      if (set) {
+        set.delete(waiter)
+        if (set.size === 0) waitersByClient.delete(clientId)
+      }
       sendJson(response, 200, null)
     }, timeoutMs),
   }
 
   request.on('close', () => {
-    waiters.delete(waiter)
+    const set = waitersByClient.get(clientId)
+    if (set) {
+      set.delete(waiter)
+      if (set.size === 0) waitersByClient.delete(clientId)
+    }
     clearTimeout(waiter.timeout)
   })
 
-  waiters.add(waiter)
+  let set = waitersByClient.get(clientId)
+  if (!set) {
+    set = new Set()
+    waitersByClient.set(clientId, set)
+  }
+  set.add(waiter)
 }
 
 const setCommandResult = async (id, request, response) => {
@@ -183,6 +291,8 @@ const getStatus = () => ({
     id: client.id,
     lastSeen: client.lastSeen,
     metadata: client.metadata,
+    audience: client.audience,
+    tokenCount: client.tokens.size,
   })),
   commands: Array.from(commands.values()).map(command => ({
     id: command.id,
@@ -191,6 +301,7 @@ const getStatus = () => ({
     createdAt: command.createdAt,
     deliveredAt: command.deliveredAt,
     completedAt: command.completedAt,
+    targetClientId: command.targetClientId,
     clientId: command.clientId,
   })),
 })
@@ -210,20 +321,59 @@ const handleRequest = async (request, response) => {
       return
     }
 
+    if (request.method === 'GET' && requestUrl.pathname === '/runtime/whoami') {
+      const token = extractBearer(request)
+      if (!token) {
+        sendJson(response, 401, {error: 'Missing bearer token'})
+        return
+      }
+      const entry = tokens.get(token)
+      if (!entry) {
+        sendJson(response, 401, {error: 'Unknown or expired token'})
+        return
+      }
+      const client = clients.get(entry.clientId)
+      sendJson(response, 200, {
+        clientId: entry.clientId,
+        audience: entry.audience,
+        connected: Boolean(client),
+        clientLastSeen: client?.lastSeen ?? null,
+      })
+      return
+    }
+
     if (request.method === 'GET' && requestUrl.pathname === '/runtime/commands/next') {
+      // Client polling; trusted by virtue of running in the user's
+      // browser. The auth boundary is the agent → bridge call below.
       waitForNextCommand(request, requestUrl, response)
       return
     }
 
     if (request.method === 'POST' && requestUrl.pathname === '/runtime/commands') {
+      const token = extractBearer(request)
+      if (!token) {
+        sendJson(response, 401, {error: 'Missing bearer token. Run `yarn agent connect <token>` first.'})
+        return
+      }
+      const entry = tokens.get(token)
+      if (!entry) {
+        sendJson(response, 401, {error: 'Unknown or expired token. The client may have disconnected, or the token was revoked.'})
+        return
+      }
+      const targetClient = clients.get(entry.clientId)
+      if (!targetClient) {
+        sendJson(response, 503, {error: 'Target client is not currently connected.'})
+        return
+      }
+
       const body = await readBody(request)
       if (!body || typeof body !== 'object' || typeof body.type !== 'string') {
         sendJson(response, 400, {error: 'Command body must include a string type'})
         return
       }
 
-      const command = createCommand(body)
-      sendJson(response, 202, {id: command.id})
+      const command = enqueueCommand(entry.clientId, body)
+      sendJson(response, 202, {id: command.id, audience: entry.audience})
       return
     }
 
@@ -253,6 +403,7 @@ const handleRequest = async (request, response) => {
         status: command.status,
         result: command.result,
         clientId: command.clientId,
+        targetClientId: command.targetClientId,
         createdAt: command.createdAt,
         deliveredAt: command.deliveredAt,
         completedAt: command.completedAt,

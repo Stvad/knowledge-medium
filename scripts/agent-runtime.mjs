@@ -1,12 +1,23 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
 
 const bridgeUrl = (process.env.AGENT_RUNTIME_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '')
 const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000
+const tokenStorePath = process.env.AGENT_RUNTIME_TOKEN_FILE
+  ?? path.join(
+    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'),
+    'knowledge-medium',
+    'agent-token.json',
+  )
 
 const usage = () => `
 Usage:
+  yarn agent connect <token>      persist token (or use AGENT_RUNTIME_TOKEN env)
+  yarn agent disconnect           remove the persisted token
+  yarn agent whoami               show audience the persisted token resolves to
   yarn agent ping
   yarn agent status
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
@@ -24,9 +35,44 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const parseJson = (value, label) => {
   try {
     return JSON.parse(value)
-  } catch (error) {
+  } catch {
     throw new Error(`${label} must be valid JSON`)
   }
+}
+
+const loadStoredToken = async () => {
+  try {
+    const raw = await fs.readFile(tokenStorePath, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed.token === 'string') return parsed.token
+    return null
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+const writeStoredToken = async token => {
+  await fs.mkdir(path.dirname(tokenStorePath), {recursive: true})
+  await fs.writeFile(
+    tokenStorePath,
+    JSON.stringify({token, savedAt: Date.now()}, null, 2),
+    {mode: 0o600},
+  )
+}
+
+const removeStoredToken = async () => {
+  try {
+    await fs.unlink(tokenStorePath)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+}
+
+const resolveToken = async () => {
+  const fromEnv = process.env.AGENT_RUNTIME_TOKEN?.trim()
+  if (fromEnv) return fromEnv
+  return loadStoredToken()
 }
 
 const requestJson = async (url, options = {}) => {
@@ -48,8 +94,25 @@ const requestJson = async (url, options = {}) => {
   return body
 }
 
+const authedRequest = async (url, options = {}) => {
+  const token = await resolveToken()
+  if (!token) {
+    throw new Error(
+      'No agent token configured. Generate one from the app (palette → "Manage agent runtime tokens"), then run `yarn agent connect <token>`.',
+    )
+  }
+
+  return requestJson(url, {
+    ...options,
+    headers: {
+      ...(options.headers ?? {}),
+      authorization: `Bearer ${token}`,
+    },
+  })
+}
+
 const submitCommand = async command => {
-  const response = await requestJson(`${bridgeUrl}/runtime/commands`, {
+  const response = await authedRequest(`${bridgeUrl}/runtime/commands`, {
     method: 'POST',
     body: JSON.stringify(command),
   })
@@ -64,6 +127,10 @@ const waitForCommand = async (id, timeoutMs = defaultTimeoutMs) => {
     const command = await requestJson(`${bridgeUrl}/runtime/commands/${id}`)
     if (command.status === 'completed') {
       return command.result
+    }
+    if (command.status === 'failed') {
+      const error = command.result?.error
+      throw new Error(error?.message ?? `Runtime command ${id} failed`)
     }
 
     await sleep(pollIntervalMs)
@@ -90,9 +157,6 @@ const commandFromArgs = async args => {
   switch (name) {
     case 'ping':
       return {type: 'ping'}
-
-    case 'status':
-      return null
 
     case 'sql': {
       const [mode, sql, paramsJson] = rest
@@ -166,7 +230,54 @@ const main = async () => {
     return
   }
 
-  if (args[0] === 'status') {
+  const verb = args[0]
+
+  if (verb === 'connect') {
+    const token = args[1]
+    if (!token) throw new Error('connect requires a token. Generate one in the app first.')
+    await writeStoredToken(token)
+    // Resolve audience as a confirmation. Treat connection failures as
+    // soft — the token is saved either way; the user will see the
+    // problem the next time they actually run a command.
+    try {
+      const info = await requestJson(`${bridgeUrl}/runtime/whoami`, {
+        headers: {authorization: `Bearer ${token}`},
+      })
+      const audience = info.audience ?? {}
+      process.stdout.write(
+        `Connected. Token saved at ${tokenStorePath}\n` +
+        `User: ${audience.userId ?? '?'}\n` +
+        `Workspace: ${audience.workspaceId ?? '?'}\n` +
+        `Connected client: ${info.connected ? 'yes' : 'no (will auto-connect when the app reaches the bridge)'}\n`,
+      )
+    } catch (error) {
+      process.stdout.write(
+        `Token saved at ${tokenStorePath}, but bridge contact failed: ${error.message}\n` +
+        `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
+      )
+    }
+    return
+  }
+
+  if (verb === 'disconnect') {
+    await removeStoredToken()
+    process.stdout.write(`Removed ${tokenStorePath}\n`)
+    return
+  }
+
+  if (verb === 'whoami') {
+    const token = await resolveToken()
+    if (!token) {
+      throw new Error('No agent token configured. Run `yarn agent connect <token>` first.')
+    }
+    const info = await requestJson(`${bridgeUrl}/runtime/whoami`, {
+      headers: {authorization: `Bearer ${token}`},
+    })
+    process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
+    return
+  }
+
+  if (verb === 'status') {
     const status = await requestJson(`${bridgeUrl}/health`)
     process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
     return

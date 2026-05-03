@@ -8,6 +8,7 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { useAgentRuntimeBridge } from '@/agentRuntime/useAgentRuntimeBridge.ts'
+import { AgentTokensDialogMount } from '@/agentRuntime/AgentTokensDialog.tsx'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
 import { videoPlayerPlugin } from '@/plugins/video-player'
@@ -154,6 +155,7 @@ export function AppRuntimeProvider({
       <ExtensionLoadErrorsProvider store={errorStore}>
         <ActiveContextsProvider>
           <HotkeyReconciler/>
+          <AgentTokensDialogMount/>
           {children}
         </ActiveContextsProvider>
       </ExtensionLoadErrorsProvider>

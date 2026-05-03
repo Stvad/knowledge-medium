@@ -7,6 +7,7 @@ import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { describeRuntime } from '@/agentRuntime/describeRuntime.ts'
+import { agentTokenStore, agentTokensChangedEvent } from '@/agentRuntime/agentTokens.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { BlockProperties } from '@/types.ts'
@@ -508,6 +509,11 @@ export function useAgentRuntimeBridge({
     let retryMs = retryBaseMs
     let attempts = 0
     let restartResolve: (() => void) | null = null
+    // Tokens were just edited (mint / revoke). The poll loop checks
+    // this on each iteration to push a fresh registration through
+    // before the next long-poll, so newly minted tokens become valid
+    // for the agent CLI without a page reload.
+    let tokensDirty = false
 
     const waitForRestart = () => new Promise<void>(resolve => {
       restartResolve = resolve
@@ -516,13 +522,30 @@ export function useAgentRuntimeBridge({
     const handleRestart = () => {
       attempts = 0
       retryMs = retryBaseMs
+      tokensDirty = true
       if (restartResolve) {
         restartResolve()
         restartResolve = null
       }
     }
 
+    const handleTokensChanged = () => {
+      tokensDirty = true
+      // Wake the idle wait if we're paused on bridge-unavailable.
+      if (restartResolve) {
+        restartResolve()
+        restartResolve = null
+      }
+      // Push a registration immediately so the bridge accepts the new
+      // token without waiting out the in-flight long-poll (~25 s). The
+      // poll loop's own register() call will also fire, but redundantly
+      // re-registering is cheap and the in-flight request can't be
+      // cancelled without a per-iteration abort signal.
+      register().catch(() => { /* loop will retry */ })
+    }
+
     window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
+    window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
 
     const context = (): AgentRuntimeContext => {
       const {
@@ -562,12 +585,30 @@ export function useAgentRuntimeBridge({
         safeMode: currentSafeMode,
       } = latestContext.current
 
+      const userId = currentRepo.user.id
+      const workspaceId = currentRepo.activeWorkspaceId
+      // Without an active workspace the bridge can't accept commands
+      // for this client (the audience has no key). Skip token shipping
+      // in that case; mint will be blocked too.
+      const tokens = userId && workspaceId
+        ? agentTokenStore.list(userId, workspaceId).map(t => ({
+            token: t.token,
+            label: t.label,
+            userId,
+            workspaceId,
+          }))
+        : []
+
+      tokensDirty = false
+
       return postJson(`${baseUrl}/runtime/clients/${clientId}`, {
         landingBlockId: currentLandingBlock.id,
         currentUser: currentRepo.user,
         safeMode: currentSafeMode,
         href: window.location.href,
         userAgent: window.navigator.userAgent,
+        audience: { userId, workspaceId },
+        tokens,
       }, abortController.signal)
     }
 
@@ -582,6 +623,12 @@ export function useAgentRuntimeBridge({
     const poll = async () => {
       while (!abortController.signal.aborted) {
         try {
+          if (tokensDirty) {
+            // No-op marker; register() always re-sends tokens. Just
+            // makes the dirty flag explicit at the top of each
+            // iteration.
+            tokensDirty = false
+          }
           await register()
 
           const nextUrl = new URL(`${baseUrl}/runtime/commands/next`)
@@ -640,6 +687,7 @@ export function useAgentRuntimeBridge({
     return () => {
       abortController.abort()
       window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
+      window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
       if (restartResolve) {
         restartResolve()
         restartResolve = null
