@@ -141,6 +141,11 @@ export interface PromotionResult {
   bubbled: Set<string>
 }
 
+export interface PromotionOptions {
+  namespacePrefix?: string
+  transformKey?: (key: string) => string
+}
+
 /** Walk a parent's direct children and compute case-1/2/3/4 promotion.
  *  No tree edits — every source block survives as a descendant of its
  *  original parent. The promotion is purely additive: we collect
@@ -155,13 +160,16 @@ export interface PromotionResult {
 export const computePromotedFromChildren = (
   children: ReadonlyArray<RoamBlock>,
   alreadyBubbled: ReadonlySet<string>,
+  options: PromotionOptions = {},
 ): PromotionResult => {
   const accumulator = new Map<string, unknown[]>()
   const diagnostics: string[] = []
   const newlyBubbled = new Set<string>()
+  const namespacePrefix = options.namespacePrefix ?? NS_PREFIX
+  const transformKey = options.transformKey ?? ((key: string) => key)
 
   const push = (key: string, value: unknown) => {
-    const propName = `${NS_PREFIX}:${key}`
+    const propName = `${namespacePrefix}:${transformKey(key)}`
     const list = accumulator.get(propName) ?? []
     list.push(value)
     accumulator.set(propName, list)

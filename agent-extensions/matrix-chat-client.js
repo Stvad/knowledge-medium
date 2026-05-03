@@ -247,12 +247,34 @@ const appendContinuationLine = (block, line) => {
 }
 
 const matrixEventUrl = (roomId, eventId) => `https://matrix.to/#/${roomId}/${eventId}`
+const matrixPromotionOptions = {
+  namespacePrefix: 'matrix',
+  transformKey: key => key.toLowerCase(),
+}
+
+const propertyValues = value => Array.isArray(value) ? value : [value]
+
+const samePropertyValue = (left, right) => Object.is(left, right)
+
+const mergePropertyValue = (current, incoming) => {
+  if (current === undefined) return incoming
+
+  const values = []
+  for (const value of [...propertyValues(current), ...propertyValues(incoming)]) {
+    if (!values.some(existing => samePropertyValue(existing, value))) {
+      values.push(value)
+    }
+  }
+  return values.length === 1 ? values[0] : values
+}
 
 const mergeProperties = (...propertyBags) => {
   const merged = {}
   for (const bag of propertyBags) {
     if (!bag || typeof bag !== 'object') continue
-    Object.assign(merged, bag)
+    for (const [key, value] of Object.entries(bag)) {
+      merged[key] = mergePropertyValue(merged[key], value)
+    }
   }
   return Object.keys(merged).length ? merged : undefined
 }
@@ -265,18 +287,19 @@ const toRoamBlock = (block, path) => ({
   children: (block.children ?? []).map((child, index) => toRoamBlock(child, [...path, index])),
 })
 
-const withPromotedRoamProperties = (blocks, bubbled = new Set(), path = []) =>
+const withPromotedMatrixProperties = (blocks, bubbled = new Set(), path = []) =>
   blocks.map((block, index) => {
     const blockPath = [...path, index]
     const children = Array.isArray(block.children) ? block.children : []
     const promotion = computePromotedFromChildren(
       children.map((child, childIndex) => toRoamBlock(child, [...blockPath, childIndex])),
       bubbled,
+      matrixPromotionOptions,
     )
 
     for (const uid of promotion.bubbled) bubbled.add(uid)
 
-    const promotedChildren = withPromotedRoamProperties(children, bubbled, blockPath)
+    const promotedChildren = withPromotedMatrixProperties(children, bubbled, blockPath)
     return {
       ...block,
       properties: mergeProperties(block.properties, promotion.promoted),
@@ -286,7 +309,7 @@ const withPromotedRoamProperties = (blocks, bubbled = new Set(), path = []) =>
 
 const createBlocksFromEvent = (event, matrixClient) => {
   const text = getMessageText(event, matrixClient)
-  return withPromotedRoamProperties(parseMarkdownToBlockDefinitions(text))
+  return withPromotedMatrixProperties(parseMarkdownToBlockDefinitions(text))
 }
 
 const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, rootProperties) => {
@@ -305,7 +328,7 @@ const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, root
       parentId,
       orderKey: orderKeys[index],
       content: block.content,
-      properties: mergeProperties(block.properties, index === 0 ? rootProperties : undefined),
+      properties: mergeProperties(index === 0 ? rootProperties : undefined, block.properties),
     })
 
     if (Array.isArray(block.children) && block.children.length) {

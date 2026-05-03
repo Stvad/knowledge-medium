@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { planImport } from '../plan'
+import { computePromotedFromChildren, planImport } from '../plan'
 import { roamBlockId } from '../ids'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import { aliasesProp, typeProp } from '@/data/properties'
@@ -448,6 +448,21 @@ describe('planImport', () => {
     expect(byUid('u1')?.parentId).toBe(roamBlockId(WORKSPACE, 'parentUid'))
   })
 
+  it('promotes attributes with a custom namespace and key transform', () => {
+    const promotion = computePromotedFromChildren([
+      {string: 'URL::https://matrix.to/x', uid: 'u1'},
+      {string: 'author::[[stvad]]', uid: 'u2'},
+    ], new Set(), {
+      namespacePrefix: 'matrix',
+      transformKey: key => key.toLowerCase(),
+    })
+
+    expect(promotion.promoted).toEqual({
+      'matrix:url': 'https://matrix.to/x',
+      'matrix:author': '[[stvad]]',
+    })
+  })
+
   it('case 3: explodes a `[[X]] [[Y]]` scalar value into a list of bracketed pages', () => {
     const plan = planImport([{
       title: 'p',
@@ -574,4 +589,3 @@ describe('planImport', () => {
     ])
   })
 })
-
