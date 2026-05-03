@@ -235,7 +235,7 @@ export const importRoam = async (
   const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
   await repo.tx(async tx => {
     // 5a. Alias-target seats for unowned aliases. Same idempotent
-    //     shape as parseReferencesProcessor's ensureAliasTarget — at
+    //     shape as backlinks.parseReferences' ensureAliasTarget — at
     //     the deterministic id, with `aliases: [alias]` on insert /
     //     restore. A live row at the seat (e.g. created earlier by
     //     parseReferences when the user typed `[[alias]]` before
@@ -604,7 +604,7 @@ interface AliasResolution {
  * 5K side-txs, each firing post-commit processors, row-events tail,
  * handle invalidation, and (in production) one PowerSync upload
  * round-trip. The deterministic-seat scheme matches what
- * parseReferencesProcessor produces, so the seats unify with any
+ * backlinks.parseReferences produces, so the seats unify with any
  * pre-existing typed `[[alias]]` stubs and the main-tx
  * parseReferences post-commit becomes a no-op (planned references
  * already match what the processor would compute).

@@ -38,7 +38,7 @@ import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
-import { KERNEL_PROCESSORS } from './internals/parseReferencesProcessor'
+import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { mutatorsFacet, postCommitProcessorsFacet, queriesFacet } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
@@ -146,10 +146,9 @@ export interface RepoOptions {
    *  path). */
   registerKernelMutators?: boolean
   /** When true (default), kernel post-commit processors are registered
-   *  at construction time. Set false when a test isolates the engine /
-   *  mutator surface from processor side-effects (e.g. parseReferences
-   *  firing on every content write would add follow-up txs the engine
-   *  test isn't asserting on). */
+   *  at construction time. The kernel set is currently empty; plugin
+   *  processors arrive through `setFacetRuntime`. Kept as a test/tooling
+   *  switch for any future core-only processors. */
   registerKernelProcessors?: boolean
   /** When true (default), kernel queries are registered at construction
    *  time so `repo.query.subtree({id})` etc. work immediately without a
@@ -209,8 +208,8 @@ export class Repo {
    *  so it doesn't need a HandleStore entry; this map IS its identity
    *  table. */
   private readonly blockFacades = new Map<string, Block>()
-  /** Handle registry for collection factories: `repo.children`,
-   *  `repo.subtree`, `repo.ancestors`, `repo.backlinks`. Identity rule:
+  /** Handle registry for query-backed collection factories: `children`,
+   *  `subtree`, `ancestors`, plugin queries, etc. Identity rule:
    *  same key → same LoaderHandle instance. GC after `gcTimeMs` of
    *  zero subscribers + zero in-flight loads. The store also walks
    *  invalidation: TxEngine fast path + row_events tail (Phase 2.C)
@@ -323,11 +322,9 @@ export class Repo {
     }
     // Register kernel contributions by default. setFacetRuntime
     // overrides with the merged kernel + plugin registry once a
-    // runtime is supplied; callers can pass either of the
-    // `registerKernel*` flags as `false` to start empty for that
-    // facet (used by tests + tooling that want explicit registration
-    // semantics). The two flags are independent so engine tests can
-    // skip processor side-effects while keeping mutator dispatch.
+    // runtime is supplied; callers can pass `registerKernel*` flags as
+    // `false` to start empty for that facet (used by tests + tooling
+    // that want explicit registration semantics).
     if (opts.registerKernelMutators ?? true) {
       this.registerMutators(KERNEL_MUTATORS)
     }
@@ -441,7 +438,7 @@ export class Repo {
    *  Useful as:
    *    - regression detection in production (`handlesWalked /
    *      invalidations` should drop once the inverted-index lands;
-   *      `queries['core.backlinks'].p95Ms` should drop once the
+   *      `queries['backlinks.forBlock'].p95Ms` should drop once the
    *      backlinks index lands),
    *    - cold-start investigation (open a page, `repo.metrics()`,
    *      see which queries dominated and how many SQL roundtrips
@@ -559,8 +556,8 @@ export class Repo {
 
   // ──── Active-workspace getter/setter (UI bookkeeping) ────
 
-  /** UI-visible "active" workspace pin — used by hooks (`useBacklinks`)
-   *  and panels that need a default workspace when there's no other
+  /** UI-visible "active" workspace pin — used by plugin hooks and
+   *  panels that need a default workspace when there's no other
    *  context. `repo.tx` does NOT consult this; tx workspaces come from
    *  the first write's row per spec §5.3. */
   get activeWorkspaceId(): string | null {

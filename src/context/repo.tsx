@@ -7,6 +7,8 @@ import { useIsLocalOnly, useUser } from '@/components/Login'
 import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
 import { User } from '@/types.ts'
 import { memoize } from 'lodash'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -17,7 +19,14 @@ const initRepo = memoize(
     await ensurePowerSyncReady(user.id, useRemoteSync)
     const db = getPowerSyncDb(user.id)
     const cache = new BlockCache()
-    return new Repo({db, cache, user: {id: user.id, name: user.name}})
+    const repo = new Repo({db, cache, user: {id: user.id, name: user.name}})
+    repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
+      repo,
+      workspaceId: null,
+      safeMode: false,
+      generation: 'repo-bootstrap',
+    }))
+    return repo
   },
   (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,
 )

@@ -577,7 +577,7 @@ describe('block_aliases backfill', () => {
 
 // ============================================================================
 // block_references trigger maintenance — the directed-edge index that
-// backs `core.backlinks`. Mirrors the block_aliases tests above; the
+// backs `backlinks.forBlock`. Mirrors the block_aliases tests above; the
 // invariant is "live block's references_json edges == its rows in
 // block_references".
 // ============================================================================

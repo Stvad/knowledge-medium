@@ -1,6 +1,5 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { useRepo } from '@/context/repo.tsx'
-import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
 import {
   AppExtension,
@@ -10,20 +9,11 @@ import {
   resolveFacetRuntimeSync,
 } from '@/extensions/facet.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
-import { appShellPlugin } from '@/plugins/app-shell'
-import { videoPlayerPlugin } from '@/plugins/video-player'
-import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
-import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
-import { backlinksPlugin } from '@/plugins/backlinks'
-import { updateIndicatorPlugin } from '@/plugins/update-indicator'
-import { agentRuntimePlugin } from '@/plugins/agent-runtime'
-import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
-import { kernelDataExtension } from '../data/kernelDataExtension.ts'
+import { staticAppExtensions } from '@/extensions/staticAppExtensions.ts'
 import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
@@ -55,25 +45,7 @@ export function AppRuntimeProvider({
     generation,
   }), [generation, repo, workspaceId, safeMode])
 
-  const baseExtensions: AppExtension[] = useMemo(() => [
-    // kernelDataExtension contributes KERNEL_MUTATORS and
-    // KERNEL_PROCESSORS to mutatorsFacet / postCommitProcessorsFacet.
-    // setFacetRuntime REPLACES the registries, so without this the
-    // kernel mutators (registered in the Repo constructor) would be
-    // dropped the first time the runtime resolves and any
-    // repo.mutate.<kernel> call would throw MutatorNotRegisteredError.
-    kernelDataExtension,
-    defaultRenderersExtension,
-    defaultEditorInteractionExtension,
-    defaultActionsExtension({repo}),
-    appShellPlugin,
-    plainOutlinerPlugin,
-    vimNormalModePlugin({repo}),
-    videoPlayerPlugin,
-    backlinksPlugin,
-    updateIndicatorPlugin,
-    agentRuntimePlugin,
-  ], [repo])
+  const baseExtensions: AppExtension[] = useMemo(() => staticAppExtensions({repo}), [repo])
 
   const baseRuntime = useMemo(() =>
     resolveFacetRuntimeSync(baseExtensions, runtimeContext),

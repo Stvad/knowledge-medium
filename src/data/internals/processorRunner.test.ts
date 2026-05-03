@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * ProcessorRunner unit tests (spec §5.7, §10 step 9). End-to-end
- * coverage exists via parseReferencesProcessor; this file pins the
+ * coverage exists via backlinks.parseReferences; this file pins the
  * runner's own contracts directly so a future refactor (Phase 3
  * facet-driven registration) doesn't accidentally drop them.
  *

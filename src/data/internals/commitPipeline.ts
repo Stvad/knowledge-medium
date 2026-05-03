@@ -55,9 +55,9 @@ const scopeUploadsToServer = (scope: ChangeScope) =>
  *  `PowerSyncDatabase` that satisfies this; production passes the
  *  same. Both `writeTransaction` (for tx primitives) and the read
  *  surface (`getAll` / `getOptional` / `get` for `repo.load`) are
- *  needed. `onChange` is the table-change subscription used by hooks
- *  (`useBacklinks`, `useChildIds`) until the row_events tail in
- *  Phase 2 ships a typed invalidation surface. */
+ *  needed. `onChange` is the table-change subscription used by
+ *  reactive query hooks until the row_events tail in Phase 2 ships a
+ *  typed invalidation surface. */
 export interface PowerSyncDbChangeHandler {
   onChange: () => void | Promise<void>
   onError?: (error: unknown) => void

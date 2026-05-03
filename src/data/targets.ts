@@ -16,7 +16,7 @@
  *   `tx.setProperty`. Per-domain also drives the cleanup-eligibility
  *   routing in §7.6: only ensureAliasTarget results enter the
  *   newlyInsertedAliasTargetIds list passed to
- *   `core.cleanupOrphanAliases` (date-shaped aliases never enter the
+ *   `backlinks.cleanupOrphanAliases` (date-shaped aliases never enter the
  *   cleanup list — daily notes persist regardless of whether a
  *   referencing block is removed within 4s).
  *
@@ -28,7 +28,7 @@
  *
  * NOTE: `createOrRestoreTargetBlock` is helper-layer, NOT exposed on
  * the public Tx surface (per v4.31). Plugin authors writing their own
- * deterministic-id flows can import it from `@/data/internals/targets`.
+ * deterministic-id flows can import it from `@/data/targets`.
  */
 
 import { v5 as uuidv5 } from 'uuid'

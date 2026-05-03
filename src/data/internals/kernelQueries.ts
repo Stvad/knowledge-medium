@@ -1,6 +1,6 @@
 /**
  * Kernel queries — raw SQL constants + `defineQuery` facet contributions
- * for outside-tx reads (UI hooks, search, alias lookup, backlinks, type
+ * for outside-tx reads (UI hooks, search, alias lookup, type
  * filters, tree walks).
  *
  * Surface: SQL constants up top (used by tests, kept stable for plugin
@@ -27,25 +27,6 @@ export const SELECT_BLOCK_BY_ID_SQL = `
   FROM blocks
   WHERE id = ?
     AND deleted = 0
-`
-
-/** Backlinks: blocks whose `references_json` array contains an entry
- *  with `id = ?`. Reads through the trigger-maintained `block_references`
- *  edge index — `(target_id, workspace_id)` keyed lookup, then PK join
- *  back to `blocks` for the row payload. Soft-deleted source rows have
- *  no edges (the UPDATE trigger wipes them on `deleted 0 → 1`); `b.deleted = 0`
- *  is belt-and-suspenders. The legacy SQL (json_each-scan over every
- *  block in the workspace whose `references_json != '[]'`) was 250-1500 ms
- *  on big workspaces; the indexed lookup is sub-millisecond. */
-export const SELECT_BACKLINKS_FOR_BLOCK_SQL = `
-  SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
-  FROM block_references br
-  JOIN blocks b ON b.id = br.source_id
-  WHERE br.workspace_id = ?
-    AND b.id != ?
-    AND br.target_id = ?
-    AND b.deleted = 0
-  ORDER BY b.updated_at DESC, b.id
 `
 
 /** Type filter — flat-property shape (`$.type`, not `$.type.value`). */
@@ -242,41 +223,7 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
   },
 })
 
-// ──── Reference / search queries ────
-
-/** Backlinks: every block in `workspaceId` whose `references_json`
- *  contains an entry with `id = ?`. Workspace is required — callers
- *  that previously relied on the row-cache resolution (`repo.backlinks(id)`
- *  factory) pass it explicitly now.
- *
- *  Dep declaration:
- *    - `{kind:'row', id}` — target's row dep (so a target deletion /
- *      restore re-fires the handle).
- *    - `{kind:'backlink-target', id}` — the precise per-target signal.
- *      The TxEngine fast path + row_events tail compute the symmetric
- *      difference of `references_json` target ids per touched row;
- *      this handle re-fires only when *some* source row gained or lost
- *      this id as a target. Pure content / property / focus-state
- *      writes don't change anyone's set of distinct outgoing targets
- *      and so don't invalidate this handle.
- *    - Per-source `{kind:'row', id: source.id}` declared inside
- *      `hydrateBlocks` for every row in the result, so an in-place
- *      content edit of an existing source still re-fires (covers the
- *      ORDER BY updated_at sort). */
-export const backlinksQuery = defineQuery<{workspaceId: string; id: string}, BlockData[]>({
-  name: 'core.backlinks',
-  argsSchema: z.object({workspaceId: z.string(), id: z.string()}),
-  resultSchema: blockDataArraySchema,
-  resolve: async ({workspaceId, id}, ctx) => {
-    ctx.depend({kind: 'row', id})
-    if (!workspaceId || !id) return []
-    ctx.depend({kind: 'backlink-target', id})
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BACKLINKS_FOR_BLOCK_SQL, [workspaceId, id, id],
-    )
-    return ctx.hydrateBlocks(asBlockRows(rows))
-  },
-})
+// ──── Search queries ────
 
 /** Live blocks in `workspaceId` whose `type` property equals `type`. */
 export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, BlockData[]>({
@@ -437,7 +384,6 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   ancestorsQuery,
   childrenQuery,
   childIdsQuery,
-  backlinksQuery,
   byTypeQuery,
   searchByContentQuery,
   firstChildByContentQuery,
@@ -459,7 +405,6 @@ declare module '@/data/api' {
     'core.ancestors': typeof ancestorsQuery
     'core.children': typeof childrenQuery
     'core.childIds': typeof childIdsQuery
-    'core.backlinks': typeof backlinksQuery
     'core.byType': typeof byTypeQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.firstChildByContent': typeof firstChildByContentQuery

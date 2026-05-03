@@ -46,9 +46,8 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
-    // Don't register parseReferences — these tests seed `references`
-    // directly via `tx.create({references})` and the processor would
-    // overwrite that with whatever it parses out of `content`.
+    // Keep the processor registry empty; these query tests seed
+    // `references` directly and should not depend on plugin processors.
     registerKernelProcessors: false,
   })
   return {h, cache, repo}
@@ -191,42 +190,6 @@ describe('repo.query.childIds', () => {
     const a = env.repo.query.childIds({id: 'p'})
     const b = env.repo.query.childIds({id: 'p', hydrate: true})
     expect(a).not.toBe(b)
-  })
-})
-
-describe('repo.query.backlinks', () => {
-  it('returns blocks whose references include the target id', async () => {
-    await create({id: 'target'})
-    await create({id: 'src1', references: [{id: 'target', alias: 't'}]})
-    await create({id: 'src2', references: [{id: 'target', alias: 't'}]})
-    await create({id: 'unrelated'})
-    const out = asBlocks(await env.repo.query.backlinks({workspaceId: WS, id: 'target'}).load())
-    expect(out.map(r => r.id).sort()).toEqual(['src1', 'src2'])
-  })
-
-  it('excludes self-reference', async () => {
-    await create({id: 'self', references: [{id: 'self', alias: 'self'}]})
-    expect(asBlocks(await env.repo.query.backlinks({workspaceId: WS, id: 'self'}).load())).toEqual([])
-  })
-
-  it('excludes soft-deleted source rows', async () => {
-    await create({id: 'target'})
-    await create({id: 'src', references: [{id: 'target', alias: 't'}]})
-    await env.repo.tx(tx => tx.delete('src'), {scope: ChangeScope.BlockDefault})
-    expect(asBlocks(await env.repo.query.backlinks({workspaceId: WS, id: 'target'}).load())).toEqual([])
-  })
-
-  it('scopes to workspaceId', async () => {
-    await create({id: 'target', workspaceId: WS})
-    await create({id: 'src-other', workspaceId: OTHER_WS, references: [{id: 'target', alias: 't'}]})
-    expect(asBlocks(await env.repo.query.backlinks({workspaceId: WS, id: 'target'}).load())).toEqual([])
-    const otherWs = asBlocks(await env.repo.query.backlinks({workspaceId: OTHER_WS, id: 'target'}).load())
-    expect(otherWs.map(r => r.id)).toEqual(['src-other'])
-  })
-
-  it('returns [] on empty workspaceId or id', async () => {
-    expect(asBlocks(await env.repo.query.backlinks({workspaceId: '', id: 'x'}).load())).toEqual([])
-    expect(asBlocks(await env.repo.query.backlinks({workspaceId: WS, id: ''}).load())).toEqual([])
   })
 })
 
@@ -519,7 +482,7 @@ describe('kernelDataExtension queriesFacet wiring', () => {
     const queries = runtime.read(queriesFacet)
     const expected = [
       'core.subtree', 'core.ancestors', 'core.children', 'core.childIds',
-      'core.backlinks', 'core.byType', 'core.searchByContent',
+      'core.byType', 'core.searchByContent',
       'core.firstChildByContent', 'core.aliasesInWorkspace',
       'core.aliasMatches', 'core.aliasLookup', 'core.findExtensionBlocks',
     ]

@@ -18,8 +18,6 @@
  *     row_events tail (Phase 2.C) drive invalidation; the per-hook
  *     `db.onChange({tables: ['blocks']})` polling that the old shape
  *     used is gone.
- *   - useBacklinks: handle via `repo.backlinks(id)`. Same story —
- *     no more ad-hoc throttled re-query, the engine handles it.
  *   - useParents: handle via `repo.ancestors(id)`.
  *   - useSubtree: handle via `repo.subtree(id)` (new in Phase 2.D).
  *
@@ -302,27 +300,6 @@ export const useParents = (block: Block): Block[] => {
   return useHandle(block.repo.query.ancestors({id: block.id}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)).reverse(),
   })
-}
-
-/** Reactive backlinks — every block in `block`'s workspace whose
- *  `references` field points at `block.id`. The new `core.backlinks`
- *  query takes `workspaceId` as an arg (no implicit cache resolution
- *  inside the loader); we resolve it here from `useData(block)`,
- *  falling back to `repo.activeWorkspaceId` when the block isn't
- *  loaded yet — same fallback chain the legacy `repo.backlinks(id)`
- *  factory used. The query's resolver short-circuits on empty
- *  `workspaceId` to `[]`, so the no-workspace case still produces a
- *  stable empty handle without a SQL hit. */
-export const useBacklinks = (block: Block): Block[] => {
-  const repo = block.repo
-  const data = useData(block)
-  const workspaceId = data?.workspaceId ?? repo.activeWorkspaceId ?? ''
-  return useHandle(
-    repo.query.backlinks({workspaceId, id: block.id}),
-    {
-      selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
-    },
-  )
 }
 
 /** Reactive subtree (root + descendants), in SUBTREE_SQL order. New in

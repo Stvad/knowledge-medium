@@ -1,8 +1,8 @@
 /**
- * `core.parseReferences` + `core.cleanupOrphanAliases` post-commit
+ * `backlinks.parseReferences` + `backlinks.cleanupOrphanAliases` post-commit
  * processors (spec §7).
  *
- * `core.parseReferences`
+ * `backlinks.parseReferences`
  *   - watches: { kind: 'field', table: 'blocks', fields: ['content'] }
  *   - For each changedRow whose `content` changed (insert or update),
  *     parse `[[alias]]` and `((uuid))` references.
@@ -11,12 +11,12 @@
  *     the target via ensureAliasTarget / ensureDailyNoteTarget.
  *   - Write `tx.update(sourceId, {references}, {skipMetadata: true})`.
  *   - If any non-date alias target was newly inserted (or restored),
- *     schedule `core.cleanupOrphanAliases` with
+ *     schedule `backlinks.cleanupOrphanAliases` with
  *     `{newlyInsertedAliasTargetIds}` after delayMs: 4000.
  *   - Opens its own tx via `ctx.repo.tx(..., {scope:
  *     ChangeScope.References})` — separate undo bucket; uploads.
  *
- * `core.cleanupOrphanAliases`
+ * `backlinks.cleanupOrphanAliases`
  *   - watches: { kind: 'explicit' }
  *   - scheduledArgsSchema: z.object({newlyInsertedAliasTargetIds: z.array(z.string())})
  *     (validated at enqueue time so a bad arg fails the originating tx)
@@ -47,6 +47,7 @@ import {
   definePostCommitProcessor,
   type BlockData,
   type BlockReference,
+  type AnyPostCommitProcessor,
   type CommittedEvent,
   type ProcessorCtx,
   type Tx,
@@ -61,7 +62,11 @@ import {
   ensureAliasTarget,
   ensureDailyNoteTarget,
   isDateAlias,
-} from '../targets'
+} from '@/data/targets'
+import { BACKLINKS_FOR_BLOCK_QUERY } from './query.ts'
+
+export const PARSE_REFERENCES_PROCESSOR = 'backlinks.parseReferences'
+export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'backlinks.cleanupOrphanAliases'
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */
@@ -184,7 +189,7 @@ const planNeedsWrite = (plan: SourcePlan): boolean =>
   || plan.datesToEnsure.length > 0
 
 export const parseReferencesProcessor = definePostCommitProcessor({
-  name: 'core.parseReferences',
+  name: PARSE_REFERENCES_PROCESSOR,
   watches: { kind: 'field', table: 'blocks', fields: ['content'] },
   apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
     // Read phase — outside any tx; bare-connection reads, no writer
@@ -214,7 +219,7 @@ export const parseReferencesProcessor = definePostCommitProcessor({
       }
       if (allNewlyInserted.length > 0 && workspaceForCleanup !== null) {
         tx.afterCommit(
-          'core.cleanupOrphanAliases',
+          CLEANUP_ORPHAN_ALIASES_PROCESSOR,
           {
             workspaceId: workspaceForCleanup,
             newlyInsertedAliasTargetIds: allNewlyInserted,
@@ -224,12 +229,12 @@ export const parseReferencesProcessor = definePostCommitProcessor({
       }
     }, {
       scope: ChangeScope.References,
-      description: 'processor: core.parseReferences',
+      description: `processor: ${PARSE_REFERENCES_PROCESSOR}`,
     })
   },
 })
 
-// ──── core.cleanupOrphanAliases ────
+// ──── backlinks.cleanupOrphanAliases ────
 
 const cleanupArgsSchema = z.object({
   workspaceId: z.string(),
@@ -243,12 +248,12 @@ interface CleanupArgs {
 
 declare module '@/data/api' {
   interface PostCommitProcessorRegistry {
-    'core.cleanupOrphanAliases': CleanupArgs
+    [CLEANUP_ORPHAN_ALIASES_PROCESSOR]: CleanupArgs
   }
 }
 
 export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupArgs>({
-  name: 'core.cleanupOrphanAliases',
+  name: CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   watches: { kind: 'explicit' },
   scheduledArgsSchema: cleanupArgsSchema,
   apply: async (event: CommittedEvent<CleanupArgs>, ctx: ProcessorCtx) => {
@@ -257,13 +262,13 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     if (ids.length === 0 || !workspaceId) return
 
     // Read phase — gather actual orphans without holding a writer slot.
-    // `repo.query.backlinks` returns BlockData[] for blocks in the same
+    // `backlinks.forBlock` returns BlockData[] for blocks in the same
     // workspace whose `references_json` entries point at `id`. The
     // workspace-scoped check is correct because per spec invariant 11
     // refs do not cross workspaces in this app.
     const orphans: string[] = []
     for (const id of ids) {
-      const refs = await ctx.repo.query.backlinks({workspaceId, id}).load()
+      const refs = await ctx.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId, id}).load()
       if (refs.length === 0) orphans.push(id)
     }
     if (orphans.length === 0) return
@@ -281,20 +286,14 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
       }
     }, {
       scope: ChangeScope.References,
-      description: 'processor: core.cleanupOrphanAliases',
+      description: `processor: ${CLEANUP_ORPHAN_ALIASES_PROCESSOR}`,
     })
   },
 })
 
 // ──── Bundle ────
 
-import type { AnyPostCommitProcessor } from '@/data/api'
-
-/** All kernel post-commit processors, registered into Repo by default
- *  at construction time (mirrors KERNEL_MUTATORS in kernelMutators.ts).
- *  Registry replacement via setFacetRuntime starts with these and
- *  layers in plugin contributions. */
-export const KERNEL_PROCESSORS: ReadonlyArray<AnyPostCommitProcessor> = [
+export const backlinksPostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
   parseReferencesProcessor,
   cleanupOrphanAliasesProcessor,
 ]

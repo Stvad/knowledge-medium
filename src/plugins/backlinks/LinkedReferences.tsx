@@ -4,8 +4,9 @@ import { BlockRendererProps } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BreadcrumbList } from '@/components/BreadcrumbList.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useBacklinks, useParents } from '@/hooks/block.ts'
+import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import { useBacklinks } from './useBacklinks.ts'
 
 const NESTED_OVERRIDES = {topLevel: false, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}

@@ -11,7 +11,7 @@ import type { Repo } from '../repo'
  *  visited). Plugin queries do the same.
  *
  *  `backlink-target`: a handle that depends on "the set of source rows
- *  pointing at this id" — i.e. `core.backlinks({id})`. The fast path +
+ *  pointing at this id" — i.e. `backlinks.forBlock({id})`. The fast path +
  *  sync tail compute the symmetric difference of `references_json`
  *  target ids per touched row and add the diff to
  *  `ChangeNotification.backlinkTargets`. A change that doesn't alter

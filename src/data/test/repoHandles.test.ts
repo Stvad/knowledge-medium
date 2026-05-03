@@ -1,13 +1,13 @@
 // @vitest-environment node
 /**
  * Tests for Repo's collection-handle factories (Phase 2.B):
- *   `repo.children(id)`, `repo.subtree(id)`, `repo.ancestors(id)`,
- *   `repo.backlinks(id)` — each returning a LoaderHandle<BlockData[]>.
+ *   `repo.children(id)`, `repo.subtree(id)`, `repo.ancestors(id)` —
+ *   each returning a LoaderHandle<BlockData[]>.
  *
  * Coverage:
  *   - Identity stability per (factory, id).
- *   - Loader correctness: data shape matches the legacy one-shot APIs
- *     (CHILDREN_SQL / SUBTREE_SQL / ANCESTORS_SQL / SELECT_BACKLINKS).
+ *   - Loader correctness: data shape matches the SQL-backed one-shot APIs
+ *     (CHILDREN_SQL / SUBTREE_SQL / ANCESTORS_SQL).
  *   - Side-effects: each loader hydrates its result rows into the
  *     per-row cache via `applySyncSnapshot`.
  *   - Dependencies declared during resolve (verified via the test-only
@@ -15,7 +15,6 @@
  *       - `children`:  parent-edge on `id` + row on each child.
  *       - `subtree`:   row + parent-edge on every visited id.
  *       - `ancestors`: row on `id` + every ancestor id.
- *       - `backlinks`: row on `id`, workspace, row on each backlink.
  *   - Invalidation through the HandleStore index: the right shape of
  *     change re-resolves the handle. (The TxEngine + row_events tail
  *     wiring is Phase 2.C; here we drive `handleStore.invalidate` by
@@ -183,65 +182,6 @@ describe('repo.ancestors(id)', () => {
     const deps = h.__depsForTest()
     expect(depIds(deps, 'row').sort()).toEqual(['a', 'b', 'r'])
     expect(depIds(deps, 'parent-edge')).toEqual([])
-  })
-})
-
-describe('repo.query.backlinks({workspaceId, id})', () => {
-  it('identity-stable across calls', () => {
-    const a = env.repo.query.backlinks({workspaceId: 'ws-1', id: 't'})
-    const b = env.repo.query.backlinks({workspaceId: 'ws-1', id: 't'})
-    expect(a).toBe(b)
-  })
-
-  it('returns blocks whose references include id', async () => {
-    await create('t', {workspaceId: 'ws-1'})
-    // Create a block that references `t`. tx.update doesn't take
-    // references; we patch via direct SQL after the row exists.
-    await create('linker', {workspaceId: 'ws-1', content: 'see t'})
-    await env.h.db.execute(
-      `UPDATE blocks SET references_json = ? WHERE id = ?`,
-      [JSON.stringify([{id: 't', alias: 't'}]), 'linker'],
-    )
-    const h = env.repo.query.backlinks({workspaceId: 'ws-1', id: 't'})
-    const out = await h.load()
-    expect(out.map(b => b.id)).toEqual(['linker'])
-  })
-
-  it('returns [] when no block references id', async () => {
-    const h = env.repo.query.backlinks({workspaceId: 'ws-1', id: 'nope'})
-    const out = await h.load()
-    expect(out).toEqual([])
-  })
-
-  it('declares row(id) + workspace dep + table dep + row deps on each backlink', async () => {
-    await create('t', {workspaceId: 'ws-1'})
-    await create('linker', {workspaceId: 'ws-1'})
-    await env.h.db.execute(
-      `UPDATE blocks SET references_json = ? WHERE id = ?`,
-      [JSON.stringify([{id: 't', alias: 't'}]), 'linker'],
-    )
-    // Drain the row_events tail BEFORE creating the handle. Otherwise
-    // the tail's throttled flush of the direct UPDATE above can race
-    // with the handle's first load: when invalidate({rowIds:['linker']})
-    // arrives between the load resolving and the test reading deps,
-    // runLoader's post-settle microtask kicks off a re-resolve whose
-    // synchronous prefix pushes upfront ctx.depend calls onto
-    // this.deps before the test's await-continuation runs — making
-    // __depsForTest() return mid-resolve state with duplicate rows.
-    await env.repo.flushRowEventsTail()
-    const h = env.repo.query.backlinks({workspaceId: 'ws-1', id: 't'})
-    await h.load()
-    const deps = h.__depsForTest()
-    expect(depIds(deps, 'row').sort()).toEqual(['linker', 't'])
-    // backlink-target is the precise per-id signal — only writes that
-    // alter some row's set of distinct outgoing target ids fan out
-    // here, so a focus-state UI write or unrelated content edit never
-    // re-fires this handle.
-    expect(depIds(deps, 'backlink-target')).toEqual(['t'])
-    // No table or workspace dep — the per-target signal makes the old
-    // workspace coarse filter unnecessary.
-    expect(deps.some(d => d.kind === 'table')).toBe(false)
-    expect(deps.some(d => d.kind === 'workspace')).toBe(false)
   })
 })
 

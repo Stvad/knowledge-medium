@@ -4,6 +4,7 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { LinkedReferences } from './LinkedReferences.tsx'
+import { backlinksDataExtension } from './dataExtension.ts'
 
 // Show "Linked References" only when the block is the zoom-in target. Roam-
 // style: backlinks live with the page you're viewing, not inline beside every
@@ -14,5 +15,6 @@ const linkedReferencesContribution: BlockChildrenFooterContribution = (context) 
 }
 
 export const backlinksPlugin: AppExtension = [
+  backlinksDataExtension,
   blockChildrenFooterFacet.of(linkedReferencesContribution, {source: 'backlinks'}),
 ]

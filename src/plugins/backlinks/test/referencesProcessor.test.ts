@@ -3,8 +3,8 @@
  * Integration tests for the parseReferences + cleanupOrphanAliases
  * post-commit processors (spec §7.4). Runs the full pipeline:
  * `repo.tx` write of `content` → field-watch fires
- * core.parseReferences → it ensures alias targets +  writes
- * `references` on source → optionally schedules core.cleanupOrphanAliases
+ * backlinks.parseReferences → it ensures alias targets +  writes
+ * `references` on source → optionally schedules backlinks.cleanupOrphanAliases
  * with delayMs:4000 → tests advance timers + await processors before
  * asserting.
  *
@@ -25,8 +25,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '../repo'
-import { computeAliasSeatId, computeDailyNoteId } from '../targets'
+import { Repo } from '@/data/repo'
+import { computeAliasSeatId, computeDailyNoteId } from '@/data/targets'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { backlinksDataExtension } from '../dataExtension.ts'
+import {
+  CLEANUP_ORPHAN_ALIASES_PROCESSOR,
+  PARSE_REFERENCES_PROCESSOR,
+} from '../referencesProcessor.ts'
 
 interface Harness {
   h: TestDb
@@ -48,7 +55,12 @@ const setup = async (): Promise<Harness> => {
     user: {id: 'user-1'},
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
+    registerKernelProcessors: false,
   })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    backlinksDataExtension,
+  ]))
   return {
     h,
     cache,
@@ -261,7 +273,7 @@ describe('parseReferences — bookkeeping', () => {
     const cmds = await env.h.db.getAll<{scope: string; description: string | null}>(
       "SELECT scope, description FROM command_events ORDER BY created_at",
     )
-    expect(cmds.some(c => c.scope === 'block-default:references' && c.description?.startsWith('processor: core.parseReferences'))).toBe(true)
+    expect(cmds.some(c => c.scope === 'block-default:references' && c.description?.startsWith(`processor: ${PARSE_REFERENCES_PROCESSOR}`))).toBe(true)
     // The references update used skipMetadata, so the source row's
     // updated_by stays at the user but the row_events still record
     // the change.
@@ -296,7 +308,7 @@ describe('cleanupOrphanAliases — schema validation at enqueue', () => {
     await expect(env.repo.tx(async tx => {
       await tx.create({id: 'src-bad', workspaceId: WS, parentId: null, orderKey: 'a0'})
       // Wrong shape — newlyInsertedAliasTargetIds should be string[].
-      tx.afterCommit('core.cleanupOrphanAliases', {
+      tx.afterCommit(CLEANUP_ORPHAN_ALIASES_PROCESSOR, {
         workspaceId: WS,
         newlyInsertedAliasTargetIds: 42 as unknown as string[],
       })

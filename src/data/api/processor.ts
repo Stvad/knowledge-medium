@@ -104,7 +104,7 @@ export interface ProcessorReadDb {
  *    itself via `repo.tx`, so reads don't queue behind a writer.
  *  - `repo`: full `Repo` — open a write tx (`repo.tx(fn, {scope})`)
  *    when/if the processor decides to write, invoke other mutators via
- *    `repo.mutate.*`, run kernel queries (`repo.query.backlinks`, etc.).
+ *    `repo.mutate.*`, run registered queries.
  *    Imported here as a type-only reference; type cycles via `import
  *    type` are erased at compile time so there's no runtime cycle. */
 export interface ProcessorCtx {

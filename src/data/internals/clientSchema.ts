@@ -175,7 +175,7 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
 
 /** Trigger-maintained directed-edge index over `blocks.references_json`,
  *  one row per `(source, target, alias)` triple. Backs the
- *  `core.backlinks` query — without this, every backlinks lookup walks
+ *  `backlinks.forBlock` query — without this, every backlinks lookup walks
  *  every block in the workspace whose `references_json != '[]'` and
  *  json_each-parses each one. At 245k-block / 91k-with-refs workspaces
  *  that's 250-1500 ms per call. The index gives `O(matched)` lookup at
@@ -208,7 +208,7 @@ export const CREATE_BLOCK_REFERENCES_TABLE_SQL = `
 `
 
 /** Backlinks lookup path: incoming edges for a target, scoped to a
- *  workspace. The `core.backlinks` SQL filters on `(target_id,
+ *  workspace. The `backlinks.forBlock` SQL filters on `(target_id,
  *  workspace_id)` and joins back to blocks for the row payload —
  *  the index makes that an indexed lookup of the matched edges. */
 export const CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL = `

@@ -1,14 +1,11 @@
 /**
- * Kernel data-layer AppExtension — wraps the kernel mutators,
- * post-commit processors, and property schemas as facet contributions
- * so the FacetRuntime carries them. The Repo bootstraps with mutators
- * and processors registered directly (constructor
- * `registerKernelMutators` / `registerKernelProcessors`), but
- * `repo.setFacetRuntime(runtime)` REPLACES the registries, so the
- * runtime's mutator / processor facets must include the kernel
- * contributions to keep `repo.mutate.<kernel>` working after that
- * call. AppRuntimeProvider's baseExtensions includes this one
- * alongside plugin extensions before resolving the runtime.
+ * Kernel data-layer AppExtension — wraps the kernel mutators, queries,
+ * property schemas, and any core-only post-commit processors as facet
+ * contributions so the FacetRuntime carries them. The Repo bootstraps
+ * with kernel registries directly, but `repo.setFacetRuntime(runtime)`
+ * REPLACES those registries, so the runtime's data facets must include
+ * the kernel contributions to keep `repo.mutate.<kernel>` and
+ * `repo.query.<kernel>` working after that call.
  *
  * Property schemas (Phase 3 — chunk A): the kernel descriptors live
  * in `data/properties.ts` + `data/internals/coreProperties.ts` and are
@@ -33,7 +30,7 @@
 
 import { mutatorsFacet, postCommitProcessorsFacet, propertySchemasFacet, queriesFacet } from './facets'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
-import { KERNEL_PROCESSORS } from './internals/parseReferencesProcessor'
+import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import type { AppExtension } from '@/extensions/facet'

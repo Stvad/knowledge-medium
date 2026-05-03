@@ -364,7 +364,7 @@ export class LoaderHandle<T> implements Handle<T>, RegisteredHandle {
     // sequence can hand the next `await handle.load()` a pre-commit
     // snapshot — e.g. a processor reading a query handle right after a
     // commit that just tombstoned the looked-up row would see it as
-    // live and skip the restore (parseReferencesProcessor §7.5 race).
+    // live and skip the restore (backlinks.parseReferences §7.5 race).
     if (this.inflight) return this.inflight
     if (this.status_ === 'ready' && this.value !== undefined && !this.stale) {
       return Promise.resolve(this.value)

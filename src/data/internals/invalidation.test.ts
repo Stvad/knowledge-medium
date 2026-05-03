@@ -25,6 +25,10 @@ import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension.ts'
+import { BACKLINKS_FOR_BLOCK_QUERY } from '@/plugins/backlinks/query.ts'
 import {
   LoaderHandle,
   snapshotsToChangeNotification,
@@ -44,6 +48,10 @@ const setup = async (
     user: {id: 'u1'},
     startRowEventsTail: opts.startTail ?? false, // off by default for determinism
   })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    backlinksDataExtension,
+  ]))
   return {h, cache, repo}
 }
 
@@ -218,7 +226,7 @@ describe('snapshotsToChangeNotification', () => {
     // distinct target ids is the same, so the backlinks handle for that
     // target doesn't need to re-resolve. (The block_references row set
     // does change, but the consumer-visible result of
-    // `core.backlinks({id})` does not.)
+    // `backlinks.forBlock({id})` does not.)
     const map = new Map<string, ChangeSnapshot>([
       ['src', {
         before: {parentId: null, workspaceId: 'w', references: [{id: 'tgt'}]},
@@ -310,7 +318,7 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
       content: '',
     }), {scope: ChangeScope.BlockDefault})
 
-    const h = env.repo.query.backlinks({workspaceId: 'ws-1', id: 'target'})
+    const h = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: 'ws-1', id: 'target'})
     const fired: number[] = []
     h.subscribe(v => fired.push(v.length))
     await vi.waitFor(() => expect(fired).toEqual([0]))
