@@ -22,6 +22,7 @@ import { Repo } from '@/data/internals/repo'
 import {
   DAILY_NOTE_NS,
   JOURNAL_NS,
+  addDaysIso,
   dailyNoteBlockId,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
@@ -72,6 +73,18 @@ describe('deterministic ids', () => {
     // reintroduces the per-client duplicate-page bug.
     expect(JOURNAL_NS).toBe('a304a5da-807a-4c20-8af3-53a033aa9df8')
     expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
+  })
+})
+
+describe('addDaysIso', () => {
+  it('moves across month and year boundaries using local calendar dates', () => {
+    expect(addDaysIso('2026-05-01', -1)).toBe('2026-04-30')
+    expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01')
+  })
+
+  it('handles leap days', () => {
+    expect(addDaysIso('2024-02-28', 1)).toBe('2024-02-29')
+    expect(addDaysIso('2024-03-01', -1)).toBe('2024-02-29')
   })
 })
 

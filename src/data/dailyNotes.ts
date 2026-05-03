@@ -51,6 +51,11 @@ const dailyNoteCreatedAt = (iso: string): number => {
   return ms
 }
 
+export const addDaysIso = (iso: string, days: number): string => {
+  const {year, month, day} = parseIsoParts(iso)
+  return formatIsoDate(new Date(year, month - 1, day + days))
+}
+
 // Build the Date used to render display aliases. Uses local-midnight
 // of the same calendar day so dailyPageAliases — which reads
 // .getDate() / .getMonth() in local TZ — produces "April 28th, 2026"
