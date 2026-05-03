@@ -485,11 +485,10 @@ describe('row_events tail: sync-applied invalidation', () => {
 
     await env.repo.flushRowEventsTail()
     // The parent-edge dep on `p` matches the new child's parent_id,
-    // so the children handle re-resolves end-to-end.
-    await vi.waitFor(() => {
-      const v = h.peek()
-      expect(v?.map(b => b.id)).toEqual(['c1-remote'])
-    })
+    // so the load-only handle is marked stale. With no subscribers,
+    // LoaderHandle defers the SQL rerun until the next load().
+    const v = await h.load()
+    expect(v.map(b => b.id)).toEqual(['c1-remote'])
   })
 
   it('does NOT re-resolve children on pure content edits (reviewer P2)', async () => {
