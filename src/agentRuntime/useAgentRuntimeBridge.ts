@@ -27,13 +27,12 @@ interface AgentRuntimeCommand {
 interface AgentRuntimeContext {
   repo: Repo
   db: Repo['db']
-  landingBlock: Block
   runtime: FacetRuntime
   safeMode: boolean
   sql: (sql: string, params?: unknown[], mode?: SqlMode) => Promise<unknown>
   block: (id: string) => Block
   getBlock: (id: string) => Promise<BlockData | null>
-  getSubtree: (rootId?: string) => Promise<BlockData[]>
+  getSubtree: (rootId: string) => Promise<BlockData[]>
   createBlock: (input?: CreateBlockInput) => Promise<BlockData | null>
   updateBlock: (input: UpdateBlockInput) => Promise<BlockData | null>
   installExtension: (input: InstallExtensionInput) => Promise<InstallExtensionResult>
@@ -77,7 +76,6 @@ interface InstallExtensionResult {
 
 interface UseAgentRuntimeBridgeOptions {
   repo: Repo
-  landingBlock: Block
   runtime: FacetRuntime
   safeMode: boolean
 }
@@ -287,25 +285,20 @@ const extensionBlockProperties = (
   }
 }
 
-const resolveWorkspaceId = async (repo: Repo, landingBlock: Block): Promise<string> => {
+const resolveWorkspaceId = (repo: Repo): string => {
   if (repo.activeWorkspaceId) return repo.activeWorkspaceId
-  const cached = landingBlock.peek()
-  if (cached?.workspaceId) return cached.workspaceId
-  const loaded = await repo.load(landingBlock.id)
-  if (loaded?.workspaceId) return loaded.workspaceId
   throw new Error('install-extension requires an active workspace')
 }
 
 const installRuntimeExtension = async (
   repo: Repo,
-  landingBlock: Block,
   input: InstallExtensionInput,
 ): Promise<InstallExtensionResult> => {
   const source = input.source.trimEnd()
   if (!source) throw new Error('install-extension requires non-empty source')
 
   const label = input.label?.trim() || null
-  const workspaceId = await resolveWorkspaceId(repo, landingBlock)
+  const workspaceId = resolveWorkspaceId(repo)
   const existingExtensions = await repo.query.findExtensionBlocks({workspaceId}).load()
   const existing = input.id
     ? existingExtensions.find(block => block.id === input.id) ?? null
@@ -392,9 +385,7 @@ const executeCommand = async (
     }
 
     case 'get-subtree': {
-      const rootId = command.rootId === undefined
-        ? undefined
-        : requireString(command.rootId, 'rootId')
+      const rootId = requireString(command.rootId, 'rootId')
       // includeRoot dropped in Phase 4 — agent always receives the
       // root + descendants. Callers that don't want the root filter
       // it out themselves.
@@ -485,7 +476,6 @@ const executeArbitraryCode = async (
 const {
   repo,
   db,
-  landingBlock,
   runtime,
   safeMode,
   sql,
@@ -616,14 +606,12 @@ const postJson = async (
 
 export function useAgentRuntimeBridge({
   repo,
-  landingBlock,
   runtime,
   safeMode,
 }: UseAgentRuntimeBridgeOptions) {
   const clientId = useMemo(() => crypto.randomUUID(), [])
   const latestContext = useRef<UseAgentRuntimeBridgeOptions>({
     repo,
-    landingBlock,
     runtime,
     safeMode,
   })
@@ -631,11 +619,10 @@ export function useAgentRuntimeBridge({
   useEffect(() => {
     latestContext.current = {
       repo,
-      landingBlock,
       runtime,
       safeMode,
     }
-  }, [repo, landingBlock, runtime, safeMode])
+  }, [repo, runtime, safeMode])
 
   useEffect(() => {
     const abortController = new AbortController()
@@ -684,7 +671,6 @@ export function useAgentRuntimeBridge({
     const context = (): AgentRuntimeContext => {
       const {
         repo: currentRepo,
-        landingBlock: currentLandingBlock,
         runtime: currentRuntime,
         safeMode: currentSafeMode,
       } = latestContext.current
@@ -692,17 +678,15 @@ export function useAgentRuntimeBridge({
       return {
         repo: currentRepo,
         db: currentRepo.db,
-        landingBlock: currentLandingBlock,
         runtime: currentRuntime,
         safeMode: currentSafeMode,
         sql: (sql, params, mode) => runSql(currentRepo, sql, params, mode),
         block: id => currentRepo.block(id),
         getBlock: id => currentRepo.load(id),
-        getSubtree: (rootId) =>
-          currentRepo.query.subtree({id: rootId ?? currentLandingBlock.id}).load(),
+        getSubtree: rootId => currentRepo.query.subtree({id: rootId}).load(),
         createBlock: input => createRuntimeBlock(currentRepo, input),
         updateBlock: input => updateRuntimeBlock(currentRepo, input),
-        installExtension: input => installRuntimeExtension(currentRepo, currentLandingBlock, input),
+        installExtension: input => installRuntimeExtension(currentRepo, input),
         actions: readRuntimeActions(currentRuntime),
         renderers: currentRuntime.read(blockRenderersFacet),
         refreshAppRuntime,
@@ -716,7 +700,6 @@ export function useAgentRuntimeBridge({
     const register = () => {
       const {
         repo: currentRepo,
-        landingBlock: currentLandingBlock,
         safeMode: currentSafeMode,
       } = latestContext.current
 
@@ -737,7 +720,7 @@ export function useAgentRuntimeBridge({
       tokensDirty = false
 
       return postJson(`${baseUrl}/runtime/clients/${clientId}`, {
-        landingBlockId: currentLandingBlock.id,
+        activeWorkspaceId: workspaceId,
         currentUser: currentRepo.user,
         safeMode: currentSafeMode,
         href: window.location.href,

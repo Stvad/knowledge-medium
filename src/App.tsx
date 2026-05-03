@@ -215,7 +215,7 @@ const App = () => {
 
   return (
     <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
-      <AppRuntimeProvider landingBlock={landingBlock} safeMode={safeMode}>
+      <AppRuntimeProvider safeMode={safeMode}>
         <BlockComponent blockId={landingBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>

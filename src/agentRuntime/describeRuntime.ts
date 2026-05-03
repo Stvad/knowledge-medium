@@ -1,10 +1,8 @@
-import { Block } from '@/data/internals/block'
 import { FacetRuntime } from '@/extensions/facet.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
 import { Repo } from '@/data/internals/repo'
 
 export interface DescribeRuntimeContext {
-  landingBlock: Block
   repo: Repo
   runtime: FacetRuntime
   safeMode: boolean
@@ -30,7 +28,7 @@ export interface ApiSurfaceSummary {
 }
 
 export interface RuntimeDescription {
-  landingBlockId: string
+  activeWorkspaceId: string | null
   currentUser: {id: string, name?: string}
   safeMode: boolean
   actions: Array<{
@@ -107,7 +105,7 @@ export const __resetApiSurfaceCacheForTest = () => {
 export const describeRuntime = async (
   context: DescribeRuntimeContext,
 ): Promise<RuntimeDescription> => ({
-  landingBlockId: context.landingBlock.id,
+  activeWorkspaceId: context.repo.activeWorkspaceId,
   currentUser: context.repo.user,
   safeMode: context.safeMode,
   actions: context.actions.map(action => ({

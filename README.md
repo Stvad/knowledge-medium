@@ -71,7 +71,7 @@ yarn dev
 
 ## Agent Runtime Access
 
-The app exposes a first-class runtime bridge for coding agents. The browser app connects to a local relay, and agents submit commands to that relay from the terminal. Commands execute inside the live app runtime, with access to the current `Repo`, PowerSync SQLite database, root block, resolved runtime facets, block helpers, and arbitrary JavaScript execution.
+The app exposes a first-class runtime bridge for coding agents. The browser app connects to a local relay, and agents submit commands to that relay from the terminal. Commands execute inside the live app runtime, with access to the current `Repo`, active workspace, PowerSync SQLite database, resolved runtime facets, block helpers, and arbitrary JavaScript execution.
 
 Start the relay and the app:
 
@@ -86,10 +86,10 @@ Then use the CLI from another terminal:
 yarn agent ping
 yarn agent sql all "SELECT id, content FROM blocks LIMIT 5"
 yarn agent create-block '{"parentId":"<block-id>","content":"Created by agent"}'
-yarn agent eval 'return await createBlock({ parentId: rootBlock.id, content: "Runtime code block" })'
+yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }'
 ```
 
-Available runtime-code bindings include `repo`, `db`, `rootBlock`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
+Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
 By default the bridge uses `http://127.0.0.1:8787`. Override the browser endpoint with `VITE_AGENT_RUNTIME_URL` and the CLI endpoint with `AGENT_RUNTIME_URL`.
 

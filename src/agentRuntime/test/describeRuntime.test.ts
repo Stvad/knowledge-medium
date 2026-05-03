@@ -14,7 +14,6 @@ import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 // Vite server's transform queue). Same `.ts` suffix as the dynamic
 // import so both share a module-cache key.
 import '@/extensions/api.ts'
-import type { Block } from '@/data/internals/block'
 import type { Repo } from '@/data/internals/repo'
 import type { ActionConfig } from '@/shortcuts/types.ts'
 
@@ -104,8 +103,10 @@ describe('getApiSurface', () => {
 })
 
 describe('describeRuntime', () => {
-  const fakeLandingBlock = {id: 'landing-x'} as unknown as Block
-  const fakeRepo = {user: {id: 'u-1', name: 'Test'}} as unknown as Repo
+  const fakeRepo = {
+    activeWorkspaceId: 'ws-1',
+    user: {id: 'u-1', name: 'Test'},
+  } as unknown as Repo
 
   const makeAction = (id: string, hasBinding: boolean): ActionConfig => ({
     id,
@@ -115,14 +116,13 @@ describe('describeRuntime', () => {
     ...(hasBinding ? {defaultBinding: {keys: 'mod+x'}} : {}),
   })
 
-  it('produces a payload with landingBlockId, currentUser, safeMode, actions, renderers, facets, apiSurface', async () => {
+  it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface', async () => {
     const facet = defineFacet({id: 'desc.full'})
     const runtime = await resolveFacetRuntime([
       facet.of('contribution', {source: 'src-1'}),
     ])
 
     const description = await describeRuntime({
-      landingBlock: fakeLandingBlock,
       repo: fakeRepo,
       runtime,
       safeMode: false,
@@ -133,7 +133,7 @@ describe('describeRuntime', () => {
       renderers: {default: () => null, custom: () => null},
     })
 
-    expect(description.landingBlockId).toBe('landing-x')
+    expect(description.activeWorkspaceId).toBe('ws-1')
     expect(description.currentUser).toEqual({id: 'u-1', name: 'Test'})
     expect(description.safeMode).toBe(false)
 
@@ -154,7 +154,6 @@ describe('describeRuntime', () => {
   it('reports safeMode=true when set', async () => {
     const runtime = await resolveFacetRuntime([])
     const description = await describeRuntime({
-      landingBlock: fakeLandingBlock,
       repo: fakeRepo,
       runtime,
       safeMode: true,

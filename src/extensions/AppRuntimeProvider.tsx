@@ -1,5 +1,4 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
-import { Block } from '@/data/internals/block'
 import { useRepo } from '@/context/repo.tsx'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
@@ -25,29 +24,29 @@ import {
 
 export function AppRuntimeProvider({
   children,
-  landingBlock,
   safeMode,
 }: {
   children: ReactNode
-  landingBlock: Block
   safeMode: boolean
 }) {
   const repo = useRepo()
   const [generation, setGeneration] = useState('initial-load')
+  const workspaceId = repo.activeWorkspaceId
 
   // One store per provider instance — survives runtime re-resolutions
-  // (so the renderer can show errors from the most recent load) but
-  // re-creates if the landing block changes (e.g. workspace switch).
-  // landingBlock.id is the recreation key, not read inside the body.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const errorStore = useMemo(() => new ExtensionLoadErrorStore(), [landingBlock.id])
+  // (so the renderer can show errors from the most recent load) and
+  // re-creates on workspace switch.
+  const errorStore = useMemo(() => {
+    void workspaceId
+    return new ExtensionLoadErrorStore()
+  }, [workspaceId])
 
   const runtimeContext: FacetResolveContext = useMemo(() => ({
     repo,
-    landingBlock,
+    workspaceId,
     safeMode,
     generation,
-  }), [generation, repo, landingBlock, safeMode])
+  }), [generation, repo, workspaceId, safeMode])
 
   const baseExtensions: AppExtension[] = useMemo(() => [
     // kernelDataExtension contributes KERNEL_MUTATORS and
@@ -100,8 +99,6 @@ export function AppRuntimeProvider({
     // re-report any that still apply.
     errorStore.reset()
 
-    const workspaceId =
-      landingBlock.peek()?.workspaceId ?? repo.activeWorkspaceId
     if (!workspaceId) {
       // Should not happen — getInitialBlock sets activeWorkspaceId
       // before any render. If it does, there's nothing to load.
@@ -141,11 +138,10 @@ export function AppRuntimeProvider({
     return () => {
       cancelled = true
     }
-  }, [baseExtensions, errorStore, repo, landingBlock, runtimeContext, safeMode])
+  }, [baseExtensions, errorStore, repo, runtimeContext, safeMode, workspaceId])
 
   useAgentRuntimeBridge({
     repo,
-    landingBlock,
     runtime,
     safeMode,
   })

@@ -22,7 +22,7 @@ Usage:
   yarn agent status
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
   yarn agent get-block <id>
-  yarn agent subtree [rootId] [--include-root]
+  yarn agent subtree <rootId> [--include-root]
   yarn agent create-block <json>
   yarn agent update-block <json>
   yarn agent install-extension <file> [label]
@@ -182,6 +182,7 @@ const commandFromArgs = async args => {
     case 'subtree': {
       const includeRoot = rest.includes('--include-root')
       const rootId = rest.find(arg => arg !== '--include-root')
+      if (!rootId) throw new Error('subtree requires <rootId>')
       return {
         type: 'get-subtree',
         rootId,
