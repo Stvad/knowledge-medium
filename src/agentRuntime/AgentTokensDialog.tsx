@@ -83,7 +83,7 @@ export function AgentTokensDialog({open, onOpenChange}: AgentTokensDialogProps) 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Agent runtime tokens</DialogTitle>
           <DialogDescription>
@@ -100,38 +100,44 @@ export function AgentTokensDialog({open, onOpenChange}: AgentTokensDialogProps) 
           <>
             <div className="space-y-2">
               <Label htmlFor="agent-token-label">New token label</Label>
-              <div className="flex gap-2">
+              <div className="flex min-w-0 gap-2">
                 <Input
                   id="agent-token-label"
+                  className="min-w-0 flex-1"
                   placeholder="e.g. claude-cli"
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') mint() }}
                 />
-                <Button type="button" onClick={mint}>
+                <Button type="button" className="shrink-0" onClick={mint}>
                   Generate
                 </Button>
               </div>
             </div>
 
             {justMinted && (
-              <div className="rounded-md border bg-muted/40 p-3 space-y-2">
+              <div className="min-w-0 rounded-md border bg-muted/40 p-3 space-y-2">
                 <p className="text-xs font-medium text-muted-foreground">
                   Copy now — this is the only time the secret is shown.
                 </p>
-                <div className="flex gap-2 items-center">
-                  <code className="flex-1 truncate text-xs font-mono">{justMinted.token}</code>
+                <div className="flex min-w-0 items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate text-xs font-mono">{justMinted.token}</code>
                   <Button
                     type="button"
                     variant="secondary"
                     size="sm"
+                    className="shrink-0"
                     onClick={() => copy(justMinted.token)}
                   >
                     {copyState === 'copied' ? 'Copied' : 'Copy'}
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Run <code>yarn agent connect {justMinted.token}</code> to register it with the CLI.
+                <p className="min-w-0 text-xs text-muted-foreground">
+                  Run{' '}
+                  <code className="break-all whitespace-normal">
+                    yarn agent connect {justMinted.token}
+                  </code>{' '}
+                  to register it with the CLI.
                 </p>
               </div>
             )}
