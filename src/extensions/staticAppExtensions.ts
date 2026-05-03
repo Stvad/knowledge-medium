@@ -3,8 +3,11 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
+import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
 import { quickFindPlugin } from '@/plugins/quick-find'
+import { themeTogglePlugin } from '@/plugins/theme-toggle'
+import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
@@ -21,8 +24,11 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),
+  workspaceHeaderPlugin,
   commandPalettePlugin,
   quickFindPlugin,
+  themeTogglePlugin,
+  accountHeaderPlugin,
   plainOutlinerPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,

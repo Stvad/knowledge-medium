@@ -1,64 +1,28 @@
-import { Search } from 'lucide-react'
-import { ThemeToggle } from './ui/theme-toggle'
-import { useSignOut, useUser } from '@/components/Login'
-import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher'
-import { PendingInvitations } from '@/components/workspace/PendingInvitations'
-import { toggleCommandPaletteEvent } from '@/plugins/command-palette/events.ts'
-import { toggleQuickFindEvent } from '@/plugins/quick-find/events.ts'
+import { ErrorBoundary } from 'react-error-boundary'
+import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { FallbackComponent } from '@/components/util/error.tsx'
 
+const HeaderRegion = ({items}: {items: readonly HeaderItemContribution[]}) => (
+  <div className="flex items-center gap-4">
+    {items.map(({id, component: Component}) => (
+      <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
+        <Component/>
+      </ErrorBoundary>
+    ))}
+  </div>
+)
 
 export function Header() {
-  const user = useUser()
-  const signOut = useSignOut()
-  const isMac = navigator.platform.toLowerCase().includes('mac')
-  const modKey = isMac ? '⌘' : 'Ctrl+'
+  const runtime = useAppRuntime()
+  const items = runtime.read(headerItemsFacet)
+  const startItems = items.filter(item => item.region === 'start')
+  const endItems = items.filter(item => item.region === 'end')
 
   return (
     <div className="flex items-center justify-between py-2 gap-4">
-      <div className="flex items-center gap-2">
-        <WorkspaceSwitcher/>
-      </div>
-      <div className="flex items-center gap-4">
-        <button
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
-          }}
-          title="Find or create page or block"
-        >
-          <Search className="h-4 w-4"/>
-          <kbd
-            className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-            {modKey}P
-          </kbd>
-        </button>
-        <button
-          className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-          onClick={() => {
-            window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
-          }}
-        >
-          <span>Command</span>
-          <kbd
-            className="pointer-events-none inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
-            {modKey}K
-          </kbd>
-        </button>
-        <PendingInvitations/>
-        <ThemeToggle/>
-        {user && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>{user.name}</span>
-            <button
-              className="hover:text-foreground transition-colors underline-offset-2 hover:underline"
-              onClick={() => { void signOut() }}
-              title="Sign out"
-            >
-              Sign out
-            </button>
-          </div>
-        )}
-      </div>
+      <HeaderRegion items={startItems}/>
+      <HeaderRegion items={endItems}/>
     </div>
   )
 }

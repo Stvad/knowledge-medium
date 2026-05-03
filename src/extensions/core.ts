@@ -26,6 +26,14 @@ export interface AppMountContribution {
   component: ComponentType
 }
 
+export type HeaderItemRegion = 'start' | 'end'
+
+export interface HeaderItemContribution {
+  id: string
+  region: HeaderItemRegion
+  component: ComponentType
+}
+
 export interface RendererContribution {
   id: string
   renderer: BlockRenderer
@@ -109,6 +117,20 @@ export const isAppMountContribution = (value: unknown): value is AppMountContrib
 export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMountContribution[]>({
   id: 'core.app-mounts',
   validate: isAppMountContribution,
+})
+
+const isHeaderItemRegion = (value: unknown): value is HeaderItemRegion =>
+  value === 'start' || value === 'end'
+
+export const isHeaderItemContribution = (value: unknown): value is HeaderItemContribution =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  isHeaderItemRegion(value.region) &&
+  typeof value.component === 'function'
+
+export const headerItemsFacet = defineFacet<HeaderItemContribution, readonly HeaderItemContribution[]>({
+  id: 'core.header-items',
+  validate: isHeaderItemContribution,
 })
 
 export const isActionContextConfig = (value: unknown): value is ActionContextConfig =>

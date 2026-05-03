@@ -1,13 +1,17 @@
 import {
   actionsFacet,
   appMountsFacet,
+  headerItemsFacet,
+  type HeaderItemContribution,
   type AppMountContribution,
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { QuickFindHeaderItem } from './HeaderItem.tsx'
 import { QuickFind } from './QuickFind.tsx'
 import { toggleQuickFindEvent } from './events.ts'
 
+export { QuickFindHeaderItem } from './HeaderItem.tsx'
 export { QuickFind } from './QuickFind.tsx'
 export { toggleQuickFindEvent } from './events.ts'
 
@@ -28,7 +32,17 @@ export const quickFindAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
   },
 }
 
+export const quickFindHeaderItem: HeaderItemContribution = {
+  id: 'quick-find.header',
+  region: 'end',
+  component: QuickFindHeaderItem,
+}
+
 export const quickFindPlugin: AppExtension = [
   appMountsFacet.of(quickFindMount, {source: 'quick-find'}),
   actionsFacet.of(quickFindAction, {source: 'quick-find'}),
+  headerItemsFacet.of(quickFindHeaderItem, {
+    source: 'quick-find',
+    precedence: 10,
+  }),
 ]

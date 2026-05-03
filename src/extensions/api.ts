@@ -35,10 +35,13 @@ export {
   appMountsFacet,
   blockRenderersFacet,
   createRendererRegistry,
+  headerItemsFacet,
   type AppEffect,
   type AppEffectCleanup,
   type AppEffectContext,
   type AppMountContribution,
+  type HeaderItemContribution,
+  type HeaderItemRegion,
   type RendererContribution,
 } from '@/extensions/core.ts'
 
