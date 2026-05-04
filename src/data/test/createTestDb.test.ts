@@ -4,9 +4,12 @@ import { createTestDb, type TestDb } from './createTestDb'
 import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
-  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_TRIGGER_NAMES,
 } from '@/data/internals/clientSchema'
+import {
+  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
+  backlinksLocalSchema,
+} from '@/plugins/backlinks/localSchema.ts'
 
 describe('createTestDb harness', () => {
   let h: TestDb
@@ -33,8 +36,12 @@ describe('createTestDb harness', () => {
     const names = (await h.db.getAll<{name: string}>(
       "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name",
     )).map(r => r.name)
-    expect(names.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
-    expect(names).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
+    const expected = [
+      ...CLIENT_SCHEMA_TRIGGER_NAMES,
+      ...(backlinksLocalSchema.triggerNames ?? []),
+    ]
+    expect(names.sort()).toEqual(expected.sort())
+    expect(names).toHaveLength(expected.length)
   })
 
   it('installs production blocks indexes', async () => {

@@ -1,13 +1,7 @@
 import { Extension } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { EditorView } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
-import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
-import { backlinkCompletionSource } from './backlinkAutocomplete'
-import {
-  blockrefCompletionSource,
-  type BlockSearchHit,
-} from './blockrefAutocomplete'
 
 const mdNoQuoteClose = markdownLanguage.data.of({
   closeBrackets: {
@@ -16,13 +10,8 @@ const mdNoQuoteClose = markdownLanguage.data.of({
   }
 });
 
-export interface AutocompleteOptions {
-  getAliases: (filter: string) => Promise<string[]>
-  searchBlocks: (filter: string) => Promise<BlockSearchHit[]>
-}
-
 export const createMinimalMarkdownConfig = (
-  autocompleteOptions?: AutocompleteOptions,
+  pluginExtensions: readonly Extension[] = [],
 ): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
@@ -52,21 +41,7 @@ export const createMinimalMarkdownConfig = (
     EditorView.lineWrapping,
   ]
 
-  // Wikilink-by-alias and block-ref-by-content share one autocompletion
-  // instance — the sources are mutually exclusive in practice (`[[` vs `((`)
-  // so the runtime picks whichever matches the cursor position.
-  if (autocompleteOptions) {
-    extensions.push(
-      autocompletion({
-        override: [
-          backlinkCompletionSource({getAliases: autocompleteOptions.getAliases}),
-          blockrefCompletionSource({searchBlocks: autocompleteOptions.searchBlocks}),
-        ],
-        defaultKeymap: false,
-      }),
-      keymap.of(completionKeymap.map(it => ({...it, stopPropagation: true}))),
-    )
-  }
+  extensions.push(...pluginExtensions)
 
   return extensions
 }

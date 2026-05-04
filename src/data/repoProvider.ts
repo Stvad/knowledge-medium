@@ -13,11 +13,11 @@
  * What this DOES:
  *   - Open a `PowerSyncDatabase` keyed by user id
  *   - Run PowerSync's `init()` (sets up powersync_crud + ps_oplog)
- *   - Run the new client-side DDL: `blocks` + indexes (parent_order,
- *     workspace_active, workspace_with_references, workspace_type),
- *     workspaces + workspace_members tables/indexes, then
+ *   - Run the new client-side DDL: `blocks` + core indexes,
+ *     workspaces + workspace_members tables/indexes,
  *     `CLIENT_SCHEMA_STATEMENTS` (tx_context, row_events,
- *     command_events, side indexes, and triggers)
+ *     command_events, core side indexes, and triggers), then static
+ *     data-plugin local schema contributions
  *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
  *
  * What this does NOT do (vs. legacy):
@@ -36,7 +36,6 @@ import {
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-  CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
   CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
@@ -49,8 +48,12 @@ import {
 import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
-  backfillBlockReferencesIfEmpty,
 } from '@/data/internals/clientSchema'
+import {
+  applyLocalSchemaContributions,
+  resolveLocalSchemaContributions,
+} from '@/data/localSchema.ts'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({
@@ -215,7 +218,6 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL)
   await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL)
 
   // ── workspaces + workspace_members ──
@@ -223,9 +225,9 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
   await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
-  // ── tx_context, row_events, command_events, block_aliases,
-  // block_references + 13 triggers ── (5 audit/upload, 2 workspace-
-  // invariant, 3 alias-index, 3 reference-index.) Statements include
+  // ── tx_context, row_events, command_events, block_aliases + core
+  // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
+  // Statements include
   // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
   // TRIGGER IF NOT EXISTS so re-running is a no-op against an
   // already-bootstrapped dev database.
@@ -244,5 +246,8 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
     },
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
-  await backfillBlockReferencesIfEmpty(backfillDb)
+  await applyLocalSchemaContributions(
+    backfillDb,
+    resolveLocalSchemaContributions(staticDataExtensions),
+  )
 }

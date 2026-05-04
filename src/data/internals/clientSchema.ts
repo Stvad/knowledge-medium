@@ -172,49 +172,6 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
   ON block_aliases (workspace_id, alias_lower)
 `
 
-/** Trigger-maintained directed-edge index over `blocks.references_json`,
- *  one row per `(source, target, alias)` triple. Backs the
- *  `backlinks.forBlock` query — without this, every backlinks lookup walks
- *  every block in the workspace whose `references_json != '[]'` and
- *  json_each-parses each one. At 245k-block / 91k-with-refs workspaces
- *  that's 250-1500 ms per call. The index gives `O(matched)` lookup at
- *  the cost of three triggers and one row per outgoing reference (~250k
- *  rows for the same workspace, vs ~91k rows scanned previously per
- *  query).
- *
- *  Local-only: derived from `blocks.references_json`, not synced.
- *  PowerSync's CRUD-apply path writes through `BLOCKS_RAW_TABLE.put`
- *  (an `INSERT … ON CONFLICT DO UPDATE`) which fires our INSERT/UPDATE
- *  triggers, populating this table on incoming sync the same way local
- *  writes do.
- *
- *  Soft-delete: triggers keep block_references empty for blocks where
- *  `deleted = 1` (matches block_aliases). Restoring a tombstone re-fires
- *  the UPDATE trigger and re-populates from `references_json`.
- *
- *  PRIMARY KEY (source_id, target_id, alias) makes the per-edge insert
- *  idempotent under `INSERT OR IGNORE`. Multiple links from one source
- *  to the same target via different aliases each get their own row;
- *  exact-duplicate edges collapse. */
-export const CREATE_BLOCK_REFERENCES_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS block_references (
-    source_id    TEXT NOT NULL,
-    target_id    TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    alias        TEXT NOT NULL,
-    PRIMARY KEY (source_id, target_id, alias)
-  )
-`
-
-/** Backlinks lookup path: incoming edges for a target, scoped to a
- *  workspace. The `backlinks.forBlock` SQL filters on `(target_id,
- *  workspace_id)` and joins back to blocks for the row payload —
- *  the index makes that an indexed lookup of the matched edges. */
-export const CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_block_references_target
-  ON block_references (target_id, workspace_id)
-`
-
 // ============================================================================
 // Helpers used inside trigger bodies. Centralised so the SQL fragments
 // match in every trigger.
@@ -513,74 +470,6 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
   END
 `
 
-// ============================================================================
-// block_references triggers (3) — fire for both local AND sync writes.
-// Hold the invariant:
-//
-//   block_references ⊇ { (id, target, workspace_id, alias)
-//                        | blocks row deleted = 0
-//                        ∧ {target, alias} ∈ references_json }
-//
-// `INSERT OR IGNORE` covers the duplicate-edge case (same source+target+alias
-// repeated in references_json). `typeof(...) = 'text'` rejects malformed
-// entries (missing $.id, missing $.alias) defensively — the codec only
-// writes well-formed objects, but stale data shouldn't crash the trigger.
-// ============================================================================
-
-const referencesInsertSelectSql = (rowRef: 'NEW') => `
-      INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias)
-      SELECT
-        ${rowRef}.id,
-        json_extract(je.value, '$.id'),
-        ${rowRef}.workspace_id,
-        json_extract(je.value, '$.alias')
-      FROM json_each(${rowRef}.references_json) AS je
-      WHERE typeof(json_extract(je.value, '$.id')) = 'text'
-        AND typeof(json_extract(je.value, '$.alias')) = 'text';
-`.trim()
-
-export const CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_references_insert
-  AFTER INSERT ON blocks
-  WHEN NEW.deleted = 0
-  BEGIN
-    ${referencesInsertSelectSql('NEW')}
-  END
-`
-
-/** Fires only when `references_json`, `deleted`, or `workspace_id`
- *  changes — content/properties/parent/order edits don't touch the
- *  reference index. Always wipes the row's prior edges first (cheap:
- *  PK prefix lookup), then re-inserts unless the row is now soft-
- *  deleted. Restoring a tombstone re-populates via the same path. */
-export const CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_references_update
-  AFTER UPDATE OF references_json, deleted, workspace_id ON blocks
-  BEGIN
-    DELETE FROM block_references WHERE source_id = NEW.id;
-    INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias)
-    SELECT
-      NEW.id,
-      json_extract(je.value, '$.id'),
-      NEW.workspace_id,
-      json_extract(je.value, '$.alias')
-    FROM json_each(NEW.references_json) AS je
-    WHERE NEW.deleted = 0
-      AND typeof(json_extract(je.value, '$.id')) = 'text'
-      AND typeof(json_extract(je.value, '$.alias')) = 'text';
-  END
-`
-
-/** Hard-delete cleanup. Soft-deletes go through the UPDATE trigger
- *  above (which sees `NEW.deleted = 1` and writes nothing back). */
-export const CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL = `
-  CREATE TRIGGER IF NOT EXISTS blocks_references_delete
-  AFTER DELETE ON blocks
-  BEGIN
-    DELETE FROM block_references WHERE source_id = OLD.id;
-  END
-`
-
 /** One-shot backfill from `blocks.properties_json`. Called after the
  *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
@@ -618,33 +507,6 @@ export const BACKFILL_BLOCK_ALIASES_SQL = `
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
 `
 
-/** One-shot backfill from `blocks.references_json` for users upgrading
- *  past the schema add. Same shape as the alias backfill: marker-gated,
- *  idempotent under `INSERT OR IGNORE`. */
-export const BLOCK_REFERENCES_BACKFILL_MARKER_KEY = 'block_references_backfill_v1'
-
-export const SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}'
-`
-
-export const RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL = `
-  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
-  VALUES ('${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
-`
-
-export const BACKFILL_BLOCK_REFERENCES_SQL = `
-  INSERT OR IGNORE INTO block_references (source_id, target_id, workspace_id, alias)
-  SELECT
-    b.id,
-    json_extract(je.value, '$.id'),
-    b.workspace_id,
-    json_extract(je.value, '$.alias')
-  FROM blocks b, json_each(b.references_json) AS je
-  WHERE b.deleted = 0
-    AND typeof(json_extract(je.value, '$.id')) = 'text'
-    AND typeof(json_extract(je.value, '$.alias')) = 'text'
-`
-
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).
@@ -664,8 +526,6 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCK_ALIASES_TABLE_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,
-  CREATE_BLOCK_REFERENCES_TABLE_SQL,
-  CREATE_BLOCK_REFERENCES_TARGET_INDEX_SQL,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
@@ -680,10 +540,6 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL,
-  // 3 block_references-maintenance triggers
-  CREATE_BLOCKS_REFERENCES_INSERT_TRIGGER_SQL,
-  CREATE_BLOCKS_REFERENCES_UPDATE_TRIGGER_SQL,
-  CREATE_BLOCKS_REFERENCES_DELETE_TRIGGER_SQL,
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -697,9 +553,6 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_alias_insert',
   'blocks_alias_update',
   'blocks_alias_delete',
-  'blocks_references_insert',
-  'blocks_references_update',
-  'blocks_references_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {
@@ -725,18 +578,4 @@ export const backfillBlockAliasesIfEmpty = async (
   // an empty workspace is fully backfilled too, and we don't want to
   // re-scan blocks on every start in that case.
   await db.execute(RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL)
-}
-
-/** One-shot block_references backfill. Same shape as the alias variant
- *  above. Runs once per device on the first start that ships the
- *  reference index; steady-state startups read a single client_schema_state
- *  row and short-circuit. The trigger maintains the table from then on
- *  (both for local writes and for sync-applied PowerSync `put`s). */
-export const backfillBlockReferencesIfEmpty = async (
-  db: ClientSchemaBootstrapDb,
-): Promise<void> => {
-  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
-  if (done !== null) return
-  await db.execute(BACKFILL_BLOCK_REFERENCES_SQL)
-  await db.execute(RECORD_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
 }

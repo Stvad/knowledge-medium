@@ -3,8 +3,7 @@
  * cursor is inside `((<filter>` and surfaces blocks whose content matches.
  * Picking a candidate inserts `<block-id>))` after the existing `((`.
  *
- * Companion to backlinkAutocomplete.ts — shares the autocompletion plumbing
- * via createMinimalMarkdownConfig, but searches by content instead of alias
+ * Companion to backlinkAutocomplete.ts — searches by content instead of alias
  * because block refs target arbitrary blocks, not aliased pages.
  */
 

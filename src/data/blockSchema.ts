@@ -100,12 +100,6 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-export const CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_with_references
-  ON blocks (workspace_id)
-  WHERE deleted = 0 AND references_json != '[]'
-`
-
 /** Expression index over `(workspace_id, $.type)`. Local-only — there's no
  *  matching server-side index, this exists to make the
  *  `SELECT_BLOCKS_BY_TYPE_SQL` path cheap on imports with O(100k) blocks

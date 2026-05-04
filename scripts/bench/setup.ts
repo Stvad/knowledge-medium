@@ -22,13 +22,17 @@ import {
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-  CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
 } from '@/data/blockSchema'
-import { CLIENT_SCHEMA_STATEMENTS } from '@/data/internals/clientSchema'
+import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
+import {
+  applyLocalSchemaContributions,
+  resolveLocalSchemaContributions,
+} from '@/data/localSchema'
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/internals/repo'
 import type { PowerSyncDb } from '@/data/internals/commitPipeline'
 import { instrumentDb, type DbCounters } from './harness'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 
 export interface BenchEnv {
   db: PowerSyncDb
@@ -64,8 +68,19 @@ export const setupBenchEnv = async (opts: SetupOptions = {}): Promise<BenchEnv> 
   await psDb.execute(CREATE_BLOCKS_TABLE_SQL)
   await psDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await psDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-  await psDb.execute(CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) await psDb.execute(stmt)
+  const backfillDb = {
+    execute: (sql: string) => psDb.execute(sql),
+    getOptional: async <T,>(sql: string) => {
+      const row = await psDb.getOptional<T>(sql)
+      return row ?? null
+    },
+  }
+  await backfillBlockAliasesIfEmpty(backfillDb)
+  await applyLocalSchemaContributions(
+    backfillDb,
+    resolveLocalSchemaContributions(staticDataExtensions),
+  )
 
   let dbForRepo: PowerSyncDb = psDb as unknown as PowerSyncDb
   let counters: DbCounters | null = null

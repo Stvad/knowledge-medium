@@ -17,6 +17,44 @@ import type {
   AnyQuery,
 } from '@/data/api'
 
+export interface LocalSchemaDb {
+  execute: (sql: string) => Promise<unknown>
+  getOptional: <T>(sql: string) => Promise<T | null>
+}
+
+export interface LocalSchemaBackfill {
+  id: string
+  run: (db: LocalSchemaDb) => Promise<void>
+}
+
+export interface LocalSchemaContribution {
+  id: string
+  statements?: readonly string[]
+  triggerNames?: readonly string[]
+  backfills?: readonly LocalSchemaBackfill[]
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+const isStringArray = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.every(item => typeof item === 'string')
+
+const isLocalSchemaBackfill = (value: unknown): value is LocalSchemaBackfill =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.run === 'function'
+
+const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribution =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  (value.statements === undefined || isStringArray(value.statements)) &&
+  (value.triggerNames === undefined || isStringArray(value.triggerNames)) &&
+  (
+    value.backfills === undefined ||
+    (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
+  )
+
 /** Key the registry by `Mutator.name`; duplicates log a warning and
  *  last-wins (per §6 convention). Mutators with heterogeneous
  *  Args/Result types share the registry slot via `AnyMutator` (variance
@@ -109,4 +147,9 @@ export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, Rea
     return out
   },
   empty: () => new Map(),
+})
+
+export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly LocalSchemaContribution[]>({
+  id: 'data.localSchema',
+  validate: isLocalSchemaContribution,
 })

@@ -32,18 +32,20 @@ import {
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-  CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
   BACKFILL_BLOCK_ALIASES_SQL,
-  BACKFILL_BLOCK_REFERENCES_SQL,
-  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_STATEMENTS,
   CLIENT_SCHEMA_TRIGGER_NAMES,
   backfillBlockAliasesIfEmpty,
-  backfillBlockReferencesIfEmpty,
 } from './clientSchema'
+import {
+  BACKFILL_BLOCK_REFERENCES_SQL,
+  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
+  backlinksLocalSchema,
+  backfillBlockReferencesIfEmpty,
+} from '@/plugins/backlinks/localSchema.ts'
 
 interface TestDb {
   db: DatabaseSync
@@ -122,9 +124,11 @@ const setupDb = (): TestDb => {
   db.exec(CREATE_BLOCKS_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-  db.exec(CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL)
 
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
+    db.exec(stmt)
+  }
+  for (const stmt of backlinksLocalSchema.statements ?? []) {
     db.exec(stmt)
   }
 
@@ -173,8 +177,12 @@ describe('client schema bootstrap', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name")
       .all() as Array<{name: string}>)
       .map(r => r.name)
-    expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
-    expect(triggers).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
+    const expected = [
+      ...CLIENT_SCHEMA_TRIGGER_NAMES,
+      ...(backlinksLocalSchema.triggerNames ?? []),
+    ]
+    expect(triggers.sort()).toEqual(expected.sort())
+    expect(triggers).toHaveLength(expected.length)
   })
 
   it('seeds tx_context with one row that starts NULL across all five tx fields', () => {

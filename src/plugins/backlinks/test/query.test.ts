@@ -8,8 +8,12 @@ import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp } from '@/data/properties'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { queriesFacet } from '@/data/facets.ts'
+import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
+import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
+import { localSchemaFacet, queriesFacet } from '@/data/facets.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
+import { backlinksLocalSchema } from '../localSchema.ts'
+import { backlinksPlugin } from '../index.ts'
 import { BACKLINKS_FOR_BLOCK_QUERY, backlinksForBlockQuery } from '../query.ts'
 
 const WS = 'ws-1'
@@ -86,6 +90,21 @@ describe('backlinksDataExtension query', () => {
     const queries = runtime.read(queriesFacet)
 
     expect(queries.get(BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
+  })
+
+  it('contributes its local edge index schema through localSchemaFacet', () => {
+    const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
+    expect(runtime.read(localSchemaFacet)).toEqual([backlinksLocalSchema])
+  })
+
+  it('owns markdown syntax and CodeMirror extension registrations', () => {
+    const runtime = resolveFacetRuntimeSync(backlinksPlugin)
+
+    expect(runtime.contributions(markdownExtensionsFacet).map(c => c.source)).toEqual([
+      'backlinks',
+      'backlinks',
+    ])
+    expect(runtime.contributions(codeMirrorExtensionsFacet).map(c => c.source)).toEqual(['backlinks'])
   })
 
   it('is identity-stable across calls', () => {

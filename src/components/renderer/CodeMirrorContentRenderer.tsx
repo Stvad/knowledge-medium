@@ -6,50 +6,17 @@ import { useUIStateProperty } from '@/data/globalState.ts'
 import { focusedBlockIdProp } from '@/data/properties.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { parseRelativeDate } from '@/utils/relativeDate.ts'
-import { formatRoamDate } from '@/utils/dailyPage.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
 
 export function CodeMirrorContentRenderer({block}: BlockRendererProps) {
   const repo = useRepo()
+  const runtime = useAppRuntime()
 
-  const getAliasesForAutocomplete = useMemo(() => {
-    return async (filter: string): Promise<string[]> => {
-      const workspaceId = repo.activeWorkspaceId
-      if (!workspaceId) {
-        console.warn('No active workspace for alias search')
-        return []
-      }
-      const aliases = await repo.query.aliasesInWorkspace({workspaceId, filter}).load()
-
-      // If the user is typing a date phrase ("fri", "next mon", "april 28"),
-      // surface the resolved long-form date as the top suggestion. Picking
-      // it inserts e.g. "April 30th, 2026" inside [[…]], which then routes
-      // through getOrCreateDailyNote on parseAndUpdateReferences. Without
-      // this, autocomplete only matches existing aliases — daily notes that
-      // don't yet exist for the day the user is reaching for stay invisible.
-      const dateMatch = parseRelativeDate(filter)
-      if (!dateMatch) return aliases
-
-      const dateAlias = formatRoamDate(dateMatch.date)
-      return [dateAlias, ...aliases.filter(a => a !== dateAlias)]
-    }
-  }, [repo])
-
-  const searchBlocksForAutocomplete = useMemo(() => {
-    return async (filter: string) => {
-      const workspaceId = repo.activeWorkspaceId
-      if (!workspaceId) return []
-      // Cap at 12 — autocompletion popovers stop being useful after that and
-      // a wider scan just hurts perceived latency on every keystroke.
-      const blocks = await repo.query.searchByContent({workspaceId, query: filter, limit: 12}).load()
-      return blocks.map(b => ({id: b.id, content: b.content}))
-    }
-  }, [repo])
-
-  const extensions = useMemo(() => createMinimalMarkdownConfig({
-    getAliases: getAliasesForAutocomplete,
-    searchBlocks: searchBlocksForAutocomplete,
-  }), [getAliasesForAutocomplete, searchBlocksForAutocomplete])
+  const extensions = useMemo(() => {
+    const pluginExtensions = runtime.read(codeMirrorExtensionsFacet)({repo, block})
+    return createMinimalMarkdownConfig(pluginExtensions)
+  }, [block, repo, runtime])
 
   const [, setFocusedBlockId] = useUIStateProperty(focusedBlockIdProp)
 
