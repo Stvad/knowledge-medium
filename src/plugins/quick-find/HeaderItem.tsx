@@ -8,14 +8,15 @@ const getModKey = () =>
 export function QuickFindHeaderItem() {
   return (
     <button
-      className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+      className="inline-flex h-8 items-center justify-center gap-1 rounded-md px-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
       onClick={() => {
         window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
       }}
       title="Find or create page or block"
+      aria-label="Find or create page or block"
     >
       <Search className="h-4 w-4"/>
-      <Kbd>{getModKey()}P</Kbd>
+      <Kbd className="hidden sm:inline-flex">{getModKey()}P</Kbd>
     </button>
   )
 }
