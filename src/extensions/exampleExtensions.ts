@@ -91,13 +91,9 @@ export default actionsFacet.of({
     )
     await repo.tx(async tx => {
       for (const data of subtree) {
-        await tx.setProperty({
-          id: data.id,
-          schema: isCollapsedProp,
-          value: anyExpanded,
-        })
+        await tx.setProperty(data.id, isCollapsedProp, anyExpanded)
       }
-    }, { scope: ChangeScope.UiState, description: 'fold all' })
+    }, { scope: ChangeScope.BlockDefault, description: 'fold all' })
   },
 })
 `

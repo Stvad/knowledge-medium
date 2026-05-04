@@ -18,6 +18,7 @@ import { ChangeScope, ParentDeletedError, codecs, defineProperty, type BlockData
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
+import { isCollapsedProp } from '@/data/properties'
 
 interface Harness {
   h: TestDb
@@ -126,6 +127,22 @@ describe('core.setProperty', () => {
     )
     expect(events).toHaveLength(2)
     expect(events[1]).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
+  })
+
+  it('writes collapsed state in BlockDefault scope so it is synced', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p-collapsed', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setProperty({id: 'p-collapsed', schema: isCollapsedProp, value: true})
+
+    expect(env.read('p-collapsed')!.properties[isCollapsedProp.name]).toBe(true)
+    const events = await env.h.db.getAll<{scope: string; source: string}>(
+      'SELECT scope, source FROM command_events ORDER BY created_at',
+    )
+    expect(events).toHaveLength(2)
+    expect(events[1]).toEqual({scope: ChangeScope.BlockDefault, source: 'user'})
   })
 
   it('UiState property writes are allowed in read-only mode (where BlockDefault writes throw)', async () => {

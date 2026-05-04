@@ -32,13 +32,6 @@ export const showPropertiesProp = defineProperty<boolean>('system:showProperties
   kind: 'boolean',
 })
 
-export const isCollapsedProp = defineProperty<boolean>('system:collapsed', {
-  codec: codecs.boolean,
-  defaultValue: false,
-  changeScope: ChangeScope.UiState,
-  kind: 'boolean',
-})
-
 export const isEditingProp = defineProperty<boolean>('isEditing', {
   codec: codecs.boolean,
   defaultValue: false,
@@ -102,6 +95,13 @@ export const selectionStateProp = defineProperty<BlockSelectionState>('blockSele
 })
 
 // ──── Block-content schemas (changeScope: BlockDefault) ────
+
+export const isCollapsedProp = defineProperty<boolean>('system:collapsed', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'boolean',
+})
 
 export const typeProp = defineProperty<string | undefined>('type', {
   codec: codecs.optional(codecs.string),
@@ -191,7 +191,6 @@ export type { PropertySchema }
 export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   // UI-state schemas
   showPropertiesProp,
-  isCollapsedProp,
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockIdProp,
@@ -199,6 +198,7 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   editorFocusRequestProp,
   selectionStateProp,
   // BlockDefault schemas
+  isCollapsedProp,
   typeProp,
   rendererProp,
   rendererNameProp,
