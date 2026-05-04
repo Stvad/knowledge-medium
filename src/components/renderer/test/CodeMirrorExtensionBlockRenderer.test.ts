@@ -3,9 +3,8 @@ import type { Block } from '../../../data/block'
 import type { BlockData, BlockRendererProps } from '@/types.ts'
 
 // Importing the renderer pulls in DefaultBlockRenderer → radix-ui →
-// react-dom; the app resolves react-dom via importmap at runtime, but
-// vitest doesn't see that. Stub the heavy transitive deps so the
-// canRender/priority surface is testable in isolation.
+// react-dom. Stub the heavy transitive deps so the canRender/priority
+// surface is testable in isolation.
 vi.mock('@/components/renderer/DefaultBlockRenderer.tsx', () => ({
   DefaultBlockRenderer: () => null,
 }))

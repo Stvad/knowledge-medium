@@ -48,9 +48,9 @@ export {
 // DefaultBlockRenderer (the default block chrome — bullet, children,
 // properties, edit affordances) is intentionally NOT re-exported here:
 // it pulls in radix-ui's Dialog/ContextMenu, which transitively
-// imports react-dom. react-dom is provided in the browser via the
-// page-global importmap (vite externalizes it) but is unresolved in
-// vitest. Importing api.ts in tests would otherwise fail to load.
+// imports react-dom. Extension blocks resolve react-dom through the
+// page-global importmap, but importing this API surface in vitest
+// should not force that heavier renderer tree to load.
 //
 // Extension authors should import it directly:
 //   import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
