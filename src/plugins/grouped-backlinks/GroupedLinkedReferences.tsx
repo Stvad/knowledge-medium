@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Filter } from 'lucide-react'
 import type { BlockRendererProps } from '@/types.ts'
 import { Block } from '@/data/block'
-import { useHandle } from '@/hooks/block.ts'
+import { useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.tsx'
 import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.tsx'
@@ -58,9 +58,7 @@ const GroupedReferencesGroup = ({group}: { group: GroupedBacklinkGroup }) => {
 
 export function GroupedLinkedReferences({block}: BlockRendererProps) {
   const repo = useRepo()
-  const workspaceId = useHandle(block, {
-    selector: data => data?.workspaceId ?? repo.activeWorkspaceId ?? '',
-  })
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
 
   return (
     <GroupedLinkedReferencesInner

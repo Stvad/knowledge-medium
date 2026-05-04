@@ -1,13 +1,13 @@
 import { BlockComponent } from '@/components/BlockComponent'
 import { useRepo } from '@/context/repo'
-import { useHandle } from '@/hooks/block'
+import { useBlockExists } from '@/hooks/block'
 import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
 
 export function BlockEmbed({blockId}: {blockId: string}) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
   const target = repo.block(blockId)
-  const targetExists = useHandle(target, {selector: doc => Boolean(doc)})
+  const targetExists = useBlockExists(target)
 
   if (!targetExists) {
     return (

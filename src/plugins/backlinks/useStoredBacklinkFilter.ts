@@ -1,30 +1,18 @@
 import { useCallback } from 'react'
-import { ChangeScope, type BlockData } from '@/data/api'
+import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { useHandle } from '@/hooks/block.ts'
+import { usePropertyValue } from '@/hooks/block.ts'
 import {
   hasBacklinksFilter,
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from './query.ts'
-import {
-  backlinksFilterProp,
-  readBacklinksFilterProperty,
-} from './filterProperty.ts'
-
-const selectStoredBacklinkFilter = (
-  data: BlockData | null | undefined,
-): BacklinksFilter => {
-  const stored = data?.properties[backlinksFilterProp.name]
-  return stored === undefined
-    ? backlinksFilterProp.defaultValue
-    : readBacklinksFilterProperty(stored)
-}
+import { backlinksFilterProp } from './filterProperty.ts'
 
 export const useStoredBacklinkFilter = (
   block: Block,
 ): [BacklinksFilter, (filter: BacklinksFilter) => void] => {
-  const filter = useHandle(block, {selector: selectStoredBacklinkFilter})
+  const [filter] = usePropertyValue(block, backlinksFilterProp)
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     if (block.repo.isReadOnly) return

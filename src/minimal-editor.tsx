@@ -2,7 +2,7 @@ import { createRoot } from 'react-dom/client'
 import { StrictMode } from 'react'
 import { RepoProvider, useRepo } from '@/context/repo.tsx'
 import { Login } from '@/components/Login.tsx'
-import { useHandle } from '@/hooks/block.ts'
+import { useBlockExists, useContent } from '@/hooks/block.ts'
 
 const docUrl = document.location.hash.substring(1) || null
 
@@ -10,8 +10,9 @@ function BasicEditor({url}: { url: string }) {
   const repo = useRepo()
   const block = repo.block(url)
 
-  const content = useHandle(block, {selector: doc => doc?.content})
-  if (content === undefined) return <div>Loading...</div>
+  const blockExists = useBlockExists(block)
+  const content = useContent(block)
+  if (!blockExists) return <div>Loading...</div>
 
   return (
     <textarea

@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
 import { BlockRendererProps } from '@/types.ts'
-import { useHandle } from '@/hooks/block.ts'
+import { useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useBacklinks } from './useBacklinks.ts'
 import { BacklinkFilters } from './BacklinkFilters.tsx'
@@ -15,9 +15,7 @@ import { LazyBacklinkItem } from './BacklinkEntry.tsx'
 
 export function LinkedReferences({block}: BlockRendererProps) {
   const repo = useRepo()
-  const workspaceId = useHandle(block, {
-    selector: data => data?.workspaceId ?? repo.activeWorkspaceId ?? '',
-  })
+  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
 
   return (
     <LinkedReferencesInner

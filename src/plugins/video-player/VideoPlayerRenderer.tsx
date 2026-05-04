@@ -6,7 +6,7 @@ import {
 } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { useEffect, useRef, useState } from 'react'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
-import { useHandle, usePropertyValue } from '@/hooks/block.ts'
+import { useContent, usePropertyValue } from '@/hooks/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import type {
@@ -22,7 +22,7 @@ import {
 import { videoPlayerViewProp } from './view.ts'
 
 const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
-  const content = useHandle(block, {selector: doc => doc?.content})
+  const content = useContent(block)
   const [view, setView] = usePropertyValue(block, videoPlayerViewProp)
   const player = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -65,8 +65,6 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
       handleCurrentTimeRequest as EventListener,
     )
   }, [block.id])
-
-  if (content === undefined) return null
 
   return (
     <div

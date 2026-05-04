@@ -5,7 +5,7 @@ import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer
 import { BlockEditor } from '@/components/BlockEditor.tsx'
 import { createTypeScriptConfig } from '@/utils/codemirror.ts'
 import { useExtensionLoadError } from '@/extensions/extensionLoadErrors.tsx'
-import { useHandle } from '@/hooks/block.ts'
+import { useContent } from '@/hooks/block.ts'
 
 const extensionFrameClass = 'border rounded-md overflow-hidden'
 const extensionTheme = 'dark'
@@ -34,10 +34,8 @@ const ExtensionFrame = ({blockId, children}: {blockId: string; children: ReactNo
 }
 
 const ExtensionViewer = ({block}: BlockRendererProps) => {
-  const content = useHandle(block, {selector: doc => doc?.content})
+  const content = useContent(block)
   const extensions = useMemo(() => createTypeScriptConfig(), [])
-
-  if (content === undefined) return null
 
   return (
     <ExtensionFrame blockId={block.id}>

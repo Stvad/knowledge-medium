@@ -38,6 +38,16 @@ import { Block } from '../data/block'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
+export interface BlockContentRevision {
+  content: string
+  updatedAt: number
+}
+
+export interface BlockUpdateMetadata {
+  updatedAt: number
+  updatedBy: string
+}
+
 const areSelectedValuesEqual = <T,>(left: T, right: T): boolean => {
   if (Object.is(left, right)) return true
   if (
@@ -203,6 +213,36 @@ export const useData = (block: Block): BlockData | undefined =>
 /** Reactive content read. `''` when not loaded. */
 export const useContent = (block: Block): string =>
   useHandle(block, {selector: doc => doc?.content ?? ''})
+
+/** Reactive existence read. `false` while loading and for confirmed-missing rows. */
+export const useBlockExists = (block: Block): boolean =>
+  useHandle(block, {selector: doc => Boolean(doc)})
+
+/** Reactive workspace id read. Falls back while loading or confirmed missing. */
+export const useWorkspaceId = (block: Block, fallback = ''): string =>
+  useHandle(block, {selector: doc => doc?.workspaceId ?? fallback})
+
+/** Reactive content plus updatedAt revision, for editors that need stale-write guards. */
+export const useContentRevision = (block: Block): BlockContentRevision | undefined =>
+  useHandle(block, {
+    selector: doc => doc
+      ? {
+        content: doc.content,
+        updatedAt: doc.updatedAt,
+      }
+      : undefined,
+  })
+
+/** Reactive update metadata for freshness indicators. */
+export const useUpdateMetadata = (block: Block): BlockUpdateMetadata | undefined =>
+  useHandle(block, {
+    selector: doc => doc
+      ? {
+        updatedAt: doc.updatedAt,
+        updatedBy: doc.updatedBy,
+      }
+      : undefined,
+  })
 
 /** Reactive typed property read + setter. The setter opens its own tx
  *  via `repo.mutate.setProperty` (whose scope derives from

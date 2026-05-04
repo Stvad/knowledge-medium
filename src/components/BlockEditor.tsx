@@ -3,7 +3,6 @@ import { Block } from '../data/block'
 import {
   editorSelection,
   focusedBlockIdProp,
-  isEditingProp,
   editorFocusRequestProp,
   type EditorSelectionState,
 } from '@/data/properties.ts'
@@ -11,7 +10,7 @@ import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'rea
 import { useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
-import { useHandle } from '@/hooks/block.ts'
+import { useContentRevision, usePropertyValue } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
@@ -27,19 +26,12 @@ export const BlockEditor = ({
   ref,
   ...codeMirrorProps
 }: BlockEditorProps) => {
-  const blockEditData = useHandle(block, {
-    selector: doc => doc
-      ? {
-        content: doc.content,
-        updatedAt: doc.updatedAt,
-      }
-      : undefined,
-  })
+  const blockEditData = useContentRevision(block)
 
   const cm = useRef<ReactCodeMirrorRef>(null)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
-  const [, setIsEditing] = useIsEditing()
+  const [isEditing, setIsEditing] = useIsEditing()
   const initialContent = useRef(blockEditData?.content ?? '')
   // Last value we handed to `block.setContent` (or adopted from an
   // external change). Decides whether a `blockData` update is (a) our
@@ -56,15 +48,8 @@ export const BlockEditor = ({
   // batching after a stale-but-published snapshot).
   const lastAdoptedUpdatedAt = useRef(blockEditData?.updatedAt ?? 0)
   const uiStateBlock = useUIStateBlock()
-  const focusedBlockId = useHandle(uiStateBlock, {
-    selector: doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
-  })
-  const isEditing = useHandle(uiStateBlock, {
-    selector: doc => Boolean(doc?.properties[isEditingProp.name]),
-  })
-  const focusRequestId = useHandle(uiStateBlock, {
-    selector: doc => (doc?.properties[editorFocusRequestProp.name] as number | undefined) ?? 0,
-  })
+  const [focusedBlockId] = usePropertyValue(uiStateBlock, focusedBlockIdProp)
+  const [focusRequestId] = usePropertyValue(uiStateBlock, editorFocusRequestProp)
 
   // useRef-wrapped debounce is the per-component-instance idiom; its
   // body runs on debounce-fire (not during render), so the ref writes

@@ -3,7 +3,7 @@ import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
-import { useHandle } from '@/hooks/block'
+import { useBlockExists, useContent, useWorkspaceId } from '@/hooks/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
@@ -22,17 +22,12 @@ export function BlockRef({blockId}: {blockId: string}) {
   const {panelId} = useBlockContext()
   const ancestors = useBlockRefAncestors()
   const target = repo.block(blockId)
-  const targetData = useHandle(target, {
-    selector: doc => doc
-      ? {
-        content: doc.content,
-        workspaceId: doc.workspaceId,
-      }
-      : undefined,
-  })
+  const targetExists = useBlockExists(target)
+  const content = useContent(target)
+  const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
   const runtime = useAppRuntime()
 
-  if (!targetData) {
+  if (!targetExists) {
     return <span className="blockref blockref--unresolved">(({blockId.slice(0, 8)}…))</span>
   }
 
@@ -40,7 +35,6 @@ export function BlockRef({blockId}: {blockId: string}) {
     return <span className="blockref blockref--cycle" title="Cycle: this block already appears in the ref chain">↻ (({blockId.slice(0, 8)}…))</span>
   }
 
-  const workspaceId = targetData.workspaceId
   const href = buildAppHash(workspaceId, blockId)
 
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
@@ -72,7 +66,7 @@ export function BlockRef({blockId}: {blockId: string}) {
           remarkPlugins={markdownConfig.remarkPlugins}
           components={markdownConfig.components}
         >
-          {targetData.content}
+          {content}
         </Markdown>
       </a>
     </BlockRefAncestorsProvider>
