@@ -91,7 +91,9 @@ yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }
 
 Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
-By default the bridge uses `http://127.0.0.1:8787`. Override the browser endpoint with `VITE_AGENT_RUNTIME_URL` and the CLI endpoint with `AGENT_RUNTIME_URL`.
+By default the bridge uses `http://127.0.0.1:8787`. When `yarn agent:server` starts, it prints a pairing URL containing a local bridge secret; open that URL in the app once so the browser can register and poll the bridge. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
+
+The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires `AGENT_RUNTIME_BRIDGE_SECRET`.
 
 ---
 

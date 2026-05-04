@@ -40,12 +40,19 @@ const waitForReady = async (port: number, attempts = 50) => {
 
 let server: ChildProcess
 let baseUrl: string
+const bridgeSecret = 'BRIDGE-SECRET'
+const bridgeHeaders = {'x-agent-runtime-secret': bridgeSecret}
 
 beforeEach(async () => {
   const port = await pickPort()
   baseUrl = `http://127.0.0.1:${port}`
   server = spawn('node', [serverScript], {
-    env: {...process.env, AGENT_RUNTIME_PORT: String(port), AGENT_RUNTIME_HOST: '127.0.0.1'},
+    env: {
+      ...process.env,
+      AGENT_RUNTIME_PORT: String(port),
+      AGENT_RUNTIME_HOST: '127.0.0.1',
+      AGENT_RUNTIME_BRIDGE_SECRET: bridgeSecret,
+    },
     stdio: ['ignore', 'ignore', 'pipe'],
   })
   await waitForReady(port)
@@ -61,13 +68,44 @@ afterEach(async () => {
 const registerClient = async (clientId: string, body: object) => {
   const response = await fetch(`${baseUrl}/runtime/clients/${clientId}`, {
     method: 'POST',
-    headers: {'content-type': 'application/json'},
+    headers: {'content-type': 'application/json', ...bridgeHeaders},
     body: JSON.stringify(body),
   })
   expect(response.ok).toBe(true)
 }
 
 describe('agent runtime bridge', () => {
+  it('rejects browser requests from disallowed origins', async () => {
+    const response = await fetch(`${baseUrl}/health`, {
+      headers: {origin: 'https://evil.example'},
+    })
+    expect(response.status).toBe(403)
+  })
+
+  it('requires the bridge secret for client registration', async () => {
+    const response = await fetch(`${baseUrl}/runtime/clients/alice-tab`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({tokens: []}),
+    })
+    expect(response.status).toBe(401)
+  })
+
+  it('redacts public health details', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+    })
+
+    const publicHealth = await fetch(`${baseUrl}/health`)
+    expect(await publicHealth.json()).toEqual({ok: true})
+
+    const detailedHealth = await fetch(`${baseUrl}/health?detail=1`, {
+      headers: bridgeHeaders,
+    })
+    const body = await detailedHealth.json()
+    expect(body.clients.map((client: {id: string}) => client.id)).toEqual(['alice-tab'])
+  })
+
   it('rejects commands without a bearer token', async () => {
     const response = await fetch(`${baseUrl}/runtime/commands`, {
       method: 'POST',
@@ -75,6 +113,26 @@ describe('agent runtime bridge', () => {
       body: JSON.stringify({type: 'ping'}),
     })
     expect(response.status).toBe(401)
+  })
+
+  it('blocks mutating commands for read-only tokens', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1', scope: 'read-only'}],
+    })
+
+    const read = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'sql', mode: 'all', sql: 'select id from blocks limit 1'}),
+    })
+    expect(read.status).toBe(202)
+
+    const write = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'eval', code: 'return 1'}),
+    })
+    expect(write.status).toBe(403)
   })
 
   it('rejects commands with an unknown token', async () => {
@@ -104,12 +162,16 @@ describe('agent runtime bridge', () => {
     expect(submission.status).toBe(202)
 
     // Alice should receive it; Bob's queue stays empty.
-    const aliceNext = await fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`)
+    const aliceNext = await fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+      headers: bridgeHeaders,
+    })
     const aliceBody = await aliceNext.json()
     expect(aliceBody?.type).toBe('ping')
     expect(aliceBody?.payload).toBe('hello-alice')
 
-    const bobNext = await fetch(`${baseUrl}/runtime/commands/next?clientId=bob-tab&timeoutMs=500`)
+    const bobNext = await fetch(`${baseUrl}/runtime/commands/next?clientId=bob-tab&timeoutMs=500`, {
+      headers: bridgeHeaders,
+    })
     const bobBody = await bobNext.json()
     expect(bobBody).toBeNull()
   })
@@ -160,17 +222,21 @@ describe('agent runtime bridge', () => {
     expect(submission.status).toBe(202)
     const {id} = await submission.json()
 
-    const next = await fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`)
+    const next = await fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+      headers: bridgeHeaders,
+    })
     const command = await next.json()
     expect(command.commandId).toBe(id)
 
     await fetch(`${baseUrl}/runtime/commands/${id}/result`, {
       method: 'POST',
-      headers: {'content-type': 'application/json'},
+      headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
       body: JSON.stringify({ok: true, value: 'pong'}),
     })
 
-    const status = await fetch(`${baseUrl}/runtime/commands/${id}`)
+    const status = await fetch(`${baseUrl}/runtime/commands/${id}`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+    })
     const body = await status.json()
     expect(body.status).toBe('completed')
     expect(body.result.value).toBe('pong')

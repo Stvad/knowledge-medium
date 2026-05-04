@@ -61,13 +61,14 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
     () => agentTokenStore.list(userId, workspaceId),
   )
   const [label, setLabel] = useState('')
+  const [readOnly, setReadOnly] = useState(false)
   const [justMinted, setJustMinted] = useState<AgentToken | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
 
   const refresh = () => setTokens(agentTokenStore.list(userId, workspaceId))
 
   const mint = () => {
-    const token = agentTokenStore.create(userId, workspaceId, label)
+    const token = agentTokenStore.create(userId, workspaceId, label, readOnly ? 'read-only' : 'read-write')
     notifyAgentTokensChanged()
     setJustMinted(token)
     setCopyState('idle')
@@ -109,6 +110,15 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
             Generate
           </Button>
         </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="size-4"
+            checked={readOnly}
+            onChange={(e) => setReadOnly(e.target.checked)}
+          />
+          Read-only
+        </label>
       </div>
 
       {justMinted && (
@@ -152,6 +162,8 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
                 <div className="min-w-0">
                   <div className="font-medium truncate">{t.label}</div>
                   <div className="text-xs text-muted-foreground">
+                    {(t.scope ?? 'read-write') === 'read-only' ? 'read-only' : 'read/write'}
+                    {' · '}
                     created {new Date(t.createdAt).toLocaleString()}
                     {t.lastSeenAt
                       ? ` · last seen ${new Date(t.lastSeenAt).toLocaleString()}`

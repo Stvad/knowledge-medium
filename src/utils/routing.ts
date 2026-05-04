@@ -16,7 +16,8 @@ export interface AppRoute {
 
 export const parseAppHash = (hash: string | undefined | null): AppRoute => {
   if (!hash) return {}
-  const trimmed = hash.startsWith('#') ? hash.slice(1) : hash
+  const trimmedWithParams = hash.startsWith('#') ? hash.slice(1) : hash
+  const trimmed = trimmedWithParams.split('?', 1)[0]
   if (!trimmed) return {}
 
   const [workspaceId, blockId] = trimmed.split('/', 2)

@@ -15,12 +15,16 @@ export interface AgentToken {
   token: string
   /** User-supplied label, e.g. "claude-cli" or "scripted-export". */
   label: string
+  /** read-only tokens can inspect state but cannot enqueue mutations/eval. */
+  scope?: AgentTokenScope
   createdAt: number
   /** Last time we observed a registration with this token. Updated by
    *  the bridge handshake reply, so users can see which tokens are
    *  actively in use. */
   lastSeenAt?: number | null
 }
+
+export type AgentTokenScope = 'read-write' | 'read-only'
 
 const KEY_PREFIX = 'agent-runtime:tokens'
 
@@ -52,7 +56,12 @@ export class AgentTokenStore {
     return Array.isArray(tokens) ? tokens : []
   }
 
-  create(userId: string, workspaceId: string, label: string): AgentToken {
+  create(
+    userId: string,
+    workspaceId: string,
+    label: string,
+    scope: AgentTokenScope = 'read-write',
+  ): AgentToken {
     if (!userId) throw new Error('userId required')
     if (!workspaceId) throw new Error('workspaceId required')
 
@@ -61,6 +70,7 @@ export class AgentTokenStore {
     const token: AgentToken = {
       token: generateSecret(),
       label: trimmedLabel,
+      scope,
       createdAt: Date.now(),
       lastSeenAt: null,
     }

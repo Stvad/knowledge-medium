@@ -63,6 +63,14 @@ describe('AgentTokenStore', () => {
     expect(t.label).toBe('agent')
   })
 
+  it('stores the requested token scope', () => {
+    const readOnly = store.create('alice', 'ws-1', 'reader', 'read-only')
+    const readWrite = store.create('alice', 'ws-1', 'writer')
+
+    expect(readOnly.scope).toBe('read-only')
+    expect(readWrite.scope).toBe('read-write')
+  })
+
   it('rejects mint without user/workspace', () => {
     expect(() => store.create('', 'ws-1', 'x')).toThrow()
     expect(() => store.create('alice', '', 'x')).toThrow()

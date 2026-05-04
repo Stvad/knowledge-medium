@@ -1,11 +1,42 @@
 #!/usr/bin/env node
 import http from 'node:http'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 
 const port = Number(process.env.AGENT_RUNTIME_PORT ?? 8787)
 const host = process.env.AGENT_RUNTIME_HOST ?? '127.0.0.1'
+if ((host === '0.0.0.0' || host === '::') && process.env.AGENT_RUNTIME_ALLOW_NETWORK !== 'true') {
+  throw new Error('Refusing to expose agent runtime bridge on the network without AGENT_RUNTIME_ALLOW_NETWORK=true')
+}
 const commandTtlMs = 10 * 60 * 1000
 const clientTtlMs = 60_000
+const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? 10 * 1024 * 1024)
+const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
+  ? configuredMaxBodyBytes
+  : 10 * 1024 * 1024
+const bridgeSecret = process.env.AGENT_RUNTIME_BRIDGE_SECRET?.trim() || randomBytes(32).toString('hex')
+const bridgeSecretHeader = 'x-agent-runtime-secret'
+const appUrl = process.env.AGENT_RUNTIME_APP_URL?.trim() || 'https://stvad.github.io/knowledge-medium/'
+const defaultAllowedOrigins = new Set(['https://stvad.github.io'])
+const configuredAllowedOrigins = (process.env.AGENT_RUNTIME_ALLOWED_ORIGINS ?? '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
+  .map(origin => {
+    try {
+      return new URL(origin).origin
+    } catch {
+      return origin
+    }
+  })
+const allowedOrigins = new Set([...defaultAllowedOrigins, ...configuredAllowedOrigins])
+const loopbackOriginPattern = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message)
+    this.status = status
+  }
+}
 
 // clientId -> {id, metadata, lastSeen, tokens: Set<token>, audience: {userId, workspaceId, label}|null}
 const clients = new Map()
@@ -15,38 +46,74 @@ const commands = new Map()
 const pendingByClient = new Map()
 // clientId -> Set<{response, timeout}>
 const waitersByClient = new Map()
-// token -> {clientId, audience}
+// token -> {clientId, audience, scope}
 const tokens = new Map()
+const responseRequests = new WeakMap()
 
 const now = () => Date.now()
 
-const jsonHeaders = {
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET,POST,OPTIONS',
-  'access-control-allow-headers': 'authorization,content-type',
-  'access-control-max-age': '86400',
-  'content-type': 'application/json',
+const normalizeOrigin = origin => {
+  try {
+    return new URL(origin).origin
+  } catch {
+    return origin
+  }
+}
+
+const isAllowedOrigin = origin => {
+  if (!origin || typeof origin !== 'string') return true
+  if (origin === 'null') return false
+  const normalized = normalizeOrigin(origin)
+  return loopbackOriginPattern.test(normalized) || allowedOrigins.has(normalized)
+}
+
+const jsonHeadersFor = response => {
+  const request = responseRequests.get(response)
+  const headers = {'content-type': 'application/json'}
+  const origin = request?.headers.origin
+
+  if (typeof origin === 'string' && isAllowedOrigin(origin)) {
+    headers['access-control-allow-origin'] = normalizeOrigin(origin)
+    headers['access-control-allow-methods'] = 'GET,POST,OPTIONS'
+    headers['access-control-allow-headers'] = `authorization,content-type,${bridgeSecretHeader},x-agent-runtime-client-id`
+    headers['access-control-max-age'] = '86400'
+    headers.vary = 'Origin'
+  }
+
+  return headers
 }
 
 const sendJson = (response, status, body) => {
-  response.writeHead(status, jsonHeaders)
+  response.writeHead(status, jsonHeadersFor(response))
   response.end(JSON.stringify(body))
 }
 
 const sendEmpty = (response, status = 204) => {
-  response.writeHead(status, jsonHeaders)
+  response.writeHead(status, jsonHeadersFor(response))
   response.end()
 }
 
 const readBody = request =>
   new Promise((resolve, reject) => {
     const chunks = []
+    let totalBytes = 0
+    let tooLarge = false
 
     request.on('data', chunk => {
+      totalBytes += chunk.length
+      if (totalBytes > maxBodyBytes) {
+        tooLarge = true
+        chunks.length = 0
+        return
+      }
       chunks.push(chunk)
     })
 
     request.on('end', () => {
+      if (tooLarge) {
+        reject(new HttpError(413, `Request body exceeds ${maxBodyBytes} bytes`))
+        return
+      }
       if (!chunks.length) {
         resolve(null)
         return
@@ -67,6 +134,46 @@ const extractBearer = request => {
   if (!header || typeof header !== 'string') return null
   const match = header.match(/^Bearer\s+(.+)$/i)
   return match ? match[1].trim() : null
+}
+
+const hashToken = token => createHash('sha256').update(token).digest('hex')
+
+const safeEqual = (a, b) => {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  const aBuffer = Buffer.from(a)
+  const bBuffer = Buffer.from(b)
+  return aBuffer.length === bBuffer.length && timingSafeEqual(aBuffer, bBuffer)
+}
+
+const hasBridgeSecret = request => {
+  const header = request.headers[bridgeSecretHeader]
+  return typeof header === 'string' && safeEqual(header, bridgeSecret)
+}
+
+const requireBridgeSecret = (request, response) => {
+  if (hasBridgeSecret(request)) return true
+  sendJson(response, 401, {error: 'Missing or invalid bridge secret'})
+  return false
+}
+
+const tokenScope = value =>
+  value === 'read-only' ? 'read-only' : 'read-write'
+
+const isReadOnlySql = sql =>
+  typeof sql === 'string' && /^(select|explain)\b/i.test(sql.trimStart())
+
+const isReadOnlyCommand = command => {
+  switch (command.type) {
+    case 'ping':
+    case 'describe-runtime':
+    case 'get-block':
+    case 'get-subtree':
+      return true
+    case 'sql':
+      return command.mode !== 'execute' && isReadOnlySql(command.sql)
+    default:
+      return false
+  }
 }
 
 const dropClient = clientId => {
@@ -176,6 +283,7 @@ const registerClient = (clientId, metadata = {}) => {
         workspaceId: typeof entry.workspaceId === 'string' ? entry.workspaceId : audience?.workspaceId ?? null,
         label: typeof entry.label === 'string' ? entry.label : null,
       },
+      scope: tokenScope(entry.scope),
     })
   }
 
@@ -192,7 +300,7 @@ const registerClient = (clientId, metadata = {}) => {
   })
 }
 
-const enqueueCommand = (clientId, payload) => {
+const enqueueCommand = (clientId, payload, submitterTokenHash) => {
   const id = randomUUID()
   const commandPayload = {
     ...payload,
@@ -208,6 +316,7 @@ const enqueueCommand = (clientId, payload) => {
     deliveredAt: null,
     completedAt: null,
     clientId: null,
+    submitterTokenHash,
     result: null,
   }
 
@@ -278,6 +387,11 @@ const setCommandResult = async (id, request, response) => {
     sendJson(response, 404, {error: `Unknown command: ${id}`})
     return
   }
+  const reportingClientId = request.headers['x-agent-runtime-client-id']
+  if (command.clientId && reportingClientId !== command.clientId) {
+    sendJson(response, 403, {error: 'Command result client mismatch'})
+    return
+  }
 
   command.status = 'completed'
   command.completedAt = now()
@@ -306,7 +420,24 @@ const getStatus = () => ({
   })),
 })
 
+const pairingUrl = () => {
+  const url = new URL(appUrl)
+  const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
+  const separator = rawHash
+    ? rawHash.includes('?') ? '&' : '?'
+    : '?'
+  url.hash = `${rawHash}${separator}agent-runtime-url=${encodeURIComponent(`http://${host}:${port}`)}&agent-runtime-secret=${encodeURIComponent(bridgeSecret)}`
+  return url.toString()
+}
+
 const handleRequest = async (request, response) => {
+  responseRequests.set(response, request)
+
+  if (!isAllowedOrigin(request.headers.origin)) {
+    sendJson(response, 403, {error: 'Origin not allowed'})
+    return
+  }
+
   if (request.method === 'OPTIONS') {
     sendEmpty(response)
     return
@@ -317,7 +448,12 @@ const handleRequest = async (request, response) => {
 
   try {
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
-      sendJson(response, 200, getStatus())
+      if (requestUrl.searchParams.get('detail') === '1') {
+        if (!requireBridgeSecret(request, response)) return
+        sendJson(response, 200, getStatus())
+        return
+      }
+      sendJson(response, 200, {ok: true})
       return
     }
 
@@ -336,6 +472,7 @@ const handleRequest = async (request, response) => {
       sendJson(response, 200, {
         clientId: entry.clientId,
         audience: entry.audience,
+        scope: entry.scope,
         connected: Boolean(client),
         clientLastSeen: client?.lastSeen ?? null,
       })
@@ -343,8 +480,7 @@ const handleRequest = async (request, response) => {
     }
 
     if (request.method === 'GET' && requestUrl.pathname === '/runtime/commands/next') {
-      // Client polling; trusted by virtue of running in the user's
-      // browser. The auth boundary is the agent → bridge call below.
+      if (!requireBridgeSecret(request, response)) return
       waitForNextCommand(request, requestUrl, response)
       return
     }
@@ -371,14 +507,19 @@ const handleRequest = async (request, response) => {
         sendJson(response, 400, {error: 'Command body must include a string type'})
         return
       }
+      if (entry.scope === 'read-only' && !isReadOnlyCommand(body)) {
+        sendJson(response, 403, {error: `Token scope read-only does not allow command type: ${body.type}`})
+        return
+      }
 
-      const command = enqueueCommand(entry.clientId, body)
+      const command = enqueueCommand(entry.clientId, body, hashToken(token))
       sendJson(response, 202, {id: command.id, audience: entry.audience})
       return
     }
 
     const clientMatch = requestUrl.pathname.match(/^\/runtime\/clients\/([^/]+)$/)
     if (request.method === 'POST' && clientMatch) {
+      if (!requireBridgeSecret(request, response)) return
       registerClient(clientMatch[1], await readBody(request) ?? {})
       sendJson(response, 200, {ok: true})
       return
@@ -386,6 +527,7 @@ const handleRequest = async (request, response) => {
 
     const resultMatch = requestUrl.pathname.match(/^\/runtime\/commands\/([^/]+)\/result$/)
     if (request.method === 'POST' && resultMatch) {
+      if (!requireBridgeSecret(request, response)) return
       await setCommandResult(resultMatch[1], request, response)
       return
     }
@@ -396,6 +538,14 @@ const handleRequest = async (request, response) => {
       if (!command) {
         sendJson(response, 404, {error: `Unknown command: ${commandMatch[1]}`})
         return
+      }
+      if (!hasBridgeSecret(request)) {
+        const token = extractBearer(request)
+        const entry = token ? tokens.get(token) : null
+        if (!entry || entry.clientId !== command.targetClientId || hashToken(token) !== command.submitterTokenHash) {
+          sendJson(response, 401, {error: 'Missing or invalid command status credentials'})
+          return
+        }
       }
 
       sendJson(response, 200, {
@@ -413,7 +563,7 @@ const handleRequest = async (request, response) => {
 
     sendJson(response, 404, {error: 'Not found'})
   } catch (error) {
-    sendJson(response, 500, {
+    sendJson(response, error instanceof HttpError ? error.status : 500, {
       error: error instanceof Error ? error.message : String(error),
     })
   }
@@ -423,4 +573,5 @@ const server = http.createServer(handleRequest)
 
 server.listen(port, host, () => {
   console.log(`Agent runtime server listening at http://${host}:${port}`)
+  console.log(`Pair app with: ${pairingUrl()}`)
 })

@@ -36,6 +36,14 @@ describe('parseAppHash', () => {
       blockId: undefined,
     })
   })
+
+  it('ignores hash query parameters used for local bridge pairing', () => {
+    expect(parseAppHash('#ws-1/block-2?agent-runtime-secret=secret')).toEqual({
+      workspaceId: 'ws-1',
+      blockId: 'block-2',
+    })
+    expect(parseAppHash('#?agent-runtime-secret=secret')).toEqual({})
+  })
 })
 
 describe('buildAppHash', () => {

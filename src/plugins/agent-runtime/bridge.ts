@@ -5,6 +5,8 @@ import { serializeError, serializeValue } from './serialization.ts'
 import type { AgentRuntimeBridgeOptions, AgentRuntimeCommand } from './protocol.ts'
 
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
+const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
+const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
@@ -20,17 +22,75 @@ const getBridgeClientId = () => {
   return bridgeClientId
 }
 
-const bridgeUrl = () =>
-  (import.meta.env.VITE_AGENT_RUNTIME_URL?.trim() || defaultBridgeUrl).replace(/\/+$/, '')
+const storeBridgePairingFromHash = () => {
+  const rawHash = window.location.hash.startsWith('#')
+    ? window.location.hash.slice(1)
+    : window.location.hash
+  if (!rawHash) return
+
+  const queryIndex = rawHash.indexOf('?')
+  const paramSource = queryIndex >= 0 ? rawHash.slice(queryIndex + 1) : rawHash
+  const params = new URLSearchParams(paramSource)
+  const secret = params.get('agent-runtime-secret')?.trim()
+  const url = params.get('agent-runtime-url')?.trim()
+  if (!secret && !url) return
+
+  if (secret) window.localStorage.setItem(bridgeSecretStorageKey, secret)
+  if (url) window.localStorage.setItem(bridgeUrlStorageKey, url.replace(/\/+$/, ''))
+
+  params.delete('agent-runtime-secret')
+  params.delete('agent-runtime-url')
+
+  const remainingParams = params.toString()
+  const routeHash = queryIndex >= 0 ? rawHash.slice(0, queryIndex) : ''
+  const nextHash = routeHash || remainingParams
+    ? `#${routeHash}${remainingParams ? `?${remainingParams}` : ''}`
+    : ''
+
+  window.history.replaceState(
+    null,
+    document.title,
+    `${window.location.pathname}${window.location.search}${nextHash}`,
+  )
+}
+
+const getStoredBridgeSecret = () => {
+  storeBridgePairingFromHash()
+  return window.localStorage.getItem(bridgeSecretStorageKey)?.trim()
+    || import.meta.env.VITE_AGENT_RUNTIME_BRIDGE_SECRET?.trim()
+    || ''
+}
+
+const bridgeUrl = () => {
+  storeBridgePairingFromHash()
+  return (
+    window.localStorage.getItem(bridgeUrlStorageKey)?.trim()
+    || import.meta.env.VITE_AGENT_RUNTIME_URL?.trim()
+    || defaultBridgeUrl
+  ).replace(/\/+$/, '')
+}
+
+const bridgeHeaders = () => {
+  const secret = getStoredBridgeSecret()
+  if (!secret) {
+    throw new Error('Agent runtime bridge is not paired. Start the bridge server and open its pairing URL.')
+  }
+  return {'x-agent-runtime-secret': secret}
+}
 
 const postJson = async (
   url: string,
   body: unknown,
   signal?: AbortSignal,
+  clientId?: string,
 ) => {
   const response = await window.fetch(url, {
     method: 'POST',
-    headers: {'content-type': 'application/json'},
+    headers: {
+      'content-type': 'application/json',
+      ...bridgeHeaders(),
+      ...(clientId ? {'x-agent-runtime-client-id': clientId} : {}),
+    },
     body: JSON.stringify(body),
     signal,
   })
@@ -87,6 +147,7 @@ export const startAgentRuntimeBridge = (
       ? agentTokenStore.list(userId, workspaceId).map(t => ({
           token: t.token,
           label: t.label,
+          scope: t.scope ?? 'read-write',
           userId,
           workspaceId,
         }))
@@ -110,6 +171,7 @@ export const startAgentRuntimeBridge = (
       `${baseUrl}/runtime/commands/${commandId}/result`,
       payload,
       abortController.signal,
+      clientId,
     )
   }
 
@@ -152,7 +214,10 @@ export const startAgentRuntimeBridge = (
         nextUrl.searchParams.set('clientId', clientId)
         nextUrl.searchParams.set('timeoutMs', String(longPollMs))
 
-        const response = await window.fetch(nextUrl, {signal: abortController.signal})
+        const response = await window.fetch(nextUrl, {
+          headers: bridgeHeaders(),
+          signal: abortController.signal,
+        })
         if (!response.ok) {
           throw new Error(`Agent runtime bridge poll failed: ${response.status}`)
         }

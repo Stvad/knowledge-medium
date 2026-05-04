@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 
 const bridgeUrl = (process.env.AGENT_RUNTIME_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '')
+const bridgeSecret = process.env.AGENT_RUNTIME_BRIDGE_SECRET?.trim() || ''
 const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000
 const tokenStorePath = process.env.AGENT_RUNTIME_TOKEN_FILE
@@ -125,7 +126,7 @@ const waitForCommand = async (id, timeoutMs = defaultTimeoutMs) => {
   const start = Date.now()
 
   while (Date.now() - start < timeoutMs) {
-    const command = await requestJson(`${bridgeUrl}/runtime/commands/${id}`)
+    const command = await authedRequest(`${bridgeUrl}/runtime/commands/${id}`)
     if (command.status === 'completed') {
       return command.result
     }
@@ -292,7 +293,9 @@ const main = async () => {
   }
 
   if (verb === 'status') {
-    const status = await requestJson(`${bridgeUrl}/health`)
+    const status = await requestJson(`${bridgeUrl}/health${bridgeSecret ? '?detail=1' : ''}`, {
+      headers: bridgeSecret ? {'x-agent-runtime-secret': bridgeSecret} : {},
+    })
     process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
     return
   }
