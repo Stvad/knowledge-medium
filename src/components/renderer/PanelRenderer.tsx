@@ -57,7 +57,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
   }
 
   return (
-    <div className="panel max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
+    <div className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
       {!isMainPanel && (
         <Button
           variant="ghost"

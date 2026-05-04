@@ -3,8 +3,14 @@ import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { FallbackComponent } from '@/components/util/error.tsx'
 
-const HeaderRegion = ({items}: {items: readonly HeaderItemContribution[]}) => (
-  <div className="flex items-center gap-4">
+const HeaderRegion = ({
+  items,
+  className = '',
+}: {
+  items: readonly HeaderItemContribution[]
+  className?: string
+}) => (
+  <div className={`flex min-w-0 items-center gap-2 sm:gap-4 ${className}`}>
     {items.map(({id, component: Component}) => (
       <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
         <Component/>
@@ -20,9 +26,9 @@ export function Header() {
   const endItems = items.filter(item => item.region === 'end')
 
   return (
-    <div className="flex items-center justify-between py-2 gap-4">
-      <HeaderRegion items={startItems}/>
-      <HeaderRegion items={endItems}/>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-2">
+      <HeaderRegion items={startItems} className="min-w-0 flex-1 basis-40"/>
+      <HeaderRegion items={endItems} className="max-w-full flex-wrap justify-end"/>
     </div>
   )
 }

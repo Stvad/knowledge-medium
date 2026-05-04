@@ -134,12 +134,12 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   // todo actual mobile support/separate renderer
   const panelsToRender = isMobile ? [mainPanelBlock] : panelBlocks
 
-  return <div className={'layout flex flex-row flex-grow overflow-x-auto justify-center h-full'}>
+  return <div className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full">
     {panelsToRender.map((panel) => {
       return <NestedBlockContextProvider
         overrides={{topLevel: true, panelId: panel.id}} key={panel.id}
       >
-        <div className="panel-container border-l border-border flex-grow basis-0 min-w-md max-w-3xl pl-2 first:border-l-0 first:pl-0 h-full ">
+        <div className="panel-container h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-md md:basis-0 md:grow md:shrink">
           <BlockComponent blockId={panel.id}/>
         </div>
       </NestedBlockContextProvider>
