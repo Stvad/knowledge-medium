@@ -174,8 +174,8 @@ export const startRowEventsTail = (args: {
 
       // Backlink-target diff: same shape as the fast-path computation
       // in `snapshotsToChangeNotification`. A soft-deleted row
-      // contributes no edges per the `block_references` trigger gate;
-      // symmetric difference of effective target id sets goes here.
+      // contributes no outgoing reference edges; symmetric difference
+      // of effective target id sets goes here.
       const beforeRefs = beforeLive ? before?.references ?? [] : []
       const afterRefs = afterLive ? after?.references ?? [] : []
       if (beforeRefs.length > 0 || afterRefs.length > 0) {

@@ -224,9 +224,7 @@ describe('snapshotsToChangeNotification', () => {
     // Two BlockReference entries pointing at the same target id with
     // different aliases (Roam-style `[[Foo]]` vs `[[foo]]`) — the set of
     // distinct target ids is the same, so the backlinks handle for that
-    // target doesn't need to re-resolve. (The block_references row set
-    // does change, but the consumer-visible result of
-    // `backlinks.forBlock({id})` does not.)
+    // target doesn't need to re-resolve.
     const map = new Map<string, ChangeSnapshot>([
       ['src', {
         before: {parentId: null, workspaceId: 'w', references: [{id: 'tgt'}]},

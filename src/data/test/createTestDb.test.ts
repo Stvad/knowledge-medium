@@ -6,10 +6,11 @@ import {
   ALIAS_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_TRIGGER_NAMES,
 } from '@/data/internals/clientSchema'
-import {
-  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
-  backlinksLocalSchema,
-} from '@/plugins/backlinks/localSchema.ts'
+import { resolveLocalSchemaContributions } from '@/data/localSchema.ts'
+import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+
+const localSchemaTriggerNames = resolveLocalSchemaContributions(staticDataExtensions)
+  .flatMap(contribution => [...(contribution.triggerNames ?? [])])
 
 describe('createTestDb harness', () => {
   let h: TestDb
@@ -38,7 +39,7 @@ describe('createTestDb harness', () => {
     )).map(r => r.name)
     const expected = [
       ...CLIENT_SCHEMA_TRIGGER_NAMES,
-      ...(backlinksLocalSchema.triggerNames ?? []),
+      ...localSchemaTriggerNames,
     ]
     expect(names.sort()).toEqual(expected.sort())
     expect(names).toHaveLength(expected.length)
@@ -51,7 +52,6 @@ describe('createTestDb harness', () => {
     expect(names).toEqual(expect.arrayContaining([
       'idx_blocks_parent_order',
       'idx_blocks_workspace_active',
-      'idx_blocks_workspace_with_references',
       'idx_blocks_workspace_type',
     ]))
   })
@@ -62,7 +62,6 @@ describe('createTestDb harness', () => {
     )).map(r => r.key)
     expect(keys).toEqual(expect.arrayContaining([
       ALIAS_BACKFILL_MARKER_KEY,
-      BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
     ]))
   })
 

@@ -40,12 +40,6 @@ import {
   CLIENT_SCHEMA_TRIGGER_NAMES,
   backfillBlockAliasesIfEmpty,
 } from './clientSchema'
-import {
-  BACKFILL_BLOCK_REFERENCES_SQL,
-  BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
-  backlinksLocalSchema,
-  backfillBlockReferencesIfEmpty,
-} from '@/plugins/backlinks/localSchema.ts'
 
 interface TestDb {
   db: DatabaseSync
@@ -128,9 +122,6 @@ const setupDb = (): TestDb => {
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     db.exec(stmt)
   }
-  for (const stmt of backlinksLocalSchema.statements ?? []) {
-    db.exec(stmt)
-  }
 
   const columnNames = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const insertStmt = db.prepare(
@@ -177,12 +168,8 @@ describe('client schema bootstrap', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name")
       .all() as Array<{name: string}>)
       .map(r => r.name)
-    const expected = [
-      ...CLIENT_SCHEMA_TRIGGER_NAMES,
-      ...(backlinksLocalSchema.triggerNames ?? []),
-    ]
-    expect(triggers.sort()).toEqual(expected.sort())
-    expect(triggers).toHaveLength(expected.length)
+    expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())
+    expect(triggers).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
   })
 
   it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
@@ -608,254 +595,6 @@ describe('block_aliases backfill', () => {
       h.db.exec('DELETE FROM block_aliases')
       await runBackfill()
       expect(aliasRows(h.db)).toHaveLength(0)
-    })
-  })
-})
-
-// ============================================================================
-// block_references trigger maintenance — the directed-edge index that
-// backs `backlinks.forBlock`. Mirrors the block_aliases tests above; the
-// invariant is "live block's references_json edges == its rows in
-// block_references".
-// ============================================================================
-
-interface ReferenceRow {
-  source_id: string
-  target_id: string
-  workspace_id: string
-  alias: string
-}
-
-const refRows = (db: DatabaseSync): ReferenceRow[] =>
-  db
-    .prepare('SELECT source_id, target_id, workspace_id, alias FROM block_references ORDER BY source_id, target_id, alias')
-    .all() as unknown as ReferenceRow[]
-
-const refsJson = (entries: Array<{ id: string; alias: string }>): string =>
-  JSON.stringify(entries)
-
-describe('block_references trigger — INSERT', () => {
-  it('extracts references_json into block_references on insert', () => {
-    h.insertBlock({
-      id: 'src',
-      workspace_id: 'ws1',
-      references_json: refsJson([
-        { id: 'tgt-a', alias: 'A' },
-        { id: 'tgt-b', alias: 'B' },
-      ]),
-    })
-    expect(refRows(h.db)).toEqual([
-      { source_id: 'src', target_id: 'tgt-a', workspace_id: 'ws1', alias: 'A' },
-      { source_id: 'src', target_id: 'tgt-b', workspace_id: 'ws1', alias: 'B' },
-    ])
-  })
-
-  it('inserts no rows for blocks without references', () => {
-    h.insertBlock({ id: 'src', references_json: '[]' })
-    expect(refRows(h.db)).toEqual([])
-  })
-
-  it('inserts no rows for soft-deleted blocks', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-      deleted: 1,
-    })
-    expect(refRows(h.db)).toEqual([])
-  })
-
-  it('keeps both edges when one source links to one target via two aliases', () => {
-    // Same target reached by two different alias spellings — Roam-style
-    // `[[Foo]]` and `[[foo]]` both resolved to the same block.
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([
-        { id: 'tgt', alias: 'Foo' },
-        { id: 'tgt', alias: 'foo' },
-      ]),
-    })
-    expect(refRows(h.db).map(r => r.alias)).toEqual(['Foo', 'foo'])
-  })
-
-  it('skips defensively-malformed entries (missing $.id or $.alias, or wrong type)', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: JSON.stringify([
-        { id: 'tgt-a', alias: 'A' },
-        { alias: 'no-id' },
-        { id: 'tgt-b' },
-        { id: 42, alias: 'numeric' },
-        { id: 'tgt-c', alias: 'C' },
-      ]),
-    })
-    expect(refRows(h.db).map(r => r.target_id)).toEqual(['tgt-a', 'tgt-c'])
-  })
-})
-
-describe('block_references trigger — UPDATE', () => {
-  it('replaces references when references_json changes', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'old', alias: 'O' }]),
-    })
-    h.updateBlock('src', {
-      references_json: refsJson([
-        { id: 'new-1', alias: 'N1' },
-        { id: 'new-2', alias: 'N2' },
-      ]),
-    })
-    expect(refRows(h.db).map(r => r.target_id)).toEqual(['new-1', 'new-2'])
-  })
-
-  it('clears references on soft-delete (deleted 0 → 1)', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-    })
-    h.updateBlock('src', { deleted: 1 })
-    expect(refRows(h.db)).toEqual([])
-  })
-
-  it('repopulates references on tombstone restore (deleted 1 → 0)', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-      deleted: 1,
-    })
-    expect(refRows(h.db)).toEqual([])
-    h.updateBlock('src', { deleted: 0 })
-    expect(refRows(h.db).map(r => r.target_id)).toEqual(['tgt'])
-  })
-
-  it('does NOT fire on content-only edits', () => {
-    // The UPDATE trigger gates on UPDATE OF references_json/deleted/workspace_id.
-    // A pure content edit must not churn block_references. We verify by
-    // dropping in a bystander row before the update and checking it
-    // survives the content edit (the trigger would have wiped it on fire).
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-    })
-    h.db
-      .prepare('INSERT INTO block_references VALUES (?, ?, ?, ?)')
-      .run('src', 'manual-tgt', 'ws1', 'manual-alias')
-    h.updateBlock('src', { content: 'changed' })
-    const targets = refRows(h.db).map(r => r.target_id)
-    expect(targets).toContain('manual-tgt')
-  })
-})
-
-describe('block_references trigger — DELETE', () => {
-  it('clears references on hard-delete', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-    })
-    h.deleteBlock('src')
-    expect(refRows(h.db)).toEqual([])
-  })
-})
-
-describe('block_references backfill', () => {
-  it('populates the index from pre-existing blocks', () => {
-    // Simulate the upgrade path: existing user has rows in `blocks`
-    // but the index hasn't been maintained yet. The triggers populate
-    // block_references on each INSERT, so we wipe the table first
-    // to mimic the pre-index state.
-    h.insertBlock({
-      id: 'src1',
-      workspace_id: 'ws1',
-      references_json: refsJson([
-        { id: 'tgt-a', alias: 'A' },
-        { id: 'tgt-b', alias: 'B' },
-      ]),
-    })
-    h.insertBlock({
-      id: 'src2-deleted',
-      workspace_id: 'ws1',
-      references_json: refsJson([{ id: 'tgt-c', alias: 'C' }]),
-      deleted: 1,
-    })
-    h.insertBlock({
-      id: 'src3',
-      workspace_id: 'ws2',
-      references_json: refsJson([{ id: 'tgt-d', alias: 'D' }]),
-    })
-    h.db.exec('DELETE FROM block_references')
-
-    h.db.exec(BACKFILL_BLOCK_REFERENCES_SQL)
-
-    expect(refRows(h.db)).toEqual([
-      { source_id: 'src1', target_id: 'tgt-a', workspace_id: 'ws1', alias: 'A' },
-      { source_id: 'src1', target_id: 'tgt-b', workspace_id: 'ws1', alias: 'B' },
-      // src2-deleted is soft-deleted → excluded
-      { source_id: 'src3', target_id: 'tgt-d', workspace_id: 'ws2', alias: 'D' },
-    ])
-  })
-
-  it('is idempotent (safe to re-run on already-populated index)', () => {
-    h.insertBlock({
-      id: 'src',
-      references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-    })
-    h.db.exec(BACKFILL_BLOCK_REFERENCES_SQL)
-    expect(refRows(h.db)).toHaveLength(1)
-  })
-
-  describe('backfillBlockReferencesIfEmpty marker gate', () => {
-    const runBackfill = async () => {
-      await backfillBlockReferencesIfEmpty({
-        execute: async (sql) => h.db.exec(sql),
-        getOptional: async <T,>(sql: string) => {
-          const row = h.db.prepare(sql).get() as T | undefined
-          return row ?? null
-        },
-      })
-    }
-    const markerExists = (): boolean =>
-      h.db
-        .prepare(`SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_BACKFILL_MARKER_KEY}'`)
-        .get() !== undefined
-
-    it('records the completion marker even when there are no references to backfill', async () => {
-      expect(markerExists()).toBe(false)
-      await runBackfill()
-      expect(markerExists()).toBe(true)
-      expect(refRows(h.db)).toHaveLength(0)
-    })
-
-    it('short-circuits on subsequent runs once the marker is present', async () => {
-      await runBackfill()
-      // Insert a block with refs AFTER the marker is set; trigger
-      // populates block_references as usual. Then drop the table to
-      // simulate "user removed every reference" and re-run the gate.
-      // The marker should keep us from re-scanning, leaving
-      // block_references empty (instead of repopulating from blocks).
-      h.insertBlock({
-        id: 'src',
-        references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-      })
-      h.db.exec('DELETE FROM block_references')
-      await runBackfill()
-      expect(refRows(h.db)).toHaveLength(0)
-    })
-
-    it('runs the backfill exactly once across multiple invocations', async () => {
-      h.insertBlock({
-        id: 'src',
-        references_json: refsJson([{ id: 'tgt', alias: 'A' }]),
-      })
-      h.db.exec('DELETE FROM block_references')
-
-      await runBackfill()
-      expect(refRows(h.db).map(r => r.target_id)).toEqual(['tgt'])
-
-      // Second call: marker is set, SQL short-circuits before the
-      // BACKFILL runs. Verify by deleting the row and checking it
-      // stays gone.
-      h.db.exec('DELETE FROM block_references')
-      await runBackfill()
-      expect(refRows(h.db)).toHaveLength(0)
     })
   })
 })

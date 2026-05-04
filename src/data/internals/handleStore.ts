@@ -804,11 +804,10 @@ export const snapshotsToChangeNotification = (
     // alone covers it. No parent-edge entry — `repo.children(id)`
     // already declares row deps on each child for this case.
 
-    // Backlink-target diff: a soft-deleted (or never-live) row
-    // contributes no outgoing edges per the `block_references` trigger
-    // gate (`WHERE NEW.deleted = 0`); treat its effective ref set as
-    // empty for diff purposes. The symmetric difference is the set of
-    // targets whose incoming-edge list either gained or lost this row.
+    // Backlink-target diff: a soft-deleted (or never-live) row contributes
+    // no outgoing reference edges; treat its effective ref set as empty for
+    // diff purposes. The symmetric difference is the set of targets whose
+    // incoming-edge list either gained or lost this row.
     const beforeRefs = beforeLive ? entry.before?.references ?? [] : []
     const afterRefs = afterLive ? entry.after?.references ?? [] : []
     addSymmetricTargetDiff(beforeRefs, afterRefs, backlinkTargets)
