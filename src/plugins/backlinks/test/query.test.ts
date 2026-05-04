@@ -10,8 +10,12 @@ import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.t
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
-import { localSchemaFacet, queriesFacet } from '@/data/facets.ts'
+import { invalidationRulesFacet, localSchemaFacet, queriesFacet } from '@/data/facets.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
+import {
+  BACKLINKS_TARGET_INVALIDATION_CHANNEL,
+  backlinksInvalidationRule,
+} from '../invalidation.ts'
 import { backlinksLocalSchema } from '../localSchema.ts'
 import { backlinksPlugin } from '../index.ts'
 import { BACKLINKS_FOR_BLOCK_QUERY, backlinksForBlockQuery } from '../query.ts'
@@ -19,8 +23,9 @@ import { BACKLINKS_FOR_BLOCK_QUERY, backlinksForBlockQuery } from '../query.ts'
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
 
-const backlinksQueryOnlyExtension: AppExtension = [
+const backlinksQueryInvalidationExtension: AppExtension = [
   queriesFacet.of(backlinksForBlockQuery, {source: 'backlinks'}),
+  invalidationRulesFacet.of(backlinksInvalidationRule, {source: 'backlinks'}),
 ]
 
 interface Harness {
@@ -43,7 +48,7 @@ const setup = async (): Promise<Harness> => {
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
-    backlinksQueryOnlyExtension,
+    backlinksQueryInvalidationExtension,
   ]))
   return {h, repo}
 }
@@ -79,7 +84,7 @@ const depIds = (deps: readonly Dependency[], kind: Dependency['kind']) =>
       if (d.kind === 'row') return d.id
       if (d.kind === 'parent-edge') return d.parentId
       if (d.kind === 'workspace') return d.workspaceId
-      if (d.kind === 'backlink-target') return d.id
+      if (d.kind === 'plugin') return `${d.channel}:${d.key}`
       return d.table
     })
     .sort()
@@ -95,6 +100,11 @@ describe('backlinksDataExtension query', () => {
   it('contributes its local edge index schema through localSchemaFacet', () => {
     const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
     expect(runtime.read(localSchemaFacet)).toEqual([backlinksLocalSchema])
+  })
+
+  it('contributes its reference invalidation through invalidationRulesFacet', () => {
+    const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
+    expect(runtime.read(invalidationRulesFacet)).toEqual([backlinksInvalidationRule])
   })
 
   it('owns markdown syntax and CodeMirror extension registrations', () => {
@@ -172,7 +182,7 @@ describe('backlinksDataExtension query', () => {
     ).resolves.toEqual([])
   })
 
-  it('declares target row, backlink-target, and source row deps', async () => {
+  it('declares target row, plugin target, and source row deps', async () => {
     await create({id: 't', workspaceId: WS})
     await create({id: 'linker', workspaceId: WS})
     await env.h.db.execute(
@@ -186,33 +196,67 @@ describe('backlinksDataExtension query', () => {
     const deps = handle.__depsForTest()
 
     expect(depIds(deps, 'row')).toEqual(['linker', 't'])
-    expect(depIds(deps, 'backlink-target')).toEqual(['t'])
+    expect(depIds(deps, 'plugin')).toEqual([`${BACKLINKS_TARGET_INVALIDATION_CHANNEL}:t`])
     expect(deps.some(d => d.kind === 'table')).toBe(false)
     expect(deps.some(d => d.kind === 'workspace')).toBe(false)
   })
 
-  it('re-resolves when a source gains a reference to the target', async () => {
-    await create({id: 't'})
-    await create({id: 'linker'})
-    const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 't'})
-    expect(await handle.load()).toEqual([])
-
+  it('re-resolves only when sources gain or lose references to the target', async () => {
+    await create({id: 'target'})
+    await create({id: 'other-target'})
+    await create({id: 'unrelated'})
+    await create({id: 'src'})
+    const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'})
     const fired: BlockData[][] = []
-    const unsub = handle.subscribe((value) => { fired.push(value as BlockData[]) })
-    try {
-      await env.repo.tx(async tx => {
-        await tx.update('linker', {
-          references: [{id: 't', alias: 't'}],
-        })
-      }, {scope: ChangeScope.BlockDefault})
+    handle.subscribe((value) => { fired.push(value as BlockData[]) })
+    await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
 
-      await vi.waitFor(() => {
-        expect(asBlocks(handle.peek()).map(block => block.id)).toEqual(['linker'])
-      })
-      expect(fired.length).toBeGreaterThanOrEqual(1)
-    } finally {
-      unsub()
-    }
+    await env.repo.mutate.setContent({id: 'unrelated', content: 'noise'})
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired.map(items => items.length)).toEqual([0])
+
+    await env.repo.tx(tx => tx.update('unrelated', {
+      references: [{id: 'other-target', alias: 'OT'}],
+    }), {scope: ChangeScope.BlockDefault})
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired.map(items => items.length)).toEqual([0])
+
+    await env.repo.tx(tx => tx.update('src', {
+      references: [{id: 'target', alias: 'T'}],
+    }), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => {
+      expect(fired.map(items => items.length)).toEqual([0, 1])
+    })
+    expect(handle.peek()?.map(block => block.id)).toEqual(['src'])
+
+    await env.repo.tx(tx => tx.update('src', {references: []}), {
+      scope: ChangeScope.BlockDefault,
+    })
+    await vi.waitFor(() => {
+      expect(fired.map(items => items.length)).toEqual([0, 1, 0])
+    })
+  })
+
+  it('re-resolves from sync-applied row events using the plugin invalidation rule', async () => {
+    await create({id: 'target'})
+    await create({id: 'src'})
+    const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'})
+    const fired: BlockData[][] = []
+    handle.subscribe((value) => { fired.push(value as BlockData[]) })
+    await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
+
+    await env.h.db.execute(
+      `UPDATE blocks SET references_json = ? WHERE id = ?`,
+      [JSON.stringify([{id: 'target', alias: 'T'}]), 'src'],
+    )
+    await env.repo.flushRowEventsTail()
+
+    await vi.waitFor(() => {
+      expect(fired.map(items => items.length)).toEqual([0, 1])
+    })
+    expect(handle.peek()?.map(block => block.id)).toEqual(['src'])
   })
 
   it('works when alias side indexes are also present', async () => {

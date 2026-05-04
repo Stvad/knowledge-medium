@@ -64,7 +64,7 @@ const depIds = (deps: readonly Dependency[], kind: Dependency['kind']) =>
       if (d.kind === 'row') return d.id
       if (d.kind === 'parent-edge') return d.parentId
       if (d.kind === 'workspace') return d.workspaceId
-      if (d.kind === 'backlink-target') return d.id
+      if (d.kind === 'plugin') return `${d.channel}:${d.key}`
       return d.table
     })
     .sort()

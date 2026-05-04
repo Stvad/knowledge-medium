@@ -35,6 +35,11 @@ import type { BlockCache } from '@/data/blockCache'
 import type { PowerSyncDb } from './commitPipeline'
 import type { ChangeNotification, HandleStore } from './handleStore'
 import { cycleScanSql } from './treeQueries'
+import {
+  createPluginInvalidationEmitter,
+  type InvalidationRule,
+  type MutablePluginInvalidationMap,
+} from '@/data/invalidation.ts'
 
 /** Shape of a single `row_events` row we care about. */
 interface RowEventRow {
@@ -80,9 +85,10 @@ export const startRowEventsTail = (args: {
   db: PowerSyncDb
   cache: BlockCache
   handleStore: HandleStore
+  getInvalidationRules?: () => readonly InvalidationRule[]
   options?: RowEventsTailOptions
 }): RowEventsTail => {
-  const { db, cache, handleStore, options } = args
+  const { db, cache, handleStore, getInvalidationRules, options } = args
   const throttleMs = options?.throttleMs ?? DEFAULT_THROTTLE_MS
   const onError = options?.onError ?? ((err) => {
     console.warn('[Repo] row_events tail error:', err)
@@ -130,7 +136,9 @@ export const startRowEventsTail = (args: {
     const rowIds = new Set<string>()
     const parentIds = new Set<string>()
     const workspaceIds = new Set<string>()
-    const backlinkTargets = new Set<string>()
+    const pluginInvalidations: MutablePluginInvalidationMap = new Map()
+    const emitPluginInvalidation = createPluginInvalidationEmitter(pluginInvalidations)
+    const invalidationRules = getInvalidationRules?.() ?? []
 
     /** Per-workspace bookkeeping for the §4.7 cycle scan. We only need
      *  to scan rows whose parent_id changed (a fresh insert with no
@@ -172,19 +180,13 @@ export const startRowEventsTail = (args: {
         if (afterParent !== null) parentIds.add(afterParent)
       }
 
-      // Backlink-target diff: same shape as the fast-path computation
-      // in `snapshotsToChangeNotification`. A soft-deleted row
-      // contributes no outgoing reference edges; symmetric difference
-      // of effective target id sets goes here.
-      const beforeRefs = beforeLive ? before?.references ?? [] : []
-      const afterRefs = afterLive ? after?.references ?? [] : []
-      if (beforeRefs.length > 0 || afterRefs.length > 0) {
-        const beforeIds = new Set<string>()
-        for (const r of beforeRefs) beforeIds.add(r.id)
-        const afterIds = new Set<string>()
-        for (const r of afterRefs) afterIds.add(r.id)
-        for (const id of beforeIds) if (!afterIds.has(id)) backlinkTargets.add(id)
-        for (const id of afterIds) if (!beforeIds.has(id)) backlinkTargets.add(id)
+      for (const rule of invalidationRules) {
+        rule.collectFromRowEvent?.({
+          blockId: r.block_id,
+          kind: r.kind,
+          before,
+          after,
+        }, emitPluginInvalidation)
       }
 
       // Cycle-scan candidate selection: live row whose parent_id
@@ -277,7 +279,7 @@ export const startRowEventsTail = (args: {
       parentIds,
       workspaceIds,
       tables: new Set(['blocks']),
-      backlinkTargets,
+      plugin: pluginInvalidations.size > 0 ? pluginInvalidations : undefined,
     }
     handleStore.invalidate(notification)
   }

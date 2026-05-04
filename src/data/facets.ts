@@ -16,6 +16,7 @@ import type {
   AnyPropertyUiContribution,
   AnyQuery,
 } from '@/data/api'
+import type { InvalidationRule } from './invalidation.ts'
 
 export interface LocalSchemaDb {
   execute: (sql: string) => Promise<unknown>
@@ -53,6 +54,18 @@ const isLocalSchemaContribution = (value: unknown): value is LocalSchemaContribu
   (
     value.backfills === undefined ||
     (Array.isArray(value.backfills) && value.backfills.every(isLocalSchemaBackfill))
+  )
+
+const isInvalidationRule = (value: unknown): value is InvalidationRule =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  (
+    value.collectFromSnapshots === undefined ||
+    typeof value.collectFromSnapshots === 'function'
+  ) &&
+  (
+    value.collectFromRowEvent === undefined ||
+    typeof value.collectFromRowEvent === 'function'
   )
 
 /** Key the registry by `Mutator.name`; duplicates log a warning and
@@ -152,4 +165,9 @@ export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, Rea
 export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly LocalSchemaContribution[]>({
   id: 'data.localSchema',
   validate: isLocalSchemaContribution,
+})
+
+export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly InvalidationRule[]>({
+  id: 'data.invalidationRules',
+  validate: isInvalidationRule,
 })

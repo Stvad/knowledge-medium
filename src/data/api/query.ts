@@ -10,21 +10,17 @@ import type { Repo } from '../repo'
  *  bodies (e.g. `parent-edge` for tree handles, `row` for everything
  *  visited). Plugin queries do the same.
  *
- *  `backlink-target`: a handle that depends on "the set of source rows
- *  pointing at this id" — i.e. `backlinks.forBlock({id})`. The fast path +
- *  sync tail compute the symmetric difference of `references_json`
- *  target ids per touched row and add the diff to
- *  `ChangeNotification.backlinkTargets`. A change that doesn't alter
- *  the set of targets a source references (a content edit on a source
- *  row, a focus-state UI write) does NOT add anything to
- *  `backlinkTargets` and so does not invalidate any backlinks handle.
+ *  Plugin queries can declare channel/key dependencies through
+ *  `{kind:'plugin', channel, key}`. Plugin-owned invalidation rules emit
+ *  matching channel/key changes after tx commits and sync-applied row
+ *  events, keeping feature-specific invalidation logic out of core.
  */
 export type Dependency =
   | { kind: 'row'; id: string }
   | { kind: 'parent-edge'; parentId: string }
   | { kind: 'workspace'; workspaceId: string }
   | { kind: 'table'; table: string }
-  | { kind: 'backlink-target'; id: string }
+  | { kind: 'plugin'; channel: string; key: string }
 
 /** Read-only SQL surface available to a query resolver. Sees committed
  *  state at resolve time. Intentionally narrower than `PowerSyncDatabase`

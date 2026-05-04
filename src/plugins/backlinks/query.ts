@@ -4,6 +4,7 @@ import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
 } from '@/data/blockSchema'
+import { BACKLINKS_TARGET_INVALIDATION_CHANNEL } from './invalidation.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -32,7 +33,7 @@ const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string
  *
  *  Dep declaration:
  *    - `{kind:'row', id}` for the target row.
- *    - `{kind:'backlink-target', id}` for the precise incoming-edge set.
+ *    - plugin dep on `backlinks.target:${id}` for the precise incoming-edge set.
  *    - Per-source row deps from `hydrateBlocks`, so content edits on
  *      existing source rows update the rendered backlinks list. */
 export const backlinksForBlockQuery = defineQuery<
@@ -45,7 +46,11 @@ export const backlinksForBlockQuery = defineQuery<
   resolve: async ({workspaceId, id}, ctx) => {
     ctx.depend({kind: 'row', id})
     if (!workspaceId || !id) return []
-    ctx.depend({kind: 'backlink-target', id})
+    ctx.depend({
+      kind: 'plugin',
+      channel: BACKLINKS_TARGET_INVALIDATION_CHANNEL,
+      key: id,
+    })
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BACKLINKS_FOR_BLOCK_SQL, [workspaceId, id, id],
     )

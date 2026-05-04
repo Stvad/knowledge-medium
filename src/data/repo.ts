@@ -40,7 +40,12 @@ import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
-import { mutatorsFacet, postCommitProcessorsFacet, queriesFacet } from './facets'
+import {
+  invalidationRulesFacet,
+  mutatorsFacet,
+  postCommitProcessorsFacet,
+  queriesFacet,
+} from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
 import { Block } from './block'
 import {
@@ -64,6 +69,7 @@ import { UndoManager, type UndoEntry } from './internals/undoManager'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { SELECT_BLOCK_BY_ID_SQL } from './internals/kernelQueries'
+import type { InvalidationRule } from './invalidation'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -186,6 +192,7 @@ export class Repo {
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
+  private invalidationRules: readonly InvalidationRule[] = []
   /** Per-query-name generation counter. Bumped by `setFacetRuntime`
    *  (and `__setQueriesForTesting`) whenever a name's registered Query
    *  instance changes — including when a name is added or removed. The
@@ -384,6 +391,7 @@ export class Repo {
       db: this.db,
       cache: this.cache,
       handleStore: this.handleStore,
+      getInvalidationRules: () => this.invalidationRules,
       options,
     })
     return this.rowEventsTail
@@ -663,7 +671,9 @@ export class Repo {
     // pendingReinvalidate / kicks off a microtask, so the caller's tx
     // resolve isn't blocked on handle re-resolution.
     if (result.snapshots.size > 0) {
-      this.handleStore.invalidate(snapshotsToChangeNotification(result.snapshots))
+      this.handleStore.invalidate(
+        snapshotsToChangeNotification(result.snapshots, this.invalidationRules),
+      )
     }
     // Step 9 of the §10 pipeline — start field-watch + explicit
     // post-commit processors. Failures are caught + logged inside the
@@ -727,6 +737,7 @@ export class Repo {
   setFacetRuntime(runtime: FacetRuntime): void {
     this.mutators = new Map(runtime.read(mutatorsFacet))
     this.processors = new Map(runtime.read(postCommitProcessorsFacet))
+    this.invalidationRules = runtime.read(invalidationRulesFacet)
     const newQueries = new Map(runtime.read(queriesFacet))
     this.swapQueries(newQueries)
   }

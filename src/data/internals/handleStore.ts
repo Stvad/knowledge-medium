@@ -26,6 +26,13 @@
 
 import { isEqual } from 'lodash'
 import type { Dependency, Handle, HandleStatus, Unsubscribe } from '@/data/api'
+import {
+  collectPluginInvalidationsFromSnapshots,
+  pluginInvalidationSize,
+  type ChangeSnapshot,
+  type InvalidationRule,
+  type PluginInvalidationMap,
+} from '@/data/invalidation.ts'
 
 /** Dependency kinds (spec §9.2). A handle whose `Dependency` matches an
  *  incoming `ChangeNotification` is invalidated and re-resolved. The
@@ -44,13 +51,9 @@ export interface ChangeNotification {
   parentIds?: ReadonlySet<string> | readonly string[]
   workspaceIds?: ReadonlySet<string> | readonly string[]
   tables?: ReadonlySet<string> | readonly string[]
-  /** Target ids whose incoming-edge set changed — i.e. some block in
-   *  the workspace gained or lost a reference pointing at this id.
-   *  Computed as the symmetric difference of `references_json` target
-   *  ids per touched row (with soft-delete / restore treated as
-   *  "all edges" lost / gained respectively). Drives `backlink-target`
-   *  deps. Empty for tx batches that didn't change any references. */
-  backlinkTargets?: ReadonlySet<string> | readonly string[]
+  /** Plugin-owned channel/key invalidations. Handles declare matching
+   *  `{kind:'plugin', channel, key}` deps. */
+  plugin?: PluginInvalidationMap
 }
 
 /** Context handed to a handle's loader. The loader calls `depend(...)`
@@ -232,7 +235,7 @@ export class HandleStore {
       (!change.parentIds || sizeOf(change.parentIds) === 0) &&
       (!change.workspaceIds || sizeOf(change.workspaceIds) === 0) &&
       (!change.tables || sizeOf(change.tables) === 0) &&
-      (!change.backlinkTargets || sizeOf(change.backlinkTargets) === 0)
+      pluginInvalidationSize(change.plugin) === 0
     ) {
       return
     }
@@ -678,8 +681,10 @@ const matchesDep = (dep: Dependency, change: ChangeNotification): boolean => {
       return change.workspaceIds ? has(change.workspaceIds, dep.workspaceId) : false
     case 'table':
       return change.tables ? has(change.tables, dep.table) : false
-    case 'backlink-target':
-      return change.backlinkTargets ? has(change.backlinkTargets, dep.id) : false
+    case 'plugin': {
+      const keys = change.plugin?.get(dep.channel)
+      return keys ? has(keys, dep.key) : false
+    }
   }
 }
 
@@ -721,23 +726,8 @@ export const handleKey = (name: string, args?: unknown): string =>
 
 /** Per-id snapshot pair shape. Mirrors `SnapshotEntry` from
  *  `txSnapshots.ts` without importing it (handleStore stays free of
- *  internals dependencies). `references` is included so the
- *  `backlinkTargets` symmetric-diff path can compute "did this row's
- *  outgoing-edge set change". */
-export interface ChangeSnapshot {
-  before: {
-    parentId: string | null
-    workspaceId: string
-    deleted?: boolean
-    references?: ReadonlyArray<{ id: string }>
-  } | null
-  after: {
-    parentId: string | null
-    workspaceId: string
-    deleted?: boolean
-    references?: ReadonlyArray<{ id: string }>
-  } | null
-}
+ *  internals dependencies). */
+export type { ChangeSnapshot } from '@/data/invalidation.ts'
 
 /** Compute a `ChangeNotification` from a tx's per-id snapshots map.
  *  Used by the TxEngine fast path (§9.3): post-commit, the engine
@@ -759,21 +749,15 @@ export interface ChangeSnapshot {
  *       declare `ctx.depend({kind:'table', table:'blocks'})` (the
  *       coarse fallback for table-scan resolvers, especially ones with
  *       empty results that have no per-row deps to invalidate against).
- *    - `backlinkTargets`: target ids whose incoming-edge set changed.
- *       Computed as symmetric difference of `before.references` and
- *       `after.references` (treating soft-deletes/restores as "all
- *       edges" lost/gained). A row whose `references_json` is unchanged
- *       (or whose changes don't alter the set of distinct target ids)
- *       contributes nothing here — content-only edits, focus-state
- *       writes, and property edits don't invalidate backlinks handles.
+ *    - `plugin`: channel/key invalidations emitted by plugin rules.
  */
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
+  invalidationRules: readonly InvalidationRule[] = [],
 ): ChangeNotification => {
   const rowIds = new Set<string>()
   const parentIds = new Set<string>()
   const workspaceIds = new Set<string>()
-  const backlinkTargets = new Set<string>()
   const tables = snapshots.size > 0 ? new Set<string>(['blocks']) : undefined
   for (const [id, entry] of snapshots) {
     rowIds.add(id)
@@ -804,30 +788,12 @@ export const snapshotsToChangeNotification = (
     // alone covers it. No parent-edge entry — `repo.children(id)`
     // already declares row deps on each child for this case.
 
-    // Backlink-target diff: a soft-deleted (or never-live) row contributes
-    // no outgoing reference edges; treat its effective ref set as empty for
-    // diff purposes. The symmetric difference is the set of targets whose
-    // incoming-edge list either gained or lost this row.
-    const beforeRefs = beforeLive ? entry.before?.references ?? [] : []
-    const afterRefs = afterLive ? entry.after?.references ?? [] : []
-    addSymmetricTargetDiff(beforeRefs, afterRefs, backlinkTargets)
   }
-  return { rowIds, parentIds, workspaceIds, tables, backlinkTargets }
-}
-
-/** Add to `out` every target id present in exactly one of `before` /
- *  `after`. Reorderings or alias-only changes that preserve the set of
- *  distinct target ids contribute nothing. */
-const addSymmetricTargetDiff = (
-  before: ReadonlyArray<{ id: string }>,
-  after: ReadonlyArray<{ id: string }>,
-  out: Set<string>,
-): void => {
-  if (before.length === 0 && after.length === 0) return
-  const beforeIds = new Set<string>()
-  for (const r of before) beforeIds.add(r.id)
-  const afterIds = new Set<string>()
-  for (const r of after) afterIds.add(r.id)
-  for (const id of beforeIds) if (!afterIds.has(id)) out.add(id)
-  for (const id of afterIds) if (!beforeIds.has(id)) out.add(id)
+  return {
+    rowIds,
+    parentIds,
+    workspaceIds,
+    tables,
+    plugin: collectPluginInvalidationsFromSnapshots(invalidationRules, snapshots),
+  }
 }
