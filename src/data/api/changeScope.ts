@@ -23,22 +23,61 @@ export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
  *  from any caller. */
 export type TxSource = 'user' | 'local-ephemeral'
 
+export type ReadOnlyScopeBehavior = 'reject' | 'preserve-source' | 'local-ephemeral'
+
+export interface ChangeScopePolicy {
+  readonly undoable: boolean
+  readonly source: TxSource
+  readonly readOnly: ReadOnlyScopeBehavior
+}
+
+export const CHANGE_SCOPE_POLICIES = {
+  [ChangeScope.BlockDefault]: {
+    undoable: true,
+    source: 'user',
+    readOnly: 'reject',
+  },
+  [ChangeScope.UiState]: {
+    undoable: false,
+    source: 'local-ephemeral',
+    readOnly: 'preserve-source',
+  },
+  [ChangeScope.UserPrefs]: {
+    undoable: false,
+    source: 'user',
+    readOnly: 'local-ephemeral',
+  },
+  [ChangeScope.References]: {
+    undoable: true,
+    source: 'user',
+    readOnly: 'reject',
+  },
+} satisfies Readonly<Record<ChangeScope, ChangeScopePolicy>>
+
 export interface ScopeRoutingOptions {
   /** Read-only repos may still record user preferences locally, but
    *  those writes must not enter the upload queue. */
   isReadOnly?: boolean
 }
 
+export const policyForScope = (scope: ChangeScope): ChangeScopePolicy =>
+  CHANGE_SCOPE_POLICIES[scope]
+
 export const scopeAllowedInReadOnly = (scope: ChangeScope): boolean =>
-  scope === ChangeScope.UiState || scope === ChangeScope.UserPrefs
+  policyForScope(scope).readOnly !== 'reject'
+
+export const scopeIsUndoable = (scope: ChangeScope): boolean =>
+  policyForScope(scope).undoable
 
 export const sourceForScope = (
   scope: ChangeScope,
   opts: ScopeRoutingOptions = {},
 ): TxSource => {
-  if (scope === ChangeScope.UiState) return 'local-ephemeral'
-  if (scope === ChangeScope.UserPrefs && opts.isReadOnly) return 'local-ephemeral'
-  return 'user'
+  const policy = policyForScope(scope)
+  if (opts.isReadOnly && policy.readOnly === 'local-ephemeral') {
+    return 'local-ephemeral'
+  }
+  return policy.source
 }
 
 export const scopeUploadsToServer = (

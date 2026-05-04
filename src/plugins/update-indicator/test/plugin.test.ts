@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ChangeScope } from '@/data/api'
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { appEffectsFacet } from '@/extensions/core.ts'
 import { blockContentDecoratorsFacet } from '@/extensions/blockInteraction.ts'
@@ -23,6 +24,8 @@ describe('updateIndicatorPlugin', () => {
 
     expect(schemas.get(previousLoadTimeProp.name)).toBe(previousLoadTimeProp)
     expect(schemas.get(currentLoadTimeProp.name)).toBe(currentLoadTimeProp)
+    expect(previousLoadTimeProp.changeScope).toBe(ChangeScope.UserPrefs)
+    expect(currentLoadTimeProp.changeScope).toBe(ChangeScope.UserPrefs)
   })
 
   it('contributes its block content decorator', () => {

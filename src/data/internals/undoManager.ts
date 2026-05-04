@@ -31,7 +31,7 @@
  *     undoable). The `record` call no-ops on this scope.
  */
 
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, scopeIsUndoable } from '@/data/api'
 import type { SnapshotsMap } from './txSnapshots'
 
 export interface UndoEntry {
@@ -110,7 +110,7 @@ export class UndoManager {
 
   /** Only document/reference scopes are undoable. */
   private isUndoable(scope: ChangeScope): boolean {
-    return scope === ChangeScope.BlockDefault || scope === ChangeScope.References
+    return scopeIsUndoable(scope)
   }
 
   private getUndo(scope: ChangeScope): UndoEntry[] {

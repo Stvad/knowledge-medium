@@ -1,4 +1,4 @@
-import { getUIStateBlock } from '@/data/globalState.ts'
+import { getUserPrefsBlock } from '@/data/globalState.ts'
 import {
   ChangeScope,
   codecs,
@@ -10,14 +10,14 @@ import type { AppEffect } from '@/extensions/core.ts'
 export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
   codec: codecs.optional(codecs.number),
   defaultValue: undefined,
-  changeScope: ChangeScope.UiState,
+  changeScope: ChangeScope.UserPrefs,
   kind: 'number',
 })
 
 export const currentLoadTimeProp = defineProperty<number | undefined>('currentLoadTime', {
   codec: codecs.optional(codecs.number),
   defaultValue: undefined,
-  changeScope: ChangeScope.UiState,
+  changeScope: ChangeScope.UserPrefs,
   kind: 'number',
 })
 
@@ -32,13 +32,13 @@ export const recordUpdateIndicatorLoadTime = async (
   if (existing) return existing
 
   const record = (async () => {
-    const uiStateBlock = await getUIStateBlock(repo, workspaceId, repo.user, {})
-    const previous = uiStateBlock.peekProperty(currentLoadTimeProp) ?? 0
+    const prefsBlock = await getUserPrefsBlock(repo, workspaceId, repo.user)
+    const previous = prefsBlock.peekProperty(currentLoadTimeProp) ?? 0
 
     await repo.tx(async tx => {
-      await tx.setProperty(uiStateBlock.id, previousLoadTimeProp, previous)
-      await tx.setProperty(uiStateBlock.id, currentLoadTimeProp, Date.now())
-    }, {scope: ChangeScope.UiState, description: 'update indicator load time'})
+      await tx.setProperty(prefsBlock.id, previousLoadTimeProp, previous)
+      await tx.setProperty(prefsBlock.id, currentLoadTimeProp, Date.now())
+    }, {scope: ChangeScope.UserPrefs, description: 'update indicator load time'})
   })().catch(error => {
     recordedLoadTimes.delete(key)
     throw error

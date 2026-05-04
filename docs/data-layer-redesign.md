@@ -902,6 +902,11 @@ interface TxWriteOpts {
 type TxSource = 'user' | 'local-ephemeral'                   // sync writes bypass repo.tx; tx_context.source stays NULL for them, COALESCE'd to 'sync' in row_events
 ```
 
+The implementation keeps those semantics in one `CHANGE_SCOPE_POLICIES`
+table (`src/data/api/changeScope.ts`). Commit routing, read-only gating,
+upload checks, and undoability should consume helper functions from that
+table instead of pattern-matching on scope strings at call sites.
+
 **No arbitrary `tx.query`.** Even with write-through making own-writes visible to SQL, queries are still kept off the Tx surface. Reasons: (a) `Query` handles maintain dynamic dependency declarations (§5.5) for invalidation, which only make sense for live handles outside a tx; running them inside a tx tangles their dep-graph with the tx's lifecycle. (b) Most query results are reactive views the caller already has via `useHandle` outside the tx; running them again inside is duplication. (c) Limiting in-tx reads to `tx.get` / `tx.peek` / `tx.childrenOf` / `tx.parentOf` keeps mutator code shaped around well-defined neighborhoods.
 
 If a mutator needs broader information (e.g., "all blocks of a type in this workspace"), it should:
