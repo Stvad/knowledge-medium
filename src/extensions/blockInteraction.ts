@@ -354,13 +354,38 @@ export const focusBlock = ({block, uiStateBlock}: BlockResolveContext) => {
   setFocusedBlockId(uiStateBlock, block.id)
 }
 
-export const isLinkActivationEvent = (event: { target: EventTarget | null }) => {
+const interactiveContentSelector = [
+  'a[href]',
+  'button',
+  'input',
+  'select',
+  'textarea',
+  'summary',
+  'details',
+  'iframe',
+  'object',
+  'embed',
+  'audio[controls]',
+  'video[controls]',
+  '[contenteditable="true"]',
+  '[role="button"]',
+  '[role="checkbox"]',
+  '[role="link"]',
+  '[role="menuitem"]',
+  '[role="option"]',
+  '[role="radio"]',
+  '[role="switch"]',
+  '[role="tab"]',
+  '[data-block-interaction="ignore"]',
+].join(',')
+
+export const isInteractiveContentEvent = (event: { target: EventTarget | null }) => {
   const target = event.target
   if (typeof Node === 'undefined' || !(target instanceof Node)) return false
   const element = target.nodeType === Node.ELEMENT_NODE
     ? target as Element
     : target.parentElement
-  return Boolean(element?.closest('a[href]'))
+  return Boolean(element?.closest(interactiveContentSelector))
 }
 
 export const enterBlockEditMode = async (
@@ -395,7 +420,7 @@ export const handleBlockSelectionClick = async (
   context: BlockResolveContext,
   event: MouseEvent,
 ) => {
-  if (isLinkActivationEvent(event)) return
+  if (isInteractiveContentEvent(event)) return
 
   const {block, repo, uiStateBlock} = context
 

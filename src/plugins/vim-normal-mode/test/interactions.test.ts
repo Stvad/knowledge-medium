@@ -15,6 +15,25 @@ import {
   vimNormalModeActivation,
 } from '../interactions.ts'
 
+const interactiveTargets: Array<[string, () => HTMLElement]> = [
+  ['anchor', () => {
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+    return link
+  }],
+  ['button', () => document.createElement('button')],
+  ['ARIA button', () => {
+    const button = document.createElement('span')
+    button.setAttribute('role', 'button')
+    return button
+  }],
+  ['controlled video', () => {
+    const video = document.createElement('video')
+    video.controls = true
+    return video
+  }],
+]
+
 const context = {
   block: {id: 'block-1'} as Block,
   repo: {} as Repo,
@@ -40,11 +59,10 @@ describe('vim normal mode interactions', () => {
     expect(props.onTouchEnd).toBeDefined()
   })
 
-  it('leaves anchor clicks to browser navigation', async () => {
-    const link = document.createElement('a')
-    link.href = 'https://example.com'
+  it.each(interactiveTargets)('leaves %s clicks to the interactive descendant', async (_label, createTarget) => {
+    const interactive = createTarget()
     const child = document.createElement('span')
-    link.appendChild(child)
+    interactive.appendChild(child)
 
     const event = {
       target: child,
@@ -61,15 +79,14 @@ describe('vim normal mode interactions', () => {
     expect(event.stopPropagation).not.toHaveBeenCalled()
   })
 
-  it('does not turn link taps into edit-mode taps', () => {
+  it.each(interactiveTargets)('does not turn %s taps into edit-mode taps', (_label, createTarget) => {
     const runtime = resolveFacetRuntimeSync([
       blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),
     ])
     const props = runtime.read(blockContentSurfacePropsFacet)(context)
-    const link = document.createElement('a')
-    link.href = 'https://example.com'
+    const interactive = createTarget()
     const child = document.createElement('span')
-    link.appendChild(child)
+    interactive.appendChild(child)
 
     const startEvent = {
       target: child,

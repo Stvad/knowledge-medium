@@ -16,6 +16,25 @@ import {
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
 
+const interactiveTargets: Array<[string, () => HTMLElement]> = [
+  ['anchor', () => {
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+    return link
+  }],
+  ['button', () => document.createElement('button')],
+  ['ARIA button', () => {
+    const button = document.createElement('span')
+    button.setAttribute('role', 'button')
+    return button
+  }],
+  ['controlled video', () => {
+    const video = document.createElement('video')
+    video.controls = true
+    return video
+  }],
+]
+
 const context = {
   block: {id: 'block-1'} as Block,
   repo: {} as Repo,
@@ -71,11 +90,10 @@ describe('plain outliner interactions', () => {
     expect(renderer).toBe(PrimaryRenderer)
   })
 
-  it('leaves anchor clicks to browser navigation', async () => {
-    const link = document.createElement('a')
-    link.href = 'https://example.com'
+  it.each(interactiveTargets)('leaves %s clicks to the interactive descendant', async (_label, createTarget) => {
+    const interactive = createTarget()
     const child = document.createElement('span')
-    link.appendChild(child)
+    interactive.appendChild(child)
 
     const event = {
       target: child,
