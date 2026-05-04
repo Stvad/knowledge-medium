@@ -27,7 +27,6 @@ export interface BlockAction {
   description: string
   handler: (dependencies: BlockShortcutDependencies, trigger: ActionTrigger) => void | Promise<void>
   defaultBinding?: Omit<ShortcutBinding, 'action'>
-  hideFromCommandPallet?: boolean
 }
 
 export interface SharedBlockActions {

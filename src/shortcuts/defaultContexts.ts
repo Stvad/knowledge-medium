@@ -4,7 +4,6 @@ import {
   BaseShortcutDependencies,
   BlockShortcutDependencies,
   CodeMirrorEditModeDependencies,
-  CommandPaletteDependencies,
   MultiSelectModeDependencies,
   PropertyEditingDependencies,
 } from '@/shortcuts/types.ts'
@@ -22,9 +21,6 @@ const isCodeMirrorEditModeDependencies = (deps: unknown): deps is CodeMirrorEdit
 
 const isPropertyEditingDependencies = (deps: unknown): deps is PropertyEditingDependencies =>
   isBlockShortcutDependencies(deps) && typeof deps === 'object' && deps !== null && 'input' in deps && deps.input instanceof HTMLInputElement
-
-const isCommandPaletteDependencies = (deps: unknown): deps is CommandPaletteDependencies =>
-  isBaseShortcutDependencies(deps)
 
 const isMultiSelectModeDependencies = (deps: unknown): deps is MultiSelectModeDependencies =>
   isBaseShortcutDependencies(deps) &&
@@ -59,11 +55,6 @@ export const defaultActionContextConfigs: readonly ActionContextConfig[] = [
     type: ActionContextTypes.PROPERTY_EDITING,
     displayName: 'Property Editing',
     validateDependencies: isPropertyEditingDependencies,
-  },
-  {
-    type: ActionContextTypes.COMMAND_PALETTE,
-    displayName: 'Command Palette',
-    validateDependencies: isCommandPaletteDependencies,
   },
   {
     type: ActionContextTypes.MULTI_SELECT_MODE,

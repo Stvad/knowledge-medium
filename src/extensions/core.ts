@@ -69,8 +69,7 @@ export const isActionConfig = (value: unknown): value is ActionConfig =>
   typeof value.description === 'string' &&
   isActionContextType(value.context) &&
   typeof value.handler === 'function' &&
-  (value.defaultBinding === undefined || isShortcutBindingInput(value.defaultBinding)) &&
-  (value.hideFromCommandPallet === undefined || typeof value.hideFromCommandPallet === 'boolean')
+  (value.defaultBinding === undefined || isShortcutBindingInput(value.defaultBinding))
 
 export const createRendererRegistry = (
   contributions: readonly RendererContribution[],

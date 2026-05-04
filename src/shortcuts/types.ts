@@ -1,5 +1,4 @@
 import { Block } from '../data/block';
-import { Optional } from '@/utils/types.ts'
 import { EditorView } from '@codemirror/view'
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
@@ -15,7 +14,7 @@ export type DependencyValidator<T extends ActionContextType> = (
 
 export interface ActionContextConfig<T extends ActionContextType = ActionContextType> {
   type: T;
-  /** User-friendly name for this context, shown in the command palette. */
+  /** User-friendly name for this context, shown in shortcut-aware UI. */
   displayName: string;
   defaultEventOptions?: EventOptions;
   /**
@@ -35,7 +34,6 @@ export type BuiltInActionContextType =
   | 'normal-mode'
   | 'edit-mode-cm'
   | 'property-editing'
-  | 'command-palette'
   | 'multi-select-mode'
 
 export type ActionContextType = BuiltInActionContextType | (string & {})
@@ -45,7 +43,6 @@ export const ActionContextTypes = {
   NORMAL_MODE: 'normal-mode',
   EDIT_MODE_CM: 'edit-mode-cm',
   PROPERTY_EDITING: 'property-editing',
-  COMMAND_PALETTE: 'command-palette',
   MULTI_SELECT_MODE: 'multi-select-mode',
 } as const;
 
@@ -66,8 +63,6 @@ export interface PropertyEditingDependencies extends BlockShortcutDependencies {
   input: HTMLInputElement;
 }
 
-export type CommandPaletteDependencies =  BaseShortcutDependencies
-
 export interface MultiSelectModeDependencies extends BaseShortcutDependencies {
   selectedBlocks: Block[];
   anchorBlock: Block | null; // The block that started a shift-selection range
@@ -79,7 +74,6 @@ export interface ShortcutDependenciesMap {
   [ActionContextTypes.NORMAL_MODE]: BlockShortcutDependencies;
   [ActionContextTypes.EDIT_MODE_CM]: CodeMirrorEditModeDependencies;
   [ActionContextTypes.PROPERTY_EDITING]: PropertyEditingDependencies;
-  [ActionContextTypes.COMMAND_PALETTE]: CommandPaletteDependencies;
   [ActionContextTypes.MULTI_SELECT_MODE]: MultiSelectModeDependencies;
 }
 
@@ -96,19 +90,19 @@ export interface ActionContextActivation {
 
 export type ActionTrigger = KeyboardEvent | CustomEvent
 
+export type ActionHandler<T extends ActionContextType = ActionContextType> = {
+  bivarianceHack(dependencies: ShortcutDependenciesMap[T], trigger: ActionTrigger): void | Promise<void>
+}['bivarianceHack']
+
 export interface Action<T extends ActionContextType = ActionContextType> {
   id: string;
   description: string;
   context: T;
-  handler: (dependencies: ShortcutDependenciesMap[T], trigger: ActionTrigger) => void | Promise<void>;
+  handler: ActionHandler<T>;
   defaultBinding?: Omit<ShortcutBinding, 'action'>; // Optional default binding
-  hideFromCommandPallet?: boolean;
 }
 
-export type ActionConfig<T extends ActionContextType = ActionContextType> = Optional<
-  Action<T>,
-  'hideFromCommandPallet'
->;
+export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>
 
 
 export interface ShortcutBinding {

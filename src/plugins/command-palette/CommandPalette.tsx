@@ -7,13 +7,14 @@ import {
   CommandGroup,
   CommandItem,
 } from '@/components/ui/command'
-import { useCommandPaletteShortcuts } from '@/shortcuts/useActionContext.ts'
-import { useAvailableActions } from '@/shortcuts/useAvailableActions.ts'
+import { useActionContext } from '@/shortcuts/useActionContext.ts'
 import { useRunAction } from '@/shortcuts/runAction.ts'
-import { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
+import type { ActionConfig, ShortcutBinding, ActionContextType } from '@/shortcuts/types.ts'
 import { Kbd } from '@/components/ui/kbd'
 import { groupBy } from 'lodash'
 import { toggleCommandPaletteEvent } from './events.ts'
+import { COMMAND_PALETTE_CONTEXT } from './context.ts'
+import { useCommandPaletteActions } from './useCommandPaletteActions.ts'
 
 const formatShortcutKeys = (bindings: readonly ShortcutBinding[]): string[] => {
   if (!bindings || bindings.length === 0) {
@@ -29,7 +30,7 @@ export function CommandPalette() {
 
   const shortcutDependencies = useMemo(() => ({}), [])
 
-  useCommandPaletteShortcuts(shortcutDependencies, open)
+  useActionContext(COMMAND_PALETTE_CONTEXT, shortcutDependencies, open)
 
   useEffect(() => {
     const handleToggle = () => {
@@ -39,7 +40,7 @@ export function CommandPalette() {
     return () => window.removeEventListener(toggleCommandPaletteEvent, handleToggle)
   }, [])
 
-  const {actions, activeContexts, bindingsFor} = useAvailableActions()
+  const {actions, activeContexts, bindingsFor} = useCommandPaletteActions()
   const runAction = useRunAction()
 
   const {activeContextsInfo, groupedActions} = useMemo(() => {

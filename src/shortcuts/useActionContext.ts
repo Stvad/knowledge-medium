@@ -6,7 +6,6 @@ import {
   BaseShortcutDependencies,
   ActionContextTypes,
   PropertyEditingDependencies,
-  CommandPaletteDependencies,
   BlockShortcutDependencies,
   CodeMirrorEditModeDependencies,
 } from './types'
@@ -94,11 +93,4 @@ export function useCodeMirrorEditModeShortcuts<T extends boolean>(
  */
 export function usePropertyEditingShortcuts(dependencies: Omit<PropertyEditingDependencies, 'uiStateBlock'>, enabled: boolean = true): void {
   useActionContext(ActionContextTypes.PROPERTY_EDITING, dependencies, enabled)
-}
-
-/**
- * Hook for command palette shortcuts
- */
-export function useCommandPaletteShortcuts(dependencies: Omit<CommandPaletteDependencies, 'uiStateBlock'>, enabled: boolean = true): void {
-  useActionContext(ActionContextTypes.COMMAND_PALETTE, dependencies, enabled)
 }

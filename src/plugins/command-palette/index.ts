@@ -1,4 +1,5 @@
 import {
+  actionContextsFacet,
   actionsFacet,
   appMountsFacet,
   headerItemsFacet,
@@ -10,10 +11,16 @@ import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 import { CommandPalette } from './CommandPalette.tsx'
 import { toggleCommandPaletteEvent } from './events.ts'
+import { COMMAND_PALETTE_ACTION_ID, commandPaletteActionContext } from './context.ts'
 
 export { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 export { CommandPalette } from './CommandPalette.tsx'
 export { toggleCommandPaletteEvent } from './events.ts'
+export {
+  COMMAND_PALETTE_ACTION_ID,
+  COMMAND_PALETTE_CONTEXT,
+  commandPaletteActionContext,
+} from './context.ts'
 
 export const commandPaletteMount: AppMountContribution = {
   id: 'command-palette.dialog',
@@ -21,7 +28,7 @@ export const commandPaletteMount: AppMountContribution = {
 }
 
 export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
-  id: 'command_palette',
+  id: COMMAND_PALETTE_ACTION_ID,
   description: 'Open command palette',
   context: ActionContextTypes.GLOBAL,
   handler: () => {
@@ -30,7 +37,6 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
   defaultBinding: {
     keys: ['cmd+k', 'ctrl+k'],
   },
-  hideFromCommandPallet: true,
 }
 
 export const commandPaletteHeaderItem: HeaderItemContribution = {
@@ -41,6 +47,7 @@ export const commandPaletteHeaderItem: HeaderItemContribution = {
 
 export const commandPalettePlugin: AppExtension = [
   appMountsFacet.of(commandPaletteMount, {source: 'command-palette'}),
+  actionContextsFacet.of(commandPaletteActionContext, {source: 'command-palette'}),
   actionsFacet.of(commandPaletteAction, {source: 'command-palette'}),
   headerItemsFacet.of(commandPaletteHeaderItem, {
     source: 'command-palette',

@@ -69,7 +69,7 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
       setActive(prev => {
         const next = new Map(prev)
         // Re-insert at end to keep activation order deterministic for
-        // command-palette display and last-active-wins semantics.
+        // ordered consumers and last-active-wins semantics.
         next.delete(context)
         next.set(context, dependencies)
         return next
@@ -105,8 +105,7 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
 
 /**
  * Read the map of currently-active contexts. Consumers of this hook re-render
- * on every activation change — use sparingly (HotkeyReconciler,
- * useAvailableActions, useRunAction).
+ * on every activation change — use sparingly (HotkeyReconciler, useRunAction).
  */
 export function useActiveContextsState(): ActiveContextsMap {
   const state = useContext(ActiveContextsStateCtx)

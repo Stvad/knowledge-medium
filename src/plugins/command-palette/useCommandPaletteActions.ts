@@ -2,42 +2,26 @@ import { useMemo } from 'react'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import {
+import type {
   ActionConfig,
   ActionContextType,
   ActiveContextInfo,
   ShortcutBinding,
 } from '@/shortcuts/types.ts'
+import { COMMAND_PALETTE_ACTION_ID } from './context.ts'
 
-export interface AvailableActionsResult {
-  /** Actions whose context is currently active (filtered for command-palette visibility). */
+export interface CommandPaletteActionsResult {
   actions: readonly ActionConfig[]
-  /**
-   * Currently-active contexts with their configs and dependencies.
-   * Iteration order reflects activation order (most-recent last).
-   */
   activeContexts: ActiveContextInfo[]
-  /** Returns the bindings declared for a given action id (empty array if none). */
   bindingsFor: (actionId: string) => readonly ShortcutBinding[]
 }
 
-// Stable empty-result the `bindingsFor` fallback can share, keeping its
-// return value referentially stable across calls.
 const NO_BINDINGS: readonly ShortcutBinding[] = []
 
-/**
- * Exposes the currently-available actions to UI consumers (e.g. the command
- * palette). All state is derived from the facet runtime and the
- * ActiveContextsProvider — no singleton engine involved.
- */
-export function useAvailableActions(): AvailableActionsResult {
+export function useCommandPaletteActions(): CommandPaletteActionsResult {
   const runtime = useAppRuntime()
   const active = useActiveContextsState()
 
-  // Derived purely from the runtime — doesn't depend on `active`, so it only
-  // recomputes when the extension graph regenerates. `bindingsFor`'s function
-  // identity is therefore stable across activation changes, which is what
-  // consumers putting it in dep arrays expect.
   const {contextConfigsByType, bindingsFor} = useMemo(() => {
     const contextConfigs = runtime.read(actionContextsFacet)
     const configsByType = new Map<ActionContextType, typeof contextConfigs[number]>(
@@ -64,7 +48,7 @@ export function useAvailableActions(): AvailableActionsResult {
     const allActions = runtime.read(actionsFacet)
 
     const actions = allActions.filter(
-      action => active.has(action.context) && !action.hideFromCommandPallet,
+      action => active.has(action.context) && action.id !== COMMAND_PALETTE_ACTION_ID,
     )
 
     const activeContexts: ActiveContextInfo[] = Array.from(active.entries()).flatMap(
