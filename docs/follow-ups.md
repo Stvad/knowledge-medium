@@ -84,3 +84,28 @@ Blockers to land first:
 3. **Multi-device sanity check.** Confirm that a synced user page on Device B doesn't crash when its child set is partially device-local on A.
 
 Once #1 lands, the migration is small: swap `AgentTokenStore` for a thin wrapper around `repo.tx({scope: DeviceLocal})` + `repo.query.children({parentId: userPage.id, kind: 'agent-token'})`. Bridge handshake and CLI stay identical.
+
+---
+
+# Architectural ideas (no current trigger)
+
+Notes captured from design discussions where we landed on a clear deferred shape but no near-term reason to build. Each entry exists so future-us doesn't re-derive the analysis from scratch.
+
+## Plugin payload side-table (`plugin_block_data`) — deferred bandwidth escape hatch
+
+The current plugin-extensibility plan has plugins write into namespaced subtrees of `properties_json` (scalars) or namespaced entries in `edges_json` (relationships), with local-only derived tables maintained by Shape-A triggers — JSON is source of truth, local rep is derived from a `LocalSchemaContribution`. This works at typical sizes but pools all plugins' bandwidth into one of the two JSON columns: a plugin that frequently mutates a large opaque payload re-syncs the whole blob on every edit, sharing wire bytes with everything else attached to that block.
+
+**Escape hatch:** one core-provided `plugin_block_data(block_id, plugin_id, payload TEXT)` table, one row per (block, plugin). Bandwidth-isolated per plugin; lifecycle (block insert/delete cascade, workspace_id propagation) handled by shared core triggers; sync via plugin-aware PowerSync rules. Plugins still derive their query/index tables via Shape-A triggers, sourced from `plugin_block_data` rows filtered by `plugin_id` instead of a JSON namespace. Plugin-skew passthrough (rows for plugins not installed locally ride round-trip intact) carries over from the JSON-namespace approach since the row exists in core regardless of whether the local plugin is registered.
+
+**Why deferred:** no current plugin needs it. Backlinks fits `edges_json`, scalar-prop plugins fit `properties_json` namespaces, both fine at alpha scale. Pre-user, building it later is approximately the same cost as building it now — the only thing that makes "later" expensive is plugins building workarounds (shoving large payloads into `properties_json` and paying the bandwidth penalty) before the proper surface exists.
+
+**Trigger to build:** a plugin shows up with non-relational, large-or-high-churn payload that doesn't fit `edges_json` (typed-edge model doesn't apply) and would meaningfully hurt other plugins' write bandwidth if it lived in `properties_json`. Examples: rich annotations, embedded media metadata, per-block AI summaries — anything where per-block payload routinely exceeds a few KB and updates independently of block content.
+
+**Migration path** for an existing plugin to graduate into it: backfill rows from the plugin's `properties_json` namespace, switch the plugin's triggers to source from `plugin_block_data` filtered by its `plugin_id`, drop the namespace from `properties_json`. Same per-plugin state-marker pattern as `block_references_backfill_v1`. The plugin's local derived tables don't change shape; only their source-of-truth changes from "JSON subtree" to "row's `payload` column." Bounded, contained, reversible.
+
+**Open decisions** to make at build time (not now):
+- Bucket strategy: per-`(workspace_id, plugin_id)` (clean install/uninstall semantics, requires `powersync deploy` per new plugin id) vs. per-`workspace_id` only (simpler ops, clients pull payloads for uninstalled plugins).
+- Whether core also provides a generic write API (`tx.setPluginData(blockId, pluginId, payload)`) or each plugin owns its write path.
+- Whether `payload` should remain opaque TEXT or be `JSON` (typed) for in-SQL extraction; defaults toward TEXT since plugins already maintain their own indexed local tables and don't need server-side JSON queries.
+
+**Considered and rejected:** generic `block_props(block_id, key, value)` normalization. Read regression on the hot path (every block load aggregates N rows instead of one blob parse) outweighs the bandwidth win at typical prop counts; doesn't unlock new query capabilities beyond what `block_aliases`-style derived tables already provide; and the 1:1 (block, plugin) shape is strictly better for the actual problem since most read paths don't need any plugin's payload at all — and when they do, it's one indexed lookup per plugin, not N rows aggregated per block.
