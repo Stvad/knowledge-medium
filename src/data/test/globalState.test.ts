@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Non-hook helpers from `src/data/globalState.ts` — the durable
- * domain-side bits of the per-user "user page" + per-panel ui-state
+ * domain-side bits of the per-user "user page", user prefs, and per-panel ui-state
  * subtree. The React hooks defined alongside these helpers are NOT
  * tested here (Phase 2 rewrites them on `useHandle` + Suspense), but
  * the resolvers / mutators stay.
@@ -12,6 +12,7 @@
  *     (workspace, user); idempotent (memoized — second call returns
  *     same promise + Block); falls back to user.id when name is
  *     undefined; restores tombstoned user page
+ *   - getUserPrefsBlock: ensures the synced user-prefs child
  *   - getUIStateBlock(repo, ws, user, ctx): with panelId → returns
  *     the panel block; without panelId → ensures a 'ui-state' child
  *     of the user page
@@ -37,6 +38,7 @@ import {
   getSelectionStateSnapshot,
   getUIStateBlock,
   getUserBlock,
+  getUserPrefsBlock,
   isMainPanel,
   resetBlockSelection,
 } from '@/data/globalState'
@@ -75,6 +77,11 @@ describe('getUserBlock', () => {
     expect(data?.workspaceId).toBe(WS)
     expect(data?.content).toBe('Alice')
     expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice'])
+
+    const events = await env.h.db.getAll<{scope: string; source: string}>(
+      'SELECT scope, source FROM command_events ORDER BY created_at',
+    )
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user'})
   })
 
   it('uses a deterministic id stable per (workspace, user)', async () => {
@@ -98,7 +105,7 @@ describe('getUserBlock', () => {
 
   it('restores a tombstoned user page', async () => {
     const block = await getUserBlock(env.repo, WS, USER)
-    await env.repo.tx(tx => tx.delete(block.id), {scope: ChangeScope.UiState})
+    await env.repo.tx(tx => tx.delete(block.id), {scope: ChangeScope.UserPrefs})
 
     // Re-resolve via a fresh Repo so we bypass the lodash.memoize
     // cached promise (which would short-circuit and never enter the
@@ -113,6 +120,47 @@ describe('getUserBlock', () => {
       expect(restored.peekProperty(aliasesProp)).toEqual(['Alice'])
     } finally {
       await fresh.h.cleanup()
+    }
+  })
+})
+
+describe('getUserPrefsBlock', () => {
+  it('ensures a "user-prefs" child under the user page', async () => {
+    const userBlock = await getUserBlock(env.repo, WS, USER)
+    const prefs = await getUserPrefsBlock(env.repo, WS, USER)
+
+    expect(prefs.peek()?.parentId).toBe(userBlock.id)
+    expect(prefs.peek()?.content).toBe('user-prefs')
+
+    const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
+      'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',
+    )
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user', workspace_id: WS})
+  })
+
+  it('routes to local-ephemeral in read-only repos', async () => {
+    const h = await createTestDb()
+    const repo = new Repo({
+      db: h.db,
+      cache: new BlockCache(),
+      user: USER,
+      isReadOnly: true,
+      registerKernelProcessors: false,
+    })
+    repo.setActiveWorkspaceId(WS)
+
+    try {
+      const prefs = await getUserPrefsBlock(repo, WS, USER)
+      expect(prefs.peek()?.content).toBe('user-prefs')
+
+      const events = await h.db.getAll<{scope: string; source: string}>(
+        'SELECT scope, source FROM command_events ORDER BY created_at',
+      )
+      expect(events.every(event => event.scope === ChangeScope.UserPrefs)).toBe(true)
+      expect(events.every(event => event.source === 'local-ephemeral')).toBe(true)
+      expect(await h.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+    } finally {
+      await h.cleanup()
     }
   })
 })
@@ -139,6 +187,11 @@ describe('getUIStateBlock', () => {
 
     expect(uiState.peek()?.parentId).toBe(userBlock.id)
     expect(uiState.peek()?.content).toBe('ui-state')
+
+    const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
+      'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',
+    )
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral', workspace_id: WS})
   })
 
   it('without panelId: idempotent — second call returns the same Block', async () => {

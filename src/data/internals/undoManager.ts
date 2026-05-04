@@ -25,6 +25,8 @@
  *   - `References` — separate bucket; recorded for parity with the spec
  *     but not exposed to user undo (§7.3, §5.8). `repo.undo` defaults
  *     to `BlockDefault`.
+ *   - `UserPrefs` — never recorded. Preference writes sync, but cmd-Z
+ *     should not toggle recents / app settings.
  *   - `UiState` — never recorded (selection / focus state isn't
  *     undoable). The `record` call no-ops on this scope.
  */
@@ -56,8 +58,7 @@ export class UndoManager {
 
   /** Push an entry onto the undo stack of its scope. Side-effects:
    *  clears the redo stack for that scope (a new action invalidates
-   *  the redo branch). No-op for `UiState` (not undoable per spec).
-   *  No-op for zero-write txs (nothing to undo). */
+   *  the redo branch). No-op for non-undoable scopes and zero-write txs. */
   record(entry: UndoEntry): void {
     if (!this.isUndoable(entry.scope)) return
     if (entry.snapshots.size === 0) return
@@ -107,9 +108,9 @@ export class UndoManager {
     }
   }
 
-  /** UiState is not undoable. BlockDefault + References are. */
+  /** Only document/reference scopes are undoable. */
   private isUndoable(scope: ChangeScope): boolean {
-    return scope !== ChangeScope.UiState
+    return scope === ChangeScope.BlockDefault || scope === ChangeScope.References
   }
 
   private getUndo(scope: ChangeScope): UndoEntry[] {

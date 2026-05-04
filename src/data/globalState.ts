@@ -1,17 +1,20 @@
 /**
- * UI-state plumbing — per-user "user page" + per-panel ui-state child
- * tree, plus the React hooks that read/write properties on those
- * blocks. Persists app-shell and plugin UI state (focus, selection,
- * edit-mode, top-level block, etc.) inside the same block tree as content,
- * scoped to `ChangeScope.UiState` so the writes are routed to local-
- * ephemeral storage and never enter the upload queue.
+ * User-local state plumbing — per-user "user page", synced user prefs,
+ * and per-panel ui-state child tree, plus React hooks that read/write
+ * properties on those blocks. Transient app-shell and plugin UI state
+ * (focus, selection, edit-mode, top-level block, etc.) uses
+ * `ChangeScope.UiState` so writes route to local-ephemeral storage and
+ * never enter the upload queue. User preferences use `ChangeScope.UserPrefs`
+ * and live on a separate child row so local-only properties cannot leak
+ * through whole-row `properties_json` uploads.
  *
  * Migration note (1.6): legacy callers used `repo.find(...)` /
  * `block.childByContent(name, createIfMissing, {scope})` /
  * `block.change(callback)` — all gone. The new shape composes with:
  *   - `repo.block(id)` for a Block facade (sync, identity-stable)
  *   - `repo.load(id, {...})` to populate cache neighborhoods
- *   - `repo.tx(fn, {scope: ChangeScope.UiState})` for writes
+ *   - `repo.tx(fn, {scope: ChangeScope.UiState | ChangeScope.UserPrefs})`
+ *     for writes
  *   - `tx.createOrGet({id, ...})` for idempotent bootstrap
  * Deterministic ids derived from (workspace, user, ...) keep two
  * offline clients converging on the same row when they later sync.
@@ -47,20 +50,20 @@ import { usePropertyValue, useHandle } from '@/hooks/block'
 // ──── Deterministic-id namespaces ────
 
 // Per-user "user page" — parent-less alias-bearing block hosting the
-// user's UI-state subtree for a given workspace. Same pattern as
-// DAILY_NOTE_NS: two offline clients converge on the same row when
-// they sync, so we never end up with duplicate user pages.
-const USER_PAGE_NS = '4d9d2a73-3e5a-4f43-95e3-2a76b1b7e6d7'
-// Per-(parent, content) UI-state child — used by the bootstrap below
-// (ui-state, panels, panel/main, etc.) so each name resolves to the
-// same block id across clients.
-const UI_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
+// user's prefs + UI-state subtree for a given workspace. This namespace
+// intentionally differs from the pre-UserPrefs UI-state namespace, whose
+// rows were local-ephemeral and may not exist on the server.
+const USER_PAGE_NS = '99b1b4e5-6f58-4fd2-9089-dc3b358dd4df'
+// Per-(parent, content) state child — used by the bootstrap below
+// (user-prefs, ui-state, panels, panel/main, etc.) so each name resolves
+// to the same block id across clients.
+const STATE_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
 
 const userPageBlockId = (workspaceId: string, userId: string): string =>
   uuidv5(`${workspaceId}:${userId}`, USER_PAGE_NS)
 
-const uiChildBlockId = (parentId: string, content: string): string =>
-  uuidv5(`${parentId}:${content}`, UI_CHILD_NS)
+const stateChildBlockId = (parentId: string, content: string): string =>
+  uuidv5(`${parentId}:${content}`, STATE_CHILD_NS)
 
 // ──── Helpers ────
 
@@ -72,19 +75,20 @@ const requireWorkspaceId = (repo: Repo, caller: string): string => {
   return workspaceId
 }
 
-/** Idempotent UI-state child creation. Returns the Block facade for
+/** Idempotent state child creation. Returns the Block facade for
  *  the child whose content equals `content` under `parent`. The id
- *  comes from `uiChildBlockId(parentId, content)` so repeat calls hit
+ *  comes from `stateChildBlockId(parentId, content)` so repeat calls hit
  *  the same row deterministically. Restores soft-deleted rows in the
  *  same scope. */
-const ensureUiChild = async (
+const ensureStateChild = async (
   repo: Repo,
   parent: Block,
   content: string,
+  scope: ChangeScope,
 ): Promise<Block> => {
   const parentData = parent.peek() ?? await parent.load()
-  if (!parentData) throw new Error(`ensureUiChild: parent ${parent.id} not loaded`)
-  const childId = uiChildBlockId(parent.id, content)
+  if (!parentData) throw new Error(`ensureStateChild: parent ${parent.id} not loaded`)
+  const childId = stateChildBlockId(parent.id, content)
 
   await repo.tx(async tx => {
     const existing = await tx.get(childId)
@@ -96,9 +100,9 @@ const ensureUiChild = async (
       return
     }
     // Fresh insert. Use 'a0' as a starter order key — fine because
-    // UI-state children don't compete for ordering with other
+    // state children don't compete for ordering with user-authored
     // siblings beyond the bootstrap bucket; if we ever add multiple
-    // ui-state children with stable order, swap to keyAtEnd.
+    // ordered state children, swap to keyAtEnd.
     await tx.create({
       id: childId,
       workspaceId: parentData.workspaceId,
@@ -106,9 +110,26 @@ const ensureUiChild = async (
       orderKey: 'a0',
       content,
     })
-  }, {scope: ChangeScope.UiState})
+  }, {scope})
 
   return repo.block(childId)
+}
+
+const ensureUiChild = (repo: Repo, parent: Block, content: string): Promise<Block> =>
+  ensureStateChild(repo, parent, content, ChangeScope.UiState)
+
+const ensureUserPrefsChild = (repo: Repo, parent: Block, content: string): Promise<Block> =>
+  ensureStateChild(repo, parent, content, ChangeScope.UserPrefs)
+
+const requireSchemaScope = <T>(
+  schema: PropertySchema<T>,
+  scope: ChangeScope,
+  caller: string,
+): PropertySchema<T> => {
+  if (schema.changeScope !== scope) {
+    throw new Error(`${caller} expected ${scope} property ${schema.name}, got ${schema.changeScope}`)
+  }
+  return schema
 }
 
 // ──── Bootstrap blocks ────
@@ -155,11 +176,20 @@ export const getUserBlock = memoize(
         content: displayName,
         properties: {[aliasesProp.name]: aliasesProp.codec.encode([displayName])},
       })
-    }, {scope: ChangeScope.UiState})
+    }, {scope: ChangeScope.UserPrefs})
 
     return repo.block(id)
   },
   (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}`,
+)
+
+const USER_PREFS_PATH_PART = 'user-prefs'
+export const getUserPrefsBlock = memoize(
+  async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
+    const userBlock = await getUserBlock(repo, workspaceId, user)
+    return ensureUserPrefsChild(repo, userBlock, USER_PREFS_PATH_PART)
+  },
+  (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}:__user_prefs__`,
 )
 
 /** Resolve the UI-state block scoped to the current panel context.
@@ -208,12 +238,29 @@ export function useUIStateBlock(): Block {
   return use(getUIStateBlock(repo, workspaceId, user, context))
 }
 
+/** Root app-shell UI state, independent of the current panel context. */
+export function useRootUIStateBlock(): Block {
+  const repo = useRepo()
+  const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'useRootUIStateBlock')
+
+  return use(getUIStateBlock(repo, workspaceId, user, {}))
+}
+
 export function useUserBlock(): Block {
   const repo = useRepo()
   const user = useUser()
   const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
 
   return use(getUserBlock(repo, workspaceId, user))
+}
+
+export function useUserPrefsBlock(): Block {
+  const repo = useRepo()
+  const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'useUserPrefsBlock')
+
+  return use(getUserPrefsBlock(repo, workspaceId, user))
 }
 
 /** Hook to access and modify a UI-state property on the active UI-state
@@ -223,12 +270,28 @@ export function useUIStateProperty<T>(
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] {
   const block = useUIStateBlock()
-  return usePropertyValue(block, schema)
+  return usePropertyValue(block, requireSchemaScope(schema, ChangeScope.UiState, 'useUIStateProperty'))
 }
 
-export const useUserProperty = <T>(
+export function useRootUIStateProperty<T>(
   schema: PropertySchema<T>,
-): [T, (value: T) => void] => usePropertyValue(useUserBlock(), schema)
+): [T, (value: T) => void] {
+  const block = useRootUIStateBlock()
+  return usePropertyValue(block, requireSchemaScope(schema, ChangeScope.UiState, 'useRootUIStateProperty'))
+}
+
+export const useUserPrefsProperty = <T>(
+  schema: PropertySchema<T>,
+): [T, (value: T) => void] =>
+  usePropertyValue(useUserPrefsBlock(), requireSchemaScope(schema, ChangeScope.UserPrefs, 'useUserPrefsProperty'))
+
+/** @deprecated Prefer `useUserPrefsProperty` for synced preferences or
+ *  `useRootUIStateProperty` for local app-shell state. */
+export function useUserProperty<T>(
+  schema: PropertySchema<T>,
+): [T, (value: T) => void] {
+  return useUserPrefsProperty(schema)
+}
 
 /** Sugar for the global editing flag — `[isEditing, setIsEditing]`. */
 export const useIsEditing = (): [boolean, (value: boolean) => void] =>

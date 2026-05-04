@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
 import { useRepo } from '@/context/repo.tsx'
-import { useUIStateBlock, useUIStateProperty } from '@/data/globalState.ts'
+import { useUserPrefsBlock, useUserPrefsProperty } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties.ts'
 import { v4 as uuidv4 } from 'uuid'
@@ -50,8 +50,8 @@ const truncate = (text: string, max = 80) =>
 
 export function QuickFind() {
   const repo = useRepo()
-  const uiStateBlock = useUIStateBlock()
-  const [recentIds] = useUIStateProperty(recentBlockIdsProp)
+  const userPrefsBlock = useUserPrefsBlock()
+  const [recentIds] = useUserPrefsProperty(recentBlockIdsProp)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -137,13 +137,13 @@ export function QuickFind() {
   const jumpToBlock = (blockId: string) => {
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    pushRecentBlockId(uiStateBlock, blockId)
+    pushRecentBlockId(userPrefsBlock, blockId)
     writeAppHash(workspaceId, blockId)
     setOpen(false)
   }
 
   const openInNewPanel = (blockId: string) => {
-    pushRecentBlockId(uiStateBlock, blockId)
+    pushRecentBlockId(userPrefsBlock, blockId)
     window.dispatchEvent(new CustomEvent('open-panel', {detail: {blockId}}))
     setOpen(false)
   }

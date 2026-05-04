@@ -565,7 +565,7 @@ describe('tx.afterCommit', () => {
 // ──── Read-only mode ────
 
 describe('read-only mode', () => {
-  it('rejects BlockDefault scope but allows UiState', async () => {
+  it('rejects BlockDefault scope but allows local UiState and UserPrefs', async () => {
     const ro = await setup({isReadOnly: true})
     try {
       await expect(
@@ -579,6 +579,16 @@ describe('read-only mode', () => {
         {scope: ChangeScope.UiState},
       )
       expect(id).toBe('ui-1')
+
+      const prefId = await ro.repo.tx(
+        tx => tx.create({id: 'prefs-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'}),
+        {scope: ChangeScope.UserPrefs},
+      )
+      expect(prefId).toBe('prefs-1')
+
+      const cmds = await ro.commandEvents()
+      expect(cmds.at(-1)).toMatchObject({scope: ChangeScope.UserPrefs, source: 'local-ephemeral'})
+      expect(await ro.psCrud()).toEqual([])
     } finally {
       await ro.h.cleanup()
     }
@@ -693,6 +703,18 @@ describe('commit pipeline bookkeeping', () => {
     // Upload trigger gates on source = 'user'; UiState writes don't enqueue.
     const crud = await env.psCrud()
     expect(crud).toEqual([])
+  })
+
+  it('UserPrefs scope uploads in writable repos', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'prefs-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.UserPrefs})
+
+    const cmds = await env.commandEvents()
+    expect(cmds.at(-1)).toMatchObject({scope: ChangeScope.UserPrefs, source: 'user'})
+    const crud = await env.psCrud()
+    expect(crud).toHaveLength(1)
+    expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id: 'prefs-1'})
   })
 
   it('multi-create tx ships as one CrudTransaction (ps_crud.tx_id groups across rows)', async () => {

@@ -131,8 +131,9 @@ export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
   user: User
-  /** Read-only mode disables `BlockDefault` / `References` writes. UI-state
-   *  scope (`local-ui`) is still allowed. Default false. */
+  /** Read-only mode disables `BlockDefault` / `References` writes.
+   *  `UiState` stays local-only and `UserPrefs` degrades to local-only.
+   *  Default false. */
   isReadOnly?: boolean
   /** Now provider — default `Date.now`. Injected for test determinism. */
   now?: () => number
@@ -178,8 +179,8 @@ export class Repo {
   readonly cache: BlockCache
   user: User
   /** Read-only mode disables `BlockDefault` / `References` writes;
-   *  UI-state writes still pass through (they route to local-ephemeral
-   *  source unconditionally per spec §5.8 / §10). Mutate via
+   *  UI-state writes still pass through, and UserPrefs writes pass
+   *  through as local-ephemeral. Mutate via
    *  `repo.setReadOnly(value)` rather than direct field assignment so
    *  callers from inside React hooks don't trip
    *  `react-hooks/immutability` lint (the mutation should travel
@@ -580,8 +581,7 @@ export class Repo {
    *  keeps call sites that come from inside React hooks lint-clean
    *  (`react-hooks/immutability` flags direct property writes on
    *  hook outputs). UI-state writes still pass through regardless of
-   *  this flag — only `BlockDefault` / `References` scopes are
-   *  blocked (per spec §10.3). */
+   *  this flag; UserPrefs writes pass through but stop uploading. */
   setReadOnly(value: boolean): void {
     this.isReadOnly = value
   }
@@ -592,8 +592,8 @@ export class Repo {
     opts: RepoTxOptions,
   ): Promise<R> {
     const result = await this._runAndDispatch(fn, opts)
-    // Step 7 of the §10 pipeline — record undo entry. UiState scope
-    // and zero-write txs are filtered inside `record`. Replays go
+    // Step 7 of the §10 pipeline — record undo entry. Non-undoable
+    // scopes and zero-write txs are filtered inside `record`. Replays go
     // through `_replay`, not here, so they don't add new history.
     this.undoManager.record({
       scope: opts.scope,
@@ -611,7 +611,8 @@ export class Repo {
    *  inverse syncs upstream just like the original write did (per the
    *  spec's §7.3 + the follow-ups doc's "undo of a content edit
    *  should sync the un-edit"). Throws `ReadOnlyError` in read-only
-   *  mode for non-UiState scopes — matches normal `repo.tx` gating. */
+   *  mode for scopes that cannot write locally — matches normal
+   *  `repo.tx` gating. */
   async undo(scope: ChangeScope = ChangeScope.BlockDefault): Promise<boolean> {
     const entry = this.undoManager.popUndo(scope)
     if (entry === null) return false

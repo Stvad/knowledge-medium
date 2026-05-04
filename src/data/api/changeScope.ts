@@ -1,13 +1,16 @@
 /** ChangeScope drives undo behavior, upload routing, and read-only gating
- *  for every write made through `repo.tx`. v1 ships three scopes; plugins
- *  pick the one whose engine semantics match their need (no plugin-extensible
- *  scope registry — see §5.8 of the data-layer spec). */
+ *  for every write made through `repo.tx`. Plugins pick the one whose
+ *  engine semantics match their need (no plugin-extensible scope registry —
+ *  see §5.8 of the data-layer spec). */
 export const ChangeScope = {
   /** User document edits. Undoable; uploads to server. */
   BlockDefault: 'block-default',
   /** Selection / focus / chrome state. Not undoable; never uploads
    *  (`tx_context.source = 'local-ephemeral'`). */
   UiState: 'local-ui',
+  /** User-owned preferences. Not undoable; uploads when writable, but
+   *  degrades to local-ephemeral in read-only workspaces. */
+  UserPrefs: 'user-prefs',
   /** parseReferences bookkeeping. Separate undo bucket; uploads. */
   References: 'block-default:references',
 } as const
@@ -20,5 +23,25 @@ export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
  *  from any caller. */
 export type TxSource = 'user' | 'local-ephemeral'
 
-export const sourceForScope = (scope: ChangeScope): TxSource =>
-  scope === ChangeScope.UiState ? 'local-ephemeral' : 'user'
+export interface ScopeRoutingOptions {
+  /** Read-only repos may still record user preferences locally, but
+   *  those writes must not enter the upload queue. */
+  isReadOnly?: boolean
+}
+
+export const scopeAllowedInReadOnly = (scope: ChangeScope): boolean =>
+  scope === ChangeScope.UiState || scope === ChangeScope.UserPrefs
+
+export const sourceForScope = (
+  scope: ChangeScope,
+  opts: ScopeRoutingOptions = {},
+): TxSource => {
+  if (scope === ChangeScope.UiState) return 'local-ephemeral'
+  if (scope === ChangeScope.UserPrefs && opts.isReadOnly) return 'local-ephemeral'
+  return 'user'
+}
+
+export const scopeUploadsToServer = (
+  scope: ChangeScope,
+  opts: ScopeRoutingOptions = {},
+): boolean => sourceForScope(scope, opts) === 'user'

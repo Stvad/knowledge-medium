@@ -105,6 +105,13 @@ describe('core.setProperty', () => {
     kind: 'boolean',
   })
 
+  const prefsFlagProp = defineProperty<boolean>('prefs:flag', {
+    codec: codecs.boolean,
+    defaultValue: false,
+    changeScope: ChangeScope.UserPrefs,
+    kind: 'boolean',
+  })
+
   it('encodes the value via codec and stores under properties[name]', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
@@ -145,7 +152,23 @@ describe('core.setProperty', () => {
     expect(events[1]).toEqual({scope: ChangeScope.BlockDefault, source: 'user'})
   })
 
-  it('UiState property writes are allowed in read-only mode (where BlockDefault writes throw)', async () => {
+  it('derives UserPrefs scope from schema.changeScope and uploads when writable', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p-prefs', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await env.repo.mutate.setProperty({id: 'p-prefs', schema: prefsFlagProp, value: true})
+
+    expect(env.read('p-prefs')!.properties[prefsFlagProp.name]).toBe(true)
+    const events = await env.h.db.getAll<{scope: string; source: string}>(
+      'SELECT scope, source FROM command_events ORDER BY created_at',
+    )
+    expect(events).toHaveLength(2)
+    expect(events[1]).toEqual({scope: ChangeScope.UserPrefs, source: 'user'})
+  })
+
+  it('UiState and UserPrefs property writes are allowed in read-only mode', async () => {
     // Pre-seed a target row in a regular repo so the read-only repo
     // has something to write to.
     await env.repo.tx(
@@ -163,9 +186,10 @@ describe('core.setProperty', () => {
       ro.mutate.setProperty({id: 'p3', schema: titleProp, value: 'no'}),
     ).rejects.toThrow(/read.?only/i)
     await ro.mutate.setProperty({id: 'p3', schema: uiFlagProp, value: true})
+    await ro.mutate.setProperty({id: 'p3', schema: prefsFlagProp, value: true})
     // Local-ephemeral source so it didn't enter the upload queue.
     const ephemeral = await env.h.db.getAll<{source: string}>(
-      "SELECT source FROM command_events WHERE scope = 'local-ui'",
+      "SELECT source FROM command_events WHERE scope IN ('local-ui', 'user-prefs') ORDER BY created_at",
     )
     expect(ephemeral.every(e => e.source === 'local-ephemeral')).toBe(true)
   })

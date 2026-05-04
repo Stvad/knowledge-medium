@@ -876,9 +876,11 @@ export interface Tx {
  *  span workspaces; the constraint is free here. Plugins that legitimately
  *  need cross-workspace effect should issue separate `repo.tx` calls. */
 
-/** Source is derived from scope alone — callers never pass it:
- *  - BlockDefault / References → 'user' (uploads)
- *  - UiState                   → 'local-ephemeral' (no upload)
+/** Source is derived from scope + read-only mode — callers never pass it:
+ *  - BlockDefault / References       → 'user' (uploads)
+ *  - UserPrefs in writable repos     → 'user' (uploads)
+ *  - UserPrefs in read-only repos    → 'local-ephemeral' (no upload)
+ *  - UiState                         → 'local-ephemeral' (no upload)
  *  ('sync' is reserved for sync-applied writes that bypass repo.tx entirely;
  *  it is not assignable from anywhere in this API.) */
 
@@ -928,7 +930,8 @@ export interface Mutator<Args = unknown, Result = void> {
 Scope semantics:
 - `ChangeScope.BlockDefault` (or any document scope): undoable, uploads to server.
 - `ChangeScope.UiState` (`'local-ui'`): not undoable; **`source='local-ephemeral'` set on `tx_context`**, so the upload trigger excludes these writes.
-- Read-only mode: `repo.tx` rejects unless every mutator in the tx has `UiState` scope. `BlockDefault` and `References` are both rejected.
+- `ChangeScope.UserPrefs` (`'user-prefs'`): not undoable; uploads when writable; in read-only repos routes to `source='local-ephemeral'`.
+- Read-only mode: `repo.tx` rejects unless the tx has `UiState` or `UserPrefs` scope. `BlockDefault` and `References` are both rejected.
 - Different mutators in the same tx with different scopes are not allowed (engine throws); a tx is one scope.
 
 ### 5.5 `Query<Args, Result>`
@@ -1295,13 +1298,14 @@ Two scheduling channels:
 export const ChangeScope = {
   BlockDefault: 'block-default',           // user document edits; undoable; uploads
   UiState: 'local-ui',                     // selection/focus/etc; not undoable; never uploads
+  UserPrefs: 'user-prefs',                 // user preferences; uploads when writable
   References: 'block-default:references',  // ref-parsing bookkeeping; separate undo bucket; uploads
 } as const
 
 export type ChangeScope = (typeof ChangeScope)[keyof typeof ChangeScope]
 ```
 
-**Plugin scopes** (v1): there is no plugin-extensible scope registry. Plugins use one of the three built-in scopes — pick the one whose engine semantics (undoable / uploads / read-only-allowed) match your need. If a plugin genuinely needs a custom scope (its own undo bucket separate from BlockDefault, or a different upload semantic), we'll add a metadata-shaped registry then; for v1, the registry was ceremonious for what it bought (plugin scopes inherited BlockDefault semantics anyway, so they were functionally identical to using BlockDefault directly).
+**Plugin scopes** (v1): there is no plugin-extensible scope registry. Plugins use one of the built-in scopes — pick the one whose engine semantics (undoable / uploads / read-only-allowed) match your need. If a plugin genuinely needs a custom scope (its own undo bucket separate from BlockDefault, or a different upload semantic), we'll add a metadata-shaped registry then; for v1, the registry was ceremonious for what it bought (plugin scopes inherited BlockDefault semantics anyway, so they were functionally identical to using BlockDefault directly).
 
 Scope semantics matrix:
 
@@ -1309,6 +1313,7 @@ Scope semantics matrix:
 |---|---|---|---|
 | `BlockDefault` | yes (user undo stack) | yes | no |
 | `UiState` | no | no (`source = 'local-ephemeral'`) | yes |
+| `UserPrefs` | no | yes when writable; no in read-only | yes |
 | `References` | yes (separate ref bucket; not exposed to user undo) | yes | no |
 
 ---
@@ -2109,7 +2114,7 @@ A `src/data/test/factories.ts` provides `createTestRepo({ user?, initialBlocks?,
 
 ## 15. Invariants worth nailing
 
-1. **Read-only mode**: `repo.tx` rejects `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` always allowed (local chrome state).
+1. **Read-only mode**: `repo.tx` rejects `BlockDefault` and `References` scopes when `repo.isReadOnly`. `UiState` always allowed (local chrome state). `UserPrefs` is allowed but routes to local-ephemeral instead of uploading.
 2. **Scope is per-tx, not per-call**: every mutator call within a tx must share the tx's scope. Mixing throws.
 3. **UI-state isolation**: UI-state txs set `tx_context.source='local-ephemeral'`; upload trigger excludes; not in undo stack.
 4. **Sync-applied writes**: bypass `repo.tx` entirely. `tx_context.source` stays `NULL` (no `repo.tx` is open to set it). row_events triggers `COALESCE(tx_context.source, 'sync')` to tag them; upload-routing triggers gate on `= 'user'` so sync writes don't loop back into `powersync_crud`. row_events have `tx_id = NULL` (no tx). **No PowerSync sync-apply wrapper exists or should be added** — the COALESCE + equality-test pair handles this without one.

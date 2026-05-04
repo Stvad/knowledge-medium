@@ -1,4 +1,4 @@
-import { getUserBlock } from '@/data/globalState.ts'
+import { getUIStateBlock } from '@/data/globalState.ts'
 import {
   ChangeScope,
   codecs,
@@ -32,12 +32,12 @@ export const recordUpdateIndicatorLoadTime = async (
   if (existing) return existing
 
   const record = (async () => {
-    const userBlock = await getUserBlock(repo, workspaceId, repo.user)
-    const previous = userBlock.peekProperty(currentLoadTimeProp) ?? 0
+    const uiStateBlock = await getUIStateBlock(repo, workspaceId, repo.user, {})
+    const previous = uiStateBlock.peekProperty(currentLoadTimeProp) ?? 0
 
     await repo.tx(async tx => {
-      await tx.setProperty(userBlock.id, previousLoadTimeProp, previous)
-      await tx.setProperty(userBlock.id, currentLoadTimeProp, Date.now())
+      await tx.setProperty(uiStateBlock.id, previousLoadTimeProp, previous)
+      await tx.setProperty(uiStateBlock.id, currentLoadTimeProp, Date.now())
     }, {scope: ChangeScope.UiState, description: 'update indicator load time'})
   })().catch(error => {
     recordedLoadTimes.delete(key)

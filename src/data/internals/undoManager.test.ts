@@ -3,7 +3,7 @@
  * UndoManager unit tests (pure data — no DB harness). Pins the
  * stack-management contract:
  *   - `record` pushes onto the scope's undo stack and clears redo
- *   - UiState entries are silently dropped (not undoable per §5.8)
+ *   - UiState/UserPrefs entries are silently dropped
  *   - References + BlockDefault stacks are independent
  *   - Zero-write txs are not recorded (nothing to undo)
  *   - `pushRedo` after popUndo, then `pushUndo` after popRedo — the
@@ -56,11 +56,14 @@ describe('UndoManager.record', () => {
     expect(m.peekRedo(ChangeScope.BlockDefault)?.txId).toBe('keep')
   })
 
-  it('drops UiState entries silently', () => {
+  it('drops UiState and UserPrefs entries silently', () => {
     const m = new UndoManager()
     m.record(entry('ui', ChangeScope.UiState))
+    m.record(entry('prefs', ChangeScope.UserPrefs))
     expect(m.peekUndo(ChangeScope.UiState)).toBeNull()
     expect(m.depths(ChangeScope.UiState)).toEqual({undo: 0, redo: 0})
+    expect(m.peekUndo(ChangeScope.UserPrefs)).toBeNull()
+    expect(m.depths(ChangeScope.UserPrefs)).toEqual({undo: 0, redo: 0})
   })
 
   it('drops zero-write entries', () => {

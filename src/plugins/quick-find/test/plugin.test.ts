@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { ChangeScope } from '@/data/api'
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
@@ -16,6 +17,7 @@ describe('quickFindPlugin', () => {
 
     expect(runtime.read(appMountsFacet)).toEqual([quickFindMount])
     expect(runtime.read(propertySchemasFacet).get(recentBlockIdsProp.name)).toBe(recentBlockIdsProp)
+    expect(recentBlockIdsProp.changeScope).toBe(ChangeScope.UserPrefs)
     expect(runtime.read(actionsFacet)).toEqual([quickFindAction])
     expect(runtime.read(headerItemsFacet)).toEqual([quickFindHeaderItem])
     expect(quickFindAction.defaultBinding?.keys).toEqual([

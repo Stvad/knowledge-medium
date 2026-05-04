@@ -28,12 +28,16 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
-  ChangeScope,
   RepoTxOptions,
   Tx,
   User,
 } from '@/data/api'
-import { ReadOnlyError, ChangeScope as ChangeScopeConst } from '@/data/api'
+import {
+  ReadOnlyError,
+  scopeAllowedInReadOnly,
+  scopeUploadsToServer,
+  sourceForScope,
+} from '@/data/api'
 import {
   newTxMeta,
   TxImpl,
@@ -43,12 +47,6 @@ import {
 } from './txEngine'
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import type { BlockCache } from '@/data/blockCache'
-
-const sourceForScope = (scope: ChangeScope) =>
-  scope === ChangeScopeConst.UiState ? 'local-ephemeral' : 'user'
-
-const scopeUploadsToServer = (scope: ChangeScope) =>
-  scope === ChangeScopeConst.BlockDefault || scope === ChangeScopeConst.References
 
 /** Minimal subset of the full PowerSync DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
@@ -146,14 +144,15 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   } = params
   const {scope, description} = opts
 
-  // §10.3 read-only gate. UiState is always allowed (local chrome state).
-  if (isReadOnly && scope !== ChangeScopeConst.UiState) {
+  // §10.3 read-only gate. UiState is always allowed (local chrome state);
+  // UserPrefs is allowed but routed to local-ephemeral below.
+  if (isReadOnly && !scopeAllowedInReadOnly(scope)) {
     throw new ReadOnlyError(scope)
   }
 
   const txId = newTxId()
   const txSeq = newTxSeq()
-  const source = sourceForScope(scope)
+  const source = sourceForScope(scope, {isReadOnly})
   const snapshots: SnapshotsMap = newSnapshotsMap()
   const afterCommitJobs: AfterCommitJob[] = []
   // `tx.run` pushes onto this list each time a mutator runs (including

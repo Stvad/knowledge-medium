@@ -13,7 +13,7 @@
  *   - Multi-row tx (kernel mutator): one entry covers all rows
  *   - Stack discipline: a new tx after undo clears the redo branch
  *   - Read-only mode rejects undo (BlockDefault scope)
- *   - UiState writes never enter the undo stack
+ *   - UiState/UserPrefs writes never enter the undo stack
  *   - References scope is recorded but isolated from BlockDefault
  *   - Empty stack: undo / redo return false (no-op)
  *   - Replay tx tags `source = 'user'` so the inverse uploads — verified
@@ -248,16 +248,20 @@ describe('repo.undo in read-only mode', () => {
   })
 })
 
-describe('UiState writes are not undoable', () => {
+describe('local and preference writes are not undoable', () => {
   it('never push onto the undo stack', async () => {
     await seedRoot(env.repo, 'a')
 
     await env.repo.tx(async (tx) => {
       await tx.update('a', {properties: {focused: 'true'}})
     }, {scope: ChangeScope.UiState})
+    await env.repo.tx(async (tx) => {
+      await tx.update('a', {properties: {recentBlockIds: ['a']}})
+    }, {scope: ChangeScope.UserPrefs})
 
     expect(env.repo.undoManager.depths(ChangeScope.BlockDefault)).toEqual({undo: 0, redo: 0})
     expect(env.repo.undoManager.depths(ChangeScope.UiState)).toEqual({undo: 0, redo: 0})
+    expect(env.repo.undoManager.depths(ChangeScope.UserPrefs)).toEqual({undo: 0, redo: 0})
     expect(await env.repo.undo()).toBe(false)
   })
 })
