@@ -354,6 +354,15 @@ export const focusBlock = ({block, uiStateBlock}: BlockResolveContext) => {
   setFocusedBlockId(uiStateBlock, block.id)
 }
 
+export const isLinkActivationEvent = (event: { target: EventTarget | null }) => {
+  const target = event.target
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
+  const element = target.nodeType === Node.ELEMENT_NODE
+    ? target as Element
+    : target.parentElement
+  return Boolean(element?.closest('a[href]'))
+}
+
 export const enterBlockEditMode = async (
   context: BlockResolveContext,
   selection?: EditorActivationSelection,
@@ -386,6 +395,8 @@ export const handleBlockSelectionClick = async (
   context: BlockResolveContext,
   event: MouseEvent,
 ) => {
+  if (isLinkActivationEvent(event)) return
+
   const {block, repo, uiStateBlock} = context
 
   event.preventDefault()

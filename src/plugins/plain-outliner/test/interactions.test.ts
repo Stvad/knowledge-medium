@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { MouseEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import type { BlockRenderer } from '@/types.ts'
@@ -7,7 +8,10 @@ import {
   BlockInteractionContext,
 } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { blockEditingContentRenderer } from '../interactions.tsx'
+import {
+  blockEditingContentRenderer,
+  plainOutlinerBlockClickBehavior,
+} from '../interactions.tsx'
 
 const PrimaryRenderer: BlockRenderer = () => null
 const SecondaryRenderer: BlockRenderer = () => null
@@ -65,5 +69,31 @@ describe('plain outliner interactions', () => {
     })
 
     expect(renderer).toBe(PrimaryRenderer)
+  })
+
+  it('leaves anchor clicks to browser navigation', async () => {
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+    const child = document.createElement('span')
+    link.appendChild(child)
+
+    const event = {
+      target: child,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      clientX: 1,
+      clientY: 1,
+    } as unknown as MouseEvent
+
+    const handler = plainOutlinerBlockClickBehavior(context)
+    if (!handler) throw new Error('Expected plain outliner click handler')
+
+    await handler(event)
+
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
   })
 })

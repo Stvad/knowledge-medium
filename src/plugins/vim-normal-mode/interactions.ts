@@ -4,6 +4,7 @@ import {
   BlockContentSurfaceContribution,
   enterBlockEditMode,
   handleBlockSelectionClick,
+  isLinkActivationEvent,
   ShortcutActivationContribution,
 } from '@/extensions/blockInteraction.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
@@ -29,6 +30,7 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
 
   return {
     onMouseDownCapture: (event: MouseEvent) => {
+      if (isLinkActivationEvent(event)) return
       if (isBlockInEditMode(uiStateBlock, block.id)) return
       // detail === 2 catches double-click before native text-selection kicks in
       if (event.detail !== 2) return
@@ -37,6 +39,10 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
       void enterBlockEditMode(context, {x: event.clientX, y: event.clientY})
     },
     onTouchStart: (event: TouchEvent) => {
+      if (isLinkActivationEvent(event)) {
+        touchStartByBlockId.delete(block.id)
+        return
+      }
       if (isBlockInEditMode(uiStateBlock, block.id)) return
       const touch = event.touches[0]
       if (!touch) return
@@ -47,6 +53,10 @@ export const vimContentSurfaceBehavior: BlockContentSurfaceContribution = contex
       })
     },
     onTouchEnd: (event: TouchEvent) => {
+      if (isLinkActivationEvent(event)) {
+        touchStartByBlockId.delete(block.id)
+        return
+      }
       if (isBlockInEditMode(uiStateBlock, block.id)) return
       const start = touchStartByBlockId.get(block.id)
       touchStartByBlockId.delete(block.id)

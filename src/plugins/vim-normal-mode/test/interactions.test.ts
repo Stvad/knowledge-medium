@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import type { MouseEvent, TouchEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
 import {
@@ -9,6 +10,7 @@ import {
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import {
+  vimBlockClickBehavior,
   vimContentSurfaceBehavior,
   vimNormalModeActivation,
 } from '../interactions.ts'
@@ -36,6 +38,59 @@ describe('vim normal mode interactions', () => {
     expect(props.onMouseDownCapture).toBeDefined()
     expect(props.onTouchStart).toBeDefined()
     expect(props.onTouchEnd).toBeDefined()
+  })
+
+  it('leaves anchor clicks to browser navigation', async () => {
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+    const child = document.createElement('span')
+    link.appendChild(child)
+
+    const event = {
+      target: child,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as MouseEvent
+
+    const handler = vimBlockClickBehavior(context)
+    if (!handler) throw new Error('Expected Vim block click handler')
+
+    await handler(event)
+
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
+  })
+
+  it('does not turn link taps into edit-mode taps', () => {
+    const runtime = resolveFacetRuntimeSync([
+      blockContentSurfacePropsFacet.of(vimContentSurfaceBehavior),
+    ])
+    const props = runtime.read(blockContentSurfacePropsFacet)(context)
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+    const child = document.createElement('span')
+    link.appendChild(child)
+
+    const startEvent = {
+      target: child,
+      touches: [{clientX: 1, clientY: 1}],
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as TouchEvent<HTMLDivElement>
+    const endEvent = {
+      target: child,
+      changedTouches: [{clientX: 1, clientY: 1}],
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as TouchEvent<HTMLDivElement>
+
+    props.onTouchStart?.(startEvent)
+    props.onTouchEnd?.(endEvent)
+
+    expect(startEvent.preventDefault).not.toHaveBeenCalled()
+    expect(startEvent.stopPropagation).not.toHaveBeenCalled()
+    expect(endEvent.preventDefault).not.toHaveBeenCalled()
+    expect(endEvent.stopPropagation).not.toHaveBeenCalled()
   })
 
   it('defines Vim normal mode as a shortcut surface activation', () => {

@@ -5,6 +5,7 @@ import {
   enterBlockEditMode,
   getBlockContentRendererSlot,
   handleBlockSelectionClick,
+  isLinkActivationEvent,
   isSelectionClick,
 } from '@/extensions/blockInteraction.ts'
 import { useInEditMode } from '@/data/globalState.ts'
@@ -33,6 +34,8 @@ export const blockEditingContentRenderer: BlockContentRendererContribution = con
 
 export const plainOutlinerBlockClickBehavior: BlockClickContribution = context =>
   async (event: MouseEvent) => {
+    if (isLinkActivationEvent(event)) return
+
     if (isSelectionClick(event)) {
       await handleBlockSelectionClick(context, event)
       return
