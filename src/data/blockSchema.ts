@@ -60,6 +60,17 @@ const formatSqlList = (items: readonly string[], indentSize: number) => {
   return items.map(item => `${indent}${item}`).join(',\n')
 }
 
+const formatSqlOrList = (items: readonly string[], indentSize: number) => {
+  const indent = ' '.repeat(indentSize)
+  return items.map((item, index) => `${indent}${index === 0 ? '' : 'OR '}${item}`).join('\n')
+}
+
+const BLOCK_SYNC_ASSIGNMENTS = BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`)
+
+const BLOCK_SYNC_DIFF_PREDICATES = BLOCK_SYNC_COLUMN_NAMES.map(
+  columnName => `blocks.${columnName} IS NOT excluded.${columnName}`,
+)
+
 export const SELECT_BLOCK_COLUMNS_SQL = BLOCK_COLUMN_NAMES.join(',\n  ')
 
 export const buildQualifiedBlockColumnsSql = (tableName: string) =>
@@ -113,7 +124,9 @@ export const UPSERT_BLOCK_SQL = `
 ${formatSqlList(BLOCK_COLUMN_NAMES, 4)}
   ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
   ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`), 4)}
+${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 4)}
+  WHERE
+${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 4)}
 `
 
 const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
@@ -127,6 +140,9 @@ const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementP
 // parent's child-loaded marker. ON CONFLICT(id) DO UPDATE preserves the
 // UPDATE shape (OLD/NEW visible to triggers), keeping before_json populated
 // so the membership-vs-content classification in `rowEventsTail` is correct.
+// The WHERE guard keeps re-delivered identical sync rows from firing UPDATE
+// triggers at all; `row_events` is an invalidation queue, not a durable copy
+// of every sync operation PowerSync has replayed.
 export const BLOCKS_RAW_TABLE = {
   put: {
     sql: `
@@ -134,7 +150,9 @@ export const BLOCKS_RAW_TABLE = {
 ${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
       ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
       ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_COLUMN_NAMES.map(columnName => `${columnName} = excluded.${columnName}`), 8)}
+${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 8)}
+      WHERE
+${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 8)}
     `,
     params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
   },

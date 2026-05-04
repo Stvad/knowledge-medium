@@ -27,6 +27,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
+  BLOCKS_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
@@ -42,6 +43,7 @@ import {
   CLIENT_SCHEMA_TRIGGER_NAMES,
   backfillBlockAliasesIfEmpty,
   backfillBlockReferencesIfEmpty,
+  pruneTransientRowEvents,
 } from './clientSchema'
 
 interface TestDb {
@@ -97,6 +99,9 @@ const defaultBlock: BlockInsert = {
   deleted: 0,
 }
 
+const blockValues = (row: BlockInsert): Array<string | number | null> =>
+  BLOCK_STORAGE_COLUMNS.map(c => row[c.name])
+
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
 
@@ -141,7 +146,7 @@ const setupDb = (): TestDb => {
     },
     insertBlock: (overrides = {}) => {
       const row = {...defaultBlock, ...overrides}
-      insertStmt.run(...columnNames.map(c => (row as Record<string, unknown>)[c] as string | number | null))
+      insertStmt.run(...blockValues(row))
     },
     updateBlock: (id, set) => {
       const cols = Object.keys(set)
@@ -256,6 +261,31 @@ describe('row_events trigger — UPDATE', () => {
   })
 })
 
+describe('PowerSync raw-table put', () => {
+  it('does not fire UPDATE triggers for identical sync replays', () => {
+    const put = h.db.prepare(BLOCKS_RAW_TABLE.put.sql)
+    const row = {...defaultBlock, id: 'raw-put'}
+
+    put.run(...blockValues(row))
+    expect(h.rowEvents()).toHaveLength(1)
+    expect(h.rowEvents()[0]).toMatchObject({block_id: 'raw-put', kind: 'create', source: 'sync'})
+
+    put.run(...blockValues(row))
+    expect(h.rowEvents()).toHaveLength(1)
+
+    put.run(...blockValues({
+      ...row,
+      content: 'changed',
+      updated_at: row.updated_at + 1,
+    }))
+    const events = h.rowEvents()
+    expect(events).toHaveLength(2)
+    expect(events[1]).toMatchObject({block_id: 'raw-put', kind: 'update', source: 'sync'})
+    expect(events[1].before_json).toContain('"content":""')
+    expect(events[1].after_json).toContain('"content":"changed"')
+  })
+})
+
 describe('row_events trigger — DELETE', () => {
   it("emits kind='delete' on hard delete with before snapshot only", () => {
     h.insertBlock({id: 'b1'})
@@ -265,6 +295,30 @@ describe('row_events trigger — DELETE', () => {
     expect(del.kind).toBe('delete')
     expect(del.before_json).toContain('"id":"b1"')
     expect(del.after_json).toBeNull()
+  })
+})
+
+describe('row_events maintenance', () => {
+  it("prunes transient sync and local-ephemeral rows but keeps user rows", async () => {
+    h.insertBlock({id: 'sync-row'})
+
+    h.setTxContext({txId: 'tx-ui', source: 'local-ephemeral'})
+    h.insertBlock({id: 'ui-row'})
+    h.clearTxContext()
+
+    h.setTxContext({txId: 'tx-user', source: 'user'})
+    h.insertBlock({id: 'user-row'})
+    h.clearTxContext()
+
+    expect(h.rowEvents()).toHaveLength(3)
+    const pruned = await pruneTransientRowEvents({
+      execute: async (sql) => h.db.exec(sql),
+      getOptional: async <T,>(sql: string) => (h.db.prepare(sql).get() as T | undefined) ?? null,
+    })
+
+    expect(pruned).toBe(2)
+    expect(h.rowEvents()).toHaveLength(1)
+    expect(h.rowEvents()[0]).toMatchObject({block_id: 'user-row', source: 'user'})
   })
 })
 
