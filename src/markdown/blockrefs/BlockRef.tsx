@@ -3,7 +3,7 @@ import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
-import { useContent, useData } from '@/hooks/block'
+import { useHandle } from '@/hooks/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
@@ -22,8 +22,14 @@ export function BlockRef({blockId}: {blockId: string}) {
   const {panelId} = useBlockContext()
   const ancestors = useBlockRefAncestors()
   const target = repo.block(blockId)
-  const targetData = useData(target)
-  const content = useContent(target)
+  const targetData = useHandle(target, {
+    selector: doc => doc
+      ? {
+        content: doc.content,
+        workspaceId: doc.workspaceId,
+      }
+      : undefined,
+  })
   const runtime = useAppRuntime()
 
   if (!targetData) {
@@ -66,7 +72,7 @@ export function BlockRef({blockId}: {blockId: string}) {
           remarkPlugins={markdownConfig.remarkPlugins}
           components={markdownConfig.components}
         >
-          {content}
+          {targetData.content}
         </Markdown>
       </a>
     </BlockRefAncestorsProvider>

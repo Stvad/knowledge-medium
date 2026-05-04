@@ -1,7 +1,7 @@
 import { BlockRendererProps } from '@/types.ts'
 import Markdown from 'react-markdown'
 import { useBlockContext } from '@/context/block.tsx'
-import { useData } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 
@@ -19,14 +19,22 @@ export function MarkdownContentRenderer({
   containerClassName = DEFAULT_CONTAINER_CLASS,
   containerElement: Container = 'div',
 }: MarkdownContentRendererProps) {
-  const blockData = useData(block)
+  const renderData = useHandle(block, {
+    selector: doc => doc
+      ? {
+        content: doc.content,
+        references: doc.references,
+        workspaceId: doc.workspaceId,
+      }
+      : undefined,
+  })
   const blockContext = useBlockContext()
   const runtime = useAppRuntime()
 
-  if (!blockData) return null
+  if (!renderData) return null
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   const markdownConfig = resolveMarkdownConfig({block, blockContext})
-  const content = contentTransform ? contentTransform(blockData.content) : blockData.content
+  const content = contentTransform ? contentTransform(renderData.content) : renderData.content
 
   return (
     <Container className={containerClassName}>

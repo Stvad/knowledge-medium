@@ -24,7 +24,7 @@ import {
   type PropertyEditor,
   type PropertyKind,
 } from '@/data/api'
-import { useData } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { propertySchemasFacet, propertyUiFacet } from '../data/facets.ts'
 import { Button } from './ui/button'
@@ -121,7 +121,16 @@ function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: AddableKind) => v
 // ──── Top-level component ────
 
 export function BlockProperties({block}: BlockPropertiesProps) {
-  const blockData = useData(block)
+  const blockData = useHandle(block, {
+    selector: data => data
+      ? {
+        id: data.id,
+        properties: data.properties,
+        updatedAt: data.updatedAt,
+        updatedBy: data.updatedBy,
+      }
+      : undefined,
+  })
   const runtime = useAppRuntime()
   // Read both registries once per render — combine() is memoised inside
   // FacetRuntime, so re-read is cheap (Map identity-stable across the

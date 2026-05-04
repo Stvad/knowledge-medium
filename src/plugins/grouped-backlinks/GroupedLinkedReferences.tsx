@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Filter } from 'lucide-react'
 import type { BlockRendererProps } from '@/types.ts'
 import { Block } from '@/data/block'
-import { useData } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.tsx'
 import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.tsx'
@@ -58,8 +58,9 @@ const GroupedReferencesGroup = ({group}: { group: GroupedBacklinkGroup }) => {
 
 export function GroupedLinkedReferences({block}: BlockRendererProps) {
   const repo = useRepo()
-  const data = useData(block)
-  const workspaceId = data?.workspaceId ?? repo.activeWorkspaceId ?? ''
+  const workspaceId = useHandle(block, {
+    selector: data => data?.workspaceId ?? repo.activeWorkspaceId ?? '',
+  })
 
   return (
     <GroupedLinkedReferencesInner
@@ -79,8 +80,8 @@ function GroupedLinkedReferencesInner({
 }) {
   const [filter, setStoredFilter] = useStoredBacklinkFilter(block)
   const filterActive = hasBacklinksFilter(filter)
-  const unfilteredBacklinks = useBacklinks(block)
-  const grouped = useGroupedBacklinks(block, filterActive ? filter : undefined)
+  const unfilteredBacklinks = useBacklinks(block, workspaceId)
+  const grouped = useGroupedBacklinks(block, workspaceId, filterActive ? filter : undefined)
   const [open, setOpen] = useState(true)
   const [filtersOpen, setFiltersOpen] = useState(filterActive)
 

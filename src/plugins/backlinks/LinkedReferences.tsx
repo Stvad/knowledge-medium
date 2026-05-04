@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
 import { BlockRendererProps } from '@/types.ts'
-import { useData } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useBacklinks } from './useBacklinks.ts'
 import { BacklinkFilters } from './BacklinkFilters.tsx'
@@ -15,8 +15,9 @@ import { LazyBacklinkItem } from './BacklinkEntry.tsx'
 
 export function LinkedReferences({block}: BlockRendererProps) {
   const repo = useRepo()
-  const data = useData(block)
-  const workspaceId = data?.workspaceId ?? repo.activeWorkspaceId ?? ''
+  const workspaceId = useHandle(block, {
+    selector: data => data?.workspaceId ?? repo.activeWorkspaceId ?? '',
+  })
 
   return (
     <LinkedReferencesInner
@@ -36,8 +37,8 @@ function LinkedReferencesInner({
 }) {
   const [filter, setStoredFilter] = useStoredBacklinkFilter(block)
   const filterActive = hasBacklinksFilter(filter)
-  const unfilteredBacklinks = useBacklinks(block)
-  const filteredBacklinks = useBacklinks(block, filterActive ? filter : undefined)
+  const unfilteredBacklinks = useBacklinks(block, workspaceId)
+  const filteredBacklinks = useBacklinks(block, workspaceId, filterActive ? filter : undefined)
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
   const [open, setOpen] = useState(true)
   const [filtersOpen, setFiltersOpen] = useState(filterActive)

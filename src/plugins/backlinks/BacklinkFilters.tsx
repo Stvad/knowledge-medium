@@ -10,7 +10,7 @@ import { FilterX, Plus, X } from 'lucide-react'
 import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/properties.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { useData } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { cn } from '@/lib/utils.ts'
@@ -60,8 +60,7 @@ const FilterChip = ({
 }) => {
   const repo = useRepo()
   const block = useMemo(() => repo.block(id), [repo, id])
-  const data = useData(block)
-  const label = labelForBlockData(data, id)
+  const label = useHandle(block, {selector: data => labelForBlockData(data, id)})
 
   return (
     <span

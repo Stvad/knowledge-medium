@@ -1,5 +1,5 @@
 import type { Block } from '@/data/block'
-import { useData, useHandle } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import {
   hasBacklinksFilter,
   type BacklinksFilter,
@@ -16,11 +16,10 @@ const EMPTY_GROUPED_BACKLINKS: GroupedBacklinksResult = {
 
 export const useGroupedBacklinks = (
   block: Block,
+  workspaceId: string,
   filter?: BacklinksFilter,
 ): GroupedBacklinksResult => {
   const repo = block.repo
-  const data = useData(block)
-  const workspaceId = data?.workspaceId ?? repo.activeWorkspaceId ?? ''
   const args = hasBacklinksFilter(filter)
     ? {workspaceId, id: block.id, filter}
     : {workspaceId, id: block.id}

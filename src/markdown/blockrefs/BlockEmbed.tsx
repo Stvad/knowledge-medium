@@ -1,15 +1,15 @@
 import { BlockComponent } from '@/components/BlockComponent'
 import { useRepo } from '@/context/repo'
-import { useData } from '@/hooks/block'
+import { useHandle } from '@/hooks/block'
 import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
 
 export function BlockEmbed({blockId}: {blockId: string}) {
   const repo = useRepo()
   const ancestors = useBlockRefAncestors()
   const target = repo.block(blockId)
-  const targetData = useData(target)
+  const targetExists = useHandle(target, {selector: doc => Boolean(doc)})
 
-  if (!targetData) {
+  if (!targetExists) {
     return (
       <div className="blockembed blockembed--unresolved border border-dashed border-muted-foreground/40 rounded p-2 my-1 text-sm text-muted-foreground">
         Embedded block not loaded yet (({blockId.slice(0, 8)}…))

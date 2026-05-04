@@ -11,7 +11,7 @@ import { useRef, useEffect, useCallback, useMemo, useState, type Ref } from 'rea
 import { useIsEditing, useUIStateBlock } from '@/data/globalState'
 import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
-import { useData, useHandle } from '@/hooks/block.ts'
+import { useHandle } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
@@ -27,27 +27,34 @@ export const BlockEditor = ({
   ref,
   ...codeMirrorProps
 }: BlockEditorProps) => {
-  const blockData = useData(block)
+  const blockEditData = useHandle(block, {
+    selector: doc => doc
+      ? {
+        content: doc.content,
+        updatedAt: doc.updatedAt,
+      }
+      : undefined,
+  })
 
   const cm = useRef<ReactCodeMirrorRef>(null)
   const [editorView, setEditorView] = useState<EditorView | null>(null)
 
   const [, setIsEditing] = useIsEditing()
-  const initialContent = useRef(blockData?.content ?? '')
+  const initialContent = useRef(blockEditData?.content ?? '')
   // Last value we handed to `block.setContent` (or adopted from an
   // external change). Decides whether a `blockData` update is (a) our
   // own committed echo / a no-op (live === incoming), (b) an external
   // change we should adopt (live matches lastCommittedContent), or
   // (c) an arrival that would clobber edits the user has typed past
   // their last commit (skip; the next debounced commit reconciles).
-  const lastCommittedContent = useRef(blockData?.content ?? '')
+  const lastCommittedContent = useRef(blockEditData?.content ?? '')
   // Highest `updatedAt` we've adopted from blockData. Ratchets forward
   // monotonically so a stale snapshot (older or same-ms with different
   // content) can't clobber the editor — the cache layer has its own LWW
   // gate via applySyncSnapshot, this is defense-in-depth at the React
   // layer for paths that bypass it (e.g. blockData arriving via React
   // batching after a stale-but-published snapshot).
-  const lastAdoptedUpdatedAt = useRef(blockData?.updatedAt ?? 0)
+  const lastAdoptedUpdatedAt = useRef(blockEditData?.updatedAt ?? 0)
   const uiStateBlock = useUIStateBlock()
   const focusedBlockId = useHandle(uiStateBlock, {
     selector: doc => doc?.properties[focusedBlockIdProp.name] as string | undefined,
@@ -104,16 +111,16 @@ export const BlockEditor = ({
   useEffect(() => flushDebouncers, [flushDebouncers])
 
   useEffect(() => {
-    if (!blockData || !editorView) return
+    if (!blockEditData || !editorView) return
     // Ratchet the high-water `updatedAt` on every observation — including
     // our own committed-echoes that fall through to the early return
     // below. This is what makes the staleness check below trustworthy:
     // without it, a stale snapshot whose `updatedAt` is older than our
     // own latest commit (but newer than the previous external adoption)
     // would slip through.
-    const incomingUpdatedAt = blockData.updatedAt
+    const incomingUpdatedAt = blockEditData.updatedAt
     const live = editorView.state.doc.toString()
-    const incoming = blockData.content
+    const incoming = blockEditData.content
     if (live === incoming) {
       // Cache has confirmed the editor's current value — either our own
       // committed write echoing back, or coincidentally identical
@@ -155,7 +162,7 @@ export const BlockEditor = ({
     })
     lastCommittedContent.current = incoming
     lastAdoptedUpdatedAt.current = incomingUpdatedAt
-  }, [blockData, editorView, block.id])
+  }, [blockEditData, editorView, block.id])
 
   useEffect(() => {
     if (!isEditing || focusedBlockId !== block.id || !editorView) return
@@ -191,7 +198,7 @@ export const BlockEditor = ({
   const shortcutSurfaceOptions = useMemo(() => ({editorView: editorView ?? undefined}), [editorView])
   useShortcutSurfaceActivations(block, 'codemirror', shortcutSurfaceOptions)
 
-  if (!blockData) return null
+  if (!blockEditData) return null
 
   const forwardRefValue = (value: ReactCodeMirrorRef | null) => {
     if (!ref) return
