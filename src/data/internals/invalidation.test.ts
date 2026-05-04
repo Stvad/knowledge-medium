@@ -443,7 +443,6 @@ describe('row_events tail: sync-applied invalidation', () => {
     const ids = fired[1].map(b => b.id)
     expect(ids).toEqual(['c1', 'c2'])
     expect(env.cache.getSnapshot('c2')?.content).toBe('remote')
-    expect(await syncRowEventCount()).toBe(0)
   })
 
   it('local writes (source=user) do NOT fire the tail (no double invalidation)', async () => {
@@ -587,32 +586,6 @@ describe('row_events tail: sync-applied invalidation', () => {
     expect(tail.lastId()).toBe(afterInit)
   })
 
-  it('high-watermark startup prunes historical sync rows', async () => {
-    await env.h.db.execute(
-      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
-    )
-    await env.h.db.execute(
-      `INSERT INTO blocks (id, workspace_id, parent_id, order_key, content,
-                            properties_json, references_json, created_at,
-                            updated_at, created_by, updated_by, deleted)
-       VALUES (?, 'ws-1', NULL, 'a0', 'old-sync', '{}', '[]', 0, 0, 'remote', 'remote', 0)`,
-      ['old-sync-row'],
-    )
-    expect(await syncRowEventCount()).toBe(1)
-
-    const tail = env.repo.startRowEventsTail({throttleMs: 0})
-    await env.repo.flushRowEventsTail()
-
-    expect(tail.lastId()).toBeGreaterThan(0)
-    expect(await syncRowEventCount()).toBe(0)
-  })
 })
 
 import type { BlockData } from '@/data/api'
-
-const syncRowEventCount = async (): Promise<number> => {
-  const row = await env.h.db.get<{count: number}>(
-    "SELECT COUNT(*) AS count FROM row_events WHERE source = 'sync'",
-  )
-  return row.count
-}

@@ -50,7 +50,6 @@ import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
   backfillBlockReferencesIfEmpty,
-  pruneTransientRowEvents,
 } from '@/data/internals/clientSchema'
 
 const appSchema = new Schema({})
@@ -80,9 +79,6 @@ const dbsByUser = new Map<string, PowerSyncDatabase>()
 const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
 let connectChain: Promise<void> = Promise.resolve()
-
-const VACUUM_MIN_FREE_BYTES = 16 * 1024 * 1024
-const VACUUM_MIN_FREE_FRACTION = 0.1
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
@@ -249,46 +245,4 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
   await backfillBlockReferencesIfEmpty(backfillDb)
-  await runClientStorageMaintenance(powerSyncDb)
-}
-
-const runClientStorageMaintenance = async (powerSyncDb: PowerSyncDatabase): Promise<void> => {
-  const maintenanceDb = {
-    execute: (sql: string) => powerSyncDb.execute(sql),
-    getOptional: async <T,>(sql: string) => {
-      const row = await powerSyncDb.getOptional<T>(sql)
-      return row ?? null
-    },
-  }
-
-  try {
-    const pruned = await pruneTransientRowEvents(maintenanceDb)
-    if (pruned === 0) return
-    await vacuumIfWorthwhile(powerSyncDb)
-  } catch (error) {
-    console.warn('[RepoProvider] client storage maintenance failed:', error)
-  }
-}
-
-const vacuumIfWorthwhile = async (powerSyncDb: PowerSyncDatabase): Promise<void> => {
-  const pageSize = await getPragmaNumber(powerSyncDb, 'PRAGMA page_size', 'page_size')
-  const pageCount = await getPragmaNumber(powerSyncDb, 'PRAGMA page_count', 'page_count')
-  const freelistCount = await getPragmaNumber(powerSyncDb, 'PRAGMA freelist_count', 'freelist_count')
-  if (pageSize <= 0 || pageCount <= 0 || freelistCount <= 0) return
-
-  const freeBytes = pageSize * freelistCount
-  const freeFraction = freelistCount / pageCount
-  if (freeBytes < VACUUM_MIN_FREE_BYTES || freeFraction < VACUUM_MIN_FREE_FRACTION) return
-
-  await powerSyncDb.execute('VACUUM')
-}
-
-const getPragmaNumber = async (
-  powerSyncDb: PowerSyncDatabase,
-  sql: string,
-  key: string,
-): Promise<number> => {
-  const row = await powerSyncDb.getOptional<Record<string, unknown>>(sql)
-  const value = row?.[key]
-  return typeof value === 'number' ? value : Number(value ?? 0)
 }

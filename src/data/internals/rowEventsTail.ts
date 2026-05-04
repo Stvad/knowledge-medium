@@ -113,20 +113,6 @@ export const startRowEventsTail = (args: {
     onError(err)
   }
 
-  const pruneConsumedSyncEvents = async (maxId: number): Promise<void> => {
-    if (maxId <= 0 || disposed) return
-    try {
-      await db.execute(
-        `DELETE FROM row_events
-          WHERE source = 'sync'
-            AND id <= ?`,
-        [maxId],
-      )
-    } catch (err) {
-      reportError(err)
-    }
-  }
-
   /** Inner drain — reads + processes rows with id > lastId. Used by
    *  both the init-time catch-up read AND the subscription's onChange
    *  handler. Does NOT await `ready` (callers ensure ordering). */
@@ -294,7 +280,6 @@ export const startRowEventsTail = (args: {
       backlinkTargets,
     }
     handleStore.invalidate(notification)
-    await pruneConsumedSyncEvents(lastId)
   }
 
   // Init flow that closes the row_events tail gap (spec §9.3, §16.13;
@@ -364,7 +349,6 @@ export const startRowEventsTail = (args: {
       )
       if (disposed) return
       lastId = row?.maxId ?? 0
-      await pruneConsumedSyncEvents(lastId)
     }
     if (disposed) return
     unsubscribe = db.onChange(

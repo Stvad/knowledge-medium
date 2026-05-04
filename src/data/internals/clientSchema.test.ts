@@ -43,7 +43,6 @@ import {
   CLIENT_SCHEMA_TRIGGER_NAMES,
   backfillBlockAliasesIfEmpty,
   backfillBlockReferencesIfEmpty,
-  pruneTransientRowEvents,
 } from './clientSchema'
 
 interface TestDb {
@@ -295,30 +294,6 @@ describe('row_events trigger — DELETE', () => {
     expect(del.kind).toBe('delete')
     expect(del.before_json).toContain('"id":"b1"')
     expect(del.after_json).toBeNull()
-  })
-})
-
-describe('row_events maintenance', () => {
-  it("prunes transient sync and local-ephemeral rows but keeps user rows", async () => {
-    h.insertBlock({id: 'sync-row'})
-
-    h.setTxContext({txId: 'tx-ui', source: 'local-ephemeral'})
-    h.insertBlock({id: 'ui-row'})
-    h.clearTxContext()
-
-    h.setTxContext({txId: 'tx-user', source: 'user'})
-    h.insertBlock({id: 'user-row'})
-    h.clearTxContext()
-
-    expect(h.rowEvents()).toHaveLength(3)
-    const pruned = await pruneTransientRowEvents({
-      execute: async (sql) => h.db.exec(sql),
-      getOptional: async <T,>(sql: string) => (h.db.prepare(sql).get() as T | undefined) ?? null,
-    })
-
-    expect(pruned).toBe(2)
-    expect(h.rowEvents()).toHaveLength(1)
-    expect(h.rowEvents()[0]).toMatchObject({block_id: 'user-row', source: 'user'})
   })
 })
 

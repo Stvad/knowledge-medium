@@ -702,38 +702,9 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_references_delete',
 ] as const
 
-interface ClientSchemaMaintenanceDb {
+interface ClientSchemaBootstrapDb {
   execute: (sql: string) => Promise<unknown>
   getOptional: <T>(sql: string) => Promise<T | null>
-}
-
-export const SELECT_TRANSIENT_ROW_EVENT_COUNT_SQL = `
-  SELECT COUNT(*) AS count
-  FROM row_events
-  WHERE source IN ('sync', 'local-ephemeral')
-`
-
-export const DELETE_TRANSIENT_ROW_EVENTS_SQL = `
-  DELETE FROM row_events
-  WHERE source IN ('sync', 'local-ephemeral')
-`
-
-/** Drop row_events that cannot be needed after a fresh app bootstrap.
- *
- * `sync` rows are only a cross-tab/session invalidation queue. Once the
- * app restarts, the in-memory cache and handles are rebuilt from `blocks`,
- * so replaying old invalidations has no value. `local-ephemeral` rows come
- * from UI-state transactions, which are explicitly non-undoable and never
- * uploaded. Keeping either source as permanent history was the source of
- * 100-MB-class SQLite files after sync replays. */
-export const pruneTransientRowEvents = async (
-  db: ClientSchemaMaintenanceDb,
-): Promise<number> => {
-  const row = await db.getOptional<{count: number}>(SELECT_TRANSIENT_ROW_EVENT_COUNT_SQL)
-  const count = row?.count ?? 0
-  if (count === 0) return 0
-  await db.execute(DELETE_TRANSIENT_ROW_EVENTS_SQL)
-  return count
 }
 
 /** Run after CLIENT_SCHEMA_STATEMENTS to populate block_aliases from
@@ -745,7 +716,7 @@ export const pruneTransientRowEvents = async (
  *  picks up the existing PowerSync-synced blocks → one large INSERT
  *  on the first start, then noop on every start after. */
 export const backfillBlockAliasesIfEmpty = async (
-  db: ClientSchemaMaintenanceDb,
+  db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
   const done = await db.getOptional<{1: number}>(SELECT_BLOCK_ALIASES_BACKFILL_DONE_SQL)
   if (done !== null) return
@@ -762,7 +733,7 @@ export const backfillBlockAliasesIfEmpty = async (
  *  row and short-circuit. The trigger maintains the table from then on
  *  (both for local writes and for sync-applied PowerSync `put`s). */
 export const backfillBlockReferencesIfEmpty = async (
-  db: ClientSchemaMaintenanceDb,
+  db: ClientSchemaBootstrapDb,
 ): Promise<void> => {
   const done = await db.getOptional<{1: number}>(SELECT_BLOCK_REFERENCES_BACKFILL_DONE_SQL)
   if (done !== null) return
