@@ -1,45 +1,46 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useMemo } from 'react'
+import { ChangeScope } from '@/data/api'
+import type { Block } from '@/data/block'
+import { useData } from '@/hooks/block.ts'
 import {
-  BACKLINK_FILTER_CHANGED_EVENT,
-  loadBacklinkFilter,
-  saveBacklinkFilter,
-  type BacklinkFilterChangedDetail,
-} from './filterStorage.ts'
-import {
+  hasBacklinksFilter,
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from './query.ts'
+import {
+  backlinksFilterProp,
+  readBacklinksFilterProperty,
+} from './filterProperty.ts'
 
 export const useStoredBacklinkFilter = (
-  workspaceId: string,
-  targetId: string,
+  block: Block,
 ): [BacklinksFilter, (filter: BacklinksFilter) => void] => {
-  const [filter, setFilterState] = useState<BacklinksFilter>(() =>
-    workspaceId ? loadBacklinkFilter(workspaceId, targetId) : {},
+  const data = useData(block)
+  const stored = data?.properties[backlinksFilterProp.name]
+  const filter = useMemo(
+    () => stored === undefined ? {} : readBacklinksFilterProperty(stored),
+    [stored],
   )
 
-  useEffect(() => {
-    const handleFilterChange = (event: Event) => {
-      const detail = (event as CustomEvent<BacklinkFilterChangedDetail>).detail
-      if (
-        detail?.workspaceId !== workspaceId ||
-        detail.targetId !== targetId
-      ) {
-        return
-      }
-      setFilterState(detail.filter)
-    }
-    window.addEventListener(BACKLINK_FILTER_CHANGED_EVENT, handleFilterChange)
-    return () => {
-      window.removeEventListener(BACKLINK_FILTER_CHANGED_EVENT, handleFilterChange)
-    }
-  }, [targetId, workspaceId])
-
   const setFilter = useCallback((next: BacklinksFilter) => {
+    if (block.repo.isReadOnly) return
     const normalized = normalizeBacklinksFilter(next)
-    setFilterState(normalized)
-    if (workspaceId) saveBacklinkFilter(workspaceId, targetId, normalized)
-  }, [targetId, workspaceId])
+    void block.repo.tx(async tx => {
+      const current = await tx.get(block.id)
+      if (!current) return
+
+      const properties = {...current.properties}
+      if (hasBacklinksFilter(normalized)) {
+        properties[backlinksFilterProp.name] = backlinksFilterProp.codec.encode(normalized)
+      } else {
+        delete properties[backlinksFilterProp.name]
+      }
+      await tx.update(block.id, {properties})
+    }, {
+      scope: ChangeScope.BlockDefault,
+      description: 'update backlinks filter',
+    })
+  }, [block])
 
   return [filter, setFilter]
 }

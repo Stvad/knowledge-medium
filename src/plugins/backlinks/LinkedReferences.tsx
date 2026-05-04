@@ -34,7 +34,7 @@ function LinkedReferencesInner({
   block: Block
   workspaceId: string
 }) {
-  const [filter, setStoredFilter] = useStoredBacklinkFilter(workspaceId, block.id)
+  const [filter, setStoredFilter] = useStoredBacklinkFilter(block)
   const filterActive = hasBacklinksFilter(filter)
   const unfilteredBacklinks = useBacklinks(block)
   const filteredBacklinks = useBacklinks(block, filterActive ? filter : undefined)

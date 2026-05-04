@@ -10,7 +10,12 @@ import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.t
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
-import { invalidationRulesFacet, localSchemaFacet, queriesFacet } from '@/data/facets.ts'
+import {
+  invalidationRulesFacet,
+  localSchemaFacet,
+  propertySchemasFacet,
+  queriesFacet,
+} from '@/data/facets.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
 import {
   BACKLINKS_TARGET_INVALIDATION_CHANNEL,
@@ -19,6 +24,7 @@ import {
 import { backlinksLocalSchema } from '../localSchema.ts'
 import { backlinksPlugin } from '../index.ts'
 import { BACKLINKS_FOR_BLOCK_QUERY, backlinksForBlockQuery } from '../query.ts'
+import { backlinksFilterProp } from '../filterProperty.ts'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -107,6 +113,11 @@ describe('backlinksDataExtension query', () => {
   it('contributes its reference invalidation through invalidationRulesFacet', () => {
     const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
     expect(runtime.read(invalidationRulesFacet)).toEqual([backlinksInvalidationRule])
+  })
+
+  it('contributes its backlink filter property schema', () => {
+    const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
+    expect(runtime.read(propertySchemasFacet).get(backlinksFilterProp.name)).toBe(backlinksFilterProp)
   })
 
   it('owns markdown syntax and CodeMirror extension registrations', () => {
