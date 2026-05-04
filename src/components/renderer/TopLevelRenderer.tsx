@@ -30,7 +30,7 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
 
   return (
     <div className="min-h-screen h-screen bg-background text-foreground flex flex-col">
-      <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-2">
+      <div className="container mx-0 max-w-full flex flex-col flex-grow overflow-hidden px-0.5 md:px-2">
         <Header/>
         <NestedBlockContextProvider overrides={CONTEXT_OVERRIDE}>
           <BlockComponent blockId={block.id}/>
