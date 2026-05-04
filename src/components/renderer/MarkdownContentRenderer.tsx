@@ -5,7 +5,20 @@ import { useData } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 
-export function MarkdownContentRenderer({block}: BlockRendererProps) {
+const DEFAULT_CONTAINER_CLASS = 'min-h-[1.7em] whitespace-pre-wrap overflow-x-hidden max-w-full'
+
+interface MarkdownContentRendererProps extends BlockRendererProps {
+  contentTransform?: (content: string) => string
+  containerClassName?: string
+  containerElement?: 'div' | 'span'
+}
+
+export function MarkdownContentRenderer({
+  block,
+  contentTransform,
+  containerClassName = DEFAULT_CONTAINER_CLASS,
+  containerElement: Container = 'div',
+}: MarkdownContentRendererProps) {
   const blockData = useData(block)
   const blockContext = useBlockContext()
   const runtime = useAppRuntime()
@@ -13,15 +26,16 @@ export function MarkdownContentRenderer({block}: BlockRendererProps) {
   if (!blockData) return null
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   const markdownConfig = resolveMarkdownConfig({block, blockContext})
+  const content = contentTransform ? contentTransform(blockData.content) : blockData.content
 
   return (
-    <div className="min-h-[1.7em] whitespace-pre-wrap overflow-x-hidden max-w-full">
+    <Container className={containerClassName}>
       <Markdown
         remarkPlugins={markdownConfig.remarkPlugins}
         components={markdownConfig.components}
       >
-        {blockData.content}
+        {content}
       </Markdown>
-    </div>
+    </Container>
   )
 }
