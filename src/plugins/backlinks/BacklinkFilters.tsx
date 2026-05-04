@@ -2,6 +2,7 @@ import {
   FormEvent,
   KeyboardEvent,
   useEffect,
+  useId,
   useMemo,
   useState,
 } from 'react'
@@ -97,11 +98,15 @@ const BacklinkFilterInput = ({
   onAdd: (id: string) => void
 }) => {
   const repo = useRepo()
+  const listboxId = useId()
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const [results, setResults] = useState<FilterCandidate[]>([])
+  const [activeIndex, setActiveIndex] = useState(-1)
   const trimmed = query.trim()
   const currentIdSet = useMemo(() => new Set(currentIds), [currentIds])
+  const popupOpen = focused && trimmed.length > 0 && results.length > 0
+  const activeCandidate = activeIndex >= 0 ? results[activeIndex] : undefined
 
   useEffect(() => {
     if (!workspaceId || !trimmed) {
@@ -136,7 +141,9 @@ const BacklinkFilterInput = ({
           detail: block.content,
         })
       }
-      setResults(candidates.slice(0, SEARCH_LIMIT))
+      const nextResults = candidates.slice(0, SEARCH_LIMIT)
+      setResults(nextResults)
+      setActiveIndex(nextResults.length > 0 ? 0 : -1)
     }, DEBOUNCE_MS)
 
     return () => {
@@ -151,6 +158,7 @@ const BacklinkFilterInput = ({
       onAdd(nextId)
       setQuery('')
       setResults([])
+      setActiveIndex(-1)
       return
     }
     if (!trimmed) return
@@ -159,6 +167,7 @@ const BacklinkFilterInput = ({
     onAdd(exact.id)
     setQuery('')
     setResults([])
+    setActiveIndex(-1)
   }
 
   const handleSubmit = (event: FormEvent) => {
@@ -167,9 +176,31 @@ const BacklinkFilterInput = ({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown' && results.length > 0) {
+      event.preventDefault()
+      setFocused(true)
+      setActiveIndex(index => (
+        index < 0 ? 0 : (index + 1) % results.length
+      ))
+      return
+    }
+    if (event.key === 'ArrowUp' && results.length > 0) {
+      event.preventDefault()
+      setFocused(true)
+      setActiveIndex(index => (
+        index <= 0 ? results.length - 1 : index - 1
+      ))
+      return
+    }
+    if (event.key === 'Enter' && popupOpen && activeCandidate) {
+      event.preventDefault()
+      void add(activeCandidate.id)
+      return
+    }
     if (event.key === 'Escape') {
       setQuery('')
       setResults([])
+      setActiveIndex(-1)
     }
   }
 
@@ -180,13 +211,23 @@ const BacklinkFilterInput = ({
         onChange={event => {
           const next = event.target.value
           setQuery(next)
-          if (!next.trim()) setResults([])
+          if (!next.trim()) {
+            setResults([])
+            setActiveIndex(-1)
+          }
         }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onKeyDown={handleKeyDown}
         placeholder={mode === 'include' ? 'Include reference' : 'Remove reference'}
         className="h-8 min-w-0 text-xs"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={Boolean(popupOpen)}
+        aria-controls={popupOpen ? listboxId : undefined}
+        aria-activedescendant={
+          popupOpen && activeCandidate ? `${listboxId}-option-${activeIndex}` : undefined
+        }
       />
       <Button
         type="submit"
@@ -198,17 +239,28 @@ const BacklinkFilterInput = ({
       >
         <Plus className="h-4 w-4" />
       </Button>
-      {focused && trimmed && results.length > 0 && (
-        <div className="absolute left-0 right-9 top-9 z-20 max-h-56 overflow-auto rounded-md border border-border bg-popover p-1 shadow-md">
-          {results.map(result => (
+      {popupOpen && (
+        <div
+          id={listboxId}
+          role="listbox"
+          className="absolute left-0 right-9 top-9 z-20 max-h-56 overflow-auto rounded-md border border-border bg-popover p-1 shadow-md"
+        >
+          {results.map((result, index) => (
             <button
               type="button"
               key={result.id}
+              id={`${listboxId}-option-${index}`}
+              role="option"
+              aria-selected={index === activeIndex}
+              onMouseEnter={() => setActiveIndex(index)}
               onMouseDown={event => {
                 event.preventDefault()
                 void add(result.id)
               }}
-              className="flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              className={cn(
+                'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+                index === activeIndex ? 'bg-accent' : '',
+              )}
             >
               <span className="truncate font-medium">{result.label}</span>
               {result.detail && result.detail !== result.label && (
