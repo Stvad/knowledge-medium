@@ -8,6 +8,12 @@ Dynamic extension blocks are intentionally powerful: a `type = extension` block 
 
 Fix shape: keep the trust decision outside synced block properties so a collaborator cannot force-enable code for other members. Store an allowlist keyed by `(workspaceId, blockId, contentHash)` in device-local or user-owned settings, and require re-approval when the extension block's source changes. The existing `system:disabled` property can remain an authoring/convenience switch, but it is not a security control because it is synced and editable by workspace writers.
 
+### React identity contract for extensions
+
+Extensions that render into the app's React tree need to share the host app's React module identity. Today that is partly enforced by externalizing `react` / `react-dom` through the page import map, and partly accidental: Babel's current extension JSX transform emits `React.createElement(...)`, so extension blocks rely on `window.React` unless they import React explicitly.
+
+Fix shape: document React and ReactDOM as host-provided peer dependencies for extension authors and bundled extensions. Bundled extensions must externalize `react`, `react-dom`, `react/jsx-runtime`, and `react/jsx-dev-runtime`, then resolve those from the host environment. Tighten the in-browser compiler so JSX uses an explicit host import (`react/jsx-runtime` or an injected `import React from 'react'`) instead of the global. Keep import-map entries exact where possible, and integrity-pin any CDN-hosted host React modules.
+
 ## Tx-bound read guards for reference processors
 
 `core.parseReferences` and `core.cleanupOrphanAliases` now do their expensive reads before opening a write transaction to avoid the PowerSync queue deadlock shape documented in `tasks/processor-tx-deadlock.md`. That leaves two narrow TOCTOU windows: alias ownership can change between "alias missing" and deterministic target creation, and a newly inserted alias target can gain a reference between the orphan precheck and cleanup delete.
