@@ -307,9 +307,20 @@ const withPromotedMatrixProperties = (blocks, bubbled = new Set(), path = []) =>
     }
   })
 
+const nestTopLevelBlocksUnderFirst = blocks => {
+  if (blocks.length <= 1) return blocks
+  const [first, ...rest] = blocks
+  return [{
+    ...first,
+    children: [...(first.children ?? []), ...rest],
+  }]
+}
+
 const createBlocksFromEvent = (event, matrixClient) => {
   const text = getMessageText(event, matrixClient)
-  return withPromotedMatrixProperties(parseMarkdownToBlockDefinitions(text))
+  return withPromotedMatrixProperties(
+    nestTopLevelBlocksUnderFirst(parseMarkdownToBlockDefinitions(text)),
+  )
 }
 
 const createBlockTree = async (tx, workspaceId, parentId, blockDefinitions, rootProperties) => {
