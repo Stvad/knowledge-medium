@@ -1,15 +1,21 @@
 import { useCallback, useMemo, useState } from 'react'
 import { Block } from '../../data/block'
 import { BlockRendererProps } from '@/types.ts'
+import { BlockLoadingPlaceholder } from '@/components/BlockLoadingPlaceholder.tsx'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BreadcrumbList } from '@/components/BreadcrumbList.tsx'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { LazyViewportMount } from '@/components/util/LazyViewportMount.tsx'
+import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.tsx'
 import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useBacklinks } from './useBacklinks.ts'
 
 const NESTED_OVERRIDES = {topLevel: false, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
+const BACKLINK_ESTIMATED_HEIGHT_PX = 96
+const BACKLINK_OVERSCAN_PX = 600
+const BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX = 32
 
 interface BreadcrumbsProps {
   shownBlock: Block
@@ -60,6 +66,34 @@ const BacklinkItem = ({block}: { block: Block }) => {
   )
 }
 
+const BacklinkItemPlaceholder = ({
+  reservedHeight,
+}: LazyViewportPlaceholderProps) => {
+  return (
+    <div
+      className="border-l-2 border-muted pl-3 py-2"
+      style={{minHeight: reservedHeight}}
+      aria-hidden
+    >
+      <div className="mb-1 h-4 w-40 max-w-full rounded-sm bg-muted/60" />
+      <BlockLoadingPlaceholder reservedHeight={BACKLINK_BLOCK_PLACEHOLDER_HEIGHT_PX} />
+    </div>
+  )
+}
+
+const LazyBacklinkItem = ({block}: { block: Block }) => {
+  return (
+    <LazyViewportMount
+      cacheKey={`backlink:${block.id}`}
+      estimatedHeightPx={BACKLINK_ESTIMATED_HEIGHT_PX}
+      overscanPx={BACKLINK_OVERSCAN_PX}
+      renderPlaceholder={(props) => <BacklinkItemPlaceholder {...props} />}
+    >
+      <BacklinkItem block={block}/>
+    </LazyViewportMount>
+  )
+}
+
 export function LinkedReferences({block}: BlockRendererProps) {
   const backlinks = useBacklinks(block)
   const [open, setOpen] = useState(true)
@@ -81,7 +115,7 @@ export function LinkedReferences({block}: BlockRendererProps) {
       {open && (
         <div className="mt-3 flex flex-col gap-3">
           {backlinks.map(backlinkBlock => (
-            <BacklinkItem key={backlinkBlock.id} block={backlinkBlock}/>
+            <LazyBacklinkItem key={backlinkBlock.id} block={backlinkBlock}/>
           ))}
         </div>
       )}
