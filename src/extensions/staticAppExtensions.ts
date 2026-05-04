@@ -12,6 +12,7 @@ import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { backlinksPlugin } from '@/plugins/backlinks'
+import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import type { AppExtension } from '@/extensions/facet.ts'
@@ -33,6 +34,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   backlinksPlugin,
+  groupedBacklinksPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
 ]

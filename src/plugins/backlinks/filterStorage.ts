@@ -4,6 +4,13 @@ import {
 } from './query.ts'
 
 const STORAGE_PREFIX = 'backlinks.filter'
+export const BACKLINK_FILTER_CHANGED_EVENT = 'backlinks-filter-changed'
+
+export interface BacklinkFilterChangedDetail {
+  workspaceId: string
+  targetId: string
+  filter: Required<BacklinksFilter>
+}
 
 const storageKey = (workspaceId: string, targetId: string): string =>
   `${STORAGE_PREFIX}:${workspaceId}:${targetId}`
@@ -58,10 +65,15 @@ export const saveBacklinkFilter = (
   try {
     if (empty) {
       storage.removeItem(storageKey(workspaceId, targetId))
-      return
+    } else {
+      storage.setItem(storageKey(workspaceId, targetId), JSON.stringify(normalized))
     }
-    storage.setItem(storageKey(workspaceId, targetId), JSON.stringify(normalized))
   } catch (error) {
     console.error('Failed to save backlinks filter', error)
   }
+
+  window.dispatchEvent(new CustomEvent<BacklinkFilterChangedDetail>(
+    BACKLINK_FILTER_CHANGED_EVENT,
+    {detail: {workspaceId, targetId, filter: normalized}},
+  ))
 }
