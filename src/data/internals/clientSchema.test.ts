@@ -407,8 +407,8 @@ describe('workspace-invariant triggers', () => {
 // ============================================================================
 // block_aliases trigger maintenance — the alias index that backs
 // findBlockByAliasInWorkspace, parseReferences' lookupAliasTarget, and
-// QuickFind autocomplete. All three pre-trigger queries scanned the
-// whole workspace; the index keeps them O(log n).
+// alias autocomplete. All three pre-trigger queries scanned the whole
+// workspace; the index keeps them O(log n).
 // ============================================================================
 
 interface AliasRow {

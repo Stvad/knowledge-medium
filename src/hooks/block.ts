@@ -136,10 +136,9 @@ export function useHandle<T, S = T | undefined>(
       // Cross-render reference stability: when the latest committed
       // value is structurally equal, hand back its reference. Inline-
       // lambda selectors that decode/allocate fresh objects each render
-      // (e.g. `useProperty(recentBlockIdsProp)`) would otherwise produce
-      // a new !== reference per render even when the value is unchanged,
-      // retriggering `useEffect` deps that close over the selection
-      // (e.g. QuickFind's recents-load effect).
+      // would otherwise produce a new !== reference per render even when
+      // the value is unchanged, retriggering effects that close over the
+      // selection.
       if (
         committedRef.current.hasValue &&
         equality(committedRef.current.value, next)

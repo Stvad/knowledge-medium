@@ -108,7 +108,7 @@ export const CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL = `
  *  The previous shape walked `json_each(properties_json, '$.alias')` per
  *  query, which scans the full workspace partition every time. With
  *  150-MB-class workspaces this is the dominant cost in alias-heavy
- *  paths (Roam import, parseReferences, QuickFind autocomplete). The
+ *  paths (Roam import, parseReferences, autocomplete). The
  *  index gives O(log n) `(workspace_id, alias_lower?)` lookup at the
  *  cost of three triggers and one extra row per (block, alias) pair.
  *
@@ -166,8 +166,7 @@ export const CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL = `
   )
 `
 
-/** Case-insensitive substring/prefix path: QuickFind +
- *  `getAliasesInWorkspace` autocomplete. */
+/** Case-insensitive substring/prefix path for alias autocomplete. */
 export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_block_aliases_ws_alias_lower
   ON block_aliases (workspace_id, alias_lower)

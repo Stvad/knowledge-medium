@@ -86,7 +86,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   LIMIT 1
 `
 
-/** Alias-prefix match used by QuickFind / autocomplete; one row per
+/** Alias-prefix match used by alias-search surfaces; one row per
  *  (alias, block) pair. Same index plan as the distinct-aliases query
  *  above: filter on alias_lower, JOIN blocks for content + ordering. */
 export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `

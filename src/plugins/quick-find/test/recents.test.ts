@@ -1,32 +1,15 @@
 // @vitest-environment node
-/**
- * Tests for the `pushRecentBlockId` UI-state helper. The helper
- * fire-and-forgets a `Block.set(recentBlockIdsProp, …)` write; the
- * scope is `ChangeScope.UiState`, so the write is local-ephemeral
- * (not synced, not undoable) per spec §5.8.
- *
- * Coverage:
- *   - Push a new id to the front of an existing list
- *   - Move an existing id to the front (dedup, no growth)
- *   - Cap the list at RECENT_BLOCKS_LIMIT
- *   - Empty initial state
- *
- * Replaces deleted `src/data/test/pushRecentBlockId.test.ts`, which
- * mocked the legacy Block facade with `dataSync()` + `setProperty`.
- * The new test goes through the real `repo.mutate.setProperty` path
- * via `Block.set` against `createTestDb`.
- */
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { Repo } from '../repo'
+import { Repo } from '@/data/repo'
 import {
   RECENT_BLOCKS_LIMIT,
   pushRecentBlockId,
   recentBlockIdsProp,
-} from '@/data/properties'
+} from '../recents.ts'
 
 const WS = 'ws-1'
 const UI_BLOCK_ID = 'ui-state'
@@ -64,12 +47,8 @@ const setup = async (initialIds: string[]): Promise<Harness> => {
 let env: Harness
 afterEach(async () => { await env?.h.cleanup() })
 
-/** Drive the fire-and-forget write to completion. The helper queues
- *  `repo.mutate.setProperty` without awaiting; an empty UI-state tx
- *  serializes behind the in-flight write so the cache reflects it
- *  by the time we read. */
 const flush = async (repo: Repo) => {
-  await repo.tx(async () => {/* serializing barrier */}, {scope: ChangeScope.UiState})
+  await repo.tx(async () => {}, {scope: ChangeScope.UiState})
 }
 
 describe('pushRecentBlockId', () => {
@@ -84,7 +63,7 @@ describe('pushRecentBlockId', () => {
       .toEqual(['new', 'old-1', 'old-2'])
   })
 
-  it('moves an existing id to the front (dedup, no growth)', async () => {
+  it('moves an existing id to the front', async () => {
     env = await setup(['a', 'b', 'c'])
     const block = env.repo.block(UI_BLOCK_ID)
 

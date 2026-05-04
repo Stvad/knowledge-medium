@@ -1,8 +1,8 @@
 /**
  * UI-state plumbing — per-user "user page" + per-panel ui-state child
  * tree, plus the React hooks that read/write properties on those
- * blocks. Persists app-shell state (focus, selection, edit-mode,
- * recents, top-level block) inside the same block tree as content,
+ * blocks. Persists app-shell and plugin UI state (focus, selection,
+ * edit-mode, top-level block, etc.) inside the same block tree as content,
  * scoped to `ChangeScope.UiState` so the writes are routed to local-
  * ephemeral storage and never enter the upload queue.
  *
@@ -114,8 +114,8 @@ const ensureUiChild = async (
 // ──── Bootstrap blocks ────
 
 /** Per-user "user page" block — created (or restored) on first access.
- *  The alias matches the user's display name so QuickFind / wiki-link
- *  resolution can target it directly. Memoized per (repo, workspaceId,
+ *  The alias matches the user's display name so alias-based lookup
+ *  surfaces can target it directly. Memoized per (repo, workspaceId,
  *  userId) — `use()` requires a stable promise per render.
  *
  *  The fast path uses `repo.load` to skip the tx entirely when the row

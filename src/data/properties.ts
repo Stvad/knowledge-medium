@@ -89,13 +89,6 @@ export const editorFocusRequestProp = defineProperty<number>('editorFocusRequest
   kind: 'number',
 })
 
-export const recentBlockIdsProp = defineProperty<string[]>('recentBlockIds', {
-  codec: codecs.list(codecs.string),
-  defaultValue: [],
-  changeScope: ChangeScope.UiState,
-  kind: 'list',
-})
-
 export interface BlockSelectionState {
   selectedBlockIds: string[]
   anchorBlockId: string | null
@@ -163,17 +156,6 @@ export { aliasesProp }
 
 // ──── Helpers ────
 
-export const RECENT_BLOCKS_LIMIT = 10
-
-/** Push `blockId` to the front of the recent list (deduped, capped at
- *  RECENT_BLOCKS_LIMIT). Fire-and-forget — UI-state writes don't need
- *  to await. */
-export const pushRecentBlockId = (uiStateBlock: Block, blockId: string): void => {
-  const current = uiStateBlock.peekProperty(recentBlockIdsProp) ?? []
-  const next = [blockId, ...current.filter(id => id !== blockId)].slice(0, RECENT_BLOCKS_LIMIT)
-  void uiStateBlock.set(recentBlockIdsProp, next)
-}
-
 /** Set the editing flag on the UI-state block. Refuses to enter edit
  *  mode in a read-only repo (workspace viewer) — the wrappers also
  *  short-circuit, but this gate keeps any new caller honest. */
@@ -215,7 +197,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   focusedBlockIdProp,
   editorSelection,
   editorFocusRequestProp,
-  recentBlockIdsProp,
   selectionStateProp,
   // BlockDefault schemas
   typeProp,

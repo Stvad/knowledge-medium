@@ -17,17 +17,14 @@ import { Kbd } from '@/components/ui/kbd'
 import { useRepo } from '@/context/repo.tsx'
 import { useUIStateBlock, useUIStateProperty } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
-import {
-  aliasesProp,
-  pushRecentBlockId,
-  recentBlockIdsProp,
-} from '@/data/properties.ts'
+import { aliasesProp } from '@/data/properties.ts'
 import { v4 as uuidv4 } from 'uuid'
 import { writeAppHash } from '@/utils/routing.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import { toggleQuickFindEvent } from './events.ts'
+import { pushRecentBlockId, recentBlockIdsProp } from './recents.ts'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
