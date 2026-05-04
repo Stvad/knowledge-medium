@@ -1,5 +1,13 @@
 # Follow-ups
 
+## Security
+
+### Explicit user enablement for synced extension blocks
+
+Dynamic extension blocks are intentionally powerful: a `type = extension` block is application code, not inert content. Before this ships to shared workspaces, make extension execution opt-in per user. A synced extension block should load as "available but disabled" on a client until that user explicitly enables it.
+
+Fix shape: keep the trust decision outside synced block properties so a collaborator cannot force-enable code for other members. Store an allowlist keyed by `(workspaceId, blockId, contentHash)` in device-local or user-owned settings, and require re-approval when the extension block's source changes. The existing `system:disabled` property can remain an authoring/convenience switch, but it is not a security control because it is synced and editable by workspace writers.
+
 ## Tx-bound read guards for reference processors
 
 `core.parseReferences` and `core.cleanupOrphanAliases` now do their expensive reads before opening a write transaction to avoid the PowerSync queue deadlock shape documented in `tasks/processor-tx-deadlock.md`. That leaves two narrow TOCTOU windows: alias ownership can change between "alias missing" and deterministic target creation, and a newly inserted alias target can gain a reference between the orphan precheck and cleanup delete.
