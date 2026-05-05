@@ -30,12 +30,23 @@ Add a new facet alongside the existing data-layer facets in `src/data/facets.ts`
 export interface TypeContribution {
   /** Stable id; matches the string written into the block's `types` array. */
   readonly id: string
-  /** Properties that apply to blocks of this type. Drives field discovery
-   *  in BlockProperties and the property panel. Use `AnyPropertySchema`
-   *  (`PropertySchema<any>`) — `PropertySchema<T>` is invariant in this
-   *  repo's variance model, mirroring `AnyMutator` / `AnyQuery`, so
-   *  `PropertySchema<unknown>` will not accept real typed schemas like
-   *  `PropertySchema<string>`. See [src/data/api/propertySchema.ts:90](src/data/api/propertySchema.ts:90). */
+  /** Properties that apply to blocks of this type. Carries the
+   *  schema *objects* (not just names): the type contribution is
+   *  the registration. `typesFacet.combine` lifts every listed
+   *  `PropertySchema` into the same flat name-keyed registry that
+   *  `propertySchemasFacet.of(...)` populates (single-source-of-
+   *  truth — see §3-schema-lift). Multiple types listing the same
+   *  imported `statusProp` (object identity) dedup harmlessly;
+   *  different objects with the same name follow the kernel's
+   *  uniform last-wins-with-warn convention.
+   *
+   *  Drives field discovery in BlockProperties and the property
+   *  panel. Use `AnyPropertySchema` (`PropertySchema<any>`) —
+   *  `PropertySchema<T>` is invariant in this repo's variance
+   *  model, mirroring `AnyMutator` / `AnyQuery`, so
+   *  `PropertySchema<unknown>` will not accept real typed schemas
+   *  like `PropertySchema<string>`. See
+   *  [src/data/api/propertySchema.ts:90](src/data/api/propertySchema.ts:90). */
   readonly properties?: ReadonlyArray<AnyPropertySchema>
   /** Optional human label for the property panel / quick-find. */
   readonly label?: string
@@ -99,6 +110,49 @@ export const typesFacet = defineFacet<TypeContribution, ReadonlyMap<string, Type
 
 Plugins contribute the same way as today — through the facet: `typesFacet.of(definition, {source: 'todo-plugin'})`. The `defineBlockType` helper is identity-typed sugar for inference, not an imperative API.
 
+#### 1a. Schema lift: type contributions register their schemas
+
+A type contribution's `properties[]` carries `PropertySchema` *objects*, and **`typesFacet.combine` lifts those schemas into the same flat name-keyed `propertySchemas` map that `propertySchemasFacet.of(...)` populates** ([src/data/facets.ts:114](src/data/facets.ts:114)). One merged registry, two contribution paths, single source of truth.
+
+The reason: without the lift, a type contribution's `properties[]` would store schema objects that the rest of the system has to ignore in favor of `propertySchemasFacet`'s registry-by-name lookup — which means a type can list `statusPropA` but if some `propertySchemasFacet.of(statusPropB)` registration wins globally under the same name, decoders / encoders / the property panel silently use `statusPropB`. The schema object on the contribution becomes confusingly vestigial. The lift removes the parallel-registry problem: the contribution IS the registration.
+
+Implementation shape (the runtime build, not the facet's combine itself, since one facet can't read another's contributions during its own combine):
+
+```ts
+// In Repo.setFacetRuntime (after both reads), build the merged map:
+const directSchemas = runtime.read(propertySchemasFacet)  // existing
+const types = runtime.read(typesFacet)                    // existing
+
+const mergedSchemas = new Map<string, AnyPropertySchema>()
+// Direct registrations land first.
+for (const [name, schema] of directSchemas) mergedSchemas.set(name, schema)
+// Type-lifted schemas land second, last-wins by lift order (which is
+// types-registration order; deterministic).
+for (const t of types.values()) {
+  for (const schema of t.properties ?? []) {
+    const existing = mergedSchemas.get(schema.name)
+    if (existing && existing !== schema) {
+      console.warn(
+        `[schema-lift] type "${t.id}" registers schema "${schema.name}" ` +
+        `that conflicts with an earlier registration; last-wins per facet convention`,
+      )
+    }
+    mergedSchemas.set(schema.name, schema)
+  }
+}
+this.propertySchemas = mergedSchemas
+```
+
+Three properties this gives:
+
+1. **Object-identity dedup.** The most common case: shared schemas declared once in a kernel/shared module and imported by multiple type contributions. `todo` and `task` both list the imported `statusProp` — same object, no warn, one registry entry.
+2. **Last-wins-with-warn on real conflicts.** Two contributions registering different `statusProp` objects under the same name follow the same convention as every other facet ([src/data/facets.ts:121](src/data/facets.ts:121)). That's the kernel's existing override mechanism — plugins replace kernel schemas by registering after; we don't break that here.
+3. **Direct-vs-lifted ordering.** Direct `propertySchemasFacet.of(...)` registrations are conventionally treated as "shared infrastructure," type-lifted schemas as "type-owned." Putting direct first means a type that lists a schema also registered directly *replaces* the direct entry (last-wins) — which is what you want when the type wants its own variant. Reverse the order if the desired semantic is "direct takes precedence over type-lifted"; document either way at the implementation site.
+
+The shape applies whether `properties[]` carries 1 schema or 30. A type contribution that lists no schemas (an `extension` type with all its data in `roam:*`-style namespaced source-mirror fields) lifts nothing — fully compatible with the §3 hybrid rule.
+
+A separate strict-mode-with-`overrides:` target mechanism (declared override of a named earlier registration; throws if target is missing; replaces silently if present) is a deferred follow-up — see follow-ups doc. v1 ships the lift + last-wins-with-warn that already works for every other facet.
+
 ### 2. Multi-type: `typesProp` replaces `typeProp` as the primary discriminator
 
 Add a new schema and migrate single-string usage to it. Per [feedback_no_backcompat_in_alpha](../.claude/projects/-Users-vlad-coding-knowledge-knowledge-medium-knowledge-medium/memory/feedback_no_backcompat_in_alpha.md), no shim — one-shot data migration, drop `typeProp` after.
@@ -144,7 +198,7 @@ This local-schema delta lives in the kernel, not in a plugin, since extension di
 
 ### 3. Property naming: flat for shared vocabulary, namespaced for plugin-private
 
-Reuse `PropertySchema` as the field primitive — `propertySchemasFacet` stays one global registry keyed by `name`. The convention for *what to name a schema* is hybrid:
+Reuse `PropertySchema` as the field primitive — the merged `propertySchemas` registry (per §1a: `propertySchemasFacet` direct registrations plus type-lifted schemas) stays one global registry keyed by `name`. The convention for *what to name a schema* is hybrid:
 
 - **Flat** for shared-vocabulary fields whose meaning is consistent across types and that an untagged block could plausibly use the same way: `status`, `due`, `priority`, `tags`, `description`, `assignee`. One `statusProp` exists with one global default and one codec; multiple types list it in their `properties[]`, and a typeless block can read/write it via `block.set(statusProp, …)` without picking a "which status" namespace. If two types disagree on the value space (todo: `'open' | 'done'` vs meeting: `'scheduled' | 'happening' | 'finished' | 'cancelled'`), their codecs differ and §3 says use distinct schema names — that's a different field, not a shared field with per-type defaults.
 - **Namespaced** for type-private / plugin-internal fields whose meaning is meaningless or confusing elsewhere: `video:playerView` (whether the video player is in notes mode — only the video plugin understands this), `roam:todo-state` (source-mirror metadata for round-trip — only the Roam importer cares), `extension:disabled` (already exists as `system:disabled`). These exist purely because *one* type needs them; namespacing prevents accidental collision with shared vocab and signals the limited scope.
@@ -219,13 +273,23 @@ setFacetRuntime(runtime: FacetRuntime): void {
   this.processors = new Map(runtime.read(postCommitProcessorsFacet))
   this.invalidationRules = runtime.read(invalidationRulesFacet)
   this.types = runtime.read(typesFacet)                   // NEW
-  this.propertySchemas = runtime.read(propertySchemasFacet) // NEW
+  // §1a schema-lift: merge propertySchemasFacet (direct
+  // registrations) with schemas declared on type contributions.
+  // Direct first, type-lifted second — last-wins-with-warn on
+  // conflicts (object-identity dedup is silent). The merged map
+  // is the single source of truth used by addType encoding,
+  // BlockProperties (§3c), processors via CommittedTxOutcome
+  // (§7a), the typed-query primitive (§8), etc.
+  this.propertySchemas = mergeLiftedSchemas(
+    runtime.read(propertySchemasFacet),
+    this.types,
+  )
   const newQueries = new Map(runtime.read(queriesFacet))
   this.swapQueries(newQueries)
 }
 ```
 
-Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. `addType` reads `types` for `setup` lookup and contribution existence, and `propertySchemas` for `initialValues` codec encoding. (Reads don't need either registry — schema defaults live on `PropertySchema.defaultValue` and surface naturally through `block.get` / `useProperty` without any type-aware overlay.) The same retained `propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
+`mergeLiftedSchemas` is the helper sketched in §1a. Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. `addType` reads `types` for `setup` lookup and contribution existence, and the merged `propertySchemas` for `initialValues` codec encoding. (Reads don't need either registry — schema defaults live on `PropertySchema.defaultValue` and surface naturally through `block.get` / `useProperty` without any type-aware overlay.) The same retained merged `propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
 
 **Two-layer shape: in-tx primitives + tx-opening wrappers.** Every operation that composes (`toggleType`, `setBlockTypes`, anything similar in plugin code) needs to run end-to-end in one tx — read, decide, write all under the same writer slot — otherwise concurrent writes interleave and decisions made on stale reads survive. So define private in-tx helpers and have the public `Repo` methods open a tx and dispatch. Composers (toggle/set) call the helpers directly inside their own tx.
 
@@ -463,7 +527,19 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
     for (const t of current) {
       if (!want.has(t)) await this._removeTypeInTx(tx, blockId, t)
     }
+    // Only run _addTypeInTx for ids that aren't already on the block.
+    // For ids already in `current`, no membership transition is
+    // happening — _addTypeInTx would early-return on the wasNew
+    // check anyway except that its registry-existence guard now
+    // throws on unregistered ids (§3a). A block that arrived from
+    // sync or an unloaded plugin can carry a typeId we don't
+    // recognise locally; preserving it through setBlockTypes must
+    // not throw just because we're keeping it in place. Skip the
+    // _addTypeInTx call for already-present ids; the order rewrite
+    // below preserves them positionally regardless of registration.
+    const currentSet = new Set(current)
     for (const t of desiredOrder) {
+      if (currentSet.has(t)) continue
       await this._addTypeInTx(tx, types, propertySchemas, blockId, t, {})
     }
     // Final order rewrite — addType only appends, so existing
@@ -541,7 +617,7 @@ typesFacet.of(defineBlockType({
 - **Bulk-write asymmetry.** `setup` fires from `repo.addType` / `repo.addTypeInTx`. A bulk path that writes `typesProp = ['task', 'meeting']` directly via `tx.update` *bypasses* both `setup` and `initialValues` materialisation. Tag-mapping callers should use the orchestration entry point appropriate to their context — `repo.addType` outside an existing tx, `repo.addTypeInTx(tx, blockId, typeId, initialValues?, snapshot?)` inside one. The Roam importer's apply phase runs inside chunked `repo.tx` calls (see §3-pure), so it must use `repo.addTypeInTx` per type per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee.
 - **Reimport runs setup again.** A Roam reimport that adds `task` to a block where the type wasn't previously present *will* run `setup`. That's usually correct (first-time-for-this-block tag), but means import paths can trigger child-block creation. Document in the importer.
 
-This naturally subsumes existing "create-and-stamp-type" code. [src/data/dailyNotes.ts:86](src/data/dailyNotes.ts:86)'s daily-note creation, which today writes `type='daily-note'` plus its own initial structure imperatively, becomes `repo.addType(id, 'daily-note')` with the `daily-note` type's `setup` carrying the template.
+This naturally subsumes existing "create-and-stamp-type" code. [src/data/dailyNotes.ts:86](src/data/dailyNotes.ts:86)'s daily-note creation, which today writes `type='daily-note'` plus its own initial structure imperatively, becomes a `repo.addTypeInTx(tx, id, 'daily-note', {}, snapshot)` call **inside the same `repo.tx` block** that runs the existing `tx.create` / `tx.restore` for the journal and the daily-note row, with the `daily-note` type's `setup` carrying the template. Splitting type-add into a separate top-level `repo.addType` would leave a window where the row exists without its template if `setup` fails — atomicity with the create write is the whole point of using the in-tx variant. `snapshotTypeRegistries()` is called before opening the tx (or once per chunk) per §3a.
 
 **`Block` facade sugar** mirrors the existing `get`/`set`/`setContent`/`delete` pattern at [src/data/block.ts:159](src/data/block.ts:159)–[:228](src/data/block.ts:228):
 
@@ -615,12 +691,14 @@ for (const name of Object.keys(properties)) {
   else unknownNames.add(name)
 }
 // (b) type-contributed slots (may not yet be set on the block).
-// Treat TypeContribution.properties as DECLARING NAMES for discovery;
-// resolve the actual schema from the registry. propertySchemasFacet
-// is last-wins on duplicate names — using the type contribution's
-// schema object directly would let the panel decode/render with a
-// stale codec/default while block.get / addType / typed queries use
-// the retained registry's version. Always go through schemas.get().
+// Per §1a, type contributions' schemas are LIFTED into the same
+// merged `schemas` registry that propertySchemasFacet populates,
+// so `schemas.get(declared.name)` and `declared` resolve to the
+// same object (or to a last-wins replacement that won the merge —
+// either way, the entry the rest of the system is using). Reading
+// from `schemas` rather than from `declared` directly keeps the
+// panel consistent with whichever registration won the lift's
+// last-wins, but they should not disagree under normal operation.
 for (const typeId of block.types) {
   const t = typesRegistry.get(typeId)
   for (const declared of t?.properties ?? []) {
@@ -629,9 +707,9 @@ for (const typeId of block.types) {
       applicable.set(declared.name, active)
       unknownNames.delete(declared.name)
     }
-    // If the type declares a name that no schema is registered under
-    // (e.g. plugin partially loaded), skip — better to render nothing
-    // than to render with a schema the rest of the system isn't using.
+    // Defensive only: if a type declares a name with no entry in
+    // the merged registry, the lift didn't complete (unreachable
+    // under §1a) — skip rather than render with a desync'd schema.
   }
 }
 ```
@@ -960,8 +1038,8 @@ interface TypedQuery {
   **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `kind` is `list`, `object`, `ref`, or `refList`. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
 
   **`null` / `undefined` semantics on the where value.** SQL `=` doesn't match NULL — `json_extract(...) = NULL` is always FALSE — and `json_extract` itself returns NULL for missing JSON paths, so naive `= ?` against an encoded null silently matches nothing. v1 rules:
-  - Decoded value is `undefined` → reject the query with a clear error. `undefined` isn't a valid encoded value (codecs encode "no value" as omitted or null) and almost always indicates a caller bug like `where: {status: someVar}` where `someVar` isn't set.
-  - Decoded value encodes to `null` (e.g. an `optional(string)` codec on a "no value") → compile to `(json_extract(properties_json, ?) IS NULL)`. This deliberately conflates "property is unset" with "property is set to null"; most schemas don't distinguish the two so this is the natural meaning. If a schema does want to distinguish, the caller can post-filter or use `peekProperty`-equivalent membership checks — out of scope for v1 typed queries.
+  - Caller-supplied `where` value is `undefined` → reject the query with a clear error. `undefined` is the JS "no value" sentinel and almost always indicates a caller bug like `where: {status: someVar}` where `someVar` isn't set; rejecting forces the caller to be explicit. To filter "field is unset," pass `null` explicitly (next bullet).
+  - Caller-supplied `where` value is `null` (or a value that the field's codec encodes to JSON null — e.g. some custom codecs may map a sentinel object to null) → compile to `(json_extract(properties_json, ?) IS NULL)`. Note the `optional(T)` codec's "no value" input is `undefined`, which is rejected at the previous bullet — so the IS-NULL path is reached by callers passing `null` directly, not via `optional(undefined)`. This deliberately conflates "property is unset" with "property is set to null"; most schemas don't distinguish the two so this is the natural meaning. If a schema does want to distinguish, the caller can post-filter or use `peekProperty`-equivalent membership checks — out of scope for v1 typed queries.
   - All other encoded scalars → compile to `json_extract(...) = ?` as before.
   Document both rules at the API site so a typed-query author can predict behaviour.
   Per-property indices (e.g. `CREATE INDEX idx_blocks_status ON blocks (json_extract(properties_json, '$.status'))`) follow the same path-quoting rule and are added incrementally for hot fields.
@@ -1019,7 +1097,7 @@ const TAG_TO_TYPE: Record<string, { types: string[]; appOwnedInit: Record<string
 
 When a Roam block carries a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer is already inside a `repo.tx` chunk (the existing planning + apply pipeline does this around `upsertImportedBlock`). Within that same tx:
 1. Calls `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit)` — the tx-aware variant per §3a so the type tag, init writes, and any `setup` share atomicity with the row write. Passes the source's app-owned initial values as the fourth arg; per the addType contract these are init-if-missing (so `DONE` initialises `status='done'` on a previously-untyped block, but doesn't overwrite a user's local `'in-progress'`). Read fallback: blocks with no `status` set read `statusProp.defaultValue = 'open'` directly via `block.get`/`useProperty`, no overlay needed. Calling the public `repo.addType` from here would open a separate tx and break atomicity with `upsertImportedBlock`.
-2. Refreshes **source-mirror** fields (`roam:todo-state`) freely via `tx.update` in the same tx.
+2. Refreshes **source-mirror** fields (`roam:todo-state`) freely in the same tx — but **per-property**, not via a wholesale `tx.update({properties: sourceMirror})`. `tx.update`'s `properties` patch *replaces* the whole map, so passing only the source-mirror keys would clobber the `typesProp` and any `appOwnedInit` writes that step 1 just made. Use `tx.setProperty(blockId, roamTodoStateProp, value)` per source-mirror key (single-property semantics; engine handles the merge), or read the row back with `tx.get` and merge before passing the whole map. The Phase 5 checklist below carries the same constraint.
 
 The marker is stripped from `content` since the type now captures the meaning; the source-mirror field preserves what Roam said for round-trip and conflict-resolution purposes. Per the §3 hybrid naming rule, `status` is the shared-vocabulary field (flat name) and `roam:todo-state` is the namespaced source-mirror.
 
@@ -1034,7 +1112,7 @@ The current Roam importer upserts deterministic IDs and replaces `content` / `pr
 
 **First-pass rule (v1):**
 
-- **Type membership is additive.** If the Roam tag maps to a type the block doesn't yet have, `repo.addType` adds it. If the block already has that type, no-op.
+- **Type membership is additive.** If the Roam tag maps to a type the block doesn't yet have, `repo.addType` adds it (and `setup` fires once for that transition). If the block already has that type, the membership write and `setup` are no-ops, **but `addType` still runs init-if-missing materialisation against the `appOwnedInit` map** — so a block that arrived already-typed via raw sync but with no `status` yet gets `status` materialised on first reimport. Don't early-return on "already has the type"; pass through to `addType` either way and let init-if-missing decide per field.
 - **Source-mirror fields (`roam:*`) refresh freely.** They represent "what the source said at this import." Always overwrite.
 - **App-owned fields initialise only if missing.** App-owned fields are *exactly* the keys declared in each tag mapping's `appOwnedInit` (e.g. `status` for the TODO/DONE mapping); they are not "everything outside the `roam:` namespace" — that mis-classifies source-authored non-namespaced fields like `alias`, page-type markers, and promoted page attributes, which the importer plans and reimports should refresh. Reimport never overwrites an app-owned value that already exists. The `appOwnedInit` map is passed to `repo.addTypeInTx` (Phase 5 step 5) as `initialValues` — these encode source-specific values atomically with the type tag (e.g. `DONE → status='done'`). Type contributions don't carry their own defaults, so the only writes here are the `appOwnedInit` map itself; an unset field after import reads `statusProp.defaultValue = 'open'` via the normal block.get / useProperty fallback. On reimport, `addTypeInTx` re-runs the materialisation pass but every `appOwnedInit` field already has a value and is skipped (the init-only-if-missing rule); app-owned fields stay as the user left them. `setup` doesn't re-run either since the type is already present.
 - **Removed source markers** (Roam now lacks the marker that previously implied the type) do *not* automatically remove the type. Removing a tag in Roam shouldn't silently un-task the user's block.
@@ -1065,7 +1143,7 @@ Each phase is independently shippable and testable.
 3. Add pure helpers `getBlockTypes` / `hasBlockType` / `addBlockTypeToProperties` per §3-pure to [src/data/properties.ts](src/data/properties.ts).
 4. Add the `block_types` table + triggers + backfill marker per §2a, in the kernel local-schema (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) shape).
 5. Rewrite `SELECT_BLOCKS_BY_TYPE_SQL` and `findExtensionBlocksQuery` to join `block_types` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33), [:384](src/data/internals/kernelQueries.ts:384)). Drop `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)).
-6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and `propertySchemas` registries on `Repo`. These are what `repo.addType` reads (for `setup` lookup and `initialValues` codec encoding) and what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a). Reads use `PropertySchema.defaultValue` directly and don't need either registry.
+6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and the **merged `propertySchemas`** map (§1a schema-lift) on `Repo`. The merge runs `mergeLiftedSchemas(runtime.read(propertySchemasFacet), this.types)` — direct registrations first, type-lifted second, last-wins-with-warn on conflicts, object-identity dedup on multi-type sharing. This merged map is what `repo.addType` reads (for `setup` lookup and `initialValues` codec encoding), what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), what the property panel reads in §3c, and what the typed-query primitive reads in §8. Reads on the read path still use `PropertySchema.defaultValue` directly and don't need either registry.
 7. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
 8. Add `repo.addType(blockId, typeId, initialValues?)` / `repo.addTypeInTx(tx, ...)` / `repo.removeType` / `repo.removeTypeInTx` / `repo.toggleType` / `repo.setBlockTypes` / `repo.snapshotTypeRegistries` as `Repo` methods (not registered mutators — see §3a). `addType` runs `contribution.setup?.()` per §3a-setup on first transitions; init-if-missing materialisation runs against `initialValues` only (no per-type defaults).
 9. Add `Block` facade sugar: `block.types` getter, `block.hasType(id)`, `block.addType(id)`, `block.removeType(id)`, `block.toggleType(id)` ([src/data/block.ts](src/data/block.ts)). `hasType` is a snapshot read; use it inside reactive contexts (component bodies that subscribe to `useProperty(block, typesProp)` separately, or `canRender` predicates re-evaluated by `useRenderer`). Don't use it as the gate inside non-reactive facet contribution functions per §4a's reactivity gotcha.

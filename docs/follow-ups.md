@@ -76,6 +76,16 @@ Blockers to land first:
 
 Once #1 lands, the migration is small: swap `AgentTokenStore` for a thin wrapper around `repo.tx({scope: DeviceLocal})` + `repo.query.children({parentId: userPage.id, kind: 'agent-token'})`. Bridge handshake and CLI stay identical.
 
+## Strict-mode-with-checked-overrides for name-keyed facets
+
+Every name-keyed facet in the codebase (`propertySchemasFacet`, `propertyUiFacet`, `postCommitProcessorsFacet`, `queriesFacet`, `mutatorsFacet`, `typesFacet`, `blockLayoutFacet`, etc.) follows the same convention: warn on duplicate name, last-wins. That's the existing override mechanism — plugins replace kernel registrations by registering after them. It works, but the warn is easy to miss in practice and accidental name collisions silently overwrite intended behavior.
+
+A stricter scheme: registrations may opt into a checked override target — `propertySchemasFacet.of(statusPropV2, {source: 'my-plugin', overrides: 'status'})`. Combine asserts that an entry under `overrides` exists; if absent, throw (catches typos). If present, replace silently (intent declared, no warn). Without `overrides`, any duplicate-name collision throws (catches accidents). That gives strict mode + intentional override + typo catch in one shape.
+
+Apply uniformly across every name-keyed facet — the convention should be consistent. ~10 lines per facet's combine.
+
+**Trigger to build:** plugin authors stepping on each other's schema / mutator / processor names in the wild and the warn-and-last-wins not catching it in code review. Until then, the existing convention works for the alpha-stage plugin surface and the [docs/type-system.md §1a](docs/type-system.md) schema-lift handles the most acute case (object-identity dedup for multi-type-shared schemas means the warn fires only on real conflicts).
+
 ## `rendererProp` silently no-ops on a misspelled renderer id
 
 [useRenderer](src/hooks/useRendererRegistry.tsx:26) reads `rendererProp` and only honors it via `if (rendererKey && registry[rendererKey])` — when the prop names a renderer id that isn't registered (typo, plugin not loaded, renderer renamed), the lookup silently fails and resolution falls through to the `canRender` predicate sort. The user's explicit override is lost with no signal.
