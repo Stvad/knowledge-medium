@@ -1,3 +1,9 @@
+import {
+  EMPTY_GROUPED_BACKLINKS_CONFIG,
+  normalizeGroupedBacklinksConfig,
+  type GroupedBacklinksConfig,
+} from './config.ts'
+
 export interface GroupedBacklinkCandidate {
   sourceId: string
   groupId: string
@@ -24,47 +30,51 @@ type GroupPriority = 'high' | 'default' | 'low'
 export const FALLBACK_GROUP_ID = '__grouped_backlinks_other__'
 export const FALLBACK_GROUP_LABEL = 'Other'
 
-const DEFAULT_EXCLUSIONS = [
-  /^ptr$/,
-  /^otter\.ai\/transcript$/,
-  /^otter\.ai$/,
-  /^TODO$/,
-  /^DONE$/,
-  /^factor$/,
-  /^interval$/,
-  /^\[\[factor]]:.+/,
-  /^\[\[interval]]:.+/,
-  /^isa$/,
-  /^repeat interval$/,
-  /^make-public$/,
-  /^matrix-messages$/,
-  /^\d{4}-\d{2}-\d{2}$/,
-  /^[A-Z][a-z]+ \d{1,2}(st|nd|rd|th), \d{4}$/,
-]
+interface GroupingMatcher {
+  highPriorityTags: ReadonlySet<string>
+  lowPriorityTags: ReadonlySet<string>
+  excludedTags: ReadonlySet<string>
+  excludedPatterns: readonly RegExp[]
+}
 
-const LOW_PRIORITY = [
-  /^reflection$/,
-  /^task$/,
-  /^weekly review$/,
-  /^person$/,
-]
+const toSet = (values: readonly string[]): ReadonlySet<string> =>
+  new Set(values.map(value => value.trim()).filter(Boolean))
 
-const matchesAny = (label: string, patterns: readonly RegExp[]): boolean =>
+const toRegExp = (pattern: string): RegExp | null => {
+  try {
+    return new RegExp(pattern)
+  } catch {
+    return null
+  }
+}
+
+const buildMatcher = (config: GroupedBacklinksConfig): GroupingMatcher => ({
+  highPriorityTags: toSet(config.highPriorityTags),
+  lowPriorityTags: toSet(config.lowPriorityTags),
+  excludedTags: toSet(config.excludedTags),
+  excludedPatterns: config.excludedPatterns
+    .map(toRegExp)
+    .filter((pattern): pattern is RegExp => pattern !== null),
+})
+
+const matchesAnyPattern = (label: string, patterns: readonly RegExp[]): boolean =>
   patterns.some(pattern => pattern.test(label))
 
 const classify = (
   candidate: GroupedBacklinkCandidate,
-  highPriorityIds: ReadonlySet<string>,
+  matcher: GroupingMatcher,
 ): GroupPriority => {
-  if (highPriorityIds.has(candidate.groupId)) return 'high'
-  if (candidate.kind === 'root' || matchesAny(candidate.groupLabel, LOW_PRIORITY)) {
+  if (matcher.highPriorityTags.has(candidate.groupLabel)) return 'high'
+  if (candidate.kind === 'root' || matcher.lowPriorityTags.has(candidate.groupLabel)) {
     return 'low'
   }
   return 'default'
 }
 
-const labelExcluded = (label: string): boolean =>
-  !label.trim() || matchesAny(label, DEFAULT_EXCLUSIONS)
+const labelExcluded = (label: string, matcher: GroupingMatcher): boolean =>
+  !label.trim() ||
+  matcher.excludedTags.has(label) ||
+  matchesAnyPattern(label, matcher.excludedPatterns)
 
 const priorityRank = (priority: GroupPriority): number => {
   switch (priority) {
@@ -101,27 +111,27 @@ export const buildGroupedBacklinks = ({
   targetId,
   sourceOrder,
   candidates,
-  highPriorityIds = [],
+  groupingConfig = EMPTY_GROUPED_BACKLINKS_CONFIG,
   minGroupSize = 2,
 }: {
   targetId: string
   sourceOrder: readonly string[]
   candidates: readonly GroupedBacklinkCandidate[]
-  highPriorityIds?: readonly string[]
+  groupingConfig?: GroupedBacklinksConfig
   minGroupSize?: number
 }): GroupedBacklinkGroup[] => {
   const sourceSet = new Set(sourceOrder)
-  const highPrioritySet = new Set(highPriorityIds)
+  const matcher = buildMatcher(normalizeGroupedBacklinksConfig(groupingConfig))
   const groups = new Map<string, CandidateGroup>()
   for (const candidate of candidates) {
     if (
       candidate.groupId === targetId ||
       !sourceSet.has(candidate.sourceId) ||
-      labelExcluded(candidate.groupLabel)
+      labelExcluded(candidate.groupLabel, matcher)
     ) {
       continue
     }
-    const priority = classify(candidate, highPrioritySet)
+    const priority = classify(candidate, matcher)
     const existing = groups.get(candidate.groupId)
     if (existing) {
       existing.sourceIds.add(candidate.sourceId)

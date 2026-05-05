@@ -6,13 +6,21 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { invalidationRulesFacet, queriesFacet } from '@/data/facets.ts'
+import { invalidationRulesFacet, propertySchemasFacet, queriesFacet } from '@/data/facets.ts'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.ts'
 import { backlinksInvalidationRule } from '@/plugins/backlinks/invalidation.ts'
+import { getUserPrefsBlock } from '@/data/globalState.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
 } from '../query.ts'
 import { groupedBacklinksDataExtension } from '../dataExtension.ts'
+import {
+  groupedBacklinksDefaultsProp,
+  groupedBacklinksOverridesProp,
+  INITIAL_GROUPED_BACKLINKS_CONFIG,
+  mergeGroupedBacklinksConfig,
+} from '../config.ts'
+import { initializeGroupedBacklinksPreferences } from '../preferences.ts'
 
 const WS = 'ws-1'
 
@@ -78,6 +86,23 @@ describe('groupedBacklinksDataExtension query', () => {
     const queries = runtime.read(queriesFacet)
 
     expect(queries.get(GROUPED_BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
+  })
+
+  it('contributes grouped backlinks property schemas', () => {
+    const runtime = resolveFacetRuntimeSync(groupedBacklinksDataExtension)
+    const schemas = runtime.read(propertySchemasFacet)
+
+    expect(schemas.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsProp)
+    expect(schemas.get(groupedBacklinksOverridesProp.name)).toBe(groupedBacklinksOverridesProp)
+  })
+
+  it('initializes grouped backlinks defaults on the user prefs block', async () => {
+    await initializeGroupedBacklinksPreferences(env.repo, WS)
+    const prefsBlock = await getUserPrefsBlock(env.repo, WS, env.repo.user)
+
+    expect(prefsBlock.peekProperty(groupedBacklinksDefaultsProp)).toEqual(
+      INITIAL_GROUPED_BACKLINKS_CONFIG,
+    )
   })
 
   it('groups backlinks by common direct references and merges singletons into Other', async () => {
@@ -156,7 +181,7 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(sorted(out.groups[0].sourceIds)).toEqual(['child-1', 'child-2'])
   })
 
-  it('applies include/remove filters before grouping', async () => {
+  it('applies include/remove filters before grouping and honors high priority config', async () => {
     await create({id: 'target', content: 'Target'})
     await create({id: 'project', content: 'Project'})
     await create({id: 'topic', content: 'Topic'})
@@ -191,11 +216,107 @@ describe('groupedBacklinksDataExtension query', () => {
       workspaceId: WS,
       id: 'target',
       filter: {includeIds: ['project'], removeIds: ['done']},
+      groupingConfig: {
+        highPriorityTags: ['Project'],
+        lowPriorityTags: [],
+        excludedTags: [],
+        excludedPatterns: [],
+      },
     }).load()
 
     expect(out.total).toBe(2)
     expect(out.groups.map(group => group.label)).toEqual(['Project'])
     expect(sorted(out.groups[0].sourceIds)).toEqual(['src-1', 'src-2'])
+  })
+
+  it('does not treat include filters as grouping priority', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'project', content: 'Project'})
+    await create({id: 'topic', content: 'Topic'})
+    await create({
+      id: 'src-1',
+      references: [
+        {id: 'target', alias: 'T'},
+        {id: 'project', alias: 'Project'},
+        {id: 'topic', alias: 'Topic'},
+      ],
+    })
+    await create({
+      id: 'src-2',
+      references: [
+        {id: 'target', alias: 'T'},
+        {id: 'project', alias: 'Project'},
+        {id: 'topic', alias: 'Topic'},
+      ],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      filter: {includeIds: ['project']},
+    }).load()
+
+    expect(out.groups.map(group => group.label)).toEqual(['Topic'])
+  })
+
+  it('uses grouped backlink config for low priority and exclusions', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'project', content: 'Project'})
+    await create({id: 'task', content: 'task'})
+    await create({id: 'done', content: 'DONE'})
+    await create({
+      id: 'src-1',
+      references: [
+        {id: 'target', alias: 'T'},
+        {id: 'project', alias: 'Project'},
+        {id: 'task', alias: 'task'},
+        {id: 'done', alias: 'DONE'},
+      ],
+    })
+    await create({
+      id: 'src-2',
+      references: [
+        {id: 'target', alias: 'T'},
+        {id: 'project', alias: 'Project'},
+        {id: 'task', alias: 'task'},
+        {id: 'done', alias: 'DONE'},
+      ],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      groupingConfig: {
+        highPriorityTags: [],
+        lowPriorityTags: ['task'],
+        excludedTags: ['DONE'],
+        excludedPatterns: [],
+      },
+    }).load()
+
+    expect(out.groups.map(group => group.label)).toEqual(['Project'])
+  })
+
+  it('merges local overrides over workspace defaults per field', () => {
+    const merged = mergeGroupedBacklinksConfig(
+      {
+        highPriorityTags: ['Workspace High'],
+        lowPriorityTags: ['Workspace Low'],
+        excludedTags: ['Workspace Hidden'],
+        excludedPatterns: ['^workspace$'],
+      },
+      {
+        highPriorityTags: ['Local High'],
+        excludedPatterns: [],
+      },
+    )
+
+    expect(merged).toEqual({
+      highPriorityTags: ['Local High'],
+      lowPriorityTags: ['Workspace Low'],
+      excludedTags: ['Workspace Hidden'],
+      excludedPatterns: [],
+    })
   })
 
   it('re-resolves when an ancestor gains a grouping reference', async () => {

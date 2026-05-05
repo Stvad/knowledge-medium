@@ -4,6 +4,7 @@ import {
   hasBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
+import type { GroupedBacklinksConfig } from './config.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
   type GroupedBacklinksResult,
@@ -17,12 +18,16 @@ const EMPTY_GROUPED_BACKLINKS: GroupedBacklinksResult = {
 export const useGroupedBacklinks = (
   block: Block,
   workspaceId: string,
+  groupingConfig: GroupedBacklinksConfig,
   filter?: BacklinksFilter,
 ): GroupedBacklinksResult => {
   const repo = block.repo
-  const args = hasBacklinksFilter(filter)
-    ? {workspaceId, id: block.id, filter}
-    : {workspaceId, id: block.id}
+  const args = {
+    workspaceId,
+    id: block.id,
+    groupingConfig,
+    ...(hasBacklinksFilter(filter) ? {filter} : {}),
+  }
   return useHandle(
     repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](args),
     {selector: data => data ?? EMPTY_GROUPED_BACKLINKS},

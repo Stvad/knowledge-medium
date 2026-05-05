@@ -17,6 +17,11 @@ import {
   type GroupedBacklinkCandidate,
   type GroupedBacklinkGroup,
 } from './grouping.ts'
+import {
+  EMPTY_GROUPED_BACKLINKS_CONFIG,
+  normalizeGroupedBacklinksConfig,
+  type GroupedBacklinksConfig,
+} from './config.ts'
 
 export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
@@ -37,6 +42,13 @@ const groupedBacklinksSchema: Schema<GroupedBacklinksResult> = {
 const backlinksFilterSchema = z.object({
   includeIds: z.array(z.string()).optional(),
   removeIds: z.array(z.string()).optional(),
+}).optional()
+
+const groupedBacklinksConfigSchema = z.object({
+  highPriorityTags: z.array(z.string()).optional(),
+  lowPriorityTags: z.array(z.string()).optional(),
+  excludedTags: z.array(z.string()).optional(),
+  excludedPatterns: z.array(z.string()).optional(),
 }).optional()
 
 const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
@@ -145,7 +157,12 @@ const labelForBlockData = (data: BlockData): string => {
 }
 
 export const groupedBacklinksForBlockQuery = defineQuery<
-  {workspaceId: string; id: string; filter?: BacklinksFilter},
+  {
+    workspaceId: string
+    id: string
+    filter?: BacklinksFilter
+    groupingConfig?: Partial<GroupedBacklinksConfig>
+  },
   GroupedBacklinksResult
 >({
   name: GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
@@ -153,9 +170,10 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     workspaceId: z.string(),
     id: z.string(),
     filter: backlinksFilterSchema,
+    groupingConfig: groupedBacklinksConfigSchema,
   }),
   resultSchema: groupedBacklinksSchema,
-  resolve: async ({workspaceId, id, filter}, ctx) => {
+  resolve: async ({workspaceId, id, filter, groupingConfig}, ctx) => {
     ctx.depend({kind: 'row', id})
     if (!workspaceId || !id) return {groups: [], total: 0}
     ctx.depend({
@@ -165,6 +183,9 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     })
 
     const normalizedFilter = normalizeBacklinksFilter(filter)
+    const normalizedGroupingConfig = normalizeGroupedBacklinksConfig(
+      groupingConfig ?? EMPTY_GROUPED_BACKLINKS_CONFIG,
+    )
     const filterActive = normalizedFilter.includeIds.length > 0 ||
       normalizedFilter.removeIds.length > 0
     const backlinkArgs = filterActive
@@ -215,7 +236,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         targetId: id,
         sourceOrder: sources.map(source => source.id),
         candidates,
-        highPriorityIds: normalizedFilter.includeIds,
+        groupingConfig: normalizedGroupingConfig,
       }),
       total: sources.length,
     }

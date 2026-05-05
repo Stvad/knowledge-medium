@@ -13,6 +13,7 @@ import {
 import { useBacklinks } from '@/plugins/backlinks/useBacklinks.ts'
 import { useStoredBacklinkFilter } from '@/plugins/backlinks/useStoredBacklinkFilter.ts'
 import type { GroupedBacklinkGroup } from './grouping.ts'
+import { useGroupedBacklinksConfig } from './useGroupedBacklinksConfig.ts'
 import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
 
 const GroupItems = ({
@@ -78,8 +79,14 @@ function GroupedLinkedReferencesInner({
 }) {
   const [filter, setStoredFilter] = useStoredBacklinkFilter(block)
   const filterActive = hasBacklinksFilter(filter)
+  const groupingConfig = useGroupedBacklinksConfig(block)
   const unfilteredBacklinks = useBacklinks(block, workspaceId)
-  const grouped = useGroupedBacklinks(block, workspaceId, filterActive ? filter : undefined)
+  const grouped = useGroupedBacklinks(
+    block,
+    workspaceId,
+    groupingConfig,
+    filterActive ? filter : undefined,
+  )
   const [open, setOpen] = useState(true)
   const [filtersOpen, setFiltersOpen] = useState(filterActive)
 
