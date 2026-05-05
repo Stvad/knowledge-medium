@@ -231,7 +231,16 @@ Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) ke
 
 ```ts
 // On Repo
-async addType(blockId: string, typeId: string): Promise<void> {
+async addType(
+  blockId: string,
+  typeId: string,
+  /** Per-call initial values that take precedence over the type's
+   *  `defaults`. Importers and "create with state" callers use this to
+   *  set app-owned fields atomically with the tag. Init-only-if-missing
+   *  semantics still apply: values already set on the block are not
+   *  overwritten. */
+  initialValues: Readonly<Record<string, unknown>> = {},
+): Promise<void> {
   const contribution = this.types.get(typeId)
   await this.tx(async tx => {
     const block = await tx.get(blockId)
@@ -240,8 +249,10 @@ async addType(blockId: string, typeId: string): Promise<void> {
     if (current.includes(typeId)) return
     const next: Record<string, unknown> = { ...block.properties }
     next[typesProp.name] = typesProp.codec.encode([...current, typeId])
-    // Apply only defaults the block doesn't already have set.
-    for (const [name, value] of Object.entries(contribution?.defaults ?? {})) {
+    // Per-call initialValues win over type defaults; both are
+    // init-only-if-missing relative to existing block state.
+    const merged = { ...(contribution?.defaults ?? {}), ...initialValues }
+    for (const [name, value] of Object.entries(merged)) {
       if (next[name] === undefined) {
         const schema = this.propertySchemas.get(name)
         next[name] = schema ? schema.codec.encode(value) : value
@@ -269,9 +280,10 @@ async removeType(blockId: string, typeId: string): Promise<void> {
 }
 
 async toggleType(blockId: string, typeId: string): Promise<void> {
-  // Read once via the retained registry — the actual add/remove path
-  // re-reads under tx for atomicity.
-  const block = await this.get(blockId)?.load()
+  // Read once outside the tx — the actual add/remove path re-reads
+  // under tx for atomicity. Repo.load(id) returns BlockData | null
+  // (see [src/data/repo.ts](src/data/repo.ts)).
+  const block = await this.load(blockId)
   const has = (block?.properties[typesProp.name] as string[] | undefined)?.includes(typeId) ?? false
   return has ? this.removeType(blockId, typeId) : this.addType(blockId, typeId)
 }
@@ -280,7 +292,7 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
   // Bulk diff-and-apply for multi-select UI / importers that want
   // defaults-on-add semantics. Each addType/removeType call is its own
   // tx; collapse into one if atomicity matters at a call site.
-  const block = await this.get(blockId)?.load()
+  const block = await this.load(blockId)
   const current = (block?.properties[typesProp.name] as string[] | undefined) ?? []
   const next = new Set(typeIds)
   const cur = new Set(current)
@@ -367,7 +379,10 @@ get<T>(schema: PropertySchema<T>): T {
 Three companion rules:
 
 - **`peekProperty` does NOT overlay.** It stays as "is this property actually materialised?" — used by `addType` itself to decide whether to write a default, by sync-conflict resolution, by debugging tools that want raw storage. The overlay is a `get`-only enhancement.
-- **`useProperty` DOES overlay** ([src/hooks/block.ts:252](src/hooks/block.ts:252)) — by the same symmetry argument as `block.get`. Inside the selector, call `repo.resolveDefault(types, schema)` against the type ids read from `doc.properties[typesProp.name]`. The retained `types` registry on `Repo` is updated wholesale on `setFacetRuntime`, so the selector re-runs through the existing `useHandle` invalidation path on rebuild. Add a parallel `usePeekProperty` returning `T | undefined` for the rare "is this materialised?" caller. The downstream wrappers `useUIStateProperty` / `useRootUIStateProperty` / `useUserPrefsProperty` ([src/data/globalState.ts:275](src/data/globalState.ts:275)) inherit the overlay automatically — verify at implementation time that no UI-state schema name collides with a type-contributed prop name.
+- **`useProperty` DOES overlay** ([src/hooks/block.ts:252](src/hooks/block.ts:252)) — by the same symmetry argument as `block.get`. Inside the selector, call `repo.resolveDefault(types, schema)` against the type ids read from `doc.properties[typesProp.name]`. **Reactivity caveat:** `useHandle` only re-runs on block-handle changes, so updating `Repo`'s retained `types` registry inside `setFacetRuntime` would NOT invalidate this hook on its own — a runtime swap that changes type defaults wouldn't re-render unless a row also changed. Two viable wirings:
+  - **(a) Pull `runtime` into the hook's deps via `useAppRuntime()`** and pass the runtime as a selector dependency so the selector closure rebuilds on runtime swap. This forces `useHandle` to re-evaluate against the new selector identity. Cheap; only cost is one extra context read per `useProperty` call site.
+  - **(b) Bump a `Repo.runtimeGeneration` counter** on each `setFacetRuntime` and have `useProperty` subscribe to it (or include it in the selector deps). Slightly more plumbing but keeps the React tree out of the runtime context for hooks that don't otherwise need it.
+  Recommend **(a)** for v1 — `useAppRuntime()` already exists and most consumers of `useProperty` are inside the runtime-aware tree anyway. Add a parallel `usePeekProperty` returning `T | undefined` for the rare "is this materialised?" caller (no overlay, no runtime dependency). The downstream wrappers `useUIStateProperty` / `useRootUIStateProperty` / `useUserPrefsProperty` ([src/data/globalState.ts:275](src/data/globalState.ts:275)) inherit the overlay automatically — verify at implementation time that no UI-state schema name collides with a type-contributed prop name.
 - **The typed-query primitive (§8) does NOT overlay by default.** SQL runs against `properties_json` and matches only materialised values. Under normal flows storage and overlay agree (because `addType` materialised them). At the three edges above, queries can miss until something materialises; `addType` remains the storage invariant. An opt-in `{ materialiseDefaults: true }` flag is a possible follow-up if real call sites want overlay-aware filtering, but defer until there's demand.
 - **`BlockProperties` field discovery (§3c) reuses `repo.resolveDefault`.** Unset slots in the panel render whatever `repo.resolveDefault(block.types, schema)` returns — same answer `block.get` would produce — so the panel and code reads agree on what an unset-but-typed slot looks like. The signature replaces the earlier free-function `resolveDefault(block, schema, typesRegistry)` sketch; pass the type-id list and let `Repo` own the registry access.
 
@@ -454,7 +469,7 @@ for (const typeId of block.types) {
 
 The dedup by `name` is exactly what §3b's "field discovery is union by name" means at the code level. Multi-type composition is automatic — a prop declared by both `todo` and `task` lands in the map once.
 
-**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `resolveDefault(block, schema, typesRegistry)` as its value (the same helper §3a-bis uses for `block.get`). This makes the panel show whatever `block.get(schema)` would return — type-conditional default for typed slots, schema default otherwise. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property.
+**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `repo.resolveDefault(block.types, schema)` as its value (the same Repo method §3a-bis uses for `block.get`). This makes the panel show whatever `block.get(schema)` would return — type-conditional default for typed slots, schema default otherwise. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property.
 
 For each entry in `unknownNames` — properties set on the block whose schema isn't registered (legacy ad-hoc props, plugin-not-loaded refs, etc.) — keep the existing unknown-schema fallback in [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) ([:201](src/components/BlockProperties.tsx:201)–[:204](src/components/BlockProperties.tsx:204)): `resolvePropertyDisplay` builds an `adhocSchema` and routes through the kind-inferred default editor. These rows still appear in the panel — the union must not silently drop them.
 
@@ -639,7 +654,18 @@ export interface ProcessorCtx {
 }
 ```
 
-`processorRunner` ([src/data/internals/processorRunner.ts:226](src/data/internals/processorRunner.ts:226)) builds `ctx`; it gets the schema map from the same runtime path that `repo.setFacetRuntime` already propagates. The map is captured at ctx-construction time so a mid-flight runtime swap doesn't change what a running processor sees.
+`processorRunner` ([src/data/internals/processorRunner.ts:226](src/data/internals/processorRunner.ts:226)) builds `ctx` and lives outside `Repo`, so reading `Repo`'s private `propertySchemas` field directly isn't an option. Add a public read-only accessor on `Repo`:
+
+```ts
+// On Repo
+get propertySchemas(): ReadonlyMap<string, AnyPropertySchema> {
+  return this.propertySchemasRegistry  // the field set inside setFacetRuntime
+}
+```
+
+(Rename the private field if needed to free up the public name — e.g. `private propertySchemasRegistry`.) `processorRunner` reads `repo.propertySchemas` once at ctx-construction time and stores the snapshot on `ctx.propertySchemas`. **Snapshot-at-ctx semantics:** the map is captured per-processor-invocation, so a mid-flight `setFacetRuntime` swap doesn't change what an in-progress processor sees. Subsequent processor invocations see the new map.
+
+Same accessor pattern works for `Repo.types` if it ever needs out-of-`Repo` consumption (none currently — the type registry is read by `Repo.addType` / `Repo.resolveDefault` internally and by React via `useAppRuntime()`).
 
 Alternative considered: hold a full `FacetRuntime` on `ctx`. Rejected — too broad a surface for a processor and pulls in extension-runtime dependencies the data layer otherwise doesn't need.
 
@@ -667,12 +693,26 @@ interface TypedQuery {
 
 **Backed by local SQLite, not an in-memory index.** This app receives row changes via two paths — local tx commit *and* the row-events tail from PowerSync sync-apply. An in-memory index would have to be initialised from a full table scan at startup AND wired to both commit and sync-apply streams, with care to not double-count or miss either. The `block_types` side table (§2a) and the `block_references` edge index (§6b) already live in SQLite and are maintained by triggers that fire on **all** writes to `blocks`, sync-applied or not. Reuse them:
 
-- `types`-only queries → join `block_types`.
+- `types`-only queries → use `EXISTS` (or `SELECT DISTINCT`) against `block_types`, not a plain join. A block matching multiple requested types would otherwise appear once per matching row. Prefer `EXISTS` because it short-circuits and avoids hash-dedup overhead:
+  ```sql
+  SELECT b.* FROM blocks b
+  WHERE b.workspace_id = ? AND b.deleted = 0
+    AND EXISTS (SELECT 1 FROM block_types bt
+                WHERE bt.block_id = b.id
+                  AND bt.workspace_id = b.workspace_id
+                  AND bt.type IN (?, ?, ?))
+  ```
 - `where` on a property → compile each `(name, decodedValue)` entry to `json_extract(properties_json, ?) = ?` and bind two parameters: the **JSON path** (computed safely — see below) and the **encoded** value run through the matching `PropertySchema.codec`. **Don't string-interpolate the property name into a `$.<name>` literal** — property names with `:`, `-`, or `.` (e.g. `system:collapsed`, `daily-note`) break naive interpolation. Use SQLite's path syntax: `'$.' || quote(name)` doesn't work directly, so build the path in JS with proper escaping (wrap in `"..."` and escape inner quotes — SQLite's JSON path accepts `$."weird:name"`). Look up the schema in `propertySchemasFacet`; if no schema is registered for that name, refuse the query with a clear error rather than guessing the codec — the caller is asking for typed-equality, ad-hoc schemas have `unsafeIdentity` codec which is meaningless to compare.
 
   **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `kind` is `list`, `object`, `ref`, or `refList`. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
   Per-property indices (e.g. `CREATE INDEX idx_blocks_status ON blocks (json_extract(properties_json, '$.status'))`) follow the same path-quoting rule and are added incrementally for hot fields.
-- `referencedBy` → join `block_references` filtered by `target_id` (and optionally `source_field`).
+- `referencedBy` → use `EXISTS` against `block_references` filtered by `target_id` (and optionally `source_field`). Same dedup reason: a source could reference the same target through multiple fields and the join would duplicate the source row otherwise.
+  ```sql
+  WHERE EXISTS (SELECT 1 FROM block_references br
+                WHERE br.source_id = b.id
+                  AND br.target_id = ?
+                  AND br.workspace_id = b.workspace_id)
+  ```
 - `subscribeBlocks` rides the existing `InvalidationRule` / `repo` change-notification stream, which is already driven by row-event-aware machinery — same as backlinks consumers do today.
 
 This reduces §8 from "build a new in-memory index that must consume two change streams" to "compose three SQL primitives that already exist or are added in §2a/§6b and re-execute on the existing notification stream."
@@ -718,7 +758,11 @@ const TAG_TO_TYPE: Record<string, { types: string[]; appOwnedInit: Record<string
 }
 ```
 
-When a Roam block carries a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer (a) calls `repo.addType(blockId, 'todo')`, (b) initialises **app-owned** fields (`status`) only if not already set, and (c) refreshes **source-mirror** fields (`roam:todo-state`) freely. The marker is stripped from `content` since the type now captures the meaning; the source-mirror field preserves what Roam said for round-trip and conflict-resolution purposes. Per the §3 hybrid naming rule, `status` is the shared-vocabulary field (flat name) and `roam:todo-state` is the namespaced source-mirror.
+When a Roam block carries a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer:
+1. Calls `repo.addType(blockId, 'todo', appOwnedInit)` — passes the source's app-owned initial values as the third arg. Per the addType contract, these win over the type's `defaults` on first add (so `DONE` correctly initialises `status='done'` instead of being clobbered by `todo.defaults.status='open'`), and stay init-only-if-missing relative to existing block state (so reimport doesn't overwrite a locally completed task).
+2. Refreshes **source-mirror** fields (`roam:todo-state`) freely via `block.set` or a separate property write.
+
+The marker is stripped from `content` since the type now captures the meaning; the source-mirror field preserves what Roam said for round-trip and conflict-resolution purposes. Per the §3 hybrid naming rule, `status` is the shared-vocabulary field (flat name) and `roam:todo-state` is the namespaced source-mirror.
 
 #### Reimport conflict semantics
 
@@ -733,7 +777,7 @@ The current Roam importer upserts deterministic IDs and replaces `content` / `pr
 
 - **Type membership is additive.** If the Roam tag maps to a type the block doesn't yet have, `repo.addType` adds it. If the block already has that type, no-op.
 - **Source-mirror fields (`roam:*`) refresh freely.** They represent "what the source said at this import." Always overwrite.
-- **App-owned fields (`status`, `due`, anything not in the `roam:` namespace) initialise only if missing.** Reimport never overwrites an app-owned value that already exists. The `appOwnedInit` map in the tag-mapping table is materialised through `repo.addType`'s defaults path on the *initial* tag; on reimport, the type is already present, no addType call fires, app-owned fields stay as the user left them.
+- **App-owned fields (`status`, `due`, anything not in the `roam:` namespace) initialise only if missing.** Reimport never overwrites an app-owned value that already exists. The `appOwnedInit` map in the tag-mapping table is passed to `repo.addType` as `initialValues` on the *initial* tag — these win over type defaults so source-specific values (e.g. `DONE → status='done'`) are honoured rather than overwritten by the type's default. On reimport, the type is already present, `addType` returns early without writing, and app-owned fields stay as the user left them.
 - **Removed source markers** (Roam now lacks the marker that previously implied the type) do *not* automatically remove the type. Removing a tag in Roam shouldn't silently un-task the user's block.
 
 **Second-pass rule (deferred):** track per-field source fingerprints — record what value was last imported for each source-mirrored field. On reimport, apply a source update only if the local value still equals the previous imported value. If both source and local changed, surface a conflict (or keep local by policy). The fingerprints live alongside the source mirror, e.g. `roam:todo-state-fingerprint` keyed by import session. Build this when reimport conflicts become a real problem; v1's "init-only-if-missing" rule covers the common case.
@@ -766,10 +810,10 @@ Each phase is independently shippable and testable.
 7. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
 8. Add `repo.addType(blockId, typeId)` / `repo.removeType(blockId, typeId)` / `repo.toggleType(blockId, typeId)` / `repo.setBlockTypes(blockId, typeIds)` as `Repo` methods (not registered mutators — see §3a). `addType` runs `contribution.setup?.()` per §3a-setup after applying defaults.
 9. Add `Block` facade sugar: `block.types` getter, `block.hasType(id)`, `block.addType(id)`, `block.removeType(id)`, `block.toggleType(id)` ([src/data/block.ts](src/data/block.ts)). Use `hasType` at every type-decoration call site introduced in later phases.
-10. Add a `resolveDefault(block, schema, typesRegistry)` helper and update `block.get` per §3a-bis to overlay type-conditional defaults (first-applicable-type wins, falls back to `schema.defaultValue`). `peekProperty` is unchanged. The typed-query primitive in Phase 4 stays storage-only.
-11. Update `useProperty` ([src/hooks/block.ts:252](src/hooks/block.ts:252)) to use the overlay via the same `resolveDefault` lookup (selector closes over `useAppRuntime().read(typesFacet)`). Add a parallel `usePeekProperty` returning `T | undefined` for raw-storage reads. Audit `useUIStateProperty`/`useRootUIStateProperty`/`useUserPrefsProperty` for accidental name collisions with type-contributed props.
+10. Add `Repo.resolveDefault(types, schema)` per §3a-bis and update `block.get` to call it for the unset-property fallback (first-applicable-type default wins, falls back to `schema.defaultValue`). `peekProperty` is unchanged. The typed-query primitive in Phase 4 stays storage-only.
+11. Update `useProperty` ([src/hooks/block.ts:252](src/hooks/block.ts:252)) to use the overlay via `repo.resolveDefault(types, schema)`. Add `useAppRuntime()` as a hook dependency so the selector closure rebuilds when the runtime swaps (per §3a-bis reactivity caveat — without this, retained-registry updates wouldn't invalidate `useHandle`). Add a parallel `usePeekProperty` returning `T | undefined` for raw-storage reads (no overlay, no runtime dep). Audit `useUIStateProperty`/`useRootUIStateProperty`/`useUserPrefsProperty` for accidental name collisions with type-contributed props.
 12. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
-13. Update every `typeProp` write site to call `repo.addType` (or write `typesProp` directly via `addBlockTypeToProperties` for batch paths like the Roam importer that bypass mutators — but still call `repo.addType` to materialise defaults / run setup).
+13. Update every `typeProp` write site to call `repo.addType(blockId, typeId, initialValues?)` directly — never prewrite `typesProp` and then call `addType` (per §3-pure: `addType` returns early when the type is already present, so prewriting causes defaults / `setup` to be skipped). Bulk paths like the Roam importer iterate blocks and call `repo.addType` per row, passing source-specific app-owned values via `initialValues`. `addBlockTypeToProperties` is reserved for raw-`BlockData` callers (tests, processor snapshot rewrites, importer **plan** rows that have no runtime access) and never composes with `addType`.
 14. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]` (or use `block.hasType`/`block.types` once #9 lands; or `hasBlockType(data, ...)` for raw `BlockData`). Greps: `grep -rn "typeProp" src/`.
 15. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
 
@@ -779,7 +823,7 @@ Each phase is independently shippable and testable.
 
 1. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) to consult `typesFacet` per §4b.
 2. Add `priority` to a few existing kernel type contributions so collisions resolve deterministically.
-3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `resolveDefault(block, schema, typesRegistry)` so type-conditional defaults appear in the panel (matches §3a-bis).
+3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `repo.resolveDefault(block.types, schema)` so type-conditional defaults appear in the panel (matches §3a-bis).
 
 **Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch. Tagging a block with a type whose contribution declares properties surfaces those property slots in the panel even when unset, and editing one writes the property.
 
@@ -797,7 +841,7 @@ Each phase is independently shippable and testable.
 
 ### Phase 4 — reactive typed-query primitive (SQLite-backed)
 
-1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `JOIN block_types` for type filters, `json_extract(properties_json, ?) = ?` for `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters; refuse the query when no schema is registered for a referenced field. `JOIN block_references` for `referencedBy`. Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
+1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `EXISTS` subqueries against `block_types` for type filters and `block_references` for `referencedBy` (avoids duplicating block rows when multiple edge rows match); `json_extract(properties_json, ?) = ?` for `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters; refuse the query when no schema is registered for a referenced field, and refuse `where` on non-scalar kinds (`list`, `object`, `ref`, `refList`) per §8. Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
 2. Wire `subscribeBlocks` to the existing repo change-notification stream (which is already row-event-aware) so updates flow from both local commits and sync-applied changes.
 3. Add `useBlockQuery` hook in `src/hooks/`.
 
