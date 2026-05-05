@@ -220,6 +220,37 @@ When two types share a property schema (the common case under §3's reuse model)
 - **Validation (deferred follow-up).** When it lands, validations across types **intersect** — a value must satisfy *all* applicable types' constraints. Constraints restrict; if any type forbids, it's forbidden. Opposite combine rule from `refTargets`, which permits.
 - **`removeType` when a prop is contributed by multiple types.** v1 leaves `block.properties` untouched. If `status` was contributed by both `todo` and `task` and you remove `todo`, `task` still contributes `statusProp` so the panel still shows it. If `status` was *only* contributed by the removed type, the value stays in `block.properties` but disappears from the type-driven panel — inert until re-tagged or manually edited. v1 accepts this leak; revisit if it bites.
 
+#### 3c. Field discovery in the property panel — surfacing type-contributed slots
+
+Tana's "see the fields a supertag declares when looking at the block" is a small surgery on [src/components/BlockProperties.tsx:197](src/components/BlockProperties.tsx:197), which today iterates `Object.entries(block.properties)` and only shows what's actually set. Replace that with a union of (a) currently-set properties and (b) properties contributed by the block's types:
+
+```ts
+// Inside BlockProperties, alongside the existing schemas / uis reads:
+const typesRegistry = runtime.read(typesFacet)
+
+const applicable = new Map<string, AnyPropertySchema>()
+// (a) actually-set properties — covers ad-hoc / unknown-schema props
+for (const name of Object.keys(properties)) {
+  const s = schemas.get(name)
+  if (s) applicable.set(name, s)
+}
+// (b) type-contributed slots (may not yet be set on the block)
+for (const typeId of block.types) {
+  const t = typesRegistry.get(typeId)
+  for (const schema of t?.properties ?? []) {
+    applicable.set(schema.name, schema)
+  }
+}
+```
+
+The dedup by `name` is exactly what §3b's "field discovery is union by name" means at the code level. Multi-type composition is automatic — a prop declared by both `todo` and `task` lands in the map once.
+
+**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `schema.defaultValue` as its value. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property. The unknown-schema fallback path remains for ad-hoc properties not contributed by any type.
+
+**Render order:** type-contributed properties in `block.types` array order, then in each type's `properties[]` order; ad-hoc / set-but-no-type properties last. Within each group, set values before unset slots so users see materialised state first. Aesthetic call, not a correctness one.
+
+**Per-type grouping (Tana-style section headers) is deferred.** v1 ships the flat union — which is what the data model actually says — optionally with a small `from todo` badge per row. Section-grouped UI is a v2 if real users ask. The "Add Property" form for ad-hoc properties stays unchanged.
+
 ### 4. Type-driven UI: decorations are the common case, full-renderer replacement is the exception
 
 Most type-driven UI is *decoration* layered on the existing block content rendering — a `todo` adds a checkbox + strikethrough-when-done, a `priority=high` block adds a colored chip, a `due` field adds a date pill. Only a few types want to take over the entire block presentation (`video-player`, `panel`, `type-definition`). The design splits cleanly along that axis.
@@ -474,12 +505,13 @@ Each phase is independently shippable and testable.
 
 **Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join.
 
-### Phase 2 — type-driven renderer dispatch
+### Phase 2 — type-driven UI: renderer dispatch + property-panel field discovery
 
-1. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) to consult `typesFacet` per §4.
+1. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) to consult `typesFacet` per §4b.
 2. Add `priority` to a few existing kernel type contributions so collisions resolve deterministically.
+3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `schema.defaultValue`.
 
-**Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch.
+**Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch. Tagging a block with a type whose contribution declares properties surfaces those property slots in the panel even when unset, and editing one writes the property.
 
 ### Phase 3 — ref codecs + named-backlinks (`block_references.source_field` + `ProcessorCtx`)
 
