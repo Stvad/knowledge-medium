@@ -310,6 +310,29 @@ async removeType(blockId: string, typeId: string): Promise<void> {
   }, { scope: ChangeScope.BlockDefault, description: `removeType ${typeId}` })
 }
 
+/** Public tx-aware helper for callers that already hold a tx
+ *  (importers running batched repo.tx chunks, plugin code orchestrating
+ *  multi-step writes). Captures registries at call time — for an
+ *  importer iterating many blocks within one tx that's the same
+ *  practical world setFacetRuntime is serialised against the writer
+ *  anyway. Consumers needing strict per-tx consistency across many
+ *  calls can capture once and call _addTypeInTx with explicit args. */
+async addTypeInTx(
+  tx: Tx,
+  blockId: string,
+  typeId: string,
+  initialValues: Readonly<Record<string, unknown>> = {},
+): Promise<void> {
+  await this._addTypeInTx(tx, this.types, this.propertySchemas, blockId, typeId, initialValues)
+}
+
+/** Symmetric for completeness — composers needing remove inside an
+ *  existing tx (`setBlockTypes`'s in-tx body, importer chunks that
+ *  also need un-tagging). */
+async removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
+  await this._removeTypeInTx(tx, blockId, typeId)
+}
+
 async toggleType(blockId: string, typeId: string): Promise<void> {
   // Decision and write in ONE tx so concurrent toggles serialise
   // correctly. Two concurrent toggles from an initially-untyped block
@@ -735,8 +758,9 @@ The watch on `content` / `properties` field changes catches every per-block edit
 Add a kernel-side reprojection step. On `setFacetRuntime`, diff the previous and new `propertySchemas` maps for property names whose ref-ness changed (was-not-ref → is-ref, was-ref → is-not-ref, or was-ref → is-different-ref-shape). For the affected name set, schedule a reprojection processor that:
 
 1. Queries blocks whose `properties_json` contains any of the affected names. Cheap with a workspace-scoped scan; for large workspaces, build the index from `block_types` pattern (a side table keyed by property name) only if reprojection latency becomes an issue. v1 starts with the scan.
-2. For each matching block, runs the same property-walk path as `parseReferences` — recomputes `references_json` against the new schema set and `tx.update`s through. The existing trigger maintains `block_references` from `references_json`, so the edge index falls in line automatically.
-3. Runs in a separate tx (`scope: ChangeScope.References` per the existing reference-tx convention) so the reprojection doesn't bloat the user's normal undo bucket.
+2. For each matching block, runs the same property-walk path as `parseReferences` — recomputes `references_json` against the new schema set. **Skip the `tx.update` when the recomputed `references_json` matches the existing one** (deep-equal check on the array — same `(id, alias, sourceField)` tuples in the same order). On initial app start, the previous `propertySchemas` snapshot is empty, so every registered ref schema *looks* "new" and a naive implementation would touch every block carrying any ref-typed property — pure churn for rows whose references are already correct, including unnecessary undo entries and upload pressure.
+3. When the row does need updating, write through `tx.update(id, {references}, {skipMetadata: true})` — same flag the existing `parseReferences` processor uses ([referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) so the reprojection isn't credited as a user edit (no `updatedAt` / `updatedBy` bump).
+4. Runs in a separate tx (`scope: ChangeScope.References` per the existing reference-tx convention) so the reprojection doesn't bloat the user's normal undo bucket. The existing trigger maintains `block_references` from `references_json`, so the edge index falls in line automatically.
 
 This is a one-shot pass at runtime-rebuild time; the watch on per-block edits handles steady-state. Plugin authors don't need to do anything — the kernel detects the schema-set change and triggers the pass automatically.
 
@@ -899,7 +923,7 @@ The current Roam importer upserts deterministic IDs and replaces `content` / `pr
 
 - **Type membership is additive.** If the Roam tag maps to a type the block doesn't yet have, `repo.addType` adds it. If the block already has that type, no-op.
 - **Source-mirror fields (`roam:*`) refresh freely.** They represent "what the source said at this import." Always overwrite.
-- **App-owned fields (`status`, `due`, anything not in the `roam:` namespace) initialise only if missing.** Reimport never overwrites an app-owned value that already exists. The `appOwnedInit` map in the tag-mapping table is passed to `repo.addType` as `initialValues` — these win over type defaults so source-specific values (e.g. `DONE → status='done'`) are honoured rather than overwritten by the type's default. On reimport, `addType` re-runs the materialisation pass but every `appOwnedInit` field already has a value and is skipped (the init-only-if-missing rule); app-owned fields stay as the user left them. `setup` doesn't re-run either since the type is already present.
+- **App-owned fields initialise only if missing.** App-owned fields are *exactly* the keys declared in each tag mapping's `appOwnedInit` (e.g. `status` for the TODO/DONE mapping); they are not "everything outside the `roam:` namespace" — that mis-classifies source-authored non-namespaced fields like `alias`, page-type markers, and promoted page attributes, which the importer plans and reimports should refresh. Reimport never overwrites an app-owned value that already exists. The `appOwnedInit` map is passed to `repo.addTypeInTx` (Phase 5 step 5) as `initialValues` — these win over type defaults so source-specific values (e.g. `DONE → status='done'`) are honoured rather than overwritten by the type's default. On reimport, `addTypeInTx` re-runs the materialisation pass but every `appOwnedInit` field already has a value and is skipped (the init-only-if-missing rule); app-owned fields stay as the user left them. `setup` doesn't re-run either since the type is already present.
 - **Removed source markers** (Roam now lacks the marker that previously implied the type) do *not* automatically remove the type. Removing a tag in Roam shouldn't silently un-task the user's block.
 
 **Second-pass rule (deferred):** track per-field source fingerprints — record what value was last imported for each source-mirrored field. On reimport, apply a source update only if the local value still equals the previous imported value. If both source and local changed, surface a conflict (or keep local by policy). The fingerprints live alongside the source mirror, e.g. `roam:todo-state-fingerprint` keyed by import session. Build this when reimport conflicts become a real problem; v1's "init-only-if-missing" rule covers the common case.
@@ -957,7 +981,7 @@ Each phase is independently shippable and testable.
 4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Update `backlinksInvalidationRule` ([src/plugins/backlinks/invalidation.ts](src/plugins/backlinks/invalidation.ts)) to diff by `(id, sourceField)` per §6b so source-field-only changes invalidate grouped backlinks.
 5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Add `propertySchemas` to `CommittedTxOutcome` ([src/data/internals/processorRunner.ts:55](src/data/internals/processorRunner.ts:55)) so it's snapshotted alongside `processors` at tx-start; the commit pipeline at [src/data/repo.ts:664](src/data/repo.ts:664) passes `this.propertySchemas` through. `processorRunner.dispatch` reads the bundle's snapshot rather than `repo.propertySchemas` directly so processors and schemas come from the same resolved runtime.
 6. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too. Per §7, isolate each property decode in a try/catch so one malformed value doesn't poison the whole projector run.
-7. Add ref-codec-set diff + reprojection pass to `setFacetRuntime` per §7-bis: detect property names whose ref-ness changed between the old and new `propertySchemas` maps, schedule a one-shot processor that re-runs the property-walk over blocks containing those names. Backfills new ref edges and clears stale ones. Tx scope is `References`.
+7. Add ref-codec-set diff + reprojection pass to `setFacetRuntime` per §7-bis: detect property names whose ref-ness changed between the old and new `propertySchemas` maps, schedule a one-shot processor that re-runs the property-walk over blocks containing those names. Skip `tx.update` when the recomputed `references_json` deep-equals the existing one (avoids churning every block on initial app start when the prior snapshot is empty). Updates use `{skipMetadata: true}` so reprojection isn't credited as a user edit. Tx scope is `References`.
 8. Add `source_field`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
 
 **Acceptance:** a block with a ref-typed property pointing to another block surfaces in the target's grouped backlinks under the property name; two property refs from the same source to the same target via different fields don't collapse.
@@ -975,17 +999,19 @@ Each phase is independently shippable and testable.
 1. Add `TAG_TO_TYPE` map to importer per the Migration section's expanded shape (separate `appOwnedInit` from `sourceMirror`).
 2. Add `'todo'` type contribution (its own small plugin, `src/plugins/todo/`) with `statusProp` (shared-vocab, flat name), a checkbox decorator via `blockContentDecoratorsFacet` gated on `block.hasType('todo')`, and `defaults: {[statusProp.name]: 'open'}` so freshly-tagged blocks default open.
 3. Add namespaced `roam:todo-state` schema in the importer (or a `roam` plugin) for the source-mirror field.
-4. **Change `upsertImportedBlock` ([src/utils/roamImport/import.ts:756](src/utils/roamImport/import.ts:756)) to merge properties on live-row hits, using an explicit app-owned allowlist.** Today's path is "last-write-wins": on an existing row it `tx.update`s `content`/`properties`/`references` with the planned values, dropping any local edits. That destroys app-owned state on reimport *before* any subsequent `repo.addType` runs — `appOwnedInit` then sees the imported value already there and skips, preserving the wrong thing (the source value, not the user's local edit). The fix isn't "namespace as classifier" though — the importer already plans source-authoritative non-`roam:` fields too (e.g. `alias` on pages, type-marker properties, page attribute promotions), and reimport SHOULD refresh those. Required behaviour:
-   - **`content` and `references`**: still overwrite (Roam content is source-authoritative; references are recomputed from content via the backlinks processor anyway).
-   - **`properties`**: per-key merge driven by an **explicit app-owned allowlist** carried alongside the plan. Each TAG_TO_TYPE entry already declares its app-owned fields via `appOwnedInit` keys; the planner unions those into a per-block `appOwnedFields: Set<string>` (typically `{ 'status' }` for a Roam todo block, possibly empty for a non-task page). On upsert:
-     - Keys in `appOwnedFields` AND already present on the existing row → keep existing value (the user's local edit survives).
-     - All other keys (everything the importer planned that *isn't* in `appOwnedFields`, including `alias`, the type marker, source-mirror `roam:*`, page attributes) → overwrite with the planned value.
-     - Keys present on the existing row but NOT in the planned `properties` and NOT in `appOwnedFields` → keep (the user's ad-hoc props on the block survive reimport).
-   - For brand-new blocks (`createOrGet → inserted: true`), no merge is needed — the planned properties are the only state.
-   The simplest implementation: split `upsertImportedBlock` into "create new" (current path) and "merge into existing." The merge path takes `(existing, planned, appOwnedFields)` and computes the merged properties map. The plan-side `appOwnedInit` for the source's TODO/DONE state continues to flow through `repo.addType`'s `initialValues` arg — it's the safety net for blocks that arrive without source-mirror state (e.g. tagged on a device that didn't have the contribution), not the primary write path for re-imported live rows.
-5. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker:
-   - Call `repo.addType(blockId, 'todo', appOwnedInit)` — pass the source-specific app-owned values via the third arg per §3a. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
-   - Write the source-mirror field (`roam:todo-state`) freely (always-overwrite via `block.set`).
+4. **Change `upsertImportedBlock` ([src/utils/roamImport/import.ts:756](src/utils/roamImport/import.ts:756)) to merge properties on live-row hits, using explicit allowlists.** Today's path is "last-write-wins": on an existing row it `tx.update`s `content`/`properties`/`references` with the planned values, dropping any local edits. That destroys app-owned state on reimport *before* any subsequent type-application runs. The fix uses two explicit per-block allowlists carried alongside the plan, not namespaces as classifiers:
+   - `appOwnedFields: Set<string>` — fields the user owns post-import. Computed as the union of `appOwnedInit` keys from every matching TAG_TO_TYPE entry for the block (typically `{ 'status' }` for a Roam todo block, empty for a plain page).
+   - `sourceFields: Set<string>` — fields the source is authoritative for. Computed as the keys of the planned `properties` map plus any source-mirror keys the importer writes (e.g. `'roam:todo-state'`, `'alias'`, type-marker, page attributes).
+   On live-row upsert, the merge applies per existing key:
+   - Key in `appOwnedFields` → keep existing value if present, write planned/init value if missing.
+   - Key in `sourceFields` AND in planned → overwrite with planned (source-authoritative refresh).
+   - Key in `sourceFields` but NOT in planned → **delete** (source removed it; e.g. a `roam:todo-state` no longer set, a page attribute Roam stopped exporting).
+   - Key in neither set → keep (user's ad-hoc props on the block survive reimport).
+   For brand-new blocks (`createOrGet → inserted: true`), no merge is needed — the planned properties are the only state.
+   The implementation splits `upsertImportedBlock` into "create new" (current path) and "merge into existing"; the merge takes `(existing, planned, appOwnedFields, sourceFields)` and returns the merged properties map. **`content` and `references`** still overwrite wholesale (Roam content is source-authoritative; references are recomputed from content by the backlinks processor anyway).
+5. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer is already inside a `repo.tx` chunk (the existing planning + apply pipeline does this around `upsertImportedBlock`). Within that same tx:
+   - Call `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit)` — the tx-aware variant per §3a so the type tag, defaults, and any setup writes share atomicity with the row creation/update. Calling the public `repo.addType` (which opens its own tx) would either fail inside an active writer or break the atomicity guarantee with the row write. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
+   - Write the source-mirror field (`roam:todo-state`) freely via `tx.update` (always-overwrite, in the same tx).
    - Strip the marker from `content`.
 
 **Acceptance:** importing a Roam graph with `#TODO`/`#DONE` blocks produces blocks with `types: ['todo']`, matching `status`, and `roam:todo-state` reflecting the source. Surfaced via the todo checkbox decorator and queryable via `useBlockQuery({types: ['todo'], where: {status: 'open'}})`. **Reimport-after-local-change preserves user state**: locally completing a task (`status='done'`) and reimporting the original Roam export leaves `status='done'` untouched (the upsert merge preserves the local app-owned value) while `roam:todo-state` refreshes to `'TODO'` (source-mirror semantics). Verified against the importer write path, not just the `addType` path.
