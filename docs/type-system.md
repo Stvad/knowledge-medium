@@ -169,7 +169,36 @@ async function removeType(tx: Tx, args: { blockId: string; typeId: string }) {
 
 Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag" action) goes through `addType`. Direct writes to `typesProp` are discouraged — add a lint or an engine guard if needed.
 
-A *read-time overlay* (defaults synthesised on read when a block has the type but lacks the property) is the alternative — but it diverges queries from storage and complicates the typed-query backing in §8. Prefer the materialise-on-add approach.
+A *full* read-time overlay (defaults synthesised everywhere — storage reads, queries, indexes — whenever a block has a type but lacks the property) is the alternative, and it's worse: it forces every storage-level reader to know about types and complicates the SQL-backed typed-query primitive in §8. Prefer materialise-on-add as the storage-level invariant.
+
+#### 3a-bis. Narrow overlay on `block.get` for schema-aware code reads
+
+Materialise-on-add covers the common case but has three edge cases where a block can carry a type without the corresponding properties materialised: sync from a device that didn't have the type contribution registered, bulk-import paths that bypass `addType` (Roam importer), and type evolution (a type's `defaults` map changes in code, or a new prop is added to `properties[]`, after blocks were tagged). Under those, `block.get(statusProp)` would today return `schema.defaultValue` (probably `undefined`), missing the meaningful type-conditional default that `addType` *would* have materialised.
+
+Teach `block.get` to overlay type-conditional defaults — narrowly, only on this one call site:
+
+```ts
+get<T>(schema: PropertySchema<T>): T {
+  const set = this.peekProperty(schema)
+  if (set !== undefined) return set
+  // Type-conditional defaults win over schema default. First applicable
+  // type in block.types order wins (matches §3b first-writer-wins for
+  // materialise-on-add, so storage and overlay agree under normal flows).
+  const typesRegistry = this.repo.runtime.read(typesFacet)
+  for (const typeId of this.types) {
+    const t = typesRegistry.get(typeId)
+    const v = t?.defaults?.[schema.name]
+    if (v !== undefined) return v as T
+  }
+  return schema.defaultValue
+}
+```
+
+Three companion rules:
+
+- **`peekProperty` does NOT overlay.** It stays as "is this property actually materialised?" — used by `addType` itself to decide whether to write a default, by sync-conflict resolution, by debugging tools that want raw storage. The overlay is a `get`-only enhancement.
+- **The typed-query primitive (§8) does NOT overlay by default.** SQL runs against `properties_json` and matches only materialised values. Under normal flows storage and overlay agree (because `addType` materialised them). At the three edges above, queries can miss until something materialises; `addType` remains the storage invariant. An opt-in `{ materialiseDefaults: true }` flag is a possible follow-up if real call sites want overlay-aware filtering, but defer until there's demand.
+- **`BlockProperties` field discovery (§3c) reuses this lookup.** Unset slots in the panel currently render `schema.defaultValue`; instead, render the same "first-applicable-type-default else schema-default" the overlay computes, so the panel and code reads agree on what an unset-but-typed slot looks like. Factor the lookup into a small helper (`resolveDefault(block, schema, typesRegistry)`) shared between `block.get` and the panel.
 
 **`Block` facade sugar** mirrors the existing `get`/`set`/`setContent`/`delete` pattern at [src/data/block.ts:159](src/data/block.ts:159)–[:228](src/data/block.ts:228):
 
@@ -245,7 +274,7 @@ for (const typeId of block.types) {
 
 The dedup by `name` is exactly what §3b's "field discovery is union by name" means at the code level. Multi-type composition is automatic — a prop declared by both `todo` and `task` lands in the map once.
 
-**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `schema.defaultValue` as its value. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property. The unknown-schema fallback path remains for ad-hoc properties not contributed by any type.
+**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `resolveDefault(block, schema, typesRegistry)` as its value (the same helper §3a-bis uses for `block.get`). This makes the panel show whatever `block.get(schema)` would return — type-conditional default for typed slots, schema default otherwise. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property. The unknown-schema fallback path remains for ad-hoc properties not contributed by any type.
 
 **Render order:** type-contributed properties in `block.types` array order, then in each type's `properties[]` order; ad-hoc / set-but-no-type properties last. Within each group, set values before unset slots so users see materialised state first. Aesthetic call, not a correctness one.
 
@@ -498,6 +527,7 @@ Each phase is independently shippable and testable.
 5. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
 6. Add `repo.mutate.addType` / `repo.mutate.removeType` per §3a.
 7. Add `Block` facade sugar: `block.types` getter, `block.hasType(id)`, `block.addType(id)`, `block.removeType(id)` ([src/data/block.ts](src/data/block.ts)). Use `hasType` at every type-decoration call site introduced in later phases.
+7a. Add a `resolveDefault(block, schema, typesRegistry)` helper and update `block.get` per §3a-bis to overlay type-conditional defaults (first-applicable-type wins, falls back to `schema.defaultValue`). `peekProperty` is unchanged. The typed-query primitive in Phase 4 stays storage-only.
 8. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
 9. Update every `typeProp` write site to call `addType` (or write `typesProp` directly for batch paths like the Roam importer that bypass mutators).
 10. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]` (or use `block.hasType`/`block.types` once #7 lands). Greps: `grep -rn "typeProp" src/`.
