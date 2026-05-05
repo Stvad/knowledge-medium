@@ -8,6 +8,7 @@ import { BlockEmbed } from './BlockEmbed.tsx'
 interface BlockrefNode {
   properties?: {
     blockId?: unknown
+    aliased?: unknown
   }
 }
 
@@ -21,13 +22,15 @@ const getBlockId = (node?: BlockrefNode) => {
   return typeof id === 'string' ? id : ''
 }
 
+const isAliased = (node?: BlockrefNode) => node?.properties?.aliased === true
+
 export const blockrefMarkdownExtension: MarkdownExtension = () => ({
   remarkPlugins: [remarkBlockrefs],
   components: {
-    blockref: ({node}: BlockrefComponentProps) => {
+    blockref: ({node, children}: BlockrefComponentProps) => {
       const blockId = getBlockId(node)
       if (!blockId) return null
-      return <BlockRef blockId={blockId}/>
+      return <BlockRef blockId={blockId}>{isAliased(node) ? children : undefined}</BlockRef>
     },
     blockembed: ({node}: BlockrefComponentProps) => {
       const blockId = getBlockId(node)

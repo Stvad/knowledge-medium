@@ -1,23 +1,42 @@
 import { Plugin } from 'unified'
 import { visit, SKIP } from 'unist-util-visit'
-import { Literal, Parent, RootContent } from 'mdast'
-import { parseBlockRefs } from '@/utils/referenceParser'
+import { Link, Literal, Parent, RootContent } from 'mdast'
+import { parseBlockRefs, parseBlockRefTarget } from '@/utils/referenceParser'
 
 const buildNode = (
   tag: 'blockref' | 'blockembed',
   blockId: string,
   raw: string,
+  children?: RootContent[],
 ): RootContent => ({
   type: tag,
   value: raw,
-  children: [{type: 'text', value: raw}],
+  children: children ?? [{type: 'text', value: raw}],
   data: {
     hName: tag,
-    hProperties: {blockId},
+    hProperties: {
+      blockId,
+      ...(children ? {aliased: true} : {}),
+    },
   },
 } as unknown as RootContent)
 
 export const remarkBlockrefs: Plugin = () => (tree) => {
+  visit(tree, 'link', (node: Link, index, parent: Parent | undefined) => {
+    if (index === undefined || !parent) return
+
+    const blockId = parseBlockRefTarget(node.url ?? '')
+    if (!blockId) return
+
+    parent.children.splice(index, 1, buildNode(
+      'blockref',
+      blockId,
+      `[…](${node.url})`,
+      node.children as RootContent[],
+    ))
+    return [SKIP, index + 1]
+  })
+
   visit(tree, 'text', (node: Literal, index, parent: Parent | undefined) => {
     if (index === undefined || !parent) return
 
@@ -35,6 +54,7 @@ export const remarkBlockrefs: Plugin = () => (tree) => {
         ref.embed ? 'blockembed' : 'blockref',
         ref.blockId,
         src.slice(ref.startIndex, ref.endIndex),
+        ref.label ? [{type: 'text', value: ref.label}] : undefined,
       ))
       last = ref.endIndex
     }

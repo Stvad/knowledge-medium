@@ -17,7 +17,14 @@ const inlineComponents: Components = {
   p: ({children}: {children?: ReactNode}) => <Fragment>{children}</Fragment>,
 }
 
-export function BlockRef({blockId}: {blockId: string}) {
+const hasDisplayChildren = (children: ReactNode) =>
+  children !== undefined
+  && children !== null
+  && (!Array.isArray(children) || children.length > 0)
+
+const shortBlockRef = (blockId: string) => `((${blockId.slice(0, 8)}…))`
+
+export function BlockRef({blockId, children}: {blockId: string; children?: ReactNode}) {
   const repo = useRepo()
   const {panelId} = useBlockContext()
   const ancestors = useBlockRefAncestors()
@@ -26,13 +33,22 @@ export function BlockRef({blockId}: {blockId: string}) {
   const content = useContent(target)
   const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
   const runtime = useAppRuntime()
+  const display = hasDisplayChildren(children) ? children : null
 
   if (!targetExists) {
-    return <span className="blockref blockref--unresolved">(({blockId.slice(0, 8)}…))</span>
+    return (
+      <span className="blockref blockref--unresolved">
+        {display ?? shortBlockRef(blockId)}
+      </span>
+    )
   }
 
   if (ancestors.has(blockId)) {
-    return <span className="blockref blockref--cycle" title="Cycle: this block already appears in the ref chain">↻ (({blockId.slice(0, 8)}…))</span>
+    return (
+      <span className="blockref blockref--cycle" title="Cycle: this block already appears in the ref chain">
+        ↻ {display ?? shortBlockRef(blockId)}
+      </span>
+    )
   }
 
   const href = buildAppHash(workspaceId, blockId)
@@ -62,12 +78,14 @@ export function BlockRef({blockId}: {blockId: string}) {
         data-block-id={blockId}
         onClick={onClick}
       >
-        <Markdown
-          remarkPlugins={markdownConfig.remarkPlugins}
-          components={markdownConfig.components}
-        >
-          {content}
-        </Markdown>
+        {display ?? (
+          <Markdown
+            remarkPlugins={markdownConfig.remarkPlugins}
+            components={markdownConfig.components}
+          >
+            {content}
+          </Markdown>
+        )}
       </a>
     </BlockRefAncestorsProvider>
   )

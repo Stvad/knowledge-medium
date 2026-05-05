@@ -1,6 +1,6 @@
 /**
- * Reference parser for [[alias]] syntax in block content
- * Uses remark-based parsing for consistency with markdown rendering
+ * Reference parser for [[alias]] and ((block-id)) syntax in block content.
+ * Uses remark-based parsing for consistency with markdown rendering.
  */
 
 import { unified } from 'unified'
@@ -19,16 +19,24 @@ export interface ParsedBlockRef {
   startIndex: number;
   endIndex: number;
   embed: boolean;  // true for !((id)), false for plain ((id))
+  label?: string;  // display label from [label](((id)))
 }
 
 // UUIDv4 shape — anchors what counts as a block-ref id. We deliberately keep
 // this strict so accidental double-parens in prose (e.g. "((not an id))")
 // don't get treated as references.
 const UUID_RE_SOURCE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+const ALIASED_BLOCK_REF_RE = new RegExp(`\\[([^\\]\\n]*)\\]\\(\\(\\((${UUID_RE_SOURCE})\\)\\)\\)`, 'gi')
 const BLOCK_REF_RE = new RegExp(`\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
 const BLOCK_EMBED_RE = new RegExp(`!\\(\\((${UUID_RE_SOURCE})\\)\\)`, 'gi')
+const BLOCK_REF_TARGET_RE = new RegExp(`^\\(\\((${UUID_RE_SOURCE})\\)\\)$`, 'i')
 
 export const isBlockRefId = (s: string) => new RegExp(`^${UUID_RE_SOURCE}$`, 'i').test(s)
+
+export const parseBlockRefTarget = (target: string): string | null => {
+  const match = BLOCK_REF_TARGET_RE.exec(target.trim())
+  return match ? match[1].toLowerCase() : null
+}
 
 /**
  * Parse [[alias]] patterns from text content using remark
@@ -129,31 +137,51 @@ export function hasReferences(content: string): boolean {
 }
 
 /**
- * Parse `((uuid))` block-refs and `{{embed: ((uuid))}}` block-embeds out of
- * text. Embeds are matched first so the outer `{{embed: ...}}` isn't double-
- * counted as a bare ref.
+ * Parse `((uuid))` block-refs, `!((uuid))` block-embeds, and Roam-style
+ * `[label](((uuid)))` aliased block refs out of text. More specific forms are
+ * matched first so their inner `((uuid))` spans are not double-counted.
  */
 export function parseBlockRefs(content: string): ParsedBlockRef[] {
   const found: ParsedBlockRef[] = []
   const consumed: Array<[number, number]> = []
+  const overlapsConsumed = (start: number, end: number) =>
+    consumed.some(([s, e]) => start < e && end > s)
+
+  ALIASED_BLOCK_REF_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = ALIASED_BLOCK_REF_RE.exec(content)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    const label = match[1].trim()
+    found.push({
+      blockId: match[2].toLowerCase(),
+      startIndex: start,
+      endIndex: end,
+      embed: false,
+      ...(label ? {label} : {}),
+    })
+    consumed.push([start, end])
+  }
 
   BLOCK_EMBED_RE.lastIndex = 0
-  let match: RegExpExecArray | null
   while ((match = BLOCK_EMBED_RE.exec(content)) !== null) {
+    const start = match.index
+    const end = start + match[0].length
+    if (overlapsConsumed(start, end)) continue
     found.push({
       blockId: match[1].toLowerCase(),
-      startIndex: match.index,
-      endIndex: match.index + match[0].length,
+      startIndex: start,
+      endIndex: end,
       embed: true,
     })
-    consumed.push([match.index, match.index + match[0].length])
+    consumed.push([start, end])
   }
 
   BLOCK_REF_RE.lastIndex = 0
   while ((match = BLOCK_REF_RE.exec(content)) !== null) {
     const start = match.index
     const end = start + match[0].length
-    if (consumed.some(([s, e]) => start >= s && end <= e)) continue
+    if (overlapsConsumed(start, end)) continue
     found.push({
       blockId: match[1].toLowerCase(),
       startIndex: start,

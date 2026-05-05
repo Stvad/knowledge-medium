@@ -5,10 +5,7 @@
 //   - `{{embed: ((roamUid))}}` / `{{[[embed]]: ((roamUid))}}`
 //                              → `!((<our-uuid>))`       (block embed,
 //                                                        Obsidian-style)
-//   - `[label](((roamUid)))`   → `[label] ((<our-uuid>))`
-//                                (preserves the alias text + a working
-//                                ref; we don't have aliased-block-ref
-//                                syntax yet)
+//   - `[label](((roamUid)))`   → `[label](((<our-uuid>)))`
 //   - `#[[multi word]]`        → `[[multi word]]`
 //   - `#word`                  → `[[word]]`              (only when not
 //                                                        inside a URL or
@@ -110,7 +107,7 @@ const collectBlockRefRewrites = (
   collect(ALIASED_BLOCK_REF_RE, m => ({
     start: m.index,
     end: m.index + m[0].length,
-    replacement: `[${m[1]}] ((${resolve(m[2])}))`,
+    replacement: `[${m[1]}](((${resolve(m[2])})))`,
   }))
   collect(BLOCK_REF_RE, m => ({
     start: m.index,

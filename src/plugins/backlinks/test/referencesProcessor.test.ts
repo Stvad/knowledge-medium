@@ -126,6 +126,17 @@ describe('parseReferences — basic alias creation', () => {
     const refs = JSON.parse((await env.read('src'))!.references_json)
     expect(refs).toEqual([{id: someUuid, alias: someUuid}])
   })
+
+  it('aliased block ref [label](((uuid))) lands in references once', async () => {
+    const someUuid = '550e8400-e29b-41d4-a716-446655440000'
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: `see [shortcut](((${someUuid})))`}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const refs = JSON.parse((await env.read('src'))!.references_json)
+    expect(refs).toEqual([{id: someUuid, alias: someUuid}])
+  })
 })
 
 describe('parseReferences — daily-note routing (§7.6)', () => {

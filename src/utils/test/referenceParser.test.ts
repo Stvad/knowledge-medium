@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { parseReferences, parseReferencesMarkdownAware, extractAliases, hasReferences, parseBlockRefs, isBlockRefId } from '../referenceParser'
+import {
+  parseReferences,
+  parseReferencesMarkdownAware,
+  extractAliases,
+  hasReferences,
+  parseBlockRefs,
+  isBlockRefId,
+  parseBlockRefTarget,
+} from '../referenceParser'
 
 describe('referenceParser', () => {
   describe('parseReferences', () => {
@@ -173,6 +181,14 @@ Another [[normal-ref]]
       expect(result[0]).toMatchObject({blockId: id, embed: false})
     })
 
+    it('parses an aliased [label](((uuid))) ref as one block ref span', () => {
+      const content = `see [named block](((${id}))) for context`
+      const result = parseBlockRefs(content)
+      expect(result).toHaveLength(1)
+      expect(result[0]).toMatchObject({blockId: id, embed: false, label: 'named block'})
+      expect(content.slice(result[0].startIndex, result[0].endIndex)).toBe(`[named block](((${id})))`)
+    })
+
     it('parses a !((uuid)) embed', () => {
       const result = parseBlockRefs(`!((${id}))`)
       expect(result).toHaveLength(1)
@@ -199,6 +215,19 @@ Another [[normal-ref]]
       const upper = id.toUpperCase()
       const [ref] = parseBlockRefs(`((${upper}))`)
       expect(ref.blockId).toBe(id)
+    })
+  })
+
+  describe('parseBlockRefTarget', () => {
+    it('accepts a markdown link destination for a block ref', () => {
+      expect(parseBlockRefTarget('((0123ABCD-4567-89EF-0123-456789ABCDEF))')).toBe(
+        '0123abcd-4567-89ef-0123-456789abcdef',
+      )
+    })
+
+    it('rejects non-block-ref destinations', () => {
+      expect(parseBlockRefTarget('https://example.com')).toBeNull()
+      expect(parseBlockRefTarget('(((0123abcd-4567-89ef-0123-456789abcdef)))')).toBeNull()
     })
   })
 

@@ -42,7 +42,7 @@ describe('rewriteRoamContent', () => {
       uidMap,
     )
     expect(content).toBe(
-      '[control hip weight transfer] ((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee))',
+      '[control hip weight transfer](((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee)))',
     )
   })
 
@@ -58,7 +58,7 @@ describe('rewriteRoamContent', () => {
     )
     expect(content).toBe(
       '!((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee)) and ' +
-      '[click] ((11111111-2222-4333-8444-555555555555)) and ' +
+      '[click](((11111111-2222-4333-8444-555555555555))) and ' +
       '((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee))',
     )
     // No "leaked" uids — every roam uid was in the map.
