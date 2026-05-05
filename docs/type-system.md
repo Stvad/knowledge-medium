@@ -239,8 +239,54 @@ setFacetRuntime(runtime: FacetRuntime): void {
 
 Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. The same retained `propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
 
+**Two-layer shape: in-tx primitives + tx-opening wrappers.** Every operation that composes (`toggleType`, `setBlockTypes`, anything similar in plugin code) needs to run end-to-end in one tx — read, decide, write all under the same writer slot — otherwise concurrent writes interleave and decisions made on stale reads survive. So define private in-tx helpers and have the public `Repo` methods open a tx and dispatch. Composers (toggle/set) call the helpers directly inside their own tx.
+
 ```ts
-// On Repo
+// On Repo (private in-tx primitives — share the same registry snapshots
+// the public method captured before opening the tx)
+private async _addTypeInTx(
+  tx: Tx,
+  types: ReadonlyMap<string, TypeContribution>,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  blockId: string,
+  typeId: string,
+  initialValues: Readonly<Record<string, unknown>>,
+): Promise<void> {
+  const contribution = types.get(typeId)
+  const block = await tx.get(blockId)
+  if (!block) return
+  const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
+  const wasNew = !current.includes(typeId)
+  const next: Record<string, unknown> = { ...block.properties }
+  if (wasNew) {
+    next[typesProp.name] = typesProp.codec.encode([...current, typeId])
+  }
+  // ALWAYS run materialisation — see §3a rationale.
+  const merged = { ...(contribution?.defaults ?? {}), ...initialValues }
+  let propsChanged = wasNew
+  for (const [name, value] of Object.entries(merged)) {
+    if (next[name] === undefined) {
+      const schema = propertySchemas.get(name)
+      next[name] = schema ? schema.codec.encode(value) : value
+      propsChanged = true
+    }
+  }
+  if (propsChanged) await tx.update(blockId, { properties: next })
+  if (wasNew) await contribution?.setup?.({ tx, id: blockId, repo: this, types, propertySchemas })
+}
+
+private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
+  const block = await tx.get(blockId)
+  if (!block) return
+  const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
+  if (!current.includes(typeId)) return
+  const next: Record<string, unknown> = { ...block.properties }
+  next[typesProp.name] = typesProp.codec.encode(current.filter(t => t !== typeId))
+  // v1: don't clean up properties.
+  await tx.update(blockId, { properties: next })
+}
+
+// Public wrappers — snapshot registries before tx, then dispatch.
 async addType(
   blockId: string,
   typeId: string,
@@ -251,82 +297,44 @@ async addType(
    *  overwritten. */
   initialValues: Readonly<Record<string, unknown>> = {},
 ): Promise<void> {
-  // Snapshot the registries ONCE before opening the tx so a
-  // setFacetRuntime landing mid-tx can't pair the captured
-  // `contribution` with a different schema map. The locals (not
-  // `this.types` / `this.propertySchemas`) drive everything inside the
-  // tx and are what get passed to setup.
   const types = this.types
   const propertySchemas = this.propertySchemas
-  const contribution = types.get(typeId)
   await this.tx(async tx => {
-    const block = await tx.get(blockId)
-    if (!block) return  // block was deleted between resolve and tx
-    const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
-    const wasNew = !current.includes(typeId)
-    const next: Record<string, unknown> = { ...block.properties }
-    if (wasNew) {
-      next[typesProp.name] = typesProp.codec.encode([...current, typeId])
-    }
-    // ALWAYS run materialisation, even when the type is already present.
-    // Otherwise existing-typed blocks with a missing field (sync from a
-    // device without the contribution, raw typesProp writes, type
-    // evolution that added a new property) never get the value
-    // initialised. Per-call initialValues win over type defaults; both
-    // are init-only-if-missing relative to existing block state.
-    const merged = { ...(contribution?.defaults ?? {}), ...initialValues }
-    let propsChanged = wasNew
-    for (const [name, value] of Object.entries(merged)) {
-      if (next[name] === undefined) {
-        const schema = propertySchemas.get(name)
-        next[name] = schema ? schema.codec.encode(value) : value
-        propsChanged = true
-      }
-    }
-    if (propsChanged) await tx.update(blockId, { properties: next })
-    // setup runs ONLY on actual first transitions, not on every addType
-    // call. Re-running setup on already-typed blocks would create
-    // duplicate template subtrees etc. — bad. Pass the snapshot
-    // registries so setup sees the same world the contribution came
-    // from.
-    if (wasNew) await contribution?.setup?.({
-      tx,
-      id: blockId,
-      repo: this,
-      types,
-      propertySchemas,
-    })
+    await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues)
   }, { scope: ChangeScope.BlockDefault, description: `addType ${typeId}` })
 }
 
 async removeType(blockId: string, typeId: string): Promise<void> {
   await this.tx(async tx => {
-    const block = await tx.get(blockId)
-    if (!block) return
-    const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
-    if (!current.includes(typeId)) return
-    const next: Record<string, unknown> = { ...block.properties }
-    next[typesProp.name] = typesProp.codec.encode(current.filter(t => t !== typeId))
-    // v1: don't clean up properties — determining which were "owned" by
-    // this type vs. set by the user is ambiguous. Document the leak;
-    // revisit if it bites.
-    await tx.update(blockId, { properties: next })
+    await this._removeTypeInTx(tx, blockId, typeId)
   }, { scope: ChangeScope.BlockDefault, description: `removeType ${typeId}` })
 }
 
 async toggleType(blockId: string, typeId: string): Promise<void> {
-  // Read once outside the tx — the actual add/remove path re-reads
-  // under tx for atomicity. Repo.load(id) returns BlockData | null
-  // (see [src/data/repo.ts](src/data/repo.ts)).
-  const block = await this.load(blockId)
-  const has = (block?.properties[typesProp.name] as string[] | undefined)?.includes(typeId) ?? false
-  return has ? this.removeType(blockId, typeId) : this.addType(blockId, typeId)
+  // Decision and write in ONE tx so concurrent toggles serialise
+  // correctly. Two concurrent toggles from an initially-untyped block
+  // both end up tagged otherwise: the load()-then-decide pattern lets
+  // both branches choose addType, the second is a no-op and the user
+  // expected toggle1+toggle2 to net out.
+  const types = this.types
+  const propertySchemas = this.propertySchemas
+  await this.tx(async tx => {
+    const block = await tx.get(blockId)
+    if (!block) return
+    const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
+    if (current.includes(typeId)) {
+      await this._removeTypeInTx(tx, blockId, typeId)
+    } else {
+      await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {})
+    }
+  }, { scope: ChangeScope.BlockDefault, description: `toggleType ${typeId}` })
 }
 
 async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
-  // Bulk diff-and-apply for multi-select UI / importers that want
-  // defaults-on-add semantics. Each call is its own tx; collapse into
-  // one if atomicity matters at a call site.
+  // ONE tx wrapping removals + materialisation + final order rewrite.
+  // Per-step txs would create multiple undo entries and let other
+  // writers interleave; the final order rewrite could then drop or
+  // reorder a type that arrived between steps.
   //
   // Steps:
   //   1. Remove unwanted types (drops their typesProp entry).
@@ -345,22 +353,31 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
   //      caller intent here is meaningful (changes which type's
   //      default wins for unset shared fields).
   const desiredOrder = Array.from(new Set(typeIds))
-  const block = await this.load(blockId)
-  const current = (block?.properties[typesProp.name] as string[] | undefined) ?? []
-  const want = new Set(desiredOrder)
-  for (const t of current) if (!want.has(t)) await this.removeType(blockId, t)
-  for (const t of desiredOrder) await this.addType(blockId, t)
-  // Final order rewrite — separate tx; no atomicity-with-addType
-  // guarantee, but no semantic risk either since the rewrite is a
-  // pure permutation of an already-correct set.
+  const types = this.types
+  const propertySchemas = this.propertySchemas
   await this.tx(async tx => {
+    const block = await tx.get(blockId)
+    if (!block) return
+    const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
+    const want = new Set(desiredOrder)
+    for (const t of current) {
+      if (!want.has(t)) await this._removeTypeInTx(tx, blockId, t)
+    }
+    for (const t of desiredOrder) {
+      await this._addTypeInTx(tx, types, propertySchemas, blockId, t, {})
+    }
+    // Final order rewrite — addType only appends, so existing
+    // memberships keep their position; e.g. current = ['b','a'] +
+    // setBlockTypes(['a','b']) would stay ['b','a'] without this. The
+    // §3a-bis read-overlay walks block.types in order, so the rewrite
+    // is semantically meaningful for unset-shared-field defaults.
     const after = await tx.get(blockId)
     if (!after) return
     const stored = (after.properties[typesProp.name] as string[] | undefined) ?? []
     if (stored.length === desiredOrder.length && stored.every((t, i) => t === desiredOrder[i])) return
-    const next = { ...after.properties, [typesProp.name]: typesProp.codec.encode(desiredOrder) }
-    await tx.update(blockId, { properties: next })
-  }, { scope: ChangeScope.BlockDefault, description: 'setBlockTypes order rewrite' })
+    const finalProps = { ...after.properties, [typesProp.name]: typesProp.codec.encode(desiredOrder) }
+    await tx.update(blockId, { properties: finalProps })
+  }, { scope: ChangeScope.BlockDefault, description: 'setBlockTypes' })
 }
 ```
 
@@ -703,10 +720,25 @@ Existing rows (PK collisions on the new schema are impossible since old rows wer
 The existing post-commit processor ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) currently watches `{ kind: 'field', table: 'blocks', fields: ['content'] }` and rewrites `references[]` from parsed content. Extend it:
 
 - Watch list expands to `fields: ['content', 'properties']`.
-- After parsing content refs (existing path), iterate the block's `properties`. For each entry whose `PropertySchema.codec` is a ref-codec or ref-list codec (looked up via `propertySchemasFacet`), decode and emit one `BlockReference { id, alias: id, sourceField: propName }` per ref.
+- After parsing content refs (existing path), iterate the block's `properties`. For each entry whose `PropertySchema.codec` is a ref-codec or ref-list codec (looked up via `propertySchemasFacet`), decode and emit one `BlockReference { id, alias: id, sourceField: propName }` per ref. **Each property is decoded inside its own try/catch.** Stored values can be malformed for legitimate reasons — plugin upgraded the codec shape, ad-hoc edits in dev tools, sync from an older client that wrote a different encoding. A bad decode logs a warning, skips that one property, and the projector continues with the rest. Without per-property isolation, one corrupt ref-typed property would poison the whole `parseReferences` run for that block — content refs and other valid property refs would silently disappear from `references_json` until the data is fixed. v1 doesn't try to preserve prior `block_references` entries for the bad field; the field's refs simply go missing in the index until the next successful decode (the next `parseReferences` run after the property is fixed).
 - Concatenate content-derived + property-derived into the new `references[]` and write through the same `tx.update(sourceId, {references}, {skipMetadata: true})`. The triggers from §6b copy `sourceField` into `block_references`.
 
 Ordering / dedupe: identical `(id, sourceField)` pairs are deduped; content refs (no `sourceField`) and property refs (with `sourceField`) coexist for the same target — they represent different relationships.
+
+#### 7-bis. Reproject when ref-codec set changes
+
+The watch on `content` / `properties` field changes catches every per-block edit, but it doesn't catch **runtime changes to the ref-codec set itself**. Two real cases:
+
+- A plugin registers a new `ref` / `refList` codec for a property name `relatedTo` that already exists on many blocks. No block row changes, so `parseReferences` never fires, and `references_json` / `block_references` stay missing the new edges until each affected block is edited.
+- A schema *stops* being ref-typed (plugin removed, or its codec changed shape). Stale property-derived `BlockReference`s sit in `references_json` / `block_references` because no row write triggers re-projection.
+
+Add a kernel-side reprojection step. On `setFacetRuntime`, diff the previous and new `propertySchemas` maps for property names whose ref-ness changed (was-not-ref → is-ref, was-ref → is-not-ref, or was-ref → is-different-ref-shape). For the affected name set, schedule a reprojection processor that:
+
+1. Queries blocks whose `properties_json` contains any of the affected names. Cheap with a workspace-scoped scan; for large workspaces, build the index from `block_types` pattern (a side table keyed by property name) only if reprojection latency becomes an issue. v1 starts with the scan.
+2. For each matching block, runs the same property-walk path as `parseReferences` — recomputes `references_json` against the new schema set and `tx.update`s through. The existing trigger maintains `block_references` from `references_json`, so the edge index falls in line automatically.
+3. Runs in a separate tx (`scope: ChangeScope.References` per the existing reference-tx convention) so the reprojection doesn't bloat the user's normal undo bucket.
+
+This is a one-shot pass at runtime-rebuild time; the watch on per-block edits handles steady-state. Plugin authors don't need to do anything — the kernel detects the schema-set change and triggers the pass automatically.
 
 #### 7a. ProcessorCtx must expose property schemas
 
@@ -924,8 +956,9 @@ Each phase is independently shippable and testable.
 3. Extend `BlockReference` with optional `sourceField`.
 4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Update `backlinksInvalidationRule` ([src/plugins/backlinks/invalidation.ts](src/plugins/backlinks/invalidation.ts)) to diff by `(id, sourceField)` per §6b so source-field-only changes invalidate grouped backlinks.
 5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Add `propertySchemas` to `CommittedTxOutcome` ([src/data/internals/processorRunner.ts:55](src/data/internals/processorRunner.ts:55)) so it's snapshotted alongside `processors` at tx-start; the commit pipeline at [src/data/repo.ts:664](src/data/repo.ts:664) passes `this.propertySchemas` through. `processorRunner.dispatch` reads the bundle's snapshot rather than `repo.propertySchemas` directly so processors and schemas come from the same resolved runtime.
-6. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too.
-7. Add `source_field`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
+6. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too. Per §7, isolate each property decode in a try/catch so one malformed value doesn't poison the whole projector run.
+7. Add ref-codec-set diff + reprojection pass to `setFacetRuntime` per §7-bis: detect property names whose ref-ness changed between the old and new `propertySchemas` maps, schedule a one-shot processor that re-runs the property-walk over blocks containing those names. Backfills new ref edges and clears stale ones. Tx scope is `References`.
+8. Add `source_field`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
 
 **Acceptance:** a block with a ref-typed property pointing to another block surfaces in the target's grouped backlinks under the property name; two property refs from the same source to the same target via different fields don't collapse.
 
@@ -942,11 +975,14 @@ Each phase is independently shippable and testable.
 1. Add `TAG_TO_TYPE` map to importer per the Migration section's expanded shape (separate `appOwnedInit` from `sourceMirror`).
 2. Add `'todo'` type contribution (its own small plugin, `src/plugins/todo/`) with `statusProp` (shared-vocab, flat name), a checkbox decorator via `blockContentDecoratorsFacet` gated on `block.hasType('todo')`, and `defaults: {[statusProp.name]: 'open'}` so freshly-tagged blocks default open.
 3. Add namespaced `roam:todo-state` schema in the importer (or a `roam` plugin) for the source-mirror field.
-4. **Change `upsertImportedBlock` ([src/utils/roamImport/import.ts:756](src/utils/roamImport/import.ts:756)) to merge properties on live-row hits, not replace wholesale.** Today's path is "last-write-wins": on an existing row it `tx.update`s `content`/`properties`/`references` with the planned values, dropping any local edits. That destroys app-owned state on reimport *before* any subsequent `repo.addType` runs — `appOwnedInit` then sees the imported value already there and skips, preserving the wrong thing (the source value, not the user's local edit). Required new behaviour for typed-block paths:
-   - **`content` and `references`**: still overwrite (Roam content is source-authoritative; references are recomputed from content anyway via the backlinks processor).
-   - **`properties`**: merge. Refresh `roam:*` source-mirror fields freely. For app-owned fields (anything outside the `roam:` namespace), keep the existing local value if present and only write missing ones from the planned shape. The merge is done at upsert time, not by `repo.addType`, because the importer's planned `properties` predates and overrides anything `addType` would do.
+4. **Change `upsertImportedBlock` ([src/utils/roamImport/import.ts:756](src/utils/roamImport/import.ts:756)) to merge properties on live-row hits, using an explicit app-owned allowlist.** Today's path is "last-write-wins": on an existing row it `tx.update`s `content`/`properties`/`references` with the planned values, dropping any local edits. That destroys app-owned state on reimport *before* any subsequent `repo.addType` runs — `appOwnedInit` then sees the imported value already there and skips, preserving the wrong thing (the source value, not the user's local edit). The fix isn't "namespace as classifier" though — the importer already plans source-authoritative non-`roam:` fields too (e.g. `alias` on pages, type-marker properties, page attribute promotions), and reimport SHOULD refresh those. Required behaviour:
+   - **`content` and `references`**: still overwrite (Roam content is source-authoritative; references are recomputed from content via the backlinks processor anyway).
+   - **`properties`**: per-key merge driven by an **explicit app-owned allowlist** carried alongside the plan. Each TAG_TO_TYPE entry already declares its app-owned fields via `appOwnedInit` keys; the planner unions those into a per-block `appOwnedFields: Set<string>` (typically `{ 'status' }` for a Roam todo block, possibly empty for a non-task page). On upsert:
+     - Keys in `appOwnedFields` AND already present on the existing row → keep existing value (the user's local edit survives).
+     - All other keys (everything the importer planned that *isn't* in `appOwnedFields`, including `alias`, the type marker, source-mirror `roam:*`, page attributes) → overwrite with the planned value.
+     - Keys present on the existing row but NOT in the planned `properties` and NOT in `appOwnedFields` → keep (the user's ad-hoc props on the block survive reimport).
    - For brand-new blocks (`createOrGet → inserted: true`), no merge is needed — the planned properties are the only state.
-   The simplest implementation: split `upsertImportedBlock` into "create new" (current path) and "merge into existing" (new path that reads the existing row and writes the merged properties). The plan-side `appOwnedInit` for the source's TODO/DONE state continues to flow through `repo.addType`'s `initialValues` arg — it's the safety net for blocks that arrive without source-mirror state, not the primary write path for re-imported live rows.
+   The simplest implementation: split `upsertImportedBlock` into "create new" (current path) and "merge into existing." The merge path takes `(existing, planned, appOwnedFields)` and computes the merged properties map. The plan-side `appOwnedInit` for the source's TODO/DONE state continues to flow through `repo.addType`'s `initialValues` arg — it's the safety net for blocks that arrive without source-mirror state (e.g. tagged on a device that didn't have the contribution), not the primary write path for re-imported live rows.
 5. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker:
    - Call `repo.addType(blockId, 'todo', appOwnedInit)` — pass the source-specific app-owned values via the third arg per §3a. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
    - Write the source-mirror field (`roam:todo-state`) freely (always-overwrite via `block.set`).
