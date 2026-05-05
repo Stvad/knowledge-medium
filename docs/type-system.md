@@ -205,7 +205,7 @@ The right boundary: paths that need full type-add semantics (`initialValues` mat
 
 Type tagging needs a central orchestration point that materialises caller-supplied initial values and runs any `setup` callback in the same tx as the membership write. Without it, every tag-mapping path (importer, command, agent action) has to hand-roll the sequence and forget pieces. Schema-level defaults still surface via `block.get` for unset fields without any per-call work — that path is unchanged. Per-call `initialValues` (typically the source-specific app-owned values an importer wants to apply atomically with the tag) flow through `addType`'s materialisation pass.
 
-**API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs both `typesFacet` (for defaults) and `propertySchemasFacet` (to encode them). Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.)
+**API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs `typesFacet` (to look up the contribution's `setup` callback and verify the type id is registered) and `propertySchemasFacet` (to encode caller-supplied `initialValues` through the right codec — schemas don't follow callers around as values). Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.) There are no per-type defaults to apply — schema-level `defaultValue` is read-time fallback only, surfaced through `block.get` without any registry lookup at write time.
 
 **`Repo` must retain the registries it needs.** `Repo.setFacetRuntime` ([src/data/repo.ts:738](src/data/repo.ts:738)) today only extracts `mutators`, `processors`, `invalidationRules`, and `queries` — it does NOT store the runtime, `typesFacet`, or `propertySchemasFacet`. Phase 1 must extend `setFacetRuntime` to also retain narrower registries needed by type-system orchestration:
 
@@ -254,11 +254,26 @@ private async _addTypeInTx(
   // PropertySchema.defaultValue and surface naturally on read via
   // block.get / useProperty. Type contributions don't carry defaults
   // (per §3 hybrid: value-space differences become distinct schemas).
+  //
+  // Every initialValues key MUST resolve to a registered schema —
+  // codecs define the storage shape (date → ISO string, optional →
+  // sentinel-or-value, custom codecs → arbitrary), and writing a
+  // raw decoded value through bypasses that and silently corrupts
+  // the row. Throw on unknown names; the caller has either typo'd
+  // or is depending on a plugin that isn't loaded, both worth
+  // surfacing loudly.
   let propsChanged = wasNew
   for (const [name, value] of Object.entries(initialValues)) {
     if (next[name] === undefined) {
       const schema = propertySchemas.get(name)
-      next[name] = schema ? schema.codec.encode(value) : value
+      if (!schema) {
+        throw new Error(
+          `[addType] initialValues['${name}'] has no registered PropertySchema. ` +
+          `Register the schema (propertySchemasFacet) before passing it as an initial value, ` +
+          `or pass a pre-encoded raw value via tx.update directly if that's intentional.`,
+        )
+      }
+      next[name] = schema.codec.encode(value)
       propsChanged = true
     }
   }
@@ -397,10 +412,15 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
   //   3. Rewrite typesProp to the deduped desired order if it doesn't
   //      already match. addType only appends, so existing memberships
   //      keep their original positions; without the rewrite, current
-  //      = ['b','a'] + setBlockTypes(['a','b']) stays ['b','a']. The
-  //      §3b read-overlay walks block.types order, so respecting
-  //      caller intent here is meaningful (changes which type's
-  //      default wins for unset shared fields).
+  //      = ['b','a'] + setBlockTypes(['a','b']) stays ['b','a']. Order
+  //      matters for: deterministic storage / diffs, the §3c per-type
+  //      property-panel section ordering, the order setup callbacks
+  //      see when they iterate types, and the renderer-resolution
+  //      `body:byType` walk order documented in
+  //      [docs/renderer-resolution.md](docs/renderer-resolution.md).
+  //      No type-aware read overlay exists, so order does NOT change
+  //      which type's "default wins" for shared fields — that read
+  //      path goes straight to PropertySchema.defaultValue.
   const desiredOrder = Array.from(new Set(typeIds))
   const types = this.types
   const propertySchemas = this.propertySchemas
@@ -596,20 +616,30 @@ Most type-driven UI is *decoration* layered on the existing block content render
 
 #### 4a. Decorations, headers, click handlers — via existing facets with a type-guard
 
-The block-interaction facets in [src/extensions/blockInteraction.ts](src/extensions/blockInteraction.ts) (`blockContentDecoratorsFacet`, `blockHeaderFacet`, `blockChildrenFooterFacet`, `blockClickHandlersFacet`, `blockContentSurfacePropsFacet`, `blockLayoutFacet`) already have the right shape: each contribution is a function `(BlockResolveContext) => Contribution | null | undefined | false`, and returning a falsy value opts the block out. `BlockResolveContext` carries `block: Block`, so a type-bound contribution simply reads `typesProp` and bails when its type isn't present. **No new slot on `TypeContribution` is needed.**
+The block-interaction facets in [src/extensions/blockInteraction.ts](src/extensions/blockInteraction.ts) (`blockContentDecoratorsFacet`, `blockHeaderFacet`, `blockChildrenFooterFacet`, `blockClickHandlersFacet`, `blockContentSurfacePropsFacet`, `blockLayoutFacet`) already have the right shape: each contribution is a function `(BlockResolveContext) => Contribution | null | undefined | false`, and returning a falsy value opts the block out. **No new slot on `TypeContribution` is needed.**
 
-The convention for type-driven decoration: a type contribution registers its decorators/headers/etc. into the existing facets via the same `AppExtension` array as everything else, gating each on `block.hasType(typeId)` (the §3a facade sugar). Example for `todo`:
+**Reactivity gotcha — don't gate the contribution function on `block.hasType(...)`; gate inside the rendered component.** [DefaultBlockRenderer.tsx:298](src/components/renderer/DefaultBlockRenderer.tsx:298) memoizes `resolveContext` on stable per-block inputs that *deliberately don't include `block.peek()` or `typesProp`* — that's what keeps `UpdateIndicator` and other decorations from remounting on every focus/edit/selection toggle. Every facet resolver downstream (`decorateContent`, `resolveBlockClickHandler`, `resolveHeaderSections`, etc.) is also memoized on `resolveContext`. So if a contribution function returns `null` because `block.hasType('todo')` was false at first render, that `null` is cached: when the user later adds the `todo` type, neither `resolveContext` nor any of its dependents re-runs, and the decoration never appears until something unrelated invalidates the chain (a focus change, navigation, a hot-reload).
+
+The fix at the contribution level is to **always return a wrapper component** and have that component subscribe to the type state itself, rendering `null` when its type isn't present. That's idiomatic React — invalidation flows through the component's own `useProperty(block, typesProp)` subscription instead of through a stale resolver cache. Example for `todo`:
 
 ```ts
-const todoCheckboxDecorator: BlockContentDecoratorContribution = ({block}) => {
-  if (!block.hasType('todo')) return null
-  return (Inner) => (props) => (
-    <>
-      <TodoCheckbox blockId={props.block.id} />
-      <Inner {...props} />
-    </>
-  )
-}
+import { typesProp } from '@/data/properties.ts'
+import { useProperty } from '@/hooks/block.ts'
+
+const TodoCheckboxWrap = (Inner: ComponentType<BlockRendererProps>) =>
+  (props: BlockRendererProps) => {
+    const [types] = useProperty(props.block, typesProp)
+    if (!types.includes('todo')) return <Inner {...props}/>
+    return (
+      <>
+        <TodoCheckbox blockId={props.block.id} />
+        <Inner {...props} />
+      </>
+    )
+  }
+
+const todoCheckboxDecorator: BlockContentDecoratorContribution = () =>
+  TodoCheckboxWrap
 
 // statusProp is the shared status concept (declared in src/plugins/todo
 // or kernel — wherever it lives, its `defaultValue: 'open'` is the
@@ -621,9 +651,13 @@ export const todoPlugin: AppExtension = [
 ]
 ```
 
-This composes naturally under multi-type: each contributing type's decorations stack (all opt-in returns are collected and applied in contribution order), and there's no priority arbitration to do.
+The contribution function returns the wrapper unconditionally, so it's always part of the decoration chain. The wrapper renders `<Inner/>` on its own when the type isn't present (a single component-tree level of pass-through, cheap), and renders the decoration when it is. Adding/removing the `todo` type re-runs the wrapper's `useProperty` subscription and the decoration appears or disappears reactively. Same pattern applies to `blockHeaderFacet` (return a component that conditionally renders), `blockChildrenFooterFacet`, etc.
 
-A small ergonomics improvement worth considering once a few types ship: a helper `whenHasType(typeId, contribution)` that does the guard. Don't pre-build it; extract from real call sites.
+For `blockClickHandlersFacet` / `blockContentSurfacePropsFacet` / `blockLayoutFacet` — facets that return non-component values rather than wrapped components — the resolver-time gate is the only path. Those contributions need an explicit reactive dep on `typesProp`: either bake `block.peek()?.properties[typesProp.name]` into a key the resolver reads, or refactor the resolver to subscribe via `useProperty`. Whichever shape lands, the contribution comment should explicitly state the resolution boundary so type-gated implementations don't get silently cached at the wrong granularity.
+
+This composes naturally under multi-type: each contributing type's wrapper sits in the chain unconditionally; whether each *renders* its decoration is reactive on the type set; multiple type-bound decorations stack as wrappers.
+
+A small ergonomics improvement worth considering once a few types ship: a helper `withTypeGuard(typeId, Wrapped)` that produces the wrapper above. Don't pre-build it; extract from real call sites.
 
 #### 4b. Full-renderer replacement — keep using the existing `blockRenderersFacet` path
 
@@ -642,19 +676,30 @@ Today's codec set ([src/data/api/codecs.ts:73](src/data/api/codecs.ts:73)) is `s
 ```ts
 // RefCodec<T> extends Codec<T> with the picker constraint —
 // "this `tasks` field accepts only Task-typed blocks" — colocated
-// with the codec / schema rather than as per-type overrides. The
-// extension is on the codec type itself so consumers reading
-// `schema.codec.targetTypes` type-check without manual narrowing,
-// while still being a Codec<T> at every usage site that doesn't
-// care about ref-ness.
+// with the codec / schema rather than as per-type overrides.
+// Extending the codec type (rather than the schema) keeps every
+// usage site of Codec<T> unaware of ref-ness; sites that DO care
+// (the property-ref projector, the picker editor) narrow with
+// `isRefCodec` / `isRefListCodec` first.
 //
-// `refKind` is the runtime discriminator. `targetTypes` alone
-// cannot tell ref from a plain string codec (an unconstrained
-// `ref()` has no targets) and cannot distinguish ref from refList,
-// but the property-ref projector and grouped-backlinks both need
-// to dispatch on those two cases. A literal field is cheaper to
-// check than a symbol brand and survives serialisation /
-// structuredClone if a codec ever crosses a worker boundary.
+// PropertySchema<T>.codec is typed as Codec<T>, so direct field
+// access `schema.codec.targetTypes` won't type-check — the
+// RefCodec subtype is erased at the schema boundary and consumers
+// must narrow before reading. Concretely:
+//
+//   const codec: AnyCodec = schema.codec
+//   if (isRefCodec(codec) || isRefListCodec(codec)) {
+//     const targets = codec.targetTypes  // ok here
+//   }
+//
+// `refKind` is the runtime discriminator the predicates dispatch
+// on. `targetTypes` alone cannot tell ref from a plain string
+// codec (an unconstrained `ref()` has no targets) and cannot
+// distinguish ref from refList, but the property-ref projector
+// and grouped-backlinks both need to dispatch on those two cases.
+// A literal field is cheaper to check than a symbol brand and
+// survives serialisation / structuredClone if a codec ever
+// crosses a worker boundary.
 export interface RefCodec<T> extends Codec<T> {
   readonly refKind: 'ref' | 'refList'
   readonly targetTypes?: readonly string[]
