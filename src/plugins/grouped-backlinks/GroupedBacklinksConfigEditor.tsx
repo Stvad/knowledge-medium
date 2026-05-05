@@ -8,14 +8,16 @@ import {
 } from 'react'
 import { Plus, X } from 'lucide-react'
 import {
-  type BlockData,
   type PropertyEditorProps,
 } from '@/data/api'
-import { aliasesProp } from '@/data/properties.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { cn } from '@/lib/utils.ts'
+import {
+  searchLinkTargetValueCandidates,
+  type LinkTargetValueCandidate,
+} from '@/utils/linkTargetAutocomplete.ts'
 import {
   normalizeGroupedBacklinksConfig,
   type GroupedBacklinksConfig,
@@ -25,23 +27,6 @@ const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
 
 type TagTone = 'high' | 'low' | 'excluded'
-
-interface TagCandidate {
-  key: string
-  value: string
-  label: string
-  detail: string
-}
-
-const labelForBlockData = (data: BlockData | null | undefined, fallback: string): string => {
-  const aliases = data?.properties[aliasesProp.name]
-  if (Array.isArray(aliases)) {
-    const alias = aliases.find((value): value is string => typeof value === 'string' && value.trim() !== '')
-    if (alias) return alias
-  }
-  const content = data?.content?.trim()
-  return content || fallback
-}
 
 const truncate = (text: string, max = 72): string =>
   text.length > max ? `${text.slice(0, max - 3)}...` : text
@@ -118,7 +103,7 @@ const ConfigTagInput = ({
   const workspaceId = repo.activeWorkspaceId ?? ''
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
-  const [results, setResults] = useState<TagCandidate[]>([])
+  const [results, setResults] = useState<LinkTargetValueCandidate[]>([])
   const [activeIndex, setActiveIndex] = useState(-1)
   const currentValues = useMemo(() => uniqueStrings(values), [values])
   const currentValueSet = useMemo(() => new Set(currentValues), [currentValues])
@@ -131,40 +116,14 @@ const ConfigTagInput = ({
 
     let cancelled = false
     const timer = setTimeout(async () => {
-      const [aliasRows, blockRows] = await Promise.all([
-        repo.query.aliasMatches({workspaceId, filter: trimmed, limit: SEARCH_LIMIT}).load(),
-        repo.query.searchByContent({workspaceId, query: trimmed, limit: SEARCH_LIMIT}).load(),
-      ])
+      const nextResults = await searchLinkTargetValueCandidates(repo, {
+        workspaceId,
+        query: trimmed,
+        limit: SEARCH_LIMIT,
+        excludeValues: currentValueSet,
+      })
       if (cancelled) return
 
-      const seen = new Set(currentValueSet)
-      const candidates: TagCandidate[] = []
-      const pushCandidate = (candidate: TagCandidate) => {
-        const value = candidate.value.trim()
-        if (!value || seen.has(value)) return
-        seen.add(value)
-        candidates.push({...candidate, value})
-      }
-
-      for (const row of aliasRows) {
-        pushCandidate({
-          key: `alias:${row.blockId}:${row.alias}`,
-          value: row.alias,
-          label: row.alias,
-          detail: row.content,
-        })
-      }
-      for (const block of blockRows) {
-        const label = labelForBlockData(block, block.id)
-        pushCandidate({
-          key: `block:${block.id}`,
-          value: label,
-          label,
-          detail: block.content,
-        })
-      }
-
-      const nextResults = candidates.slice(0, SEARCH_LIMIT)
       setResults(nextResults)
       setActiveIndex(nextResults.length > 0 ? 0 : -1)
     }, DEBOUNCE_MS)

@@ -23,22 +23,16 @@ import { writeAppHash } from '@/utils/routing.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
+import {
+  searchLinkTargets,
+  type LinkTargetAliasMatch,
+  type LinkTargetBlockMatch,
+} from '@/utils/linkTargetAutocomplete.ts'
 import { toggleQuickFindEvent } from './events.ts'
 import { pushRecentBlockId, recentBlockIdsProp } from './recents.ts'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
-
-interface AliasMatch {
-  alias: string
-  blockId: string
-  content: string
-}
-
-interface BlockMatch {
-  blockId: string
-  content: string
-}
 
 interface RecentItem {
   blockId: string
@@ -56,8 +50,8 @@ export function QuickFind() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [value, setValue] = useState('')
-  const [aliasResults, setAliasResults] = useState<AliasMatch[]>([])
-  const [blockResults, setBlockResults] = useState<BlockMatch[]>([])
+  const [aliasResults, setAliasResults] = useState<LinkTargetAliasMatch[]>([])
+  const [blockResults, setBlockResults] = useState<LinkTargetBlockMatch[]>([])
   // Mask stale fetch results when the query is empty so the effect
   // above doesn't need to setState on the empty path.
   const aliases = query.trim() ? aliasResults : []
@@ -91,21 +85,15 @@ export function QuickFind() {
 
     let cancelled = false
     const timer = setTimeout(async () => {
-      const [aliasRows, blockRows] = await Promise.all([
-        repo.query.aliasMatches({workspaceId, filter: query, limit: SEARCH_LIMIT}).load(),
-        repo.query.searchByContent({workspaceId, query, limit: SEARCH_LIMIT}).load(),
-      ])
+      const results = await searchLinkTargets(repo, {
+        workspaceId,
+        query,
+        limit: SEARCH_LIMIT,
+      })
       if (cancelled) return
 
-      const aliasBlockIds = new Set(aliasRows.map(row => row.blockId))
-      const blockMatches: BlockMatch[] = []
-      for (const block of blockRows) {
-        if (aliasBlockIds.has(block.id)) continue
-        blockMatches.push({blockId: block.id, content: block.content})
-      }
-
-      setAliasResults(aliasRows)
-      setBlockResults(blockMatches)
+      setAliasResults(results.aliases)
+      setBlockResults(results.blocks)
     }, DEBOUNCE_MS)
 
     return () => {

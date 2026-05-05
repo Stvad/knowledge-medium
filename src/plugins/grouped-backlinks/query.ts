@@ -1,10 +1,10 @@
 import { z } from 'zod'
-import { defineQuery, type BlockData, type Schema } from '@/data/api'
+import { defineQuery, type Schema } from '@/data/api'
 import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
 } from '@/data/blockSchema'
-import { aliasesProp } from '@/data/properties.ts'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
   normalizeBacklinksFilter,
@@ -145,17 +145,6 @@ export const selectGroupedBacklinkCandidatesSql = (
   ORDER BY cr.source_id, group_block.updated_at DESC, group_block.id
 `
 
-const labelForBlockData = (data: BlockData): string => {
-  const aliases = data.properties[aliasesProp.name]
-  if (Array.isArray(aliases)) {
-    const alias = aliases.find((value): value is string =>
-      typeof value === 'string' && value.trim() !== '',
-    )
-    if (alias) return alias
-  }
-  return data.content.trim() || data.id
-}
-
 export const groupedBacklinksForBlockQuery = defineQuery<
   {
     workspaceId: string
@@ -222,7 +211,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       groupRowsById.set(row.id, row)
     }
     const groupData = ctx.hydrateBlocks(asBlockRows(Array.from(groupRowsById.values())))
-    const labelByGroupId = new Map(groupData.map(data => [data.id, labelForBlockData(data)]))
+    const labelByGroupId = new Map(groupData.map(data => [data.id, labelForBlockData(data, data.id)]))
 
     const candidates: GroupedBacklinkCandidate[] = candidateRows.map(row => ({
       sourceId: row.source_id,

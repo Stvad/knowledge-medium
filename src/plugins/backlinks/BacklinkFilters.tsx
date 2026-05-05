@@ -7,13 +7,16 @@ import {
   useState,
 } from 'react'
 import { FilterX, Plus, X } from 'lucide-react'
-import type { BlockData } from '@/data/api'
-import { aliasesProp } from '@/data/properties.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useHandle } from '@/hooks/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { cn } from '@/lib/utils.ts'
+import {
+  labelForBlockData,
+  searchLinkTargetIdCandidates,
+  type LinkTargetIdCandidate,
+} from '@/utils/linkTargetAutocomplete.ts'
 import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
@@ -24,26 +27,10 @@ const DEBOUNCE_MS = 80
 
 type FilterMode = 'include' | 'remove'
 
-interface FilterCandidate {
-  id: string
-  label: string
-  detail: string
-}
-
 interface BacklinkFiltersProps {
   workspaceId: string
   filter: BacklinksFilter
   onChange: (filter: BacklinksFilter) => void
-}
-
-const labelForBlockData = (data: BlockData | null | undefined, fallback: string): string => {
-  const aliases = data?.properties[aliasesProp.name]
-  if (Array.isArray(aliases)) {
-    const alias = aliases.find((value): value is string => typeof value === 'string' && value.trim() !== '')
-    if (alias) return alias
-  }
-  const content = data?.content?.trim()
-  return content || fallback
 }
 
 const truncate = (text: string, max = 72): string =>
@@ -100,7 +87,7 @@ const BacklinkFilterInput = ({
   const listboxId = useId()
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
-  const [results, setResults] = useState<FilterCandidate[]>([])
+  const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
   const [activeIndex, setActiveIndex] = useState(-1)
   const trimmed = query.trim()
   const currentIdSet = useMemo(() => new Set(currentIds), [currentIds])
@@ -114,33 +101,14 @@ const BacklinkFilterInput = ({
 
     let cancelled = false
     const timer = setTimeout(async () => {
-      const [aliasRows, blockRows] = await Promise.all([
-        repo.query.aliasMatches({workspaceId, filter: trimmed, limit: SEARCH_LIMIT}).load(),
-        repo.query.searchByContent({workspaceId, query: trimmed, limit: SEARCH_LIMIT}).load(),
-      ])
+      const nextResults = await searchLinkTargetIdCandidates(repo, {
+        workspaceId,
+        query: trimmed,
+        limit: SEARCH_LIMIT,
+        excludeIds: currentIdSet,
+      })
       if (cancelled) return
 
-      const seen = new Set<string>(currentIdSet)
-      const candidates: FilterCandidate[] = []
-      for (const row of aliasRows) {
-        if (seen.has(row.blockId)) continue
-        seen.add(row.blockId)
-        candidates.push({
-          id: row.blockId,
-          label: row.alias,
-          detail: row.content,
-        })
-      }
-      for (const block of blockRows) {
-        if (seen.has(block.id)) continue
-        seen.add(block.id)
-        candidates.push({
-          id: block.id,
-          label: labelForBlockData(block, block.id),
-          detail: block.content,
-        })
-      }
-      const nextResults = candidates.slice(0, SEARCH_LIMIT)
       setResults(nextResults)
       setActiveIndex(nextResults.length > 0 ? 0 : -1)
     }, DEBOUNCE_MS)

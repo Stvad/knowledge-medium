@@ -5,6 +5,7 @@ import { formatRoamDate } from '@/utils/dailyPage.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.ts'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.ts'
+import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.ts'
 
 export const backlinksCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo}) => [
   autocompletion({
@@ -17,7 +18,7 @@ export const backlinksCodeMirrorExtensions: CodeMirrorExtensionContribution = ({
             return []
           }
 
-          const aliases = await repo.query.aliasesInWorkspace({workspaceId, filter}).load()
+          const aliases = await searchAliasLabels(repo, {workspaceId, query: filter})
           const dateMatch = parseRelativeDate(filter)
           if (!dateMatch) return aliases
 
