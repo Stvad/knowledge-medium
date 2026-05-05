@@ -5,6 +5,7 @@ import {
   DefaultBlockRenderer,
 } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { useEffect, useRef, useState } from 'react'
+import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useContent, usePropertyValue } from '@/hooks/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
@@ -22,6 +23,21 @@ import {
 } from './events.ts'
 import { enterVideoNotesView } from './notes.ts'
 import { videoPlayerViewProp } from './view.ts'
+
+const DEFAULT_VIDEO_NOTES_PANE_RATIO = 0.8
+const MIN_VIDEO_NOTES_PANE_RATIO = 0.28
+const MAX_VIDEO_NOTES_PANE_RATIO = 0.9
+const VIDEO_NOTES_DESKTOP_BREAKPOINT = 768
+const VIDEO_NOTES_KEYBOARD_STEP = 0.05
+
+type VideoNotesPaneStyle = CSSProperties & {
+  '--video-notes-pane-ratio': string
+}
+
+const clampVideoNotesPaneRatio = (ratio: number) =>
+  Math.min(MAX_VIDEO_NOTES_PANE_RATIO, Math.max(MIN_VIDEO_NOTES_PANE_RATIO, ratio))
+
+const videoNotesPanePercent = (ratio: number) => `${(ratio * 100).toFixed(2)}%`
 
 const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
@@ -124,18 +140,140 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
  */
 const VideoPlayerLayout: BlockLayout = (slots) => {
   const [view, setView] = usePropertyValue(slots.block, videoPlayerViewProp)
+  const [videoPaneRatio, setVideoPaneRatio] = useState(DEFAULT_VIDEO_NOTES_PANE_RATIO)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const dragCleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => {
+    dragCleanupRef.current?.()
+  }, [])
+
+  const handleResizePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return
+
+    const container = containerRef.current
+    if (!container) return
+
+    dragCleanupRef.current?.()
+
+    const rect = container.getBoundingClientRect()
+    const isDesktopLayout = rect.width >= VIDEO_NOTES_DESKTOP_BREAKPOINT
+    const totalSize = isDesktopLayout ? rect.width : rect.height
+    if (totalSize <= 0) return
+
+    const previousCursor = document.body.style.cursor
+    const previousUserSelect = document.body.style.userSelect
+
+    const updateRatio = (clientX: number, clientY: number) => {
+      const offset = isDesktopLayout ? clientX - rect.left : clientY - rect.top
+      setVideoPaneRatio(clampVideoNotesPaneRatio(offset / totalSize))
+    }
+
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+      moveEvent.preventDefault()
+      updateRatio(moveEvent.clientX, moveEvent.clientY)
+    }
+
+    const cleanup = () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerUp)
+      document.body.style.cursor = previousCursor
+      document.body.style.userSelect = previousUserSelect
+      dragCleanupRef.current = null
+    }
+
+    const handlePointerUp = (upEvent: globalThis.PointerEvent) => {
+      upEvent.preventDefault()
+      cleanup()
+    }
+
+    document.body.style.cursor = isDesktopLayout ? 'col-resize' : 'row-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', handlePointerMove, {passive: false})
+    window.addEventListener('pointerup', handlePointerUp, {passive: false})
+    window.addEventListener('pointercancel', handlePointerUp, {passive: false})
+
+    dragCleanupRef.current = cleanup
+    event.preventDefault()
+    updateRatio(event.clientX, event.clientY)
+  }
+
+  const handleResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const deltas: Partial<Record<string, number>> = {
+      ArrowDown: VIDEO_NOTES_KEYBOARD_STEP,
+      ArrowRight: VIDEO_NOTES_KEYBOARD_STEP,
+      ArrowLeft: -VIDEO_NOTES_KEYBOARD_STEP,
+      ArrowUp: -VIDEO_NOTES_KEYBOARD_STEP,
+      End: MAX_VIDEO_NOTES_PANE_RATIO - videoPaneRatio,
+      Home: MIN_VIDEO_NOTES_PANE_RATIO - videoPaneRatio,
+    }
+    const delta = deltas[event.key]
+    if (delta === undefined) return
+
+    event.preventDefault()
+    setVideoPaneRatio(current => clampVideoNotesPaneRatio(current + delta))
+  }
 
   if (view !== 'notes') {
     return <DefaultBlockLayout {...slots}/>
   }
 
   const {Children} = slots
+  const clampedVideoPaneRatio = clampVideoNotesPaneRatio(videoPaneRatio)
+  const videoPaneStyle: VideoNotesPaneStyle = {
+    flexBasis: videoNotesPanePercent(clampedVideoPaneRatio),
+    '--video-notes-pane-ratio': String(clampedVideoPaneRatio),
+  }
+  const notesPaneStyle: CSSProperties = {
+    flexBasis: videoNotesPanePercent(1 - clampedVideoPaneRatio),
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row">
-      <section className="h-[56vh] w-screen bg-black [--video-notes-pane-height:56vh] md:h-screen md:w-[80vw] md:[--video-notes-pane-height:100vh]">
+    <div
+      ref={containerRef}
+      className="fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row"
+    >
+      <section
+        className="min-h-0 min-w-0 flex-none bg-black [--video-notes-pane-height:calc(100vh*var(--video-notes-pane-ratio))] md:[--video-notes-pane-height:100vh]"
+        style={videoPaneStyle}
+      >
         <VideoPlayerContentRenderer block={slots.block}/>
       </section>
-      <aside className="h-[44vh] w-screen overflow-y-auto border-t border-border bg-background p-3 md:h-screen md:w-[20vw] md:border-l md:border-t-0">
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize video notes panes"
+        aria-orientation="horizontal"
+        aria-valuemax={Math.round(MAX_VIDEO_NOTES_PANE_RATIO * 100)}
+        aria-valuemin={Math.round(MIN_VIDEO_NOTES_PANE_RATIO * 100)}
+        aria-valuenow={Math.round(clampedVideoPaneRatio * 100)}
+        className="group/resizer flex h-2 w-full flex-none cursor-row-resize touch-none items-center justify-center bg-border/80 outline-none transition-colors hover:bg-primary/60 focus-visible:bg-primary/70 focus-visible:ring-1 focus-visible:ring-ring md:hidden"
+        title="Resize video notes panes"
+        onKeyDown={handleResizeKeyDown}
+        onPointerDown={handleResizePointerDown}
+      >
+        <span className="h-1 w-10 rounded-full bg-background/80 transition-colors group-hover/resizer:bg-primary-foreground/90 md:h-10 md:w-1"/>
+      </div>
+      <div
+        role="separator"
+        tabIndex={0}
+        aria-label="Resize video notes panes"
+        aria-orientation="vertical"
+        aria-valuemax={Math.round(MAX_VIDEO_NOTES_PANE_RATIO * 100)}
+        aria-valuemin={Math.round(MIN_VIDEO_NOTES_PANE_RATIO * 100)}
+        aria-valuenow={Math.round(clampedVideoPaneRatio * 100)}
+        className="group/resizer hidden h-full w-2 flex-none cursor-col-resize touch-none items-center justify-center bg-border/80 outline-none transition-colors hover:bg-primary/60 focus-visible:bg-primary/70 focus-visible:ring-1 focus-visible:ring-ring md:flex"
+        title="Resize video notes panes"
+        onKeyDown={handleResizeKeyDown}
+        onPointerDown={handleResizePointerDown}
+      >
+        <span className="h-10 w-1 rounded-full bg-background/80 transition-colors group-hover/resizer:bg-primary-foreground/90"/>
+      </div>
+      <aside
+        className="min-h-0 min-w-0 flex-none overflow-y-auto bg-background p-3"
+        style={notesPaneStyle}
+      >
         <div className="sticky top-0 z-10 mb-2 flex justify-end bg-background/95 pb-2">
           <Button
             type="button"
