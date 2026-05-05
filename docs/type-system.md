@@ -45,11 +45,6 @@ export interface TypeContribution {
    *  for the type/decoration split. Leave undefined unless the type
    *  takes over the whole block presentation. */
   readonly defaultRenderer?: string
-  /** Type-conditional defaults. Applied by the `addType(block, typeId)`
-   *  mutator (§3a) — both at instance creation *and* whenever a type is
-   *  added to an existing block. Keys are property names, values are
-   *  decoded values run through the matching schema's codec. */
-  readonly defaults?: Readonly<Record<string, unknown>>
   /** Renderer dispatch priority when a block has multiple types.
    *  Higher wins. `rendererProp` always overrides everything. */
   readonly priority?: number
@@ -58,13 +53,17 @@ export interface TypeContribution {
   /** Optional longer description for hover tooltips in type pickers and
    *  the property panel section header. */
   readonly description?: string
-  /** Optional escape hatch beyond `defaults`. Runs once when `addType`
-   *  first applies this type to a block, after `defaults` are
-   *  materialised, inside the same tx. See §3a-setup. Use sparingly —
-   *  it's a code-execution hatch in the type registry. Common cases:
-   *  child-block templates (meeting → Attendees/Agenda/Action items),
-   *  computed initial values (`due = now() + 7 days`), cross-block
-   *  wiring at add time. */
+  /** Optional escape hatch for type-add work that needs more than the
+   *  per-call `initialValues` arg can express. Runs once when `addType`
+   *  first applies this type to a block, after the caller-provided
+   *  initial values are written, inside the same tx. See §3a-setup.
+   *  Use sparingly — it's a code-execution hatch in the type registry.
+   *  Common cases: child-block templates (meeting → Attendees / Agenda /
+   *  Action items), computed initial values (`due = now() + 7 days`),
+   *  cross-block wiring at add time. Setup callbacks that write
+   *  block-level fields they don't strictly own should follow
+   *  init-if-missing semantics so a re-add or competing call doesn't
+   *  clobber a user value. */
   readonly setup?: TypeSetup
 }
 
@@ -158,7 +157,7 @@ This local-schema delta lives in the kernel, not in a plugin, since extension di
 
 Reuse `PropertySchema` as the field primitive — `propertySchemasFacet` stays one global registry keyed by `name`. The convention for *what to name a schema* is hybrid:
 
-- **Flat** for shared-vocabulary fields whose meaning is consistent across types and that an untagged block could plausibly use the same way: `status`, `due`, `priority`, `tags`, `description`, `assignee`. One `statusProp` exists, multiple types list it in their `properties[]`, and a typeless block can read/write it via `block.set(statusProp, …)` without picking a "which status" namespace. The defaults differ per type via `TypeContribution.defaults`; the codec is shared.
+- **Flat** for shared-vocabulary fields whose meaning is consistent across types and that an untagged block could plausibly use the same way: `status`, `due`, `priority`, `tags`, `description`, `assignee`. One `statusProp` exists with one global default and one codec; multiple types list it in their `properties[]`, and a typeless block can read/write it via `block.set(statusProp, …)` without picking a "which status" namespace. If two types disagree on the value space (todo: `'open' | 'done'` vs meeting: `'scheduled' | 'happening' | 'finished' | 'cancelled'`), their codecs differ and §3 says use distinct schema names — that's a different field, not a shared field with per-type defaults.
 - **Namespaced** for type-private / plugin-internal fields whose meaning is meaningless or confusing elsewhere: `video:playerView` (whether the video player is in notes mode — only the video plugin understands this), `roam:todo-state` (source-mirror metadata for round-trip — only the Roam importer cares), `extension:disabled` (already exists as `system:disabled`). These exist purely because *one* type needs them; namespacing prevents accidental collision with shared vocab and signals the limited scope.
 - **Heuristic when in doubt:** could a different type or a typeless block reasonably use this field with the same meaning? Yes → flat. No → namespace. When two types genuinely want the same field name with **incompatible codec semantics**, namespace one (or both) — but this is rare in practice.
 
@@ -166,10 +165,10 @@ This sidesteps Tana-style per-supertag schema scoping (which makes "set status o
 
 What still belongs on the type contribution rather than on the schema:
 
-- **Type-conditional defaults** → `TypeContribution.defaults`. A `todo`'s `status='open'` and a `meeting`'s `status='scheduled'` are declared by their respective types, not the prop schema.
 - **Per-type `properties[]` membership** → which schemas appear in this type's section of the property panel; a flat `statusProp` listed by both `todo` and `task` shows up under both.
+- **Per-type `setup` callbacks** → child-block templates, computed initial values, cross-block wiring at add time (§3a-setup).
 
-(Ref-target constraints — "this `tasks` field accepts only Task-typed blocks" — live on the codec itself, not on per-type overrides; see §5. The §3 hybrid rule covers the case where two types want differently-constrained refs: different acceptable targets means different meaning means different schema names.)
+Defaults belong on the schema (one global per field), not on per-type overrides — the §3 hybrid rule covers value-space differences by namespacing into a different field rather than by overriding a shared field's default. Ref-target constraints — "this `tasks` field accepts only Task-typed blocks" — live on the codec itself, also not on per-type overrides; see §5.
 
 #### 3-pure. Pure helpers on raw `BlockData`
 
@@ -203,15 +202,15 @@ export const addBlockTypeToProperties = (
 }
 ```
 
-These are deliberately small. Registry resolution, defaults materialisation, and `setup` all happen inside `repo.addType` — these helpers don't replicate any of that.
+These are deliberately small. Registry resolution, `initialValues` materialisation, and `setup` all happen inside `repo.addType` — these helpers don't replicate any of that.
 
-**Important: `addBlockTypeToProperties` does NOT call defaults or setup.** It's a *raw membership writer* for paths that genuinely can't reach `repo.addType` — fixture construction in tests, processor snapshot rewrites, importer **plan** code that builds row shapes before commit. **Don't pre-write membership and then call `repo.addType` expecting `setup` to fire**: `repo.addType` always runs init-if-missing materialisation (so defaults *will* apply on a re-call), but `setup` only fires when `addType` actually transitions the block from "doesn't have type" to "does have type." Pre-writing typesProp via raw `tx.update` makes that transition invisible to `addType` — `setup` never runs.
+**Important: `addBlockTypeToProperties` does NOT run `setup` or apply `initialValues`.** It's a *raw membership writer* for paths that genuinely can't reach `repo.addType` — fixture construction in tests, processor snapshot rewrites, importer **plan** code that builds row shapes before commit. **Don't pre-write membership and then call `repo.addType` expecting `setup` to fire**: `repo.addType` will still run init-if-missing materialisation against any `initialValues` you pass on a re-call, but `setup` only fires when `addType` actually transitions the block from "doesn't have type" to "does have type." Pre-writing typesProp via raw `tx.update` makes that transition invisible to `addType` — `setup` never runs.
 
-The right boundary: paths that need full type-add semantics (defaults + setup) call the type-system orchestration entry point directly without prewriting. App-level callers outside an existing tx use `repo.addType`. The Roam importer's apply phase is already inside chunked `repo.tx` calls — it must use `repo.addTypeInTx(tx, blockId, 'todo', initialValues?)` per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee. Either way the importer does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — but those paths are responsible for either also writing the defaults that `addType`/`addTypeInTx` would have written, or leaving them unmaterialised and relying on the §3a-bis read overlay (acceptable for app-owned-init-only-if-missing semantics; see Phase 5 reimport rule).
+The right boundary: paths that need full type-add semantics (`initialValues` materialisation + `setup`) call the type-system orchestration entry point directly without prewriting. App-level callers outside an existing tx use `repo.addType`. The Roam importer's apply phase is already inside chunked `repo.tx` calls — it must use `repo.addTypeInTx(tx, blockId, 'todo', initialValues?, snapshot?)` per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee. Either way the importer does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — those paths get tagged blocks but don't get `setup` execution or `initialValues` materialisation. Read fallbacks come from `PropertySchema.defaultValue` automatically; `initialValues` skipped here just means the block reads its schema default until something writes the field.
 
-#### 3a. `addType` / `removeType` mutators — defaults apply on add, not just creation
+#### 3a. `addType` / `removeType` — orchestration that owns membership, init values, and setup
 
-Defaults at *creation* aren't enough. The common motion is "tag this existing block as a `todo`" — that block needs `status='open'` materialised so `where: {status: 'open'}` queries match. Without a central place to apply defaults, every writer (importer, command, agent action) has to remember to do it, and missed sites silently degrade query results.
+Type tagging needs a central orchestration point that materialises caller-supplied initial values and runs any `setup` callback in the same tx as the membership write. Without it, every tag-mapping path (importer, command, agent action) has to hand-roll the sequence and forget pieces. Schema-level defaults still surface via `block.get` for unset fields without any per-call work — that path is unchanged. Per-call `initialValues` (typically the source-specific app-owned values an importer wants to apply atomically with the tag) flow through `addType`'s materialisation pass.
 
 **API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs both `typesFacet` (for defaults) and `propertySchemasFacet` (to encode them). Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.)
 
@@ -233,7 +232,7 @@ setFacetRuntime(runtime: FacetRuntime): void {
 }
 ```
 
-Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. The same retained `propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
+Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. `addType` reads `types` for `setup` lookup and contribution existence, and `propertySchemas` for `initialValues` codec encoding. (Reads don't need either registry — schema defaults live on `PropertySchema.defaultValue` and surface naturally through `block.get` / `useProperty` without any type-aware overlay.) The same retained `propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
 
 **Two-layer shape: in-tx primitives + tx-opening wrappers.** Every operation that composes (`toggleType`, `setBlockTypes`, anything similar in plugin code) needs to run end-to-end in one tx — read, decide, write all under the same writer slot — otherwise concurrent writes interleave and decisions made on stale reads survive. So define private in-tx helpers and have the public `Repo` methods open a tx and dispatch. Composers (toggle/set) call the helpers directly inside their own tx.
 
@@ -257,10 +256,13 @@ private async _addTypeInTx(
   if (wasNew) {
     next[typesProp.name] = typesProp.codec.encode([...current, typeId])
   }
-  // ALWAYS run materialisation — see §3a rationale.
-  const merged = { ...(contribution?.defaults ?? {}), ...initialValues }
+  // Init-if-missing materialisation for caller-supplied initial values.
+  // Schema-level defaults aren't applied here — they live on
+  // PropertySchema.defaultValue and surface naturally on read via
+  // block.get / useProperty. Type contributions don't carry defaults
+  // (per §3 hybrid: value-space differences become distinct schemas).
   let propsChanged = wasNew
-  for (const [name, value] of Object.entries(merged)) {
+  for (const [name, value] of Object.entries(initialValues)) {
     if (next[name] === undefined) {
       const schema = propertySchemas.get(name)
       next[name] = schema ? schema.codec.encode(value) : value
@@ -417,9 +419,11 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
     }
     // Final order rewrite — addType only appends, so existing
     // memberships keep their position; e.g. current = ['b','a'] +
-    // setBlockTypes(['a','b']) would stay ['b','a'] without this. The
-    // §3a-bis read-overlay walks block.types in order, so the rewrite
-    // is semantically meaningful for unset-shared-field defaults.
+    // setBlockTypes(['a','b']) would stay ['b','a'] without this.
+    // Order matters for the panel's per-type section ordering (§3c)
+    // and for sequential-initialValues first-writer-wins (§3b), so
+    // respecting caller intent here keeps subsequent operations
+    // predictable.
     const after = await tx.get(blockId)
     if (!after) return
     const stored = (after.properties[typesProp.name] as string[] | undefined) ?? []
@@ -434,18 +438,18 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
 
 Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag" action) goes through `repo.addType`. Direct writes to `typesProp` are discouraged — add a lint or an engine guard if needed.
 
-A *full* read-time overlay (defaults synthesised everywhere — storage reads, queries, indexes — whenever a block has a type but lacks the property) is the alternative, and it's worse: it forces every storage-level reader to know about types and complicates the SQL-backed typed-query primitive in §8. Prefer materialise-on-add as the storage-level invariant.
+No type-aware read-time overlay exists. `block.get` returns `schema.defaultValue` for unset properties (current behaviour, unchanged); `useProperty` does the same; the typed-query primitive (§8) reads materialised state directly. The §3 hybrid rule means a value-space difference becomes a different schema with its own default rather than a per-type override of a shared field, which keeps the read paths simple — no cross-registry lookup needed for the unset-property case.
 
-#### 3a-setup. The `setup` escape hatch beyond `defaults`
+#### 3a-setup. The `setup` escape hatch beyond `initialValues`
 
-`defaults` is a static map: "if this property isn't set, set it to this literal value." A handful of legitimate type-add behaviors don't fit:
+`initialValues` covers static caller-supplied values per add. A handful of legitimate type-add behaviors fall outside that:
 
 - **Child-block templates.** `meeting` creates child blocks for *Attendees*, *Agenda*, *Action items*. `project` creates *Tasks* and *Notes* container children. `daily-note` pre-populates the daily template structure.
-- **Computed initial values.** `due = now() + 7 days`. `weekNumber = isoWeek(today)`. `assignee = currentUser`. Static defaults can't carry expressions.
+- **Computed initial values defined by the type** (not supplied by every caller). `due = now() + 7 days`. `weekNumber = isoWeek(today)`. Type-specific computations the caller shouldn't have to reproduce.
 - **Cross-block wiring at add time.** Setting `project = parent.id` when a `task` is added under a `project`-typed parent. (Borderline — react-to-context fits workflow rules better, but if it should fire *only* on the initial tag, `setup` is the place.)
 - **Side effects sharing the tx.** Append a row to a side table or an "All Tasks" inbox subtree, with the same tx so undo of the type-add cleanly removes everything together.
 
-The hook fires inside `repo.addType` after `defaults` are applied, in the same tx. `removeType` doesn't run a teardown — use the same "we don't clean up on remove in v1" rule as for properties; types that ship complex setups should be ones users add and rarely undo.
+The hook fires inside `repo.addType` after `initialValues` are written, in the same tx. `removeType` doesn't run a teardown — use the same "we don't clean up on remove in v1" rule as for properties; types that ship complex setups should be ones users add and rarely undo.
 
 ```ts
 import { createChild } from '@/data/internals/kernelMutators'  // 'core.createChild' mutator
@@ -454,8 +458,9 @@ typesFacet.of(defineBlockType({
   id: 'meeting',
   label: 'Meeting',
   properties: [meetingDateProp, meetingAttendeesProp],
-  defaults: { [meetingDateProp.name]: today() },
   setup: async ({ tx, id }) => {
+    // Type-defined computed initial value (not a per-call initialValue).
+    await tx.update(id, { properties: { ...(await tx.get(id))?.properties, [meetingDateProp.name]: meetingDateProp.codec.encode(today()) } })
     for (const label of ['Attendees:', 'Agenda:', 'Action items:']) {
       // tx.run dispatches a registered mutator inside this tx so the
       // child writes share the same transactional bucket as the
@@ -468,60 +473,14 @@ typesFacet.of(defineBlockType({
 }), { source: 'meeting' })
 ```
 
-`tx.run(mutator, args)` ([src/data/api/tx.ts:130](src/data/api/tx.ts:130)) is the in-tx mutator dispatch — different from `repo.mutate.createChild(...)` which would open a separate tx and break the atomicity property `setup` exists for. Setup callbacks should always use `tx.run`, never `repo.mutate.X`.
+`tx.run(mutator, args)` ([src/data/api/tx.ts:130](src/data/api/tx.ts:130)) is the in-tx mutator dispatch — different from `repo.mutate.createChild(...)` which would open a separate tx and break the atomicity property `setup` exists for. Setup callbacks should always use `tx.run`, never `repo.mutate.X`. Setup callbacks that write block-level fields they don't strictly own should be init-if-missing too — read the existing value via `tx.get` first and skip writes for fields already set.
 
-**Use sparingly** — it's a code-execution hatch in the type registry. `defaults` covers ~90% of cases and is data (auditable, syncable, deterministic). `setup` is opaque code at add time. Two specific gotchas to flag at implementation time:
+**Use sparingly** — it's a code-execution hatch in the type registry. `initialValues` (caller-supplied static map) and `PropertySchema.defaultValue` (read-time fallback) cover the static cases without code. `setup` is opaque code at add time. Two specific gotchas to flag at implementation time:
 
 - **Bulk-write asymmetry.** `setup` fires from `repo.addType`. A bulk path that writes `typesProp = ['task', 'meeting']` directly via `tx.update` *bypasses* setup. Importers that want setup behavior must call `repo.addType` per type rather than writing typesProp directly.
 - **Reimport runs setup again.** A Roam reimport that adds `task` to a block where the type wasn't previously present *will* run `setup`. That's usually correct (first-time-for-this-block tag), but means import paths can trigger child-block creation. Document in the importer.
 
 This naturally subsumes existing "create-and-stamp-type" code. [src/data/dailyNotes.ts:86](src/data/dailyNotes.ts:86)'s daily-note creation, which today writes `type='daily-note'` plus its own initial structure imperatively, becomes `repo.addType(id, 'daily-note')` with the `daily-note` type's `setup` carrying the template.
-
-#### 3a-bis. Narrow overlay on `block.get` for schema-aware code reads
-
-Materialise-on-add covers the common case but has three edge cases where a block can carry a type without the corresponding properties materialised: sync from a device that didn't have the type contribution registered, bulk-import paths that bypass `addType` (Roam importer), and type evolution (a type's `defaults` map changes in code, or a new prop is added to `properties[]`, after blocks were tagged). Under those, `block.get(statusProp)` would today return `schema.defaultValue` (probably `undefined`), missing the meaningful type-conditional default that `addType` *would* have materialised.
-
-Teach `block.get` to overlay type-conditional defaults — narrowly, only on this one call site:
-
-The lookup itself lives on `Repo` so all consumers share one implementation against the retained registry (avoiding direct `runtime` exposure on `Repo` and keeping `Block` from poking into private fields):
-
-```ts
-// On Repo
-resolveDefault<T>(types: readonly string[], schema: PropertySchema<T>): T {
-  for (const typeId of types) {
-    const v = this.types.get(typeId)?.defaults?.[schema.name]
-    if (v !== undefined) return v as T
-  }
-  return schema.defaultValue
-}
-```
-
-```ts
-// Updated Block.get — preserves the existing loaded-row contract.
-// `this.data` throws BlockNotLoadedError / BlockNotFoundError when the
-// row isn't in cache (current behaviour at [src/data/block.ts:74](src/data/block.ts:74)),
-// so callers see the same not-loaded error as today rather than
-// silently getting schema.defaultValue back.
-get<T>(schema: PropertySchema<T>): T {
-  const data = this.data  // throws if not loaded
-  const stored = data.properties[schema.name]
-  if (stored !== undefined) return schema.codec.decode(stored) as T
-  // Row IS loaded; the property just isn't materialised. Apply the
-  // type-conditional overlay against the row's actual `types` array.
-  const types = (data.properties[typesProp.name] as string[] | undefined) ?? []
-  return this.repo.resolveDefault(types, schema)
-}
-```
-
-Three companion rules:
-
-- **`peekProperty` does NOT overlay.** It stays as "is this property actually materialised?" — used by `addType` itself to decide whether to write a default, by sync-conflict resolution, by debugging tools that want raw storage. The overlay is a `get`-only enhancement.
-- **`useProperty` DOES overlay** ([src/hooks/block.ts:252](src/hooks/block.ts:252)) — by the same symmetry argument as `block.get`. Inside the selector, call `repo.resolveDefault(types, schema)` against the type ids read from `doc.properties[typesProp.name]`. **Reactivity caveat:** `useHandle` only re-runs on block-handle changes, so updating `Repo`'s retained `types` registry inside `setFacetRuntime` would NOT invalidate this hook on its own — a runtime swap that changes type defaults wouldn't re-render unless a row also changed. Two viable wirings:
-  - **(a) Pull `runtime` into the hook's deps via `useAppRuntime()`** and pass the runtime as a selector dependency so the selector closure rebuilds on runtime swap. This forces `useHandle` to re-evaluate against the new selector identity. Cheap; only cost is one extra context read per `useProperty` call site.
-  - **(b) Bump a `Repo.runtimeGeneration` counter** on each `setFacetRuntime` and have `useProperty` subscribe to it (or include it in the selector deps). Slightly more plumbing but keeps the React tree out of the runtime context for hooks that don't otherwise need it.
-  Recommend **(a)** for v1 — `useAppRuntime()` already exists and most consumers of `useProperty` are inside the runtime-aware tree anyway. Add a parallel `usePeekProperty` returning `T | undefined` for the rare "is this materialised?" caller (no overlay, no runtime dependency). The downstream wrappers `useUIStateProperty` / `useRootUIStateProperty` / `useUserPrefsProperty` ([src/data/globalState.ts:275](src/data/globalState.ts:275)) inherit the overlay automatically — verify at implementation time that no UI-state schema name collides with a type-contributed prop name.
-- **The typed-query primitive (§8) does NOT overlay by default.** SQL runs against `properties_json` and matches only materialised values. Under normal flows storage and overlay agree (because `addType` materialised them). At the three edges above, queries can miss until something materialises; `addType` remains the storage invariant. An opt-in `{ materialiseDefaults: true }` flag is a possible follow-up if real call sites want overlay-aware filtering, but defer until there's demand.
-- **`BlockProperties` field discovery (§3c) reuses `repo.resolveDefault`.** Unset slots in the panel render whatever `repo.resolveDefault(block.types, schema)` returns — same answer `block.get` would produce — so the panel and code reads agree on what an unset-but-typed slot looks like. The signature replaces the earlier free-function `resolveDefault(block, schema, typesRegistry)` sketch; pass the type-id list and let `Repo` own the registry access.
 
 **`Block` facade sugar** mirrors the existing `get`/`set`/`setContent`/`delete` pattern at [src/data/block.ts:159](src/data/block.ts:159)–[:228](src/data/block.ts:228):
 
@@ -568,7 +527,7 @@ When two types share a property schema (the common case under §3's reuse model)
 
 - **Field discovery (which props apply to a block).** Union of every `TypeContribution.properties` across the block's types, deduped by `name`. If `todo` and `task` both list `statusProp`, the property panel shows `status` once.
 - **Codec.** A property has one codec globally — `propertySchemasFacet` is keyed by `name` and last-wins on duplicates. Multi-type doesn't change that. If two types want truly incompatible codecs, namespace one of them per the §3 hybrid rule (use a plugin-private `myplugin:status` rather than overloading the shared `status`).
-- **Defaults — first-writer-wins, order-dependent.** `todo.defaults={status:'open'}` and `task.defaults={status:'todo'}` on a block with neither set: `repo.addType('todo')` then `repo.addType('task')` → `status='open'` (the second `addType` sees the property already set during materialisation and skips it). Reverse order → `status='todo'`. The order callers invoke `repo.addType` in is therefore semantically load-bearing for default conflicts on shared fields; `repo.setBlockTypes(typeIds)` iterates the array in order and calls `addType` per type, which preserves the same first-wins rule. Don't pre-write `typesProp` directly via `tx.update` to apply both types "atomically" — that bypasses defaults / setup entirely and is the bug §3-pure / Phase 1 step 13 explicitly call out. This rule is intuitive (the type tagged first wins) but worth pinning.
+- **`initialValues` — first-writer-wins, order-dependent.** Schema defaults are global (one default per field on `PropertySchema.defaultValue`), so there's no per-type defaults to combine. The only multi-type ordering question is around caller-supplied `initialValues` to sequential `addType` calls: `repo.addType('todo', {status: 'open'})` then `repo.addType('task', {status: 'doing'})` on a block with no `status` → `status='open'` (the second `addType` sees the property already set during materialisation and skips it). Reverse order → `status='doing'`. The order callers invoke `repo.addType` in is therefore load-bearing for `initialValues` conflicts on shared fields; `repo.setBlockTypes(typeIds)` iterates in array order and inherits the same rule. Don't pre-write `typesProp` directly via `tx.update` to apply both types "atomically" — that bypasses `initialValues` / setup and is the bug §3-pure / Phase 1 step 13 explicitly call out. Convention for `setup` callbacks that write block-level fields they don't strictly own: be init-if-missing too.
 - **`defaultRenderer`.** Priority arbitration in §4b. Most types contribute none, so multi-type collisions are rare by construction.
 - **Decorations / headers / click handlers (§4a).** Stack natively — every contribution's non-falsy return is applied in contribution order. Multi-type decoration is the easy path; this is the main reason to prefer decorations over renderer-replacement.
 - **Validation (deferred follow-up).** When it lands, validations across types **intersect** — a value must satisfy *all* applicable types' constraints. Constraints restrict; if any type forbids, it's forbidden.
@@ -605,7 +564,7 @@ for (const typeId of block.types) {
 
 The dedup by `name` is exactly what §3b's "field discovery is union by name" means at the code level. Multi-type composition is automatic — a prop declared by both `todo` and `task` lands in the map once.
 
-**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `repo.resolveDefault(block.types, schema)` as its value (the same Repo method §3a-bis uses for `block.get`). This makes the panel show whatever `block.get(schema)` would return — type-conditional default for typed slots, schema default otherwise. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property.
+**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `schema.defaultValue` as its value — same global default `block.get` returns for an unset property, since defaults live on the schema, not on type contributions. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property.
 
 For each entry in `unknownNames` — properties set on the block whose schema isn't registered (legacy ad-hoc props, plugin-not-loaded refs, etc.) — keep the existing unknown-schema fallback in [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) ([:201](src/components/BlockProperties.tsx:201)–[:204](src/components/BlockProperties.tsx:204)): `resolvePropertyDisplay` builds an `adhocSchema` and routes through the kind-inferred default editor. These rows still appear in the panel — the union must not silently drop them.
 
@@ -634,8 +593,11 @@ const todoCheckboxDecorator: BlockContentDecoratorContribution = ({block}) => {
   )
 }
 
+// statusProp is the shared status concept (declared in src/plugins/todo
+// or kernel — wherever it lives, its `defaultValue: 'open'` is the
+// global read fallback for any unset status field).
 export const todoPlugin: AppExtension = [
-  typesFacet.of({id: 'todo', properties: [statusProp], defaults: {[statusProp.name]: 'open'}}, {source: 'todo'}),
+  typesFacet.of({id: 'todo', properties: [statusProp]}, {source: 'todo'}),
   blockContentDecoratorsFacet.of(todoCheckboxDecorator, {source: 'todo'}),
   // optionally: header chip when overdue, click handler on the checkbox, etc.
 ]
@@ -846,7 +808,7 @@ export interface CommittedTxOutcome {
 
 The `Repo` commit pipeline ([src/data/repo.ts:664](src/data/repo.ts:664)) passes `this.propertySchemas` into the tx-engine alongside `this.processors`; the engine puts both on the result; `processorRunner.dispatch` builds each `ctx` with the bundle's `propertySchemas` rather than reading `repo.propertySchemas` afresh.
 
-This requires a public read access on `Repo` only for the tx-engine plumbing path (the engine sees `Repo` internals already). No public getter is needed for general consumers; the type-system orchestration paths (`addType`, `resolveDefault`) read the same private field directly. (If a future consumer outside `Repo` needs schemas, add a getter then — keeping the API surface small for now.)
+This requires a public read access on `Repo` only for the tx-engine plumbing path (the engine sees `Repo` internals already). No public getter is needed for general consumers; the type-system orchestration paths (`addType`, `addTypeInTx`) read the same private field directly. (If a future consumer outside `Repo` needs schemas, add a getter then — keeping the API surface small for now.)
 
 Same snapshotting rule applies to `types` if a processor ever needs the type registry — wire it through `CommittedTxOutcome.types` at the same time. Currently no processor needs it; `parseReferences` only looks at `propertySchemas` to detect ref codecs.
 
@@ -948,7 +910,7 @@ const TAG_TO_TYPE: Record<string, { types: string[]; appOwnedInit: Record<string
 ```
 
 When a Roam block carries a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer is already inside a `repo.tx` chunk (the existing planning + apply pipeline does this around `upsertImportedBlock`). Within that same tx:
-1. Calls `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit)` — the tx-aware variant per §3a so the type tag, defaults, and any setup writes share atomicity with the row write. Passes the source's app-owned initial values as the fourth arg; per the addType contract these win over the type's `defaults` on first add (so `DONE` correctly initialises `status='done'` instead of being clobbered by `todo.defaults.status='open'`), and stay init-only-if-missing relative to existing block state (so reimport doesn't overwrite a locally completed task). Calling the public `repo.addType` from here would open a separate tx and break atomicity with `upsertImportedBlock`.
+1. Calls `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit)` — the tx-aware variant per §3a so the type tag, init writes, and any `setup` share atomicity with the row write. Passes the source's app-owned initial values as the fourth arg; per the addType contract these are init-if-missing (so `DONE` initialises `status='done'` on a previously-untyped block, but doesn't overwrite a user's local `'in-progress'`). Read fallback: blocks with no `status` set read `statusProp.defaultValue = 'open'` directly via `block.get`/`useProperty`, no overlay needed. Calling the public `repo.addType` from here would open a separate tx and break atomicity with `upsertImportedBlock`.
 2. Refreshes **source-mirror** fields (`roam:todo-state`) freely via `tx.update` in the same tx.
 
 The marker is stripped from `content` since the type now captures the meaning; the source-mirror field preserves what Roam said for round-trip and conflict-resolution purposes. Per the §3 hybrid naming rule, `status` is the shared-vocabulary field (flat name) and `roam:todo-state` is the namespaced source-mirror.
@@ -995,27 +957,26 @@ Each phase is independently shippable and testable.
 3. Add pure helpers `getBlockTypes` / `hasBlockType` / `addBlockTypeToProperties` per §3-pure to [src/data/properties.ts](src/data/properties.ts).
 4. Add the `block_types` table + triggers + backfill marker per §2a, in the kernel local-schema (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) shape).
 5. Rewrite `SELECT_BLOCKS_BY_TYPE_SQL` and `findExtensionBlocksQuery` to join `block_types` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33), [:384](src/data/internals/kernelQueries.ts:384)). Drop `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)).
-6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and `propertySchemas` registries on `Repo`. These are the registries `repo.addType` / `block.get` overlay / `ProcessorCtx` propagation depend on.
+6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and `propertySchemas` registries on `Repo`. These are what `repo.addType` reads (for `setup` lookup and `initialValues` codec encoding) and what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a). Reads use `PropertySchema.defaultValue` directly and don't need either registry.
 7. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
-8. Add `repo.addType(blockId, typeId)` / `repo.removeType(blockId, typeId)` / `repo.toggleType(blockId, typeId)` / `repo.setBlockTypes(blockId, typeIds)` as `Repo` methods (not registered mutators — see §3a). `addType` runs `contribution.setup?.()` per §3a-setup after applying defaults.
+8. Add `repo.addType(blockId, typeId, initialValues?)` / `repo.addTypeInTx(tx, ...)` / `repo.removeType` / `repo.removeTypeInTx` / `repo.toggleType` / `repo.setBlockTypes` / `repo.snapshotTypeRegistries` as `Repo` methods (not registered mutators — see §3a). `addType` runs `contribution.setup?.()` per §3a-setup on first transitions; init-if-missing materialisation runs against `initialValues` only (no per-type defaults).
 9. Add `Block` facade sugar: `block.types` getter, `block.hasType(id)`, `block.addType(id)`, `block.removeType(id)`, `block.toggleType(id)` ([src/data/block.ts](src/data/block.ts)). Use `hasType` at every type-decoration call site introduced in later phases.
-10. Add `Repo.resolveDefault(types, schema)` per §3a-bis and update `block.get` to call it for the unset-property fallback (first-applicable-type default wins, falls back to `schema.defaultValue`). `peekProperty` is unchanged. The typed-query primitive in Phase 4 stays storage-only.
-11. Update `useProperty` ([src/hooks/block.ts:252](src/hooks/block.ts:252)) to use the overlay via `repo.resolveDefault(types, schema)`. Add `useAppRuntime()` as a hook dependency so the selector closure rebuilds when the runtime swaps (per §3a-bis reactivity caveat — without this, retained-registry updates wouldn't invalidate `useHandle`). Add a parallel `usePeekProperty` returning `T | undefined` for raw-storage reads (no overlay, no runtime dep). Audit `useUIStateProperty`/`useRootUIStateProperty`/`useUserPrefsProperty` for accidental name collisions with type-contributed props.
-12. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
-13. Update every `typeProp` write site to use the type-system orchestration path — never prewrite `typesProp` and then call `addType` (per §3-pure: `addType` still materialises defaults on re-call, but `setup` only fires on actual membership transitions, so prewriting silently bypasses any template/wiring the type defines). Pick the right entry point for the calling context:
+10. `block.get` and `useProperty` ship unchanged in semantics from current behaviour: unset properties return `schema.defaultValue` via the existing fallback. No type-aware overlay, no `Repo.resolveDefault` helper, no `usePeekProperty` parallel — schema defaults are sufficient since type contributions don't carry per-type defaults.
+11. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
+12. Update every `typeProp` write site to use the type-system orchestration path — never prewrite `typesProp` and then call `addType` (per §3-pure: `addType` still runs init-if-missing materialisation on re-call, but `setup` only fires on actual membership transitions, so prewriting silently bypasses any template/wiring the type defines). Pick the right entry point for the calling context:
     - **Outside an existing tx** (typical app code, command palette, agent runtime) → `repo.addType(blockId, typeId, initialValues?)`. Opens its own tx.
-    - **Inside an existing tx** (Roam importer chunks around `upsertImportedBlock`, plugin code orchestrating multi-step writes) → `repo.addTypeInTx(tx, blockId, typeId, initialValues?)`. Shares atomicity with the surrounding row writes; calling the public `repo.addType` from inside another tx would either fail against the active writer or open a separate tx and lose the atomicity guarantee.
-    Bulk paths like the Roam importer go through `addTypeInTx` per row inside their existing chunked tx, passing source-specific app-owned values via `initialValues`. `addBlockTypeToProperties` is reserved for raw-`BlockData` callers (tests, processor snapshot rewrites, importer **plan** rows that have no runtime access) and never composes with `addType` / `addTypeInTx`.
-14. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]` (or use `block.hasType`/`block.types` once #9 lands; or `hasBlockType(data, ...)` for raw `BlockData`). Greps: `grep -rn "typeProp" src/`.
-15. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
+    - **Inside an existing tx** (Roam importer chunks around `upsertImportedBlock`, plugin code orchestrating multi-step writes) → `repo.addTypeInTx(tx, blockId, typeId, initialValues?, snapshot?)`. Shares atomicity with the surrounding row writes; calling the public `repo.addType` from inside another tx would either fail against the active writer or open a separate tx and lose the atomicity guarantee.
+    Bulk paths like the Roam importer go through `addTypeInTx` per row inside their existing chunked tx, passing source-specific app-owned values via `initialValues` and a captured `repo.snapshotTypeRegistries()` for cross-row consistency. `addBlockTypeToProperties` is reserved for raw-`BlockData` callers (tests, processor snapshot rewrites, importer **plan** rows that have no runtime access) and never composes with `addType` / `addTypeInTx`.
+13. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]` (or use `block.hasType`/`block.types` once #9 lands; or `hasBlockType(data, ...)` for raw `BlockData`). Greps: `grep -rn "typeProp" src/`.
+14. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
 
-**Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join. `repo.addType('some-existing-block', 'todo')` materialises the type's defaults and runs its `setup` (if any) atomically.
+**Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join. `repo.addType('some-existing-block', 'todo', {status: 'open'})` writes `status='open'` if unset, runs `setup` (if any) atomically; a re-call with the type already present skips both.
 
 ### Phase 2 — type-driven UI: renderer dispatch + property-panel field discovery
 
 1. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) to consult `typesFacet` per §4b.
 2. Add `priority` to a few existing kernel type contributions so collisions resolve deterministically.
-3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `repo.resolveDefault(block.types, schema)` so type-conditional defaults appear in the panel (matches §3a-bis).
+3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `schema.defaultValue` (the same global default `block.get` returns).
 
 **Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch. Tagging a block with a type whose contribution declares properties surfaces those property slots in the panel even when unset, and editing one writes the property.
 
@@ -1043,7 +1004,7 @@ Each phase is independently shippable and testable.
 ### Phase 5 — Roam todo import (downstream consumer)
 
 1. Add `TAG_TO_TYPE` map to importer per the Migration section's expanded shape (separate `appOwnedInit` from `sourceMirror`).
-2. Add `'todo'` type contribution (its own small plugin, `src/plugins/todo/`) with `statusProp` (shared-vocab, flat name), a checkbox decorator via `blockContentDecoratorsFacet` gated on `block.hasType('todo')`, and `defaults: {[statusProp.name]: 'open'}` so freshly-tagged blocks default open.
+2. Add `'todo'` type contribution (its own small plugin, `src/plugins/todo/`) with `statusProp` (shared-vocab, flat name) listed in `properties[]`, and a checkbox decorator via `blockContentDecoratorsFacet` gated on `block.hasType('todo')`. The default `'open'` lives on `statusProp.defaultValue` (the schema's global default), not on the type contribution. Reads of unset `status` return `'open'` via the existing `block.get`/`useProperty` schema-default path.
 3. Add namespaced `roam:todo-state` schema in the importer (or a `roam` plugin) for the source-mirror field.
 4. **Change `upsertImportedBlock` ([src/utils/roamImport/import.ts:756](src/utils/roamImport/import.ts:756)) to merge properties on live-row hits, using explicit allowlists.** Today's path is "last-write-wins": on an existing row it `tx.update`s `content`/`properties`/`references` with the planned values, dropping any local edits. That destroys app-owned state on reimport *before* any subsequent type-application runs. The fix uses two explicit per-block allowlists carried alongside the plan, not namespaces as classifiers:
    - `appOwnedFields: Set<string>` — fields the user owns post-import. Computed as the union of `appOwnedInit` keys from every matching TAG_TO_TYPE entry for the block (typically `{ 'status' }` for a Roam todo block, empty for a plain page).
