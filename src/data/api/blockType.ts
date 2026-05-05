@@ -25,7 +25,11 @@ export interface TypeSetupContext {
 
 export type TypeSetup = (ctx: TypeSetupContext) => void | Promise<void>
 
+export interface TypeRegistrySnapshot {
+  readonly types: ReadonlyMap<string, TypeContribution>
+  readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+}
+
 /** Identity helper for definition-site inference. Registration still
  *  happens through `typesFacet.of(...)`. */
 export const defineBlockType = (def: TypeContribution): TypeContribution => def
-

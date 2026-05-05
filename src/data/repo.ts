@@ -28,6 +28,7 @@ import type {
   QueryRegistry,
   RepoTxOptions,
   TypeContribution,
+  TypeRegistrySnapshot,
   Tx,
   User,
 } from '@/data/api'
@@ -74,6 +75,7 @@ import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { SELECT_BLOCK_BY_ID_SQL } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
+import { getBlockTypes, typesProp } from './properties'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -790,6 +792,152 @@ export class Repo {
     )
     const newQueries = new Map(runtime.read(queriesFacet))
     this.swapQueries(newQueries)
+  }
+
+  snapshotTypeRegistries(): TypeRegistrySnapshot {
+    return {types: this._types, propertySchemas: this._propertySchemas}
+  }
+
+  private async _addTypeInTx(
+    tx: Tx,
+    types: ReadonlyMap<string, TypeContribution>,
+    propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+    blockId: string,
+    typeId: string,
+    initialValues: Readonly<Record<string, unknown>>,
+  ): Promise<void> {
+    const contribution = types.get(typeId)
+    if (contribution === undefined) {
+      throw new Error(
+        `[addType] type id ${JSON.stringify(typeId)} is not registered. ` +
+        'Register a TypeContribution through typesFacet before calling addType.',
+      )
+    }
+    const block = await tx.get(blockId)
+    if (!block) return
+
+    const current = getBlockTypes(block)
+    const wasNew = !current.includes(typeId)
+    const next: Record<string, unknown> = {...block.properties}
+    let propsChanged = false
+
+    if (wasNew) {
+      next[typesProp.name] = typesProp.codec.encode([...current, typeId])
+      propsChanged = true
+    }
+
+    for (const [name, value] of Object.entries(initialValues)) {
+      if (next[name] !== undefined) continue
+      const schema = propertySchemas.get(name)
+      if (schema === undefined) {
+        throw new Error(
+          `[addType] initialValues[${JSON.stringify(name)}] has no registered PropertySchema ` +
+          'in the merged registry.',
+        )
+      }
+      next[name] = schema.codec.encode(value)
+      propsChanged = true
+    }
+
+    if (propsChanged) {
+      await tx.update(blockId, {properties: next})
+    }
+    if (wasNew) {
+      await contribution.setup?.({tx, id: blockId, repo: this, types, propertySchemas})
+    }
+  }
+
+  private async _removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
+    const block = await tx.get(blockId)
+    if (!block) return
+    const current = getBlockTypes(block)
+    if (!current.includes(typeId)) return
+    const next = {
+      ...block.properties,
+      [typesProp.name]: typesProp.codec.encode(current.filter(t => t !== typeId)),
+    }
+    await tx.update(blockId, {properties: next})
+  }
+
+  async addType(
+    blockId: string,
+    typeId: string,
+    initialValues: Readonly<Record<string, unknown>> = {},
+  ): Promise<void> {
+    const {types, propertySchemas} = this.snapshotTypeRegistries()
+    await this.tx(async tx => {
+      await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues)
+    }, {scope: ChangeScope.BlockDefault, description: `addType ${typeId}`})
+  }
+
+  async addTypeInTx(
+    tx: Tx,
+    blockId: string,
+    typeId: string,
+    initialValues: Readonly<Record<string, unknown>> = {},
+    snapshot?: TypeRegistrySnapshot,
+  ): Promise<void> {
+    const types = snapshot?.types ?? this._types
+    const propertySchemas = snapshot?.propertySchemas ?? this._propertySchemas
+    await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues)
+  }
+
+  async removeType(blockId: string, typeId: string): Promise<void> {
+    await this.tx(async tx => {
+      await this._removeTypeInTx(tx, blockId, typeId)
+    }, {scope: ChangeScope.BlockDefault, description: `removeType ${typeId}`})
+  }
+
+  async removeTypeInTx(tx: Tx, blockId: string, typeId: string): Promise<void> {
+    await this._removeTypeInTx(tx, blockId, typeId)
+  }
+
+  async toggleType(blockId: string, typeId: string): Promise<void> {
+    const {types, propertySchemas} = this.snapshotTypeRegistries()
+    await this.tx(async tx => {
+      const block = await tx.get(blockId)
+      if (!block) return
+      if (getBlockTypes(block).includes(typeId)) {
+        await this._removeTypeInTx(tx, blockId, typeId)
+      } else {
+        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {})
+      }
+    }, {scope: ChangeScope.BlockDefault, description: `toggleType ${typeId}`})
+  }
+
+  async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
+    const desiredOrder = Array.from(new Set(typeIds))
+    const {types, propertySchemas} = this.snapshotTypeRegistries()
+    await this.tx(async tx => {
+      const block = await tx.get(blockId)
+      if (!block) return
+
+      const current = getBlockTypes(block)
+      const want = new Set(desiredOrder)
+      for (const typeId of current) {
+        if (!want.has(typeId)) await this._removeTypeInTx(tx, blockId, typeId)
+      }
+
+      const currentSet = new Set(current)
+      for (const typeId of desiredOrder) {
+        if (currentSet.has(typeId)) continue
+        await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, {})
+      }
+
+      const after = await tx.get(blockId)
+      if (!after) return
+      const stored = getBlockTypes(after)
+      const alreadyOrdered =
+        stored.length === desiredOrder.length &&
+        stored.every((typeId, index) => typeId === desiredOrder[index])
+      if (alreadyOrdered) return
+      await tx.update(blockId, {
+        properties: {
+          ...after.properties,
+          [typesProp.name]: typesProp.codec.encode(desiredOrder),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'setBlockTypes'})
   }
 
   /** Replace the query registry, bumping the per-name generation

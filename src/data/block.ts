@@ -33,6 +33,7 @@ import {
 } from '@/data/api'
 import type { Repo } from './repo'
 import type { LoaderHandle } from './internals/handleStore'
+import { getBlockTypes } from './properties'
 
 export class Block implements Handle<BlockData | null> {
   readonly id: string
@@ -173,6 +174,15 @@ export class Block implements Handle<BlockData | null> {
     return schema.codec.decode(stored)
   }
 
+  get types(): readonly string[] {
+    const data = this.data
+    return getBlockTypes(data)
+  }
+
+  hasType(typeId: string): boolean {
+    return this.types.includes(typeId)
+  }
+
   // ──── Tree relatives ────
 
   /** Reactive child-id list. Delegates to `repo.query.childIds({id})` —
@@ -216,6 +226,18 @@ export class Block implements Handle<BlockData | null> {
    *  `repo.mutate.setProperty({id, schema, value})`. */
   async set<T>(schema: PropertySchema<T>, value: T): Promise<void> {
     await this.repo.mutate.setProperty({id: this.id, schema, value})
+  }
+
+  async addType(typeId: string): Promise<void> {
+    await this.repo.addType(this.id, typeId)
+  }
+
+  async removeType(typeId: string): Promise<void> {
+    await this.repo.removeType(this.id, typeId)
+  }
+
+  async toggleType(typeId: string): Promise<void> {
+    await this.repo.toggleType(this.id, typeId)
   }
 
   /** Set the block's content. */
