@@ -124,34 +124,62 @@ const directSchemas = runtime.read(propertySchemasFacet)  // existing
 const types = runtime.read(typesFacet)                    // existing
 
 const mergedSchemas = new Map<string, AnyPropertySchema>()
-// Direct registrations land first.
-for (const [name, schema] of directSchemas) mergedSchemas.set(name, schema)
-// Type-lifted schemas land second, last-wins by lift order (which is
-// types-registration order; deterministic).
+// Type-lifted schemas first — these are the type's "default
+// understanding" of its fields. Last-wins among lifted, by
+// types-registration order.
 for (const t of types.values()) {
   for (const schema of t.properties ?? []) {
     const existing = mergedSchemas.get(schema.name)
     if (existing && existing !== schema) {
       console.warn(
         `[schema-lift] type "${t.id}" registers schema "${schema.name}" ` +
-        `that conflicts with an earlier registration; last-wins per facet convention`,
+        `that conflicts with an earlier type-lifted registration; last-wins per facet convention`,
       )
     }
     mergedSchemas.set(schema.name, schema)
   }
 }
+// Direct registrations second — these are the explicit "shared
+// vocabulary" path per the §3 hybrid rule, and they take precedence
+// over type-lifted entries. A plugin overrides a kernel type's
+// schema by registering directly after; the existing
+// "register-after-to-override" pattern works uniformly for direct
+// registrations regardless of source.
+for (const [name, schema] of directSchemas) {
+  const existing = mergedSchemas.get(name)
+  if (existing && existing !== schema) {
+    console.warn(
+      `[schema-lift] direct propertySchemasFacet registration "${name}" ` +
+      `replaces an earlier (type-lifted or direct) registration; last-wins per facet convention`,
+    )
+  }
+  mergedSchemas.set(name, schema)
+}
 this.propertySchemas = mergedSchemas
 ```
 
-Three properties this gives:
+Properties this gives:
 
 1. **Object-identity dedup.** The most common case: shared schemas declared once in a kernel/shared module and imported by multiple type contributions. `todo` and `task` both list the imported `statusProp` — same object, no warn, one registry entry.
-2. **Last-wins-with-warn on real conflicts.** Two contributions registering different `statusProp` objects under the same name follow the same convention as every other facet ([src/data/facets.ts:121](src/data/facets.ts:121)). That's the kernel's existing override mechanism — plugins replace kernel schemas by registering after; we don't break that here.
-3. **Direct-vs-lifted ordering.** Direct `propertySchemasFacet.of(...)` registrations are conventionally treated as "shared infrastructure," type-lifted schemas as "type-owned." Putting direct first means a type that lists a schema also registered directly *replaces* the direct entry (last-wins) — which is what you want when the type wants its own variant. Reverse the order if the desired semantic is "direct takes precedence over type-lifted"; document either way at the implementation site.
+2. **Last-wins-with-warn on real conflicts.** Two contributions registering different `statusProp` objects under the same name follow the same convention as every other facet ([src/data/facets.ts:121](src/data/facets.ts:121)).
+3. **Direct registrations always win over type-lifted ones.** This is the deliberate ordering choice. The §3 hybrid rule says shared vocabulary lives in `propertySchemasFacet` directly; type contributions list shared schemas to declare *membership*, but the canonical registration is the direct one. So direct second / wins, type-lifted first / loses. This preserves the existing "register after to override" pattern uniformly for any plugin that wants to replace a kernel schema — whether the kernel registered it directly or via a type contribution, a plugin's `propertySchemasFacet.of(...)` after the kernel always wins.
+4. **No cross-source ordering between two type-lifted entries and a direct registration interleaved.** The merge runs lifted-first / direct-second as two passes, not in unified registration order across both facets — that would require runtime API changes beyond v1's scope. In practice this only differs from unified ordering when a plugin registers BOTH a type-lifted schema and a direct schema for the same name in a specific interleaved order with kernel registrations; the §3 hybrid rule means this shouldn't happen in well-behaved code. If it does, the rule is "direct wins" regardless of relative load order.
 
 The shape applies whether `properties[]` carries 1 schema or 30. A type contribution that lists no schemas (an `extension` type with all its data in `roam:*`-style namespaced source-mirror fields) lifts nothing — fully compatible with the §3 hybrid rule.
 
-A separate strict-mode-with-`overrides:` target mechanism (declared override of a named earlier registration; throws if target is missing; replaces silently if present) is a deferred follow-up — see follow-ups doc. v1 ships the lift + last-wins-with-warn that already works for every other facet.
+A separate strict-mode-with-`overrides:` target mechanism (declared override of a named earlier registration; throws if target is missing; replaces silently if present) is a deferred follow-up — see follow-ups doc. It would also bring full unified ordering (declared-target overrides are explicit, no implicit ordering needed). v1 ships the lift + last-wins-with-warn + lifted-first/direct-second pass order described above.
+
+#### 1a-public. The merged map is the public schema registry
+
+Consumers outside `Repo` — `BlockProperties`, the typed-query primitive, plugin code reading schemas — must read the **merged** map, not `propertySchemasFacet` directly, otherwise type-lifted-only schemas (anything contributed exclusively through a type's `properties[]`) won't be visible.
+
+Concretely:
+
+- `Repo` exposes `get propertySchemas(): ReadonlyMap<string, AnyPropertySchema>` — a read-only public getter over the same map populated by the merge above.
+- React consumers go through a small hook `usePropertySchemas()` returning `useRepo().propertySchemas` (or equivalently a `runtime.derived(...)` shape if the codebase grows a derived-facet primitive later — until then, repo getter + hook is the path).
+- `propertySchemasFacet` itself is **not** read directly by app code outside `Repo` after this lands. Audit and migrate every `runtime.read(propertySchemasFacet)` call site to read the merged map. The grep target is small today: [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) is the only direct consumer; processor code reads via `ProcessorCtx.propertySchemas` (already snapshotted from the merged map per §7a); the typed-query primitive reads via `Repo.propertySchemas`. Phase 1's checklist enforces this audit.
+
+The lift mechanism itself stays internal to the runtime build — `propertySchemasFacet` doesn't change shape, `typesFacet` doesn't change shape; the merge is a two-input function in `setFacetRuntime`. The public surface is just the getter.
 
 ### 2. Multi-type: `typesProp` replaces `typeProp` as the primary discriminator
 
@@ -929,7 +957,7 @@ Existing rows (PK collisions on the new schema are impossible since old rows wer
 The existing post-commit processor ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) currently watches `{ kind: 'field', table: 'blocks', fields: ['content'] }` and rewrites `references[]` from parsed content. Extend it:
 
 - Watch list expands to `fields: ['content', 'properties']`.
-- After parsing content refs (existing path), iterate the block's `properties`. For each entry whose `PropertySchema.codec` is a ref-codec or ref-list codec (looked up via `propertySchemasFacet`), decode and emit one `BlockReference { id, alias: id, sourceField: propName }` per ref. **Each property is decoded inside its own try/catch.** Stored values can be malformed for legitimate reasons — plugin upgraded the codec shape, ad-hoc edits in dev tools, sync from an older client that wrote a different encoding. A bad decode logs a warning, skips that one property, and the projector continues with the rest. Without per-property isolation, one corrupt ref-typed property would poison the whole `parseReferences` run for that block — content refs and other valid property refs would silently disappear from `references_json` until the data is fixed. v1 doesn't try to preserve prior `block_references` entries for the bad field; the field's refs simply go missing in the index until the next successful decode (the next `parseReferences` run after the property is fixed).
+- After parsing content refs (existing path), iterate the block's `properties`. For each entry whose `PropertySchema.codec` is a ref-codec or ref-list codec (looked up via `ctx.propertySchemas` — the snapshot of the **merged** schemas map per §7a, populated by the §1a lift; not `propertySchemasFacet` directly), decode and emit one `BlockReference { id, alias: id, sourceField: propName }` per ref. **Each property is decoded inside its own try/catch.** Stored values can be malformed for legitimate reasons — plugin upgraded the codec shape, ad-hoc edits in dev tools, sync from an older client that wrote a different encoding. A bad decode logs a warning, skips that one property, and the projector continues with the rest. Without per-property isolation, one corrupt ref-typed property would poison the whole `parseReferences` run for that block — content refs and other valid property refs would silently disappear from `references_json` until the data is fixed. v1 doesn't try to preserve prior `block_references` entries for the bad field; the field's refs simply go missing in the index until the next successful decode (the next `parseReferences` run after the property is fixed).
 - Concatenate content-derived + property-derived into the new `references[]` and write through the same `tx.update(sourceId, {references}, {skipMetadata: true})`. The triggers from §6b copy `sourceField` into `block_references`.
 
 Ordering / dedupe: identical `(id, sourceField)` pairs are deduped; content refs (no `sourceField`) and property refs (with `sourceField`) coexist for the same target — they represent different relationships.
@@ -1033,7 +1061,7 @@ interface TypedQuery {
                   AND bt.workspace_id = b.workspace_id
                   AND bt.type IN (?, ?, ?))
   ```
-- `where` on a property → compile each `(name, decodedValue)` entry to `json_extract(properties_json, ?) = ?` and bind two parameters: the **JSON path** (computed safely — see below) and the **encoded** value run through the matching `PropertySchema.codec`. **Don't string-interpolate the property name into a `$.<name>` literal** — property names with `:`, `-`, or `.` (e.g. `system:collapsed`, `daily-note`) break naive interpolation. Use SQLite's path syntax: `'$.' || quote(name)` doesn't work directly, so build the path in JS with proper escaping (wrap in `"..."` and escape inner quotes — SQLite's JSON path accepts `$."weird:name"`). Look up the schema in `propertySchemasFacet`; if no schema is registered for that name, refuse the query with a clear error rather than guessing the codec — the caller is asking for typed-equality, ad-hoc schemas have `unsafeIdentity` codec which is meaningless to compare.
+- `where` on a property → compile each `(name, decodedValue)` entry to `json_extract(properties_json, ?) = ?` and bind two parameters: the **JSON path** (computed safely — see below) and the **encoded** value run through the matching `PropertySchema.codec`. **Don't string-interpolate the property name into a `$.<name>` literal** — property names with `:`, `-`, or `.` (e.g. `system:collapsed`, `daily-note`) break naive interpolation. Use SQLite's path syntax: `'$.' || quote(name)` doesn't work directly, so build the path in JS with proper escaping (wrap in `"..."` and escape inner quotes — SQLite's JSON path accepts `$."weird:name"`). Look up the schema in **the merged `repo.propertySchemas` map** (§1a-public — not `propertySchemasFacet` directly, otherwise type-lifted-only schemas won't be found); if no schema is registered for that name, refuse the query with a clear error rather than guessing the codec — the caller is asking for typed-equality, ad-hoc schemas have `unsafeIdentity` codec which is meaningless to compare.
 
   **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `kind` is `list`, `object`, `ref`, or `refList`. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
 
@@ -1143,7 +1171,7 @@ Each phase is independently shippable and testable.
 3. Add pure helpers `getBlockTypes` / `hasBlockType` / `addBlockTypeToProperties` per §3-pure to [src/data/properties.ts](src/data/properties.ts).
 4. Add the `block_types` table + triggers + backfill marker per §2a, in the kernel local-schema (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) shape).
 5. Rewrite `SELECT_BLOCKS_BY_TYPE_SQL` and `findExtensionBlocksQuery` to join `block_types` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33), [:384](src/data/internals/kernelQueries.ts:384)). Drop `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)).
-6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and the **merged `propertySchemas`** map (§1a schema-lift) on `Repo`. The merge runs `mergeLiftedSchemas(runtime.read(propertySchemasFacet), this.types)` — direct registrations first, type-lifted second, last-wins-with-warn on conflicts, object-identity dedup on multi-type sharing. This merged map is what `repo.addType` reads (for `setup` lookup and `initialValues` codec encoding), what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), what the property panel reads in §3c, and what the typed-query primitive reads in §8. Reads on the read path still use `PropertySchema.defaultValue` directly and don't need either registry.
+6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and the **merged `propertySchemas`** map (§1a schema-lift) on `Repo`. The merge runs the two-pass shape from §1a — type-lifted first, direct second, last-wins-with-warn on conflicts, object-identity dedup. Direct registrations end up winning over type-lifted entries with the same name, preserving the kernel's "register-after-to-override" pattern uniformly across sources. Expose a public `get propertySchemas()` getter on `Repo` and a `usePropertySchemas()` hook (§1a-public). **Audit and migrate** every `runtime.read(propertySchemasFacet)` call site to read the merged map: today the only non-`Repo` consumer is [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx); processor consumers already read from `ProcessorCtx.propertySchemas` which is sourced from the merged map per §7a. This merged map is what `repo.addType` reads (for `setup` lookup and `initialValues` codec encoding), what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), what the property panel reads in §3c, and what the typed-query primitive reads in §8. Reads on the read path still use `PropertySchema.defaultValue` directly and don't need either registry.
 7. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
 8. Add `repo.addType(blockId, typeId, initialValues?)` / `repo.addTypeInTx(tx, ...)` / `repo.removeType` / `repo.removeTypeInTx` / `repo.toggleType` / `repo.setBlockTypes` / `repo.snapshotTypeRegistries` as `Repo` methods (not registered mutators — see §3a). `addType` runs `contribution.setup?.()` per §3a-setup on first transitions; init-if-missing materialisation runs against `initialValues` only (no per-type defaults).
 9. Add `Block` facade sugar: `block.types` getter, `block.hasType(id)`, `block.addType(id)`, `block.removeType(id)`, `block.toggleType(id)` ([src/data/block.ts](src/data/block.ts)). `hasType` is a snapshot read; use it inside reactive contexts (component bodies that subscribe to `useProperty(block, typesProp)` separately, or `canRender` predicates re-evaluated by `useRenderer`). Don't use it as the gate inside non-reactive facet contribution functions per §4a's reactivity gotcha.
@@ -1207,7 +1235,7 @@ Each phase is independently shippable and testable.
    The implementation splits `upsertImportedBlock` into "create new" (current path) and "merge into existing"; the merge takes `(existing, planned, appOwnedFields, sourceMirrorPrefixes, otherSourceFields)` and computes `sourceFields` from the union above before applying the per-key rules. Per-importer config carries the source-mirror prefix list (Roam: `['roam:']`, Notion: `['notion:']`) so the same shape generalises. **`content` and `references`** still overwrite wholesale (Roam content is source-authoritative; references are recomputed from content by the backlinks processor anyway).
 5. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer is already inside a `repo.tx` chunk (the existing planning + apply pipeline does this around `upsertImportedBlock`). Within that same tx:
    - Capture a registry snapshot once via `repo.snapshotTypeRegistries()` *before* opening the chunk's tx, then thread it through every per-row call: `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit, snapshot)`. This pins the type registry across all rows in the chunk so a `setFacetRuntime` rebuild mid-import doesn't leave half the chunk on the old contributions and the rest on the new — see §3a `TypeRegistrySnapshot` for the rationale. The tx-aware variant shares atomicity with the row write; calling the public `repo.addType` would open a separate tx and break that. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
-   - Write the source-mirror field (`roam:todo-state`) freely via `tx.update` (always-overwrite, in the same tx).
+   - Write the source-mirror field via **`tx.setProperty(blockId, roamTodoStateProp, value)`** (per-property write, in the same tx). Always-overwrite is the source-mirror semantic, but **do NOT use `tx.update({properties: {...}})`** with just the source-mirror keys — that replaces the whole properties map and would clobber the `typesProp` / `appOwnedInit` writes `addTypeInTx` just made. If a future caller needs to write multiple source-mirror keys atomically and `tx.setProperty` looping is awkward, read with `tx.get`, merge the source-mirror keys into the read-back `properties`, then `tx.update`.
    - Strip the marker from `content`.
 
 **Acceptance:** importing a Roam graph with `#TODO`/`#DONE` blocks produces blocks with `types: ['todo']`, matching `status`, and `roam:todo-state` reflecting the source. Surfaced via the todo checkbox decorator and queryable via `useBlockQuery({types: ['todo'], where: {status: 'open'}})`. **Reimport-after-local-change preserves user state**: locally completing a task (`status='done'`) and reimporting the original Roam export leaves `status='done'` untouched (the upsert merge preserves the local app-owned value) while `roam:todo-state` refreshes to `'TODO'` (source-mirror semantics). Verified against the importer write path, not just the `addType` path.
