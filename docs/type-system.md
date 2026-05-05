@@ -38,7 +38,12 @@ export interface TypeContribution {
    *  `PropertySchema<string>`. See [src/data/api/propertySchema.ts:90](src/data/api/propertySchema.ts:90). */
   readonly properties?: ReadonlyArray<AnyPropertySchema>
   /** Renderer id (looked up against blockRenderersFacet) used when a block
-   *  is rendered solely by virtue of having this type. */
+   *  is rendered *solely* by virtue of having this type — i.e. the block
+   *  IS this thing (video-player, panel, type-definition). The common
+   *  case for type-driven UI is *decoration*, not full-renderer
+   *  replacement (todo checkbox, due-date chip, status badge); see §4
+   *  for the type/decoration split. Leave undefined unless the type
+   *  takes over the whole block presentation. */
   readonly defaultRenderer?: string
   /** Type-conditional defaults. Applied by the `addType(block, typeId)`
    *  mutator (§3a) — both at instance creation *and* whenever a type is
@@ -166,14 +171,48 @@ Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag"
 
 A *read-time overlay* (defaults synthesised on read when a block has the type but lacks the property) is the alternative — but it diverges queries from storage and complicates the typed-query backing in §8. Prefer the materialise-on-add approach.
 
-### 4. Renderer dispatch — type-driven, `rendererProp` overrides
+### 4. Type-driven UI: decorations are the common case, full-renderer replacement is the exception
 
-Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) so the resolution order becomes:
+Most type-driven UI is *decoration* layered on the existing block content rendering — a `todo` adds a checkbox + strikethrough-when-done, a `priority=high` block adds a colored chip, a `due` field adds a date pill. Only a few types want to take over the entire block presentation (`video-player`, `panel`, `type-definition`). The design splits cleanly along that axis.
+
+#### 4a. Decorations, headers, click handlers — via existing facets with a type-guard
+
+The block-interaction facets in [src/extensions/blockInteraction.ts](src/extensions/blockInteraction.ts) (`blockContentDecoratorsFacet`, `blockHeaderFacet`, `blockChildrenFooterFacet`, `blockClickHandlersFacet`, `blockContentSurfacePropsFacet`, `blockLayoutFacet`) already have the right shape: each contribution is a function `(BlockResolveContext) => Contribution | null | undefined | false`, and returning a falsy value opts the block out. `BlockResolveContext` carries `block: Block`, so a type-bound contribution simply reads `typesProp` and bails when its type isn't present. **No new slot on `TypeContribution` is needed.**
+
+The convention for type-driven decoration: a type contribution registers its decorators/headers/etc. into the existing facets via the same `AppExtension` array as everything else, gating each on `block.peekProperty(typesProp)?.includes(typeId)`. Example for `todo`:
+
+```ts
+const todoCheckboxDecorator: BlockContentDecoratorContribution = ({block}) => {
+  if (!block.peekProperty(typesProp)?.includes('todo')) return null
+  return (Inner) => (props) => (
+    <>
+      <TodoCheckbox blockId={props.block.id} />
+      <Inner {...props} />
+    </>
+  )
+}
+
+export const todoPlugin: AppExtension = [
+  typesFacet.of({id: 'todo', properties: [statusProp], defaults: {[statusProp.name]: 'open'}}, {source: 'todo'}),
+  blockContentDecoratorsFacet.of(todoCheckboxDecorator, {source: 'todo'}),
+  // optionally: header chip when overdue, click handler on the checkbox, etc.
+]
+```
+
+This composes naturally under multi-type: each contributing type's decorations stack (all opt-in returns are collected and applied in contribution order), and there's no priority arbitration to do.
+
+A small ergonomics improvement worth considering once a few types ship: a helper `whenHasType(typeId, contribution)` that does the guard. Don't pre-build it; extract from real call sites.
+
+#### 4b. Full-renderer replacement — for "this block IS this type"
+
+For the rare types that want to replace the entire renderer (video-player, panel, type-definition), `TypeContribution.defaultRenderer` drives dispatch. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) so the resolution order becomes:
 
 1. `rendererProp` set on the block → use that id verbatim.
-2. Else read `typesProp`; for each id, look up the `TypeContribution` in `typesFacet`, collect each `defaultRenderer` with its `priority`. Highest-priority wins.
+2. Else read `typesProp`; for each id, look up the `TypeContribution` in `typesFacet`, collect each `defaultRenderer` with its `priority`. Highest-priority wins. Most types contribute no `defaultRenderer` and don't enter the contest.
 3. Else fall through to the existing `canRender` / `priority` dynamic-dispatch path on `blockRenderersFacet`.
 4. Else default renderer.
+
+Multi-type composition concern is restricted to this path: when two types both claim a `defaultRenderer`, the higher `priority` wins. Avoidable in practice — most types should contribute decorations, leaving renderer-replacement to types where the block genuinely *is* the thing.
 
 Existing `aliases` on `RendererContribution` continues to work for renderer-id resolution (it's about the renderer registry, not types).
 
