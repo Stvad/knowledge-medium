@@ -174,7 +174,35 @@ describe('getOrCreateDailyNote', () => {
     const journalId = journalBlockId(WS)
     await env.repo.load(journalId, {children: true})
     const childIds = await env.repo.block(journalId).childIds.load()
-    expect(childIds).toEqual(expect.arrayContaining([a.id, b.id]))
+    expect(childIds).toEqual([b.id, a.id])
+  })
+
+  it('rekeys existing daily notes into reverse chronology when reopened', async () => {
+    const journal = await getOrCreateJournalBlock(env.repo, WS)
+    const olderId = dailyNoteBlockId(WS, '2026-04-28')
+    const newerId = dailyNoteBlockId(WS, '2026-04-29')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: olderId,
+        workspaceId: WS,
+        parentId: journal.id,
+        orderKey: '2026-04-28',
+        content: 'April 28th, 2026',
+      })
+      await tx.create({
+        id: newerId,
+        workspaceId: WS,
+        parentId: journal.id,
+        orderKey: '2026-04-29',
+        content: 'April 29th, 2026',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
+    await getOrCreateDailyNote(env.repo, WS, '2026-04-29')
+
+    const childIds = await env.repo.block(journal.id).childIds.load()
+    expect(childIds).toEqual([newerId, olderId])
   })
 
   it('resurrects a soft-deleted daily note and re-parents under the journal', async () => {

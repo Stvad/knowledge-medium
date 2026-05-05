@@ -147,6 +147,20 @@ describe('backlinksDataExtension query', () => {
     expect(out.map(r => r.id).sort()).toEqual(['src1', 'src2'])
   })
 
+  it('orders linked references by newest-created source first', async () => {
+    await create({id: 'target'})
+    await create({id: 'src-old', references: [{id: 'target', alias: 't'}]})
+    await create({id: 'src-new', references: [{id: 'target', alias: 't'}]})
+    await env.repo.tx(tx => tx.update('src-old', {content: 'edited later'}), {
+      scope: ChangeScope.BlockDefault,
+    })
+
+    const out = asBlocks(
+      await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
+    )
+    expect(out.map(row => row.id)).toEqual(['src-new', 'src-old'])
+  })
+
   it('excludes self-reference', async () => {
     await create({id: 'self', references: [{id: 'self', alias: 'self'}]})
     const out = asBlocks(
@@ -202,6 +216,30 @@ describe('backlinksDataExtension query', () => {
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['src1'])
+  })
+
+  it('keeps newest-created ordering when backlinks are filtered', async () => {
+    await create({id: 'target'})
+    await create({id: 'tag'})
+    await create({
+      id: 'src-old',
+      references: [{id: 'target', alias: 'T'}, {id: 'tag', alias: 'Tag'}],
+    })
+    await create({
+      id: 'src-new',
+      references: [{id: 'target', alias: 'T'}, {id: 'tag', alias: 'Tag'}],
+    })
+    await env.repo.tx(tx => tx.update('src-old', {content: 'edited later'}), {
+      scope: ChangeScope.BlockDefault,
+    })
+
+    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      filter: {includeIds: ['tag']},
+    }).load())
+
+    expect(out.map(row => row.id)).toEqual(['src-new', 'src-old'])
   })
 
   it('filters backlinks by references on ancestor blocks', async () => {

@@ -41,9 +41,7 @@ const parseIsoParts = (iso: string): {year: number, month: number, day: number} 
 }
 
 const dailyNoteCreatedAt = (iso: string): number => {
-  // Stable across clients: midnight UTC of the wall-clock day. Keeps
-  // chronological sort under the journal deterministic regardless of
-  // who created the row first or what their local TZ is.
+  // Stable across clients: midnight UTC of the wall-clock day.
   const ms = Date.parse(`${iso}T00:00:00Z`)
   if (Number.isNaN(ms)) {
     throw new Error(`Invalid ISO date for daily note: ${iso}`)
@@ -104,13 +102,18 @@ export const getOrCreateJournalBlock = async (
   return repo.block(id)
 }
 
-/** Order key under the journal page. Using the ISO date directly is
- *  deterministic across clients (no need for `dailyNoteCreatedAt`
- *  trickery on creation timestamps) and sorts chronologically by
- *  string compare. Each daily note has a unique date, so there's
- *  never a collision; if a future caller wants to insert *between*
- *  daily notes they can compute a fractional key from this base. */
-const dailyNoteOrderKey = (iso: string): string => iso
+/** Order key under the journal page. The tree uses normal ascending
+ *  `(order_key, id)` ordering, so daily notes encode the date as its
+ *  lexical complement: newer ISO dates sort before older ISO dates
+ *  without a journal-specific query sort. Each daily note has a unique
+ *  date, so there's never a collision. */
+const dailyNoteOrderKey = (iso: string): string => {
+  const {year, month, day} = parseIsoParts(iso)
+  const reverseYear = String(9999 - year).padStart(4, '0')
+  const reverseMonth = String(12 - month).padStart(2, '0')
+  const reverseDay = String(31 - day).padStart(2, '0')
+  return `${reverseYear}-${reverseMonth}-${reverseDay}`
+}
 
 /** Get-or-create today's daily note. Two clients calling concurrently
  *  with the same (workspaceId, iso) write to the same row, so the
@@ -127,12 +130,25 @@ export const getOrCreateDailyNote = async (
   iso: string,
 ): Promise<Block> => {
   const id = dailyNoteBlockId(workspaceId, iso)
+  const orderKey = dailyNoteOrderKey(iso)
   const live = await repo.load(id)
-  if (live && !live.deleted) return repo.block(id)
+  if (live && !live.deleted) {
+    if (live.parentId === journalBlockId(workspaceId) && live.orderKey === orderKey) {
+      return repo.block(id)
+    }
+    const journal = await getOrCreateJournalBlock(repo, workspaceId)
+    await repo.tx(async tx => {
+      const current = await tx.get(id)
+      if (!current || current.deleted) return
+      if (current.parentId !== journal.id || current.orderKey !== orderKey) {
+        await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
+      }
+    }, {scope: ChangeScope.BlockDefault})
+    return repo.block(id)
+  }
 
   const journal = await getOrCreateJournalBlock(repo, workspaceId)
   const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
-  const orderKey = dailyNoteOrderKey(iso)
 
   await repo.tx(async tx => {
     const existing = await tx.get(id)

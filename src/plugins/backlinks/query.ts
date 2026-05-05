@@ -29,7 +29,7 @@ export const SELECT_BACKLINKS_FOR_BLOCK_SQL = `
     AND b.id != ?
     AND br.target_id = ?
     AND b.deleted = 0
-  ORDER BY b.updated_at DESC, b.id
+  ORDER BY b.created_at DESC, b.id
 `
 
 const filterValuesCteSql = (name: string, count: number): string =>
@@ -105,7 +105,7 @@ export const selectFilteredBacklinksForBlockSql = (
       JOIN remove_filter removed ON removed.id = cr.context_id
       WHERE cr.source_id = bs.source_id
     )
-  ORDER BY b.updated_at DESC, b.id
+  ORDER BY b.created_at DESC, b.id
 `
 
 export const SELECT_FILTERED_BACKLINK_CONTEXT_NODE_IDS_SQL = `
