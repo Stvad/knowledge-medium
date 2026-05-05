@@ -6,14 +6,22 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { invalidationRulesFacet, propertySchemasFacet, queriesFacet } from '@/data/facets.ts'
+import {
+  invalidationRulesFacet,
+  propertySchemasFacet,
+  propertyUiFacet,
+  queriesFacet,
+} from '@/data/facets.ts'
+import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.ts'
 import { backlinksInvalidationRule } from '@/plugins/backlinks/invalidation.ts'
 import { getUserPrefsBlock } from '@/data/globalState.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
 } from '../query.ts'
+import { groupedBacklinksPlugin } from '../index.ts'
 import { groupedBacklinksDataExtension } from '../dataExtension.ts'
+import { groupedBacklinksDefaultsUi } from '../propertyUi.ts'
 import {
   groupedBacklinksDefaultsProp,
   groupedBacklinksOverridesProp,
@@ -94,6 +102,20 @@ describe('groupedBacklinksDataExtension query', () => {
 
     expect(schemas.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsProp)
     expect(schemas.get(groupedBacklinksOverridesProp.name)).toBe(groupedBacklinksOverridesProp)
+  })
+
+  it('contributes a custom property UI for grouped backlinks defaults', () => {
+    const runtime = resolveFacetRuntimeSync(groupedBacklinksPlugin)
+    const schemas = runtime.read(propertySchemasFacet)
+    const uis = runtime.read(propertyUiFacet)
+
+    expect(uis.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsUi)
+    expect(resolvePropertyDisplay({
+      name: groupedBacklinksDefaultsProp.name,
+      encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
+      schemas,
+      uis,
+    }).customEditor).toBe(groupedBacklinksDefaultsUi.Editor)
   })
 
   it('initializes grouped backlinks defaults on the user prefs block', async () => {
