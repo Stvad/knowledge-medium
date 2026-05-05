@@ -436,7 +436,7 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
 
 `block.addType(id)` / `block.removeType(id)` (the §3a facade sugar) delegate to `block.repo.addType(block.id, id)` / `block.repo.removeType(block.id, id)`.
 
-Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag" action) goes through `repo.addType`. Direct writes to `typesProp` are discouraged — add a lint or an engine guard if needed.
+Every tag-mapping path goes through the type-system orchestration entry points — outside an existing tx use `repo.addType` (agent commands, command-palette "Add tag" action, app-level UI), inside an existing tx use `repo.addTypeInTx` (Roam importer chunks around `upsertImportedBlock`, plugin code orchestrating multi-step writes). Calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose atomicity with the surrounding writes. Direct `tx.update` writes to `typesProp` are discouraged either way — add a lint or engine guard if needed.
 
 No type-aware read-time overlay exists. `block.get` returns `schema.defaultValue` for unset properties (current behaviour, unchanged); `useProperty` does the same; the typed-query primitive (§8) reads materialised state directly. The §3 hybrid rule means a value-space difference becomes a different schema with its own default rather than a per-type override of a shared field, which keeps the read paths simple — no cross-registry lookup needed for the unset-property case.
 
@@ -459,8 +459,17 @@ typesFacet.of(defineBlockType({
   label: 'Meeting',
   properties: [meetingDateProp, meetingAttendeesProp],
   setup: async ({ tx, id }) => {
-    // Type-defined computed initial value (not a per-call initialValue).
-    await tx.update(id, { properties: { ...(await tx.get(id))?.properties, [meetingDateProp.name]: meetingDateProp.codec.encode(today()) } })
+    // Type-defined computed initial value, init-if-missing. Setup runs
+    // AFTER caller-supplied initialValues are written, so a meeting
+    // imported with an explicit date (or one already set on the row
+    // via sync) will already be present here — read first, skip the
+    // write if so, otherwise compute today() and stamp it.
+    const block = await tx.get(id)
+    if (!block) return
+    if (block.properties[meetingDateProp.name] === undefined) {
+      const next = { ...block.properties, [meetingDateProp.name]: meetingDateProp.codec.encode(today()) }
+      await tx.update(id, { properties: next })
+    }
     for (const label of ['Attendees:', 'Agenda:', 'Action items:']) {
       // tx.run dispatches a registered mutator inside this tx so the
       // child writes share the same transactional bucket as the
@@ -552,12 +561,24 @@ for (const name of Object.keys(properties)) {
   if (s) applicable.set(name, s)
   else unknownNames.add(name)
 }
-// (b) type-contributed slots (may not yet be set on the block)
+// (b) type-contributed slots (may not yet be set on the block).
+// Treat TypeContribution.properties as DECLARING NAMES for discovery;
+// resolve the actual schema from the registry. propertySchemasFacet
+// is last-wins on duplicate names — using the type contribution's
+// schema object directly would let the panel decode/render with a
+// stale codec/default while block.get / addType / typed queries use
+// the retained registry's version. Always go through schemas.get().
 for (const typeId of block.types) {
   const t = typesRegistry.get(typeId)
-  for (const schema of t?.properties ?? []) {
-    applicable.set(schema.name, schema)
-    unknownNames.delete(schema.name)  // type contribution promotes it
+  for (const declared of t?.properties ?? []) {
+    const active = schemas.get(declared.name)
+    if (active) {
+      applicable.set(declared.name, active)
+      unknownNames.delete(declared.name)
+    }
+    // If the type declares a name that no schema is registered under
+    // (e.g. plugin partially loaded), skip — better to render nothing
+    // than to render with a schema the rest of the system isn't using.
   }
 }
 ```
@@ -760,7 +781,7 @@ Add a kernel-side reprojection step. `setFacetRuntime` itself is synchronous and
 1. **Inside `setFacetRuntime` (synchronous):** diff the previous and new `propertySchemas` maps for property names whose ref-ness changed (was-not-ref → is-ref, was-ref → is-not-ref, or was-ref → is-different-ref-shape). If the affected name set is empty, no enqueue. If non-empty, push a job onto the post-runtime-rebuild queue carrying the affected name set.
 2. **The async job runs after `setFacetRuntime` returns.** Two-phase shape, matching the existing `parseReferences` pattern (`docs/processor-tx-deadlock.md`): all SQL reads happen *before* opening a write tx so the read doesn't hold a writer slot.
    - **Read phase (no tx).** Enumerate workspaces this `Repo` has blocks for. For client-side apps this is typically just `repo.activeWorkspaceId`; for multi-workspace state run `SELECT DISTINCT workspace_id FROM blocks` against the underlying read DB. For each workspace, query the candidate ids: `SELECT id, properties_json, references_json FROM blocks WHERE workspace_id = ? AND deleted = 0 AND ...` filtering by the affected property-name set. v1 uses the workspace-scoped scan; if reprojection latency becomes an issue, build a side table indexing property-name occurrences (same pattern as `block_types`).
-   - **Write phase (one tx per workspace).** `RepoTxOptions` ([src/data/api/tx.ts:169](src/data/api/tx.ts:169)) currently carries `scope` + `description` only — there's no `workspaceId` parameter because `Repo` derives it from `activeWorkspaceId`. So per-workspace reprojection means switching `Repo`'s active workspace (or running entirely against the current active one in v1) before opening the tx, *not* passing `workspaceId` into `RepoTxOptions`. For each workspace's id list, open one `repo.tx(async tx => { ... }, { scope: ChangeScope.References })`. Inside the tx, iterate the precomputed ids:
+   - **Write phase (one tx per workspace).** `RepoTxOptions` ([src/data/api/tx.ts:169](src/data/api/tx.ts:169)) carries `scope` + `description` only — `repo.tx` doesn't consult `activeWorkspaceId` and switching the UI-visible active workspace is a side effect, not a tx scope. The tx pins to a workspace when its first write fires (driven by the row being touched). So per-workspace reprojection works without any tx-options change: the read phase already grouped ids by `workspace_id`, so iterate per-workspace id list and open one `repo.tx(async tx => { ... }, { scope: ChangeScope.References })`. Every `tx.update(id, ...)` inside hits a row with the same `workspace_id`, pinning the tx accordingly. Inside the tx, iterate the precomputed ids:
      - `await tx.get(id)` to read the current row (read-your-own-writes semantics).
      - Run the same property-walk path as `parseReferences` — recompute `references_json` against the new schema set.
      - **Skip the `tx.update` when the recomputed `references_json` deep-equals the existing one** (same `(id, alias, sourceField)` tuples in the same order). On initial app start, the previous `propertySchemas` snapshot is empty, so every registered ref schema *looks* "new"; a naive implementation would touch every block carrying any ref-typed property — pure churn for rows whose references are already correct, including unnecessary undo entries and upload pressure.
@@ -970,7 +991,7 @@ Each phase is independently shippable and testable.
 13. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]` (or use `block.hasType`/`block.types` once #9 lands; or `hasBlockType(data, ...)` for raw `BlockData`). Greps: `grep -rn "typeProp" src/`.
 14. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
 
-**Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join. `repo.addType('some-existing-block', 'todo', {status: 'open'})` writes `status='open'` if unset, runs `setup` (if any) atomically; a re-call with the type already present skips both.
+**Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join. `repo.addType('some-existing-block', 'todo', {status: 'open'})` writes `status='open'` if unset and runs `setup` (if any) atomically. A re-call with the type already present **still runs init-if-missing materialisation against `initialValues`** (so already-typed blocks from sync without contribution / raw `typesProp` writes get any missing fields filled in); only `setup` is gated on actual first transitions and skipped on re-call.
 
 ### Phase 2 — type-driven UI: renderer dispatch + property-panel field discovery
 
