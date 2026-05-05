@@ -1,4 +1,5 @@
 import type { BlockData } from './blockData'
+import type { AnyPropertySchema } from './propertySchema'
 // Type-only — no runtime cycle. Keeps `ProcessorCtx.repo` honest (full
 // Repo capability surface for processors) without inventing a narrow
 // shadow interface.
@@ -116,6 +117,10 @@ export interface ProcessorCtx {
   /** Full `Repo` — open a write tx when needed, invoke mutators, run
    *  kernel queries. */
   repo: Repo
+  /** Merged property-schema registry snapshotted with the processor
+   *  registry at tx start. Processors use this for codec lookups
+   *  without racing runtime swaps. */
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
 export const definePostCommitProcessor = <ScheduledArgs = undefined>(

@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { addBlockTypeToProperties, aliasesProp, extensionDisabledProp } from '@/data/properties.ts'
+import { aliasesProp, extensionDisabledProp } from '@/data/properties.ts'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import { blockRenderersFacet } from '@/extensions/core.ts'
@@ -186,7 +186,7 @@ const extensionBlockProperties = (
   if (label) aliases.add(label)
 
   return {
-    ...addBlockTypeToProperties(existing ?? {}, EXTENSION_TYPE),
+    ...(existing ?? {}),
     ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
     ...(disabled !== undefined ? {[extensionDisabledProp.name]: extensionDisabledProp.codec.encode(disabled)} : {}),
   }
@@ -214,6 +214,7 @@ const installRuntimeExtension = async (
       : null
 
   if (existing) {
+    const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
@@ -221,6 +222,7 @@ const installRuntimeExtension = async (
         content: source,
         properties: extensionBlockProperties(current.properties, label, input.disabled),
       })
+      await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
     refreshAppRuntime()
     return {id: existing.id, inserted: false, label}
@@ -232,6 +234,7 @@ const installRuntimeExtension = async (
     : await repo.query.aliasLookup({workspaceId, alias: agentExtensionsParentAlias}).load() as BlockData | null
 
   let installedId = input.id?.trim() || ''
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     let parentId = parentIdFromInput ?? defaultParent?.id ?? null
     if (!parentId) {
@@ -256,6 +259,7 @@ const installRuntimeExtension = async (
       content: source,
       properties: extensionBlockProperties(undefined, label, input.disabled),
     })
+    await repo.addTypeInTx(tx, installedId, EXTENSION_TYPE, {}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
   refreshAppRuntime()

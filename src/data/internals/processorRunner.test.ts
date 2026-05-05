@@ -26,11 +26,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ChangeScope,
+  codecs,
   type AnyPostCommitProcessor,
+  defineProperty,
 } from '@/data/api'
+import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
+import { postCommitProcessorsFacet, propertySchemasFacet } from '../facets'
 
 const WS = 'ws-1'
 
@@ -283,6 +287,46 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
     // The late-registered processor must NOT have fired for this tx —
     // it wasn't in the snapshot at tx start.
     expect(lateCalls.events).toEqual([])
+  })
+
+  it('passes the propertySchemas snapshot from tx start to processors', async () => {
+    const originalSchema = defineProperty<string>('status', {
+      codec: codecs.string,
+      defaultValue: 'open',
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'string',
+    })
+    const replacementSchema = defineProperty<string>('status', {
+      codec: codecs.string,
+      defaultValue: 'done',
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'string',
+    })
+    const observed: unknown[] = []
+    const processor: AnyPostCommitProcessor = {
+      name: 'test.schemaSnapshot',
+      watches: {kind: 'field', table: 'blocks', fields: ['content']},
+      apply: async (_event, ctx) => {
+        observed.push(ctx.propertySchemas.get('status'))
+      },
+    }
+
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      postCommitProcessorsFacet.of(processor, {source: 'test'}),
+      propertySchemasFacet.of(originalSchema, {source: 'test'}),
+    ]))
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'a', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'x'})
+      env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+        postCommitProcessorsFacet.of(processor, {source: 'test'}),
+        propertySchemasFacet.of(replacementSchema, {source: 'test'}),
+      ]))
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.awaitProcessors()
+
+    expect(observed).toEqual([originalSchema])
+    expect(env.repo.propertySchemas.get('status')).toBe(replacementSchema)
   })
 })
 

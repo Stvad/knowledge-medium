@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from './data/repo'
-import { typesProp, rendererProp, aliasesProp } from '@/data/properties'
+import { rendererProp, aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
 
@@ -22,6 +22,7 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
   const sampleId = uuidv4()
   const extensionsParentId = uuidv4()
   const extensionIds = exampleExtensions.map(() => uuidv4())
+  const typeSnapshot = repo.snapshotTypeRegistries()
 
   await repo.tx(async tx => {
     // Tutorial root.
@@ -72,8 +73,8 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
         parentId: extensionsParentId,
         orderKey: `a${i}`,
         content: source,
-        properties: {[typesProp.name]: typesProp.codec.encode([EXTENSION_TYPE])},
       })
+      await repo.addTypeInTx(tx, extensionIds[i], EXTENSION_TYPE, {}, typeSnapshot)
     }
   }, {scope: ChangeScope.BlockDefault, description: 'seed tutorial'})
 

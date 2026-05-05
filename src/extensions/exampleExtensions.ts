@@ -15,8 +15,9 @@
 // content area is customized.
 
 import type { Block } from '../data/block'
-import { typesProp } from '@/data/properties.ts'
+import { ChangeScope } from '@/data/api'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { createChild } from '@/data/internals/kernelMutators'
 
 export interface ExampleExtensionDefinition {
   /** Stable, kebab-case label used in commit history and source attribution. */
@@ -303,12 +304,16 @@ export const insertExampleExtensionsUnder = async (
 ): Promise<Block[]> => {
   const repo = parentBlock.repo
   const created: Block[] = []
+  const typeSnapshot = repo.snapshotTypeRegistries()
   for (const example of exampleExtensions) {
-    const id = await repo.mutate.createChild({
-      parentId: parentBlock.id,
-      content: example.source,
-      properties: {[typesProp.name]: typesProp.codec.encode([EXTENSION_TYPE])},
-    }) as string
+    const id = await repo.tx(async tx => {
+      const childId = await tx.run(createChild, {
+        parentId: parentBlock.id,
+        content: example.source,
+      })
+      await repo.addTypeInTx(tx, childId, EXTENSION_TYPE, {}, typeSnapshot)
+      return childId
+    }, {scope: ChangeScope.BlockDefault, description: 'insert example extension'})
     created.push(repo.block(id))
   }
   return created

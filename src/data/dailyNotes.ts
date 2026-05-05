@@ -2,7 +2,7 @@ import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { DAILY_NOTE_TYPE, JOURNAL_TYPE } from '@/data/blockTypes'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 
@@ -74,6 +74,7 @@ export const getOrCreateJournalBlock = async (
   const live = await repo.load(id)
   if (live && !live.deleted) return repo.block(id)
 
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     // Re-read inside the tx with the unfiltered `tx.get` so we see
     // tombstones (`repo.load` filtered them out as null).
@@ -82,7 +83,7 @@ export const getOrCreateJournalBlock = async (
     if (existing && existing.deleted) {
       await tx.restore(id, {content: JOURNAL_ALIAS})
       await tx.setProperty(id, aliasesProp, [JOURNAL_ALIAS])
-      await tx.setProperty(id, typesProp, [JOURNAL_TYPE])
+      await repo.addTypeInTx(tx, id, JOURNAL_TYPE, {}, typeSnapshot)
       return
     }
     await tx.create({
@@ -93,9 +94,9 @@ export const getOrCreateJournalBlock = async (
       content: JOURNAL_ALIAS,
       properties: {
         [aliasesProp.name]: aliasesProp.codec.encode([JOURNAL_ALIAS]),
-        [typesProp.name]: typesProp.codec.encode([JOURNAL_TYPE]),
       },
     })
+    await repo.addTypeInTx(tx, id, JOURNAL_TYPE, {}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(id)
@@ -149,13 +150,14 @@ export const getOrCreateDailyNote = async (
   const journal = await getOrCreateJournalBlock(repo, workspaceId)
   const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
 
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     const existing = await tx.get(id)
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       await tx.restore(id, {content: longLabel})
       await tx.setProperty(id, aliasesProp, [longLabel, isoLabel])
-      await tx.setProperty(id, typesProp, [DAILY_NOTE_TYPE])
+      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
       // Re-parent under the journal in case the prior tombstoned row
       // had drifted. tx.move sets parent_id + order_key in one
       // primitive (with engine cycle check on parent_id mutation).
@@ -170,9 +172,9 @@ export const getOrCreateDailyNote = async (
       content: longLabel,
       properties: {
         [aliasesProp.name]: aliasesProp.codec.encode([longLabel, isoLabel]),
-        [typesProp.name]: typesProp.codec.encode([DAILY_NOTE_TYPE]),
       },
     })
+    await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(id)

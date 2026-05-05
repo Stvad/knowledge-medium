@@ -28,6 +28,7 @@
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySchema,
   RepoTxOptions,
   Tx,
   User,
@@ -106,6 +107,10 @@ export interface RunTxParams<R> {
   /** Processor registry snapshot, captured at tx start. Used by
    *  `tx.afterCommit` to validate scheduledArgs at enqueue time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Merged property-schema registry snapshot, captured at the same
+   *  boundary as `processors` so processor code sees a consistent
+   *  runtime bundle. */
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
 export interface TxResult<R> {
@@ -134,13 +139,15 @@ export interface TxResult<R> {
    *  before that tx's field-watch / explicit jobs fire — the spec says
    *  registries are snapshotted at tx start (§3, §8). */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Merged property-schema registry snapshot paired with `processors`. */
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
 export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => {
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, now,
-    mutators, processors,
+    mutators, processors, propertySchemas,
   } = params
   const {scope, description} = opts
 
@@ -252,6 +259,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     txId,
     user,
     processors,
+    propertySchemas,
   }
 }
 

@@ -9,7 +9,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
 import { v5 as uuidv5 } from 'uuid'
-import { focusedBlockIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties.ts'
 import { PANEL_TYPE } from '@/data/blockTypes'
 import { useChildren } from '@/hooks/block.ts'
 
@@ -66,13 +66,12 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     // `focusedBlockId=block.id` on the main panel block so the panel
     // renderer recognizes it and keyboard navigation has a panel-local
     // focus target after URL navigation. These writes go
-    // through a UiState-scoped tx — typesProp's schema declares
-    // BlockDefault as its default, but the panel-infrastructure write
-    // is engine-routing-only and shouldn't reach the upload queue.
+    // through a UiState-scoped tx. The panel-infrastructure write is
+    // engine-routing-only and shouldn't reach the upload queue.
     // Routing through `repo.tx` directly (vs `block.set`) lets us
     // override scope while still using the schema's codec.
     void repo.tx(async tx => {
-      await tx.setProperty(mainPanelBlock.id, typesProp, [PANEL_TYPE])
+      await repo.addTypeInTx(tx, mainPanelBlock.id, PANEL_TYPE)
       await tx.setProperty(mainPanelBlock.id, topLevelBlockIdProp, block.id)
       await tx.setProperty(mainPanelBlock.id, focusedBlockIdProp, block.id)
     }, {scope: ChangeScope.UiState, description: 'init main panel'})
@@ -118,7 +117,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
             content: blockToOpenId,
           })
         }
-        await tx.setProperty(panelId, typesProp, [PANEL_TYPE])
+        await repo.addTypeInTx(tx, panelId, PANEL_TYPE)
         await tx.setProperty(panelId, topLevelBlockIdProp, blockToOpenId)
         await tx.setProperty(panelId, focusedBlockIdProp, blockToOpenId)
       }, {scope: ChangeScope.UiState, description: 'open panel'})

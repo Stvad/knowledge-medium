@@ -75,7 +75,8 @@ import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import { SELECT_BLOCK_BY_ID_SQL } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
-import { getBlockTypes, typesProp } from './properties'
+import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
+import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -163,6 +164,9 @@ const mergeLiftedSchemas = (
   return merged
 }
 
+const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
+const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+
 export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
@@ -229,8 +233,8 @@ export class Repo {
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
-  private _types: ReadonlyMap<string, TypeContribution> = new Map()
-  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = new Map()
+  private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
+  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
   private invalidationRules: readonly InvalidationRule[] = []
   /** Per-query-name generation counter. Bumped by `setFacetRuntime`
    *  (and `__setQueriesForTesting`) whenever a name's registered Query
@@ -708,6 +712,7 @@ export class Repo {
       now: this.now,
       mutators: this.mutators,
       processors: this.processors,
+      propertySchemas: this._propertySchemas,
     })
     // TxEngine fast path (spec §9.3 path 1): post-commit, fan-out the
     // tx's snapshots diff to dep-matching collection handles. The
@@ -734,6 +739,7 @@ export class Repo {
       snapshots: result.snapshots,
       afterCommitJobs: result.afterCommitJobs,
       processors: result.processors,
+      propertySchemas: result.propertySchemas,
     })
     return result
   }

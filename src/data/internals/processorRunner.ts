@@ -39,6 +39,7 @@
 import {
   CodecError,
   type AnyPostCommitProcessor,
+  type AnyPropertySchema,
   type ChangedRow,
   type CommittedEvent,
   type ProcessorCtx,
@@ -65,6 +66,9 @@ export interface CommittedTxOutcome {
    *  `setFacetRuntime` call landing mid-flight can't change which
    *  processors fire (or with what apply fn) for an already-running tx. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Merged property-schema registry snapshot taken at the same
+   *  boundary as `processors`. */
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
 /** Internal helper — convert a snapshots map entry into a ChangedRow. */
@@ -159,7 +163,7 @@ export class ProcessorRunner {
         user: outcome.user,
         workspaceId: outcome.workspaceId,
       }
-      this.track(this.runOne(processor, event, name))
+      this.track(this.runOne(processor, event, name, outcome.propertySchemas))
     }
 
     // Explicit processors: one job per `tx.afterCommit` call. The tx's
@@ -198,10 +202,10 @@ export class ProcessorRunner {
         // matches the spec: §16.4 calls out that delayMs is real
         // wall-clock time and not part of the synchronous commit step.
         setTimeout(() => {
-          this.track(this.runOne(processor, event, job.processorName))
+          this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas))
         }, job.delayMs)
       } else {
-        this.track(this.runOne(processor, event, job.processorName))
+        this.track(this.runOne(processor, event, job.processorName, outcome.propertySchemas))
       }
     }
   }
@@ -221,11 +225,13 @@ export class ProcessorRunner {
     processor: AnyPostCommitProcessor,
     event: CommittedEvent<unknown>,
     name: string,
+    propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   ): Promise<void> {
     try {
       const ctx: ProcessorCtx = {
         db: this.db,
         repo: this.repo,
+        propertySchemas,
       }
       await processor.apply(event, ctx)
     } catch (err) {

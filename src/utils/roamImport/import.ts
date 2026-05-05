@@ -19,7 +19,7 @@ import {
   type NewBlockData,
   type Tx,
 } from '@/data/api'
-import { addBlockTypeToProperties, aliasesProp, hasBlockType } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
 import { computeAliasSeatId } from '../../data/targets'
@@ -234,6 +234,7 @@ export const importRoam = async (
   let pagesMerged = 0
   let aliasBlocksCreated = 0
   const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     // 5a. Alias-target seats for unowned aliases. Same idempotent
     //     shape as backlinks.parseReferences' ensureAliasTarget — at
@@ -279,7 +280,7 @@ export const importRoam = async (
       }
       if (recon.merging) {
         pagesMerged += 1
-        await mergeIntoExistingPage(tx, recon)
+        await mergeIntoExistingPage(tx, recon, repo, typeSnapshot)
         await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
         continue
       }
@@ -818,7 +819,12 @@ const applyPromotedAttributes = async (
   await tx.update(id, {properties: next})
 }
 
-const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {
+const mergeIntoExistingPage = async (
+  tx: Tx,
+  recon: PageReconciliation,
+  repo: Repo,
+  typeSnapshot = repo.snapshotTypeRegistries(),
+) => {
   const existing = await tx.get(recon.finalId)
   if (!existing) {
     throw new Error(`mergeIntoExistingPage: existing page ${recon.finalId} not found`)
@@ -833,12 +839,7 @@ const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {
   if (!aliases.includes(recon.page.title)) {
     await tx.setProperty(recon.finalId, aliasesProp, [...aliases, recon.page.title])
   }
-  const afterAlias = await tx.get(recon.finalId)
-  if (afterAlias && !hasBlockType(afterAlias, PAGE_TYPE)) {
-    await tx.update(recon.finalId, {
-      properties: addBlockTypeToProperties(afterAlias.properties, PAGE_TYPE),
-    })
-  }
+  await repo.addTypeInTx(tx, recon.finalId, PAGE_TYPE, {}, typeSnapshot)
   // Descendants are already routed under recon.finalId via the
   // reparentMap (their parentId was rewritten before tx.createOrGet).
   // No explicit child-list manipulation needed in the new shape.
