@@ -47,7 +47,13 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
     AND deleted = 0
     AND content != ''
     AND LOWER(content) LIKE '%' || LOWER(?) || '%'
-  ORDER BY updated_at DESC
+  ORDER BY
+    CASE
+      WHEN LOWER(content) = LOWER(?) THEN 0
+      WHEN LOWER(content) LIKE LOWER(?) || '%' THEN 1
+      ELSE 2
+    END,
+    updated_at DESC
   LIMIT ?
 `
 
@@ -67,7 +73,14 @@ export const SELECT_ALIASES_IN_WORKSPACE_SQL = `
     AND b.deleted = 0
     AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
   GROUP BY ba.alias
-  ORDER BY MIN(b.created_at), ba.alias
+  ORDER BY
+    MIN(CASE
+      WHEN ba.alias_lower = LOWER(?) THEN 0
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      ELSE 2
+    END),
+    MIN(b.created_at),
+    ba.alias
 `
 
 /** Single-block lookup by exact alias (used by createOrRestore wrappers
@@ -86,7 +99,7 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   LIMIT 1
 `
 
-/** Alias-prefix match used by alias-search surfaces; one row per
+/** Alias substring match used by alias-search surfaces; one row per
  *  (alias, block) pair. Same index plan as the distinct-aliases query
  *  above: filter on alias_lower, JOIN blocks for content + ordering. */
 export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
@@ -99,7 +112,14 @@ export const SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL = `
   WHERE ba.workspace_id = ?
     AND b.deleted = 0
     AND (? = '' OR ba.alias_lower LIKE '%' || LOWER(?) || '%')
-  ORDER BY b.created_at, ba.alias
+  ORDER BY
+    CASE
+      WHEN ba.alias_lower = LOWER(?) THEN 0
+      WHEN ba.alias_lower LIKE LOWER(?) || '%' THEN 1
+      ELSE 2
+    END,
+    b.created_at,
+    ba.alias
   LIMIT ?
 `
 
@@ -256,7 +276,7 @@ export const searchByContentQuery = defineQuery<
     if (!query) return []
     ctx.depend({kind: 'workspace', workspaceId})
     const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, limit],
+      SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, query, query, limit],
     )
     return ctx.hydrateBlocks(asBlockRows(rows))
   },
@@ -294,7 +314,7 @@ export const aliasesInWorkspaceQuery = defineQuery<
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
     const rows = await ctx.db.getAll<{alias: string}>(
-      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter],
+      SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter],
     )
     return rows.map(r => r.alias)
   },
@@ -320,7 +340,7 @@ export const aliasMatchesQuery = defineQuery<
     if (!workspaceId) return []
     ctx.depend({kind: 'workspace', workspaceId})
     return ctx.db.getAll<AliasMatch>(
-      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, limit],
+      SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter, limit],
     )
   },
 })

@@ -239,6 +239,16 @@ describe('repo.query.searchByContent', () => {
     expect(out).toHaveLength(2)
   })
 
+  it('orders exact matches before prefix and substring matches', async () => {
+    await create({id: 'exact', content: 'Dating'})
+    await create({id: 'prefix', content: 'Dating notes'})
+    await create({id: 'contains', content: 'My Dating notes'})
+
+    const out = asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: 'dating'}).load())
+
+    expect(out.map(r => r.id)).toEqual(['exact', 'prefix', 'contains'])
+  })
+
   it('returns [] on empty query', async () => {
     await create({id: 'a', content: 'hi'})
     expect(asBlocks(await env.repo.query.searchByContent({workspaceId: WS, query: ''}).load())).toEqual([])
@@ -293,6 +303,16 @@ describe('repo.query.aliasesInWorkspace', () => {
     expect(out).toEqual(['Inbox'])
   })
 
+  it('orders exact aliases before prefix and substring matches', async () => {
+    await create({id: 'exact', aliases: ['i']})
+    await create({id: 'prefix', aliases: ['Inbox']})
+    await create({id: 'contains', aliases: ['Skiing']})
+
+    const out = await env.repo.query.aliasesInWorkspace({workspaceId: WS, filter: 'i'}).load()
+
+    expect(out).toEqual(['i', 'Inbox', 'Skiing'])
+  })
+
   it('excludes tombstoned blocks', async () => {
     await create({id: 'a', aliases: ['Live']})
     await create({id: 'b', aliases: ['Dead']})
@@ -317,6 +337,16 @@ describe('repo.query.aliasMatches', () => {
     await create({id: 'a', aliases: ['x1', 'x2', 'x3']})
     expect(await env.repo.query.aliasMatches({workspaceId: WS, filter: 'x', limit: 2}).load())
       .toHaveLength(2)
+  })
+
+  it('orders exact aliases before prefix and substring matches', async () => {
+    await create({id: 'exact', content: 'Exact page', aliases: ['Dating']})
+    await create({id: 'prefix', content: 'Prefix page', aliases: ['Dating pool']})
+    await create({id: 'contains', content: 'Contains page', aliases: ['Online Dating']})
+
+    const out = await env.repo.query.aliasMatches({workspaceId: WS, filter: 'dating'}).load()
+
+    expect(out.map(row => row.alias)).toEqual(['Dating', 'Dating pool', 'Online Dating'])
   })
 })
 
