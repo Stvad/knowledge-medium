@@ -729,9 +729,17 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Empty block: delete it and move focus up.
         if (liveContent === '') {
+          trigger.preventDefault()
           const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+          if (prevVisible) {
+            const prevData = await prevVisible.load()
+            await uiStateBlock.set(editorSelection, {
+              blockId: prevVisible.id,
+              start: prevData?.content.length ?? 0,
+            })
+            await uiStateBlock.set(focusedBlockIdProp, prevVisible.id)
+          }
           await block.delete()
-          if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
           return
         }
 
