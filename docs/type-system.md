@@ -31,14 +31,19 @@ export interface TypeContribution {
   /** Stable id; matches the string written into the block's `types` array. */
   readonly id: string
   /** Properties that apply to blocks of this type. Drives field discovery
-   *  in BlockProperties and the property panel. */
-  readonly properties?: ReadonlyArray<PropertySchema<unknown>>
+   *  in BlockProperties and the property panel. Use `AnyPropertySchema`
+   *  (`PropertySchema<any>`) — `PropertySchema<T>` is invariant in this
+   *  repo's variance model, mirroring `AnyMutator` / `AnyQuery`, so
+   *  `PropertySchema<unknown>` will not accept real typed schemas like
+   *  `PropertySchema<string>`. See [src/data/api/propertySchema.ts:90](src/data/api/propertySchema.ts:90). */
+  readonly properties?: ReadonlyArray<AnyPropertySchema>
   /** Renderer id (looked up against blockRenderersFacet) used when a block
    *  is rendered solely by virtue of having this type. */
   readonly defaultRenderer?: string
-  /** Type-conditional defaults applied at instance creation. Keys are
-   *  property names, values are decoded values run through the matching
-   *  schema's codec. */
+  /** Type-conditional defaults. Applied by the `addType(block, typeId)`
+   *  mutator (§3a) — both at instance creation *and* whenever a type is
+   *  added to an existing block. Keys are property names, values are
+   *  decoded values run through the matching schema's codec. */
   readonly defaults?: Readonly<Record<string, unknown>>
   /** Renderer dispatch priority when a block has multiple types.
    *  Higher wins. `rendererProp` always overrides everything. */
@@ -87,6 +92,31 @@ export const typesProp = defineProperty<readonly string[]>('types', {
 
 A one-shot migration backfills existing rows: any block with `properties.type` writes `properties.types = [oldValue]` and clears `type`. Land it as a kernel `LocalSchemaBackfill` on `propertySchemasFacet` plumbing (same mechanism that already exists for kernel migrations — see [src/data/facets.ts:21](src/data/facets.ts:21) `LocalSchemaBackfill`).
 
+#### 2a. SQL / index migration — type lookup must move off `$.type`
+
+Today's by-type lookup is SQL, not just property reads. Three call sites touch it:
+
+- `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)) — composite index on `(workspace_id, json_extract(properties_json, '$.type'))`.
+- `SELECT_BLOCKS_BY_TYPE_SQL` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33)) — generic `WHERE json_extract(properties_json, '$.type') = ?`.
+- `findExtensionBlocksQuery` ([src/data/internals/kernelQueries.ts:384](src/data/internals/kernelQueries.ts:384)) — runs at every workspace bootstrap and on every extension change.
+
+Switching to `types: string[]` breaks `=`-comparison; SQLite expression indexes can't directly index array membership. The right shape is a trigger-maintained side table, mirroring the `block_references` design at [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts):
+
+```sql
+CREATE TABLE IF NOT EXISTS block_types (
+  block_id     TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  type         TEXT NOT NULL,
+  PRIMARY KEY (block_id, type)
+);
+CREATE INDEX IF NOT EXISTS idx_block_types_type_workspace
+  ON block_types (type, workspace_id);
+```
+
+Triggers on `INSERT`, `UPDATE OF properties_json, deleted, workspace_id`, and `DELETE` walk `json_each(json_extract(properties_json, '$.types'))` and rewrite the rows for `block_id`. `SELECT_BLOCKS_BY_TYPE_SQL` becomes a join (`SELECT b.* FROM blocks b JOIN block_types t ON t.block_id = b.id WHERE t.workspace_id = ? AND t.type = ? AND b.deleted = 0`); `idx_blocks_workspace_type` is dropped. A one-shot backfill marker (`block_types_backfill_v1`, same pattern as `block_references_backfill_v1`) populates `block_types` from existing `properties_json.types` on first launch after migration.
+
+This local-schema delta lives in the kernel, not in a plugin, since extension discovery (`findExtensionBlocks`) is bootstrap-critical and must not depend on plugin load order.
+
 ### 3. Field reuse — props are global, type-conditional bits live on the type
 
 Reuse `PropertySchema` as the field primitive. A type *curates* which props apply to its instances rather than namespacing fields. This matches how Roam works (`priority::` is `priority::` regardless of tags) and keeps the property registry as a single shared vocabulary.
@@ -97,6 +127,44 @@ The two pieces that *would* have wanted namespacing instead live on the type con
 - **Per-type ref-target hints** → carried on the type contribution alongside the property reference (see §5). The codec is a single shared `refList`; the *hint* of "for this type, the picker should suggest Task-typed targets" lives on the type.
 
 If two types ever want a same-named field with **incompatible codecs**, the rule is to pick distinct names (`todoStatus` vs `meetingStatus`). Don't pre-pay for fully-namespaced fields.
+
+#### 3a. `addType` / `removeType` mutators — defaults apply on add, not just creation
+
+Defaults at *creation* aren't enough. The common motion is "tag this existing block as a `todo`" — that block needs `status='open'` materialised so `where: {status: 'open'}` queries match. Without a central place to apply defaults, every writer (importer, command, agent action) has to remember to do it, and missed sites silently degrade query results.
+
+Add two kernel mutators:
+
+```ts
+// repo.mutate.addType
+async function addType(tx: Tx, args: { blockId: string; typeId: string }) {
+  const block = await tx.read(args.blockId)
+  const types = (block.properties[typesProp.name] as string[] | undefined) ?? []
+  if (types.includes(args.typeId)) return
+  const contribution = runtime.read(typesFacet).get(args.typeId)
+  // Apply only defaults the block doesn't already have set.
+  const defaults = contribution?.defaults ?? {}
+  const newProps: Record<string, unknown> = { ...block.properties }
+  newProps[typesProp.name] = typesProp.codec.encode([...types, args.typeId])
+  for (const [name, value] of Object.entries(defaults)) {
+    if (newProps[name] === undefined) {
+      const schema = runtime.read(propertySchemasFacet).get(name)
+      newProps[name] = schema ? schema.codec.encode(value) : value
+    }
+  }
+  await tx.update(args.blockId, { properties: newProps })
+}
+
+// repo.mutate.removeType
+async function removeType(tx: Tx, args: { blockId: string; typeId: string }) {
+  // v1: just remove from `types`. Don't try to clean up properties —
+  // determining which properties were "owned" by this type vs. set by
+  // the user is ambiguous. Document the leak; revisit if it bites.
+}
+```
+
+Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag" action) goes through `addType`. Direct writes to `typesProp` are discouraged — add a lint or an engine guard if needed.
+
+A *read-time overlay* (defaults synthesised on read when a block has the type but lacks the property) is the alternative — but it diverges queries from storage and complicates the typed-query backing in §8. Prefer the materialise-on-add approach.
 
 ### 4. Renderer dispatch — type-driven, `rendererProp` overrides
 
@@ -147,9 +215,13 @@ typesFacet.of({
 
 `refTargets` is `Record<propertyName, readonly TypeId[]>` on `TypeContribution`. Empty/missing means any type.
 
-### 6. Schema delta: `BlockReference.sourceField?: string`
+### 6. Schema delta: `BlockReference.sourceField`, plus `block_references` edge index
 
-The only structural data-shape change. `BlockReference` ([src/data/api/blockData.ts:4](src/data/api/blockData.ts:4)) gains an optional `sourceField`:
+Two coordinated changes — the JSON shape *and* the trigger-maintained edge index that backlinks queries actually read.
+
+#### 6a. `BlockReference` shape
+
+`BlockReference` ([src/data/api/blockData.ts:4](src/data/api/blockData.ts:4)) gains an optional `sourceField`:
 
 ```ts
 export interface BlockReference {
@@ -158,12 +230,33 @@ export interface BlockReference {
   /** Property name that produced this reference. Absent when the
    *  reference was parsed from `content` (`[[alias]]` / `((uuid))`).
    *  Set when projected from a typed property whose codec is
-   *  `ref`/`refList`. Drives named-backlinks (§7). */
+   *  `ref`/`refList`. Drives named-backlinks. */
   readonly sourceField?: string
 }
 ```
 
-No back-compat shim. Existing content-derived rows simply have `sourceField` undefined. SQL row encoding keeps the same JSON column; the field is optional in the JSON.
+No back-compat shim. Existing content-derived rows simply have `sourceField` undefined.
+
+#### 6b. `block_references` edge index — add `source_field` to PK
+
+Backlinks/grouped-backlinks queries don't read `references_json` directly — they query the trigger-maintained `block_references` edge index built in [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts). Today its PK is `(source_id, target_id, alias)`, which would collapse two property refs from the same source to the same target via different fields, and offers no way for grouped-backlinks to group by field name.
+
+Schema delta:
+
+```sql
+CREATE TABLE IF NOT EXISTS block_references (
+  source_id    TEXT NOT NULL,
+  target_id    TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  alias        TEXT NOT NULL,
+  source_field TEXT NOT NULL DEFAULT '',   -- '' for content-derived
+  PRIMARY KEY (source_id, target_id, alias, source_field)
+);
+```
+
+The triggers (`blocks_references_insert`, `blocks_references_update`, the backfill `BACKFILL_BLOCK_REFERENCES_SQL`) all extend their `INSERT OR IGNORE` to read `json_extract(je.value, '$.sourceField')` and write it (coalesced to `''`) into the new column. The backlinks plugin's `InvalidationRule` for `block_references` already watches the table; the rule shape doesn't change because we're just adding a column to an existing table the rule already covers — verify against [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) at implementation time.
+
+Existing rows (PK collisions on the new schema are impossible since old rows were content-derived with `source_field=''` by construction). The migration is a `CREATE TABLE block_references_new ... INSERT INTO block_references_new SELECT ..., '' FROM block_references; DROP TABLE block_references; ALTER TABLE block_references_new RENAME TO block_references` sequence, gated by a `block_references_source_field_v1` marker.
 
 ### 7. Extend `backlinks.parseReferences` to also project property refs
 
@@ -171,17 +264,38 @@ The existing post-commit processor ([src/plugins/backlinks/referencesProcessor.t
 
 - Watch list expands to `fields: ['content', 'properties']`.
 - After parsing content refs (existing path), iterate the block's `properties`. For each entry whose `PropertySchema.codec` is a ref-codec or ref-list codec (looked up via `propertySchemasFacet`), decode and emit one `BlockReference { id, alias: id, sourceField: propName }` per ref.
-- Concatenate content-derived + property-derived into the new `references[]` and write through the same `tx.update(sourceId, {references}, {skipMetadata: true})`.
+- Concatenate content-derived + property-derived into the new `references[]` and write through the same `tx.update(sourceId, {references}, {skipMetadata: true})`. The triggers from §6b copy `sourceField` into `block_references`.
 
 Ordering / dedupe: identical `(id, sourceField)` pairs are deduped; content refs (no `sourceField`) and property refs (with `sourceField`) coexist for the same target — they represent different relationships.
 
-`grouped-backlinks` ([src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/)) gains a grouping mode keyed on `sourceField` so a target block sees:
+#### 7a. ProcessorCtx must expose property schemas
+
+Today `ProcessorCtx = { db, repo }` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Looking up `PropertySchema.codec` to identify ref-bearing properties needs the schema registry, which currently lives on `FacetRuntime` and isn't reachable from a processor.
+
+The simpler patch: extend `ProcessorCtx` with a slot:
+
+```ts
+export interface ProcessorCtx {
+  db: ProcessorReadDb
+  repo: Repo
+  /** Property-schema registry from the active runtime. Lets processors
+   *  look up a property's codec — needed by `backlinks.parseReferences`
+   *  to recognise ref-codec properties. */
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+}
+```
+
+`processorRunner` ([src/data/internals/processorRunner.ts:226](src/data/internals/processorRunner.ts:226)) builds `ctx`; it gets the schema map from the same runtime path that `repo.setFacetRuntime` already propagates. The map is captured at ctx-construction time so a mid-flight runtime swap doesn't change what a running processor sees.
+
+Alternative considered: hold a full `FacetRuntime` on `ctx`. Rejected — too broad a surface for a processor and pulls in extension-runtime dependencies the data layer otherwise doesn't need.
+
+`grouped-backlinks` ([src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/)) gains a grouping mode keyed on `source_field` so a target block sees:
 
 > Referenced by `tasks` from: [Project A] [Project B]
 > Referenced by `relatedTo` from: [Note X]
-> Mentioned in: [Daily 2026-05-04] [Inbox]   ← content-derived (sourceField undefined)
+> Mentioned in: [Daily 2026-05-04] [Inbox]   ← content-derived (`source_field=''`)
 
-### 8. Reactive typed-query primitive
+### 8. Reactive typed-query primitive — SQLite-backed
 
 The kernel today exposes per-block traversal + content-ref backlinks. To support typed inboxes / agendas / "all open todos" without per-consumer indexing, add a `Repo` query API:
 
@@ -197,23 +311,24 @@ interface TypedQuery {
 //   repo.subscribeBlocks(q, (rows) => ...): () => void
 ```
 
-Implementation: an in-memory secondary index in the repo, maintained on commit, keyed by `(propertyName, primitiveValue) -> Set<blockId>` and `(targetId, sourceField) -> Set<sourceBlockId>`. The `references[]` reverse-index already needs to exist for backlinks; this generalises it.
+**Backed by local SQLite, not an in-memory index.** This app receives row changes via two paths — local tx commit *and* the row-events tail from PowerSync sync-apply. An in-memory index would have to be initialised from a full table scan at startup AND wired to both commit and sync-apply streams, with care to not double-count or miss either. The `block_types` side table (§2a) and the `block_references` edge index (§6b) already live in SQLite and are maintained by triggers that fire on **all** writes to `blocks`, sync-applied or not. Reuse them:
 
-**No PowerSync / Postgres changes.** `typesProp` is just another key in the existing JSON `properties` column; the `sourceField` addition lives inside the existing `references` JSON. Server-side filtered sync (don't pull all blocks, only types X and Y) is a separate, deferred decision.
+- `types`-only queries → join `block_types`.
+- `where` on a property → `json_extract(properties_json, '$.<name>') = ?` (and add per-property indices as we identify hot fields, same shape as `idx_blocks_workspace_type` was).
+- `referencedBy` → join `block_references` filtered by `target_id` (and optionally `source_field`).
+- `subscribeBlocks` rides the existing `InvalidationRule` / `repo` change-notification stream, which is already driven by row-event-aware machinery — same as backlinks consumers do today.
+
+This reduces §8 from "build a new in-memory index that must consume two change streams" to "compose three SQL primitives that already exist or are added in §2a/§6b and re-execute on the existing notification stream."
+
+**No PowerSync / Postgres changes.** `typesProp` is just another key in the existing JSON `properties` column; the `source_field` addition lives in the local-only `block_references` table; `block_types` is local-only. Server-side filtered sync (don't pull all blocks, only types X and Y) is a separate, deferred decision.
 
 A `useBlockQuery(q)` hook in `src/hooks/` wraps `subscribeBlocks` for components.
 
-### 9. Data-defined types — `appEffect`, no new mechanism
+### 9. User-authored types — code extensions only for v1
 
-Tana lets users define supertags from inside the graph. Mirror this with an effect that watches blocks of a known meta-type and contributes them to `typesFacet`:
+Types in v1 are facet contributions, full stop. End users who want to declare a new type write a small extension block (the existing `extension`-block path) whose source contributes `typesFacet.of({...})`. The extension-block compiler at [src/extensions/dynamicExtensions.ts](src/extensions/dynamicExtensions.ts) and the resolution-rebuild trigger via `refreshAppRuntime()` ([src/extensions/runtimeEvents.ts:3](src/extensions/runtimeEvents.ts:3)) already handle dynamic load, validation, and atomic switchover — there's no work to do for "user-defined types" beyond documenting that contributing to `typesFacet` is the supported path.
 
-- A built-in type contribution `{ id: 'type-definition', properties: [...] }` declares the schemas a type-definition block carries: `typeName: string`, `typeProperties: refList()` (refs to property-schema-definition blocks, for v1 just names), `defaultRenderer: string`, `priority: number`, `aliases: list<string>`, `defaults: object`.
-- An `appEffect` (`typeDefinitionsEffect`) subscribes via `repo.subscribeBlocks({ types: ['type-definition'] })` and, on each change, projects every type-definition block into a `TypeContribution` and contributes it to `typesFacet` through the runtime's contribution sink — same pattern as `dynamicExtensions` ([src/extensions/dynamicExtensions.ts](src/extensions/dynamicExtensions.ts)).
-- Hot-reload comes for free.
-
-The "graduate to a code extension" path is a UI affordance later — convert a type-definition block into an `extension` block whose code calls `typesFacet.of(...)`.
-
-For v1, the property-set carried by a data-defined type is by *name* (matched against existing schemas in `propertySchemasFacet`). Letting users define entirely new property schemas from data is a follow-up — needs a schema-definition block type and a parallel projector into `propertySchemasFacet`.
+A dedicated declarative `type-definition` block (with a property-panel UI for non-coding authors) is **deferred to a follow-up**. It would land as a resolver in the resolution pipeline, symmetric to `dynamicExtensionsExtension`, with `refreshAppRuntime()` triggering rebuilds on change — explicitly *not* a mutable contribution sink, because `FacetRuntime` is immutable after construction ([src/extensions/facet.ts:88](src/extensions/facet.ts:88)) for real reasons (atomic switchover when mutators + processors + schemas register together, upfront validation, deterministic `combine`, order-independent visibility). When it lands, follow the `dynamicExtensions` shape exactly. Until then, the v1 surface is small: ship `typesFacet`, document the extension-author recipe, move on.
 
 ## Migration of existing `typeProp` users
 
@@ -226,7 +341,6 @@ Mechanical. Each replaces `typeProp` with `typesProp` (string array) and adds th
 | `panel` | [LayoutRenderer.tsx:74](src/components/renderer/LayoutRenderer.tsx:74), [:120](src/components/renderer/LayoutRenderer.tsx:120) | kernel |
 | `journal`, `daily-note` | [dailyNotes.ts:86](src/data/dailyNotes.ts:86), [:159](src/data/dailyNotes.ts:159) | kernel |
 | (new) `todo` | importer + new todo plugin | new `src/plugins/todo/` |
-| (new) `type-definition` | data-defined-types effect | kernel |
 
 Per `KERNEL_PROPERTY_SCHEMAS` ([properties.ts:191](src/data/properties.ts:191)) convention, kernel-level type contributions live in a parallel `KERNEL_TYPE_CONTRIBUTIONS` array in `src/data/properties.ts`, registered by `kernelDataExtension`.
 
@@ -250,22 +364,26 @@ When a Roam block has a `#TODO` tag, the importer pushes `'todo'` into `typesPro
 - **Field namespacing** (Tana-style `Project.status` vs `Task.status`). Use distinct prop names when codecs would diverge.
 - **User-defined property schemas from data**. v1 only lets data-defined types reference *existing* code-defined property schemas by name.
 - **Required-field validation at edit time**. Type contributions can declare it as data, but enforcing at the editor is a follow-up.
+- **Data-defined `type-definition` blocks + property-panel UI for non-coders.** v1 ships types-as-facet-contributions only; users author types via small extension blocks. The data-defined path lands later when there's user demand — design sketch lives in §9 so it's not lost.
 
 ## Phases
 
 Each phase is independently shippable and testable.
 
-### Phase 1 — `typesFacet` and field-reuse plumbing
+### Phase 1 — `typesFacet`, `typesProp`, `block_types` index, addType/removeType
 
 1. Add `typesFacet` to [src/data/facets.ts](src/data/facets.ts).
 2. Add `typesProp` schema to [src/data/properties.ts](src/data/properties.ts), include in `KERNEL_PROPERTY_SCHEMAS`.
-3. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`. Each with `defaultRenderer` if applicable, `properties: []` for now (existing schemas already global).
-4. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type`. Land as `LocalSchemaBackfill`.
-5. Update every `typeProp` write site (table above) to write `typesProp` (push, not replace, when adding a type).
-6. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]`. Greps: `grep -rn "typeProp" src/`.
-7. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
+3. Add the `block_types` table + triggers + backfill marker per §2a, in the kernel local-schema (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) shape).
+4. Rewrite `SELECT_BLOCKS_BY_TYPE_SQL` and `findExtensionBlocksQuery` to join `block_types` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33), [:384](src/data/internals/kernelQueries.ts:384)). Drop `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)).
+5. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
+6. Add `repo.mutate.addType` / `repo.mutate.removeType` per §3a.
+7. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
+8. Update every `typeProp` write site to call `addType` (or write `typesProp` directly for batch paths like the Roam importer that bypass mutators).
+9. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]`. Greps: `grep -rn "typeProp" src/`.
+10. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
 
-**Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`.
+**Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join.
 
 ### Phase 2 — type-driven renderer dispatch
 
@@ -274,43 +392,37 @@ Each phase is independently shippable and testable.
 
 **Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch.
 
-### Phase 3 — ref codecs + named-backlinks
+### Phase 3 — ref codecs + named-backlinks (`block_references.source_field` + `ProcessorCtx`)
 
 1. Add `codecs.ref()` / `codecs.refList()` to [src/data/api/codecs.ts](src/data/api/codecs.ts) with runtime `isRefCodec` / `isRefListCodec` predicates.
 2. Add `kind: 'ref' | 'refList'` to `PropertyKind`.
 3. Extend `BlockReference` with optional `sourceField`.
-4. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties; watch `properties` field too.
-5. Add `sourceField`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
+4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Re-verify the existing `InvalidationRule` for `block_references` covers the schema change.
+5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)) and propagate from `processorRunner` ([src/data/internals/processorRunner.ts:226](src/data/internals/processorRunner.ts:226)) using the same runtime path that `repo.setFacetRuntime` already drives.
+6. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too.
+7. Add `source_field`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
 
-**Acceptance:** a block with a ref-typed property pointing to another block surfaces in the target's grouped backlinks under the property name.
+**Acceptance:** a block with a ref-typed property pointing to another block surfaces in the target's grouped backlinks under the property name; two property refs from the same source to the same target via different fields don't collapse.
 
-### Phase 4 — reactive typed-query primitive
+### Phase 4 — reactive typed-query primitive (SQLite-backed)
 
-1. Build the in-memory secondary index in `Repo` (or its data layer) maintained on commit.
-2. Add `repo.queryBlocks` / `repo.subscribeBlocks` per §8.
-3. Add `useBlockQuery` hook.
+1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `JOIN block_types` for type filters, `json_extract(properties_json, '$.<name>') = ?` for `where`, `JOIN block_references` for `referencedBy`. Per-property indexes added incrementally as hot fields are identified.
+2. Wire `subscribeBlocks` to the existing repo change-notification stream (which is already row-event-aware) so updates flow from both local commits and sync-applied changes.
+3. Add `useBlockQuery` hook in `src/hooks/`.
 
-**Acceptance:** subscribing to `{ types: ['todo'] }` returns a live list that updates when a block is tagged/untagged.
+**Acceptance:** subscribing to `{ types: ['todo'] }` returns a live list that updates when a block is tagged/untagged, including across a remote sync apply (e.g. another device adds a todo).
 
-### Phase 5 — data-defined types
-
-1. Kernel contributes `'type-definition'` with the property set described in §9.
-2. `typeDefinitionsEffect` watches and projects.
-3. Minimal property panel UX so a user can fill in `typeName`, pick existing properties by name, etc.
-
-**Acceptance:** creating a `type-definition` block in the UI causes a new type to show up in `typesFacet` and become assignable to other blocks within the same session.
-
-### Phase 6 — Roam todo import (downstream consumer)
+### Phase 5 — Roam todo import (downstream consumer)
 
 1. Add `TAG_TO_TYPE` map to importer.
 2. Add `'todo'` type contribution (its own small plugin, `src/plugins/todo/`) with at minimum `statusProp` and a renderer.
-3. On import, project tag → type + defaults.
+3. On import, project tag → `addType(block, 'todo')` followed by merging non-default fields. (Direct `properties.types` writes are acceptable in the importer's bulk path so long as type-defaults are materialised — `addType` is the simpler route.)
 
 **Acceptance:** importing a Roam graph with `#TODO`/`#DONE` blocks produces blocks with `types: ['todo']` and matching `status`, surfaced via the todo renderer and queryable via `useBlockQuery({types: ['todo'], where: {status: 'open'}})`.
 
 ## Open questions for the implementer
 
-- **Index backing.** Phase 4's in-memory index is fine for moderate workspaces; if blocks-per-workspace grows past ~50k consider a SQLite-backed index in the local schema. Decide at implementation time based on real numbers; nothing about the public API should leak which one.
 - **Where `KERNEL_TYPE_CONTRIBUTIONS` is registered.** `kernelDataExtension` is the natural home (matches `KERNEL_PROPERTY_SCHEMAS`). Confirm by reading the kernel-extension wire-up before adding.
-- **Importer content stripping.** Whether to strip `#TODO` from content after mapping to `types`. Recommend strip; confirm with user once Phase 6 begins.
-- **`type-definition`'s `typeProperties` codec.** v1 stores property *names* (a `list<string>`). If a richer schema-definition block lands later, this becomes a `refList` to schema-definition blocks; design Phase 5 so this widening doesn't break stored data.
+- **`removeType` cleanup policy.** v1 just removes from `typesProp` and leaves properties intact (defaults become inert). If this proves leaky in practice, add a "clear properties whose only contributing type is being removed" rule — but only after seeing the failure mode.
+- **Importer content stripping.** Whether to strip `#TODO` from content after mapping to `types`. Recommend strip; confirm with user once Phase 5 begins.
+- **Per-property indexes for typed queries.** Phase 4 starts with `json_extract` scans. Add expression indexes per hot field (e.g. `idx_blocks_status` on `json_extract(properties_json, '$.status')`) only when query latency shows up — easier to add later than to remove.
