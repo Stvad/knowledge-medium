@@ -76,6 +76,12 @@ Blockers to land first:
 
 Once #1 lands, the migration is small: swap `AgentTokenStore` for a thin wrapper around `repo.tx({scope: DeviceLocal})` + `repo.query.children({parentId: userPage.id, kind: 'agent-token'})`. Bridge handshake and CLI stay identical.
 
+## `rendererProp` silently no-ops on a misspelled renderer id
+
+[useRenderer](src/hooks/useRendererRegistry.tsx:26) reads `rendererProp` and only honors it via `if (rendererKey && registry[rendererKey])` — when the prop names a renderer id that isn't registered (typo, plugin not loaded, renderer renamed), the lookup silently fails and resolution falls through to the `canRender` predicate sort. The user's explicit override is lost with no signal.
+
+Fix shape: when `rendererKey` is set but absent from the registry, `console.warn` with the offending id + the available ids, and either (a) render `MissingDataRenderer`-style "renderer not found" placeholder so the lost override is visible, or (b) fall through with the warning. Pick (b) for now — less disruptive — but at least surface it. Independent of any larger renderer-resolution redesign; cheap fix.
+
 ---
 
 # Architectural ideas (no current trigger)
