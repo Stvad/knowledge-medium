@@ -15,6 +15,7 @@
  * via `block.set(schema, value)`.
  */
 import { Block } from './block'
+import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,
@@ -103,6 +104,13 @@ export const isCollapsedProp = defineProperty<boolean>('system:collapsed', {
   kind: 'boolean',
 })
 
+export const typesProp = defineProperty<readonly string[]>('types', {
+  codec: codecs.list(codecs.string),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'list',
+})
+
 export const typeProp = defineProperty<string | undefined>('type', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
@@ -156,6 +164,31 @@ export { aliasesProp }
 
 // ──── Helpers ────
 
+export const getBlockTypes = (data: Pick<BlockData, 'properties'>): readonly string[] => {
+  const raw = data.properties[typesProp.name]
+  return raw === undefined ? typesProp.defaultValue : typesProp.codec.decode(raw)
+}
+
+export const hasBlockType = (
+  data: Pick<BlockData, 'properties'>,
+  typeId: string,
+): boolean => getBlockTypes(data).includes(typeId)
+
+/** Raw membership writer for BlockData construction paths that do not
+ *  have a Repo/Tx available. Does not run setup or materialise
+ *  addType initial values. */
+export const addBlockTypeToProperties = (
+  properties: Record<string, unknown>,
+  typeId: string,
+): Record<string, unknown> => {
+  const current = getBlockTypes({properties})
+  if (current.includes(typeId)) return properties
+  return {
+    ...properties,
+    [typesProp.name]: typesProp.codec.encode([...current, typeId]),
+  }
+}
+
 /** Set the editing flag on the UI-state block. Refuses to enter edit
  *  mode in a read-only repo (workspace viewer) — the wrappers also
  *  short-circuit, but this gate keeps any new caller honest. */
@@ -199,6 +232,7 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   selectionStateProp,
   // BlockDefault schemas
   isCollapsedProp,
+  typesProp,
   typeProp,
   rendererProp,
   rendererNameProp,

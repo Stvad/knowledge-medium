@@ -20,6 +20,7 @@ import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
   ChangeScope,
   codecs,
+  defineBlockType,
   defineMutator,
   defineProperty,
   definePropertyUi,
@@ -29,8 +30,9 @@ import {
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
-import { mutatorsFacet, propertySchemasFacet, propertyUiFacet, queriesFacet } from '../facets'
+import { mutatorsFacet, propertySchemasFacet, propertyUiFacet, queriesFacet, typesFacet } from '../facets'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
+import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import { Repo } from '../repo'
 
 let h: TestDb
@@ -191,6 +193,101 @@ describe('propertySchemasFacet — kernel registration', () => {
       const registered = runtime.read(propertySchemasFacet)
       expect(registered.get('plugin:dup')).toBe(b)
       expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
+describe('typesFacet + schema lift', () => {
+  it('typesFacet combines contributions by id with last-wins warnings', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const a = defineBlockType({id: 'task', label: 'Task A'})
+      const b = defineBlockType({id: 'task', label: 'Task B'})
+      const runtime = resolveFacetRuntimeSync([
+        typesFacet.of(a, {source: 'test'}),
+        typesFacet.of(b, {source: 'test'}),
+      ])
+      const registered = runtime.read(typesFacet)
+      expect(registered.get('task')).toBe(b)
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('kernelDataExtension contributes kernel block types', () => {
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    const registered = runtime.read(typesFacet)
+    expect(registered.size).toBe(KERNEL_TYPE_CONTRIBUTIONS.length)
+    for (const type of KERNEL_TYPE_CONTRIBUTIONS) {
+      expect(registered.get(type.id)).toBe(type)
+    }
+  })
+
+  it('Repo exposes schemas lifted from type contributions', () => {
+    const liftedSchema = defineProperty<string>('task:status', {
+      codec: codecs.string,
+      defaultValue: 'open',
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'string',
+    })
+    const taskType = defineBlockType({id: 'task', properties: [liftedSchema]})
+    const runtime = resolveFacetRuntimeSync([
+      typesFacet.of(taskType, {source: 'test'}),
+    ])
+    repo.setFacetRuntime(runtime)
+
+    expect(repo.types.get('task')).toBe(taskType)
+    expect(repo.propertySchemas.get('task:status')).toBe(liftedSchema)
+  })
+
+  it('direct property schema registrations override type-lifted conflicts', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const liftedSchema = defineProperty<string>('status', {
+        codec: codecs.string,
+        defaultValue: 'open',
+        changeScope: ChangeScope.BlockDefault,
+        kind: 'string',
+      })
+      const directSchema = defineProperty<string>('status', {
+        codec: codecs.string,
+        defaultValue: 'todo',
+        changeScope: ChangeScope.BlockDefault,
+        kind: 'string',
+      })
+      const runtime = resolveFacetRuntimeSync([
+        typesFacet.of(defineBlockType({id: 'task', properties: [liftedSchema]}), {source: 'test'}),
+        propertySchemasFacet.of(directSchema, {source: 'test'}),
+      ])
+      repo.setFacetRuntime(runtime)
+
+      expect(repo.propertySchemas.get('status')).toBe(directSchema)
+      expect(warn).toHaveBeenCalledOnce()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('shared schema object lifted by multiple types dedups without warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const sharedSchema = defineProperty<string>('status', {
+        codec: codecs.string,
+        defaultValue: 'open',
+        changeScope: ChangeScope.BlockDefault,
+        kind: 'string',
+      })
+      const runtime = resolveFacetRuntimeSync([
+        typesFacet.of(defineBlockType({id: 'todo', properties: [sharedSchema]}), {source: 'test'}),
+        typesFacet.of(defineBlockType({id: 'task', properties: [sharedSchema]}), {source: 'test'}),
+      ])
+      repo.setFacetRuntime(runtime)
+
+      expect(repo.propertySchemas.get('status')).toBe(sharedSchema)
+      expect(warn).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
     }

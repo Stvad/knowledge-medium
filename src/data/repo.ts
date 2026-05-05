@@ -19,6 +19,7 @@ import type { FacetRuntime } from '@/extensions/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertySchema,
   AnyQuery,
   BlockData,
   Mutator,
@@ -26,6 +27,7 @@ import type {
   Query,
   QueryRegistry,
   RepoTxOptions,
+  TypeContribution,
   Tx,
   User,
 } from '@/data/api'
@@ -44,7 +46,9 @@ import {
   invalidationRulesFacet,
   mutatorsFacet,
   postCommitProcessorsFacet,
+  propertySchemasFacet,
   queriesFacet,
+  typesFacet,
 } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
 import { Block } from './block'
@@ -127,6 +131,36 @@ type KnownQueryDispatch = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type QueryProxy = KnownQueryDispatch & { [name: string]: (args: any) => LoaderHandle<any> }
 
+const mergeLiftedSchemas = (
+  directSchemas: ReadonlyMap<string, AnyPropertySchema>,
+  types: ReadonlyMap<string, TypeContribution>,
+): ReadonlyMap<string, AnyPropertySchema> => {
+  const merged = new Map<string, AnyPropertySchema>()
+  for (const type of types.values()) {
+    for (const schema of type.properties ?? []) {
+      const existing = merged.get(schema.name)
+      if (existing !== undefined && existing !== schema) {
+        console.warn(
+          `[schema-lift] type "${type.id}" registers schema "${schema.name}" ` +
+          'that conflicts with an earlier type-lifted registration; last-wins per facet convention',
+        )
+      }
+      merged.set(schema.name, schema)
+    }
+  }
+  for (const [name, schema] of directSchemas) {
+    const existing = merged.get(name)
+    if (existing !== undefined && existing !== schema) {
+      console.warn(
+        `[schema-lift] direct propertySchemasFacet registration "${name}" ` +
+        'replaces an earlier type-lifted registration; last-wins per facet convention',
+      )
+    }
+    merged.set(name, schema)
+  }
+  return merged
+}
+
 export interface RepoOptions {
   db: PowerSyncDb
   cache: BlockCache
@@ -193,6 +227,8 @@ export class Repo {
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
+  private _types: ReadonlyMap<string, TypeContribution> = new Map()
+  private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
   /** Per-query-name generation counter. Bumped by `setFacetRuntime`
    *  (and `__setQueriesForTesting`) whenever a name's registered Query
@@ -257,6 +293,14 @@ export class Repo {
       out.push(data)
     }
     return out
+  }
+
+  get types(): ReadonlyMap<string, TypeContribution> {
+    return this._types
+  }
+
+  get propertySchemas(): ReadonlyMap<string, AnyPropertySchema> {
+    return this._propertySchemas
   }
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
@@ -739,6 +783,11 @@ export class Repo {
     this.mutators = new Map(runtime.read(mutatorsFacet))
     this.processors = new Map(runtime.read(postCommitProcessorsFacet))
     this.invalidationRules = runtime.read(invalidationRulesFacet)
+    this._types = runtime.read(typesFacet)
+    this._propertySchemas = mergeLiftedSchemas(
+      runtime.read(propertySchemasFacet),
+      this._types,
+    )
     const newQueries = new Map(runtime.read(queriesFacet))
     this.swapQueries(newQueries)
   }

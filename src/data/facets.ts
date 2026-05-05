@@ -15,6 +15,7 @@ import type {
   AnyPropertySchema,
   AnyPropertyUiContribution,
   AnyQuery,
+  TypeContribution,
 } from '@/data/api'
 import type { InvalidationRule } from './invalidation.ts'
 
@@ -122,6 +123,23 @@ export const propertySchemasFacet = defineFacet<AnyPropertySchema, ReadonlyMap<s
         )
       }
       out.set(s.name, s)
+    }
+    return out
+  },
+  empty: () => new Map(),
+})
+
+export const typesFacet = defineFacet<TypeContribution, ReadonlyMap<string, TypeContribution>>({
+  id: 'data.types',
+  combine: (values) => {
+    const out = new Map<string, TypeContribution>()
+    for (const t of values) {
+      if (out.has(t.id)) {
+        console.warn(
+          `[typesFacet] duplicate registration for "${t.id}"; last-wins per facet convention`,
+        )
+      }
+      out.set(t.id, t)
     }
     return out
   },

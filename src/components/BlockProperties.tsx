@@ -26,7 +26,8 @@ import {
 } from '@/data/api'
 import { useHandle } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { propertySchemasFacet, propertyUiFacet } from '../data/facets.ts'
+import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
+import { propertyUiFacet } from '../data/facets.ts'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -135,7 +136,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // Read both registries once per render — combine() is memoised inside
   // FacetRuntime, so re-read is cheap (Map identity-stable across the
   // same runtime).
-  const schemas = runtime.read(propertySchemasFacet)
+  const schemas = usePropertySchemas()
   const uis = runtime.read(propertyUiFacet)
 
   const properties = useMemo(() => blockData?.properties ?? {}, [blockData?.properties])

@@ -2,6 +2,7 @@
  *  Internals live under `src/data/internals/`. */
 
 export * from './blockData'
+export * from './blockType'
 export * from './changeScope'
 export * from './codecs'
 export * from './errors'
