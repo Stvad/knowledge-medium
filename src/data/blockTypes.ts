@@ -13,4 +13,3 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({id: JOURNAL_TYPE, label: 'Journal'}),
   defineBlockType({id: DAILY_NOTE_TYPE, label: 'Daily note'}),
 ]
-

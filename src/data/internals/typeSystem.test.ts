@@ -181,4 +181,3 @@ describe('Repo type membership orchestration', () => {
     expect(block.data.properties[typesProp.name]).toEqual(['todo'])
   })
 })
-

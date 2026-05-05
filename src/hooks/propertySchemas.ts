@@ -8,4 +8,3 @@ export const usePropertySchemas = (): ReadonlyMap<string, AnyPropertySchema> => 
   useAppRuntime()
   return useRepo().propertySchemas
 }
-
