@@ -207,7 +207,7 @@ These are deliberately small. Registry resolution, defaults materialisation, and
 
 **Important: `addBlockTypeToProperties` does NOT call defaults or setup.** It's a *raw membership writer* for paths that genuinely can't reach `repo.addType` — fixture construction in tests, processor snapshot rewrites, importer **plan** code that builds row shapes before commit. **Don't pre-write membership and then call `repo.addType` expecting `setup` to fire**: `repo.addType` always runs init-if-missing materialisation (so defaults *will* apply on a re-call), but `setup` only fires when `addType` actually transitions the block from "doesn't have type" to "does have type." Pre-writing typesProp via raw `tx.update` makes that transition invisible to `addType` — `setup` never runs.
 
-The right boundary: paths that need full type-add semantics (defaults + setup) call `repo.addType` directly without prewriting. The Roam importer's apply phase iterates blocks and calls `repo.addType(blockId, 'todo')` per row; it does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — but those paths are responsible for either also writing the defaults that `addType` would have written, or leaving them unmaterialised and relying on the §3a-bis read overlay (acceptable for app-owned-init-only-if-missing semantics; see Phase 5 reimport rule).
+The right boundary: paths that need full type-add semantics (defaults + setup) call the type-system orchestration entry point directly without prewriting. App-level callers outside an existing tx use `repo.addType`. The Roam importer's apply phase is already inside chunked `repo.tx` calls — it must use `repo.addTypeInTx(tx, blockId, 'todo', initialValues?)` per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee. Either way the importer does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — but those paths are responsible for either also writing the defaults that `addType`/`addTypeInTx` would have written, or leaving them unmaterialised and relying on the §3a-bis read overlay (acceptable for app-owned-init-only-if-missing semantics; see Phase 5 reimport rule).
 
 #### 3a. `addType` / `removeType` mutators — defaults apply on add, not just creation
 
@@ -306,20 +306,50 @@ async removeType(blockId: string, typeId: string): Promise<void> {
   }, { scope: ChangeScope.BlockDefault, description: `removeType ${typeId}` })
 }
 
+/** Captured registry snapshot for callers that need consistency across
+ *  many addTypeInTx calls inside one tx (importer loops, multi-row
+ *  apply paths). Take the snapshot once via `repo.snapshotTypeRegistries()`
+ *  before opening the outer tx, then thread the snapshot through every
+ *  addTypeInTx call inside the tx. */
+export interface TypeRegistrySnapshot {
+  readonly types: ReadonlyMap<string, TypeContribution>
+  readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
+}
+
+/** Public method, returns the current registries as a frozen pair.
+ *  Importers / orchestration code call this once before their tx
+ *  loop. */
+snapshotTypeRegistries(): TypeRegistrySnapshot {
+  return { types: this.types, propertySchemas: this.propertySchemas }
+}
+
 /** Public tx-aware helper for callers that already hold a tx
  *  (importers running batched repo.tx chunks, plugin code orchestrating
- *  multi-step writes). Captures registries at call time — for an
- *  importer iterating many blocks within one tx that's the same
- *  practical world setFacetRuntime is serialised against the writer
- *  anyway. Consumers needing strict per-tx consistency across many
- *  calls can capture once and call _addTypeInTx with explicit args. */
+ *  multi-step writes). Optional `snapshot` arg pins the registry pair
+ *  to one captured value across many calls inside the same tx; without
+ *  it, registries are re-read at call time (fine for one-off calls
+ *  where setFacetRuntime mid-call is sufficiently rare).
+ *
+ *  Importer pattern:
+ *  ```ts
+ *  const snap = repo.snapshotTypeRegistries()
+ *  await repo.tx(async tx => {
+ *    for (const block of chunk) {
+ *      await upsertImportedBlock(tx, block.data)
+ *      await repo.addTypeInTx(tx, block.id, 'todo', appOwnedInit, snap)
+ *    }
+ *  }, { ... })
+ *  ``` */
 async addTypeInTx(
   tx: Tx,
   blockId: string,
   typeId: string,
   initialValues: Readonly<Record<string, unknown>> = {},
+  snapshot?: TypeRegistrySnapshot,
 ): Promise<void> {
-  await this._addTypeInTx(tx, this.types, this.propertySchemas, blockId, typeId, initialValues)
+  const types = snapshot?.types ?? this.types
+  const propertySchemas = snapshot?.propertySchemas ?? this.propertySchemas
+  await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues)
 }
 
 /** Symmetric for completeness — composers needing remove inside an
@@ -651,11 +681,17 @@ export interface RefCodec<T> extends Codec<T> {
 export const ref: (targetTypes?: readonly string[]) => RefCodec<string>
 export const refList: (targetTypes?: readonly string[]) => RefCodec<readonly string[]>
 
-// Type guards narrow Codec<T> down to RefCodec<T> at predicate-using
-// call sites (parseReferences projector, the property panel's editor
-// dispatch, etc.).
-export const isRefCodec: <T>(codec: Codec<T>) => codec is RefCodec<string>
-export const isRefListCodec: <T>(codec: Codec<T>) => codec is RefCodec<readonly string[]>
+// AnyCodec = variance-erased Codec for storage in heterogeneous
+// collections + predicate inputs, mirroring AnyPropertySchema /
+// AnyMutator. Codec<T> is invariant in T (encode contravariant,
+// decode covariant), so a generic predicate input `Codec<T>` can't
+// narrow to RefCodec<string> — RefCodec<string> is not assignable
+// to Codec<T> for arbitrary T. Erased input solves it.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AnyCodec = Codec<any>
+
+export const isRefCodec: (codec: AnyCodec) => codec is RefCodec<string>
+export const isRefListCodec: (codec: AnyCodec) => codec is RefCodec<readonly string[]>
 ```
 
 Add a `kind: 'ref' | 'refList'` to `PropertyKind` in [propertySchema.ts:5](src/data/api/propertySchema.ts:5) so the property panel can pick a ref-aware editor when a `PropertySchema` is registered. The projector in §7 only needs the ref-ness check (`isRefCodec` / `isRefListCodec`); picker UIs additionally read `targetTypes` after narrowing.
@@ -760,11 +796,13 @@ The watch on `content` / `properties` field changes catches every per-block edit
 Add a kernel-side reprojection step. `setFacetRuntime` itself is synchronous and not workspace-scoped — it just swaps the retained registries — so the reprojection runs as an *async job enqueued from* `setFacetRuntime`, not as work done inside it. Concretely:
 
 1. **Inside `setFacetRuntime` (synchronous):** diff the previous and new `propertySchemas` maps for property names whose ref-ness changed (was-not-ref → is-ref, was-ref → is-not-ref, or was-ref → is-different-ref-shape). If the affected name set is empty, no enqueue. If non-empty, push a job onto the post-runtime-rebuild queue carrying the affected name set.
-2. **The async job runs after `setFacetRuntime` returns.** It enumerates *workspaces this `Repo` instance has any blocks for* (typically just the active workspace in client-side apps; iterate the full set if the `Repo` ever sees more — query `SELECT DISTINCT workspace_id FROM blocks`). For each workspace, opens **one** `repo.tx(..., {scope: ChangeScope.References, workspaceId})` to honour the single-workspace-per-tx invariant. Inside that workspace's tx:
-   - Queries blocks within `workspaceId` whose `properties_json` contains any of the affected names. v1 starts with a workspace-scoped scan; if reprojection latency becomes an issue, build a side table indexing property-name occurrences (same pattern as `block_types`).
-   - For each matching block, runs the same property-walk path as `parseReferences` — recomputes `references_json` against the new schema set.
-   - **Skips the `tx.update` when the recomputed `references_json` matches the existing one** (deep-equal check on the array — same `(id, alias, sourceField)` tuples in the same order). On initial app start, the previous `propertySchemas` snapshot is empty, so every registered ref schema *looks* "new"; a naive implementation would touch every block carrying any ref-typed property — pure churn for rows whose references are already correct, including unnecessary undo entries and upload pressure.
-   - When the row does need updating, writes through `tx.update(id, {references}, {skipMetadata: true})` — same flag the existing `parseReferences` processor uses ([referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) so the reprojection isn't credited as a user edit (no `updatedAt` / `updatedBy` bump).
+2. **The async job runs after `setFacetRuntime` returns.** Two-phase shape, matching the existing `parseReferences` pattern (`docs/processor-tx-deadlock.md`): all SQL reads happen *before* opening a write tx so the read doesn't hold a writer slot.
+   - **Read phase (no tx).** Enumerate workspaces this `Repo` has blocks for. For client-side apps this is typically just `repo.activeWorkspaceId`; for multi-workspace state run `SELECT DISTINCT workspace_id FROM blocks` against the underlying read DB. For each workspace, query the candidate ids: `SELECT id, properties_json, references_json FROM blocks WHERE workspace_id = ? AND deleted = 0 AND ...` filtering by the affected property-name set. v1 uses the workspace-scoped scan; if reprojection latency becomes an issue, build a side table indexing property-name occurrences (same pattern as `block_types`).
+   - **Write phase (one tx per workspace).** `RepoTxOptions` ([src/data/api/tx.ts:169](src/data/api/tx.ts:169)) currently carries `scope` + `description` only — there's no `workspaceId` parameter because `Repo` derives it from `activeWorkspaceId`. So per-workspace reprojection means switching `Repo`'s active workspace (or running entirely against the current active one in v1) before opening the tx, *not* passing `workspaceId` into `RepoTxOptions`. For each workspace's id list, open one `repo.tx(async tx => { ... }, { scope: ChangeScope.References })`. Inside the tx, iterate the precomputed ids:
+     - `await tx.get(id)` to read the current row (read-your-own-writes semantics).
+     - Run the same property-walk path as `parseReferences` — recompute `references_json` against the new schema set.
+     - **Skip the `tx.update` when the recomputed `references_json` deep-equals the existing one** (same `(id, alias, sourceField)` tuples in the same order). On initial app start, the previous `propertySchemas` snapshot is empty, so every registered ref schema *looks* "new"; a naive implementation would touch every block carrying any ref-typed property — pure churn for rows whose references are already correct, including unnecessary undo entries and upload pressure.
+     - When the row does need updating, write through `tx.update(id, {references}, {skipMetadata: true})` — same flag the existing `parseReferences` processor uses ([referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) so the reprojection isn't credited as a user edit (no `updatedAt` / `updatedBy` bump).
 3. The `ChangeScope.References` tx scope keeps the reprojection out of the user's normal undo bucket, matching the convention `parseReferences` already uses. The trigger that maintains `block_references` from `references_json` runs inside the same tx, so the edge index falls in line automatically.
 
 This is a one-shot pass per runtime rebuild; the watch on per-block edits handles steady-state. Plugin authors don't need to do anything — the kernel detects the schema-set change and triggers the pass automatically. Workspace iteration matters even for predominantly single-workspace clients because the `Repo` may briefly hold blocks from multiple workspaces during workspace switches; one tx per workspace keeps the writer-slot semantics clean.
@@ -909,9 +947,9 @@ const TAG_TO_TYPE: Record<string, { types: string[]; appOwnedInit: Record<string
 }
 ```
 
-When a Roam block carries a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer:
-1. Calls `repo.addType(blockId, 'todo', appOwnedInit)` — passes the source's app-owned initial values as the third arg. Per the addType contract, these win over the type's `defaults` on first add (so `DONE` correctly initialises `status='done'` instead of being clobbered by `todo.defaults.status='open'`), and stay init-only-if-missing relative to existing block state (so reimport doesn't overwrite a locally completed task).
-2. Refreshes **source-mirror** fields (`roam:todo-state`) freely via `block.set` or a separate property write.
+When a Roam block carries a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer is already inside a `repo.tx` chunk (the existing planning + apply pipeline does this around `upsertImportedBlock`). Within that same tx:
+1. Calls `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit)` — the tx-aware variant per §3a so the type tag, defaults, and any setup writes share atomicity with the row write. Passes the source's app-owned initial values as the fourth arg; per the addType contract these win over the type's `defaults` on first add (so `DONE` correctly initialises `status='done'` instead of being clobbered by `todo.defaults.status='open'`), and stay init-only-if-missing relative to existing block state (so reimport doesn't overwrite a locally completed task). Calling the public `repo.addType` from here would open a separate tx and break atomicity with `upsertImportedBlock`.
+2. Refreshes **source-mirror** fields (`roam:todo-state`) freely via `tx.update` in the same tx.
 
 The marker is stripped from `content` since the type now captures the meaning; the source-mirror field preserves what Roam said for round-trip and conflict-resolution purposes. Per the §3 hybrid naming rule, `status` is the shared-vocabulary field (flat name) and `roam:todo-state` is the namespaced source-mirror.
 
@@ -1022,7 +1060,7 @@ Each phase is independently shippable and testable.
    For brand-new blocks (`createOrGet → inserted: true`), no merge is needed — the planned properties are the only state.
    The implementation splits `upsertImportedBlock` into "create new" (current path) and "merge into existing"; the merge takes `(existing, planned, appOwnedFields, sourceMirrorPrefixes, otherSourceFields)` and computes `sourceFields` from the union above before applying the per-key rules. Per-importer config carries the source-mirror prefix list (Roam: `['roam:']`, Notion: `['notion:']`) so the same shape generalises. **`content` and `references`** still overwrite wholesale (Roam content is source-authoritative; references are recomputed from content by the backlinks processor anyway).
 5. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker, the importer is already inside a `repo.tx` chunk (the existing planning + apply pipeline does this around `upsertImportedBlock`). Within that same tx:
-   - Call `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit)` — the tx-aware variant per §3a so the type tag, defaults, and any setup writes share atomicity with the row creation/update. Calling the public `repo.addType` (which opens its own tx) would either fail inside an active writer or break the atomicity guarantee with the row write. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
+   - Capture a registry snapshot once via `repo.snapshotTypeRegistries()` *before* opening the chunk's tx, then thread it through every per-row call: `repo.addTypeInTx(tx, blockId, 'todo', appOwnedInit, snapshot)`. This pins the type registry across all rows in the chunk so a `setFacetRuntime` rebuild mid-import doesn't leave half the chunk on the old contributions and the rest on the new — see §3a `TypeRegistrySnapshot` for the rationale. The tx-aware variant shares atomicity with the row write; calling the public `repo.addType` would open a separate tx and break that. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
    - Write the source-mirror field (`roam:todo-state`) freely via `tx.update` (always-overwrite, in the same tx).
    - Strip the marker from `content`.
 
