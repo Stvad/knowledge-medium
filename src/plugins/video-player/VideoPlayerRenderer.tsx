@@ -28,6 +28,12 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const containerRef = useRef<HTMLDivElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const inNotesView = view === 'notes'
+  const notesPlayerFrameStyle = inNotesView
+    ? {width: 'min(100%, calc(var(--video-notes-pane-height) * 16 / 9))'}
+    : undefined
+  const notesPlayerStyle = inNotesView
+    ? {width: '100%', height: 'auto', aspectRatio: '16 / 9'}
+    : undefined
 
   const focusPlayer = () => {
     if (containerRef.current) {
@@ -70,11 +76,14 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
     <div
       ref={containerRef}
       className={inNotesView
-        ? 'flex h-full w-full items-center justify-center bg-black'
+        ? 'grid h-full w-full place-items-center bg-black'
         : 'group/video-player relative aspect-video'
       }
     >
-      <div className={inNotesView ? 'aspect-video w-full max-h-full' : 'h-full w-full'}>
+      <div
+        className={inNotesView ? 'm-auto max-h-full max-w-full' : 'h-full w-full'}
+        style={notesPlayerFrameStyle}
+      >
         <ReactPlayer
           ref={player}
           src={content}
@@ -82,6 +91,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           controls
           width="100%"
           height="100%"
+          style={notesPlayerStyle}
         />
       </div>
 
@@ -116,11 +126,11 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
     return <DefaultBlockLayout {...slots}/>
   }
 
-  const {Content, Children} = slots
+  const {Children} = slots
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background text-foreground md:flex-row">
-      <section className="flex h-[56vh] w-screen items-center justify-center bg-black md:h-screen md:w-[80vw]">
-        <Content/>
+      <section className="h-[56vh] w-screen bg-black [--video-notes-pane-height:56vh] md:h-screen md:w-[80vw] md:[--video-notes-pane-height:100vh]">
+        <VideoPlayerContentRenderer block={slots.block}/>
       </section>
       <aside className="h-[44vh] w-screen overflow-y-auto border-t border-border bg-background p-3 md:h-screen md:w-[20vw] md:border-l md:border-t-0">
         <div className="sticky top-0 z-10 mb-2 flex justify-end bg-background/95 pb-2">
