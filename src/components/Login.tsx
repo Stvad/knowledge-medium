@@ -88,12 +88,13 @@ interface LocalLoginProps {
 }
 
 function LocalLogin({children, clearLocalOnlyOnSignOut}: LocalLoginProps) {
-  const [user, setUser] = useLocalStorage<User | undefined>('ftm.user', undefined)
+  const [user, setUser, clearUser] = useLocalStorage<User | undefined>('ftm.user', undefined)
   const [name, setName] = useState('')
 
   if (user) {
     const signOut = async () => {
-      setUser(undefined)
+      clearUser()
+      setName('')
       if (clearLocalOnlyOnSignOut) {
         clearLocalOnlyOptIn()
         // Reload so the top-level Login re-reads localStorage and falls back
