@@ -32,13 +32,16 @@ export interface TypeContribution {
   readonly id: string
   /** Properties that apply to blocks of this type. Carries the
    *  schema *objects* (not just names): the type contribution is
-   *  the registration. `typesFacet.combine` lifts every listed
-   *  `PropertySchema` into the same flat name-keyed registry that
-   *  `propertySchemasFacet.of(...)` populates (single-source-of-
-   *  truth — see §3-schema-lift). Multiple types listing the same
-   *  imported `statusProp` (object identity) dedup harmlessly;
-   *  different objects with the same name follow the kernel's
-   *  uniform last-wins-with-warn convention.
+   *  the registration. The lift happens in `Repo.setFacetRuntime`
+   *  via `mergeLiftedSchemas` (§1a) — NOT in `typesFacet.combine`,
+   *  because a facet's combine function only sees that facet's
+   *  contributions and can't read another facet's registrations.
+   *  The runtime merge step is what folds these schemas into the
+   *  same flat name-keyed registry that `propertySchemasFacet.of(...)`
+   *  populates (single-source-of-truth — see §1a). Multiple types
+   *  listing the same imported `statusProp` (object identity) dedup
+   *  harmlessly; different objects with the same name follow the
+   *  kernel's uniform last-wins-with-warn convention.
    *
    *  Drives field discovery in BlockProperties and the property
    *  panel. Use `AnyPropertySchema` (`PropertySchema<any>`) —
@@ -112,7 +115,7 @@ Plugins contribute the same way as today — through the facet: `typesFacet.of(d
 
 #### 1a. Schema lift: type contributions register their schemas
 
-A type contribution's `properties[]` carries `PropertySchema` *objects*, and **`typesFacet.combine` lifts those schemas into the same flat name-keyed `propertySchemas` map that `propertySchemasFacet.of(...)` populates** ([src/data/facets.ts:114](src/data/facets.ts:114)). One merged registry, two contribution paths, single source of truth.
+A type contribution's `properties[]` carries `PropertySchema` *objects*, and **the runtime build step (`Repo.setFacetRuntime`) lifts those schemas into the same flat name-keyed `propertySchemas` map that `propertySchemasFacet.of(...)` populates** ([src/data/facets.ts:114](src/data/facets.ts:114)). The lift can't live inside `typesFacet`'s `combine` because a facet's combine function only sees its own contributions — it can't read `propertySchemasFacet`'s. So the merge runs once per runtime swap in `setFacetRuntime` after both facets have been read; see the implementation sketch below. One merged registry, two contribution paths, single source of truth.
 
 The reason: without the lift, a type contribution's `properties[]` would store schema objects that the rest of the system has to ignore in favor of `propertySchemasFacet`'s registry-by-name lookup — which means a type can list `statusPropA` but if some `propertySchemasFacet.of(statusPropB)` registration wins globally under the same name, decoders / encoders / the property panel silently use `statusPropB`. The schema object on the contribution becomes confusingly vestigial. The lift removes the parallel-registry problem: the contribution IS the registration.
 
@@ -155,7 +158,7 @@ for (const [name, schema] of directSchemas) {
   }
   mergedSchemas.set(name, schema)
 }
-this.propertySchemas = mergedSchemas
+this._propertySchemas = mergedSchemas
 ```
 
 Properties this gives:
@@ -175,8 +178,23 @@ Consumers outside `Repo` — `BlockProperties`, the typed-query primitive, plugi
 
 Concretely:
 
-- `Repo` exposes `get propertySchemas(): ReadonlyMap<string, AnyPropertySchema>` — a read-only public getter over the same map populated by the merge above.
-- React consumers go through a small hook `usePropertySchemas()` returning `useRepo().propertySchemas` (or equivalently a `runtime.derived(...)` shape if the codebase grows a derived-facet primitive later — until then, repo getter + hook is the path).
+- `Repo` exposes `get propertySchemas(): ReadonlyMap<string, AnyPropertySchema>` — a read-only public getter over the same map populated by the merge above. Backed by a private `_propertySchemas` field (TypeScript doesn't allow a private field and a public getter to share an identifier).
+- React consumers go through a small hook `usePropertySchemas()`. The hook **must subscribe to the runtime context**, not just read `useRepo().propertySchemas` directly: `Repo`'s identity is stable across `setFacetRuntime` swaps, so a plain `useRepo()` read won't re-render when the merged map changes (a newly loaded type-lifted schema would stay invisible in `BlockProperties` until some unrelated subscription fires).
+  ```ts
+  // src/hooks/propertySchemas.ts (new)
+  export const usePropertySchemas = (): ReadonlyMap<string, AnyPropertySchema> => {
+    // useAppRuntime ([src/extensions/runtimeContext.ts:8](src/extensions/runtimeContext.ts:8))
+    // changes identity on every setFacetRuntime via the
+    // appRuntimeUpdateEvent listener wired up in
+    // [AppRuntimeProvider.tsx:61](src/extensions/AppRuntimeProvider.tsx:61).
+    // Reading it here makes this hook a subscriber: any runtime
+    // swap re-renders consumers, and Repo.propertySchemas is read
+    // *after* setFacetRuntime has already updated the merged map.
+    useAppRuntime()
+    return useRepo().propertySchemas
+  }
+  ```
+  The `useAppRuntime()` read is the subscription dependency, even though we're not using its return value — it's the "why this hook re-renders." Comment that intent at the call site so a future reader doesn't delete it as dead code. (If a derived-facet primitive lands later — `runtime.derived(...)` — the hook becomes `runtime.read(derivedPropertySchemasFacet)` and the indirection through Repo goes away. Until then, `useAppRuntime()` + `useRepo().propertySchemas` is the path.)
 - `propertySchemasFacet` itself is **not** read directly by app code outside `Repo` after this lands. Audit and migrate every `runtime.read(propertySchemasFacet)` call site to read the merged map. The grep target is small today: [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) is the only direct consumer; processor code reads via `ProcessorCtx.propertySchemas` (already snapshotted from the merged map per §7a); the typed-query primitive reads via `Repo.propertySchemas`. Phase 1's checklist enforces this audit.
 
 The lift mechanism itself stays internal to the runtime build — `propertySchemasFacet` doesn't change shape, `typesFacet` doesn't change shape; the merge is a two-input function in `setFacetRuntime`. The public surface is just the getter.
@@ -292,32 +310,45 @@ Type tagging needs a central orchestration point that materialises caller-suppli
 **`Repo` must retain the registries it needs.** `Repo.setFacetRuntime` ([src/data/repo.ts:738](src/data/repo.ts:738)) today only extracts `mutators`, `processors`, `invalidationRules`, and `queries` — it does NOT store the runtime, `typesFacet`, or `propertySchemasFacet`. Phase 1 must extend `setFacetRuntime` to also retain narrower registries needed by type-system orchestration:
 
 ```ts
-// Inside Repo
-private types: ReadonlyMap<string, TypeContribution> = new Map()
-private propertySchemas: ReadonlyMap<string, AnyPropertySchema> = new Map()
+// Inside Repo. Backing fields are underscore-prefixed because the
+// public API exposes a `get propertySchemas()` getter (§1a-public)
+// — TypeScript doesn't allow a private field and a public getter
+// to share an identifier on the same class.
+private _types: ReadonlyMap<string, TypeContribution> = new Map()
+private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = new Map()
+
+get types(): ReadonlyMap<string, TypeContribution> {
+  return this._types
+}
+get propertySchemas(): ReadonlyMap<string, AnyPropertySchema> {
+  return this._propertySchemas
+}
 
 setFacetRuntime(runtime: FacetRuntime): void {
   this.mutators = new Map(runtime.read(mutatorsFacet))
   this.processors = new Map(runtime.read(postCommitProcessorsFacet))
   this.invalidationRules = runtime.read(invalidationRulesFacet)
-  this.types = runtime.read(typesFacet)                   // NEW
-  // §1a schema-lift: merge propertySchemasFacet (direct
-  // registrations) with schemas declared on type contributions.
-  // Direct first, type-lifted second — last-wins-with-warn on
-  // conflicts (object-identity dedup is silent). The merged map
-  // is the single source of truth used by addType encoding,
+  this._types = runtime.read(typesFacet)                   // NEW
+  // §1a schema-lift: merge type-lifted schemas (from typesFacet
+  // contributions' properties[]) with direct propertySchemasFacet
+  // registrations. Type-lifted FIRST, direct SECOND — direct
+  // registrations override type-lifted entries with the same name,
+  // preserving the kernel's "register-after-to-override" pattern
+  // uniformly across sources. Last-wins-with-warn on real
+  // conflicts; object-identity dedup is silent. The merged map is
+  // the single source of truth used by addType encoding,
   // BlockProperties (§3c), processors via CommittedTxOutcome
   // (§7a), the typed-query primitive (§8), etc.
-  this.propertySchemas = mergeLiftedSchemas(
+  this._propertySchemas = mergeLiftedSchemas(
     runtime.read(propertySchemasFacet),
-    this.types,
+    this._types,
   )
   const newQueries = new Map(runtime.read(queriesFacet))
   this.swapQueries(newQueries)
 }
 ```
 
-`mergeLiftedSchemas` is the helper sketched in §1a. Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. `addType` reads `types` for `setup` lookup and contribution existence, and the merged `propertySchemas` for `initialValues` codec encoding. (Reads don't need either registry — schema defaults live on `PropertySchema.defaultValue` and surface naturally through `block.get` / `useProperty` without any type-aware overlay.) The same retained merged `propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
+`mergeLiftedSchemas` is the helper sketched in §1a (lifted-first / direct-second). Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. The public getters expose them to consumers that need read access (the `usePropertySchemas` hook, the typed-query primitive); the underscore-prefixed backing fields are written only by `setFacetRuntime`. Internal code on `Repo` itself (in-tx primitives, snapshot helpers) can read either form — the sketches below use `this._propertySchemas` / `this._types` for clarity that they're touching the backing slot. `addType` reads `_types` for `setup` lookup and contribution existence, and `_propertySchemas` for `initialValues` codec encoding. (Reads don't need either registry — schema defaults live on `PropertySchema.defaultValue` and surface naturally through `block.get` / `useProperty` without any type-aware overlay.) The same retained merged `_propertySchemas` map is what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), so processors see schemas from the same resolved runtime that produced their registry snapshot.
 
 **Two-layer shape: in-tx primitives + tx-opening wrappers.** Every operation that composes (`toggleType`, `setBlockTypes`, anything similar in plugin code) needs to run end-to-end in one tx — read, decide, write all under the same writer slot — otherwise concurrent writes interleave and decisions made on stale reads survive. So define private in-tx helpers and have the public `Repo` methods open a tx and dispatch. Composers (toggle/set) call the helpers directly inside their own tx.
 
@@ -426,8 +457,8 @@ async addType(
    *  unsafe. */
   initialValues: Readonly<Record<string, unknown>> = {},
 ): Promise<void> {
-  const types = this.types
-  const propertySchemas = this.propertySchemas
+  const types = this._types
+  const propertySchemas = this._propertySchemas
   await this.tx(async tx => {
     await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues)
   }, { scope: ChangeScope.BlockDefault, description: `addType ${typeId}` })
@@ -453,7 +484,7 @@ export interface TypeRegistrySnapshot {
  *  Importers / orchestration code call this once before their tx
  *  loop. */
 snapshotTypeRegistries(): TypeRegistrySnapshot {
-  return { types: this.types, propertySchemas: this.propertySchemas }
+  return { types: this._types, propertySchemas: this._propertySchemas }
 }
 
 /** Public tx-aware helper for callers that already hold a tx
@@ -480,8 +511,8 @@ async addTypeInTx(
   initialValues: Readonly<Record<string, unknown>> = {},
   snapshot?: TypeRegistrySnapshot,
 ): Promise<void> {
-  const types = snapshot?.types ?? this.types
-  const propertySchemas = snapshot?.propertySchemas ?? this.propertySchemas
+  const types = snapshot?.types ?? this._types
+  const propertySchemas = snapshot?.propertySchemas ?? this._propertySchemas
   await this._addTypeInTx(tx, types, propertySchemas, blockId, typeId, initialValues)
 }
 
@@ -498,8 +529,8 @@ async toggleType(blockId: string, typeId: string): Promise<void> {
   // both end up tagged otherwise: the load()-then-decide pattern lets
   // both branches choose addType, the second is a no-op and the user
   // expected toggle1+toggle2 to net out.
-  const types = this.types
-  const propertySchemas = this.propertySchemas
+  const types = this._types
+  const propertySchemas = this._propertySchemas
   await this.tx(async tx => {
     const block = await tx.get(blockId)
     if (!block) return
@@ -545,8 +576,8 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
   //      which type's "default wins" for shared fields — that read
   //      path goes straight to PropertySchema.defaultValue.
   const desiredOrder = Array.from(new Set(typeIds))
-  const types = this.types
-  const propertySchemas = this.propertySchemas
+  const types = this._types
+  const propertySchemas = this._propertySchemas
   await this.tx(async tx => {
     const block = await tx.get(blockId)
     if (!block) return
@@ -1020,9 +1051,9 @@ export interface CommittedTxOutcome {
 }
 ```
 
-The `Repo` commit pipeline ([src/data/repo.ts:664](src/data/repo.ts:664)) passes `this.propertySchemas` into the tx-engine alongside `this.processors`; the engine puts both on the result; `processorRunner.dispatch` builds each `ctx` with the bundle's `propertySchemas` rather than reading `repo.propertySchemas` afresh.
+The `Repo` commit pipeline ([src/data/repo.ts:664](src/data/repo.ts:664)) passes `this._propertySchemas` into the tx-engine alongside `this.processors`; the engine puts both on the result; `processorRunner.dispatch` builds each `ctx` with the bundle's `propertySchemas` rather than reading `repo.propertySchemas` afresh.
 
-This requires a public read access on `Repo` only for the tx-engine plumbing path (the engine sees `Repo` internals already). No public getter is needed for general consumers; the type-system orchestration paths (`addType`, `addTypeInTx`) read the same private field directly. (If a future consumer outside `Repo` needs schemas, add a getter then — keeping the API surface small for now.)
+The tx-engine plumbing reads `this._propertySchemas` directly (the engine sees `Repo` internals). External consumers — `BlockProperties` in §3c, the typed-query primitive in §8, plugin code — go through the public `repo.propertySchemas` getter and the reactive `usePropertySchemas` hook (§1a-public). Phase 1 step 6 enforces the audit: every existing `runtime.read(propertySchemasFacet)` call site outside `Repo` migrates to the merged-map path, otherwise type-lifted-only schemas stay invisible.
 
 Same snapshotting rule applies to `types` if a processor ever needs the type registry — wire it through `CommittedTxOutcome.types` at the same time. Currently no processor needs it; `parseReferences` only looks at `propertySchemas` to detect ref codecs.
 
@@ -1199,7 +1230,7 @@ Each phase is independently shippable and testable.
 2. Add `kind: 'ref' | 'refList'` to `PropertyKind`.
 3. Extend `BlockReference` with optional `sourceField`.
 4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Update `backlinksInvalidationRule` ([src/plugins/backlinks/invalidation.ts](src/plugins/backlinks/invalidation.ts)) to diff by `(id, sourceField)` per §6b so source-field-only changes invalidate grouped backlinks.
-5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Add `propertySchemas` to `CommittedTxOutcome` ([src/data/internals/processorRunner.ts:55](src/data/internals/processorRunner.ts:55)) so it's snapshotted alongside `processors` at tx-start; the commit pipeline at [src/data/repo.ts:664](src/data/repo.ts:664) passes `this.propertySchemas` through. `processorRunner.dispatch` reads the bundle's snapshot rather than `repo.propertySchemas` directly so processors and schemas come from the same resolved runtime.
+5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Add `propertySchemas` to `CommittedTxOutcome` ([src/data/internals/processorRunner.ts:55](src/data/internals/processorRunner.ts:55)) so it's snapshotted alongside `processors` at tx-start; the commit pipeline at [src/data/repo.ts:664](src/data/repo.ts:664) passes `this._propertySchemas` through. `processorRunner.dispatch` reads the bundle's snapshot rather than reading the public `repo.propertySchemas` afresh, so processors and schemas come from the same resolved runtime.
 6. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too. Per §7, isolate each property decode in a try/catch so one malformed value doesn't poison the whole projector run.
 7. Add ref-codec-set diff + reprojection pass to `setFacetRuntime` per §7-bis: detect property names whose ref-ness changed between the old and new `propertySchemas` maps, schedule a one-shot processor that re-runs the property-walk over blocks containing those names. Skip `tx.update` when the recomputed `references_json` deep-equals the existing one (avoids churning every block on initial app start when the prior snapshot is empty). Updates use `{skipMetadata: true}` so reprojection isn't credited as a user edit. Tx scope is `References`.
 8. Add `source_field`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
