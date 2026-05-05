@@ -112,7 +112,9 @@ const ensureStateChild = async (
     })
   }, {scope})
 
-  return repo.block(childId)
+  const child = repo.block(childId)
+  await child.load()
+  return child
 }
 
 const ensureUiChild = (repo: Repo, parent: Block, content: string): Promise<Block> =>
