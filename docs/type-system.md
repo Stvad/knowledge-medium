@@ -171,6 +171,19 @@ Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag"
 
 A *read-time overlay* (defaults synthesised on read when a block has the type but lacks the property) is the alternative — but it diverges queries from storage and complicates the typed-query backing in §8. Prefer the materialise-on-add approach.
 
+#### 3b. Multi-type interactions over shared property schemas
+
+When two types share a property schema (the common case under §3's reuse model), how the per-type bits combine matters. The rules:
+
+- **Field discovery (which props apply to a block).** Union of every `TypeContribution.properties` across the block's types, deduped by `name`. If `todo` and `task` both list `statusProp`, the property panel shows `status` once.
+- **Codec.** A property has one codec globally — `propertySchemasFacet` is keyed by `name` and last-wins on duplicates. Multi-type doesn't change that. If two types want truly incompatible codecs, pick distinct names (the §3 rule).
+- **Defaults — first-writer-wins, order-dependent.** `todo.defaults={status:'open'}` and `task.defaults={status:'todo'}` on a block with neither set: `addType('todo')` then `addType('task')` → `status='open'` (the second `addType` sees the property already set and skips). Reverse order → `status='todo'`. Bulk-write paths (importer setting `types=['todo','task']` in one shot) must iterate in array order with the same first-wins rule. The order types appear in `typesProp` is therefore semantically load-bearing for default conflicts. This is intuitive (the type tagged first wins) but worth pinning.
+- **`refTargets` for a shared ref-prop.** Multi-type combine is **union** — `Project.refTargets={tasks:['task']}` + `Person.refTargets={tasks:['activity']}` on a block tagged both means the picker offers `task | activity`. Empty union after merging → fall back to "any type." Intersection would yield an empty picker as soon as two types disagreed; permission unions are the right combine here.
+- **`defaultRenderer`.** Priority arbitration in §4b. Most types contribute none, so multi-type collisions are rare by construction.
+- **Decorations / headers / click handlers (§4a).** Stack natively — every contribution's non-falsy return is applied in contribution order. Multi-type decoration is the easy path; this is the main reason to prefer decorations over renderer-replacement.
+- **Validation (deferred follow-up).** When it lands, validations across types **intersect** — a value must satisfy *all* applicable types' constraints. Constraints restrict; if any type forbids, it's forbidden. Opposite combine rule from `refTargets`, which permits.
+- **`removeType` when a prop is contributed by multiple types.** v1 leaves `block.properties` untouched. If `status` was contributed by both `todo` and `task` and you remove `todo`, `task` still contributes `statusProp` so the panel still shows it. If `status` was *only* contributed by the removed type, the value stays in `block.properties` but disappears from the type-driven panel — inert until re-tagged or manually edited. v1 accepts this leak; revisit if it bites.
+
 ### 4. Type-driven UI: decorations are the common case, full-renderer replacement is the exception
 
 Most type-driven UI is *decoration* layered on the existing block content rendering — a `todo` adds a checkbox + strikethrough-when-done, a `priority=high` block adds a colored chip, a `due` field adds a date pill. Only a few types want to take over the entire block presentation (`video-player`, `panel`, `type-definition`). The design splits cleanly along that axis.
