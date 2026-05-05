@@ -1,7 +1,8 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from './data/repo'
-import { typeProp, rendererProp, aliasesProp } from '@/data/properties'
+import { typesProp, rendererProp, aliasesProp } from '@/data/properties'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
 
 /** Creates a parent-less Tutorial page carrying intro text + a sample
@@ -71,7 +72,7 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
         parentId: extensionsParentId,
         orderKey: `a${i}`,
         content: source,
-        properties: {[typeProp.name]: typeProp.codec.encode('extension')},
+        properties: {[typesProp.name]: typesProp.codec.encode([EXTENSION_TYPE])},
       })
     }
   }, {scope: ChangeScope.BlockDefault, description: 'seed tutorial'})

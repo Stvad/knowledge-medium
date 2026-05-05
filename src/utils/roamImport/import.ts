@@ -19,7 +19,8 @@ import {
   type NewBlockData,
   type Tx,
 } from '@/data/api'
-import { aliasesProp, typeProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp, hasBlockType } from '@/data/properties'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
 import { computeAliasSeatId } from '../../data/targets'
 import { keyAtEnd, keysBetween } from '../../data/orderKey'
@@ -832,8 +833,11 @@ const mergeIntoExistingPage = async (tx: Tx, recon: PageReconciliation) => {
   if (!aliases.includes(recon.page.title)) {
     await tx.setProperty(recon.finalId, aliasesProp, [...aliases, recon.page.title])
   }
-  if (existing.properties[typeProp.name] === undefined) {
-    await tx.setProperty(recon.finalId, typeProp, 'page')
+  const afterAlias = await tx.get(recon.finalId)
+  if (afterAlias && !hasBlockType(afterAlias, PAGE_TYPE)) {
+    await tx.update(recon.finalId, {
+      properties: addBlockTypeToProperties(afterAlias.properties, PAGE_TYPE),
+    })
   }
   // Descendants are already routed under recon.finalId via the
   // reparentMap (their parentId was rewritten before tx.createOrGet).

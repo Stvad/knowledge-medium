@@ -111,13 +111,6 @@ export const typesProp = defineProperty<readonly string[]>('types', {
   kind: 'list',
 })
 
-export const typeProp = defineProperty<string | undefined>('type', {
-  codec: codecs.optional(codecs.string),
-  defaultValue: undefined,
-  changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
-})
-
 export const rendererProp = defineProperty<string | undefined>('renderer', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
@@ -220,7 +213,7 @@ export type { PropertySchema }
  *  Heterogeneous `PropertySchema<T>` shapes flatten through
  *  `PropertySchema<unknown>` for storage in the array — the precise
  *  per-schema types stay at the export sites and reach typed callers
- *  via the schema reference (`block.set(typeProp, ...)` etc.). */
+ *  via the schema reference (`block.set(typesProp, ...)` etc.). */
 export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   // UI-state schemas
   showPropertiesProp,
@@ -233,7 +226,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   // BlockDefault schemas
   isCollapsedProp,
   typesProp,
-  typeProp,
   rendererProp,
   rendererNameProp,
   extensionDisabledProp,

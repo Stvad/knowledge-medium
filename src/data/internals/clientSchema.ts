@@ -172,6 +172,28 @@ export const CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL = `
   ON block_aliases (workspace_id, alias_lower)
 `
 
+export const DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL = `
+  DROP INDEX IF EXISTS idx_blocks_workspace_type
+`
+
+/** Trigger-maintained membership index over `properties_json.$.types`.
+ *  This replaces the old scalar `$.type` expression index: SQLite
+ *  cannot expression-index array membership directly, so by-type
+ *  queries join through this local side table. */
+export const CREATE_BLOCK_TYPES_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS block_types (
+    block_id     TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    type         TEXT NOT NULL,
+    PRIMARY KEY (block_id, type)
+  )
+`
+
+export const CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_block_types_type_workspace
+  ON block_types (type, workspace_id)
+`
+
 // ============================================================================
 // Helpers used inside trigger bodies. Centralised so the SQL fragments
 // match in every trigger.
@@ -470,6 +492,47 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
   END
 `
 
+// ============================================================================
+// block_types triggers (3) — same maintenance shape as block_aliases, but
+// indexing every string in properties_json $.types.
+// ============================================================================
+
+const typeInsertSelectSql = (rowRef: 'NEW') => `
+      INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+      SELECT ${rowRef}.id, ${rowRef}.workspace_id, je.value
+      FROM json_each(${rowRef}.properties_json, '$.types') AS je
+      WHERE typeof(je.value) = 'text';
+`.trim()
+
+export const CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_type_insert
+  AFTER INSERT ON blocks
+  WHEN NEW.deleted = 0
+  BEGIN
+    ${typeInsertSelectSql('NEW')}
+  END
+`
+
+export const CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_type_update
+  AFTER UPDATE OF properties_json, deleted, workspace_id ON blocks
+  BEGIN
+    DELETE FROM block_types WHERE block_id = NEW.id;
+    INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+    SELECT NEW.id, NEW.workspace_id, je.value
+    FROM json_each(NEW.properties_json, '$.types') AS je
+    WHERE NEW.deleted = 0 AND typeof(je.value) = 'text';
+  END
+`
+
+export const CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_type_delete
+  AFTER DELETE ON blocks
+  BEGIN
+    DELETE FROM block_types WHERE block_id = OLD.id;
+  END
+`
+
 /** One-shot backfill from `blocks.properties_json`. Called after the
  *  CLIENT_SCHEMA_STATEMENTS run, gated on a `client_schema_state` row
  *  so existing installations populate the index once on the first
@@ -507,6 +570,24 @@ export const BACKFILL_BLOCK_ALIASES_SQL = `
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
 `
 
+export const BLOCK_TYPES_BACKFILL_MARKER_KEY = 'block_types_backfill_v1'
+
+export const SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL = `
+  SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_TYPES_BACKFILL_MARKER_KEY}'
+`
+
+export const RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES ('${BLOCK_TYPES_BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
+`
+
+export const BACKFILL_BLOCK_TYPES_SQL = `
+  INSERT OR IGNORE INTO block_types (block_id, workspace_id, type)
+  SELECT b.id, b.workspace_id, je.value
+  FROM blocks b, json_each(b.properties_json, '$.types') AS je
+  WHERE b.deleted = 0 AND typeof(je.value) = 'text'
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).
@@ -526,7 +607,10 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCK_ALIASES_TABLE_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,
+  CREATE_BLOCK_TYPES_TABLE_SQL,
+  CREATE_BLOCK_TYPES_TYPE_WORKSPACE_INDEX_SQL,
   CREATE_CLIENT_SCHEMA_STATE_TABLE_SQL,
+  DROP_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
   // 5 audit/upload triggers
   CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL,
   CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL,
@@ -540,6 +624,10 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL,
+  // 3 block_types-maintenance triggers
+  CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL,
+  CREATE_BLOCKS_TYPE_DELETE_TRIGGER_SQL,
 ] as const
 
 export const CLIENT_SCHEMA_TRIGGER_NAMES = [
@@ -553,6 +641,9 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_alias_insert',
   'blocks_alias_update',
   'blocks_alias_delete',
+  'blocks_type_insert',
+  'blocks_type_update',
+  'blocks_type_delete',
 ] as const
 
 interface ClientSchemaBootstrapDb {
@@ -578,4 +669,13 @@ export const backfillBlockAliasesIfEmpty = async (
   // an empty workspace is fully backfilled too, and we don't want to
   // re-scan blocks on every start in that case.
   await db.execute(RECORD_BLOCK_ALIASES_BACKFILL_DONE_SQL)
+}
+
+export const backfillBlockTypesIfEmpty = async (
+  db: ClientSchemaBootstrapDb,
+): Promise<void> => {
+  const done = await db.getOptional<{1: number}>(SELECT_BLOCK_TYPES_BACKFILL_DONE_SQL)
+  if (done !== null) return
+  await db.execute(BACKFILL_BLOCK_TYPES_SQL)
+  await db.execute(RECORD_BLOCK_TYPES_BACKFILL_DONE_SQL)
 }

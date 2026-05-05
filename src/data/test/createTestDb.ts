@@ -30,11 +30,11 @@ import {
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-  CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL,
 } from '@/data/blockSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
   backfillBlockAliasesIfEmpty,
+  backfillBlockTypesIfEmpty,
 } from '@/data/internals/clientSchema'
 import {
   applyLocalSchemaContributions,
@@ -70,7 +70,6 @@ export const createTestDb = async (): Promise<TestDb> => {
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-  await db.execute(CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await db.execute(stmt)
   }
@@ -85,6 +84,7 @@ export const createTestDb = async (): Promise<TestDb> => {
     },
   }
   await backfillBlockAliasesIfEmpty(backfillDb)
+  await backfillBlockTypesIfEmpty(backfillDb)
   await applyLocalSchemaContributions(
     backfillDb,
     resolveLocalSchemaContributions(staticDataExtensions),

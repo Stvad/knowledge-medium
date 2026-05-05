@@ -29,14 +29,17 @@ export const SELECT_BLOCK_BY_ID_SQL = `
     AND deleted = 0
 `
 
-/** Type filter — flat-property shape (`$.type`, not `$.type.value`). */
+/** Type filter — array membership via the trigger-maintained block_types index. */
 export const SELECT_BLOCKS_BY_TYPE_SQL = `
-  SELECT ${SELECT_BLOCK_COLUMNS_SQL}
-  FROM blocks
-  WHERE workspace_id = ?
-    AND deleted = 0
-    AND json_extract(properties_json, '$.type') = ?
-  ORDER BY created_at ASC, id ASC
+  SELECT ${buildQualifiedBlockColumnsSql('b')}
+  FROM blocks b
+  JOIN block_types bt
+    ON bt.block_id = b.id
+   AND bt.workspace_id = b.workspace_id
+  WHERE b.workspace_id = ?
+    AND b.deleted = 0
+    AND bt.type = ?
+  ORDER BY b.created_at ASC, b.id ASC
 `
 
 /** Content search — case-insensitive substring match. */

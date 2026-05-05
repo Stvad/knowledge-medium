@@ -15,7 +15,8 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp, typeProp } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
+import { DAILY_NOTE_TYPE, JOURNAL_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -98,7 +99,7 @@ describe('getOrCreateJournalBlock', () => {
     expect(data?.workspaceId).toBe(WS)
     expect(data?.content).toBe('Journal')
     expect(journal.peekProperty(aliasesProp)).toEqual(['Journal'])
-    expect(journal.peekProperty(typeProp)).toBe('journal')
+    expect(journal.hasType(JOURNAL_TYPE)).toBe(true)
   })
 
   it('is idempotent: second call returns the same row, no duplicate', async () => {
@@ -121,7 +122,7 @@ describe('getOrCreateJournalBlock', () => {
     expect(restored.id).toBe(journal.id)
     expect(restored.peek()?.deleted).toBe(false)
     expect(restored.peekProperty(aliasesProp)).toEqual(['Journal'])
-    expect(restored.peekProperty(typeProp)).toBe('journal')
+    expect(restored.hasType(JOURNAL_TYPE)).toBe(true)
   })
 })
 
@@ -135,7 +136,7 @@ describe('getOrCreateDailyNote', () => {
     const data = note.peek()
     expect(data?.parentId).toBe(journalBlockId(WS))
     expect(data?.workspaceId).toBe(WS)
-    expect(note.peekProperty(typeProp)).toBe('daily-note')
+    expect(note.hasType(DAILY_NOTE_TYPE)).toBe(true)
 
     const aliases = note.peekProperty(aliasesProp)
     expect(aliases).toHaveLength(2)
@@ -213,6 +214,6 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.id).toBe(note.id)
     expect(restored.peek()?.deleted).toBe(false)
     expect(restored.peek()?.parentId).toBe(journalBlockId(WS))
-    expect(restored.peekProperty(typeProp)).toBe('daily-note')
+    expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
   })
 })

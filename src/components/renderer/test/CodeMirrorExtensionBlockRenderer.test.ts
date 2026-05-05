@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '../../../data/block'
 import type { BlockData, BlockRendererProps } from '@/types.ts'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { typesProp } from '@/data/properties'
 
 // Importing the renderer pulls in DefaultBlockRenderer → radix-ui →
 // react-dom. Stub the heavy transitive deps so the canRender/priority
@@ -40,17 +42,17 @@ const fakeBlock = (id: string, properties: BlockData['properties'] = {}): Block 
 const propsFor = (block: Block): BlockRendererProps => ({block} as unknown as BlockRendererProps)
 
 describe('CodeMirrorExtensionBlockRenderer.canRender', () => {
-  it('returns true when block type is extension', () => {
-    const block = fakeBlock('ext-1', {type: 'extension'})
+  it('returns true when block has the extension type', () => {
+    const block = fakeBlock('ext-1', {[typesProp.name]: typesProp.codec.encode([EXTENSION_TYPE])})
     expect(CodeMirrorExtensionBlockRenderer.canRender?.(propsFor(block))).toBe(true)
   })
 
-  it('returns false when block type is anything else', () => {
-    const block = fakeBlock('plain-1', {type: 'note'})
+  it('returns false when block has another type', () => {
+    const block = fakeBlock('plain-1', {[typesProp.name]: typesProp.codec.encode(['note'])})
     expect(CodeMirrorExtensionBlockRenderer.canRender?.(propsFor(block))).toBe(false)
   })
 
-  it('returns false when type property is missing', () => {
+  it('returns false when types property is missing', () => {
     const block = fakeBlock('plain-2')
     expect(CodeMirrorExtensionBlockRenderer.canRender?.(propsFor(block))).toBe(false)
   })

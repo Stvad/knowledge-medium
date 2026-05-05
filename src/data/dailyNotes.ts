@@ -2,7 +2,8 @@ import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { aliasesProp, typeProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { DAILY_NOTE_TYPE, JOURNAL_TYPE } from '@/data/blockTypes'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 
 // Namespace UUIDs — fixed constants so two clients computing the same
@@ -22,8 +23,6 @@ export const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
 export const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
 const JOURNAL_ALIAS = 'Journal'
-const JOURNAL_TYPE = 'journal'
-const DAILY_NOTE_TYPE = 'daily-note'
 
 export const journalBlockId = (workspaceId: string): string =>
   uuidv5(workspaceId, JOURNAL_NS)
@@ -83,7 +82,7 @@ export const getOrCreateJournalBlock = async (
     if (existing && existing.deleted) {
       await tx.restore(id, {content: JOURNAL_ALIAS})
       await tx.setProperty(id, aliasesProp, [JOURNAL_ALIAS])
-      await tx.setProperty(id, typeProp, JOURNAL_TYPE)
+      await tx.setProperty(id, typesProp, [JOURNAL_TYPE])
       return
     }
     await tx.create({
@@ -94,7 +93,7 @@ export const getOrCreateJournalBlock = async (
       content: JOURNAL_ALIAS,
       properties: {
         [aliasesProp.name]: aliasesProp.codec.encode([JOURNAL_ALIAS]),
-        [typeProp.name]: typeProp.codec.encode(JOURNAL_TYPE),
+        [typesProp.name]: typesProp.codec.encode([JOURNAL_TYPE]),
       },
     })
   }, {scope: ChangeScope.BlockDefault})
@@ -156,7 +155,7 @@ export const getOrCreateDailyNote = async (
     if (existing && existing.deleted) {
       await tx.restore(id, {content: longLabel})
       await tx.setProperty(id, aliasesProp, [longLabel, isoLabel])
-      await tx.setProperty(id, typeProp, DAILY_NOTE_TYPE)
+      await tx.setProperty(id, typesProp, [DAILY_NOTE_TYPE])
       // Re-parent under the journal in case the prior tombstoned row
       // had drifted. tx.move sets parent_id + order_key in one
       // primitive (with engine cycle check on parent_id mutation).
@@ -171,7 +170,7 @@ export const getOrCreateDailyNote = async (
       content: longLabel,
       properties: {
         [aliasesProp.name]: aliasesProp.codec.encode([longLabel, isoLabel]),
-        [typeProp.name]: typeProp.codec.encode(DAILY_NOTE_TYPE),
+        [typesProp.name]: typesProp.codec.encode([DAILY_NOTE_TYPE]),
       },
     })
   }, {scope: ChangeScope.BlockDefault})

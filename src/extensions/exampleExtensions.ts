@@ -15,7 +15,8 @@
 // content area is customized.
 
 import type { Block } from '../data/block'
-import { typeProp } from '@/data/properties.ts'
+import { typesProp } from '@/data/properties.ts'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 
 export interface ExampleExtensionDefinition {
   /** Stable, kebab-case label used in commit history and source attribution. */
@@ -274,7 +275,7 @@ export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
 
 export const TUTORIAL_README = `Welcome — this is a malleable thought medium.
 
-Below are example **extension blocks** (\`type: extension\`) that show the kinds of things you can build:
+Below are example **extension blocks** (\`types: ['extension']\`) that show the kinds of things you can build:
 
 - **hello-renderer** — wraps the primary content renderer (no replacement of the host block).
 - **fold-all-action** — an action with a default keyboard shortcut.
@@ -283,7 +284,7 @@ Below are example **extension blocks** (\`type: extension\`) that show the kinds
 - **split-layout** — replaces the block layout for blocks tagged \`user:layout = split\`, placing content and children side by side.
 
 To author your own:
-1. Create a block with property \`type = extension\`.
+1. Create a block with property \`types = ['extension']\`.
 2. Set its content to a TS/JSX module whose \`default\` export is an \`AppExtension\` — a FacetContribution, an array, or a function returning one.
 3. Import what you need from \`@/extensions/api.js\` (\`Object.keys(km)\` to discover; or check the agent bridge's describeRuntime).
 4. Run the "Reload extensions" command (Cmd-K) to apply changes after editing.
@@ -306,7 +307,7 @@ export const insertExampleExtensionsUnder = async (
     const id = await repo.mutate.createChild({
       parentId: parentBlock.id,
       content: example.source,
-      properties: {[typeProp.name]: typeProp.codec.encode('extension')},
+      properties: {[typesProp.name]: typesProp.codec.encode([EXTENSION_TYPE])},
     }) as string
     created.push(repo.block(id))
   }

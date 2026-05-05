@@ -2,7 +2,8 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDisabledProp, typeProp } from '@/data/properties.ts'
+import { addBlockTypeToProperties, aliasesProp, extensionDisabledProp } from '@/data/properties.ts'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
@@ -185,8 +186,7 @@ const extensionBlockProperties = (
   if (label) aliases.add(label)
 
   return {
-    ...(existing ?? {}),
-    [typeProp.name]: typeProp.codec.encode('extension'),
+    ...addBlockTypeToProperties(existing ?? {}, EXTENSION_TYPE),
     ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
     ...(disabled !== undefined ? {[extensionDisabledProp.name]: extensionDisabledProp.codec.encode(disabled)} : {}),
   }

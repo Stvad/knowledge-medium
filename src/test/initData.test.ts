@@ -11,8 +11,7 @@
  *   - Returns the tutorial root id
  *   - Lays down the intro + sample renderer children with the right
  *     properties
- *   - Lays down the extensions parent + one child per example
- *     extension, all tagged type=extension
+ *   - Lays down the extensions parent + one extension-typed child per example
  *   - All inserts share a single tx (one command_events row)
  *
  * Replaces deleted `src/test/initData.test.ts` (legacy `Repo`/`Block`
@@ -21,7 +20,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { aliasesProp, typeProp, rendererProp } from '@/data/properties'
+import { aliasesProp, rendererProp } from '@/data/properties'
+import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../data/repo'
@@ -104,7 +104,7 @@ describe('seedTutorial', () => {
     expect(extensionsParent.peekProperty(aliasesProp)).toEqual(['extensions'])
   })
 
-  it('seeds one block per example extension, all tagged type=extension', async () => {
+  it('seeds one block per example extension, all tagged as extension', async () => {
     const tutorialId = await seedTutorial(env.repo, WS)
     await env.repo.load(tutorialId, {descendants: true})
 
@@ -115,7 +115,7 @@ describe('seedTutorial', () => {
 
     expect(extBlocks).toHaveLength(exampleExtensions.length)
     for (const block of extBlocks) {
-      expect(block.peekProperty(typeProp)).toBe('extension')
+      expect(block.hasType(EXTENSION_TYPE)).toBe(true)
     }
     // Source content matches example extensions in declaration order.
     expect(extBlocks.map(b => b.peek()?.content)).toEqual(

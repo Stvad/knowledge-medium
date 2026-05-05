@@ -19,7 +19,7 @@ import {
   type BlockData,
   type BlockReference,
 } from '@/data/api'
-import { aliasesProp, typeProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
@@ -69,7 +69,7 @@ const create = async (args: {
 }) => {
   const properties: Record<string, unknown> = {}
   if (args.aliases) properties[aliasesProp.name] = aliasesProp.codec.encode(args.aliases)
-  if (args.type) properties[typeProp.name] = typeProp.codec.encode(args.type)
+  if (args.type) properties[typesProp.name] = typesProp.codec.encode([args.type])
   await env.repo.tx(async tx => {
     await tx.create({
       id: args.id,
@@ -194,7 +194,7 @@ describe('repo.query.childIds', () => {
 })
 
 describe('repo.query.byType', () => {
-  it('returns blocks whose type property matches', async () => {
+  it('returns blocks whose types membership matches', async () => {
     await create({id: 'a', type: 'note'})
     await create({id: 'b', type: 'note'})
     await create({id: 'c', type: 'task'})
@@ -382,7 +382,7 @@ describe('repo.query.aliasLookup', () => {
 })
 
 describe('repo.query.findExtensionBlocks', () => {
-  it('returns blocks whose type property is "extension"', async () => {
+  it('returns blocks whose types membership includes "extension"', async () => {
     await create({id: 'ext1', type: 'extension'})
     await create({id: 'ext2', type: 'extension'})
     await create({id: 'note', type: 'note'})

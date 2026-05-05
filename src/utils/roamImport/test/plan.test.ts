@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { computePromotedFromChildren, planImport } from '../plan'
 import { roamBlockId } from '../ids'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
-import { aliasesProp, typeProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import type { RoamExport } from '../types'
 
 const WORKSPACE = '11111111-2222-4333-8444-555555555555'
@@ -76,8 +77,8 @@ describe('planImport', () => {
     // Flat property shape: encoded value stored directly.
     expect(wcs?.data?.properties[aliasesProp.name])
       .toEqual(aliasesProp.codec.encode(['wcs/plan']))
-    expect(wcs?.data?.properties[typeProp.name])
-      .toBe(typeProp.codec.encode('page'))
+    expect(wcs?.data?.properties[typesProp.name])
+      .toEqual(typesProp.codec.encode([PAGE_TYPE]))
     expect(wcs?.childIds).toEqual([roamBlockId(WORKSPACE, 'parentuid')])
     expect(wcs?.data?.parentId).toBeNull()
   })

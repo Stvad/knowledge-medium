@@ -9,7 +9,8 @@ import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
 import { v5 as uuidv5 } from 'uuid'
-import { focusedBlockIdProp, topLevelBlockIdProp, typeProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.ts'
+import { PANEL_TYPE } from '@/data/blockTypes'
 import { useChildren } from '@/hooks/block.ts'
 
 // Mirrors UI_CHILD_NS in globalState.ts. Used to derive a deterministic
@@ -18,7 +19,7 @@ import { useChildren } from '@/hooks/block.ts'
 const UI_CHILD_NS = '8f6c2c84-1c12-4e4a-8b9e-9b0f87a7e1d2'
 
 /** Get-or-create the "main" panel under the panels block. Idempotent
- *  via deterministic id. The panel row carries `type='panel'` so the
+ *  via deterministic id. The panel row carries `types=['panel']` so the
  *  panel renderer picks it up; we set that under UiState scope so the
  *  write doesn't enter the upload queue. */
 const ensureMainPanel = async (panelsBlock: Block): Promise<Block> => {
@@ -61,17 +62,17 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const isMobile = useIsMobile()
 
   useEffect(() => {
-    // Stamp `type='panel'`, `topLevelBlockId=block.id`, and
+    // Stamp `types=['panel']`, `topLevelBlockId=block.id`, and
     // `focusedBlockId=block.id` on the main panel block so the panel
     // renderer recognizes it and keyboard navigation has a panel-local
     // focus target after URL navigation. These writes go
-    // through a UiState-scoped tx — typeProp's schema declares
+    // through a UiState-scoped tx — typesProp's schema declares
     // BlockDefault as its default, but the panel-infrastructure write
     // is engine-routing-only and shouldn't reach the upload queue.
     // Routing through `repo.tx` directly (vs `block.set`) lets us
     // override scope while still using the schema's codec.
     void repo.tx(async tx => {
-      await tx.setProperty(mainPanelBlock.id, typeProp, 'panel')
+      await tx.setProperty(mainPanelBlock.id, typesProp, [PANEL_TYPE])
       await tx.setProperty(mainPanelBlock.id, topLevelBlockIdProp, block.id)
       await tx.setProperty(mainPanelBlock.id, focusedBlockIdProp, block.id)
     }, {scope: ChangeScope.UiState, description: 'init main panel'})
@@ -117,7 +118,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
             content: blockToOpenId,
           })
         }
-        await tx.setProperty(panelId, typeProp, 'panel')
+        await tx.setProperty(panelId, typesProp, [PANEL_TYPE])
         await tx.setProperty(panelId, topLevelBlockIdProp, blockToOpenId)
         await tx.setProperty(panelId, focusedBlockIdProp, blockToOpenId)
       }, {scope: ChangeScope.UiState, description: 'open panel'})

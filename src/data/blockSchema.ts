@@ -100,19 +100,6 @@ export const CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL = `
   WHERE deleted = 0
 `
 
-/** Expression index over `(workspace_id, $.type)`. Local-only — there's no
- *  matching server-side index, this exists to make the
- *  `SELECT_BLOCKS_BY_TYPE_SQL` path cheap on imports with O(100k) blocks
- *  where the JSON-extract scan would otherwise be a full-table walk.
- *  `findExtensionBlocks` runs at every workspace bootstrap and re-runs on
- *  every workspace-scoped invalidation; without this it dominated cold
- *  load (single ~2.7s call per re-run on the 91k-block import DB). */
-export const CREATE_BLOCKS_WORKSPACE_TYPE_INDEX_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_blocks_workspace_type
-  ON blocks (workspace_id, json_extract(properties_json, '$.type'))
-  WHERE deleted = 0
-`
-
 export const UPSERT_BLOCK_SQL = `
   INSERT INTO blocks (
 ${formatSqlList(BLOCK_COLUMN_NAMES, 4)}

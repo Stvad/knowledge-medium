@@ -4,6 +4,7 @@ import { createTestDb, type TestDb } from './createTestDb'
 import { BLOCK_STORAGE_COLUMNS } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
+  BLOCK_TYPES_BACKFILL_MARKER_KEY,
   CLIENT_SCHEMA_TRIGGER_NAMES,
 } from '@/data/internals/clientSchema'
 import { resolveLocalSchemaContributions } from '@/data/localSchema.ts'
@@ -52,7 +53,21 @@ describe('createTestDb harness', () => {
     expect(names).toEqual(expect.arrayContaining([
       'idx_blocks_parent_order',
       'idx_blocks_workspace_active',
-      'idx_blocks_workspace_type',
+    ]))
+  })
+
+  it('installs the block_types side index', async () => {
+    const columns = (await h.db.getAll<{name: string}>(
+      "SELECT name FROM pragma_table_info('block_types') ORDER BY cid",
+    )).map(r => r.name)
+    expect(columns).toEqual(['block_id', 'workspace_id', 'type'])
+
+    const indexes = (await h.db.getAll<{name: string}>(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='block_types'",
+    )).map(r => r.name)
+    expect(indexes).toEqual(expect.arrayContaining([
+      'sqlite_autoindex_block_types_1',
+      'idx_block_types_type_workspace',
     ]))
   })
 
@@ -62,6 +77,7 @@ describe('createTestDb harness', () => {
     )).map(r => r.key)
     expect(keys).toEqual(expect.arrayContaining([
       ALIAS_BACKFILL_MARKER_KEY,
+      BLOCK_TYPES_BACKFILL_MARKER_KEY,
     ]))
   })
 
