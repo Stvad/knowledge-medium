@@ -171,6 +171,25 @@ Every tag-mapping path (Roam importer, agent commands, command-palette "Add tag"
 
 A *read-time overlay* (defaults synthesised on read when a block has the type but lacks the property) is the alternative — but it diverges queries from storage and complicates the typed-query backing in §8. Prefer the materialise-on-add approach.
 
+**`Block` facade sugar** mirrors the existing `get`/`set`/`setContent`/`delete` pattern at [src/data/block.ts:159](src/data/block.ts:159)–[:228](src/data/block.ts:228):
+
+```ts
+get types(): readonly string[] {
+  return this.peekProperty(typesProp) ?? []
+}
+hasType(typeId: string): boolean {
+  return this.types.includes(typeId)
+}
+async addType(typeId: string): Promise<void> {
+  await this.repo.mutate.addType({blockId: this.id, typeId})
+}
+async removeType(typeId: string): Promise<void> {
+  await this.repo.mutate.removeType({blockId: this.id, typeId})
+}
+```
+
+`block.hasType('todo')` is the canonical guard at every type-decoration call site (replaces `block.peekProperty(typesProp)?.includes('todo')`). No `setTypes(array)` sugar — the bulk path is the importer's, and going through `tx.update` keeps the "defaults-on-add" semantics explicit at that one site rather than implied by an atomic-looking facade method.
+
 #### 3b. Multi-type interactions over shared property schemas
 
 When two types share a property schema (the common case under §3's reuse model), how the per-type bits combine matters. The rules:
@@ -192,11 +211,11 @@ Most type-driven UI is *decoration* layered on the existing block content render
 
 The block-interaction facets in [src/extensions/blockInteraction.ts](src/extensions/blockInteraction.ts) (`blockContentDecoratorsFacet`, `blockHeaderFacet`, `blockChildrenFooterFacet`, `blockClickHandlersFacet`, `blockContentSurfacePropsFacet`, `blockLayoutFacet`) already have the right shape: each contribution is a function `(BlockResolveContext) => Contribution | null | undefined | false`, and returning a falsy value opts the block out. `BlockResolveContext` carries `block: Block`, so a type-bound contribution simply reads `typesProp` and bails when its type isn't present. **No new slot on `TypeContribution` is needed.**
 
-The convention for type-driven decoration: a type contribution registers its decorators/headers/etc. into the existing facets via the same `AppExtension` array as everything else, gating each on `block.peekProperty(typesProp)?.includes(typeId)`. Example for `todo`:
+The convention for type-driven decoration: a type contribution registers its decorators/headers/etc. into the existing facets via the same `AppExtension` array as everything else, gating each on `block.hasType(typeId)` (the §3a facade sugar). Example for `todo`:
 
 ```ts
 const todoCheckboxDecorator: BlockContentDecoratorContribution = ({block}) => {
-  if (!block.peekProperty(typesProp)?.includes('todo')) return null
+  if (!block.hasType('todo')) return null
   return (Inner) => (props) => (
     <>
       <TodoCheckbox blockId={props.block.id} />
@@ -430,10 +449,11 @@ Each phase is independently shippable and testable.
 4. Rewrite `SELECT_BLOCKS_BY_TYPE_SQL` and `findExtensionBlocksQuery` to join `block_types` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33), [:384](src/data/internals/kernelQueries.ts:384)). Drop `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)).
 5. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
 6. Add `repo.mutate.addType` / `repo.mutate.removeType` per §3a.
-7. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
-8. Update every `typeProp` write site to call `addType` (or write `typesProp` directly for batch paths like the Roam importer that bypass mutators).
-9. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]`. Greps: `grep -rn "typeProp" src/`.
-10. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
+7. Add `Block` facade sugar: `block.types` getter, `block.hasType(id)`, `block.addType(id)`, `block.removeType(id)` ([src/data/block.ts](src/data/block.ts)). Use `hasType` at every type-decoration call site introduced in later phases.
+8. One-shot data migration: backfill `properties.types = [oldType]` for every row with `properties.type` (clearing `properties.type`). The `block_types` triggers populate the side table from `properties.types` automatically.
+9. Update every `typeProp` write site to call `addType` (or write `typesProp` directly for batch paths like the Roam importer that bypass mutators).
+10. Update every `typeProp` read site to read `typesProp` and `.includes(value)` / `[0]` (or use `block.hasType`/`block.types` once #7 lands). Greps: `grep -rn "typeProp" src/`.
+11. Remove `typeProp` from `KERNEL_PROPERTY_SCHEMAS` and from [properties.ts](src/data/properties.ts).
 
 **Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join.
 
