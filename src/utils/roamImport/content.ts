@@ -2,7 +2,8 @@
 //
 // What this does:
 //   - `((roamUid))`            → `((<our-uuid>))`        (block ref)
-//   - `{{embed: ((roamUid))}}` → `!((<our-uuid>))`       (block embed,
+//   - `{{embed: ((roamUid))}}` / `{{[[embed]]: ((roamUid))}}`
+//                              → `!((<our-uuid>))`       (block embed,
 //                                                        Obsidian-style)
 //   - `[label](((roamUid)))`   → `[label] ((<our-uuid>))`
 //                                (preserves the alias text + a working
@@ -21,9 +22,10 @@
 
 const ROAM_UID = '[A-Za-z0-9_-]+'
 
-// `{{embed: ((uid))}}` — match BEFORE the bare `((uid))` so we don't
-// double-replace.
-const EMBED_RE = new RegExp(`\\{\\{\\s*embed\\s*:\\s*\\(\\((${ROAM_UID})\\)\\)\\s*\\}\\}`, 'g')
+// `{{embed: ((uid))}}` / `{{[[embed]]: ((uid))}}` — match BEFORE the bare
+// `((uid))` so we don't double-replace.
+const ROAM_EMBED_DIRECTIVE = '(?:embed|\\[\\[embed\\]\\])'
+const EMBED_RE = new RegExp(`\\{\\{\\s*${ROAM_EMBED_DIRECTIVE}\\s*:\\s*\\(\\((${ROAM_UID})\\)\\)\\s*\\}\\}`, 'g')
 
 // `[label](((uid)))` — Roam's aliased block ref. Markdown link with a
 // `((uid))` href.
@@ -45,7 +47,8 @@ export interface ContentRewriteResult {
 }
 
 // Surface every Roam uid the content uses as a `((uid))` block-ref or
-// `{{embed: ((uid))}}` embed. Used by the planner to register a
+// `{{embed: ((uid))}}` / `{{[[embed]]: ((uid))}}` embed. Used by the
+// planner to register a
 // deterministic id for refs whose target isn't a block elsewhere in the
 // export — so the orchestrator can mint an empty placeholder block,
 // `((uid))` in content gets rewritten to the placeholder uuid, and a
@@ -70,7 +73,8 @@ interface BlockRefMatch {
   replacement: string
 }
 
-// Resolve all `((uid))` / `{{embed: ((uid))}}` / `[label](((uid)))`
+// Resolve all `((uid))` / `{{embed: ((uid))}}` /
+// `{{[[embed]]: ((uid))}}` / `[label](((uid)))`
 // occurrences against the *source* string in a single pass, so the
 // resolved-UUID output of one rewrite isn't fed back into the next
 // rewrite (which would treat it as a fresh uid to look up). Returns

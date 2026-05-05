@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyHeading, rewriteRoamContent } from '../content'
+import { applyHeading, collectContentRefUids, rewriteRoamContent } from '../content'
 
 const uidMap = new Map<string, string>([
   ['vgkFNA64b', 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'],
@@ -19,6 +19,16 @@ describe('rewriteRoamContent', () => {
   it('rewrites embed macro to !((uuid))', () => {
     const {content} = rewriteRoamContent(
       '{{embed: ((vgkFNA64b))}} and {{ embed : ((3iAWxE3r8)) }}',
+      uidMap,
+    )
+    expect(content).toBe(
+      '!((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee)) and !((11111111-2222-4333-8444-555555555555))',
+    )
+  })
+
+  it('rewrites wikilink embed directive macro to !((uuid))', () => {
+    const {content} = rewriteRoamContent(
+      '{{[[embed]]: ((vgkFNA64b))}} and {{ [[embed]] : ((3iAWxE3r8)) }}',
       uidMap,
     )
     expect(content).toBe(
@@ -92,6 +102,14 @@ describe('rewriteRoamContent', () => {
   it('leaves [[Page]] page refs alone', () => {
     const {content} = rewriteRoamContent('see [[April 28th, 2026]]', uidMap)
     expect(content).toBe('see [[April 28th, 2026]]')
+  })
+})
+
+describe('collectContentRefUids', () => {
+  it('collects both embed directive spellings', () => {
+    expect(collectContentRefUids(
+      '{{embed: ((vgkFNA64b))}} {{[[embed]]: ((3iAWxE3r8))}}',
+    )).toEqual(['vgkFNA64b', '3iAWxE3r8'])
   })
 })
 
