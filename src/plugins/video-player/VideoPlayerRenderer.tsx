@@ -7,6 +7,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useContent, usePropertyValue } from '@/hooks/block.ts'
+import { useUIStateBlock } from '@/data/globalState.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { PanelRightClose, PanelRightOpen } from 'lucide-react'
 import type {
@@ -19,11 +20,13 @@ import {
   seekToEventName,
   SeekToEventDetail,
 } from './events.ts'
+import { enterVideoNotesView } from './notes.ts'
 import { videoPlayerViewProp } from './view.ts'
 
 const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
-  const [view, setView] = usePropertyValue(block, videoPlayerViewProp)
+  const [view] = usePropertyValue(block, videoPlayerViewProp)
+  const uiStateBlock = useUIStateBlock()
   const player = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -103,7 +106,7 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
           aria-label="Open video notes view"
           title="Open video notes view"
           className="absolute right-2 top-2 opacity-0 shadow-md transition-opacity group-hover/video-player:opacity-100 focus-visible:opacity-100"
-          onClick={() => setView('notes')}
+          onClick={() => { void enterVideoNotesView(block, uiStateBlock) }}
         >
           <PanelRightOpen className="h-4 w-4"/>
         </Button>

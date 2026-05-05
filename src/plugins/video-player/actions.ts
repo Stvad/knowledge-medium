@@ -11,6 +11,7 @@ import type {
   BaseShortcutDependencies,
 } from '@/shortcuts/types.ts'
 import { requestCurrentTime } from './events.ts'
+import { enterVideoNotesView } from './notes.ts'
 import { videoPlayerViewProp } from './view.ts'
 
 export const VIDEO_PLAYER_CONTEXT = 'video-player'
@@ -129,7 +130,12 @@ const toggleVideoNotesView: ActionConfig = {
     if (!isVideoPlayerShortcutDependencies(deps)) return
 
     const currentView = deps.videoBlock.peekProperty(videoPlayerViewProp) ?? videoPlayerViewProp.defaultValue
-    await deps.videoBlock.set(videoPlayerViewProp, currentView === 'notes' ? 'default' : 'notes')
+    if (currentView === 'notes') {
+      await deps.videoBlock.set(videoPlayerViewProp, 'default')
+      return
+    }
+
+    await enterVideoNotesView(deps.videoBlock, deps.uiStateBlock)
   },
   defaultBinding: {
     keys: ['cmd+shift+n', 'ctrl+shift+n'],
