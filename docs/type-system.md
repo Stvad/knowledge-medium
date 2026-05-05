@@ -58,11 +58,6 @@ export interface TypeContribution {
   /** Optional longer description for hover tooltips in type pickers and
    *  the property panel section header. */
   readonly description?: string
-  /** Per-type ref-target hints for ref-codec properties on this type
-   *  (§5). Keys are property names; values are TypeId allowlists for
-   *  the picker UI. Empty/missing = "any type." Multi-type combine
-   *  is union (§3b). */
-  readonly refTargets?: Readonly<Record<string, readonly string[]>>
   /** Optional escape hatch beyond `defaults`. Runs once when `addType`
    *  first applies this type to a block, after `defaults` are
    *  materialised, inside the same tx. See §3a-setup. Use sparingly —
@@ -172,8 +167,9 @@ This sidesteps Tana-style per-supertag schema scoping (which makes "set status o
 What still belongs on the type contribution rather than on the schema:
 
 - **Type-conditional defaults** → `TypeContribution.defaults`. A `todo`'s `status='open'` and a `meeting`'s `status='scheduled'` are declared by their respective types, not the prop schema.
-- **Per-type ref-target hints** → `TypeContribution.refTargets`. The codec is a single shared `refList`; the *hint* of "for this type, the picker should suggest Task-typed targets" lives on the type.
 - **Per-type `properties[]` membership** → which schemas appear in this type's section of the property panel; a flat `statusProp` listed by both `todo` and `task` shows up under both.
+
+(Ref-target constraints — "this `tasks` field accepts only Task-typed blocks" — live on the codec itself, not on per-type overrides; see §5. The §3 hybrid rule covers the case where two types want differently-constrained refs: different acceptable targets means different meaning means different schema names.)
 
 #### 3-pure. Pure helpers on raw `BlockData`
 
@@ -543,10 +539,9 @@ When two types share a property schema (the common case under §3's reuse model)
 - **Field discovery (which props apply to a block).** Union of every `TypeContribution.properties` across the block's types, deduped by `name`. If `todo` and `task` both list `statusProp`, the property panel shows `status` once.
 - **Codec.** A property has one codec globally — `propertySchemasFacet` is keyed by `name` and last-wins on duplicates. Multi-type doesn't change that. If two types want truly incompatible codecs, namespace one of them per the §3 hybrid rule (use a plugin-private `myplugin:status` rather than overloading the shared `status`).
 - **Defaults — first-writer-wins, order-dependent.** `todo.defaults={status:'open'}` and `task.defaults={status:'todo'}` on a block with neither set: `repo.addType('todo')` then `repo.addType('task')` → `status='open'` (the second `addType` sees the property already set during materialisation and skips it). Reverse order → `status='todo'`. The order callers invoke `repo.addType` in is therefore semantically load-bearing for default conflicts on shared fields; `repo.setBlockTypes(typeIds)` iterates the array in order and calls `addType` per type, which preserves the same first-wins rule. Don't pre-write `typesProp` directly via `tx.update` to apply both types "atomically" — that bypasses defaults / setup entirely and is the bug §3-pure / Phase 1 step 13 explicitly call out. This rule is intuitive (the type tagged first wins) but worth pinning.
-- **`refTargets` for a shared ref-prop.** Multi-type combine is **union** — `Project.refTargets={tasks:['task']}` + `Person.refTargets={tasks:['activity']}` on a block tagged both means the picker offers `task | activity`. Empty union after merging → fall back to "any type." Intersection would yield an empty picker as soon as two types disagreed; permission unions are the right combine here.
 - **`defaultRenderer`.** Priority arbitration in §4b. Most types contribute none, so multi-type collisions are rare by construction.
 - **Decorations / headers / click handlers (§4a).** Stack natively — every contribution's non-falsy return is applied in contribution order. Multi-type decoration is the easy path; this is the main reason to prefer decorations over renderer-replacement.
-- **Validation (deferred follow-up).** When it lands, validations across types **intersect** — a value must satisfy *all* applicable types' constraints. Constraints restrict; if any type forbids, it's forbidden. Opposite combine rule from `refTargets`, which permits.
+- **Validation (deferred follow-up).** When it lands, validations across types **intersect** — a value must satisfy *all* applicable types' constraints. Constraints restrict; if any type forbids, it's forbidden.
 - **`removeType` when a prop is contributed by multiple types.** v1 leaves `block.properties` untouched. If `status` was contributed by both `todo` and `task` and you remove `todo`, `task` still contributes `statusProp` so the panel still shows it. If `status` was *only* contributed by the removed type, the value stays in `block.properties` but disappears from the type-driven panel — inert until re-tagged or manually edited. v1 accepts this leak; revisit if it bites.
 
 #### 3c. Field discovery in the property panel — surfacing type-contributed slots
@@ -640,38 +635,31 @@ Today's codec set ([src/data/api/codecs.ts:73](src/data/api/codecs.ts:73)) is `s
 ```ts
 // Storage: a string block id. The codec exists so the data layer can
 // recognise ref-bearing properties without per-block scanning, and so
-// editor lookup in propertyUiFacet can default to a ref picker.
-export const ref: () => Codec<string>             // single ref (block id)
-export const refList: () => Codec<readonly string[]>  // list of refs
+// editor lookup in propertyUiFacet can default to a ref picker. The
+// optional targetTypes argument carries the picker constraint —
+// "this `tasks` field accepts only Task-typed blocks" — colocated
+// with the codec / schema rather than as per-type overrides. Empty/
+// missing = "any type."
+export const ref: (targetTypes?: readonly string[]) => Codec<string>
+export const refList: (targetTypes?: readonly string[]) => Codec<readonly string[]>
 ```
 
-Both are tagged so `isRefCodec(codec)` and `isRefListCodec(codec)` return true at runtime — the projector in §7 needs to identify them. Add a `kind: 'ref' | 'refList'` to `PropertyKind` in [propertySchema.ts:5](src/data/api/propertySchema.ts:5) so the property panel can pick a ref-aware editor when a `PropertySchema` is registered.
+Both are tagged so `isRefCodec(codec)` and `isRefListCodec(codec)` return true at runtime, and the codec instance carries `targetTypes` for the picker to read directly. The projector in §7 only needs the ref-ness check, not the target list. Add a `kind: 'ref' | 'refList'` to `PropertyKind` in [propertySchema.ts:5](src/data/api/propertySchema.ts:5) so the property panel can pick a ref-aware editor when a `PropertySchema` is registered.
 
 **Unknown-schema fallback for refs is intentionally limited.** The unknown-schema path in [propertyEditors/defaults.tsx](src/components/propertyEditors/defaults.tsx) infers `kind` from raw JSON shape; a ref stored as a plain string id is indistinguishable from any other string, and a `refList` from any other `string[]`. Without a registered schema or an out-of-band marker on the value, the data layer has no way to know it's a ref. Accept this: unknown refs render via the primitive `string` / `list` editors, with no picker affordance, until the contributing plugin loads. Adding a `_ref: true` marker to stored values to make refs self-describing was considered and rejected — invasive, breaks JSON-equality compares, and "plugin not loaded" is rare enough that primitive-editor fallback is the right trade-off.
 
-Schemas declare ref properties like:
+Schemas declare ref properties with their target-type constraint colocated on the codec:
 
 ```ts
 export const projectTasksProp = defineProperty<readonly string[]>('tasks', {
-  codec: codecs.refList(),
+  codec: codecs.refList(['task']),   // picker constraint lives on the codec
   defaultValue: [],
   kind: 'refList',
   changeScope: ChangeScope.BlockDefault,
 })
 ```
 
-The *target-type filter* for the picker UI lives on the type contribution (because two types may share a ref-prop name with different target types):
-
-```ts
-typesFacet.of({
-  id: 'project',
-  properties: [projectTasksProp],
-  refTargets: { tasks: ['task'] },   // picker filter for this type's `tasks`
-  ...
-})
-```
-
-`refTargets` is `Record<propertyName, readonly TypeId[]>` on `TypeContribution`. Empty/missing means any type.
+The picker UI reads `schema.codec.targetTypes` directly. Empty/missing means "any type." Two types that genuinely need differently-constrained refs (e.g. `Project.tasks → Task[]` vs `Person.activities → Activity[]`) use distinct schema names per the §3 hybrid rule — different acceptable targets means different meaning means different schema. There's no per-type override path for ref targets.
 
 ### 6. Schema delta: `BlockReference.sourceField`, plus `block_references` edge index
 
