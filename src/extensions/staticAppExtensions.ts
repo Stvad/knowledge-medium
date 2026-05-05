@@ -15,6 +15,7 @@ import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
+import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import type { AppExtension } from '@/extensions/facet.ts'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -35,6 +36,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   videoPlayerPlugin,
   backlinksPlugin,
   groupedBacklinksPlugin,
+  srsReschedulingPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
 ]
