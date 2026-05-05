@@ -37,17 +37,6 @@ export interface TypeContribution {
    *  `PropertySchema<unknown>` will not accept real typed schemas like
    *  `PropertySchema<string>`. See [src/data/api/propertySchema.ts:90](src/data/api/propertySchema.ts:90). */
   readonly properties?: ReadonlyArray<AnyPropertySchema>
-  /** Renderer id (looked up against blockRenderersFacet) used when a block
-   *  is rendered *solely* by virtue of having this type — i.e. the block
-   *  IS this thing (video-player, panel, type-definition). The common
-   *  case for type-driven UI is *decoration*, not full-renderer
-   *  replacement (todo checkbox, due-date chip, status badge); see §4
-   *  for the type/decoration split. Leave undefined unless the type
-   *  takes over the whole block presentation. */
-  readonly defaultRenderer?: string
-  /** Renderer dispatch priority when a block has multiple types.
-   *  Higher wins. `rendererProp` always overrides everything. */
-  readonly priority?: number
   /** Optional human label for the property panel / quick-find. */
   readonly label?: string
   /** Optional longer description for hover tooltips in type pickers and
@@ -186,9 +175,13 @@ export const hasBlockType = (
 ): boolean => getBlockTypes(data).includes(typeId)
 
 /** Returns a new `properties` map with `typeId` appended if absent.
- *  Does NOT apply defaults — for that, route through `repo.addType`,
- *  which is the only path that has access to the type contribution
- *  and can encode default values via the matching schema's codec. */
+ *  Does NOT materialise per-call `initialValues` and does NOT run
+ *  `setup`. Type contributions don't carry defaults (schema-level
+ *  defaultValue is read-time fallback only — see §3); the only
+ *  per-add-call materialisation is `initialValues` passed into
+ *  `repo.addType` / `repo.addTypeInTx`, which is what callers
+ *  should route through if they want fields populated atomically
+ *  with the membership write. */
 export const addBlockTypeToProperties = (
   properties: Record<string, unknown>,
   typeId: string,
@@ -389,13 +382,18 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
   //
   // Steps:
   //   1. Remove unwanted types (drops their typesProp entry).
-  //   2. addType for ALL desired types in array order — not just the
-  //      new additions. addType is idempotent and intentionally
-  //      re-materialises missing defaults / initial values even when
-  //      the type is already present (§3a), so passing every desired
-  //      type through it gives setBlockTypes a "make this the
-  //      canonical state" semantics: missing fields on already-typed
-  //      blocks get repaired.
+  //   2. addTypeInTx for desired types — passes initialValues = {}
+  //      because setBlockTypes is a membership-shaping API, not a
+  //      field-materialisation one. For first-time additions this
+  //      runs `setup` (transition triggers it). For already-present
+  //      types it's a no-op on fields. setBlockTypes does NOT
+  //      "repair" missing app-owned fields on already-typed blocks
+  //      — there's nothing to repair from, since type contributions
+  //      no longer carry defaults; field values come from per-call
+  //      `initialValues` to addType, which setBlockTypes can't
+  //      synthesize. Callers that want to materialise fields go
+  //      through repo.addType / addTypeInTx directly with the
+  //      relevant initialValues map.
   //   3. Rewrite typesProp to the deduped desired order if it doesn't
   //      already match. addType only appends, so existing memberships
   //      keep their original positions; without the rewrite, current
@@ -486,7 +484,7 @@ typesFacet.of(defineBlockType({
 
 **Use sparingly** — it's a code-execution hatch in the type registry. `initialValues` (caller-supplied static map) and `PropertySchema.defaultValue` (read-time fallback) cover the static cases without code. `setup` is opaque code at add time. Two specific gotchas to flag at implementation time:
 
-- **Bulk-write asymmetry.** `setup` fires from `repo.addType`. A bulk path that writes `typesProp = ['task', 'meeting']` directly via `tx.update` *bypasses* setup. Importers that want setup behavior must call `repo.addType` per type rather than writing typesProp directly.
+- **Bulk-write asymmetry.** `setup` fires from `repo.addType` / `repo.addTypeInTx`. A bulk path that writes `typesProp = ['task', 'meeting']` directly via `tx.update` *bypasses* both `setup` and `initialValues` materialisation. Tag-mapping callers should use the orchestration entry point appropriate to their context — `repo.addType` outside an existing tx, `repo.addTypeInTx(tx, blockId, typeId, initialValues?, snapshot?)` inside one. The Roam importer's apply phase runs inside chunked `repo.tx` calls (see §3-pure), so it must use `repo.addTypeInTx` per type per row to share atomicity with the surrounding `upsertImportedBlock` writes; calling the public `repo.addType` from inside an active tx would either fail against the writer slot or open a separate tx and lose the atomicity guarantee.
 - **Reimport runs setup again.** A Roam reimport that adds `task` to a block where the type wasn't previously present *will* run `setup`. That's usually correct (first-time-for-this-block tag), but means import paths can trigger child-block creation. Document in the importer.
 
 This naturally subsumes existing "create-and-stamp-type" code. [src/data/dailyNotes.ts:86](src/data/dailyNotes.ts:86)'s daily-note creation, which today writes `type='daily-note'` plus its own initial structure imperatively, becomes `repo.addType(id, 'daily-note')` with the `daily-note` type's `setup` carrying the template.
@@ -537,7 +535,6 @@ When two types share a property schema (the common case under §3's reuse model)
 - **Field discovery (which props apply to a block).** Union of every `TypeContribution.properties` across the block's types, deduped by `name`. If `todo` and `task` both list `statusProp`, the property panel shows `status` once.
 - **Codec.** A property has one codec globally — `propertySchemasFacet` is keyed by `name` and last-wins on duplicates. Multi-type doesn't change that. If two types want truly incompatible codecs, namespace one of them per the §3 hybrid rule (use a plugin-private `myplugin:status` rather than overloading the shared `status`).
 - **`initialValues` — first-writer-wins, order-dependent.** Schema defaults are global (one default per field on `PropertySchema.defaultValue`), so there's no per-type defaults to combine. The only multi-type ordering question is around caller-supplied `initialValues` to sequential `addType` calls: `repo.addType('todo', {status: 'open'})` then `repo.addType('task', {status: 'doing'})` on a block with no `status` → `status='open'` (the second `addType` sees the property already set during materialisation and skips it). Reverse order → `status='doing'`. The order callers invoke `repo.addType` in is therefore load-bearing for `initialValues` conflicts on shared fields; `repo.setBlockTypes(typeIds)` iterates in array order and inherits the same rule. Don't pre-write `typesProp` directly via `tx.update` to apply both types "atomically" — that bypasses `initialValues` / setup and is the bug §3-pure / Phase 1 step 13 explicitly call out. Convention for `setup` callbacks that write block-level fields they don't strictly own: be init-if-missing too.
-- **`defaultRenderer`.** Priority arbitration in §4b. Most types contribute none, so multi-type collisions are rare by construction.
 - **Decorations / headers / click handlers (§4a).** Stack natively — every contribution's non-falsy return is applied in contribution order. Multi-type decoration is the easy path; this is the main reason to prefer decorations over renderer-replacement.
 - **Validation (deferred follow-up).** When it lands, validations across types **intersect** — a value must satisfy *all* applicable types' constraints. Constraints restrict; if any type forbids, it's forbidden.
 - **`removeType` when a prop is contributed by multiple types.** v1 leaves `block.properties` untouched. If `status` was contributed by both `todo` and `task` and you remove `todo`, `task` still contributes `statusProp` so the panel still shows it. If `status` was *only* contributed by the removed type, the value stays in `block.properties` but disappears from the type-driven panel — inert until re-tagged or manually edited. v1 accepts this leak; revisit if it bites.
@@ -628,18 +625,15 @@ This composes naturally under multi-type: each contributing type's decorations s
 
 A small ergonomics improvement worth considering once a few types ship: a helper `whenHasType(typeId, contribution)` that does the guard. Don't pre-build it; extract from real call sites.
 
-#### 4b. Full-renderer replacement — for "this block IS this type"
+#### 4b. Full-renderer replacement — keep using the existing `blockRenderersFacet` path
 
-For the rare types that want to replace the entire renderer (video-player, panel, type-definition), `TypeContribution.defaultRenderer` drives dispatch. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) so the resolution order becomes:
+For the rare types that want to replace the entire renderer (video-player, panel, type-definition), v1 keeps using the existing `blockRenderersFacet` + `BlockRenderer.canRender` / `priority` dynamic-dispatch path that [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) already runs. A type plugin that wants to own the body registers a renderer there with a `canRender` predicate that checks `block.hasType(...)`, exactly the way [VideoPlayerRenderer](src/plugins/video-player/VideoPlayerRenderer.tsx:176) checks `ReactPlayer.canPlay` today. `rendererProp` continues to override.
 
-1. `rendererProp` set on the block → use that id verbatim.
-2. Else read `typesProp`; for each id, look up the `TypeContribution` in `typesFacet`, collect each `defaultRenderer` with its `priority`. Highest-priority wins. Most types contribute no `defaultRenderer` and don't enter the contest.
-3. Else fall through to the existing `canRender` / `priority` dynamic-dispatch path on `blockRenderersFacet`.
-4. Else default renderer.
+The type system deliberately doesn't carry renderer-resolution metadata. The current model exists to give plugins a real lever — they can supplant top-level / layout / breadcrumb renderers and remap how the app is rendered, which is a load-bearing design goal. Encoding `defaultRenderer` + numeric `priority` on `TypeContribution` would duplicate the existing facet's job, leak behavior into the membership layer (the §1 split says types declare semantic membership, existing facets declare behavior), and pre-commit to single-winner dispatch. Multi-view futures (Embark-style, simultaneous presentations of the same block keyed off frame, not a tournament) further argue for not freezing renderer ownership on types now.
 
-Multi-type composition concern is restricted to this path: when two types both claim a `defaultRenderer`, the higher `priority` wins. Avoidable in practice — most types should contribute decorations, leaving renderer-replacement to types where the block genuinely *is* the thing.
+There are real problems with the current resolution scheme — uncoordinated global priority numbers, no explainability when the wrong renderer wins, three different decisions (frame vs body vs missing-data) flattened onto one scalar, magic-string `default` fallback, silent no-op on misspelled `rendererProp`. Those are worth fixing, but as a separate refactor in its own doc — `docs/renderer-resolution.md` — not bundled with this. Once that lands and the resolution shape is settled, types may grow back a way to contribute renderers; design that against the new shape, not the current one.
 
-Existing `aliases` on `RendererContribution` continues to work for renderer-id resolution (it's about the renderer registry, not types).
+Until then, the practical guidance for type authors stays the same as for any other plugin: register a renderer in `blockRenderersFacet` with a type-checking `canRender`, pick a priority that fits the existing landscape (kernel renderers are at 1, 5, 10, 20), and remember decorations are the common case.
 
 ### 5. Ref codecs — `codecs.ref`, `codecs.refList`
 
@@ -653,7 +647,16 @@ Today's codec set ([src/data/api/codecs.ts:73](src/data/api/codecs.ts:73)) is `s
 // `schema.codec.targetTypes` type-check without manual narrowing,
 // while still being a Codec<T> at every usage site that doesn't
 // care about ref-ness.
+//
+// `refKind` is the runtime discriminator. `targetTypes` alone
+// cannot tell ref from a plain string codec (an unconstrained
+// `ref()` has no targets) and cannot distinguish ref from refList,
+// but the property-ref projector and grouped-backlinks both need
+// to dispatch on those two cases. A literal field is cheaper to
+// check than a symbol brand and survives serialisation /
+// structuredClone if a codec ever crosses a worker boundary.
 export interface RefCodec<T> extends Codec<T> {
+  readonly refKind: 'ref' | 'refList'
   readonly targetTypes?: readonly string[]
 }
 
@@ -673,6 +676,9 @@ export const refList: (targetTypes?: readonly string[]) => RefCodec<readonly str
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyCodec = Codec<any>
 
+// Predicates dispatch on the `refKind` discriminator above; the
+// targetTypes-only earlier draft couldn't tell ref from refList
+// reliably and false-negatived on unconstrained ref().
 export const isRefCodec: (codec: AnyCodec) => codec is RefCodec<string>
 export const isRefListCodec: (codec: AnyCodec) => codec is RefCodec<readonly string[]>
 ```
@@ -993,13 +999,12 @@ Each phase is independently shippable and testable.
 
 **Acceptance:** existing app behaviour unchanged. All current tests green. `repo` snapshots show `types: [...]` instead of `type:`. `findExtensionBlocks` returns the same set as before via `block_types` join. `repo.addType('some-existing-block', 'todo', {status: 'open'})` writes `status='open'` if unset and runs `setup` (if any) atomically. A re-call with the type already present **still runs init-if-missing materialisation against `initialValues`** (so already-typed blocks from sync without contribution / raw `typesProp` writes get any missing fields filled in); only `setup` is gated on actual first transitions and skipped on re-call.
 
-### Phase 2 — type-driven UI: renderer dispatch + property-panel field discovery
+### Phase 2 — type-driven UI: decorations + property-panel field discovery
 
-1. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) to consult `typesFacet` per §4b.
-2. Add `priority` to a few existing kernel type contributions so collisions resolve deterministically.
-3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `schema.defaultValue` (the same global default `block.get` returns).
+1. Wire decoration / header / click-handler contributions for the kernel types that need them via the existing `blockInteraction` facets per §4a, gated on `block.hasType(...)`. No changes to `useRendererRegistry`; renderer-replacement types continue to register in `blockRenderersFacet` with type-checking `canRender` predicates per §4b.
+2. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `schema.defaultValue` (the same global default `block.get` returns).
 
-**Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch. Tagging a block with a type whose contribution declares properties surfaces those property slots in the panel even when unset, and editing one writes the property.
+**Acceptance:** tagging a block with a type whose contribution declares decorations (e.g. `todo` checkbox) makes the decoration appear without a `rendererProp` change. Tagging a block with a type whose contribution declares properties surfaces those property slots in the panel even when unset, and editing one writes the property.
 
 ### Phase 3 — ref codecs + named-backlinks (`block_references.source_field` + `ProcessorCtx`)
 
