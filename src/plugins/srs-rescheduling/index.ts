@@ -1,5 +1,3 @@
-import { EditorSelection } from '@codemirror/state'
-import type { EditorView } from '@codemirror/view'
 import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
@@ -33,30 +31,6 @@ const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<void> =
   await block.setContent(scheduleSrsContent(data.content, signal))
 }
 
-const replaceEditorDocument = (editorView: EditorView, next: string): void => {
-  const selection = editorView.state.selection
-  const nextSelection = EditorSelection.create(
-    selection.ranges.map(range =>
-      EditorSelection.range(
-        Math.min(range.anchor, next.length),
-        Math.min(range.head, next.length),
-      ),
-    ),
-    selection.mainIndex,
-  )
-
-  editorView.dispatch({
-    changes: {from: 0, to: editorView.state.doc.length, insert: next},
-    selection: nextSelection,
-  })
-  editorView.focus()
-}
-
-const rescheduleEditor = (editorView: EditorView, signal: SrsSignal): void => {
-  const current = editorView.state.doc.toString()
-  replaceEditorDocument(editorView, scheduleSrsContent(current, signal))
-}
-
 const createNormalModeAction = (
   signal: SrsSignal,
 ): ActionConfig<typeof ActionContextTypes.NORMAL_MODE> => ({
@@ -78,10 +52,10 @@ const createEditModeAction = (
   signal: SrsSignal,
 ): ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> => ({
   id: `edit.cm.srs.reschedule.${signalName(signal).toLowerCase()}`,
-  description: `SRS: ${signalName(signal)} (CodeMirror)`,
+  description: `SRS: ${signalName(signal)} (Edit Mode)`,
   context: ActionContextTypes.EDIT_MODE_CM,
-  handler: ({editorView}: CodeMirrorEditModeDependencies) => {
-    rescheduleEditor(editorView, signal)
+  handler: async ({block}: CodeMirrorEditModeDependencies) => {
+    await rescheduleBlock(block, signal)
   },
   defaultBinding: {
     keys: shortcutKeysForSignal(signal),
