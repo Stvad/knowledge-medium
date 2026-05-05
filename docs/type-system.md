@@ -190,6 +190,23 @@ async removeType(typeId: string): Promise<void> {
 
 `block.hasType('todo')` is the canonical guard at every type-decoration call site (replaces `block.peekProperty(typesProp)?.includes('todo')`). No `setTypes(array)` sugar — the bulk path is the importer's, and going through `tx.update` keeps the "defaults-on-add" semantics explicit at that one site rather than implied by an atomic-looking facade method.
 
+**The addressing shape is `string`, not `TypeContribution`.** `block.hasType(typeId: string)`, `block.addType(typeId: string)`, etc. all take the persisted string id. This parallels `PropertySchema.name` as the storage primitive: the persisted shape and the API shape match. Three concrete reasons not to pass the contribution object: (a) blocks can carry types whose contribution hasn't been registered yet (sync from another device, dynamic extension not yet loaded, deferred type-definition block resolved later) — the string survives, an object reference can't; (b) data-defined paths (Roam importer's tag-mapping table, future type-definition blocks) only have strings to work with; (c) the `addType` mutator looks up the contribution internally via `runtime.read(typesFacet).get(typeId)` to apply defaults — the contribution isn't useful as an *argument*, only as a *lookup target*, so taking it would force every caller to have runtime access for no win.
+
+This differs from `block.set(statusProp, ...)` which takes the schema object because the *codec* lives on the schema and is needed at the encode site. Type ops have no per-type codec to apply (`typesProp`'s codec is just `list(string)`), so nothing to carry.
+
+**Plugin-side typo safety:** export a string constant per type and import where used:
+
+```ts
+// src/plugins/todo/types.ts
+export const TODO = 'todo' as const
+
+// at every call site within the plugin
+block.hasType(TODO)
+block.addType(TODO)
+```
+
+A branded `TypeId<'todo'>` type would catch unrelated strings being passed, but is overkill for v1 — graduate to a brand only if string confusion becomes a real failure mode in practice.
+
 #### 3b. Multi-type interactions over shared property schemas
 
 When two types share a property schema (the common case under §3's reuse model), how the per-type bits combine matters. The rules:
