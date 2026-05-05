@@ -5,7 +5,6 @@ import {
   ActionConfig,
   ActionContextTypes,
   BlockShortcutDependencies,
-  CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types.ts'
 import {
   scheduleSrsContent,
@@ -24,6 +23,16 @@ const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
 const signalName = (signal: SrsSignal): string =>
   SrsSignal[signal]
 
+type SrsActionContext =
+  | typeof ActionContextTypes.NORMAL_MODE
+  | typeof ActionContextTypes.EDIT_MODE_CM
+
+interface RescheduleActionOptions<T extends SrsActionContext> {
+  context: T
+  idPrefix?: string
+  descriptionSuffix?: string
+}
+
 const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<void> => {
   const data = block.peek() ?? await block.load()
   if (!data) return
@@ -31,43 +40,40 @@ const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<void> =
   await block.setContent(scheduleSrsContent(data.content, signal))
 }
 
-const createNormalModeAction = (
+const createRescheduleAction = <T extends SrsActionContext>(
   signal: SrsSignal,
-): ActionConfig<typeof ActionContextTypes.NORMAL_MODE> => ({
-  id: `srs.reschedule.${signalName(signal).toLowerCase()}`,
-  description: `SRS: ${signalName(signal)}`,
-  context: ActionContextTypes.NORMAL_MODE,
-  handler: async ({block}: BlockShortcutDependencies) => {
-    await rescheduleBlock(block, signal)
-  },
-  defaultBinding: {
-    keys: shortcutKeysForSignal(signal),
-    eventOptions: {
-      preventDefault: true,
+  {
+    context,
+    idPrefix = '',
+    descriptionSuffix = '',
+  }: RescheduleActionOptions<T>,
+): ActionConfig<T> => {
+  const name = signalName(signal)
+  return {
+    id: `${idPrefix}srs.reschedule.${name.toLowerCase()}`,
+    description: `SRS: ${name}${descriptionSuffix}`,
+    context,
+    handler: (async ({block}: BlockShortcutDependencies) => {
+      await rescheduleBlock(block, signal)
+    }) as ActionConfig<T>['handler'],
+    defaultBinding: {
+      keys: shortcutKeysForSignal(signal),
+      eventOptions: {
+        preventDefault: true,
+      },
     },
-  },
-})
-
-const createEditModeAction = (
-  signal: SrsSignal,
-): ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> => ({
-  id: `edit.cm.srs.reschedule.${signalName(signal).toLowerCase()}`,
-  description: `SRS: ${signalName(signal)} (Edit Mode)`,
-  context: ActionContextTypes.EDIT_MODE_CM,
-  handler: async ({block}: CodeMirrorEditModeDependencies) => {
-    await rescheduleBlock(block, signal)
-  },
-  defaultBinding: {
-    keys: shortcutKeysForSignal(signal),
-    eventOptions: {
-      preventDefault: true,
-    },
-  },
-})
+  }
+}
 
 export const srsReschedulingActions: readonly ActionConfig[] = [
-  ...srsSignals.map(createNormalModeAction),
-  ...srsSignals.map(createEditModeAction),
+  ...srsSignals.map(signal => createRescheduleAction(signal, {
+    context: ActionContextTypes.NORMAL_MODE,
+  })),
+  ...srsSignals.map(signal => createRescheduleAction(signal, {
+    context: ActionContextTypes.EDIT_MODE_CM,
+    idPrefix: 'edit.cm.',
+    descriptionSuffix: ' (Edit Mode)',
+  })),
 ]
 
 export const srsReschedulingPlugin: AppExtension =
