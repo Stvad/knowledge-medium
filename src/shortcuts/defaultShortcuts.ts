@@ -709,6 +709,67 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       },
     },
     {
+      id: 'move_left_from_cm_start',
+      description: 'Move to previous block when cursor is at start of CodeMirror',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock} = deps
+        if (!block || !editorView || !uiStateBlock) return
+
+        const selection = editorView.state.selection.main
+        if (!(selection.empty && selection.head === 0)) return
+
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+        if (!topLevelBlockId) return
+
+        trigger.preventDefault()
+
+        const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
+        if (!prevVisible) return
+
+        const prevData = await prevVisible.load()
+        await uiStateBlock.set(editorSelection, {
+          blockId: prevVisible.id,
+          start: prevData?.content.length ?? 0,
+        })
+
+        await uiStateBlock.set(focusedBlockIdProp, prevVisible.id)
+      },
+      defaultBinding: {
+        keys: 'left',
+      },
+    },
+    {
+      id: 'move_right_from_cm_end',
+      description: 'Move to next block when cursor is at end of CodeMirror',
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async (deps: CodeMirrorEditModeDependencies, trigger: ActionTrigger) => {
+        const {block, editorView, uiStateBlock} = deps
+        if (!block || !editorView || !uiStateBlock) return
+
+        const selection = editorView.state.selection.main
+        if (!(selection.empty && selection.head === editorView.state.doc.length)) return
+
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+        if (!topLevelBlockId) return
+
+        trigger.preventDefault()
+
+        const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
+        if (!nextVisible) return
+
+        await uiStateBlock.set(editorSelection, {
+          blockId: nextVisible.id,
+          start: 0,
+        })
+
+        await uiStateBlock.set(focusedBlockIdProp, nextVisible.id)
+      },
+      defaultBinding: {
+        keys: 'right',
+      },
+    },
+    {
       id: 'delete_empty_block_cm',
       description: 'Backspace at block start: delete empty / merge into previous (CodeMirror)',
       context: ActionContextTypes.EDIT_MODE_CM,

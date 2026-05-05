@@ -40,16 +40,19 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
-const emptyEditorView = (): EditorView => ({
+const codeMirrorEditorView = (content: string, cursor: number): EditorView => ({
   state: {
     selection: {
-      main: {empty: true, from: 0},
+      main: {empty: true, from: cursor, to: cursor, anchor: cursor, head: cursor},
     },
     doc: {
-      toString: () => '',
+      length: content.length,
+      toString: () => content,
     },
   },
 }) as unknown as EditorView
+
+const emptyEditorView = (): EditorView => codeMirrorEditorView('', 0)
 
 const findEditModeAction = (
   repo: Repo,
@@ -68,6 +71,64 @@ beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('default CodeMirror shortcuts', () => {
+  it('places the cursor at the beginning of the next block after pressing right at block end', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'next', content: 'next'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await uiStateBlock.set(focusedBlockIdProp, 'current')
+
+    const action = findEditModeAction(env.repo, 'move_right_from_cm_end')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 'current'.length),
+      uiStateBlock,
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('next')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'next',
+      start: 0,
+    })
+  })
+
+  it('places the cursor at the end of the previous block after pressing left at block start', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'prev', content: 'previous'})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'current'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await uiStateBlock.set(focusedBlockIdProp, 'current')
+
+    const action = findEditModeAction(env.repo, 'move_left_from_cm_start')
+    const trigger = {preventDefault: vi.fn()} as unknown as ActionTrigger
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView: codeMirrorEditorView('current', 0),
+      uiStateBlock,
+    } satisfies CodeMirrorEditModeDependencies, trigger)
+
+    expect(trigger.preventDefault).toHaveBeenCalledTimes(1)
+    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('prev')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'prev',
+      start: 'previous'.length,
+    })
+  })
+
   it('places the cursor at the end of the previous block after deleting an empty block with backspace', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
