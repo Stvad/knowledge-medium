@@ -142,17 +142,35 @@ If two types ever want a same-named field with **incompatible codecs**, the rule
 
 Defaults at *creation* aren't enough. The common motion is "tag this existing block as a `todo`" — that block needs `status='open'` materialised so `where: {status: 'open'}` queries match. Without a central place to apply defaults, every writer (importer, command, agent action) has to remember to do it, and missed sites silently degrade query results.
 
-**API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs both `typesFacet` (for defaults) and `propertySchemasFacet` (to encode them). Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` already holds the runtime via `setFacetRuntime` and is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.)
+**API surface: `repo.addType` / `repo.removeType` are `Repo` methods, not registered mutators.** The `Mutator.apply: (tx, args) => Promise<R>` signature ([src/data/api/mutator.ts:9](src/data/api/mutator.ts:9)) deliberately doesn't carry runtime/registry access, and `addType` needs both `typesFacet` (for defaults) and `propertySchemasFacet` (to encode them). Adding a context arg to the mutator surface is a broad change for one call site; making `addType` a `Repo` method is the conservative fit — `Repo` is the natural home for orchestration that spans facet lookups + tx writes. (Pattern parallel: `repo.tx`, `repo.mutate.X` for low-level ops; `repo.addType` for type-system orchestration that needs registry access.)
+
+**`Repo` must retain the registries it needs.** `Repo.setFacetRuntime` ([src/data/repo.ts:738](src/data/repo.ts:738)) today only extracts `mutators`, `processors`, `invalidationRules`, and `queries` — it does NOT store the runtime, `typesFacet`, or `propertySchemasFacet`. Phase 1 must extend `setFacetRuntime` to also retain narrower registries needed by type-system orchestration:
+
+```ts
+// Inside Repo
+private types: ReadonlyMap<string, TypeContribution> = new Map()
+private propertySchemas: ReadonlyMap<string, AnyPropertySchema> = new Map()
+
+setFacetRuntime(runtime: FacetRuntime): void {
+  this.mutators = new Map(runtime.read(mutatorsFacet))
+  this.processors = new Map(runtime.read(postCommitProcessorsFacet))
+  this.invalidationRules = runtime.read(invalidationRulesFacet)
+  this.types = runtime.read(typesFacet)                   // NEW
+  this.propertySchemas = runtime.read(propertySchemasFacet) // NEW
+  const newQueries = new Map(runtime.read(queriesFacet))
+  this.swapQueries(newQueries)
+}
+```
+
+Storing the narrower registries (vs. holding a `runtime: FacetRuntime` field) keeps the surface small — `Repo` only sees what type-system orchestration needs, no general extension-runtime exposure. The same retained `propertySchemas` map is also what `ProcessorCtx.propertySchemas` (§7a) reads when `processorRunner` builds the ctx.
 
 ```ts
 // On Repo
 async addType(blockId: string, typeId: string): Promise<void> {
-  const types = this.runtime.read(typesFacet)
-  const schemas = this.runtime.read(propertySchemasFacet)
-  const contribution = types.get(typeId)
-
+  const contribution = this.types.get(typeId)
   await this.tx(async tx => {
-    const block = await tx.read(blockId)
+    const block = await tx.get(blockId)
+    if (!block) return  // block was deleted between resolve and tx
     const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
     if (current.includes(typeId)) return
     const next: Record<string, unknown> = { ...block.properties }
@@ -160,17 +178,20 @@ async addType(blockId: string, typeId: string): Promise<void> {
     // Apply only defaults the block doesn't already have set.
     for (const [name, value] of Object.entries(contribution?.defaults ?? {})) {
       if (next[name] === undefined) {
-        const schema = schemas.get(name)
+        const schema = this.propertySchemas.get(name)
         next[name] = schema ? schema.codec.encode(value) : value
       }
     }
     await tx.update(blockId, { properties: next })
+    // Optional setup escape hatch (§3a-setup) runs after defaults are applied.
+    await contribution?.setup?.({ tx, id: blockId, repo: this })
   }, { scope: ChangeScope.BlockDefault, description: `addType ${typeId}` })
 }
 
 async removeType(blockId: string, typeId: string): Promise<void> {
   await this.tx(async tx => {
-    const block = await tx.read(blockId)
+    const block = await tx.get(blockId)
+    if (!block) return
     const current = (block.properties[typesProp.name] as string[] | undefined) ?? []
     if (!current.includes(typeId)) return
     const next: Record<string, unknown> = { ...block.properties }
@@ -180,6 +201,26 @@ async removeType(blockId: string, typeId: string): Promise<void> {
     // revisit if it bites.
     await tx.update(blockId, { properties: next })
   }, { scope: ChangeScope.BlockDefault, description: `removeType ${typeId}` })
+}
+
+async toggleType(blockId: string, typeId: string): Promise<void> {
+  // Read once via the retained registry — the actual add/remove path
+  // re-reads under tx for atomicity.
+  const block = await this.get(blockId)?.load()
+  const has = (block?.properties[typesProp.name] as string[] | undefined)?.includes(typeId) ?? false
+  return has ? this.removeType(blockId, typeId) : this.addType(blockId, typeId)
+}
+
+async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
+  // Bulk diff-and-apply for multi-select UI / importers that want
+  // defaults-on-add semantics. Each addType/removeType call is its own
+  // tx; collapse into one if atomicity matters at a call site.
+  const block = await this.get(blockId)?.load()
+  const current = (block?.properties[typesProp.name] as string[] | undefined) ?? []
+  const next = new Set(typeIds)
+  const cur = new Set(current)
+  for (const t of cur) if (!next.has(t)) await this.removeType(blockId, t)
+  for (const t of next) if (!cur.has(t)) await this.addType(blockId, t)
 }
 ```
 
@@ -229,16 +270,19 @@ hasType(typeId: string): boolean {
   return this.types.includes(typeId)
 }
 async addType(typeId: string): Promise<void> {
-  await this.repo.mutate.addType({blockId: this.id, typeId})
+  await this.repo.addType(this.id, typeId)
 }
 async removeType(typeId: string): Promise<void> {
-  await this.repo.mutate.removeType({blockId: this.id, typeId})
+  await this.repo.removeType(this.id, typeId)
+}
+async toggleType(typeId: string): Promise<void> {
+  await this.repo.toggleType(this.id, typeId)
 }
 ```
 
-`block.hasType('todo')` is the canonical guard at every type-decoration call site (replaces `block.peekProperty(typesProp)?.includes('todo')`). No `setTypes(array)` sugar — the bulk path is the importer's, and going through `tx.update` keeps the "defaults-on-add" semantics explicit at that one site rather than implied by an atomic-looking facade method.
+`block.hasType('todo')` is the canonical guard at every type-decoration call site (replaces `block.peekProperty(typesProp)?.includes('todo')`). No `setTypes(array)` sugar on the facade — bulk-diff-and-apply lives on `Repo` (`repo.setBlockTypes`) where the call site is explicit about the operation rather than implied by an atomic-looking facade method.
 
-**The addressing shape is `string`, not `TypeContribution`.** `block.hasType(typeId: string)`, `block.addType(typeId: string)`, etc. all take the persisted string id. This parallels `PropertySchema.name` as the storage primitive: the persisted shape and the API shape match. Three concrete reasons not to pass the contribution object: (a) blocks can carry types whose contribution hasn't been registered yet (sync from another device, dynamic extension not yet loaded, deferred type-definition block resolved later) — the string survives, an object reference can't; (b) data-defined paths (Roam importer's tag-mapping table, future type-definition blocks) only have strings to work with; (c) the `addType` mutator looks up the contribution internally via `runtime.read(typesFacet).get(typeId)` to apply defaults — the contribution isn't useful as an *argument*, only as a *lookup target*, so taking it would force every caller to have runtime access for no win.
+**The addressing shape is `string`, not `TypeContribution`.** `block.hasType(typeId: string)`, `block.addType(typeId: string)`, etc. all take the persisted string id. This parallels `PropertySchema.name` as the storage primitive: the persisted shape and the API shape match. Three concrete reasons not to pass the contribution object: (a) blocks can carry types whose contribution hasn't been registered yet (sync from another device, dynamic extension not yet loaded, deferred type-definition block resolved later) — the string survives, an object reference can't; (b) data-defined paths (Roam importer's tag-mapping table, future type-definition blocks) only have strings to work with; (c) `repo.addType` looks up the contribution internally via the retained `types` registry to apply defaults — the contribution isn't useful as an *argument*, only as a *lookup target*, so taking it would force every caller to have runtime access for no win.
 
 This differs from `block.set(statusProp, ...)` which takes the schema object because the *codec* lives on the schema and is needed at the encode site. Type ops have no per-type codec to apply (`typesProp`'s codec is just `list(string)`), so nothing to carry.
 
@@ -441,7 +485,7 @@ const emitReferenceTargetDiff = (
   after: ReadonlyArray<BlockReference>,
   emit: PluginInvalidationEmit,
 ): void => {
-  const key = (r: BlockReference) => `${r.id} ${r.sourceField ?? ''}`
+  const key = (r: BlockReference) => `${r.id}\u0000${r.sourceField ?? ''}`
   const beforeKeys = new Set(before.map(key))
   const afterKeys = new Set(after.map(key))
   const targets = new Set<string>()
@@ -590,7 +634,7 @@ Each phase is independently shippable and testable.
 
 1. Update [src/hooks/useRendererRegistry.tsx](src/hooks/useRendererRegistry.tsx) to consult `typesFacet` per §4b.
 2. Add `priority` to a few existing kernel type contributions so collisions resolve deterministically.
-3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `schema.defaultValue`.
+3. Update [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) per §3c: replace the `Object.entries(properties)` iteration with the union over actually-set + type-contributed schemas; render unset type-slots via the existing default-editor path with `resolveDefault(block, schema, typesRegistry)` so type-conditional defaults appear in the panel (matches §3a-bis).
 
 **Acceptance:** removing every explicit `rendererProp` from current code paths still renders correctly because the type drives dispatch. Tagging a block with a type whose contribution declares properties surfaces those property slots in the panel even when unset, and editing one writes the property.
 
@@ -608,7 +652,7 @@ Each phase is independently shippable and testable.
 
 ### Phase 4 — reactive typed-query primitive (SQLite-backed)
 
-1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `JOIN block_types` for type filters, `json_extract(properties_json, '$.<name>') = ?` for `where`, `JOIN block_references` for `referencedBy`. Per-property indexes added incrementally as hot fields are identified.
+1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `JOIN block_types` for type filters, `json_extract(properties_json, ?) = ?` for `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters; refuse the query when no schema is registered for a referenced field. `JOIN block_references` for `referencedBy`. Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
 2. Wire `subscribeBlocks` to the existing repo change-notification stream (which is already row-event-aware) so updates flow from both local commits and sync-applied changes.
 3. Add `useBlockQuery` hook in `src/hooks/`.
 
