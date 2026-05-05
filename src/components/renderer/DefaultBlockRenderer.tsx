@@ -9,6 +9,7 @@ import {
   isCollapsedProp,
   topLevelBlockIdProp,
   setFocusedBlockId,
+  typesProp,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
@@ -281,6 +282,7 @@ export function DefaultBlockRenderer(
   const uiStateBlock = useUIStateBlock()
   const inEditMode = useInEditMode(block.id)
   const [showProperties] = usePropertyValue(block, showPropertiesProp)
+  const [types] = usePropertyValue(block, typesProp)
 
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
@@ -299,6 +301,7 @@ export function DefaultBlockRenderer(
     block,
     repo,
     uiStateBlock,
+    types,
     topLevelBlockId,
     isTopLevel,
     blockContext,
@@ -316,6 +319,7 @@ export function DefaultBlockRenderer(
     block,
     repo,
     uiStateBlock,
+    types,
     topLevelBlockId,
     isTopLevel,
     blockContext,

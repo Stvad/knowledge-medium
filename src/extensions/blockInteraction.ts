@@ -31,10 +31,11 @@ export interface BlockContentRendererSlot {
 /**
  * Stable per-block input to facet resolvers. Identity changes only on
  * block swap, panel-context change (panelId/safeMode/etc.), or zoom
- * (topLevelBlockId). Crucially does NOT include focus / edit mode /
- * selection — those are reactive UI state, and folding them into the
- * resolver context would re-run every facet resolver and reswap every
- * decorator/layout/slot identity on each focus toggle.
+ * (topLevelBlockId), or the block's type membership. Crucially does
+ * NOT include focus / edit mode / selection — those are reactive UI
+ * state, and folding them into the resolver context would re-run every
+ * facet resolver and reswap every decorator/layout/slot identity on
+ * each focus toggle.
  *
  * Contributions that need reactive state read it inside their rendered
  * components via `useInFocus(block.id)` / `useInEditMode(block.id)` /
@@ -44,6 +45,7 @@ export interface BlockResolveContext {
   block: Block
   repo: Repo
   uiStateBlock: Block
+  types: readonly string[]
   topLevelBlockId?: string
   isTopLevel: boolean
   blockContext?: BlockContextType

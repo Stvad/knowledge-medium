@@ -17,7 +17,8 @@ import {
   useUIStateBlock,
   useUIStateProperty,
 } from '@/data/globalState.ts'
-import { topLevelBlockIdProp } from '@/data/properties.ts'
+import { topLevelBlockIdProp, typesProp } from '@/data/properties.ts'
+import { usePropertyValue } from '@/hooks/block.ts'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
@@ -48,6 +49,7 @@ export function useShortcutSurfaceActivations(
   const uiStateBlock = useUIStateBlock()
   const blockContext = useBlockContext()
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+  const [types] = usePropertyValue(block, typesProp)
   const inFocus = useInFocus(block.id)
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
@@ -60,6 +62,7 @@ export function useShortcutSurfaceActivations(
       block,
       repo,
       uiStateBlock,
+      types,
       topLevelBlockId,
       isTopLevel: block.id === topLevelBlockId,
       blockContext,
@@ -73,6 +76,7 @@ export function useShortcutSurfaceActivations(
       block,
       repo,
       uiStateBlock,
+      types,
       topLevelBlockId,
       blockContext,
       inFocus,

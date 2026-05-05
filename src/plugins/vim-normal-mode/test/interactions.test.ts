@@ -38,6 +38,7 @@ const context = {
   block: {id: 'block-1'} as Block,
   repo: {} as Repo,
   uiStateBlock: {} as Block,
+  types: [],
   topLevelBlockId: 'root',
   inFocus: true,
   inEditMode: false,

@@ -1,7 +1,7 @@
 /**
  * Property panel — implements the §5.6.1 lookup chain:
  *
- *   1. Look up the schema in `propertySchemasFacet`.
+ *   1. Look up the schema in the merged property-schema registry.
  *   2. Look up the matching `PropertyUiContribution` in `propertyUiFacet`.
  *   3. If schema is known: decode the encoded value via `schema.codec`,
  *      render via `uiContribution?.Editor` falling back to the kernel
@@ -21,13 +21,15 @@ import { Block } from '../data/block'
 import {
   ChangeScope,
   type AnyPropertySchema,
+  type AnyPropertyUiContribution,
   type PropertyEditor,
   type PropertyKind,
 } from '@/data/api'
 import { useHandle } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
-import { propertyUiFacet } from '../data/facets.ts'
+import { propertyUiFacet, typesFacet } from '../data/facets.ts'
+import { getBlockTypes, typesProp } from '@/data/properties.ts'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Label } from './ui/label'
@@ -35,8 +37,14 @@ import {
   DefaultPropertyValueEditor,
   adhocSchema,
   defaultValueForKind,
+  type PropertyDisplayInfo,
   resolvePropertyDisplay,
 } from './propertyEditors/defaults'
+import {
+  buildPropertyPanelSections,
+  type PropertyPanelRow,
+  type PropertyPanelSection,
+} from './propertyPanelSections'
 
 interface BlockPropertiesProps {
   block: Block
@@ -52,6 +60,7 @@ interface BlockPropertiesProps {
 type AddableKind = Exclude<PropertyKind, 'date' | 'object'> | 'object'
 
 const ADDABLE_KINDS: ReadonlyArray<AddableKind> = ['string', 'number', 'boolean', 'list', 'object']
+const EMPTY_BLOCK_TYPES: readonly string[] = []
 
 function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: AddableKind) => void}) {
   const [isOpen, setIsOpen] = useState(false)
@@ -138,8 +147,23 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // same runtime).
   const schemas = usePropertySchemas()
   const uis = runtime.read(propertyUiFacet)
+  const typesRegistry = runtime.read(typesFacet)
 
   const properties = useMemo(() => blockData?.properties ?? {}, [blockData?.properties])
+  const blockTypes = useMemo(() => {
+    if (!blockData) return EMPTY_BLOCK_TYPES
+    try {
+      return getBlockTypes(blockData)
+    } catch {
+      return EMPTY_BLOCK_TYPES
+    }
+  }, [blockData])
+  const propertySections = useMemo(() => buildPropertyPanelSections({
+    properties,
+    blockTypes,
+    typesRegistry,
+    schemas,
+  }), [properties, blockTypes, typesRegistry, schemas])
 
   if (!blockData) return null
   const readOnly = block.repo.isReadOnly
@@ -155,6 +179,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
 
   const renameProperty = async (oldName: string, newName: string) => {
     if (!newName || newName === oldName) return
+    if (newName === typesProp.name) return
     // Rename = read+delete+write under the new name in one tx so the
     // rename is atomic for sync. Use repo.tx directly since the
     // single-block write sugar can't express two-key updates.
@@ -177,7 +202,51 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const addProperty = (name: string, kind: AddableKind) => {
-    writeProperty(adhocSchema(name, kind), defaultValueForKind(kind))
+    if (name === typesProp.name) return
+    const registered = schemas.get(name)
+    if (registered) writeProperty(registered, registered.defaultValue)
+    else writeProperty(adhocSchema(name, kind), defaultValueForKind(kind))
+  }
+
+  const renderPropertyRow = (section: PropertyPanelSection, row: PropertyPanelRow) => {
+    const display = row.isSet
+      ? resolvePropertyDisplay({name: row.name, encodedValue: row.encodedValue, schemas, uis})
+      : resolveKnownPropertyDisplay(row.name, schemas, uis)
+
+    if (!display) return null
+
+    // Decode if a real schema is registered; otherwise the encoded
+    // shape IS the editor's value (ad-hoc schema uses unsafeIdentity).
+    const value = row.isSet
+      ? display.isKnown
+        ? safeDecode(display.schema, row.encodedValue)
+        : row.encodedValue
+      : display.schema.defaultValue
+    const decodeFailed = row.isSet && display.isKnown && value === DECODE_FAILED
+    const ui = uis.get(row.name)
+    const labelText = ui?.label ?? row.name
+    const typeMembershipRow = row.name === typesProp.name
+    const rowReadOnly = readOnly || typeMembershipRow
+
+    return (
+      <PropertyRow
+        key={`${section.id}:${row.name}`}
+        name={row.name}
+        labelText={labelText}
+        kindLabel={display.kind}
+        schemaUnknown={!display.isKnown}
+        decodeFailed={decodeFailed}
+        value={decodeFailed ? row.encodedValue : value}
+        customEditor={display.customEditor}
+        block={block}
+        kind={display.kind}
+        readOnly={rowReadOnly}
+        canDelete={row.isSet && !typeMembershipRow}
+        onChange={(next) => writeProperty(display.schema, next)}
+        onRename={(newName) => void renameProperty(row.name, newName)}
+        onDelete={() => void deleteProperty(row.name)}
+      />
+    )
   }
 
   return (
@@ -195,35 +264,17 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         <Input value={blockData.updatedBy} disabled className="bg-muted/50 text-xs md:text-sm" />
       </div>
 
-      {Object.entries(properties).map(([key, encodedValue]) => {
-        const display = resolvePropertyDisplay({name: key, encodedValue, schemas, uis})
-        // Decode if a real schema is registered; otherwise the encoded
-        // shape IS the editor's value (ad-hoc schema uses unsafeIdentity).
-        const value = display.isKnown
-          ? safeDecode(display.schema, encodedValue)
-          : encodedValue
-        const decodeFailed = display.isKnown && value === DECODE_FAILED
-        const ui = uis.get(key)
-        const labelText = ui?.label ?? key
-        return (
-          <PropertyRow
-            key={key}
-            name={key}
-            labelText={labelText}
-            kindLabel={display.kind}
-            schemaUnknown={!display.isKnown}
-            decodeFailed={decodeFailed}
-            value={decodeFailed ? encodedValue : value}
-            customEditor={display.customEditor}
-            block={block}
-            kind={display.kind}
-            readOnly={readOnly}
-            onChange={(next) => writeProperty(display.schema, next)}
-            onRename={(newName) => void renameProperty(key, newName)}
-            onDelete={() => void deleteProperty(key)}
-          />
-        )
-      })}
+      {propertySections.map(section => (
+        <div key={section.id} className="space-y-2 pt-2 border-t border-muted/70 first:border-t-0">
+          <div
+            className="text-xs md:text-sm font-medium text-muted-foreground"
+            title={section.description}
+          >
+            {section.label}
+          </div>
+          {section.rows.map(row => renderPropertyRow(section, row))}
+        </div>
+      ))}
 
       {!readOnly && <AddPropertyForm onAdd={addProperty} />}
     </div>
@@ -244,6 +295,7 @@ interface PropertyRowProps {
   block: Block
   kind: PropertyKind
   readOnly: boolean
+  canDelete?: boolean
   onChange: (next: unknown) => void
   onRename: (newName: string) => void
   onDelete: () => void
@@ -260,6 +312,7 @@ function PropertyRow({
   block,
   kind,
   readOnly,
+  canDelete = true,
   onChange,
   onRename,
   onDelete,
@@ -333,7 +386,7 @@ function PropertyRow({
             />
           )}
         </div>
-        {!readOnly && (
+        {!readOnly && canDelete && (
           <Button
             variant="ghost"
             size="sm"
@@ -351,6 +404,22 @@ function PropertyRow({
 // ──── Codec-decode helper ────
 
 const DECODE_FAILED = Symbol('decode-failed')
+
+const resolveKnownPropertyDisplay = (
+  name: string,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+  uis: ReadonlyMap<string, AnyPropertyUiContribution>,
+): PropertyDisplayInfo | null => {
+  const schema = schemas.get(name)
+  if (!schema) return null
+  const ui = uis.get(name)
+  return {
+    schema,
+    kind: schema.kind,
+    customEditor: ui?.Editor,
+    isKnown: true,
+  }
+}
 
 /** Decode an encoded value through `schema.codec.decode`, returning a
  *  sentinel symbol when the codec throws. The panel falls back to the

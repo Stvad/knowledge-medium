@@ -18,6 +18,7 @@ const baseContext = {
     block: vi.fn(() => videoBlock),
   } as unknown as Repo,
   uiStateBlock: {id: 'ui-state'} as Block,
+  types: [],
   topLevelBlockId: 'root',
   inFocus: true,
   inEditMode: false,
