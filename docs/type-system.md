@@ -251,7 +251,14 @@ async addType(
    *  overwritten. */
   initialValues: Readonly<Record<string, unknown>> = {},
 ): Promise<void> {
-  const contribution = this.types.get(typeId)
+  // Snapshot the registries ONCE before opening the tx so a
+  // setFacetRuntime landing mid-tx can't pair the captured
+  // `contribution` with a different schema map. The locals (not
+  // `this.types` / `this.propertySchemas`) drive everything inside the
+  // tx and are what get passed to setup.
+  const types = this.types
+  const propertySchemas = this.propertySchemas
+  const contribution = types.get(typeId)
   await this.tx(async tx => {
     const block = await tx.get(blockId)
     if (!block) return  // block was deleted between resolve and tx
@@ -271,7 +278,7 @@ async addType(
     let propsChanged = wasNew
     for (const [name, value] of Object.entries(merged)) {
       if (next[name] === undefined) {
-        const schema = this.propertySchemas.get(name)
+        const schema = propertySchemas.get(name)
         next[name] = schema ? schema.codec.encode(value) : value
         propsChanged = true
       }
@@ -279,13 +286,15 @@ async addType(
     if (propsChanged) await tx.update(blockId, { properties: next })
     // setup runs ONLY on actual first transitions, not on every addType
     // call. Re-running setup on already-typed blocks would create
-    // duplicate template subtrees etc. — bad.
+    // duplicate template subtrees etc. — bad. Pass the snapshot
+    // registries so setup sees the same world the contribution came
+    // from.
     if (wasNew) await contribution?.setup?.({
       tx,
       id: blockId,
       repo: this,
-      types: this.types,
-      propertySchemas: this.propertySchemas,
+      types,
+      propertySchemas,
     })
   }, { scope: ChangeScope.BlockDefault, description: `addType ${typeId}` })
 }
@@ -316,21 +325,42 @@ async toggleType(blockId: string, typeId: string): Promise<void> {
 
 async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> {
   // Bulk diff-and-apply for multi-select UI / importers that want
-  // defaults-on-add semantics. Each addType/removeType call is its own
-  // tx; collapse into one if atomicity matters at a call site.
+  // defaults-on-add semantics. Each call is its own tx; collapse into
+  // one if atomicity matters at a call site.
   //
-  // After removals, run addType for ALL desired types in array order —
-  // not just the new additions. addType is idempotent and intentionally
-  // re-materialises missing defaults / initial values even when the
-  // type is already present (§3a), so passing every desired type
-  // through it gives setBlockTypes a "make this the canonical state"
-  // semantics: missing fields on already-typed blocks get repaired,
-  // and the typesProp array order matches the caller's intent.
+  // Steps:
+  //   1. Remove unwanted types (drops their typesProp entry).
+  //   2. addType for ALL desired types in array order — not just the
+  //      new additions. addType is idempotent and intentionally
+  //      re-materialises missing defaults / initial values even when
+  //      the type is already present (§3a), so passing every desired
+  //      type through it gives setBlockTypes a "make this the
+  //      canonical state" semantics: missing fields on already-typed
+  //      blocks get repaired.
+  //   3. Rewrite typesProp to the deduped desired order if it doesn't
+  //      already match. addType only appends, so existing memberships
+  //      keep their original positions; without the rewrite, current
+  //      = ['b','a'] + setBlockTypes(['a','b']) stays ['b','a']. The
+  //      §3b read-overlay walks block.types order, so respecting
+  //      caller intent here is meaningful (changes which type's
+  //      default wins for unset shared fields).
+  const desiredOrder = Array.from(new Set(typeIds))
   const block = await this.load(blockId)
   const current = (block?.properties[typesProp.name] as string[] | undefined) ?? []
-  const want = new Set(typeIds)
+  const want = new Set(desiredOrder)
   for (const t of current) if (!want.has(t)) await this.removeType(blockId, t)
-  for (const t of typeIds) await this.addType(blockId, t)
+  for (const t of desiredOrder) await this.addType(blockId, t)
+  // Final order rewrite — separate tx; no atomicity-with-addType
+  // guarantee, but no semantic risk either since the rewrite is a
+  // pure permutation of an already-correct set.
+  await this.tx(async tx => {
+    const after = await tx.get(blockId)
+    if (!after) return
+    const stored = (after.properties[typesProp.name] as string[] | undefined) ?? []
+    if (stored.length === desiredOrder.length && stored.every((t, i) => t === desiredOrder[i])) return
+    const next = { ...after.properties, [typesProp.name]: typesProp.codec.encode(desiredOrder) }
+    await tx.update(blockId, { properties: next })
+  }, { scope: ChangeScope.BlockDefault, description: 'setBlockTypes order rewrite' })
 }
 ```
 
@@ -759,6 +789,12 @@ interface TypedQuery {
 - `where` on a property → compile each `(name, decodedValue)` entry to `json_extract(properties_json, ?) = ?` and bind two parameters: the **JSON path** (computed safely — see below) and the **encoded** value run through the matching `PropertySchema.codec`. **Don't string-interpolate the property name into a `$.<name>` literal** — property names with `:`, `-`, or `.` (e.g. `system:collapsed`, `daily-note`) break naive interpolation. Use SQLite's path syntax: `'$.' || quote(name)` doesn't work directly, so build the path in JS with proper escaping (wrap in `"..."` and escape inner quotes — SQLite's JSON path accepts `$."weird:name"`). Look up the schema in `propertySchemasFacet`; if no schema is registered for that name, refuse the query with a clear error rather than guessing the codec — the caller is asking for typed-equality, ad-hoc schemas have `unsafeIdentity` codec which is meaningless to compare.
 
   **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `kind` is `list`, `object`, `ref`, or `refList`. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
+
+  **`null` / `undefined` semantics on the where value.** SQL `=` doesn't match NULL — `json_extract(...) = NULL` is always FALSE — and `json_extract` itself returns NULL for missing JSON paths, so naive `= ?` against an encoded null silently matches nothing. v1 rules:
+  - Decoded value is `undefined` → reject the query with a clear error. `undefined` isn't a valid encoded value (codecs encode "no value" as omitted or null) and almost always indicates a caller bug like `where: {status: someVar}` where `someVar` isn't set.
+  - Decoded value encodes to `null` (e.g. an `optional(string)` codec on a "no value") → compile to `(json_extract(properties_json, ?) IS NULL)`. This deliberately conflates "property is unset" with "property is set to null"; most schemas don't distinguish the two so this is the natural meaning. If a schema does want to distinguish, the caller can post-filter or use `peekProperty`-equivalent membership checks — out of scope for v1 typed queries.
+  - All other encoded scalars → compile to `json_extract(...) = ?` as before.
+  Document both rules at the API site so a typed-query author can predict behaviour.
   Per-property indices (e.g. `CREATE INDEX idx_blocks_status ON blocks (json_extract(properties_json, '$.status'))`) follow the same path-quoting rule and are added incrementally for hot fields.
 - `referencedBy` → use `EXISTS` against `block_references` filtered by `target_id` (and optionally `source_field`). Same dedup reason: a source could reference the same target through multiple fields and the join would duplicate the source row otherwise.
   ```sql
@@ -895,7 +931,7 @@ Each phase is independently shippable and testable.
 
 ### Phase 4 — reactive typed-query primitive (SQLite-backed)
 
-1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `EXISTS` subqueries against `block_types` for type filters and `block_references` for `referencedBy` (avoids duplicating block rows when multiple edge rows match); `json_extract(properties_json, ?) = ?` for `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters; refuse the query when no schema is registered for a referenced field, and refuse `where` on non-scalar kinds (`list`, `object`, `ref`, `refList`) per §8. Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
+1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `EXISTS` subqueries against `block_types` for type filters and `block_references` for `referencedBy` (avoids duplicating block rows when multiple edge rows match); `json_extract(properties_json, ?) = ?` for scalar `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters. Refuse the query when no schema is registered for a referenced field; refuse `where` on non-scalar kinds (`list`, `object`, `ref`, `refList`) per §8; refuse `undefined` `where` values; compile encoded `null` to `IS NULL` (matches both unset and explicit-null per §8). Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
 2. Wire `subscribeBlocks` to the existing repo change-notification stream (which is already row-event-aware) so updates flow from both local commits and sync-applied changes.
 3. Add `useBlockQuery` hook in `src/hooks/`.
 
