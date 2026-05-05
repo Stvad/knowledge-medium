@@ -18,7 +18,7 @@ These pieces are load-bearing and the design composes them, not replaces them:
 - **`blockRenderersFacet`** ([src/extensions/core.ts](src/extensions/core.ts)) — renderer registry with `id` + optional `aliases`; `BlockRenderer` supports `canRender` / `priority` for dynamic dispatch ([src/types.ts:65](src/types.ts:65)).
 - **`BlockData.references: BlockReference[]`** ([src/data/api/blockData.ts:26](src/data/api/blockData.ts:26)) — content-derived (parsed from `[[alias]]` and `((uuid))`) by the `backlinks.parseReferences` post-commit processor ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)). `BlockReference = { id, alias }` ([src/data/api/blockData.ts:4](src/data/api/blockData.ts:4)).
 - **`AppExtension`** + facets — plugins contribute via `someFacet.of(contribution, {source})` ([video-player/index.ts](src/plugins/video-player/index.ts) is a good template).
-- **`appEffectsFacet`** ([src/extensions/core.ts](src/extensions/core.ts)) — long-lived runtime effects with cleanup, used here for the data-defined-types watcher.
+- **`appEffectsFacet`** ([src/extensions/core.ts](src/extensions/core.ts)) — long-lived runtime effects with cleanup. Not used in the v1 type-system shape (it would be the natural home for the deferred data-defined-types watcher; §9 explains why that's deferred).
 
 ## Design
 
@@ -53,9 +53,6 @@ export interface TypeContribution {
   /** Renderer dispatch priority when a block has multiple types.
    *  Higher wins. `rendererProp` always overrides everything. */
   readonly priority?: number
-  /** Tana-style supertag aliases — extra strings that map to this type
-   *  (importer convenience: `'task'` → `'todo'`). */
-  readonly aliases?: ReadonlyArray<string>
   /** Optional human label for the property panel / quick-find. */
   readonly label?: string
   /** Optional longer description for hover tooltips in type pickers and
@@ -100,7 +97,6 @@ export const typesFacet = defineFacet<TypeContribution, ReadonlyMap<string, Type
         console.warn(`[typesFacet] duplicate registration for "${t.id}"; last-wins per facet convention`)
       }
       out.set(t.id, t)
-      for (const a of t.aliases ?? []) out.set(a, t)
     }
     return out
   },
@@ -126,7 +122,7 @@ export const typesProp = defineProperty<readonly string[]>('types', {
 
 `KERNEL_PROPERTY_SCHEMAS` includes `typesProp`; `typeProp` is removed. All current writers ([dailyNotes.ts](src/data/dailyNotes.ts), [LayoutRenderer.tsx](src/components/renderer/LayoutRenderer.tsx), [roamImport/import.ts](src/utils/roamImport/import.ts), [roamImport/plan.ts](src/utils/roamImport/plan.ts), [initData.ts](src/initData.ts), [exampleExtensions.ts](src/extensions/exampleExtensions.ts), [agent-runtime/commands.ts](src/plugins/agent-runtime/commands.ts)) switch from `typeProp.codec.encode('foo')` / `tx.setProperty(id, typeProp, 'foo')` to `typesProp` writes.
 
-A one-shot migration backfills existing rows: any block with `properties.type` writes `properties.types = [oldValue]` and clears `type`. Land it as a kernel `LocalSchemaBackfill` on `propertySchemasFacet` plumbing (same mechanism that already exists for kernel migrations — see [src/data/facets.ts:21](src/data/facets.ts:21) `LocalSchemaBackfill`).
+A one-shot migration backfills existing rows: any block with `properties.type` writes `properties.types = [oldValue]` and clears `type`. Land it as a `LocalSchemaBackfill` contributed via `localSchemaFacet` ([src/data/facets.ts](src/data/facets.ts) — `LocalSchemaContribution.backfills`); `propertySchemasFacet` only combines schema registrations and won't run backfills. Kernel local-schema contributions live in the same place as the existing kernel-side migrations (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) for the pattern, including the `client_schema_state` marker key).
 
 #### 2a. SQL / index migration — type lookup must move off `$.type`
 
@@ -201,7 +197,11 @@ export const addBlockTypeToProperties = (
 }
 ```
 
-These are deliberately small. Registry resolution, defaults materialisation, and `setup` belong in `repo.addType` — bulk paths that don't have runtime access can use `addBlockTypeToProperties` for the membership write but should still call `repo.addType` post-commit (or per-row) to get defaults applied. The Roam importer's plan phase uses these helpers to set up rows; the apply phase calls `repo.addType` for each newly-tagged block.
+These are deliberately small. Registry resolution, defaults materialisation, and `setup` all happen inside `repo.addType` — these helpers don't replicate any of that.
+
+**Important: `addBlockTypeToProperties` does NOT call defaults or setup.** It's a *raw membership writer* for paths that genuinely can't reach `repo.addType` — fixture construction in tests, processor snapshot rewrites, importer **plan** code that builds row shapes before commit. **Don't pre-write membership and then call `repo.addType` expecting defaults to fire**: `repo.addType` returns early when the type is already present in `typesProp`, so a prewrite-then-addType sequence leaves the block tagged but with no materialised defaults and no `setup` ever running.
+
+The right boundary: paths that need full type-add semantics (defaults + setup) call `repo.addType` directly without prewriting. The Roam importer's apply phase iterates blocks and calls `repo.addType(blockId, 'todo')` per row; it does **not** stamp `typesProp` itself. Plan code that constructs `BlockData` rows pre-tx (deterministic-id paths) can use `addBlockTypeToProperties` — but those paths are responsible for either also writing the defaults that `addType` would have written, or leaving them unmaterialised and relying on the §3a-bis read overlay (acceptable for app-owned-init-only-if-missing semantics; see Phase 5 reimport rule).
 
 #### 3a. `addType` / `removeType` mutators — defaults apply on add, not just creation
 
@@ -307,6 +307,8 @@ A *full* read-time overlay (defaults synthesised everywhere — storage reads, q
 The hook fires inside `repo.addType` after `defaults` are applied, in the same tx. `removeType` doesn't run a teardown — use the same "we don't clean up on remove in v1" rule as for properties; types that ship complex setups should be ones users add and rarely undo.
 
 ```ts
+import { createChild } from '@/data/internals/kernelMutators'  // 'core.createChild' mutator
+
 typesFacet.of(defineBlockType({
   id: 'meeting',
   label: 'Meeting',
@@ -314,12 +316,18 @@ typesFacet.of(defineBlockType({
   defaults: { [meetingDateProp.name]: today() },
   setup: async ({ tx, id }) => {
     for (const label of ['Attendees:', 'Agenda:', 'Action items:']) {
-      const childId = await tx.createChild({ parentId: id, position: { kind: 'last' } })
+      // tx.run dispatches a registered mutator inside this tx so the
+      // child writes share the same transactional bucket as the
+      // addType writes — undo of the type-add cleanly removes the
+      // template subtree.
+      const childId = await tx.run(createChild, { parentId: id, position: { kind: 'last' } })
       await tx.update(childId, { content: label })
     }
   },
 }), { source: 'meeting' })
 ```
+
+`tx.run(mutator, args)` ([src/data/api/tx.ts:130](src/data/api/tx.ts:130)) is the in-tx mutator dispatch — different from `repo.mutate.createChild(...)` which would open a separate tx and break the atomicity property `setup` exists for. Setup callbacks should always use `tx.run`, never `repo.mutate.X`.
 
 **Use sparingly** — it's a code-execution hatch in the type registry. `defaults` covers ~90% of cases and is data (auditable, syncable, deterministic). `setup` is opaque code at add time. Two specific gotchas to flag at implementation time:
 
@@ -334,29 +342,34 @@ Materialise-on-add covers the common case but has three edge cases where a block
 
 Teach `block.get` to overlay type-conditional defaults — narrowly, only on this one call site:
 
+The lookup itself lives on `Repo` so all consumers share one implementation against the retained registry (avoiding direct `runtime` exposure on `Repo` and keeping `Block` from poking into private fields):
+
 ```ts
-get<T>(schema: PropertySchema<T>): T {
-  const set = this.peekProperty(schema)
-  if (set !== undefined) return set
-  // Type-conditional defaults win over schema default. First applicable
-  // type in block.types order wins (matches §3b first-writer-wins for
-  // materialise-on-add, so storage and overlay agree under normal flows).
-  const typesRegistry = this.repo.runtime.read(typesFacet)
-  for (const typeId of this.types) {
-    const t = typesRegistry.get(typeId)
-    const v = t?.defaults?.[schema.name]
+// On Repo
+resolveDefault<T>(types: readonly string[], schema: PropertySchema<T>): T {
+  for (const typeId of types) {
+    const v = this.types.get(typeId)?.defaults?.[schema.name]
     if (v !== undefined) return v as T
   }
   return schema.defaultValue
 }
 ```
 
+```ts
+// Updated Block.get
+get<T>(schema: PropertySchema<T>): T {
+  const set = this.peekProperty(schema)
+  if (set !== undefined) return set
+  return this.repo.resolveDefault(this.types, schema)
+}
+```
+
 Three companion rules:
 
 - **`peekProperty` does NOT overlay.** It stays as "is this property actually materialised?" — used by `addType` itself to decide whether to write a default, by sync-conflict resolution, by debugging tools that want raw storage. The overlay is a `get`-only enhancement.
-- **`useProperty` DOES overlay** ([src/hooks/block.ts:252](src/hooks/block.ts:252)) — by the same symmetry argument as `block.get`. The selector closes over `runtime.read(typesFacet)`, reads `doc.properties[typesProp.name]` alongside `doc.properties[schema.name]`, and applies the same `resolveDefault` lookup. Reactivity works out via the existing `useHandle` selector-equality path; runtime rebuild (extension reload) re-runs the hook because `useAppRuntime()` identity changes. Add a parallel `usePeekProperty` returning `T | undefined` for the rare "is this materialised?" caller. The downstream wrappers `useUIStateProperty` / `useRootUIStateProperty` / `useUserPrefsProperty` ([src/data/globalState.ts:275](src/data/globalState.ts:275)) inherit the overlay automatically — verify at implementation time that no UI-state schema name collides with a type-contributed prop name.
+- **`useProperty` DOES overlay** ([src/hooks/block.ts:252](src/hooks/block.ts:252)) — by the same symmetry argument as `block.get`. Inside the selector, call `repo.resolveDefault(types, schema)` against the type ids read from `doc.properties[typesProp.name]`. The retained `types` registry on `Repo` is updated wholesale on `setFacetRuntime`, so the selector re-runs through the existing `useHandle` invalidation path on rebuild. Add a parallel `usePeekProperty` returning `T | undefined` for the rare "is this materialised?" caller. The downstream wrappers `useUIStateProperty` / `useRootUIStateProperty` / `useUserPrefsProperty` ([src/data/globalState.ts:275](src/data/globalState.ts:275)) inherit the overlay automatically — verify at implementation time that no UI-state schema name collides with a type-contributed prop name.
 - **The typed-query primitive (§8) does NOT overlay by default.** SQL runs against `properties_json` and matches only materialised values. Under normal flows storage and overlay agree (because `addType` materialised them). At the three edges above, queries can miss until something materialises; `addType` remains the storage invariant. An opt-in `{ materialiseDefaults: true }` flag is a possible follow-up if real call sites want overlay-aware filtering, but defer until there's demand.
-- **`BlockProperties` field discovery (§3c) reuses this lookup.** Unset slots in the panel currently render `schema.defaultValue`; instead, render the same "first-applicable-type-default else schema-default" the overlay computes, so the panel and code reads agree on what an unset-but-typed slot looks like. Factor the lookup into a small helper (`resolveDefault(block, schema, typesRegistry)`) shared between `block.get` and the panel.
+- **`BlockProperties` field discovery (§3c) reuses `repo.resolveDefault`.** Unset slots in the panel render whatever `repo.resolveDefault(block.types, schema)` returns — same answer `block.get` would produce — so the panel and code reads agree on what an unset-but-typed slot looks like. The signature replaces the earlier free-function `resolveDefault(block, schema, typesRegistry)` sketch; pass the type-id list and let `Repo` own the registry access.
 
 **`Block` facade sugar** mirrors the existing `get`/`set`/`setContent`/`delete` pattern at [src/data/block.ts:159](src/data/block.ts:159)–[:228](src/data/block.ts:228):
 
@@ -506,7 +519,9 @@ export const ref: () => Codec<string>             // single ref (block id)
 export const refList: () => Codec<readonly string[]>  // list of refs
 ```
 
-Both are tagged so `isRefCodec(codec)` and `isRefListCodec(codec)` return true at runtime — the projector in §7 needs to identify them. Add a `kind: 'ref' | 'refList'` to `PropertyKind` in [propertySchema.ts:5](src/data/api/propertySchema.ts:5) so the unknown-schema fallback editor can render a stub picker.
+Both are tagged so `isRefCodec(codec)` and `isRefListCodec(codec)` return true at runtime — the projector in §7 needs to identify them. Add a `kind: 'ref' | 'refList'` to `PropertyKind` in [propertySchema.ts:5](src/data/api/propertySchema.ts:5) so the property panel can pick a ref-aware editor when a `PropertySchema` is registered.
+
+**Unknown-schema fallback for refs is intentionally limited.** The unknown-schema path in [propertyEditors/defaults.tsx](src/components/propertyEditors/defaults.tsx) infers `kind` from raw JSON shape; a ref stored as a plain string id is indistinguishable from any other string, and a `refList` from any other `string[]`. Without a registered schema or an out-of-band marker on the value, the data layer has no way to know it's a ref. Accept this: unknown refs render via the primitive `string` / `list` editors, with no picker affordance, until the contributing plugin loads. Adding a `_ref: true` marker to stored values to make refs self-describing was considered and rejected — invasive, breaks JSON-equality compares, and "plugin not loaded" is rare enough that primitive-editor fallback is the right trade-off.
 
 Schemas declare ref properties like:
 
@@ -654,6 +669,8 @@ interface TypedQuery {
 
 - `types`-only queries → join `block_types`.
 - `where` on a property → compile each `(name, decodedValue)` entry to `json_extract(properties_json, ?) = ?` and bind two parameters: the **JSON path** (computed safely — see below) and the **encoded** value run through the matching `PropertySchema.codec`. **Don't string-interpolate the property name into a `$.<name>` literal** — property names with `:`, `-`, or `.` (e.g. `system:collapsed`, `daily-note`) break naive interpolation. Use SQLite's path syntax: `'$.' || quote(name)` doesn't work directly, so build the path in JS with proper escaping (wrap in `"..."` and escape inner quotes — SQLite's JSON path accepts `$."weird:name"`). Look up the schema in `propertySchemasFacet`; if no schema is registered for that name, refuse the query with a clear error rather than guessing the codec — the caller is asking for typed-equality, ad-hoc schemas have `unsafeIdentity` codec which is meaningless to compare.
+
+  **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `kind` is `list`, `object`, `ref`, or `refList`. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
   Per-property indices (e.g. `CREATE INDEX idx_blocks_status ON blocks (json_extract(properties_json, '$.status'))`) follow the same path-quoting rule and are added incrementally for hot fields.
 - `referencedBy` → join `block_references` filtered by `target_id` (and optionally `source_field`).
 - `subscribeBlocks` rides the existing `InvalidationRule` / `repo` change-notification stream, which is already driven by row-event-aware machinery — same as backlinks consumers do today.
