@@ -77,8 +77,18 @@ export interface TypeSetupContext {
   readonly tx: Tx
   /** The block the type is being added to. */
   readonly id: string
-  /** For registry lookups (typesFacet, propertySchemasFacet). */
+  /** For ordinary repo operations — opening tx-internal queries, etc.
+   *  Not for type/schema registry reads: those registries are private
+   *  on Repo. Use the snapshots below instead. */
   readonly repo: Repo
+  /** Type registry snapshotted at addType-call time, parallel to the
+   *  ProcessorCtx.propertySchemas pattern (§7a). Lets a setup look up
+   *  related type contributions (e.g. the parent's type) without
+   *  reaching into Repo internals. */
+  readonly types: ReadonlyMap<string, TypeContribution>
+  /** Property-schema registry snapshotted at addType-call time. Lets
+   *  setup encode values via a schema's codec when needed. */
+  readonly propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
 
 export type TypeSetup = (ctx: TypeSetupContext) => void | Promise<void>
@@ -270,7 +280,13 @@ async addType(
     // setup runs ONLY on actual first transitions, not on every addType
     // call. Re-running setup on already-typed blocks would create
     // duplicate template subtrees etc. — bad.
-    if (wasNew) await contribution?.setup?.({ tx, id: blockId, repo: this })
+    if (wasNew) await contribution?.setup?.({
+      tx,
+      id: blockId,
+      repo: this,
+      types: this.types,
+      propertySchemas: this.propertySchemas,
+    })
   }, { scope: ChangeScope.BlockDefault, description: `addType ${typeId}` })
 }
 
@@ -302,12 +318,19 @@ async setBlockTypes(blockId: string, typeIds: readonly string[]): Promise<void> 
   // Bulk diff-and-apply for multi-select UI / importers that want
   // defaults-on-add semantics. Each addType/removeType call is its own
   // tx; collapse into one if atomicity matters at a call site.
+  //
+  // After removals, run addType for ALL desired types in array order —
+  // not just the new additions. addType is idempotent and intentionally
+  // re-materialises missing defaults / initial values even when the
+  // type is already present (§3a), so passing every desired type
+  // through it gives setBlockTypes a "make this the canonical state"
+  // semantics: missing fields on already-typed blocks get repaired,
+  // and the typesProp array order matches the caller's intent.
   const block = await this.load(blockId)
   const current = (block?.properties[typesProp.name] as string[] | undefined) ?? []
-  const next = new Set(typeIds)
-  const cur = new Set(current)
-  for (const t of cur) if (!next.has(t)) await this.removeType(blockId, t)
-  for (const t of next) if (!cur.has(t)) await this.addType(blockId, t)
+  const want = new Set(typeIds)
+  for (const t of current) if (!want.has(t)) await this.removeType(blockId, t)
+  for (const t of typeIds) await this.addType(blockId, t)
 }
 ```
 
@@ -378,11 +401,19 @@ resolveDefault<T>(types: readonly string[], schema: PropertySchema<T>): T {
 ```
 
 ```ts
-// Updated Block.get
+// Updated Block.get — preserves the existing loaded-row contract.
+// `this.data` throws BlockNotLoadedError / BlockNotFoundError when the
+// row isn't in cache (current behaviour at [src/data/block.ts:74](src/data/block.ts:74)),
+// so callers see the same not-loaded error as today rather than
+// silently getting schema.defaultValue back.
 get<T>(schema: PropertySchema<T>): T {
-  const set = this.peekProperty(schema)
-  if (set !== undefined) return set
-  return this.repo.resolveDefault(this.types, schema)
+  const data = this.data  // throws if not loaded
+  const stored = data.properties[schema.name]
+  if (stored !== undefined) return schema.codec.decode(stored) as T
+  // Row IS loaded; the property just isn't materialised. Apply the
+  // type-conditional overlay against the row's actual `types` array.
+  const types = (data.properties[typesProp.name] as string[] | undefined) ?? []
+  return this.repo.resolveDefault(types, schema)
 }
 ```
 
@@ -875,12 +906,17 @@ Each phase is independently shippable and testable.
 1. Add `TAG_TO_TYPE` map to importer per the Migration section's expanded shape (separate `appOwnedInit` from `sourceMirror`).
 2. Add `'todo'` type contribution (its own small plugin, `src/plugins/todo/`) with `statusProp` (shared-vocab, flat name), a checkbox decorator via `blockContentDecoratorsFacet` gated on `block.hasType('todo')`, and `defaults: {[statusProp.name]: 'open'}` so freshly-tagged blocks default open.
 3. Add namespaced `roam:todo-state` schema in the importer (or a `roam` plugin) for the source-mirror field.
-4. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker:
+4. **Change `upsertImportedBlock` ([src/utils/roamImport/import.ts:756](src/utils/roamImport/import.ts:756)) to merge properties on live-row hits, not replace wholesale.** Today's path is "last-write-wins": on an existing row it `tx.update`s `content`/`properties`/`references` with the planned values, dropping any local edits. That destroys app-owned state on reimport *before* any subsequent `repo.addType` runs — `appOwnedInit` then sees the imported value already there and skips, preserving the wrong thing (the source value, not the user's local edit). Required new behaviour for typed-block paths:
+   - **`content` and `references`**: still overwrite (Roam content is source-authoritative; references are recomputed from content anyway via the backlinks processor).
+   - **`properties`**: merge. Refresh `roam:*` source-mirror fields freely. For app-owned fields (anything outside the `roam:` namespace), keep the existing local value if present and only write missing ones from the planned shape. The merge is done at upsert time, not by `repo.addType`, because the importer's planned `properties` predates and overrides anything `addType` would do.
+   - For brand-new blocks (`createOrGet → inserted: true`), no merge is needed — the planned properties are the only state.
+   The simplest implementation: split `upsertImportedBlock` into "create new" (current path) and "merge into existing" (new path that reads the existing row and writes the merged properties). The plan-side `appOwnedInit` for the source's TODO/DONE state continues to flow through `repo.addType`'s `initialValues` arg — it's the safety net for blocks that arrive without source-mirror state, not the primary write path for re-imported live rows.
+5. On import, for each Roam block carrying a `{{[[TODO]]}}` / `{{[[DONE]]}}` marker:
    - Call `repo.addType(blockId, 'todo', appOwnedInit)` — pass the source-specific app-owned values via the third arg per §3a. addType is idempotent and always runs init-if-missing materialisation (so already-typed blocks from sync without contribution / raw `typesProp` writes still get their `status` filled in); `setup` only fires on actual first transitions.
    - Write the source-mirror field (`roam:todo-state`) freely (always-overwrite via `block.set`).
    - Strip the marker from `content`.
 
-**Acceptance:** importing a Roam graph with `#TODO`/`#DONE` blocks produces blocks with `types: ['todo']`, matching `status`, and `roam:todo-state` reflecting the source. Surfaced via the todo checkbox decorator and queryable via `useBlockQuery({types: ['todo'], where: {status: 'open'}})`. **Reimport-after-local-change preserves user state**: locally completing a task (`status='done'`) and reimporting the original Roam export leaves `status='done'` untouched while `roam:todo-state` refreshes to `'TODO'` (source-mirror semantics).
+**Acceptance:** importing a Roam graph with `#TODO`/`#DONE` blocks produces blocks with `types: ['todo']`, matching `status`, and `roam:todo-state` reflecting the source. Surfaced via the todo checkbox decorator and queryable via `useBlockQuery({types: ['todo'], where: {status: 'open'}})`. **Reimport-after-local-change preserves user state**: locally completing a task (`status='done'`) and reimporting the original Roam export leaves `status='done'` untouched (the upsert merge preserves the local app-owned value) while `roam:todo-state` refreshes to `'TODO'` (source-mirror semantics). Verified against the importer write path, not just the `addType` path.
 
 ## Open questions for the implementer
 
