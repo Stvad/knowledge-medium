@@ -22,11 +22,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../../../data/repo'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { dailyNoteBlockId, journalBlockId, todayIso } from '@/data/dailyNotes'
+import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
+import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { computeAliasSeatId } from '../../../data/targets'
 import { importRoam } from '../import'
 import { roamBlockId } from '../ids'
@@ -56,6 +60,7 @@ const setup = async (): Promise<Harness> => {
     // importer also calls processors itself for alias resolution.
     registerKernelProcessors: false,
   })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, todoDataExtension]))
   return {h, repo}
 }
 
@@ -137,6 +142,100 @@ describe('importRoam', () => {
     const leaf = await readBlock(roamBlockId(WORKSPACE, 'leafA'))
     expect(leaf?.parent_id).toBe(roamBlockId(WORKSPACE, 'parentA'))
     expect(leaf?.content).toBe('leaf with [[wcs/plan]]')
+  })
+
+  it('imports Roam TODO markers as todo type metadata and strips the marker from content', async () => {
+    const todoExport: RoamExport = [
+      {
+        title: 'todos',
+        uid: 'todoPage',
+        children: [
+          {string: '#TODO write importer', uid: 'todoOpen'},
+          {string: '{{[[DONE]]}} ship phase five', uid: 'todoDone'},
+        ],
+      },
+    ]
+
+    await importRoam(todoExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const open = await readBlock(roamBlockId(WORKSPACE, 'todoOpen'))
+    expect(open?.content).toBe('write importer')
+    const openProps = JSON.parse(open!.properties_json) as Record<string, unknown>
+    expect(openProps[typesProp.name]).toContain(TODO_TYPE)
+    expect(openProps[statusProp.name]).toBe('open')
+    expect(openProps[roamTodoStateProp.name]).toBe('TODO')
+
+    const done = await readBlock(roamBlockId(WORKSPACE, 'todoDone'))
+    expect(done?.content).toBe('ship phase five')
+    const doneProps = JSON.parse(done!.properties_json) as Record<string, unknown>
+    expect(doneProps[typesProp.name]).toContain(TODO_TYPE)
+    expect(doneProps[statusProp.name]).toBe('done')
+    expect(doneProps[roamTodoStateProp.name]).toBe('DONE')
+  })
+
+  it('preserves app-owned todo status while refreshing Roam source mirrors on re-import', async () => {
+    const todoExport: RoamExport = [
+      {
+        title: 'todos',
+        uid: 'todoPage',
+        children: [
+          {string: '#TODO write importer', uid: 'todoOpen'},
+        ],
+      },
+    ]
+    const todoId = roamBlockId(WORKSPACE, 'todoOpen')
+
+    await importRoam(todoExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    await env.repo.tx(async tx => {
+      const row = await tx.get(todoId)
+      if (!row) throw new Error('expected imported todo row')
+      await tx.update(todoId, {
+        properties: {
+          ...row.properties,
+          [statusProp.name]: statusProp.codec.encode('done'),
+          [roamTodoStateProp.name]: roamTodoStateProp.codec.encode('DONE'),
+          'local:note': 'keep me',
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    await importRoam(todoExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const reimported = await readBlock(todoId)
+    const reimportedProps = JSON.parse(reimported!.properties_json) as Record<string, unknown>
+    expect(reimportedProps[statusProp.name]).toBe('done')
+    expect(reimportedProps[roamTodoStateProp.name]).toBe('TODO')
+    expect(reimportedProps['local:note']).toBe('keep me')
+
+    await importRoam([
+      {
+        title: 'todos',
+        uid: 'todoPage',
+        children: [
+          {string: 'write importer', uid: 'todoOpen'},
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const noMarker = await readBlock(todoId)
+    const noMarkerProps = JSON.parse(noMarker!.properties_json) as Record<string, unknown>
+    expect(noMarkerProps[statusProp.name]).toBe('done')
+    expect(noMarkerProps[typesProp.name]).toContain(TODO_TYPE)
+    expect(noMarkerProps[roamTodoStateProp.name]).toBeUndefined()
+    expect(noMarkerProps['local:note']).toBe('keep me')
   })
 
   it('routes daily pages through getOrCreateDailyNote and parents children there', async () => {

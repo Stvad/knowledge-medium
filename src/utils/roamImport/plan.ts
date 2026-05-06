@@ -1,6 +1,7 @@
 import type { BlockData, BlockReference } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import type { RoamTodoState } from '@/plugins/todo/schema'
 import { parseReferences } from '@/utils/referenceParser'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
 import { resolveDailyPage, roamBlockId } from './ids'
@@ -38,6 +39,7 @@ export interface PreparedPage {
 export interface PreparedBlock {
   data: BlockData
   roamUid: string
+  todoState?: RoamTodoState
 }
 
 export interface PreparedPlaceholder {
@@ -101,6 +103,26 @@ const detectInlineAttribute = (rawContent: string | undefined): {key: string, va
   const match = SIMPLE_ATTR_RE.exec(rawContent)
   if (!match) return null
   return {key: match[1], value: match[2]}
+}
+
+const ROAM_TODO_MARKER_RE =
+  /(^|\s)(?:#\[\[(TODO|DONE)\]\]|#(TODO|DONE)\b|\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\})(?=$|\s)/g
+
+export const extractRoamTodoMarker = (
+  rawContent: string,
+): {content: string; todoState?: RoamTodoState} => {
+  let todoState: RoamTodoState | undefined
+  ROAM_TODO_MARKER_RE.lastIndex = 0
+  const content = rawContent
+    .replace(ROAM_TODO_MARKER_RE, (_match, _lead, pageState, tagState, commandState) => {
+      const nextState = (pageState ?? tagState ?? commandState) as RoamTodoState
+      todoState ??= nextState
+      return ' '
+    })
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim()
+
+  return {content, todoState}
 }
 
 // `[[X]]` tokens with whitespace / `,` / `;` separators between them,
@@ -335,12 +357,13 @@ const buildBlock = (
     buildBlock(ctx, children[i], id, i, pushDescendant)
   }
 
+  const todo = extractRoamTodoMarker(block.string ?? '')
   const data = composeBlockData({
     ctx,
     id,
     parentId,
     orderKey: siblingOrderKey(siblingIndex),
-    rawString: block.string ?? '',
+    rawString: todo.content,
     heading: block.heading,
     roamProps: collectRoamProps(block),
     roamRefUids: collectUidRefs(block),
@@ -349,7 +372,7 @@ const buildBlock = (
     promotedFromChildren: promotion.promoted,
   })
 
-  pushDescendant({data, roamUid: block.uid})
+  pushDescendant({data, roamUid: block.uid, todoState: todo.todoState})
   return id
 }
 

@@ -17,17 +17,25 @@ import {
   DeletedConflictError,
   type BlockData,
   type NewBlockData,
+  type TypeRegistrySnapshot,
   type Tx,
 } from '@/data/api'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
+import {
+  roamTodoStateProp,
+  statusProp,
+  TODO_TYPE,
+  type RoamTodoState,
+  type TodoStatus,
+} from '@/plugins/todo/schema'
 import { computeAliasSeatId } from '../../data/targets'
 import { keyAtEnd, keysBetween } from '../../data/orderKey'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import { parseReferences } from '@/utils/referenceParser'
 import type { Repo } from '../../data/repo'
-import { planImport, type PreparedPage, type RoamImportPlan } from './plan'
+import { planImport, type PreparedBlock, type PreparedPage, type RoamImportPlan } from './plan'
 import type { RoamExport } from './types'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -47,6 +55,28 @@ type AliasIdMap = ReadonlyMap<string, string>
  *  later if profiling moves the needle. Not exposed as an option
  *  for now; callers don't need a knob, they need it fast. */
 const DESCENDANT_CHUNK_SIZE = 5000
+
+interface RoamTypeMapping {
+  readonly typeId: string
+  readonly appOwnedInit: Readonly<Record<string, unknown>>
+  readonly sourceMirror: Readonly<Record<string, unknown>>
+}
+
+const TAG_TO_TYPE: Readonly<Record<RoamTodoState, RoamTypeMapping>> = {
+  TODO: {
+    typeId: TODO_TYPE,
+    appOwnedInit: {[statusProp.name]: 'open' satisfies TodoStatus},
+    sourceMirror: {[roamTodoStateProp.name]: 'TODO' satisfies RoamTodoState},
+  },
+  DONE: {
+    typeId: TODO_TYPE,
+    appOwnedInit: {[statusProp.name]: 'done' satisfies TodoStatus},
+    sourceMirror: {[roamTodoStateProp.name]: 'DONE' satisfies RoamTodoState},
+  },
+}
+
+const ROAM_SOURCE_PREFIXES = ['roam:']
+const PAGE_SOURCE_FIELDS = [aliasesProp.name, typesProp.name]
 
 interface PageReconciliation {
   /** Plan-side blockId; matches data.parentId for direct children. */
@@ -286,7 +316,7 @@ export const importRoam = async (
       }
       pagesCreated += 1
       if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
-      await upsertImportedBlock(tx, recon.page.data)
+      await upsertImportedBlock(tx, recon.page.data, pageImportMergeOptions())
     }
   }, {scope: ChangeScope.BlockDefault, description: 'roam import: pages'})
 
@@ -312,7 +342,8 @@ export const importRoam = async (
       for (let i = chunkStart; i >= chunkEnd; i--) {
         const desc = plan.descendants[i]
         const data = applyReparent(desc.data, reparentMap)
-        await upsertImportedBlock(tx, data)
+        await upsertImportedBlock(tx, data, mergeOptionsForDescendant(desc))
+        await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
       }
     }, {scope: ChangeScope.BlockDefault, description: 'roam import: descendants'})
     const chunkRows = chunkStart - chunkEnd + 1
@@ -735,6 +766,98 @@ const ensurePlaceholderRow = async (
   }
 }
 
+interface ImportPropertyMergeOptions {
+  readonly appOwnedFields?: readonly string[]
+  readonly sourceFields?: readonly string[]
+  readonly sourcePrefixes?: readonly string[]
+}
+
+const pageImportMergeOptions = (): ImportPropertyMergeOptions => ({
+  sourceFields: PAGE_SOURCE_FIELDS,
+  sourcePrefixes: ROAM_SOURCE_PREFIXES,
+})
+
+const todoMappingFor = (desc: PreparedBlock): RoamTypeMapping | undefined =>
+  desc.todoState ? TAG_TO_TYPE[desc.todoState] : undefined
+
+const mergeOptionsForDescendant = (
+  desc: PreparedBlock,
+): ImportPropertyMergeOptions => {
+  const mapping = todoMappingFor(desc)
+  return {
+    appOwnedFields: mapping ? Object.keys(mapping.appOwnedInit) : [],
+    sourcePrefixes: ROAM_SOURCE_PREFIXES,
+  }
+}
+
+const hasOwn = (
+  obj: Record<string, unknown>,
+  key: string,
+): boolean => Object.prototype.hasOwnProperty.call(obj, key)
+
+const mergeImportedProperties = (
+  existing: Record<string, unknown>,
+  planned: Record<string, unknown>,
+  options: ImportPropertyMergeOptions = {},
+): Record<string, unknown> => {
+  const appOwned = new Set(options.appOwnedFields ?? [])
+  const sourceFields = new Set<string>([
+    ...Object.keys(planned),
+    ...(options.sourceFields ?? []),
+  ])
+  const sourcePrefixes = options.sourcePrefixes ?? []
+
+  for (const key of Object.keys(existing)) {
+    if (sourcePrefixes.some(prefix => key.startsWith(prefix))) {
+      sourceFields.add(key)
+    }
+  }
+
+  const keys = new Set([
+    ...Object.keys(existing),
+    ...Object.keys(planned),
+    ...sourceFields,
+  ])
+  const next: Record<string, unknown> = {}
+
+  for (const key of keys) {
+    const existingHas = hasOwn(existing, key)
+    const plannedHas = hasOwn(planned, key)
+
+    if (appOwned.has(key)) {
+      if (existingHas) next[key] = existing[key]
+      else if (plannedHas) next[key] = planned[key]
+      continue
+    }
+
+    if (sourceFields.has(key)) {
+      if (plannedHas) next[key] = planned[key]
+      continue
+    }
+
+    if (existingHas) next[key] = existing[key]
+    else if (plannedHas) next[key] = planned[key]
+  }
+
+  return next
+}
+
+const applyMappedTypesInTx = async (
+  tx: Tx,
+  desc: PreparedBlock,
+  repo: Repo,
+  typeSnapshot: TypeRegistrySnapshot,
+): Promise<void> => {
+  const mapping = todoMappingFor(desc)
+  if (!mapping) return
+
+  await repo.addTypeInTx(tx, desc.data.id, mapping.typeId, mapping.appOwnedInit, typeSnapshot)
+  const roamTodoState = mapping.sourceMirror[roamTodoStateProp.name] as RoamTodoState | undefined
+  if (roamTodoState) {
+    await tx.setProperty(desc.data.id, roamTodoStateProp, roamTodoState)
+  }
+}
+
 /**
  * Insert a planned block, OR upgrade an existing row at the same id.
  *
@@ -742,22 +865,25 @@ const ensurePlaceholderRow = async (
  *   - Fresh insert (createOrGet returns inserted=true): nothing else
  *     to do — the row was written with the planned data.
  *   - Live-row hit (inserted=false): apply the planned content /
- *     properties / references via tx.update and re-parent via
- *     tx.move so a prior placeholder gets upgraded.
+ *     references and the planned/source-owned property subset via
+ *     tx.update, then re-parent via tx.move so a prior placeholder
+ *     gets upgraded.
  *   - Tombstone hit (createOrGet throws DeletedConflictError):
  *     tx.restore writes deleted=0 + the data-field patch in one
  *     UPDATE; tx.move handles parent_id + order_key. Without this
  *     branch a re-import of a previously-deleted Roam block / page
  *     would crash the entire import tx.
  *
- * Last-write-wins is the explicit semantics on the live-row path:
- * re-imports overwrite local edits at the same id. Same on the
- * tombstone path — re-importing resurrects the row with the planned
- * data rather than the user's pre-deletion state.
+ * Live-row content + references remain source-authoritative. Properties
+ * merge by ownership: planned/importer source fields refresh, app-owned
+ * type fields initialise only when missing, and unrelated local fields
+ * survive. Tombstones still resurrect with the planned data rather than
+ * the user's pre-deletion state.
  */
 const upsertImportedBlock = async (
   tx: Tx,
   data: NewBlockData & {id: string; content: string},
+  propertyMergeOptions: ImportPropertyMergeOptions = {},
 ) => {
   try {
     const result = await tx.createOrGet({
@@ -770,9 +896,16 @@ const upsertImportedBlock = async (
       references: data.references,
     })
     if (result.inserted) return
+    const existing = await tx.get(data.id)
+    if (!existing) throw new Error(`upsertImportedBlock: existing block ${data.id} not found`)
+    const properties = mergeImportedProperties(
+      existing.properties,
+      data.properties ?? {},
+      propertyMergeOptions,
+    )
     await tx.update(data.id, {
       content: data.content,
-      properties: data.properties ?? {},
+      properties,
       references: data.references ?? [],
     })
     await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
