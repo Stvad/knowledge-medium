@@ -11,7 +11,7 @@ The first downstream consumer is the Roam importer: every imported `key:: value`
 Load-bearing pieces this design composes:
 
 - **`PropertySchema<T>`** ([src/data/api/propertySchema.ts:8](src/data/api/propertySchema.ts:8)) — name + codec + defaultValue + changeScope. The codec is the single source of truth for value semantics after the [db2a987](https://github.com/) refactor (`kind` removed; editor selection derives from codec via `propertyEditorFallbackFacet`).
-- **`Codec<T>`** ([src/data/api/codecs.ts:9](src/data/api/codecs.ts:9)) — primitive encode/decode contract running at four boundary call sites. Carries `shape: CodecShape` for storage primitive; semantic codecs are distinguished by a `kind: string` discriminator that matches their preset id (see §1a — replaces the earlier ad-hoc `RefCodec.refKind` field).
+- **`Codec<T>`** ([src/data/api/codecs.ts:9](src/data/api/codecs.ts:9)) — primitive encode/decode contract running at four boundary call sites. After this design lands, codec carries a single open-string `type: string` discriminator matching its preset id (see §1a — replaces both the closed `shape: CodecShape` enum and the ad-hoc `RefCodec.refKind` field).
 - **`propertySchemasFacet` / `propertyUiFacet` / `propertyEditorFallbackFacet`** ([src/data/facets.ts](src/data/facets.ts)) — facet-resolved registries; today read once at `setFacetRuntime` and merged per [type-system.md §1a](type-system.md) into `repo.propertySchemas`.
 - **`AddPropertyForm`** ([src/components/propertyPanel/AddPropertyForm.tsx](src/components/propertyPanel/AddPropertyForm.tsx)) — the panel's "add field" UI. Currently picks an `AddablePropertyShape` (subset of `CodecShape`, excludes `date` and refs) and synthesizes an in-memory `adhocSchema`.
 - **`adhocSchema` / `inferShapeFromValue`** ([src/components/propertyEditors/defaults.tsx:220](src/components/propertyEditors/defaults.tsx:220)) — the unknown-schema fallback path. Lossy by design: a stored ref looks like a string on read.
@@ -19,7 +19,7 @@ Load-bearing pieces this design composes:
 
 The gap the refactor exposed: `CodecShape` is the wrong vocabulary for the user-facing picker. It's the JSON storage primitive, deliberately doesn't grow `'ref'` / `'url'` / etc. The user wants a richer menu of *value presets* — bundles of (codec factory, default, label, glyph, optional config) — that map down to codecs at registration time.
 
-The codec refactor itself was the right move and stays. What's missing is the user-vocabulary layer above it, plus a runtime-mutable contribution path so schemas can be added without rebuilding the whole facet runtime.
+The codec refactor itself was the right move and stays. What's missing is the user-vocabulary layer above it, a runtime-mutable contribution path so schemas can be added without rebuilding the whole facet runtime, and a cleanup of the codec discriminator vocabulary so semantic and primitive codecs share one open identifier instead of two redundant ones.
 
 ## Design
 
@@ -83,56 +83,61 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
 
 Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {source: 'plugin'})`. No imperative API.
 
-#### 1a. Codec carries `kind`, presets and editors share its vocabulary
+#### 1a. Codec carries a single open `type` discriminator
 
-The pre-this-design `RefCodec.refKind: 'ref' | 'refList'` field is an ad-hoc discriminator on one specific codec subtype. Every new semantic codec would invent its own (`format: 'url'`, etc.). Replace it with a single uniform `kind: string` on every codec, whose value matches the preset id that built it:
+Pre-this-design `Codec` carries two fields: `shape: CodecShape` (closed JSON-primitive enum) and — on `RefCodec` only — `refKind: 'ref' | 'refList'` (an ad-hoc discriminator). Every new semantic codec would either invent its own `refKind`-style field (`format: 'url'`, …) or sit awkwardly under the existing `shape` while needing predicate-based exclusion (the way `isRefCodec` is special-cased outside the shape check in [typedBlockQuery.ts:40](src/data/internals/typedBlockQuery.ts:40)).
+
+Replace both with a **single open `type: string`** on every codec, whose value matches the preset id that built it:
 
 ```ts
 // src/data/api/codecs.ts
 export interface Codec<T> {
-  readonly shape: CodecShape       // storage primitive
-  readonly kind: string            // stable preset id; e.g. 'string', 'ref', 'url'
+  readonly type: string            // stable preset id; e.g. 'string', 'ref', 'url'
   encode(value: T): unknown
   decode(json: unknown): T
 }
 
 export interface RefCodec extends Codec<string> {
-  readonly kind: 'ref'             // replaces refKind
+  readonly type: 'ref'             // replaces refKind
   readonly targetTypes: readonly string[]
 }
 
 export interface RefListCodec extends Codec<readonly string[]> {
-  readonly kind: 'refList'
+  readonly type: 'refList'
   readonly targetTypes: readonly string[]
 }
 
-// Kernel codecs declare their kind:
-const stringCodec:  Codec<string>  = { shape: 'string',  kind: 'string',  encode, decode }
-const numberCodec:  Codec<number>  = { shape: 'number',  kind: 'number',  encode, decode }
-const booleanCodec: Codec<boolean> = { shape: 'boolean', kind: 'boolean', encode, decode }
-const dateCodec:    Codec<Date>    = { shape: 'date',    kind: 'date',    encode, decode }
-const ref     = (opts?) => ({ shape: 'string', kind: 'ref',     targetTypes: ..., encode, decode })
-const refList = (opts?) => ({ shape: 'list',   kind: 'refList', targetTypes: ..., encode, decode })
-const url:          Codec<string>  = { shape: 'string',  kind: 'url',     encode: validateUrl, decode: validateUrl }
+// Kernel codecs declare their type:
+const stringCodec:  Codec<string>  = { type: 'string',  encode, decode }
+const numberCodec:  Codec<number>  = { type: 'number',  encode, decode }
+const booleanCodec: Codec<boolean> = { type: 'boolean', encode, decode }
+const dateCodec:    Codec<Date>    = { type: 'date',    encode, decode }
+const listCodec    = <T>(inner: Codec<T>): Codec<T[]> => ({ type: 'list', encode, decode })
+const objectCodec  = <T>(): Codec<T> => ({ type: 'object', encode, decode })
+const ref     = (opts?) => ({ type: 'ref',     targetTypes: ..., encode, decode })
+const refList = (opts?) => ({ type: 'refList', targetTypes: ..., encode, decode })
+const url:          Codec<string>  = { type: 'url',     encode: validateUrl, decode: validateUrl }
 ```
 
-Predicates collapse to one-liners on `kind`:
+Predicates collapse to one-liners on `type`:
 
 ```ts
-export const isRefCodec     = (c: AnyCodec): c is RefCodec     => c.kind === 'ref'
-export const isRefListCodec = (c: AnyCodec): c is RefListCodec => c.kind === 'refList'
-export const isUrlCodec     = (c: AnyCodec): c is Codec<string> => c.kind === 'url'
+export const isRefCodec     = (c: AnyCodec): c is RefCodec     => c.type === 'ref'
+export const isRefListCodec = (c: AnyCodec): c is RefListCodec => c.type === 'refList'
+export const isUrlCodec     = (c: AnyCodec): c is Codec<string> => c.type === 'url'
 ```
 
-`propertyEditorFallbackFacet` matchers shift to `codec.kind ===` checks; the existing predicate-based facet stays — predicates are now trivial. A new semantic codec only requires picking a `kind` string + adding a fallback contribution; no new ad-hoc fields per codec subtype, no new kind enum to extend (the discriminator is just `string`).
+`propertyEditorFallbackFacet` matchers shift to `codec.type ===` checks; the existing predicate-based facet stays — predicates are now trivial. A new semantic codec only requires picking a `type` string + adding a fallback contribution.
 
 Three properties this gives:
 
-- **One vocabulary, three uses.** Preset id, codec kind, and editor-fallback match key are all the same string. A `'ref'` preset's `build()` returns a codec with `kind: 'ref'`; the `kernel.ref` fallback editor matches `codec.kind === 'ref'`. No translation layer.
-- **Storage-primitive vs. semantics stay separate.** `shape` is still the JSON storage primitive (the only thing `json_extract` and the data layer's where-clauses care about). `kind` is the semantic-flavor pick. A `url` codec is `shape: 'string', kind: 'url'`; a `ref` codec is `shape: 'string', kind: 'ref'`. Same storage shape, different semantic kinds, different editors.
-- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `kind: 'email'`, adds a fallback editor matching `codec.kind === 'email'`, registers both via facets. Kernel doesn't have to know.
+- **One vocabulary, three uses.** Preset id, codec type, and editor-fallback match key are all the same string. A `'ref'` preset's `build()` returns a codec with `type: 'ref'`; the `kernel.ref` fallback editor matches `codec.type === 'ref'`. No translation layer.
+- **The `where`-clause check becomes one read.** Today's [typedBlockQuery.ts:40](src/data/internals/typedBlockQuery.ts:40) is `SCALAR_WHERE_SHAPES.has(shape) && !isRefCodec && !isRefListCodec` — shape conflates JSON storage primitive with semantic flavor, so refs (string-shaped but semantically reference) need a special-case exclusion. With open `type`, ref is its own value, naturally excluded by curation: `WHERE_ALLOWED_TYPES = new Set(['string', 'number', 'boolean', 'date', 'url'])` and the check is just `!WHERE_ALLOWED_TYPES.has(codec.type)`. Refs → `referencedBy` (indexed via `block_references`), not where-clause; lists/objects → JSON-text `=`-comparison is unreliable; both excluded by not being in the kernel-curated set. The set is itself a facet (`whereAllowedTypesFacet`) so plugin codecs can opt in.
+- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, adds a fallback editor matching `codec.type === 'email'`, contributes `'email'` to `whereAllowedTypesFacet` if it should be query-able. No new ad-hoc fields per codec subtype.
 
-The `kind` is the *codec author's* declaration of what semantic flavor the codec implements — usually equal to the preset id that built it, but kernel codecs without presets (like the kernel `'object'` codec) also carry one. Two codecs with the same `kind` are claiming the same semantic contract; the editor-fallback last-wins (or priority-orders) among them, same as today.
+What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. Today's only data-layer consumer of that information is the where-clause check, which becomes the kernel-curated allowed-set. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
+
+The pre-existing `Codec.shape: CodecShape` field, the `CodecShape` type itself, and the `isStringCodec` / `isListCodec` / `isObjectCodec` / etc. shape-keyed predicates all go away. `inferShapeFromValue` becomes `inferTypeFromValue`, returns one of `'string' | 'number' | 'boolean' | 'list' | 'object'` (a known-primitive subset of the open string namespace).
 
 ### 2. Facets gain a runtime contribution source
 
@@ -381,7 +386,7 @@ After this lands, the `adhocSchema` / `inferShapeFromValue` path in [src/compone
 - **Property-schema block in malformed state**: a `'property-schema'` block exists but is missing `propertyName` or `presetId`. The service skips it, values for the intended name render via the fallback. Resolves when the schema block is fixed.
 - **Direct raw writes that bypass the form**: any code path calling `tx.update(id, {properties: {someAdHocName: rawValue}})` without an associated registered schema. Should not exist for unregistered names after Phase 4; if a buggy plugin or future feature reintroduces one, the fallback keeps the panel rendering. Worth a runtime warn in the tx engine for "writing a property whose name has no registered schema."
 
-The fallback's *write* path (the form's `addProperty` calling `adhocSchema(name, shape)` and `block.set(adhocSchema, ...)`) goes away. The form always either adopts a registered schema or creates a new one before writing — no in-memory ad-hoc schemas at write time.
+The fallback's *write* path (the form's `addProperty` calling `adhocSchema(name, type)` and `block.set(adhocSchema, ...)`) goes away. The form always either adopts a registered schema or creates a new one before writing — no in-memory ad-hoc schemas at write time.
 
 ## Phasing
 
@@ -400,7 +405,7 @@ No user-visible change yet. This is pure infrastructure.
 
 1. Add `ValuePreset` type and `valuePresetsFacet` ([src/data/api/valuePresets.ts](src/data/api/valuePresets.ts) new).
 2. Register kernel presets (string, number, boolean, list, date, url, ref, refList).
-3. Add `kind: string` to `Codec<T>` and update kernel codecs to declare it. Replace `RefCodec.refKind` with `kind: 'ref' | 'refList'`. Add `urlCodec` with `kind: 'url'`. Add `kernel.url` fallback editor matching `codec.kind === 'url'` (priority above `kernel.string`); update `kernel.ref` / `kernel.refList` matchers to read `codec.kind`.
+3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Drop the `CodecShape` type and `isStringCodec` / `isListCodec` / etc. shape-keyed predicates; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check against a `whereAllowedTypesFacet`-resolved kernel set instead of `SCALAR_WHERE_SHAPES` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case. Add `urlCodec` with `type: 'url'` and a `kernel.url` fallback editor matching `codec.type === 'url'` above `kernel.string`.
 4. Replace `AddablePropertyShape` in `AddPropertyForm` and `FieldConfigSheet` with preset selection. Form's default preset is `ref`.
 5. Extend `FieldConfigSheet` to render a preset's optional `ConfigEditor`.
 6. Tests: preset list resolves, configEditor renders for ref, glyph + label propagate.
