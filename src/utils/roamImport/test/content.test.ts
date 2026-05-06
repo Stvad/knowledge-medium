@@ -132,6 +132,16 @@ describe('rewriteRoamContent', () => {
     expect(content).toBe('[comments](https://vlad.roam.garden/post?#comments) [[tag]]')
   })
 
+  it('does not rewrite hash tokens inside markdown link labels', () => {
+    const {content} = rewriteRoamContent(
+      '[Reader Public Beta Update #5](https://read.readwise.io/read/abc) #tag',
+      new Map(),
+    )
+    expect(content).toBe(
+      '[Reader Public Beta Update #5](https://read.readwise.io/read/abc) [[tag]]',
+    )
+  })
+
   it('does not match # mid-identifier', () => {
     const {content} = rewriteRoamContent('a#b is not a tag, but #b is', new Map())
     expect(content).toBe('a#b is not a tag, but [[b]] is')

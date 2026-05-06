@@ -179,13 +179,24 @@ const findClosingParen = (value: string, start: number): number => {
   return -1
 }
 
-const collectMarkdownLinkDestinationRanges = (content: string): ProtectedRange[] => {
+const collectMarkdownLinkRanges = (content: string): ProtectedRange[] => {
   const ranges: ProtectedRange[] = []
   for (let i = 0; i < content.length - 1; i++) {
     if (content[i] !== ']' || content[i + 1] !== '(') continue
+    let labelStart = i - 1
+    while (labelStart >= 0) {
+      if (content[labelStart] === '\\') {
+        labelStart -= 2
+        continue
+      }
+      if (content[labelStart] === '[') break
+      labelStart -= 1
+    }
+    if (labelStart < 0) continue
     const destinationStart = i + 2
     const destinationEnd = findClosingParen(content, destinationStart)
     if (destinationEnd < 0) continue
+    ranges.push({start: labelStart, end: i + 1})
     ranges.push({start: destinationStart, end: destinationEnd})
     i = destinationEnd
   }
@@ -254,7 +265,7 @@ const collectUrlRanges = (content: string): ProtectedRange[] => {
 const collectHashRewriteProtectedRanges = (content: string): ProtectedRange[] =>
   [
     ...collectCodeRanges(content),
-    ...collectMarkdownLinkDestinationRanges(content),
+    ...collectMarkdownLinkRanges(content),
     ...collectPageRefRanges(content),
     ...collectUrlRanges(content),
   ].sort((a, b) => a.start - b.start || a.end - b.end)

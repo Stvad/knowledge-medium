@@ -12,7 +12,13 @@ import {
   derivePropertiesFromContent,
   nonStandardPageAliasValues,
   propertiesFromRoam,
+  ROAM_AUTHOR_PROP,
   ROAM_EMBED_PATH_PROP,
+  ROAM_MESSAGE_AUTHOR_PROP,
+  ROAM_MESSAGE_TIMESTAMP_PROP,
+  ROAM_MESSAGE_URL_PROP,
+  ROAM_TIMESTAMP_PROP,
+  ROAM_URL_PROP,
   uniqueStrings,
 } from './properties'
 import { computePromotedFromChildren } from './promotion'
@@ -160,6 +166,9 @@ interface BuildContext {
   aliasesUsed: Set<string>
   unresolvedBlockUids: Set<string>
   diagnostics: string[]
+  emittedBlockUids: Set<string>
+  readwisePromotedMetadataConflictCounts: Map<string, number>
+  readwisePromotedMetadataConflictSamples: string[]
   /** Uids whose values were already pulled into a higher-level block's
    *  promoted properties. `computePromotedFromChildren` skips children
    *  whose uid is in this set so an intermediate attr block on the
@@ -179,6 +188,15 @@ const buildBlock = (
   if (!id) throw new Error(`Roam uid not in uidMap: ${block.uid}`)
 
   const children = block.children ?? []
+  const alreadyEmitted = ctx.emittedBlockUids.has(block.uid)
+  if (alreadyEmitted) {
+    for (let i = 0; i < children.length; i++) {
+      buildBlock(ctx, children[i], id, i, pushDescendant)
+    }
+    return id
+  }
+  ctx.emittedBlockUids.add(block.uid)
+
   const promotion = computePromotedFromChildren(children, ctx.bubbledUids)
   const promotedSrs = findPromotedSrsScheduleInChildren(children, ctx.options.workspaceId, block.uid)
   const rawContent = block.string ?? ''
@@ -287,6 +305,135 @@ interface ComposeArgs {
   promotedFromChildren?: Record<string, unknown>
 }
 
+const hasOwn = (obj: Record<string, unknown>, key: string): boolean =>
+  Object.prototype.hasOwnProperty.call(obj, key)
+
+const propertyValues = (value: unknown): unknown[] =>
+  value === undefined || value === null
+    ? []
+    : Array.isArray(value)
+      ? value
+      : [value]
+
+const propertyKey = (value: unknown): string =>
+  typeof value === 'string' ? `s:${value.trim()}` : JSON.stringify(value)
+
+const mergePropertyValues = (primary: unknown, secondary: unknown): unknown => {
+  const out: unknown[] = []
+  const seen = new Set<string>()
+  for (const value of [...propertyValues(primary), ...propertyValues(secondary)]) {
+    const key = propertyKey(value)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(typeof value === 'string' ? value.trim() : value)
+  }
+  return out.length === 1 ? out[0] : out
+}
+
+const propertyValuesEqual = (a: unknown, b: unknown): boolean => {
+  const left = propertyValues(a).map(propertyKey).sort()
+  const right = propertyValues(b).map(propertyKey).sort()
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+const valuesNotIn = (values: unknown, existing: unknown): unknown[] => {
+  const existingKeys = new Set(propertyValues(existing).map(propertyKey))
+  const out: unknown[] = []
+  const seen = new Set<string>()
+  for (const value of propertyValues(values)) {
+    const key = propertyKey(value)
+    if (existingKeys.has(key) || seen.has(key)) continue
+    seen.add(key)
+    out.push(typeof value === 'string' ? value.trim() : value)
+  }
+  return out
+}
+
+const propertyValueFromList = (values: readonly unknown[]): unknown =>
+  values.length === 1 ? values[0] : [...values]
+
+const matrixUrlValues = (value: unknown): unknown[] =>
+  propertyValues(value).filter(item =>
+    typeof item === 'string' && /^https:\/\/matrix\.to\//i.test(item.trim()),
+  )
+
+interface ReconciledPromotedProperties {
+  derivedProperties: Record<string, unknown>
+  promotedProperties: Record<string, unknown>
+  preservedProperties: Record<string, unknown>
+}
+
+const reconcileReadwisePromotedMetadata = (
+  roamUid: string,
+  derived: Record<string, unknown>,
+  promoted: Record<string, unknown> | undefined,
+  ctx: BuildContext,
+): ReconciledPromotedProperties => {
+  const derivedProperties = {...derived}
+  const promotedProperties = {...(promoted ?? {})}
+  const preservedProperties: Record<string, unknown> = {}
+
+  const hasDerivedArticleMetadata =
+    hasOwn(derivedProperties, ROAM_AUTHOR_PROP) ||
+    hasOwn(derivedProperties, ROAM_URL_PROP)
+  if (!hasDerivedArticleMetadata) {
+    return {derivedProperties, promotedProperties, preservedProperties}
+  }
+
+  const notes: string[] = []
+  if (hasOwn(promotedProperties, ROAM_URL_PROP)) {
+    const promotedUrl = promotedProperties[ROAM_URL_PROP]
+    const matrixUrls = matrixUrlValues(promotedUrl)
+    if (matrixUrls.length > 0) {
+      preservedProperties[ROAM_MESSAGE_URL_PROP] = propertyValueFromList(matrixUrls)
+      notes.push(`preserved Matrix URL as ${ROAM_MESSAGE_URL_PROP}`)
+    }
+    if (hasOwn(derivedProperties, ROAM_URL_PROP)) {
+      const promotedOnly = valuesNotIn(promotedUrl, derivedProperties[ROAM_URL_PROP])
+      if (promotedOnly.length > 0) {
+        derivedProperties[ROAM_URL_PROP] = mergePropertyValues(
+          derivedProperties[ROAM_URL_PROP],
+          promotedUrl,
+        )
+        notes.push(`merged promoted ${ROAM_URL_PROP} into derived ${ROAM_URL_PROP}`)
+      }
+      delete promotedProperties[ROAM_URL_PROP]
+    }
+  }
+
+  let movedMessageMetadata = hasOwn(preservedProperties, ROAM_MESSAGE_URL_PROP)
+  if (hasOwn(promotedProperties, ROAM_AUTHOR_PROP)) {
+    const promotedAuthor = promotedProperties[ROAM_AUTHOR_PROP]
+    if (!hasOwn(derivedProperties, ROAM_AUTHOR_PROP) ||
+        !propertyValuesEqual(derivedProperties[ROAM_AUTHOR_PROP], promotedAuthor)) {
+      preservedProperties[ROAM_MESSAGE_AUTHOR_PROP] = promotedAuthor
+      notes.push(`preserved promoted ${ROAM_AUTHOR_PROP} as ${ROAM_MESSAGE_AUTHOR_PROP}`)
+      movedMessageMetadata = true
+    }
+    delete promotedProperties[ROAM_AUTHOR_PROP]
+  }
+
+  if (movedMessageMetadata && hasOwn(promotedProperties, ROAM_TIMESTAMP_PROP)) {
+    preservedProperties[ROAM_MESSAGE_TIMESTAMP_PROP] = promotedProperties[ROAM_TIMESTAMP_PROP]
+    delete promotedProperties[ROAM_TIMESTAMP_PROP]
+    notes.push(`preserved promoted ${ROAM_TIMESTAMP_PROP} as ${ROAM_MESSAGE_TIMESTAMP_PROP}`)
+  }
+
+  if (notes.length > 0) {
+    for (const note of notes) {
+      ctx.readwisePromotedMetadataConflictCounts.set(
+        note,
+        (ctx.readwisePromotedMetadataConflictCounts.get(note) ?? 0) + 1,
+      )
+    }
+    if (ctx.readwisePromotedMetadataConflictSamples.length < 8) {
+      ctx.readwisePromotedMetadataConflictSamples.push(`uid ${roamUid}: ${notes.join('; ')}`)
+    }
+  }
+
+  return {derivedProperties, promotedProperties, preservedProperties}
+}
+
 const composeBlockData = (args: ComposeArgs): BlockData => {
   const {ctx, id, roamUid, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties, promotedFromChildren} = args
 
@@ -313,9 +460,16 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     .filter((mapped): mapped is string => Boolean(mapped))
     .map(mapped => ({id: mapped, alias: mapped}))
 
+  const reconciled = reconcileReadwisePromotedMetadata(
+    roamUid,
+    derived.properties,
+    promotedFromChildren,
+    ctx,
+  )
   const properties: Record<string, unknown> = {
-    ...derived.properties,
-    ...(promotedFromChildren ?? {}),
+    ...reconciled.derivedProperties,
+    ...reconciled.promotedProperties,
+    ...reconciled.preservedProperties,
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
   }
@@ -383,6 +537,129 @@ const buildUidMap = (
   }
 
   return {uidMap, dailyByUid, knownUids}
+}
+
+interface UidOccurrence {
+  uid: string
+  kind: 'page' | 'block'
+  pageTitle: string
+  parentUid: string | null
+  siblingIndex: number
+  content: string
+  childUids: string[]
+}
+
+const occurrenceContent = (occ: UidOccurrence): string =>
+  occ.content.replace(/\s+/g, ' ').trim()
+
+const occurrenceParent = (occ: UidOccurrence): string =>
+  occ.kind === 'page'
+    ? '(page)'
+    : `${occ.pageTitle}\u0000${occ.parentUid ?? '(page-root)'}`
+
+const occurrenceChildren = (occ: UidOccurrence): string =>
+  occ.childUids.join('\u0000')
+
+const quotedSample = (value: string): string => {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  const clipped = normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized
+  return JSON.stringify(clipped)
+}
+
+const collectDuplicateUidDiagnostics = (pages: RoamExport): string[] => {
+  const occurrences = new Map<string, UidOccurrence[]>()
+  const add = (occ: UidOccurrence) => {
+    const list = occurrences.get(occ.uid) ?? []
+    list.push(occ)
+    occurrences.set(occ.uid, list)
+  }
+
+  const visitBlock = (
+    block: RoamBlock,
+    pageTitle: string,
+    parentUid: string | null,
+    siblingIndex: number,
+  ) => {
+    add({
+      uid: block.uid,
+      kind: 'block',
+      pageTitle,
+      parentUid,
+      siblingIndex,
+      content: block.string ?? '',
+      childUids: (block.children ?? []).map(child => child.uid),
+    })
+    for (let i = 0; i < (block.children ?? []).length; i++) {
+      visitBlock(block.children![i], pageTitle, block.uid, i)
+    }
+  }
+
+  for (const page of pages) {
+    add({
+      uid: page.uid,
+      kind: 'page',
+      pageTitle: page.title,
+      parentUid: null,
+      siblingIndex: 0,
+      content: page.title,
+      childUids: (page.children ?? []).map(child => child.uid),
+    })
+    for (let i = 0; i < (page.children ?? []).length; i++) {
+      visitBlock(page.children![i], page.title, page.uid, i)
+    }
+  }
+
+  const duplicates = [...occurrences.entries()]
+    .filter(([, list]) => list.length > 1)
+    .map(([uid, list]) => {
+      const first = list[0]
+      const contentConflict = list.some(occ => occurrenceContent(occ) !== occurrenceContent(first))
+      const parentConflict = list.some(occ => occurrenceParent(occ) !== occurrenceParent(first))
+      const childrenConflict = list.some(occ => occurrenceChildren(occ) !== occurrenceChildren(first))
+      return {uid, list, first, contentConflict, parentConflict, childrenConflict}
+    })
+
+  if (duplicates.length === 0) return []
+
+  const pageDuplicates = duplicates.filter(d => d.first.kind === 'page')
+  const blockDuplicates = duplicates.filter(d => d.first.kind === 'block')
+  const duplicateInstances = duplicates.reduce((sum, d) => sum + d.list.length, 0)
+  const contentConflicts = duplicates.filter(d => d.contentConflict).length
+  const parentConflicts = duplicates.filter(d => d.parentConflict).length
+  const childrenConflicts = duplicates.filter(d => d.childrenConflict).length
+  const diagnostics = [
+    `Duplicate Roam uid weirdness: ${duplicates.length} uid(s) appeared across ` +
+    `${duplicateInstances} export node instances (${blockDuplicates.length} block uid(s), ` +
+    `${pageDuplicates.length} page uid(s)); importer emits the first block occurrence per uid ` +
+    `and skips later duplicate block rows. Conflicts: ${contentConflicts} content, ` +
+    `${parentConflicts} parent/page, ${childrenConflicts} child-list.`,
+  ]
+
+  const conflictSamples = duplicates
+    .filter(d => d.contentConflict || d.parentConflict || d.childrenConflict || d.list.length > 2)
+    .slice(0, 8)
+  for (const d of conflictSamples) {
+    const first = d.first
+    const later = d.list.find(occ =>
+      occurrenceContent(occ) !== occurrenceContent(first) ||
+      occurrenceParent(occ) !== occurrenceParent(first) ||
+      occurrenceChildren(occ) !== occurrenceChildren(first)
+    ) ?? d.list[1]
+    const conflictKinds = [
+      d.contentConflict ? 'content' : '',
+      d.parentConflict ? 'parent/page' : '',
+      d.childrenConflict ? 'child-list' : '',
+    ].filter(Boolean).join(', ') || 'repeated identical node'
+    diagnostics.push(
+      `Duplicate Roam uid ${d.uid} (${d.list.length} occurrences, ${conflictKinds}); ` +
+      `kept first on [[${pageTitleForDiagnostic(first.pageTitle)}]] ` +
+      `at sibling ${first.siblingIndex} with content ${quotedSample(first.content)}; ` +
+      `sample later on [[${pageTitleForDiagnostic(later.pageTitle)}]] ` +
+      `at sibling ${later.siblingIndex} with content ${quotedSample(later.content)}.`,
+    )
+  }
+
+  return diagnostics
 }
 
 // Walk all `string` fields in the export and surface every `((uid))` /
@@ -525,6 +802,26 @@ const collectRoamCommandFollowUpDiagnostics = (pages: RoamExport): string[] => {
   return diagnostics
 }
 
+const appendReadwisePromotedMetadataDiagnostics = (
+  diagnostics: string[],
+  ctx: BuildContext,
+) => {
+  const total = [...ctx.readwisePromotedMetadataConflictCounts.values()]
+    .reduce((sum, count) => sum + count, 0)
+  if (total === 0) return
+  const formattedCounts = [...ctx.readwisePromotedMetadataConflictCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([note, count]) => `${note} ${count}`)
+    .join(', ')
+  diagnostics.push(
+    `Readwise promoted metadata conflicts: handled ${total} promoted child metadata conflict(s) ` +
+    `without letting Matrix/source metadata overwrite article metadata (${formattedCounts}).`,
+  )
+  for (const sample of ctx.readwisePromotedMetadataConflictSamples) {
+    diagnostics.push(`Readwise promoted metadata conflict sample: ${sample}.`)
+  }
+}
+
 const pageTitleForDiagnostic = (title: string): string => {
   const normalized = title.replace(/\s+/g, ' ').trim()
   return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized
@@ -559,6 +856,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
   })
 
   const diagnostics: string[] = []
+  diagnostics.push(...collectDuplicateUidDiagnostics(pages))
   diagnostics.push(...collectPageTitleDiagnostics(pages))
   diagnostics.push(...collectRoamCommandFollowUpDiagnostics(pages))
   const ctx: BuildContext = {
@@ -568,6 +866,9 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     aliasesUsed: new Set(),
     unresolvedBlockUids: new Set(),
     diagnostics,
+    emittedBlockUids: new Set(),
+    readwisePromotedMetadataConflictCounts: new Map(),
+    readwisePromotedMetadataConflictSamples: [],
     bubbledUids: new Set(),
   }
 
@@ -660,6 +961,8 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       `[bug] ${ctx.unresolvedBlockUids.size} content uid(s) leaked past placeholder registration: ${[...ctx.unresolvedBlockUids].slice(0, 5).join(', ')}`,
     )
   }
+
+  appendReadwisePromotedMetadataDiagnostics(diagnostics, ctx)
 
   return {
     pages: preparedPages,

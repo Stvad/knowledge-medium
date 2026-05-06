@@ -105,6 +105,46 @@ describe('planImport', () => {
     expect(order).toEqual(['child1uid', 'parentuid', 'dailychild'])
   })
 
+  it('reports duplicate Roam uids and emits the first block occurrence once', () => {
+    const plan = planImport([
+      {
+        title: 'p1',
+        uid: 'p1Uid',
+        children: [
+          {string: 'first copy', uid: 'dupUid'},
+          {string: 'unique under p1', uid: 'unique1'},
+        ],
+      },
+      {
+        title: 'p2',
+        uid: 'p2Uid',
+        children: [
+          {
+            string: 'second copy',
+            uid: 'dupUid',
+            children: [{string: 'child survives', uid: 'laterChild'}],
+          },
+        ],
+      },
+    ], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const duplicates = plan.descendants.filter(d => d.roamUid === 'dupUid')
+    expect(duplicates).toHaveLength(1)
+    expect(duplicates[0].data.content).toBe('first copy')
+    expect(duplicates[0].data.parentId).toBe(roamBlockId(WORKSPACE, 'p1Uid'))
+    expect(plan.descendants.find(d => d.roamUid === 'laterChild')?.data.parentId)
+      .toBe(roamBlockId(WORKSPACE, 'dupUid'))
+    expect(plan.diagnostics.some(d =>
+      d.includes('Duplicate Roam uid weirdness') &&
+      d.includes('1 uid(s)'),
+    )).toBe(true)
+    expect(plan.diagnostics.some(d =>
+      d.includes('Duplicate Roam uid dupUid') &&
+      d.includes('content') &&
+      d.includes('parent/page'),
+    )).toBe(true)
+  })
+
   it('treats pages with implausible :log/id years as non-daily', () => {
     // Real-bug repro: a Roam page with a :log/id that decodes to a
     // 5-digit year (e.g. from a typo'd daily title that Roam still
@@ -292,6 +332,28 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('Raemon')).toBe(true)
   })
 
+  it('normalizes markdown Readwise links whose labels contain hash-like text', () => {
+    const readwiseUrl = 'https://read.readwise.io/read/01h7xjk8dm90znajdde8ab5hfj'
+    const viaUrl = 'https://readwise.io/reader/update-august2023'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string:
+          `{{[[DONE]]}} [Reader Public Beta Update #5](${readwiseUrl}) by Daniel Doyon • ` +
+          `via ${viaUrl}\n\nsummary [[to/read]]`,
+        uid: 'entryUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')
+    expect(entry?.data.content.startsWith('[[doc/Reader Public Beta Update #5]] by Daniel Doyon'))
+      .toBe(true)
+    expect(entry?.data.properties['roam:author']).toBe('[[Daniel Doyon]]')
+    expect(entry?.data.properties['roam:URL']).toEqual([readwiseUrl, viaUrl])
+    expect(plan.aliasesUsed.has('doc/Reader Public Beta Update #5')).toBe(true)
+  })
+
   it('keeps wiki-label markdown Readwise links as wikilinks while saving URL props', () => {
     const readwiseUrl = 'https://read.readwise.io/read/01hbabc'
     const viaUrl = 'https://example.com/post'
@@ -310,6 +372,69 @@ describe('planImport', () => {
     )
     expect(entry?.properties['roam:author']).toBe('[[Anish Athalye]]')
     expect(entry?.properties['roam:URL']).toEqual([readwiseUrl, viaUrl])
+  })
+
+  it('keeps title-line Readwise author while preserving Matrix sender metadata separately', () => {
+    const readwiseUrl = 'https://read.readwise.io/read/01kqwhtg1kqwc1hbacx767mx53'
+    const articleUrl = 'https://larsfaye.com/articles/agentic-coding-is-a-trap'
+    const matrixUrl = 'https://matrix.to/#/!room:matrix.org/$event'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: '[[doc/Agentic Coding is a Trap]] by [[larsfaye.com]]',
+        uid: 'entryUid',
+        children: [
+          {string: `URL::${readwiseUrl}`, uid: 'readwiseUrlUid'},
+          {string: `URL::${articleUrl}`, uid: 'articleUrlUid'},
+          {
+            string: `URL::${matrixUrl}`,
+            uid: 'matrixUrlUid',
+            children: [
+              {string: 'author::[[@openwhisperer:matrix.org]]', uid: 'senderUid'},
+              {string: 'timestamp::5/5/2026, 10:09:51 AM PDT', uid: 'timestampUid'},
+            ],
+          },
+        ],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
+    expect(entry?.properties['roam:author']).toBe('[[larsfaye.com]]')
+    expect(entry?.properties['roam:URL']).toEqual([readwiseUrl, articleUrl, matrixUrl])
+    expect(entry?.properties['roam:message-url']).toBe(matrixUrl)
+    expect(entry?.properties['roam:message-author']).toBe('[[@openwhisperer:matrix.org]]')
+    expect(entry?.properties['roam:message-timestamp']).toBe('5/5/2026, 10:09:51 AM PDT')
+    expect(entry?.properties['roam:timestamp']).toBeUndefined()
+    expect(plan.diagnostics.some(d =>
+      d.includes('Readwise promoted metadata conflict') &&
+      d.includes('entryUid'),
+    )).toBe(true)
+  })
+
+  it('does not use Matrix sender metadata as article author for blank Readwise authors', () => {
+    const readwiseUrl = 'https://read.readwise.io/read/01h530aprdxq6w4d4y3ctm19ef'
+    const viaUrl = 'https://readwise.io/reader/document_raw_content/70233190'
+    const matrixUrl = 'https://matrix.to/#/!room:matrix.org/$event'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: `[Everything I knew](${readwiseUrl}) by via ${viaUrl}`,
+        uid: 'entryUid',
+        children: [
+          {string: `URL::${matrixUrl}`, uid: 'matrixUrlUid'},
+          {string: 'author::[[@openwhisperer:matrix.org]]', uid: 'senderUid'},
+        ],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
+    expect(entry?.content).toBe(`[[doc/Everything I knew]] by via ${viaUrl}`)
+    expect(entry?.properties['roam:author']).toBeUndefined()
+    expect(entry?.properties['roam:message-author']).toBe('[[@openwhisperer:matrix.org]]')
+    expect(entry?.properties['roam:message-url']).toBe(matrixUrl)
+    expect(entry?.properties['roam:URL']).toEqual([readwiseUrl, viaUrl, matrixUrl])
   })
 
   it('reports ambiguous exact Readwise author candidates', () => {

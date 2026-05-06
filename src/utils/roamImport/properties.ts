@@ -6,6 +6,10 @@ export const ROAM_AUTHOR_PROP = `${NS_PREFIX}:author`
 export const ROAM_ISA_PROP = `${NS_PREFIX}:isa`
 export const ROAM_EMBED_PATH_PROP = `${NS_PREFIX}:embed-path`
 export const ROAM_URL_PROP = `${NS_PREFIX}:URL`
+export const ROAM_TIMESTAMP_PROP = `${NS_PREFIX}:timestamp`
+export const ROAM_MESSAGE_URL_PROP = `${NS_PREFIX}:message-url`
+export const ROAM_MESSAGE_AUTHOR_PROP = `${NS_PREFIX}:message-author`
+export const ROAM_MESSAGE_TIMESTAMP_PROP = `${NS_PREFIX}:message-timestamp`
 
 export const uniqueStrings = (values: readonly string[]): string[] => {
   const out: string[] = []
@@ -346,8 +350,13 @@ const parseAuthorBeforeMarker = (
   markerRe.lastIndex = 0
   const match = markerRe.exec(rest)
   if (!match) return null
+  const author = rest
+    .slice(0, match.index)
+    .replace(/\s+/g, ' ')
+    .replace(/\s*[•·]\s*$/u, '')
+    .trim()
   return {
-    author: rest.slice(0, match.index).replace(/\s+/g, ' ').trim(),
+    author,
     marker: match[0],
     afterMarker: rest.slice(match.index + match[0].length),
   }
