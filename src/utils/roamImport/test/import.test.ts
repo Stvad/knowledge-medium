@@ -750,7 +750,7 @@ describe('importRoam', () => {
       currentUserId: USER_ID,
     })
 
-    expect(summary.aliasBlocksCreated).toBe(0)
+    expect(summary.aliasBlocksCreated).toBe(4)
 
     const parent = await readBlock(roamBlockId(WORKSPACE, 'srsParent'))
     const props = JSON.parse(parent!.properties_json) as Record<string, unknown>
@@ -779,6 +779,29 @@ describe('importRoam', () => {
     const marker = await readBlock(roamBlockId(WORKSPACE, 'srsMarker'))
     expect(marker?.content)
       .toBe('[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *')
+    const markerRefs = JSON.parse(marker!.references_json) as {id: string, alias: string}[]
+    expect(markerRefs).toEqual(expect.arrayContaining([
+      {
+        id: computeAliasSeatId('[[interval]]:31.1', WORKSPACE),
+        alias: '[[interval]]:31.1',
+      },
+      {
+        id: computeAliasSeatId('interval', WORKSPACE),
+        alias: 'interval',
+      },
+      {
+        id: computeAliasSeatId('[[factor]]:2.50', WORKSPACE),
+        alias: '[[factor]]:2.50',
+      },
+      {
+        id: computeAliasSeatId('factor', WORKSPACE),
+        alias: 'factor',
+      },
+      {
+        id: nextReviewDateId,
+        alias: 'June 6th, 2026',
+      },
+    ]))
   })
 
   it('dry-run reports counts without writing rows', async () => {

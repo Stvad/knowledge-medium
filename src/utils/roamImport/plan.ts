@@ -191,7 +191,6 @@ export const normalizeRoamPropertyValue = (value: string): string => {
 
 const ROAM_TODO_MARKER_RE =
   /(^|\s)(?:#\[\[(TODO|DONE)\]\]|#(TODO|DONE)\b|\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\})(?=$|\s)/g
-const ROAM_INLINE_PROPERTY_SPAN_RE = /\[\[\[\[[^\]\n]+]]::?[^\]\n]*]]/g
 
 export const extractRoamTodoMarker = (
   rawContent: string,
@@ -210,22 +209,7 @@ export const extractRoamTodoMarker = (
   return {content, todoState}
 }
 
-export const parseRoamImportReferences = (content: string) => {
-  const inlinePropertySpans: Array<[number, number]> = []
-  ROAM_INLINE_PROPERTY_SPAN_RE.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = ROAM_INLINE_PROPERTY_SPAN_RE.exec(content)) !== null) {
-    inlinePropertySpans.push([match.index, match.index + match[0].length])
-  }
-
-  if (inlinePropertySpans.length === 0) return parseReferences(content)
-
-  return parseReferences(content).filter(ref =>
-    !inlinePropertySpans.some(([start, end]) =>
-      ref.startIndex >= start && ref.endIndex <= end,
-    ),
-  )
-}
+export const parseRoamImportReferences = parseReferences
 
 const escapeRegExp = (value: string): string =>
   value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')

@@ -267,11 +267,17 @@ describe('planImport', () => {
     expect(markerBlock?.content).toBe(marker)
   })
 
-  it('does not treat Roam inline property wrappers as page references', () => {
+  it('treats Roam inline property wrappers as page references', () => {
     const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *'
 
     expect(parseRoamImportReferences(marker).map(ref => ref.alias))
-      .toEqual(['June 6th, 2026'])
+      .toEqual([
+        '[[interval]]:31.1',
+        'interval',
+        '[[factor]]:2.50',
+        'factor',
+        'June 6th, 2026',
+      ])
     expect(extractSrsScheduleMarker(marker, WORKSPACE)?.reviewCount).toBe(3)
   })
 
