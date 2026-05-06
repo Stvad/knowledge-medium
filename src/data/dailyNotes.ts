@@ -2,8 +2,8 @@ import { v5 as uuidv5 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties'
-import { DAILY_NOTE_TYPE, JOURNAL_TYPE } from '@/data/blockTypes'
+import { aliasesProp, hasBlockType } from '@/data/properties'
+import { DAILY_NOTE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
 
 // Namespace UUIDs — fixed constants so two clients computing the same
@@ -23,6 +23,7 @@ export const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
 export const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
 const JOURNAL_ALIAS = 'Journal'
+const JOURNAL_ALIASES = [JOURNAL_ALIAS]
 
 export const journalBlockId = (workspaceId: string): string =>
   uuidv5(workspaceId, JOURNAL_NS)
@@ -62,6 +63,16 @@ const dailyNoteLocalDate = (iso: string): Date => {
   return new Date(year, month - 1, day)
 }
 
+const stringListProperty = (value: unknown): string[] =>
+  Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : []
+
+const includesAll = (existing: readonly string[], expected: readonly string[]): boolean =>
+  expected.every(value => existing.includes(value))
+
+const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
+
 /** Get-or-create the workspace's Journal page. Idempotent: a
  *  deterministic id derived from `workspaceId` means two clients
  *  booting offline converge on the same row. Soft-deleted journal
@@ -72,7 +83,25 @@ export const getOrCreateJournalBlock = async (
 ): Promise<Block> => {
   const id = journalBlockId(workspaceId)
   const live = await repo.load(id)
-  if (live && !live.deleted) return repo.block(id)
+  if (live && !live.deleted) {
+    const aliases = stringListProperty(live.properties[aliasesProp.name])
+    const needsRepair =
+      !hasBlockType(live, PAGE_TYPE) ||
+      !includesAll(aliases, JOURNAL_ALIASES)
+    if (!needsRepair) return repo.block(id)
+
+    const typeSnapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      const current = await tx.get(id)
+      if (!current || current.deleted) return
+      const currentAliases = stringListProperty(current.properties[aliasesProp.name])
+      if (!includesAll(currentAliases, JOURNAL_ALIASES)) {
+        await tx.setProperty(id, aliasesProp, mergeStrings([...JOURNAL_ALIASES, ...currentAliases]))
+      }
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+    return repo.block(id)
+  }
 
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
@@ -82,8 +111,8 @@ export const getOrCreateJournalBlock = async (
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       await tx.restore(id, {content: JOURNAL_ALIAS})
-      await tx.setProperty(id, aliasesProp, [JOURNAL_ALIAS])
-      await repo.addTypeInTx(tx, id, JOURNAL_TYPE, {}, typeSnapshot)
+      await tx.setProperty(id, aliasesProp, JOURNAL_ALIASES)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
       return
     }
     await tx.create({
@@ -92,11 +121,8 @@ export const getOrCreateJournalBlock = async (
       parentId: null,
       orderKey: 'a0',
       content: JOURNAL_ALIAS,
-      properties: {
-        [aliasesProp.name]: aliasesProp.codec.encode([JOURNAL_ALIAS]),
-      },
     })
-    await repo.addTypeInTx(tx, id, JOURNAL_TYPE, {}, typeSnapshot)
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: JOURNAL_ALIASES}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(id)
@@ -131,15 +157,31 @@ export const getOrCreateDailyNote = async (
 ): Promise<Block> => {
   const id = dailyNoteBlockId(workspaceId, iso)
   const orderKey = dailyNoteOrderKey(iso)
+  const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
+  const dailyAliases = [longLabel, isoLabel]
   const live = await repo.load(id)
   if (live && !live.deleted) {
-    if (live.parentId === journalBlockId(workspaceId) && live.orderKey === orderKey) {
+    const aliases = stringListProperty(live.properties[aliasesProp.name])
+    const needsRepair =
+      live.parentId !== journalBlockId(workspaceId) ||
+      live.orderKey !== orderKey ||
+      !hasBlockType(live, PAGE_TYPE) ||
+      !hasBlockType(live, DAILY_NOTE_TYPE) ||
+      !includesAll(aliases, dailyAliases)
+    if (!needsRepair) {
       return repo.block(id)
     }
     const journal = await getOrCreateJournalBlock(repo, workspaceId)
+    const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       const current = await tx.get(id)
       if (!current || current.deleted) return
+      const currentAliases = stringListProperty(current.properties[aliasesProp.name])
+      if (!includesAll(currentAliases, dailyAliases)) {
+        await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
+      }
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
       if (current.parentId !== journal.id || current.orderKey !== orderKey) {
         await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
       }
@@ -148,7 +190,6 @@ export const getOrCreateDailyNote = async (
   }
 
   const journal = await getOrCreateJournalBlock(repo, workspaceId)
-  const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
 
   const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
@@ -156,7 +197,8 @@ export const getOrCreateDailyNote = async (
     if (existing && !existing.deleted) return
     if (existing && existing.deleted) {
       await tx.restore(id, {content: longLabel})
-      await tx.setProperty(id, aliasesProp, [longLabel, isoLabel])
+      await tx.setProperty(id, aliasesProp, dailyAliases)
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
       await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
       // Re-parent under the journal in case the prior tombstoned row
       // had drifted. tx.move sets parent_id + order_key in one
@@ -170,10 +212,8 @@ export const getOrCreateDailyNote = async (
       parentId: journal.id,
       orderKey,
       content: longLabel,
-      properties: {
-        [aliasesProp.name]: aliasesProp.codec.encode([longLabel, isoLabel]),
-      },
     })
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
     await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 

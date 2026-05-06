@@ -16,7 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { DAILY_NOTE_TYPE, JOURNAL_TYPE } from '@/data/blockTypes'
+import { DAILY_NOTE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -90,7 +90,7 @@ describe('addDaysIso', () => {
 })
 
 describe('getOrCreateJournalBlock', () => {
-  it('creates a parent-less journal with the canonical alias + type', async () => {
+  it('creates a parent-less journal page with the canonical alias', async () => {
     const journal = await getOrCreateJournalBlock(env.repo, WS)
 
     expect(journal.id).toBe(journalBlockId(WS))
@@ -99,7 +99,7 @@ describe('getOrCreateJournalBlock', () => {
     expect(data?.workspaceId).toBe(WS)
     expect(data?.content).toBe('Journal')
     expect(journal.peekProperty(aliasesProp)).toEqual(['Journal'])
-    expect(journal.hasType(JOURNAL_TYPE)).toBe(true)
+    expect(journal.hasType(PAGE_TYPE)).toBe(true)
   })
 
   it('is idempotent: second call returns the same row, no duplicate', async () => {
@@ -122,7 +122,7 @@ describe('getOrCreateJournalBlock', () => {
     expect(restored.id).toBe(journal.id)
     expect(restored.peek()?.deleted).toBe(false)
     expect(restored.peekProperty(aliasesProp)).toEqual(['Journal'])
-    expect(restored.hasType(JOURNAL_TYPE)).toBe(true)
+    expect(restored.hasType(PAGE_TYPE)).toBe(true)
   })
 })
 
@@ -136,6 +136,7 @@ describe('getOrCreateDailyNote', () => {
     const data = note.peek()
     expect(data?.parentId).toBe(journalBlockId(WS))
     expect(data?.workspaceId).toBe(WS)
+    expect(note.hasType(PAGE_TYPE)).toBe(true)
     expect(note.hasType(DAILY_NOTE_TYPE)).toBe(true)
 
     const aliases = note.peekProperty(aliasesProp)
@@ -204,6 +205,10 @@ describe('getOrCreateDailyNote', () => {
 
     const childIds = await env.repo.block(journal.id).childIds.load()
     expect(childIds).toEqual([newerId, olderId])
+    expect(env.repo.block(olderId).hasType(PAGE_TYPE)).toBe(true)
+    expect(env.repo.block(olderId).hasType(DAILY_NOTE_TYPE)).toBe(true)
+    expect(env.repo.block(newerId).hasType(PAGE_TYPE)).toBe(true)
+    expect(env.repo.block(newerId).hasType(DAILY_NOTE_TYPE)).toBe(true)
   })
 
   it('resurrects a soft-deleted daily note and re-parents under the journal', async () => {
@@ -214,6 +219,7 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.id).toBe(note.id)
     expect(restored.peek()?.deleted).toBe(false)
     expect(restored.peek()?.parentId).toBe(journalBlockId(WS))
+    expect(restored.hasType(PAGE_TYPE)).toBe(true)
     expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
   })
 })

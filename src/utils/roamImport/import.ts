@@ -20,7 +20,7 @@ import {
   type TypeRegistrySnapshot,
   type Tx,
 } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
 import {
@@ -778,7 +778,10 @@ const ensureAliasSeat = async (
   {alias, workspaceId}: {alias: string; workspaceId: string},
 ): Promise<{ id: string; inserted: boolean }> => {
   const id = computeAliasSeatId(alias, workspaceId)
-  const properties = {[aliasesProp.name]: aliasesProp.codec.encode([alias])}
+  const properties = {
+    [aliasesProp.name]: aliasesProp.codec.encode([alias]),
+    [typesProp.name]: typesProp.codec.encode([PAGE_TYPE]),
+  }
   try {
     const result = await tx.createOrGet({
       id,
@@ -953,7 +956,7 @@ const lookupExistingPageByAliases = async (
 ): Promise<BlockData | null> => {
   for (const alias of aliases) {
     const existing = await repo.query.aliasLookup({workspaceId, alias}).load()
-    if (existing) return existing
+    if (existing && hasBlockType(existing, PAGE_TYPE)) return existing
   }
   return null
 }
@@ -1397,10 +1400,10 @@ const withPageAliases = (
   aliases: readonly string[],
 ): NewBlockData & {id: string; content: string} => ({
   ...data,
-  properties: {
+  properties: addBlockTypeToProperties({
     ...(data.properties ?? {}),
     [aliasesProp.name]: aliasesProp.codec.encode(uniqueStrings(aliases)),
-  },
+  }, PAGE_TYPE),
 })
 
 const mergePageAliases = async (

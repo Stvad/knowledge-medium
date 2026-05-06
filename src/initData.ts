@@ -2,7 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from './data/repo'
 import { rendererProp, aliasesProp } from '@/data/properties'
-import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
 
 /** Creates a parent-less Tutorial page carrying intro text + a sample
@@ -32,8 +32,8 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
       parentId: null,
       orderKey: 'a0',
       content: 'Tutorial',
-      properties: {[aliasesProp.name]: aliasesProp.codec.encode(['Tutorial'])},
     })
+    await repo.addTypeInTx(tx, tutorialRootId, PAGE_TYPE, {[aliasesProp.name]: ['Tutorial']}, typeSnapshot)
 
     // First child of root: intro README.
     await tx.create({
@@ -61,8 +61,8 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
       parentId: tutorialRootId,
       orderKey: 'a2',
       content: 'extensions',
-      properties: {[aliasesProp.name]: aliasesProp.codec.encode(['extensions'])},
     })
+    await repo.addTypeInTx(tx, extensionsParentId, PAGE_TYPE, {[aliasesProp.name]: ['extensions']}, typeSnapshot)
 
     // Each example extension block as a child of `extensionsParentId`.
     for (let i = 0; i < exampleExtensions.length; i++) {

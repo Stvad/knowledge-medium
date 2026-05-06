@@ -1,5 +1,5 @@
 import type { BlockData, BlockReference } from '@/data/api'
-import { aliasesProp, typesProp } from '@/data/properties'
+import { addBlockTypeToProperties, aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import {
@@ -766,10 +766,9 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       roamRefUids: collectUidRefs(page),
       createdAt: cloneTimestamp(page['create-time'], Date.now()),
       updatedAt: cloneTimestamp(page['edit-time'] ?? page['create-time'], Date.now()),
-      extraProperties: {
+      extraProperties: addBlockTypeToProperties({
         [aliasesProp.name]: aliasesProp.codec.encode(uniqueStrings([page.title, ...pageAliases])),
-        [typesProp.name]: typesProp.codec.encode([PAGE_TYPE]),
-      },
+      }, PAGE_TYPE),
       promotedFromChildren,
     })
 

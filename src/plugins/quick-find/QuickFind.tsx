@@ -18,6 +18,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useUserPrefsBlock, useUserPrefsProperty } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties.ts'
+import { PAGE_TYPE } from '@/data/blockTypes.ts'
 import { v4 as uuidv4 } from 'uuid'
 import { writeAppHash } from '@/utils/routing.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
@@ -149,6 +150,7 @@ export function QuickFind() {
     }
 
     const newId = uuidv4()
+    const typeSnapshot = repo.snapshotTypeRegistries()
     await repo.tx(async tx => {
       await tx.create({
         id: newId,
@@ -156,8 +158,8 @@ export function QuickFind() {
         parentId: null,
         orderKey: 'a0',
         content: trimmed,
-        properties: {[aliasesProp.name]: aliasesProp.codec.encode([trimmed])},
       })
+      await repo.addTypeInTx(tx, newId, PAGE_TYPE, {[aliasesProp.name]: [trimmed]}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault, description: 'create page from QuickFind'})
     jumpToBlock(newId)
   }

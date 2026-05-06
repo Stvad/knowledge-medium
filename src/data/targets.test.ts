@@ -29,6 +29,8 @@ import {
   DeterministicIdCrossWorkspaceError,
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
+import { typesProp } from '@/data/properties'
+import { DAILY_NOTE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from './repo'
@@ -262,7 +264,9 @@ describe('ensureAliasTarget', () => {
 
     const row = await env.h.db.get<{properties_json: string}>(
       'SELECT properties_json FROM blocks WHERE id = ?', [result.id])
-    expect(JSON.parse(row.properties_json)[aliasesProp.name]).toEqual(['foo'])
+    const props = JSON.parse(row.properties_json)
+    expect(props[aliasesProp.name]).toEqual(['foo'])
+    expect(props[typesProp.name]).toEqual([PAGE_TYPE])
   })
 
   it('is idempotent: second call returns inserted=false on the same row', async () => {
@@ -288,7 +292,9 @@ describe('ensureDailyNoteTarget', () => {
 
     const row = await env.h.db.get<{properties_json: string}>(
       'SELECT properties_json FROM blocks WHERE id = ?', [result.id])
-    expect(JSON.parse(row.properties_json)[aliasesProp.name]).toEqual([ISO])
+    const props = JSON.parse(row.properties_json)
+    expect(props[aliasesProp.name]).toEqual([ISO])
+    expect(props[typesProp.name]).toEqual([PAGE_TYPE, DAILY_NOTE_TYPE])
   })
 
   it('shares the namespace with dailyNotes.dailyNoteBlockId', async () => {

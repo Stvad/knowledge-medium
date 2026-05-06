@@ -45,7 +45,6 @@ import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
 import { propertyUiFacet, typesFacet } from '../data/facets.ts'
 import {
-  aliasesProp,
   createdAtProp,
   editorFocusRequestProp,
   editorSelection,
@@ -109,7 +108,6 @@ const METADATA_ROW_GRID_STYLE = {
   gridTemplateColumns: '1.25rem minmax(8rem, 13rem) minmax(0, 1fr)',
 }
 const INLINE_HIDDEN_PROPERTY_NAMES = new Set([
-  aliasesProp.name,
   createdAtProp.name,
   editorFocusRequestProp.name,
   editorSelection.name,
