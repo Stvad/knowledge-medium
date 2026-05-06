@@ -2,7 +2,6 @@ import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
 import { ChangeScope, type PropertySchema } from '@/data/api'
-import { propertyUiFacet } from '@/data/facets.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes'
 import { getBlockTypes } from '@/data/properties.ts'
 import { formatIsoDate } from '@/utils/dailyPage'
@@ -27,7 +26,6 @@ import {
   srsNextReviewDateProp,
   srsReviewCountProp,
 } from './schema.ts'
-import { srsNextReviewDateUi } from './propertyUi.ts'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
   const key = String(signal)
@@ -138,7 +136,6 @@ export const srsReschedulingActions: readonly ActionConfig[] = [
 
 export const srsReschedulingPlugin: AppExtension = [
   srsReschedulingDataExtension,
-  propertyUiFacet.of(srsNextReviewDateUi, {source: 'srs-rescheduling'}),
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),
@@ -153,4 +150,3 @@ export {
   srsReviewCountProp,
   srsSm25Type,
 } from './schema.ts'
-export { srsNextReviewDateUi } from './propertyUi.ts'
