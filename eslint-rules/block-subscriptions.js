@@ -11,10 +11,25 @@ const getFilename = (context) =>
 const isAllowedFile = (filename, allowedFiles = []) =>
   allowedFiles.some(allowed => filename.endsWith(normalizePath(allowed)))
 
+const isTestFile = (filename) =>
+  /(^|\/)test\//.test(filename) || /\.(test|spec)\.(ts|tsx|js|jsx)$/.test(filename)
+
 const isBlockHookSource = (value) => {
   if (typeof value !== 'string') return false
   const source = normalizePath(value)
   return BLOCK_HOOK_SOURCES.has(source) || /(^|\/)hooks\/block(\.ts)?$/.test(source)
+}
+
+const isPropertiesSource = (value, filename) => {
+  if (typeof value !== 'string') return false
+  const source = normalizePath(value)
+  return source === '@/data/properties'
+    || source === '@/data/properties.ts'
+    || /(^|\/)data\/properties(\.ts)?$/.test(source)
+    || (
+      /(^|\/)src\/data\//.test(filename)
+      && (source === './properties' || source === './properties.ts')
+    )
 }
 
 const importName = (specifier) => {
@@ -91,6 +106,87 @@ const isContentSelectorExpression = (node) => {
     return true
   }
   return false
+}
+
+const memberPropertyName = (node) => {
+  if (node.type === 'Identifier') return node.name
+  if (node.type === 'Literal') return node.value
+  return undefined
+}
+
+const noDirectTypesPropWrites = {
+  meta: {
+    type: 'problem',
+    docs: {
+      description: 'Disallow direct runtime writes to the raw typesProp field.',
+    },
+    schema: [{
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        allowIn: {
+          type: 'array',
+          items: {type: 'string'},
+        },
+      },
+    }],
+    messages: {
+      directWrite: 'Direct typesProp writes bypass Repo type invariants. Use repo.addType/addTypeInTx/removeType/setBlockTypes, or addBlockTypeToProperties only while planning raw BlockData.',
+    },
+  },
+  create(context) {
+    const options = context.options[0] ?? {}
+    const filename = getFilename(context)
+    const typesPropNames = new Set()
+
+    const shouldSkip = () => isTestFile(filename) || isAllowedFile(filename, options.allowIn)
+    const isTypesPropIdentifier = (node) =>
+      node?.type === 'Identifier' && typesPropNames.has(node.name)
+    const isTypesPropNameMember = (node) => {
+      const expression = unwrap(node)
+      return expression?.type === 'MemberExpression'
+        && !expression.computed
+        && isTypesPropIdentifier(unwrap(expression.object))
+        && memberPropertyName(expression.property) === 'name'
+    }
+    const isTypesPropIndexedWrite = (node) => {
+      const expression = unwrap(node)
+      return expression?.type === 'MemberExpression'
+        && expression.computed
+        && isTypesPropNameMember(expression.property)
+    }
+    const report = (node) => {
+      if (!shouldSkip()) context.report({node, messageId: 'directWrite'})
+    }
+
+    return {
+      ImportDeclaration(node) {
+        if (!isPropertiesSource(node.source.value, filename)) return
+        for (const specifier of node.specifiers) {
+          if (specifier.type !== 'ImportSpecifier') continue
+          if (importName(specifier) === 'typesProp') typesPropNames.add(specifier.local.name)
+        }
+      },
+      Property(node) {
+        if (node.parent?.type !== 'ObjectExpression') return
+        if (node.computed && isTypesPropNameMember(node.key)) report(node.key)
+      },
+      AssignmentExpression(node) {
+        if (isTypesPropIndexedWrite(node.left)) report(node.left)
+      },
+      CallExpression(node) {
+        const callee = unwrap(node.callee)
+        if (callee?.type !== 'MemberExpression') return
+        const propertyName = memberPropertyName(callee.property)
+        if (propertyName === 'setProperty' && isTypesPropIdentifier(unwrap(node.arguments[1]))) {
+          report(node.arguments[1])
+        }
+        if (propertyName === 'set' && isTypesPropIdentifier(unwrap(node.arguments[0]))) {
+          report(node.arguments[0])
+        }
+      },
+    }
+  },
 }
 
 const noBroadBlockSubscriptions = {
@@ -195,6 +291,7 @@ const preferSemanticBlockHooks = {
 
 export default {
   rules: {
+    'no-direct-types-prop-writes': noDirectTypesPropWrites,
     'no-broad-block-subscriptions': noBroadBlockSubscriptions,
     'prefer-semantic-block-hooks': preferSemanticBlockHooks,
   },

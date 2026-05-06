@@ -19,8 +19,7 @@
     "gen:sync-config": "vite-node scripts/gen-sync-config.ts",
     "check:sync-config": "vite-node scripts/gen-sync-config.ts -- --check",
     "check:no-service-role": "bash scripts/check-no-service-role.sh",
-    "check:type-invariants": "node scripts/check-type-invariants.mjs",
-    "check": "yarn run compile && yarn run lint && yarn run check:type-invariants && yarn run test && yarn run check:sync-config && yarn run check:no-service-role",
+    "check": "yarn run compile && yarn run lint && yarn run test && yarn run check:sync-config && yarn run check:no-service-role",
     "agent:server": "node scripts/agent-runtime-server.mjs",
     "agent": "node scripts/agent-runtime.mjs",
     "bench": "vite-node scripts/bench/index.ts"

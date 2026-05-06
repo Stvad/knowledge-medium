@@ -13,6 +13,70 @@ const ruleTester = new RuleTester({
 
 describe('block subscription ESLint rules', () => {
   ruleTester.run(
+    'no-direct-types-prop-writes',
+    blockSubscriptions.rules['no-direct-types-prop-writes'],
+    {
+      valid: [
+        {
+          code: `
+            import { typesProp } from '@/data/properties'
+            const [types] = usePropertyValue(block, typesProp)
+          `,
+        },
+        {
+          filename: '/repo/src/data/repo.ts',
+          options: [{allowIn: ['src/data/repo.ts']}],
+          code: `
+            import { typesProp } from './properties'
+            next[typesProp.name] = typesProp.codec.encode(['page'])
+          `,
+        },
+        {
+          filename: '/repo/src/data/targets.test.ts',
+          code: `
+            import { typesProp } from '@/data/properties'
+            const properties = {[typesProp.name]: typesProp.codec.encode(['page'])}
+          `,
+        },
+      ],
+      invalid: [
+        {
+          filename: '/repo/src/data/targets.ts',
+          code: `
+            import { typesProp } from '@/data/properties'
+            tx.setProperty(id, typesProp, ['page'])
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/components/BlockProperties.tsx',
+          code: `
+            import { typesProp as rawTypesProp } from '@/data/properties.ts'
+            next[rawTypesProp.name] = rawTypesProp.codec.encode(['page'])
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/utils/roamImport/import.ts',
+          code: `
+            import { typesProp } from '@/data/properties'
+            const properties = {[typesProp.name]: typesProp.codec.encode(['page'])}
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/components/BlockProperties.tsx',
+          code: `
+            import { typesProp } from '@/data/properties'
+            block.set(typesProp, ['page'])
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+      ],
+    },
+  )
+
+  ruleTester.run(
     'no-broad-block-subscriptions',
     blockSubscriptions.rules['no-broad-block-subscriptions'],
     {

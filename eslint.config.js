@@ -42,6 +42,12 @@ export default tseslint.config(
       'block/prefer-semantic-block-hooks': ['error', {
         allowIn: ['src/hooks/block.ts'],
       }],
+      'block/no-direct-types-prop-writes': ['error', {
+        allowIn: [
+          'src/data/properties.ts',
+          'src/data/repo.ts',
+        ],
+      }],
     },
   },
 )
