@@ -234,6 +234,114 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('AnnaSalamon')).toBe(true)
   })
 
+  it('does not treat later refs in generic `by` prose as authors', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: '[[Interactive essay]] by [[Peter Norvig]] on #economics using [[Jupyter notebook]]',
+        uid: 'entryUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
+    expect(entry?.properties['roam:author']).toBeUndefined()
+  })
+
+  it('derives author and URL props from old all-in-one Readwise url/via entries', () => {
+    const readwiseUrl = 'https://read.readwise.io/read/01hgeg920ybrh1104p2vq6099n'
+    const viaUrl = 'https://www.lesswrong.com/s/JdAfXBx4gS3DjN5s6/p/9QxnfMYccz9QRgZ5z'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string:
+          `[[The Costly Coordination Mechanism of Common Knowledge]] by Ben Pace\n` +
+          ` url: ${readwiseUrl}\nvia ${viaUrl}\n\nsummary [[to/read]]`,
+        uid: 'entryUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
+    expect(entry?.properties['roam:author']).toBe('[[Ben Pace]]')
+    expect(entry?.properties['roam:URL']).toEqual([readwiseUrl, viaUrl])
+    expect(plan.aliasesUsed.has('Ben Pace')).toBe(true)
+  })
+
+  it('normalizes old markdown Readwise links to doc wikilinks and saves the link URLs', () => {
+    const readwiseUrl = 'https://read.readwise.io/read/01h7wy938mgf88cnk2q7q5fvyn'
+    const viaUrl = 'https://www.lesswrong.com/posts/pZrvkZzL2JnbRgEBC/feedbackloop-first-rationality'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string:
+          `{{[[DONE]]}} [Feedbackloop-first Rationality](${readwiseUrl}) by Raemon\n` +
+          `via ${viaUrl}\n\nsummary [[to/read]]`,
+        uid: 'entryUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')
+    expect(entry?.data.content.startsWith('[[doc/Feedbackloop-first Rationality]] by Raemon'))
+      .toBe(true)
+    expect(entry?.data.properties['roam:author']).toBe('[[Raemon]]')
+    expect(entry?.data.properties['roam:URL']).toEqual([readwiseUrl, viaUrl])
+    expect(entry?.todoState).toBe('DONE')
+    expect(plan.aliasesUsed.has('doc/Feedbackloop-first Rationality')).toBe(true)
+    expect(plan.aliasesUsed.has('Raemon')).toBe(true)
+  })
+
+  it('keeps wiki-label markdown Readwise links as wikilinks while saving URL props', () => {
+    const readwiseUrl = 'https://read.readwise.io/read/01hbabc'
+    const viaUrl = 'https://example.com/post'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: `[[Designing a Better Judging System]](${readwiseUrl}) by Anish Athalye via ${viaUrl}`,
+        uid: 'entryUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
+    expect(entry?.content).toBe(
+      `[[Designing a Better Judging System]](${readwiseUrl}) by Anish Athalye via ${viaUrl}`,
+    )
+    expect(entry?.properties['roam:author']).toBe('[[Anish Athalye]]')
+    expect(entry?.properties['roam:URL']).toEqual([readwiseUrl, viaUrl])
+  })
+
+  it('reports ambiguous exact Readwise author candidates', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {
+          string: '[[doc/Episode 17: Exploring the Intersection of Dance & Therapy]] by [[Infuse Compassion]] [[Brandi Guild]]',
+          uid: 'multiAuthorUid',
+        },
+        {
+          string: '[[doc/Chapter 3: Standard | A Practical Guide to Evil]] by [[]]',
+          uid: 'blankAuthorUid',
+        },
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.descendants.find(d => d.roamUid === 'multiAuthorUid')?.data.properties['roam:author'])
+      .toBeUndefined()
+    expect(plan.descendants.find(d => d.roamUid === 'blankAuthorUid')?.data.properties['roam:author'])
+      .toBeUndefined()
+    expect(plan.diagnostics.some(d =>
+      d.includes('multiAuthorUid') &&
+      d.includes('2 exact author refs'),
+    )).toBe(true)
+    expect(plan.diagnostics.some(d =>
+      d.includes('blankAuthorUid') &&
+      d.includes('blank [[]] author'),
+    )).toBe(true)
+  })
+
   it('extracts SRS SM-2.5 child metadata onto the parent block', () => {
     const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *'
     const plan = planImport([{

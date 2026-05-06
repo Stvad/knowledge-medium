@@ -224,6 +224,7 @@ const buildBlock = (
   const data = composeBlockData({
     ctx,
     id,
+    roamUid: block.uid,
     parentId,
     orderKey: siblingOrderKey(siblingIndex),
     rawString: todo.content,
@@ -269,6 +270,7 @@ const siblingOrderKey = (index: number): string => `a${index.toString().padStart
 interface ComposeArgs {
   ctx: BuildContext
   id: string
+  roamUid: string
   parentId: string | null
   orderKey: string
   rawString: string
@@ -286,12 +288,17 @@ interface ComposeArgs {
 }
 
 const composeBlockData = (args: ComposeArgs): BlockData => {
-  const {ctx, id, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties, promotedFromChildren} = args
+  const {ctx, id, roamUid, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties, promotedFromChildren} = args
 
   const rewritten = rewriteRoamContent(rawString, ctx.uidMap)
   for (const u of rewritten.unresolvedBlockUids) ctx.unresolvedBlockUids.add(u)
 
-  const content = applyHeading(rewritten.content, heading)
+  const derived = derivePropertiesFromContent(rewritten.content)
+  for (const diagnostic of derived.diagnostics) {
+    ctx.diagnostics.push(`Readwise property extraction on uid ${roamUid}: ${diagnostic}`)
+  }
+
+  const content = applyHeading(derived.content, heading)
 
   // Collect aliases referenced from this block. Used by the orchestrator
   // to pre-resolve alias targets before the import lands.
@@ -307,7 +314,7 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     .map(mapped => ({id: mapped, alias: mapped}))
 
   const properties: Record<string, unknown> = {
-    ...derivePropertiesFromContent(content),
+    ...derived.properties,
     ...(promotedFromChildren ?? {}),
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
@@ -613,6 +620,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     const pageData = composeBlockData({
       ctx,
       id: pageBlockId,
+      roamUid: page.uid,
       parentId: null,
       orderKey: 'a0',
       rawString: page.title,
