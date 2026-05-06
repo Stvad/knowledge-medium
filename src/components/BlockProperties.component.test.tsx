@@ -17,6 +17,7 @@ import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { BlockProperties } from './BlockProperties'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
+import { typesPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import type { Block } from '@/data/block'
 
 const repoRef = vi.hoisted(() => ({
@@ -87,6 +88,7 @@ describe('BlockProperties component', () => {
     })
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
+      typesPropertyUiExtension,
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),
     ])
@@ -150,6 +152,7 @@ describe('BlockProperties component', () => {
       </AppRuntimeContextProvider>,
     )
 
+    expect(screen.getByText('Types')).toBeTruthy()
     expect(screen.queryByText('types')).toBeNull()
 
     await act(async () => {
@@ -158,7 +161,38 @@ describe('BlockProperties component', () => {
 
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
-    expect(screen.getByText('types')).toBeTruthy()
+    expect(screen.queryByText('types')).toBeNull()
+  })
+
+  it('edits block type membership with the contributed autocomplete editor', async () => {
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(screen.getByText('Phase 2 Review')).toBeTruthy()
+
+    const input = screen.getByRole('combobox', {name: /add block type/i})
+    await act(async () => {
+      fireEvent.change(input, {target: {value: 'assignment'}})
+      fireEvent.keyDown(input, {key: 'Enter'})
+    })
+
+    await waitFor(() => {
+      expect(block.types).toEqual(['phase2-review', 'phase2-assignment'])
+    })
+    expect(screen.getByText('Phase 2 Assignment')).toBeTruthy()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /remove phase 2 review type/i}))
+    })
+
+    await waitFor(() => {
+      expect(block.types).toEqual(['phase2-assignment'])
+    })
   })
 
   it('places hidden fields in the first group when revealed', async () => {
@@ -240,7 +274,10 @@ describe('BlockProperties component', () => {
       expect(block.data.properties.mood).toBe('')
     })
     await waitFor(() => {
-      expect(document.activeElement).toBe(screen.getByDisplayValue(''))
+      const moodInput = document.querySelector<HTMLInputElement>(
+        '[data-property-name="mood"] [data-property-value="true"] input',
+      )
+      expect(document.activeElement).toBe(moodInput)
     })
   })
 })

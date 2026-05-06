@@ -124,7 +124,6 @@ const INLINE_HIDDEN_PROPERTY_NAMES = new Set([
   showPropertiesProp.name,
   sourceBlockIdProp.name,
   topLevelBlockIdProp.name,
-  typesProp.name,
 ])
 
 const isInlineHiddenProperty = (
@@ -272,20 +271,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const typesRegistry = runtime.read(typesFacet)
 
   const properties = useMemo(() => blockData?.properties ?? {}, [blockData?.properties])
-  const visibleProperties = useMemo(() => {
-    const next: Record<string, unknown> = {}
-    for (const [name, value] of Object.entries(properties)) {
-      if (!isInlineHiddenProperty(name, schemas)) next[name] = value
-    }
-    return next
-  }, [properties, schemas])
-  const hiddenProperties = useMemo(() => {
-    const next: Record<string, unknown> = {}
-    for (const [name, value] of Object.entries(properties)) {
-      if (isInlineHiddenProperty(name, schemas)) next[name] = value
-    }
-    return next
-  }, [properties, schemas])
   const blockTypes = useMemo(() => {
     if (!blockData) return EMPTY_BLOCK_TYPES
     try {
@@ -294,6 +279,23 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       return EMPTY_BLOCK_TYPES
     }
   }, [blockData, properties])
+  const visibleProperties = useMemo(() => {
+    const next: Record<string, unknown> = {}
+    for (const [name, value] of Object.entries(properties)) {
+      if (!isInlineHiddenProperty(name, schemas)) next[name] = value
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, typesProp.name)) {
+      next[typesProp.name] = typesProp.codec.encode(blockTypes)
+    }
+    return next
+  }, [blockTypes, properties, schemas])
+  const hiddenProperties = useMemo(() => {
+    const next: Record<string, unknown> = {}
+    for (const [name, value] of Object.entries(properties)) {
+      if (isInlineHiddenProperty(name, schemas)) next[name] = value
+    }
+    return next
+  }, [properties, schemas])
   const propertySections = useMemo(() => buildPropertyPanelSections({
     properties: visibleProperties,
     blockTypes,
@@ -417,7 +419,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     const ui = uis.get(row.name)
     const labelText = ui?.label ?? row.name
     const typeMembershipRow = row.name === typesProp.name
-    const rowReadOnly = readOnly || typeMembershipRow
+    const rowReadOnly = readOnly
 
     return (
       <PropertyRow
