@@ -20,6 +20,7 @@ import {
   AtSign,
   Braces,
   Calendar,
+  ChevronDown,
   CheckSquare,
   Eye,
   EyeOff,
@@ -229,7 +230,6 @@ function AddPropertyForm({
       <div />
       <FieldConfigSheet
         open={configOpen}
-        name={propertyName.trim() || 'New field'}
         labelText={propertyName.trim() || 'New field'}
         kind={propertyKind}
         kindOptions={ADDABLE_KINDS}
@@ -399,6 +399,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     else writeProperty(adhocSchema(name, kind), defaultValueForKind(kind))
   }
 
+  const changeAdhocPropertyKind = (name: string, kind: AddableKind) => {
+    if (isInlineHiddenProperty(name, schemas)) return
+    void block.set(adhocSchema(name, kind), defaultValueForKind(kind))
+  }
+
   const renderPropertyRow = (section: PropertyPanelSection, row: PropertyPanelRow) => {
     const display = resolvePropertyDisplay({
       name: row.name,
@@ -439,6 +444,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         canDelete={row.isSet && !typeMembershipRow}
         onNavigate={(event, direction) => handlePropertyRowKeyDown(event, direction)}
         onChange={(next) => writeProperty(display.schema, next)}
+        onKindChange={(next) => changeAdhocPropertyKind(row.name, next)}
         onRename={(newName) => void renameProperty(row.name, newName)}
         onDelete={() => void deleteProperty(row.name)}
       />
@@ -532,6 +538,7 @@ interface PropertyRowProps {
   canDelete?: boolean
   onNavigate: (event: KeyboardEvent<HTMLDivElement>, direction: -1 | 1) => void
   onChange: (next: unknown) => void
+  onKindChange: (kind: AddableKind) => void
   onRename: (newName: string) => void
   onDelete: () => void
 }
@@ -551,6 +558,7 @@ function PropertyRow({
   canDelete = true,
   onNavigate,
   onChange,
+  onKindChange,
   onRename,
   onDelete,
 }: PropertyRowProps) {
@@ -599,6 +607,7 @@ function PropertyRow({
             // separate label), so this matches what the user sees.
             defaultValue={name}
             aria-label={`Field ${labelText}`}
+            data-property-label="true"
             title={hintText}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === 'Tab') {
@@ -614,6 +623,8 @@ function PropertyRow({
           // one); the raw key is still exposed in the row tooltip.
           <div
             className="truncate text-foreground"
+            data-property-label="true"
+            tabIndex={-1}
             title={hintText}
           >
             {labelText}
@@ -634,7 +645,7 @@ function PropertyRow({
           />
         )}
       </div>
-      <div className="flex h-7 items-center justify-center">
+      <div className="flex h-7 items-center justify-center" data-property-row-control="true">
         {!readOnly && canDelete && (
           <Button
             variant="ghost"
@@ -649,29 +660,20 @@ function PropertyRow({
       </div>
       <FieldConfigSheet
         open={configOpen}
-        name={name}
         labelText={labelText}
         kind={kind}
+        kindOptions={schemaUnknown ? ADDABLE_KINDS : [kind]}
         schemaUnknown={schemaUnknown}
         decodeFailed={decodeFailed}
         readOnly={readOnly || !schemaUnknown}
-        onKindChange={() => undefined}
+        onKindChange={(next) => {
+          if (isAddableKind(next)) onKindChange(next)
+        }}
         onClose={() => setConfigOpen(false)}
       />
     </div>
   )
 }
-
-const FIELD_KIND_OPTIONS: readonly PropertyKind[] = [
-  'string',
-  'list',
-  'ref',
-  'refList',
-  'date',
-  'number',
-  'boolean',
-  'object',
-]
 
 const INLINE_INPUT_CLASS =
   'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/55 focus-visible:border-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60'
@@ -739,6 +741,7 @@ function PropertyKindButton({
       title={`Configure ${label} (${kindLabel(kind)})`}
       aria-label={`Configure ${label}`}
       data-property-config-button="true"
+      data-property-row-control="true"
       onClick={(event) => {
         event.preventDefault()
         event.stopPropagation()
@@ -891,10 +894,9 @@ function InlinePropertyValueEditor({
 
 function FieldConfigSheet({
   open,
-  name,
   labelText,
   kind,
-  kindOptions = FIELD_KIND_OPTIONS,
+  kindOptions,
   schemaUnknown,
   decodeFailed = false,
   readOnly,
@@ -902,10 +904,9 @@ function FieldConfigSheet({
   onClose,
 }: {
   open: boolean
-  name: string
   labelText: string
   kind: PropertyKind
-  kindOptions?: readonly PropertyKind[]
+  kindOptions: readonly PropertyKind[]
   schemaUnknown: boolean
   decodeFailed?: boolean
   readOnly: boolean
@@ -927,7 +928,6 @@ function FieldConfigSheet({
             <PropertyKindGlyph kind={kind} className={schemaUnknown ? 'text-muted-foreground' : 'text-fuchsia-500'} />
             <span className="truncate">{labelText}</span>
           </div>
-          <div className="mt-2 text-sm text-muted-foreground">Add a description</div>
         </div>
         <Button
           type="button"
@@ -943,16 +943,24 @@ function FieldConfigSheet({
 
       <div className="divide-y divide-border text-sm">
         <ConfigRow label="Field type">
-          <select
-            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            value={kind}
-            disabled={readOnly}
-            onChange={(event) => onKindChange(event.target.value as PropertyKind)}
-          >
-            {kindOptions.map(option => (
-              <option key={option} value={option}>{kindLabel(option)}</option>
-            ))}
-          </select>
+          <div className="relative">
+            <select
+              className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label={`${labelText} field type`}
+              value={kind}
+              disabled={readOnly}
+              onChange={(event) => onKindChange(event.target.value as PropertyKind)}
+            >
+              {kindOptions.map(option => (
+                <option key={option} value={option}>{kindLabel(option)}</option>
+              ))}
+            </select>
+            <ChevronDown
+              className={`pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 ${
+                readOnly ? 'text-muted-foreground/45' : 'text-foreground/70'
+              }`}
+            />
+          </div>
         </ConfigRow>
 
         <ConfigRow label="Status">
@@ -963,26 +971,6 @@ function FieldConfigSheet({
                 ? 'Local ad-hoc field'
                 : 'Registered field'}
           </div>
-        </ConfigRow>
-
-        <ConfigRow label="Storage key">
-          <code className="rounded bg-muted px-1.5 py-1 text-xs text-muted-foreground">{name}</code>
-        </ConfigRow>
-
-        <ConfigRow label="Hide field">
-          <select className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm" defaultValue="never">
-            <option value="never">Never</option>
-            <option value="empty">When empty</option>
-            <option value="not-empty">When not empty</option>
-            <option value="always">Always</option>
-          </select>
-        </ConfigRow>
-
-        <ConfigRow label="Required">
-          <label className="inline-flex items-center gap-2 text-muted-foreground">
-            <input type="checkbox" className="h-4 w-4" disabled />
-            Visual warning when empty
-          </label>
         </ConfigRow>
       </div>
     </div>

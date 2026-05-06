@@ -53,6 +53,9 @@ export const subscribePropertyCreateRequests = (
 }
 
 const PROPERTY_ROW_SELECTOR = '[data-property-row="true"]'
+const PROPERTY_LABEL_SELECTOR = '[data-property-label="true"]'
+const PROPERTY_VALUE_SELECTOR = '[data-property-value="true"]'
+const PROPERTY_ROW_CONTROL_SELECTOR = '[data-property-row-control="true"]'
 const PROPERTY_FOCUSABLE_SELECTOR = [
   'input:not([disabled])',
   'textarea:not([disabled])',
@@ -74,18 +77,41 @@ const isFocusableElement = (element: HTMLElement): boolean => {
   return true
 }
 
+const focusableWithin = (row: HTMLElement, selector: string): HTMLElement[] => {
+  const root = row.querySelector<HTMLElement>(selector)
+  if (!root) return []
+
+  const rootIsFocusable = root.matches(PROPERTY_FOCUSABLE_SELECTOR) || root.hasAttribute('tabindex')
+  const candidates = [
+    ...(rootIsFocusable ? [root] : []),
+    ...Array.from(root.querySelectorAll<HTMLElement>(PROPERTY_FOCUSABLE_SELECTOR)),
+  ]
+  return candidates.filter(isFocusableElement)
+}
+
+const focusableFallbacks = (row: HTMLElement): HTMLElement[] =>
+  Array.from(row.querySelectorAll<HTMLElement>(PROPERTY_FOCUSABLE_SELECTOR))
+    .filter(element => !element.closest(PROPERTY_ROW_CONTROL_SELECTOR))
+    .filter(isFocusableElement)
+
 export const getPropertyRows = (blockId: string): HTMLElement[] => {
   if (typeof document === 'undefined') return []
   return Array.from(document.querySelectorAll<HTMLElement>(PROPERTY_ROW_SELECTOR))
     .filter(row => row.dataset.blockId === blockId && isVisibleElement(row))
 }
 
-export const getPropertyRowFocusTarget = (row: HTMLElement): HTMLElement | null =>
-  Array.from(
-    row.querySelectorAll<HTMLElement>(`[data-property-value="true"] ${PROPERTY_FOCUSABLE_SELECTOR}`),
-  ).find(isFocusableElement) ??
-  Array.from(row.querySelectorAll<HTMLElement>(PROPERTY_FOCUSABLE_SELECTOR))
-    .find(isFocusableElement) ?? null
+export const getPropertyRowFocusTarget = (
+  row: HTMLElement,
+  edge: 'start' | 'end' = 'end',
+): HTMLElement | null => {
+  const labelTargets = focusableWithin(row, PROPERTY_LABEL_SELECTOR)
+  const valueTargets = focusableWithin(row, PROPERTY_VALUE_SELECTOR)
+  const orderedTargets = edge === 'start'
+    ? [...labelTargets, ...valueTargets]
+    : [...valueTargets, ...labelTargets]
+
+  return orderedTargets[0] ?? focusableFallbacks(row)[0] ?? null
+}
 
 const placeCaret = (target: HTMLElement, edge: 'start' | 'end') => {
   if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
@@ -102,7 +128,7 @@ export const focusPropertyRowElement = (
   row: HTMLElement,
   edge: 'start' | 'end' = 'end',
 ): boolean => {
-  const target = getPropertyRowFocusTarget(row)
+  const target = getPropertyRowFocusTarget(row, edge)
   if (!target) return false
   target.focus()
   placeCaret(target, edge)

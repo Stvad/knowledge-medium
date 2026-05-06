@@ -17,6 +17,7 @@ import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { blockRenderersFacet } from '@/extensions/core'
 import { BlockProperties } from './BlockProperties'
+import { adhocSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
 import { typesPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import type { Block } from '@/data/block'
@@ -257,6 +258,69 @@ describe('BlockProperties component', () => {
     expect(screen.getByRole('dialog', {name: /phase2:review-status field configuration/i})).toBeTruthy()
     expect(screen.getByText('Field type')).toBeTruthy()
     expect(screen.getByText('Registered field')).toBeTruthy()
+    expect(screen.queryByText('Storage key')).toBeNull()
+    expect(screen.queryByText('Hide field')).toBeNull()
+    expect(screen.queryByText('Required')).toBeNull()
+  })
+
+  it('persists field type changes for ad-hoc properties', async () => {
+    const block = repo.block('block-1')
+    await block.set(adhocSchema('mood', 'string'), 'ok')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
+    })
+
+    const typeSelect = screen.getByRole('combobox', {name: /mood field type/i}) as HTMLSelectElement
+    await act(async () => {
+      fireEvent.change(typeSelect, {target: {value: 'number'}})
+    })
+
+    await waitFor(() => {
+      expect(block.data.properties.mood).toBe(0)
+    })
+    await waitFor(() => {
+      expect((screen.getByRole('combobox', {name: /mood field type/i}) as HTMLSelectElement).value)
+        .toBe('number')
+    })
+    expect(screen.getByDisplayValue('0')).toBeTruthy()
+  })
+
+  it('moves between property values and labels without selecting row controls', async () => {
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    const statusRow = propertyRow(reviewStatusProp.name)
+    const reviewerRow = propertyRow(reviewerRefProp.name)
+    const statusValue = within(statusRow).getByDisplayValue('open')
+    const reviewerLabel = within(reviewerRow).getByText('phase2:reviewer-ref')
+    const reviewerConfig = within(reviewerRow)
+      .getByRole('button', {name: /configure phase2:reviewer-ref/i})
+
+    statusValue.focus()
+    await act(async () => {
+      fireEvent.keyDown(statusValue, {key: 'ArrowDown'})
+    })
+
+    expect(document.activeElement).toBe(reviewerLabel)
+    expect(document.activeElement).not.toBe(reviewerConfig)
+
+    await act(async () => {
+      fireEvent.keyDown(reviewerLabel, {key: 'ArrowUp'})
+    })
+
+    expect(document.activeElement).toBe(statusValue)
   })
 
   it('keeps fields visually grouped by contributing type when multiple types apply', async () => {
