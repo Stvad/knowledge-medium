@@ -5,11 +5,14 @@ import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
 import {
   SRS_SM25_TYPE,
+  srsArchivedProp,
   srsFactorProp,
+  srsGradeProp,
   srsIntervalProp,
   srsNextReviewDateProp,
   srsReschedulingPlugin,
   srsReviewCountProp,
+  srsSnapshotHistoryProp,
 } from '../index.ts'
 
 describe('srsReschedulingPlugin', () => {
@@ -22,11 +25,17 @@ describe('srsReschedulingPlugin', () => {
     expect(schemas.get(srsFactorProp.name)).toBe(srsFactorProp)
     expect(schemas.get(srsNextReviewDateProp.name)).toBe(srsNextReviewDateProp)
     expect(schemas.get(srsReviewCountProp.name)).toBe(srsReviewCountProp)
+    expect(schemas.get(srsGradeProp.name)).toBe(srsGradeProp)
+    expect(schemas.get(srsArchivedProp.name)).toBe(srsArchivedProp)
+    expect(schemas.get(srsSnapshotHistoryProp.name)).toBe(srsSnapshotHistoryProp)
     expect(types.get(SRS_SM25_TYPE)?.properties).toEqual([
       srsIntervalProp,
       srsFactorProp,
       srsNextReviewDateProp,
       srsReviewCountProp,
+      srsGradeProp,
+      srsArchivedProp,
+      srsSnapshotHistoryProp,
     ])
   })
 
@@ -62,7 +71,7 @@ describe('srsReschedulingPlugin', () => {
     ])
   })
 
-  it('writes block data directly from edit mode', async () => {
+  it('does not rewrite legacy inline SRS content from edit mode', async () => {
     const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
     const action = runtime.read(actionsFacet).find(it =>
       it.id === 'edit.cm.srs.reschedule.good',
@@ -83,7 +92,6 @@ describe('srsReschedulingPlugin', () => {
     } as never, new KeyboardEvent('keydown'))
 
     expect(editorView.dispatch).not.toHaveBeenCalled()
-    expect(setContent).toHaveBeenCalledTimes(1)
-    expect(setContent.mock.calls[0][0]).toContain('[[[[interval]]:')
+    expect(setContent).not.toHaveBeenCalled()
   })
 })

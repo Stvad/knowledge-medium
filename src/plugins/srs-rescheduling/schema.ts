@@ -3,6 +3,14 @@ import { DAILY_NOTE_TYPE } from '@/data/blockTypes'
 
 export const SRS_SM25_TYPE = 'srs-sm2.5'
 
+export interface SrsReviewSnapshot {
+  reviewedAt: string
+  grade: number
+  interval: number
+  factor: number
+  reviewCount: number
+}
+
 export const srsIntervalProp = defineProperty<number>('interval', {
   codec: codecs.number,
   defaultValue: 2,
@@ -31,6 +39,27 @@ export const srsReviewCountProp = defineProperty<number>('review-count', {
   kind: 'number',
 })
 
+export const srsGradeProp = defineProperty<number>('grade', {
+  codec: codecs.number,
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'number',
+})
+
+export const srsArchivedProp = defineProperty<boolean>('archived', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'boolean',
+})
+
+export const srsSnapshotHistoryProp = defineProperty<SrsReviewSnapshot[]>('snapshot-history', {
+  codec: codecs.list(codecs.unsafeIdentity<SrsReviewSnapshot>()),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'list',
+})
+
 export const srsSm25Type = defineBlockType({
   id: SRS_SM25_TYPE,
   label: 'SRS SM-2.5',
@@ -39,5 +68,8 @@ export const srsSm25Type = defineBlockType({
     srsFactorProp,
     srsNextReviewDateProp,
     srsReviewCountProp,
+    srsGradeProp,
+    srsArchivedProp,
+    srsSnapshotHistoryProp,
   ],
 })

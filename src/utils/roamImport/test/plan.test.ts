@@ -11,10 +11,13 @@ import { dailyNoteBlockId } from '@/data/dailyNotes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import {
+  srsArchivedProp,
   srsFactorProp,
+  srsGradeProp,
   srsIntervalProp,
   srsNextReviewDateProp,
   srsReviewCountProp,
+  srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
 import type { RoamExport } from '../types'
 
@@ -279,6 +282,87 @@ describe('planImport', () => {
         'June 6th, 2026',
       ])
     expect(extractSrsScheduleMarker(marker, WORKSPACE)?.reviewCount).toBe(3)
+  })
+
+  it('imports roam/memo snapshots onto referenced SRS blocks', () => {
+    const plan = planImport([
+      {
+        title: 'cards',
+        uid: 'cardsPage',
+        children: [{string: 'Question #memo', uid: 'targetUid'}],
+      },
+      {
+        title: 'roam/memo',
+        uid: 'memoPage',
+        children: [{
+          string: 'data',
+          uid: 'memoData',
+          children: [{
+            string: '((targetUid))',
+            uid: 'memoEntry',
+            children: [
+              {
+                string: '[[May 5th, 2026]] 🔵',
+                uid: 'newerSession',
+                children: [
+                  {string: 'reviewMode:: SPACED_INTERVAL', uid: 'newerMode'},
+                  {string: 'nextDueDate:: [[May 10th, 2026]]', uid: 'newerDue'},
+                  {string: 'repetitions:: 2', uid: 'newerReps'},
+                  {string: 'interval:: 5', uid: 'newerInterval'},
+                  {string: 'eFactor:: 2.2', uid: 'newerFactor'},
+                  {string: 'grade:: 4', uid: 'newerGrade'},
+                ],
+              },
+              {
+                string: '[[May 1st, 2026]] 🟢',
+                uid: 'olderSession',
+                children: [
+                  {string: 'reviewMode:: SPACED_INTERVAL', uid: 'olderMode'},
+                  {string: 'nextDueDate:: [[May 5th, 2026]]', uid: 'olderDue'},
+                  {string: 'repetitions:: 1', uid: 'olderReps'},
+                  {string: 'interval:: 4', uid: 'olderInterval'},
+                  {string: 'eFactor:: 2.3', uid: 'olderFactor'},
+                  {string: 'grade:: 5', uid: 'olderGrade'},
+                ],
+              },
+              {string: '[[memo/archived]]', uid: 'archivedTag'},
+              {string: '[[memo/to-review]]', uid: 'toReviewTag'},
+            ],
+          }],
+        }],
+      },
+    ], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const target = plan.descendants.find(d => d.roamUid === 'targetUid')
+    const props = target?.data.properties
+    const may1 = dailyNoteBlockId(WORKSPACE, '2026-05-01')
+    const may5 = dailyNoteBlockId(WORKSPACE, '2026-05-05')
+    const may10 = dailyNoteBlockId(WORKSPACE, '2026-05-10')
+
+    expect(props?.[srsIntervalProp.name]).toBe(5)
+    expect(props?.[srsFactorProp.name]).toBe(2.2)
+    expect(props?.[srsNextReviewDateProp.name]).toBe(may10)
+    expect(props?.[srsReviewCountProp.name]).toBe(2)
+    expect(props?.[srsGradeProp.name]).toBe(4)
+    expect(props?.[srsArchivedProp.name]).toBe(true)
+    expect(props?.[srsSnapshotHistoryProp.name]).toEqual([
+      {reviewedAt: may1, grade: 5, interval: 4, factor: 2.3, reviewCount: 1},
+      {reviewedAt: may5, grade: 4, interval: 5, factor: 2.2, reviewCount: 2},
+    ])
+    expect(props?.['roam:memo/to-review']).toBeUndefined()
+    expect(target?.data.references).toContainEqual({
+      id: may10,
+      alias: 'May 10th, 2026',
+      sourceField: srsNextReviewDateProp.name,
+    })
+    expect(plan.roamMemo).toMatchObject({
+      entries: 1,
+      matchedTargets: 1,
+      archivedTargets: 1,
+      toReviewRefs: 1,
+      snapshots: 2,
+      targetsWithHistory: 1,
+    })
   })
 
   it('hoists simple inline `key::value` children onto the parent while keeping the source blocks', () => {

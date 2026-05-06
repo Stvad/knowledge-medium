@@ -30,7 +30,16 @@ import {
   type RoamTodoState,
   type TodoStatus,
 } from '@/plugins/todo/schema'
-import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling/schema'
+import {
+  SRS_SM25_TYPE,
+  srsArchivedProp,
+  srsFactorProp,
+  srsGradeProp,
+  srsIntervalProp,
+  srsNextReviewDateProp,
+  srsReviewCountProp,
+  srsSnapshotHistoryProp,
+} from '@/plugins/srs-rescheduling/schema'
 import { computeAliasSeatId } from '../../data/targets'
 import { keyAtEnd, keysBetween } from '../../data/orderKey'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
@@ -40,6 +49,7 @@ import {
   planImport,
   type PreparedBlock,
   type PreparedPage,
+  type RoamMemoImportPlanSummary,
   ROAM_ISA_PROP,
   ROAM_PAGE_ALIAS_PROP,
   type RoamImportPlan,
@@ -137,6 +147,7 @@ export interface RoamImportSummary {
   aliasesResolved: number
   aliasBlocksCreated: number
   typeCandidates: RoamTypeCandidate[]
+  roamMemo: RoamMemoImportPlanSummary
   /**
    * Empty stand-in blocks created for `((uid))` references whose target
    * wasn't in this export. A future import that brings in the real
@@ -234,6 +245,7 @@ export const importRoam = async (
       // would be a fresh insert vs a live-row hit.
       aliasBlocksCreated: 0,
       typeCandidates,
+      roamMemo: plan.roamMemo,
       placeholdersCreated: plan.placeholders.length,
       diagnostics: plan.diagnostics,
       durationMs: Date.now() - start,
@@ -399,6 +411,7 @@ export const importRoam = async (
       for (let i = chunkStart; i >= chunkEnd; i--) {
         const desc = plan.descendants[i]
         const data = applyReparent(desc.data, reparentMap)
+        appendRoamMemoExistingConflicts(plan.diagnostics, desc, await tx.get(data.id))
         await upsertImportedBlock(tx, data, mergeOptionsForDescendant(desc))
         await applyMappedTypesInTx(tx, desc, repo, typeSnapshot)
       }
@@ -432,6 +445,7 @@ export const importRoam = async (
       placeholdersCreated: plan.placeholders.length,
       aliasBlocksCreated,
       typeCandidates,
+      roamMemo: plan.roamMemo,
       durationMs: Date.now() - start,
       diagnostics: plan.diagnostics,
     })
@@ -449,6 +463,7 @@ export const importRoam = async (
     aliasesResolved: aliasResolution.aliasIdMap.size,
     aliasBlocksCreated,
     typeCandidates,
+    roamMemo: plan.roamMemo,
     placeholdersCreated: plan.placeholders.length,
     diagnostics: plan.diagnostics,
     durationMs: Date.now() - start,
@@ -602,6 +617,26 @@ const formatTypeCandidateReport = (
   return lines
 }
 
+const formatRoamMemoReport = (
+  summary: RoamMemoImportPlanSummary,
+): string[] => {
+  if (summary.entries === 0) return []
+
+  const lines = [
+    `${summary.matchedTargets}/${summary.entries} entries matched imported blocks`,
+    `${summary.activeTargets} active, ${summary.archivedTargets} archived, ${summary.toReviewRefs} to-review refs preserved as source tags`,
+    `${summary.snapshots} snapshots imported across ${summary.matchedTargets} blocks`,
+    `${summary.targetsWithHistory} blocks had multi-snapshot review history`,
+  ]
+  if (summary.missingTargets > 0) {
+    lines.push(`${summary.missingTargets} entries referenced missing target blocks`)
+  }
+  if (summary.unsupportedSessions > 0) {
+    lines.push(`${summary.unsupportedSessions} session rows were skipped because they were not SPACED_INTERVAL snapshots`)
+  }
+  return lines
+}
+
 interface ImportLogStats {
   pagesCreated: number
   pagesMerged: number
@@ -610,6 +645,7 @@ interface ImportLogStats {
   placeholdersCreated: number
   aliasBlocksCreated: number
   typeCandidates: ReadonlyArray<RoamTypeCandidate>
+  roamMemo: RoamMemoImportPlanSummary
   durationMs: number
   diagnostics: ReadonlyArray<string>
 }
@@ -636,8 +672,12 @@ const writeImportLog = async (
   await getOrCreateDailyNote(repo, workspaceId, iso)
   const dailyId = dailyNoteBlockId(workspaceId, iso)
   const typeCandidateLines = formatTypeCandidateReport(stats.typeCandidates)
+  const roamMemoLines = formatRoamMemoReport(stats.roamMemo)
   const typeCandidateSummary = stats.typeCandidates.length > 0
     ? `, ${stats.typeCandidates.length} type candidates`
+    : ''
+  const roamMemoSummary = stats.roamMemo.entries > 0
+    ? `, ${stats.roamMemo.snapshots} roam/memo snapshots`
     : ''
 
   const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
@@ -647,7 +687,7 @@ const writeImportLog = async (
     `${stats.pagesDaily} daily, ${stats.blocksWritten} blocks ` +
     `(${stats.placeholdersCreated} placeholders, ` +
     `${stats.aliasBlocksCreated} alias seats, ` +
-    `${stats.diagnostics.length} notes${typeCandidateSummary}, ` +
+    `${stats.diagnostics.length} notes${typeCandidateSummary}${roamMemoSummary}, ` +
     `${(stats.durationMs / 1000).toFixed(1)}s)`
 
   await repo.tx(async tx => {
@@ -664,7 +704,10 @@ const writeImportLog = async (
       content: headerContent,
     })
 
-    const childCount = stats.diagnostics.length + (typeCandidateLines.length > 0 ? 1 : 0)
+    const childCount =
+      stats.diagnostics.length +
+      (roamMemoLines.length > 0 ? 1 : 0) +
+      (typeCandidateLines.length > 0 ? 1 : 0)
     if (childCount === 0) return
     const childKeys = keysBetween(null, null, childCount)
     let childIndex = 0
@@ -675,6 +718,23 @@ const writeImportLog = async (
         orderKey: childKeys[childIndex++],
         content: stats.diagnostics[i],
       })
+    }
+    if (roamMemoLines.length > 0) {
+      const sectionId = await tx.create({
+        workspaceId,
+        parentId: headerId,
+        orderKey: childKeys[childIndex++],
+        content: 'Roam Memo SRS',
+      })
+      const sectionKeys = keysBetween(null, null, roamMemoLines.length)
+      for (let i = 0; i < roamMemoLines.length; i++) {
+        await tx.create({
+          workspaceId,
+          parentId: sectionId,
+          orderKey: sectionKeys[i],
+          content: roamMemoLines[i],
+        })
+      }
     }
     if (typeCandidateLines.length > 0) {
       const sectionId = await tx.create({
@@ -1236,6 +1296,45 @@ const mergeOptionsForDescendant = (
   }
 }
 
+const ROAM_MEMO_SRS_CONFLICT_FIELDS = [
+  srsIntervalProp.name,
+  srsFactorProp.name,
+  srsNextReviewDateProp.name,
+  srsReviewCountProp.name,
+  srsGradeProp.name,
+  srsArchivedProp.name,
+  srsSnapshotHistoryProp.name,
+]
+
+const storedValuesEqual = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right)
+
+const formatStoredForDiagnostic = (value: unknown): string =>
+  Array.isArray(value) ? `[${value.length} items]` : JSON.stringify(value)
+
+const appendRoamMemoExistingConflicts = (
+  diagnostics: string[],
+  desc: PreparedBlock,
+  existing: BlockData | null,
+) => {
+  if (!desc.roamMemo || !existing) return
+  const conflicts: string[] = []
+  for (const field of ROAM_MEMO_SRS_CONFLICT_FIELDS) {
+    const planned = desc.data.properties[field]
+    if (planned === undefined) continue
+    const current = existing.properties[field]
+    if (current === undefined || storedValuesEqual(current, planned)) continue
+    conflicts.push(
+      `${field} existing=${formatStoredForDiagnostic(current)} ` +
+      `memo=${formatStoredForDiagnostic(planned)}`,
+    )
+  }
+  if (conflicts.length === 0) return
+  diagnostics.push(
+    `roam/memo SRS conflict on uid ${desc.roamUid}: ${conflicts.join(', ')}`,
+  )
+}
+
 const hasOwn = (
   obj: Record<string, unknown>,
   key: string,
@@ -1303,7 +1402,7 @@ const applyMappedTypesInTx = async (
     }
   }
 
-  if (desc.srsSchedule) {
+  if (desc.srsSchedule || desc.roamMemo?.snapshots.length || desc.roamMemo?.archived) {
     await repo.addTypeInTx(tx, desc.data.id, SRS_SM25_TYPE, {}, typeSnapshot)
   }
 }

@@ -34,10 +34,13 @@ import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
 import {
   SRS_SM25_TYPE,
+  srsArchivedProp,
   srsFactorProp,
+  srsGradeProp,
   srsIntervalProp,
   srsNextReviewDateProp,
   srsReviewCountProp,
+  srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
 import { computeAliasSeatId } from '../../../data/targets'
 import { importRoam } from '../import'
@@ -876,6 +879,105 @@ describe('importRoam', () => {
         alias: 'June 6th, 2026',
       },
     ]))
+  })
+
+  it('imports roam/memo review snapshots and reports existing SRS conflicts', async () => {
+    const targetId = roamBlockId(WORKSPACE, 'targetUid')
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: targetId,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'old card',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+          [srsIntervalProp.name]: 99,
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed conflict'})
+
+    const memoExport: RoamExport = [
+      {
+        title: 'cards',
+        uid: 'cardsPage',
+        children: [{string: 'Question #memo', uid: 'targetUid'}],
+      },
+      {
+        title: 'roam/memo',
+        uid: 'memoPage',
+        children: [{
+          string: 'data',
+          uid: 'memoData',
+          children: [{
+            string: '((targetUid))',
+            uid: 'memoEntry',
+            children: [
+              {
+                string: '[[May 5th, 2026]] 🔵',
+                uid: 'newerSession',
+                children: [
+                  {string: 'reviewMode:: SPACED_INTERVAL', uid: 'newerMode'},
+                  {string: 'nextDueDate:: [[May 10th, 2026]]', uid: 'newerDue'},
+                  {string: 'repetitions:: 2', uid: 'newerReps'},
+                  {string: 'interval:: 5', uid: 'newerInterval'},
+                  {string: 'eFactor:: 2.2', uid: 'newerFactor'},
+                  {string: 'grade:: 4', uid: 'newerGrade'},
+                ],
+              },
+              {
+                string: '[[May 1st, 2026]] 🟢',
+                uid: 'olderSession',
+                children: [
+                  {string: 'reviewMode:: SPACED_INTERVAL', uid: 'olderMode'},
+                  {string: 'nextDueDate:: [[May 5th, 2026]]', uid: 'olderDue'},
+                  {string: 'repetitions:: 1', uid: 'olderReps'},
+                  {string: 'interval:: 4', uid: 'olderInterval'},
+                  {string: 'eFactor:: 2.3', uid: 'olderFactor'},
+                  {string: 'grade:: 5', uid: 'olderGrade'},
+                ],
+              },
+              {string: '[[memo/archived]]', uid: 'archivedTag'},
+            ],
+          }],
+        }],
+      },
+    ]
+
+    const summary = await importRoam(memoExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.roamMemo).toMatchObject({
+      entries: 1,
+      matchedTargets: 1,
+      archivedTargets: 1,
+      snapshots: 2,
+      targetsWithHistory: 1,
+    })
+    expect(summary.diagnostics.some(d =>
+      d.includes('roam/memo SRS conflict') &&
+      d.includes('interval existing=99 memo=5'),
+    )).toBe(true)
+
+    const target = await readBlock(targetId)
+    const props = JSON.parse(target!.properties_json) as Record<string, unknown>
+    const may1 = dailyNoteBlockId(WORKSPACE, '2026-05-01')
+    const may5 = dailyNoteBlockId(WORKSPACE, '2026-05-05')
+    const may10 = dailyNoteBlockId(WORKSPACE, '2026-05-10')
+
+    expect(props[typesProp.name]).toContain(SRS_SM25_TYPE)
+    expect(props[srsIntervalProp.name]).toBe(5)
+    expect(props[srsFactorProp.name]).toBe(2.2)
+    expect(props[srsNextReviewDateProp.name]).toBe(may10)
+    expect(props[srsReviewCountProp.name]).toBe(2)
+    expect(props[srsGradeProp.name]).toBe(4)
+    expect(props[srsArchivedProp.name]).toBe(true)
+    expect(props[srsSnapshotHistoryProp.name]).toEqual([
+      {reviewedAt: may1, grade: 5, interval: 4, factor: 2.3, reviewCount: 1},
+      {reviewedAt: may5, grade: 4, interval: 5, factor: 2.2, reviewCount: 2},
+    ])
   })
 
   it('dry-run reports counts without writing rows', async () => {

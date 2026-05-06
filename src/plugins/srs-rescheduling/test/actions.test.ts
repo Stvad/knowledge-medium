@@ -15,9 +15,11 @@ import { srsReschedulingDataExtension } from '../dataExtension.ts'
 import {
   SRS_SM25_TYPE,
   srsFactorProp,
+  srsGradeProp,
   srsIntervalProp,
   srsNextReviewDateProp,
   srsReviewCountProp,
+  srsSnapshotHistoryProp,
 } from '../schema.ts'
 
 const WORKSPACE = 'ws-1'
@@ -77,12 +79,22 @@ describe('rescheduleBlock', () => {
     await rescheduleBlock(block, SrsSignal.GOOD)
 
     const nextReviewId = dailyNoteBlockId(WORKSPACE, '2026-05-25')
+    const reviewedAtId = dailyNoteBlockId(WORKSPACE, '2026-05-05')
     expect(block.data.content).toBe('Review this card')
     expect(block.types).toContain(SRS_SM25_TYPE)
     expect(block.get(srsIntervalProp)).toBe(20)
     expect(block.get(srsFactorProp)).toBe(2)
     expect(block.get(srsNextReviewDateProp)).toBe(nextReviewId)
     expect(block.get(srsReviewCountProp)).toBe(4)
+    expect(block.get(srsGradeProp)).toBe(4)
+    expect(block.get(srsSnapshotHistoryProp)).toEqual([{
+      reviewedAt: reviewedAtId,
+      grade: 4,
+      interval: 20,
+      factor: 2,
+      reviewCount: 4,
+    }])
     expect(await repo.load(nextReviewId)).not.toBeNull()
+    expect(await repo.load(reviewedAtId)).not.toBeNull()
   })
 })
