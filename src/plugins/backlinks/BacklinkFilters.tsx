@@ -11,6 +11,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useHandle } from '@/hooks/block.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
+import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
 import { cn } from '@/lib/utils.ts'
 import {
   labelForBlockData,
@@ -85,6 +86,7 @@ const BacklinkFilterInput = ({
 }) => {
   const repo = useRepo()
   const listboxId = useId()
+  const [formElement, setFormElement] = useState<HTMLFormElement | null>(null)
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
   const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
@@ -172,7 +174,7 @@ const BacklinkFilterInput = ({
   }
 
   return (
-    <form className="relative flex min-w-0 flex-1 gap-1" onSubmit={handleSubmit}>
+    <form ref={setFormElement} className="flex min-w-0 flex-1 gap-1" onSubmit={handleSubmit}>
       <Input
         value={query}
         onChange={event => {
@@ -206,37 +208,38 @@ const BacklinkFilterInput = ({
       >
         <Plus className="h-4 w-4" />
       </Button>
-      {popupOpen && (
-        <div
-          id={listboxId}
-          role="listbox"
-          className="absolute left-0 right-9 top-9 z-20 max-h-56 overflow-auto rounded-md border border-border bg-popover p-1 shadow-md"
-        >
-          {results.map((result, index) => (
-            <button
-              type="button"
-              key={result.id}
-              id={`${listboxId}-option-${index}`}
-              role="option"
-              aria-selected={index === activeIndex}
-              onMouseEnter={() => setActiveIndex(index)}
-              onMouseDown={event => {
-                event.preventDefault()
-                void add(result.id)
-              }}
-              className={cn(
-                'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
-                index === activeIndex ? 'bg-accent' : '',
-              )}
-            >
-              <span className="truncate font-medium">{result.label}</span>
-              {result.detail && result.detail !== result.label && (
-                <span className="truncate text-muted-foreground">{truncate(result.detail)}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
+      <FloatingListbox
+        id={listboxId}
+        open={popupOpen}
+        anchorElement={formElement}
+        maxWidth={384}
+        maxHeight={224}
+        className="text-xs shadow-md"
+      >
+        {results.map((result, index) => (
+          <button
+            type="button"
+            key={result.id}
+            id={`${listboxId}-option-${index}`}
+            role="option"
+            aria-selected={index === activeIndex}
+            onMouseEnter={() => setActiveIndex(index)}
+            onMouseDown={event => {
+              event.preventDefault()
+              void add(result.id)
+            }}
+            className={cn(
+              'flex w-full min-w-0 flex-col rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              index === activeIndex ? 'bg-accent' : '',
+            )}
+          >
+            <span className="truncate font-medium">{result.label}</span>
+            {result.detail && result.detail !== result.label && (
+              <span className="truncate text-muted-foreground">{truncate(result.detail)}</span>
+            )}
+          </button>
+        ))}
+      </FloatingListbox>
     </form>
   )
 }

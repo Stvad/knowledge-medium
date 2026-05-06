@@ -412,8 +412,11 @@ describe('BlockProperties component', () => {
       fireEvent.focus(input)
     })
 
-    expect(await within(row).findByRole('option', {name: /Target Alias/})).toBeTruthy()
-    expect(await within(row).findByRole('option', {name: /Recent target content/})).toBeTruthy()
+    const listbox = await screen.findByRole('listbox')
+    expect(listbox.parentElement).toBe(document.body)
+    expect(listbox.classList.contains('fixed')).toBe(true)
+    expect(await screen.findByRole('option', {name: /Target Alias/})).toBeTruthy()
+    expect(await screen.findByRole('option', {name: /Recent target content/})).toBeTruthy()
   })
 
   it('stores a searched ref target and renders it as a block embed', async () => {
@@ -442,7 +445,7 @@ describe('BlockProperties component', () => {
       fireEvent.change(input, {target: {value: 'Target ref'}})
     })
 
-    const option = await within(row).findByRole('option', {name: /Target ref block/})
+    const option = await screen.findByRole('option', {name: /Target ref block/})
     await act(async () => {
       fireEvent.click(option)
     })
@@ -483,7 +486,7 @@ describe('BlockProperties component', () => {
       fireEvent.change(input, {target: {value: 'Related target'}})
     })
 
-    const option = await within(row).findByRole('option', {name: /Related target block/})
+    const option = await screen.findByRole('option', {name: /Related target block/})
     await act(async () => {
       fireEvent.click(option)
     })

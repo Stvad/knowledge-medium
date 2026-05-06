@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState, type KeyboardEvent } from 'react'
-import { Plus, Search, X } from 'lucide-react'
+import { Check, Plus, Search, X } from 'lucide-react'
 import {
   isRefCodec,
   isRefListCodec,
@@ -18,6 +18,7 @@ import {
   searchLinkTargetIdCandidates,
   type LinkTargetIdCandidate,
 } from '@/utils/linkTargetAutocomplete.ts'
+import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
 
 const SEARCH_LIMIT = 12
 const EMPTY_REFS: readonly string[] = Object.freeze([])
@@ -188,15 +189,18 @@ function ReferenceSearch({
   excludeIds,
   targetTypes,
   placeholder,
+  selectionMode,
   onPick,
 }: {
   owner: Block
   excludeIds: readonly string[]
   targetTypes: readonly string[]
   placeholder: string
+  selectionMode: 'single' | 'multiple'
   onPick: (blockId: string) => void
 }) {
   const listboxId = useId()
+  const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null)
   const workspaceId = useWorkspaceId(owner, owner.repo.activeWorkspaceId ?? '')
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -274,12 +278,15 @@ function ReferenceSearch({
 
   return (
     <div
-      className="relative min-w-0"
+      className="min-w-0"
       onBlur={() => {
         window.setTimeout(() => setOpen(false), 120)
       }}
     >
-      <div className="flex h-7 min-w-0 items-center gap-1.5 rounded-md border border-transparent bg-transparent px-0 focus-within:border-input focus-within:px-1.5">
+      <div
+        ref={setShellElement}
+        className="flex h-7 min-w-0 items-center gap-1.5 rounded-md border border-transparent bg-transparent px-0 focus-within:border-input focus-within:px-1.5"
+      >
         <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
         <input
           className="h-6 min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/55"
@@ -299,42 +306,44 @@ function ReferenceSearch({
         />
       </div>
 
-      {open && (
-        <div
-          id={listboxId}
-          role="listbox"
-          className="absolute left-0 top-full z-50 mt-1 max-h-64 w-[min(28rem,100%)] overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-lg"
-        >
-          {candidates.length > 0 ? candidates.map((candidate, index) => {
-            const label = candidateLabel(candidate)
-            const detail = candidateDetail(candidate)
-            return (
-              <button
-                key={`${candidate.id}:${candidate.label}`}
-                type="button"
-                role="option"
-                aria-selected={index === activeIndex}
-                className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left ${
-                  index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'
-                }`}
-                onMouseDown={event => event.preventDefault()}
-                onMouseEnter={() => setActiveIndex(index)}
-                onClick={() => pick(candidate)}
-              >
-                <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{label}</span>
-                {detail && detail !== label && (
-                  <span className="max-w-[11rem] truncate text-xs text-muted-foreground">{detail}</span>
-                )}
-              </button>
-            )
-          }) : (
-            <div className="px-2 py-1.5 text-muted-foreground">
-              {loading ? 'Searching...' : 'No matching blocks'}
-            </div>
-          )}
-        </div>
-      )}
+      <FloatingListbox
+        id={listboxId}
+        open={open}
+        anchorElement={shellElement}
+        maxWidth={448}
+        maxHeight={256}
+      >
+        {candidates.length > 0 ? candidates.map((candidate, index) => {
+          const label = candidateLabel(candidate)
+          const detail = candidateDetail(candidate)
+          return (
+            <button
+              key={`${candidate.id}:${candidate.label}`}
+              type="button"
+              role="option"
+              aria-selected={index === activeIndex}
+              className={`flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left ${
+                index === activeIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent hover:text-accent-foreground'
+              }`}
+              onMouseDown={event => event.preventDefault()}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => pick(candidate)}
+            >
+              {selectionMode === 'multiple'
+                ? <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                : <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+              <span className="min-w-0 flex-1 truncate">{label}</span>
+              {detail && detail !== label && (
+                <span className="max-w-[11rem] truncate text-xs text-muted-foreground">{detail}</span>
+              )}
+            </button>
+          )
+        }) : (
+          <div className="px-2 py-1.5 text-muted-foreground">
+            {loading ? 'Searching...' : 'No matching blocks'}
+          </div>
+        )}
+      </FloatingListbox>
     </div>
   )
 }
@@ -371,6 +380,7 @@ function RefPropertyEditorInner({
       excludeIds={EMPTY_REFS}
       targetTypes={targetTypes}
       placeholder="Search blocks"
+      selectionMode="single"
       onPick={onChange}
     />
   )
@@ -416,6 +426,7 @@ function RefListPropertyEditorInner({
           excludeIds={blockIds}
           targetTypes={targetTypes}
           placeholder={blockIds.length > 0 ? 'Add block' : 'Search blocks'}
+          selectionMode="multiple"
           onPick={add}
         />
       )}
