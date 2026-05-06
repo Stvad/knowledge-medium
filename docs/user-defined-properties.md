@@ -11,7 +11,7 @@ The first downstream consumer is the Roam importer: every imported `key:: value`
 Load-bearing pieces this design composes:
 
 - **`PropertySchema<T>`** ([src/data/api/propertySchema.ts:8](src/data/api/propertySchema.ts:8)) — name + codec + defaultValue + changeScope. The codec is the single source of truth for value semantics after the [db2a987](https://github.com/) refactor (`kind` removed; editor selection derives from codec via `propertyEditorFallbackFacet`).
-- **`Codec<T>`** ([src/data/api/codecs.ts:9](src/data/api/codecs.ts:9)) — primitive encode/decode contract running at four boundary call sites. Carries `shape: CodecShape` for storage primitive; semantic codecs add discriminators (`RefCodec.refKind`, etc.).
+- **`Codec<T>`** ([src/data/api/codecs.ts:9](src/data/api/codecs.ts:9)) — primitive encode/decode contract running at four boundary call sites. Carries `shape: CodecShape` for storage primitive; semantic codecs are distinguished by a `kind: string` discriminator that matches their preset id (see §1a — replaces the earlier ad-hoc `RefCodec.refKind` field).
 - **`propertySchemasFacet` / `propertyUiFacet` / `propertyEditorFallbackFacet`** ([src/data/facets.ts](src/data/facets.ts)) — facet-resolved registries; today read once at `setFacetRuntime` and merged per [type-system.md §1a](type-system.md) into `repo.propertySchemas`.
 - **`AddPropertyForm`** ([src/components/propertyPanel/AddPropertyForm.tsx](src/components/propertyPanel/AddPropertyForm.tsx)) — the panel's "add field" UI. Currently picks an `AddablePropertyShape` (subset of `CodecShape`, excludes `date` and refs) and synthesizes an in-memory `adhocSchema`.
 - **`adhocSchema` / `inferShapeFromValue`** ([src/components/propertyEditors/defaults.tsx:220](src/components/propertyEditors/defaults.tsx:220)) — the unknown-schema fallback path. Lossy by design: a stored ref looks like a string on read.
@@ -81,9 +81,58 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
 ]
 ```
 
-`urlCodec` is a new string-shaped codec that adds a `format: 'url'` discriminator (parallel to `RefCodec.refKind`) so a `kernel.url` fallback editor in `propertyEditorFallbackFacet` can match before the generic `kernel.string` fallback. Same pattern applies to any future semantic codec.
-
 Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {source: 'plugin'})`. No imperative API.
+
+#### 1a. Codec carries `kind`, presets and editors share its vocabulary
+
+The pre-this-design `RefCodec.refKind: 'ref' | 'refList'` field is an ad-hoc discriminator on one specific codec subtype. Every new semantic codec would invent its own (`format: 'url'`, etc.). Replace it with a single uniform `kind: string` on every codec, whose value matches the preset id that built it:
+
+```ts
+// src/data/api/codecs.ts
+export interface Codec<T> {
+  readonly shape: CodecShape       // storage primitive
+  readonly kind: string            // stable preset id; e.g. 'string', 'ref', 'url'
+  encode(value: T): unknown
+  decode(json: unknown): T
+}
+
+export interface RefCodec extends Codec<string> {
+  readonly kind: 'ref'             // replaces refKind
+  readonly targetTypes: readonly string[]
+}
+
+export interface RefListCodec extends Codec<readonly string[]> {
+  readonly kind: 'refList'
+  readonly targetTypes: readonly string[]
+}
+
+// Kernel codecs declare their kind:
+const stringCodec:  Codec<string>  = { shape: 'string',  kind: 'string',  encode, decode }
+const numberCodec:  Codec<number>  = { shape: 'number',  kind: 'number',  encode, decode }
+const booleanCodec: Codec<boolean> = { shape: 'boolean', kind: 'boolean', encode, decode }
+const dateCodec:    Codec<Date>    = { shape: 'date',    kind: 'date',    encode, decode }
+const ref     = (opts?) => ({ shape: 'string', kind: 'ref',     targetTypes: ..., encode, decode })
+const refList = (opts?) => ({ shape: 'list',   kind: 'refList', targetTypes: ..., encode, decode })
+const url:          Codec<string>  = { shape: 'string',  kind: 'url',     encode: validateUrl, decode: validateUrl }
+```
+
+Predicates collapse to one-liners on `kind`:
+
+```ts
+export const isRefCodec     = (c: AnyCodec): c is RefCodec     => c.kind === 'ref'
+export const isRefListCodec = (c: AnyCodec): c is RefListCodec => c.kind === 'refList'
+export const isUrlCodec     = (c: AnyCodec): c is Codec<string> => c.kind === 'url'
+```
+
+`propertyEditorFallbackFacet` matchers shift to `codec.kind ===` checks; the existing predicate-based facet stays — predicates are now trivial. A new semantic codec only requires picking a `kind` string + adding a fallback contribution; no new ad-hoc fields per codec subtype, no new kind enum to extend (the discriminator is just `string`).
+
+Three properties this gives:
+
+- **One vocabulary, three uses.** Preset id, codec kind, and editor-fallback match key are all the same string. A `'ref'` preset's `build()` returns a codec with `kind: 'ref'`; the `kernel.ref` fallback editor matches `codec.kind === 'ref'`. No translation layer.
+- **Storage-primitive vs. semantics stay separate.** `shape` is still the JSON storage primitive (the only thing `json_extract` and the data layer's where-clauses care about). `kind` is the semantic-flavor pick. A `url` codec is `shape: 'string', kind: 'url'`; a `ref` codec is `shape: 'string', kind: 'ref'`. Same storage shape, different semantic kinds, different editors.
+- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `kind: 'email'`, adds a fallback editor matching `codec.kind === 'email'`, registers both via facets. Kernel doesn't have to know.
+
+The `kind` is the *codec author's* declaration of what semantic flavor the codec implements — usually equal to the preset id that built it, but kernel codecs without presets (like the kernel `'object'` codec) also carry one. Two codecs with the same `kind` are claiming the same semantic contract; the editor-fallback last-wins (or priority-orders) among them, same as today.
 
 ### 2. Facets gain a runtime contribution source
 
@@ -312,16 +361,16 @@ Schemaless properties go away as a steady-state design. Every imported `key:: va
 4. **Plan schema blocks.** For each newly-classified name, emit a property-schema block into the deterministic-id plan. Schema block id is `hash(workspaceId, propertyName)` so re-importing the same dump doesn't duplicate. Parent is the Properties page.
 5. **Apply order.** Phase the apply pipeline so schema blocks land **before** any block carrying their properties. The simplest reliable shape: schema blocks form a first apply chunk; subscribers (`UserSchemasService`) fire and `setRuntimeContributions` runs synchronously; subsequent chunks write content + properties against an already-registered registry. If synchronous re-resolution proves brittle, the importer can call `setRuntimeContributions` directly inside the same tx after writing the schema blocks.
 
-#### One-shot migration for existing imported data
+#### Existing alpha data — drop and recreate
 
-There's already Roam-imported data in user databases without property-schema blocks. A one-shot kernel migration runs once, gated by a `user_property_schemas_migration_v1` marker (same pattern as existing local-schema backfills):
+Per the project's no-back-compat-in-alpha rule, there's no migration of pre-this-design data. Existing local databases get wiped on first launch carrying this change; users re-import their Roam dumps under the schema-aware importer to repopulate. No one-shot scan-and-classify, no migration markers, no fallback for properties without schema blocks.
 
-1. Scan `properties_json` across all blocks for property names not already registered.
-2. Classify each via the same logic as the importer (sample values, pick a preset).
-3. Create property-schema blocks under the Properties page.
-4. Mark complete.
+What this means concretely:
 
-This brings existing data up to the "every property has a schema" invariant without requiring a re-import.
+- The `'property-schema'` type contribution and the Properties page are kernel additions; first launch creates the page fresh.
+- Anything that was in `properties_json` on existing rows is gone with the local DB wipe — there's nothing to classify.
+- Users with sync state on a server: server data is part of the alpha-wipe scope too. Synced clients reimport.
+- The first paragraph of the §9 "degraded read fallback" subsection (sync-race, plugin-not-loaded) still applies post-wipe — those are race-condition cases, not legacy-data cases.
 
 ### 9. `adhocSchema` becomes a degraded read fallback
 
@@ -329,7 +378,8 @@ After this lands, the `adhocSchema` / `inferShapeFromValue` path in [src/compone
 
 - **Sync race**: a row arrives carrying property values whose property-schema block hasn't synced yet. The fallback renders the value via the inferred-shape primitive editor; once the schema block syncs, the merged map updates and the row re-renders with the proper editor.
 - **Plugin not loaded**: a kernel/plugin schema's plugin is disabled. Same shape — primitive fallback until the plugin loads.
-- **Never-registered legacy**: a property that pre-dates this change and somehow escapes the migration. The fallback keeps the panel from crashing, but a "no schema registered for this property" hint in the panel surfaces it for user action.
+- **Property-schema block in malformed state**: a `'property-schema'` block exists but is missing `propertyName` or `presetId`. The service skips it, values for the intended name render via the fallback. Resolves when the schema block is fixed.
+- **Direct raw writes that bypass the form**: any code path calling `tx.update(id, {properties: {someAdHocName: rawValue}})` without an associated registered schema. Should not exist for unregistered names after Phase 4; if a buggy plugin or future feature reintroduces one, the fallback keeps the panel rendering. Worth a runtime warn in the tx engine for "writing a property whose name has no registered schema."
 
 The fallback's *write* path (the form's `addProperty` calling `adhocSchema(name, shape)` and `block.set(adhocSchema, ...)`) goes away. The form always either adopts a registered schema or creates a new one before writing — no in-memory ad-hoc schemas at write time.
 
@@ -350,7 +400,7 @@ No user-visible change yet. This is pure infrastructure.
 
 1. Add `ValuePreset` type and `valuePresetsFacet` ([src/data/api/valuePresets.ts](src/data/api/valuePresets.ts) new).
 2. Register kernel presets (string, number, boolean, list, date, url, ref, refList).
-3. Add `urlCodec` with `format: 'url'` discriminator + `kernel.url` fallback editor in `propertyEditorFallbackFacet` (priority above `kernel.string`).
+3. Add `kind: string` to `Codec<T>` and update kernel codecs to declare it. Replace `RefCodec.refKind` with `kind: 'ref' | 'refList'`. Add `urlCodec` with `kind: 'url'`. Add `kernel.url` fallback editor matching `codec.kind === 'url'` (priority above `kernel.string`); update `kernel.ref` / `kernel.refList` matchers to read `codec.kind`.
 4. Replace `AddablePropertyShape` in `AddPropertyForm` and `FieldConfigSheet` with preset selection. Form's default preset is `ref`.
 5. Extend `FieldConfigSheet` to render a preset's optional `ConfigEditor`.
 6. Tests: preset list resolves, configEditor renders for ref, glyph + label propagate.
@@ -368,15 +418,14 @@ After this phase, the form lets users pick rich presets but still synthesizes in
 
 After this phase, user-created schemas with full preset semantics persist across reloads and sync.
 
-### Phase 4 — Roam importer schema reconciliation + migration
+### Phase 4 — Roam importer schema reconciliation
 
 1. Add the schema-reconciliation step to the Roam importer plan phase ([src/utils/roamImport/plan.ts](src/utils/roamImport/plan.ts)). Sample-and-classify, plan deterministic-id schema blocks, sequence apply chunks so schemas land first.
-2. Add the one-shot existing-data migration (`user_property_schemas_migration_v1` marker), classifying property names already on disk.
-3. Demote `adhocSchema` to degraded-read-only — remove the form's write-time use of it; keep the fallback for sync-race and plugin-not-loaded cases.
-4. Add a "no schema registered" hint in `BlockProperties` for properties that fall through to the degraded path, with a one-click "register a schema for this" action that opens `AddPropertyForm` pre-filled with the property name.
-5. Tests: import a Roam dump with a few attribute kinds, verify schema blocks emitted, verify reapply on the same dump is idempotent. Run migration against a fixture pre-this-change, verify schemas created and properties readable.
+2. Demote `adhocSchema` to degraded-read-only — remove the form's write-time use of it; keep the fallback for sync-race and plugin-not-loaded cases.
+3. Add a "no schema registered" hint in `BlockProperties` for properties that fall through to the degraded path, with a one-click "register a schema for this" action that opens `AddPropertyForm` pre-filled with the property name.
+4. Tests: import a Roam dump with a few attribute kinds, verify schema blocks emitted, verify reapply on the same dump is idempotent.
 
-After this phase, schemaless properties are gone from the steady-state shape.
+Existing alpha local databases are wiped (per the no-back-compat rule); users reimport their dumps under the new importer. After this phase, schemaless properties are gone from the steady-state shape.
 
 ## Decisions deferred / out of scope
 
