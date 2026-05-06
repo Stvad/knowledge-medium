@@ -18,9 +18,19 @@
  */
 
 import { z } from 'zod'
-import { defineQuery, type AnyQuery, type BlockData, type Schema } from '@/data/api'
+import {
+  defineQuery,
+  type AnyQuery,
+  type BlockData,
+  type ResolvedTypedBlockQuery,
+  type Schema,
+} from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
+import {
+  compileTypedBlockQuery,
+  normalizeTypedBlockQuery,
+} from './typedBlockQuery'
 
 export const SELECT_BLOCK_BY_ID_SQL = `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}
@@ -263,6 +273,33 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
   },
 })
 
+const typedBlocksArgsSchema = z.object({
+  workspaceId: z.string(),
+  types: z.array(z.string()).optional(),
+  where: z.record(z.string(), z.unknown()).optional(),
+  referencedBy: z.object({
+    id: z.string(),
+    sourceField: z.string().optional(),
+  }).optional(),
+})
+
+/** SQLite-backed typed block query. Repo.queryBlocks / subscribeBlocks
+ *  default workspaceId before dispatching here; direct query callers
+ *  should pass workspaceId explicitly. */
+export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]>({
+  name: 'core.typedBlocks',
+  argsSchema: typedBlocksArgsSchema,
+  resultSchema: blockDataArraySchema,
+  resolve: async (query, ctx) => {
+    if (!query.workspaceId) return []
+    const normalized = normalizeTypedBlockQuery(query)
+    ctx.depend({kind: 'workspace', workspaceId: normalized.workspaceId})
+    const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
+    const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
 /** Substring-match content search. Empty `query` returns []. */
 export const searchByContentQuery = defineQuery<
   {workspaceId: string; query: string; limit?: number},
@@ -408,6 +445,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   childrenQuery,
   childIdsQuery,
   byTypeQuery,
+  typedBlocksQuery,
   searchByContentQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
@@ -429,6 +467,7 @@ declare module '@/data/api' {
     'core.children': typeof childrenQuery
     'core.childIds': typeof childIdsQuery
     'core.byType': typeof byTypeQuery
+    'core.typedBlocks': typeof typedBlocksQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery

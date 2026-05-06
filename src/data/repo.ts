@@ -27,10 +27,13 @@ import type {
   MutatorRegistry,
   Query,
   QueryRegistry,
+  ResolvedTypedBlockQuery,
   RepoTxOptions,
+  TypedBlockQuery,
   TypeContribution,
   TypeRegistrySnapshot,
   Tx,
+  Unsubscribe,
   User,
 } from '@/data/api'
 import {
@@ -63,6 +66,7 @@ import {
   snapshotsToChangeNotification,
   type ResolveContext,
 } from './internals/handleStore'
+import { normalizeTypedBlockQuery } from './internals/typedBlockQuery'
 import {
   DbMetrics,
   QueryMetrics,
@@ -844,6 +848,42 @@ export class Repo {
    *  result. The same `core.${name}` shortcut as the proxy applies. */
   async runQuery<R = unknown>(name: string, args: unknown): Promise<R> {
     return this.dispatchQuery(name)(args).load() as Promise<R>
+  }
+
+  private resolveTypedBlockQuery(query: TypedBlockQuery): ResolvedTypedBlockQuery | null {
+    const workspaceId = query.workspaceId ?? this.activeWorkspaceId
+    if (!workspaceId) return null
+    return normalizeTypedBlockQuery({
+      workspaceId,
+      types: query.types,
+      where: query.where,
+      referencedBy: query.referencedBy,
+    })
+  }
+
+  /** Run a typed block query once. `workspaceId` defaults to the
+   *  repo's active workspace; missing workspace returns an empty list. */
+  async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
+    const resolved = this.resolveTypedBlockQuery(query)
+    if (resolved === null) return []
+    return this.query.typedBlocks(resolved).load()
+  }
+
+  /** Subscribe to a typed block query. `workspaceId` defaults to the
+   *  repo's active workspace at subscription time. */
+  subscribeBlocks(
+    query: TypedBlockQuery,
+    listener: (rows: BlockData[]) => void,
+  ): Unsubscribe {
+    const resolved = this.resolveTypedBlockQuery(query)
+    if (resolved === null) {
+      queueMicrotask(() => listener([]))
+      return () => {}
+    }
+    const handle = this.query.typedBlocks(resolved)
+    const current = handle.peek()
+    if (current !== undefined) queueMicrotask(() => listener(current))
+    return handle.subscribe(listener)
   }
 
   /** Update the data-layer registries from a FacetRuntime. Spec §8.

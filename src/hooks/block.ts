@@ -33,8 +33,9 @@ import {
   useRef,
   useSyncExternalStore,
 } from 'react'
-import type { BlockData, Handle, PropertySchema } from '@/data/api'
+import type { BlockData, Handle, PropertySchema, TypedBlockQuery } from '@/data/api'
 import { Block } from '../data/block'
+import { useRepo } from '@/context/repo.tsx'
 
 const EMPTY_BLOCK_DATA_ARRAY: readonly BlockData[] = Object.freeze([])
 
@@ -349,4 +350,15 @@ export const useSubtree = (block: Block): Block[] => {
   return useHandle(block.repo.query.subtree({id: block.id}), {
     selector: data => (data ?? EMPTY_BLOCK_DATA_ARRAY).map(d => repo.block(d.id)),
   })
+}
+
+/** Reactive typed block query. `workspaceId` defaults to the repo's
+ *  active workspace at render time; while absent, the query returns [].
+ */
+export const useBlockQuery = (query: TypedBlockQuery): BlockData[] => {
+  const repo = useRepo()
+  const workspaceId = query.workspaceId ?? repo.activeWorkspaceId ?? ''
+  return useHandle(repo.query.typedBlocks({...query, workspaceId}), {
+    selector: data => data ?? EMPTY_BLOCK_DATA_ARRAY,
+  }) as BlockData[]
 }
