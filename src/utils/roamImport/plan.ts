@@ -97,6 +97,7 @@ export interface PlanOptions {
 const NS_PREFIX = 'roam'
 export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`
 export const ROAM_AUTHOR_PROP = `${NS_PREFIX}:author`
+export const ROAM_ISA_PROP = `${NS_PREFIX}:isa`
 
 const uniqueStrings = (values: readonly string[]): string[] => {
   const out: string[] = []

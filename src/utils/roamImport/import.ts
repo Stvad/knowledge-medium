@@ -40,6 +40,8 @@ import {
   planImport,
   type PreparedBlock,
   type PreparedPage,
+  ROAM_ISA_PROP,
+  ROAM_PAGE_ALIAS_PROP,
   type RoamImportPlan,
 } from './plan'
 import type { RoamExport } from './types'
@@ -114,6 +116,19 @@ export interface RoamImportOptions {
   descendantChunkSize?: number
 }
 
+export interface RoamTypeCandidateProperty {
+  name: string
+  count: number
+  percent: number
+}
+
+export interface RoamTypeCandidate {
+  alias: string
+  typeId: string
+  count: number
+  commonProperties: RoamTypeCandidateProperty[]
+}
+
 export interface RoamImportSummary {
   pagesCreated: number
   pagesMerged: number
@@ -121,6 +136,7 @@ export interface RoamImportSummary {
   blocksWritten: number
   aliasesResolved: number
   aliasBlocksCreated: number
+  typeCandidates: RoamTypeCandidate[]
   /**
    * Empty stand-in blocks created for `((uid))` references whose target
    * wasn't in this export. A future import that brings in the real
@@ -200,6 +216,12 @@ export const importRoam = async (
   }
   log(`Patched references on ${plan.descendants.length + plan.pages.length} blocks (${sinceLastPhase()})`)
 
+  const typeSnapshot = repo.snapshotTypeRegistries()
+  const typeCandidates = collectTypeCandidates(plan, typeSnapshot.types)
+  if (typeCandidates.length > 0) {
+    log(`Found ${typeCandidates.length} isa:: type candidates`)
+  }
+
   if (options.dryRun) {
     return {
       pagesCreated: reconciliations.filter(r => !r.merging && !r.page.isDaily).length,
@@ -211,6 +233,7 @@ export const importRoam = async (
       // every aliasesNeedingSeat entry but can't tell up-front which
       // would be a fresh insert vs a live-row hit.
       aliasBlocksCreated: 0,
+      typeCandidates,
       placeholdersCreated: plan.placeholders.length,
       diagnostics: plan.diagnostics,
       durationMs: Date.now() - start,
@@ -283,7 +306,6 @@ export const importRoam = async (
   let pagesMerged = 0
   let aliasBlocksCreated = 0
   const pagesDaily = reconciliations.filter(r => r.page.isDaily).length
-  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
     // 5a. Alias-target seats for unowned aliases. Same idempotent
     //     shape as backlinks.parseReferences' ensureAliasTarget — at
@@ -407,6 +429,7 @@ export const importRoam = async (
       blocksWritten: plan.descendants.length,
       placeholdersCreated: plan.placeholders.length,
       aliasBlocksCreated,
+      typeCandidates,
       durationMs: Date.now() - start,
       diagnostics: plan.diagnostics,
     })
@@ -423,11 +446,158 @@ export const importRoam = async (
     blocksWritten: plan.descendants.length,
     aliasesResolved: aliasResolution.aliasIdMap.size,
     aliasBlocksCreated,
+    typeCandidates,
     placeholdersCreated: plan.placeholders.length,
     diagnostics: plan.diagnostics,
     durationMs: Date.now() - start,
     dryRun: false,
   }
+}
+
+interface TypeCandidateAccumulator {
+  alias: string
+  typeId: string
+  count: number
+  propCounts: Map<string, number>
+}
+
+const TYPE_CANDIDATE_EXCLUDED_PROPERTIES = new Set([
+  aliasesProp.name,
+  typesProp.name,
+  ROAM_ISA_PROP,
+  ROAM_PAGE_ALIAS_PROP,
+])
+
+const MAX_TYPE_CANDIDATES_IN_REPORT = 20
+const MAX_COMMON_PROPS_IN_REPORT = 5
+
+const typeIdFromIsaAlias = (alias: string): string => {
+  const slug = alias
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return slug || alias.trim()
+}
+
+const collectIsaAliases = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return uniqueNonEmpty(value.flatMap(collectIsaAliases))
+  }
+  if (typeof value !== 'string') return []
+
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return []
+
+  const parsed = parseRoamImportReferences(trimmed).map(ref => ref.alias)
+  if (parsed.length > 0) return uniqueNonEmpty(parsed)
+
+  const unwrapped = /^\[\[(.+)]]$/.exec(trimmed)?.[1]?.trim()
+  return [unwrapped ?? trimmed]
+}
+
+const uniqueNonEmpty = (values: readonly string[]): string[] => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (trimmed.length === 0 || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+const reportablePropertyNames = (properties: Record<string, unknown>): string[] =>
+  Object.keys(properties)
+    .filter(name =>
+      !TYPE_CANDIDATE_EXCLUDED_PROPERTIES.has(name) &&
+      properties[name] !== undefined,
+    )
+
+const addTypeCandidateSource = (
+  groups: Map<string, TypeCandidateAccumulator>,
+  registeredTypes: ReadonlyMap<string, unknown>,
+  properties: Record<string, unknown>,
+) => {
+  const aliases = collectIsaAliases(properties[ROAM_ISA_PROP])
+  if (aliases.length === 0) return
+  const props = reportablePropertyNames(properties)
+
+  for (const alias of aliases) {
+    const typeId = typeIdFromIsaAlias(alias)
+    if (registeredTypes.has(typeId) || registeredTypes.has(alias)) continue
+
+    let group = groups.get(alias)
+    if (!group) {
+      group = {alias, typeId, count: 0, propCounts: new Map()}
+      groups.set(alias, group)
+    }
+    group.count += 1
+    for (const prop of props) {
+      group.propCounts.set(prop, (group.propCounts.get(prop) ?? 0) + 1)
+    }
+  }
+}
+
+const collectTypeCandidates = (
+  plan: RoamImportPlan,
+  registeredTypes: ReadonlyMap<string, unknown>,
+): RoamTypeCandidate[] => {
+  const groups = new Map<string, TypeCandidateAccumulator>()
+
+  for (const page of plan.pages) {
+    const properties = page.data?.properties ?? page.promotedFromChildren
+    addTypeCandidateSource(groups, registeredTypes, properties)
+  }
+  for (const desc of plan.descendants) {
+    addTypeCandidateSource(groups, registeredTypes, desc.data.properties)
+  }
+
+  return [...groups.values()]
+    .map(group => {
+      const minCommonCount = group.count === 1
+        ? 1
+        : Math.max(2, Math.ceil(group.count * 0.15))
+      const commonProperties = [...group.propCounts.entries()]
+        .filter(([, count]) => count >= minCommonCount)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, MAX_COMMON_PROPS_IN_REPORT)
+        .map(([name, count]) => ({
+          name,
+          count,
+          percent: Math.round((count / group.count) * 100),
+        }))
+      return {
+        alias: group.alias,
+        typeId: group.typeId,
+        count: group.count,
+        commonProperties,
+      }
+    })
+    .sort((a, b) => b.count - a.count || a.alias.localeCompare(b.alias))
+}
+
+const formatTypeCandidateReport = (
+  candidates: ReadonlyArray<RoamTypeCandidate>,
+): string[] => {
+  const lines = candidates.slice(0, MAX_TYPE_CANDIDATES_IN_REPORT).map(candidate => {
+    const nodeLabel = candidate.count === 1
+      ? '1 node'
+      : `${candidate.count} nodes`
+    const props = candidate.commonProperties.length > 0
+      ? candidate.commonProperties
+        .map(prop => `${prop.name} ${prop.count}/${candidate.count} (${prop.percent}%)`)
+        .join(', ')
+      : 'no recurring props'
+    return `[[${candidate.alias}]] -> type "${candidate.typeId}" (${nodeLabel}); common props: ${props}`
+  })
+
+  if (candidates.length > MAX_TYPE_CANDIDATES_IN_REPORT) {
+    lines.push(`${candidates.length - MAX_TYPE_CANDIDATES_IN_REPORT} more isa:: candidates omitted from this report.`)
+  }
+
+  return lines
 }
 
 interface ImportLogStats {
@@ -437,6 +607,7 @@ interface ImportLogStats {
   blocksWritten: number
   placeholdersCreated: number
   aliasBlocksCreated: number
+  typeCandidates: ReadonlyArray<RoamTypeCandidate>
   durationMs: number
   diagnostics: ReadonlyArray<string>
 }
@@ -462,6 +633,10 @@ const writeImportLog = async (
   // import already touched it, this is a cache hit.
   await getOrCreateDailyNote(repo, workspaceId, iso)
   const dailyId = dailyNoteBlockId(workspaceId, iso)
+  const typeCandidateLines = formatTypeCandidateReport(stats.typeCandidates)
+  const typeCandidateSummary = stats.typeCandidates.length > 0
+    ? `, ${stats.typeCandidates.length} type candidates`
+    : ''
 
   const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
   const headerContent =
@@ -470,7 +645,7 @@ const writeImportLog = async (
     `${stats.pagesDaily} daily, ${stats.blocksWritten} blocks ` +
     `(${stats.placeholdersCreated} placeholders, ` +
     `${stats.aliasBlocksCreated} alias seats, ` +
-    `${stats.diagnostics.length} notes, ` +
+    `${stats.diagnostics.length} notes${typeCandidateSummary}, ` +
     `${(stats.durationMs / 1000).toFixed(1)}s)`
 
   await repo.tx(async tx => {
@@ -487,15 +662,34 @@ const writeImportLog = async (
       content: headerContent,
     })
 
-    if (stats.diagnostics.length === 0) return
-    const childKeys = keysBetween(null, null, stats.diagnostics.length)
+    const childCount = stats.diagnostics.length + (typeCandidateLines.length > 0 ? 1 : 0)
+    if (childCount === 0) return
+    const childKeys = keysBetween(null, null, childCount)
+    let childIndex = 0
     for (let i = 0; i < stats.diagnostics.length; i++) {
       await tx.create({
         workspaceId,
         parentId: headerId,
-        orderKey: childKeys[i],
+        orderKey: childKeys[childIndex++],
         content: stats.diagnostics[i],
       })
+    }
+    if (typeCandidateLines.length > 0) {
+      const sectionId = await tx.create({
+        workspaceId,
+        parentId: headerId,
+        orderKey: childKeys[childIndex],
+        content: 'Type candidates from isa::',
+      })
+      const sectionKeys = keysBetween(null, null, typeCandidateLines.length)
+      for (let i = 0; i < typeCandidateLines.length; i++) {
+        await tx.create({
+          workspaceId,
+          parentId: sectionId,
+          orderKey: sectionKeys[i],
+          content: typeCandidateLines[i],
+        })
+      }
     }
   }, {scope: ChangeScope.BlockDefault, description: 'roam import: log'})
 }

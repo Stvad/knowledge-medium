@@ -668,6 +668,80 @@ describe('importRoam', () => {
     }
   })
 
+  it('posts isa type candidates to the import report block', async () => {
+    const typedExport: RoamExport = [
+      {
+        title: 'Ada Lovelace',
+        uid: 'adaPage',
+        children: [
+          {string: 'isa::[[import-test-person]]', uid: 'adaIsa'},
+          {string: 'twitter::@ada', uid: 'adaTwitter'},
+          {string: 'website::https://ada.example', uid: 'adaWebsite'},
+        ],
+      },
+      {
+        title: 'Grace Hopper',
+        uid: 'gracePage',
+        children: [
+          {string: 'isa::[[import-test-person]]', uid: 'graceIsa'},
+          {string: 'twitter::@grace', uid: 'graceTwitter'},
+          {string: 'company::[[Navy]]', uid: 'graceCompany'},
+        ],
+      },
+      {
+        title: 'A Good Book',
+        uid: 'bookPage',
+        children: [
+          {string: 'isa::[[import-test-book]]', uid: 'bookIsa'},
+          {string: 'author::[[Some Author]]', uid: 'bookAuthor'},
+        ],
+      },
+    ]
+
+    const summary = await importRoam(typedExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.typeCandidates.map(candidate => candidate.alias))
+      .toEqual(['import-test-person', 'import-test-book'])
+    expect(summary.typeCandidates[0]).toMatchObject({
+      alias: 'import-test-person',
+      typeId: 'import-test-person',
+      count: 2,
+      commonProperties: [{name: 'roam:twitter', count: 2, percent: 100}],
+    })
+
+    const dailyId = dailyNoteBlockId(WORKSPACE, todayIso())
+    const dailyChildren = await env.h.db.getAll<{
+      id: string
+      content: string
+      order_key: string
+    }>(
+      'SELECT id, content, order_key FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [dailyId],
+    )
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+    expect(header!.content).toContain('2 type candidates')
+
+    const reportChildren = await env.h.db.getAll<{id: string, content: string}>(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [header!.id],
+    )
+    const section = reportChildren.find(c => c.content === 'Type candidates from isa::')
+    expect(section).toBeDefined()
+
+    const candidateLines = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [section!.id],
+    )
+    expect(candidateLines.map(line => line.content)).toEqual([
+      '[[import-test-person]] -> type "import-test-person" (2 nodes); common props: roam:twitter 2/2 (100%)',
+      '[[import-test-book]] -> type "import-test-book" (1 node); common props: roam:author 1/1 (100%)',
+    ])
+  })
+
   it('merges imported pages through page_alias properties and reports the merge set', async () => {
     const aliasExport: RoamExport = [
       {
