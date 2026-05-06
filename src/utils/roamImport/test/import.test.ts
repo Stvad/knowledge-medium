@@ -31,6 +31,14 @@ import { dailyNoteBlockId, journalBlockId, todayIso } from '@/data/dailyNotes'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
+import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
+import {
+  SRS_SM25_TYPE,
+  srsFactorProp,
+  srsIntervalProp,
+  srsNextReviewDateProp,
+  srsReviewCountProp,
+} from '@/plugins/srs-rescheduling/schema'
 import { computeAliasSeatId } from '../../../data/targets'
 import { importRoam } from '../import'
 import { roamBlockId } from '../ids'
@@ -60,7 +68,11 @@ const setup = async (): Promise<Harness> => {
     // importer also calls processors itself for alias resolution.
     registerKernelProcessors: false,
   })
-  repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension, todoDataExtension]))
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    todoDataExtension,
+    srsReschedulingDataExtension,
+  ]))
   return {h, repo}
 }
 
@@ -711,6 +723,62 @@ describe('importRoam', () => {
     const aliasBlock = await readBlock(roamBlockId(WORKSPACE, 'aliasXY'))
     expect(aliasBlock?.parent_id).toBe(canonicalId)
     expect(aliasBlock?.content).toBe('page_alias::[[page y]]')
+  })
+
+  it('imports Roam SRS SM-2.5 markers as typed parent metadata', async () => {
+    const srsExport: RoamExport = [
+      {
+        title: 'srs',
+        uid: 'srsPage',
+        children: [
+          {
+            string: 'parent',
+            uid: 'srsParent',
+            children: [
+              {
+                string: '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *',
+                uid: 'srsMarker',
+              },
+            ],
+          },
+        ],
+      },
+    ]
+
+    const summary = await importRoam(srsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.aliasBlocksCreated).toBe(0)
+
+    const parent = await readBlock(roamBlockId(WORKSPACE, 'srsParent'))
+    const props = JSON.parse(parent!.properties_json) as Record<string, unknown>
+    const nextReviewDateId = dailyNoteBlockId(WORKSPACE, '2026-06-06')
+
+    expect(props[typesProp.name]).toContain(SRS_SM25_TYPE)
+    expect(props[srsIntervalProp.name]).toBe(31.1)
+    expect(props[srsFactorProp.name]).toBe(2.5)
+    expect(props[srsNextReviewDateProp.name]).toBe(nextReviewDateId)
+    expect(props[srsReviewCountProp.name]).toBe(3)
+
+    const refs = JSON.parse(parent!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+    expect(refs).toContainEqual({
+      id: nextReviewDateId,
+      alias: 'June 6th, 2026',
+      sourceField: srsNextReviewDateProp.name,
+    })
+
+    const daily = await readBlock(nextReviewDateId)
+    expect(daily).not.toBeNull()
+
+    const marker = await readBlock(roamBlockId(WORKSPACE, 'srsMarker'))
+    expect(marker?.content)
+      .toBe('[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *')
   })
 
   it('dry-run reports counts without writing rows', async () => {

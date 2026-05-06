@@ -2,6 +2,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension.ts'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension.ts'
+import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension.ts'
 import { todoDataExtension } from '@/plugins/todo/dataExtension.ts'
 
 /** Static data facets that must be available before the React app runtime
@@ -11,5 +12,6 @@ export const staticDataExtensions: AppExtension[] = [
   kernelDataExtension,
   backlinksDataExtension,
   groupedBacklinksDataExtension,
+  srsReschedulingDataExtension,
   todoDataExtension,
 ]

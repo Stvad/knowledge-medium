@@ -30,12 +30,18 @@ import {
   type RoamTodoState,
   type TodoStatus,
 } from '@/plugins/todo/schema'
+import { SRS_SM25_TYPE } from '@/plugins/srs-rescheduling/schema'
 import { computeAliasSeatId } from '../../data/targets'
 import { keyAtEnd, keysBetween } from '../../data/orderKey'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
-import { parseReferences } from '@/utils/referenceParser'
 import type { Repo } from '../../data/repo'
-import { planImport, type PreparedBlock, type PreparedPage, type RoamImportPlan } from './plan'
+import {
+  parseRoamImportReferences,
+  planImport,
+  type PreparedBlock,
+  type PreparedPage,
+  type RoamImportPlan,
+} from './plan'
 import type { RoamExport } from './types'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -943,7 +949,7 @@ const resolveAliases = async (
 }
 
 const patchAliasReferences = (data: BlockData, aliasIdMap: AliasIdMap) => {
-  const parsed = parseReferences(data.content)
+  const parsed = parseRoamImportReferences(data.content)
   if (parsed.length === 0) return
 
   const seen = new Set(data.references.map(r => `${r.id}:${r.alias}`))
@@ -1085,12 +1091,16 @@ const applyMappedTypesInTx = async (
   typeSnapshot: TypeRegistrySnapshot,
 ): Promise<void> => {
   const mapping = todoMappingFor(desc)
-  if (!mapping) return
+  if (mapping) {
+    await repo.addTypeInTx(tx, desc.data.id, mapping.typeId, mapping.appOwnedInit, typeSnapshot)
+    const roamTodoState = mapping.sourceMirror[roamTodoStateProp.name] as RoamTodoState | undefined
+    if (roamTodoState) {
+      await tx.setProperty(desc.data.id, roamTodoStateProp, roamTodoState)
+    }
+  }
 
-  await repo.addTypeInTx(tx, desc.data.id, mapping.typeId, mapping.appOwnedInit, typeSnapshot)
-  const roamTodoState = mapping.sourceMirror[roamTodoStateProp.name] as RoamTodoState | undefined
-  if (roamTodoState) {
-    await tx.setProperty(desc.data.id, roamTodoStateProp, roamTodoState)
+  if (desc.srsSchedule) {
+    await repo.addTypeInTx(tx, desc.data.id, SRS_SM25_TYPE, {}, typeSnapshot)
   }
 }
 

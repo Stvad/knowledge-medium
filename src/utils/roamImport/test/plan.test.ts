@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { computePromotedFromChildren, extractRoamTodoMarker, planImport } from '../plan'
+import {
+  computePromotedFromChildren,
+  extractRoamTodoMarker,
+  extractSrsScheduleMarker,
+  parseRoamImportReferences,
+  planImport,
+} from '../plan'
 import { roamBlockId } from '../ids'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import {
+  srsFactorProp,
+  srsIntervalProp,
+  srsNextReviewDateProp,
+  srsReviewCountProp,
+} from '@/plugins/srs-rescheduling/schema'
 import type { RoamExport } from '../types'
 
 const WORKSPACE = '11111111-2222-4333-8444-555555555555'
@@ -217,6 +229,50 @@ describe('planImport', () => {
     const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
     expect(entry?.properties['roam:author']).toBe('[[AnnaSalamon]]')
     expect(plan.aliasesUsed.has('AnnaSalamon')).toBe(true)
+  })
+
+  it('extracts SRS SM-2.5 child metadata onto the parent block', () => {
+    const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [{string: marker, uid: 'srsUid'}],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    const expectedDateId = dailyNoteBlockId(WORKSPACE, '2026-06-06')
+    expect(parent?.srsSchedule).toEqual({
+      interval: 31.1,
+      factor: 2.5,
+      nextReviewDateAlias: 'June 6th, 2026',
+      nextReviewDateId: expectedDateId,
+      reviewCount: 3,
+    })
+    expect(parent?.data.properties[srsIntervalProp.name]).toBe(31.1)
+    expect(parent?.data.properties[srsFactorProp.name]).toBe(2.5)
+    expect(parent?.data.properties[srsNextReviewDateProp.name]).toBe(expectedDateId)
+    expect(parent?.data.properties[srsReviewCountProp.name]).toBe(3)
+    expect(parent?.data.references).toContainEqual({
+      id: expectedDateId,
+      alias: 'June 6th, 2026',
+      sourceField: srsNextReviewDateProp.name,
+    })
+    expect(plan.aliasesUsed.has('June 6th, 2026')).toBe(true)
+
+    const markerBlock = plan.descendants.find(d => d.roamUid === 'srsUid')?.data
+    expect(markerBlock?.content).toBe(marker)
+  })
+
+  it('does not treat Roam inline property wrappers as page references', () => {
+    const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *'
+
+    expect(parseRoamImportReferences(marker).map(ref => ref.alias))
+      .toEqual(['June 6th, 2026'])
+    expect(extractSrsScheduleMarker(marker, WORKSPACE)?.reviewCount).toBe(3)
   })
 
   it('hoists simple inline `key::value` children onto the parent while keeping the source blocks', () => {

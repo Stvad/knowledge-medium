@@ -1,8 +1,16 @@
 import type { BlockData, BlockReference } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import { dailyNoteBlockId } from '@/data/dailyNotes'
+import {
+  srsFactorProp,
+  srsIntervalProp,
+  srsNextReviewDateProp,
+  srsReviewCountProp,
+} from '@/plugins/srs-rescheduling/schema'
 import type { RoamTodoState } from '@/plugins/todo/schema'
 import { parseReferences } from '@/utils/referenceParser'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
 import { resolveDailyPage, roamBlockId } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
@@ -44,6 +52,15 @@ export interface PreparedBlock {
   data: BlockData
   roamUid: string
   todoState?: RoamTodoState
+  srsSchedule?: PreparedSrsSchedule
+}
+
+export interface PreparedSrsSchedule {
+  interval: number
+  factor: number
+  nextReviewDateAlias: string
+  nextReviewDateId: string
+  reviewCount: number
 }
 
 export interface PreparedPlaceholder {
@@ -174,6 +191,7 @@ export const normalizeRoamPropertyValue = (value: string): string => {
 
 const ROAM_TODO_MARKER_RE =
   /(^|\s)(?:#\[\[(TODO|DONE)\]\]|#(TODO|DONE)\b|\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\})(?=$|\s)/g
+const ROAM_INLINE_PROPERTY_SPAN_RE = /\[\[\[\[[^\]\n]+]]::?[^\]\n]*]]/g
 
 export const extractRoamTodoMarker = (
   rawContent: string,
@@ -190,6 +208,84 @@ export const extractRoamTodoMarker = (
     .trim()
 
   return {content, todoState}
+}
+
+export const parseRoamImportReferences = (content: string) => {
+  const inlinePropertySpans: Array<[number, number]> = []
+  ROAM_INLINE_PROPERTY_SPAN_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = ROAM_INLINE_PROPERTY_SPAN_RE.exec(content)) !== null) {
+    inlinePropertySpans.push([match.index, match.index + match[0].length])
+  }
+
+  if (inlinePropertySpans.length === 0) return parseReferences(content)
+
+  return parseReferences(content).filter(ref =>
+    !inlinePropertySpans.some(([start, end]) =>
+      ref.startIndex >= start && ref.endIndex <= end,
+    ),
+  )
+}
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const roamInlinePropertyValue = (text: string, name: string): string | undefined => {
+  const pattern = new RegExp(`\\[\\[\\[\\[${escapeRegExp(name)}\\]\\]::?([^\\]]+)\\]\\]`)
+  return pattern.exec(text)?.[1]?.trim()
+}
+
+const countReviewStars = (text: string): number => {
+  const matches = text.match(/(?:^|\s)\*(?=\s|$)/g)
+  return matches?.length ?? 0
+}
+
+export const extractSrsScheduleMarker = (
+  rawContent: string,
+  workspaceId: string,
+): PreparedSrsSchedule | null => {
+  const interval = Number.parseFloat(roamInlinePropertyValue(rawContent, 'interval') ?? '')
+  const factor = Number.parseFloat(roamInlinePropertyValue(rawContent, 'factor') ?? '')
+  if (!Number.isFinite(interval) || !Number.isFinite(factor)) return null
+
+  const reviewCount = countReviewStars(rawContent)
+  if (reviewCount === 0) return null
+
+  const dateRef = parseRoamImportReferences(rawContent)
+    .map(ref => ({ref, parsed: parseLiteralDailyPageTitle(ref.alias)}))
+    .find(item => item.parsed !== null)
+  if (!dateRef?.parsed) return null
+
+  return {
+    interval,
+    factor,
+    nextReviewDateAlias: dateRef.ref.alias,
+    nextReviewDateId: dailyNoteBlockId(workspaceId, dateRef.parsed.iso),
+    reviewCount,
+  }
+}
+
+const findSrsScheduleInChildren = (
+  children: ReadonlyArray<RoamBlock>,
+  workspaceId: string,
+): PreparedSrsSchedule | undefined => {
+  for (const child of children) {
+    const schedule = extractSrsScheduleMarker(child.string ?? '', workspaceId)
+    if (schedule) return schedule
+  }
+  return undefined
+}
+
+const propertiesFromSrsSchedule = (
+  schedule: PreparedSrsSchedule | undefined,
+): Record<string, unknown> => {
+  if (!schedule) return {}
+  return {
+    [srsIntervalProp.name]: schedule.interval,
+    [srsFactorProp.name]: schedule.factor,
+    [srsNextReviewDateProp.name]: schedule.nextReviewDateId,
+    [srsReviewCountProp.name]: schedule.reviewCount,
+  }
 }
 
 // `[[X]]` tokens with whitespace / `,` / `;` separators between them,
@@ -429,8 +525,10 @@ const buildBlock = (
 
   const children = block.children ?? []
   const promotion = computePromotedFromChildren(children, ctx.bubbledUids)
+  const srsSchedule = findSrsScheduleInChildren(children, ctx.options.workspaceId)
   for (const d of promotion.diagnostics) ctx.diagnostics.push(d)
   for (const uid of promotion.bubbled) ctx.bubbledUids.add(uid)
+  if (srsSchedule) ctx.aliasesUsed.add(srsSchedule.nextReviewDateAlias)
 
   // Every original block is preserved in the tree; the importer no
   // longer drops attribute blocks on promotion. Backlinks come through
@@ -453,10 +551,21 @@ const buildBlock = (
     roamRefUids: collectUidRefs(block),
     createdAt: cloneTimestamp(block['create-time'], Date.now()),
     updatedAt: cloneTimestamp(block['edit-time'] ?? block['create-time'], Date.now()),
-    promotedFromChildren: promotion.promoted,
+    promotedFromChildren: {
+      ...promotion.promoted,
+      ...propertiesFromSrsSchedule(srsSchedule),
+    },
   })
 
-  pushDescendant({data, roamUid: block.uid, todoState: todo.todoState})
+  if (srsSchedule) {
+    data.references.push({
+      id: srsSchedule.nextReviewDateId,
+      alias: srsSchedule.nextReviewDateAlias,
+      sourceField: srsNextReviewDateProp.name,
+    })
+  }
+
+  pushDescendant({data, roamUid: block.uid, todoState: todo.todoState, srsSchedule})
   return id
 }
 
@@ -496,7 +605,7 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
 
   // Collect aliases referenced from this block. Used by the orchestrator
   // to pre-resolve alias targets before the import lands.
-  const aliasMatches = parseReferences(content)
+  const aliasMatches = parseRoamImportReferences(content)
   for (const ref of aliasMatches) ctx.aliasesUsed.add(ref.alias)
 
   // Pre-populate references[] with what we can resolve right now: page

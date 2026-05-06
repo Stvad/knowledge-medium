@@ -11,6 +11,7 @@ import {
   SrsSignal,
   srsSignals,
 } from './scheduler.ts'
+import { srsReschedulingDataExtension } from './dataExtension.ts'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
   const key = String(signal)
@@ -76,7 +77,19 @@ export const srsReschedulingActions: readonly ActionConfig[] = [
   })),
 ]
 
-export const srsReschedulingPlugin: AppExtension =
+export const srsReschedulingPlugin: AppExtension = [
+  srsReschedulingDataExtension,
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
-  )
+  ),
+]
+
+export { srsReschedulingDataExtension } from './dataExtension.ts'
+export {
+  SRS_SM25_TYPE,
+  srsFactorProp,
+  srsIntervalProp,
+  srsNextReviewDateProp,
+  srsReviewCountProp,
+  srsSm25Type,
+} from './schema.ts'
