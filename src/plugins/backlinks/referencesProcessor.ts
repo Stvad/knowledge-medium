@@ -51,6 +51,7 @@ import {
   type AnyPostCommitProcessor,
   type CommittedEvent,
   type ProcessorCtx,
+  type TypeRegistrySnapshot,
   type Tx,
   isRefCodec,
   isRefListCodec,
@@ -217,14 +218,16 @@ const buildSourcePlan = async (
  *  §7.6). */
 const applySourcePlan = async (
   tx: Tx,
+  ctx: ProcessorCtx,
   plan: SourcePlan,
+  typeSnapshot: TypeRegistrySnapshot,
 ): Promise<string[]> => {
   const newlyInserted: string[] = []
   for (const date of plan.datesToEnsure) {
-    await ensureDailyNoteTarget(tx, date, plan.workspaceId)
+    await ensureDailyNoteTarget(tx, ctx.repo, date, plan.workspaceId, typeSnapshot)
   }
   for (const alias of plan.aliasesToEnsure) {
-    const ensured = await ensureAliasTarget(tx, alias, plan.workspaceId)
+    const ensured = await ensureAliasTarget(tx, ctx.repo, alias, plan.workspaceId, typeSnapshot)
     if (ensured.inserted) newlyInserted.push(ensured.id)
   }
   if (plan.referencesChanged) {
@@ -259,12 +262,13 @@ export const parseReferencesProcessor = definePostCommitProcessor({
     if (!plans.some(planNeedsWrite)) return
 
     // Write phase — single tx, atomic for refs + targets + afterCommit.
+    const typeSnapshot = ctx.repo.snapshotTypeRegistries()
     await ctx.repo.tx(async tx => {
       const allNewlyInserted: string[] = []
       let workspaceForCleanup: string | null = null
       for (const plan of plans) {
         if (!planNeedsWrite(plan)) continue
-        const inserted = await applySourcePlan(tx, plan)
+        const inserted = await applySourcePlan(tx, ctx, plan, typeSnapshot)
         allNewlyInserted.push(...inserted)
         // All sources in one tx share a workspace per spec invariant 11
         // — pin the first non-null and use it for cleanup scheduling.

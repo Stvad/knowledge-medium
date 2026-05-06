@@ -21,6 +21,7 @@ export const buildPropertyPanelSections = (args: {
   blockTypes: readonly string[]
   typesRegistry: ReadonlyMap<string, TypeContribution>
   schemas: ReadonlyMap<string, AnyPropertySchema>
+  syntheticRows?: readonly PropertyPanelRow[]
 }): readonly PropertyPanelSection[] => {
   const hasProperty = (name: string) => Object.prototype.hasOwnProperty.call(args.properties, name)
   const assigned = new Set<string>()
@@ -68,16 +69,25 @@ export const buildPropertyPanelSections = (args: {
   const otherRows: PropertyPanelRow[] = []
   const unregisteredRows: PropertyPanelRow[] = []
 
+  const addLooseRow = (row: PropertyPanelRow): void => {
+    if (assigned.has(row.name)) return
+    if (args.schemas.has(row.name)) otherRows.push(row)
+    else unregisteredRows.push(row)
+  }
+
   for (const name of Object.keys(args.properties)) {
     if (assigned.has(name)) continue
 
-    const row: PropertyPanelRow = {
+    addLooseRow({
       name,
       encodedValue: args.properties[name],
       isSet: true,
-    }
-    if (args.schemas.has(name)) otherRows.push(row)
-    else unregisteredRows.push(row)
+    })
+  }
+
+  for (const row of args.syntheticRows ?? []) {
+    if (hasProperty(row.name)) continue
+    addLooseRow(row)
   }
 
   if (otherRows.length > 0) {

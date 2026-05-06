@@ -280,11 +280,8 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     for (const [name, value] of Object.entries(properties)) {
       if (!isInlineHiddenProperty(name, schemas)) next[name] = value
     }
-    if (!Object.prototype.hasOwnProperty.call(next, typesProp.name)) {
-      next[typesProp.name] = typesProp.codec.encode(blockTypes)
-    }
     return next
-  }, [blockTypes, properties, schemas])
+  }, [properties, schemas])
   const hiddenProperties = useMemo(() => {
     const next: Record<string, unknown> = {}
     for (const [name, value] of Object.entries(properties)) {
@@ -297,6 +294,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     blockTypes,
     typesRegistry,
     schemas,
+    syntheticRows: [{
+      name: typesProp.name,
+      encodedValue: typesProp.codec.encode(blockTypes),
+      isSet: true,
+    }],
   }), [visibleProperties, blockTypes, typesRegistry, schemas])
   const hiddenRows = useMemo<PropertyPanelRow[]>(
     () => Object.keys(hiddenProperties).sort().map(name => ({

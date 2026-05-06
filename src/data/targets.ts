@@ -32,10 +32,10 @@
  */
 
 import { v5 as uuidv5 } from 'uuid'
-import { DeletedConflictError, type Tx } from '@/data/api'
+import { DeletedConflictError, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp } from './internals/coreProperties'
-import { getBlockTypes, typesProp } from './properties'
 import { DAILY_NOTE_TYPE, PAGE_TYPE } from './blockTypes'
 
 /** Layer 1 args. */
@@ -123,20 +123,6 @@ const computeAliasSeatId = (alias: string, workspaceId: string): string =>
 const computeDailyNoteId = (date: string, workspaceId: string): string =>
   uuidv5(`${workspaceId}:${date}`, DAILY_NOTE_NS)
 
-const mergeStrings = (values: readonly string[]): string[] => Array.from(new Set(values))
-
-const addBlockTypes = async (
-  tx: Tx,
-  id: string,
-  typeIds: readonly string[],
-): Promise<void> => {
-  const block = await tx.get(id)
-  const current = block ? getBlockTypes(block) : []
-  const next = mergeStrings([...current, ...typeIds])
-  if (next.length === current.length && next.every((typeId, index) => typeId === current[index])) return
-  await tx.setProperty(id, typesProp, next)
-}
-
 /** Date-shaped alias detector (§7.6). Routing decision: dates go to
  *  `ensureDailyNoteTarget` (no cleanup eligibility); non-dates go to
  *  `ensureAliasTarget` (eligible for orphan cleanup if this tx
@@ -157,8 +143,10 @@ export const isDateAlias = (alias: string): boolean =>
  *  Returns `{id, inserted}`. */
 export const ensureAliasTarget = async (
   tx: Tx,
+  repo: Repo,
   alias: string,
   workspaceId: string,
+  typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
 ): Promise<{ id: string; inserted: boolean }> =>
   createOrRestoreTargetBlock(tx, {
     id: computeAliasSeatId(alias, workspaceId),
@@ -168,7 +156,7 @@ export const ensureAliasTarget = async (
     freshContent: '',
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [alias])
-      await addBlockTypes(tx, id, [PAGE_TYPE])
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [alias]}, typeSnapshot)
     },
   })
 
@@ -178,8 +166,10 @@ export const ensureAliasTarget = async (
  *  to a separate list so cleanup never sees them (§7.6). */
 export const ensureDailyNoteTarget = async (
   tx: Tx,
+  repo: Repo,
   date: string,
   workspaceId: string,
+  typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
 ): Promise<{ id: string; inserted: boolean }> =>
   createOrRestoreTargetBlock(tx, {
     id: computeDailyNoteId(date, workspaceId),
@@ -189,7 +179,8 @@ export const ensureDailyNoteTarget = async (
     freshContent: '',
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
-      await addBlockTypes(tx, id, [PAGE_TYPE, DAILY_NOTE_TYPE])
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
     },
   })
 

@@ -255,8 +255,9 @@ describe('createOrRestoreTargetBlock — workspace mismatch', () => {
 
 describe('ensureAliasTarget', () => {
   it('inserts an alias-target row with the correct deterministic id + alias property', async () => {
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
     const result = await env.repo.tx(async tx => {
-      return ensureAliasTarget(tx, 'foo', WS)
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault})
 
     expect(result.id).toBe(computeAliasSeatId('foo', WS))
@@ -270,9 +271,10 @@ describe('ensureAliasTarget', () => {
   })
 
   it('is idempotent: second call returns inserted=false on the same row', async () => {
-    const a = await env.repo.tx(tx => ensureAliasTarget(tx, 'foo', WS),
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const a = await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
-    const b = await env.repo.tx(tx => ensureAliasTarget(tx, 'foo', WS),
+    const b = await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
 
     expect(a.id).toBe(b.id)
@@ -284,7 +286,8 @@ describe('ensureAliasTarget', () => {
 describe('ensureDailyNoteTarget', () => {
   it('inserts a daily-note row with the daily-note deterministic id + iso alias', async () => {
     const ISO = '2026-04-28'
-    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, ISO, WS),
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, env.repo, ISO, WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
 
     expect(result.id).toBe(computeDailyNoteId(ISO, WS))
@@ -299,7 +302,8 @@ describe('ensureDailyNoteTarget', () => {
 
   it('shares the namespace with dailyNotes.dailyNoteBlockId', async () => {
     const ISO = '2026-04-28'
-    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, ISO, WS),
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, env.repo, ISO, WS, typeSnapshot),
       {scope: ChangeScope.BlockDefault})
     expect(result.id).toBe(dailyNoteBlockId(WS, ISO))
   })

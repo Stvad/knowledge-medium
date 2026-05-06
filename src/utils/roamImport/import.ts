@@ -318,10 +318,12 @@ export const importRoam = async (
     //     `[[Foo]]` → empty stub; Roam imports `[[Foo]]` → "Foo"
     //     content for findability).
     for (const alias of aliasResolution.aliasesNeedingSeat) {
-      const result = await ensureAliasSeat(tx, {
-        alias,
-        workspaceId: options.workspaceId,
-      })
+      const result = await ensureAliasSeat(
+        tx,
+        repo,
+        {alias, workspaceId: options.workspaceId},
+        typeSnapshot,
+      )
       if (result.inserted) aliasBlocksCreated += 1
     }
 
@@ -775,12 +777,13 @@ const collectDailyIsos = (
  *  left alone; tombstones restore as a fresh stub. */
 const ensureAliasSeat = async (
   tx: Tx,
+  repo: Repo,
   {alias, workspaceId}: {alias: string; workspaceId: string},
+  typeSnapshot: TypeRegistrySnapshot,
 ): Promise<{ id: string; inserted: boolean }> => {
   const id = computeAliasSeatId(alias, workspaceId)
   const properties = {
     [aliasesProp.name]: aliasesProp.codec.encode([alias]),
-    [typesProp.name]: typesProp.codec.encode([PAGE_TYPE]),
   }
   try {
     const result = await tx.createOrGet({
@@ -791,11 +794,15 @@ const ensureAliasSeat = async (
       content: alias,
       properties,
     })
+    if (result.inserted) {
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [alias]}, typeSnapshot)
+    }
     return result
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
     await tx.restore(id, {content: alias, properties, references: []})
     await tx.move(id, {parentId: null, orderKey: 'a0'})
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [alias]}, typeSnapshot)
     return {id, inserted: true}
   }
 }
