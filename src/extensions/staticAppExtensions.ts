@@ -3,7 +3,7 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
-import { typesPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
+import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
 import { quickFindPlugin } from '@/plugins/quick-find'
@@ -25,7 +25,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // registries. repo.setFacetRuntime REPLACES those registries, so the
   // kernel contribution must be present in every static runtime.
   kernelDataExtension,
-  typesPropertyUiExtension,
+  kernelPropertyUiExtension,
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),

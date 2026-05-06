@@ -40,7 +40,12 @@ describe('@/extensions/api — public surface', () => {
     'Repo',
     // PropertySchema authoring surface (replaces legacy boolProp /
     // numberProperty / stringProperty / uiChangeScope)
+    'defineBlockType',
     'defineProperty',
+    'definePropertyUi',
+    'propertySchemasFacet',
+    'propertyUiFacet',
+    'typesFacet',
     'codecs',
     'ChangeScope',
     'extensionDisabledProp',

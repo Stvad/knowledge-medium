@@ -39,6 +39,10 @@ export interface PropertyUiContribution<T = unknown> {
   readonly label?: string
   /** Property-editor grouping. */
   readonly category?: string
+  /** Hide from the normal property panel. Hidden rows can still be
+   *  revealed in the debug/metadata section, but the panel treats them
+   *  as read-only internal fields. */
+  readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
   readonly Renderer?: PropertyRenderer<T>
 }

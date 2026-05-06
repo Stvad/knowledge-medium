@@ -115,8 +115,16 @@ export { Repo } from '../data/repo'
 export { getPanelsBlock } from '@/data/globalState.ts'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.
-export { defineProperty, codecs, ChangeScope } from '@/data/api'
-export type { PropertySchema, Codec, BlockData } from '@/data/api'
+export { defineBlockType, defineProperty, definePropertyUi, codecs, ChangeScope } from '@/data/api'
+export type {
+  BlockData,
+  Codec,
+  PropertyEditorProps,
+  PropertySchema,
+  PropertyUiContribution,
+  TypeContribution,
+} from '@/data/api'
+export { propertySchemasFacet, propertyUiFacet, typesFacet } from '@/data/facets.ts'
 export {
   // System UI-state props extensions might want to read/write
   isCollapsedProp,

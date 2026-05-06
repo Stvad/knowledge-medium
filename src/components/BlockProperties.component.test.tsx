@@ -19,7 +19,7 @@ import { blockRenderersFacet } from '@/extensions/core'
 import { BlockProperties } from './BlockProperties'
 import { adhocSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
-import { typesPropertyUiExtension } from './propertyEditors/typesPropertyUi'
+import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import type { Block } from '@/data/block'
 import { aliasesProp } from '@/data/properties'
 import { useContent } from '@/hooks/block'
@@ -112,7 +112,7 @@ describe('BlockProperties component', () => {
     })
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
-      typesPropertyUiExtension,
+      kernelPropertyUiExtension,
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),
