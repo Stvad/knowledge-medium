@@ -485,9 +485,9 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
 
 interface SplitArgs {
   id: string
-  /** New content for the original block (the prefix). */
+  /** Content for the new sibling-before (the prefix). */
   before: string
-  /** Content for the new sibling-after (the suffix). */
+  /** New content for the original block (the suffix). */
   after: string
 }
 
@@ -508,21 +508,21 @@ export const split = defineMutator<SplitArgs, string>({
   // §13.3 / phase-1 review feedback.
   apply: async (tx, {id, before, after}) => {
     const self = await requireBlock(tx, id)
-    await tx.update(id, {content: before})
-    // Compute order_key for the new sibling — between self and its next
-    // sibling. Pass self.workspaceId for the null-parent case so the
-    // root-sibling lookup is workspace-scoped (the pinned-meta would
-    // also work here since tx.update above already pinned, but the
-    // explicit pass is clearer and less brittle).
+    await tx.update(id, {content: after})
+    // Compute order_key for the new prefix sibling — between self and
+    // its previous sibling. Pass self.workspaceId for the null-parent
+    // case so the root-sibling lookup is workspace-scoped (the
+    // pinned-meta would also work here since tx.update above already
+    // pinned, but the explicit pass is clearer and less brittle).
     const siblings = await tx.childrenOf(self.parentId, self.workspaceId)
     const ix = siblings.findIndex(s => s.id === id)
-    const next = ix >= 0 ? siblings[ix + 1] : undefined
-    const orderKey = keyBetween(self.orderKey, next?.orderKey ?? null)
+    const prev = ix >= 0 ? siblings[ix - 1] : undefined
+    const orderKey = keyBetween(prev?.orderKey ?? null, self.orderKey)
     return tx.create({
       workspaceId: self.workspaceId,
       parentId: self.parentId,
       orderKey,
-      content: after,
+      content: before,
     })
   },
 })

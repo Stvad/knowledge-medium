@@ -10,7 +10,7 @@ import {
 } from './types'
 import { Block } from '@/data/block'
 import { Repo } from '@/data/repo'
-import { createChild as createChildMutator, merge as mergeMutator } from '@/data/internals/kernelMutators'
+import { merge as mergeMutator } from '@/data/internals/kernelMutators'
 import { ChangeScope } from '@/data/api'
 import {
   nextVisibleBlock,
@@ -65,7 +65,6 @@ import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
   editorView: EditorView,
-  isTopLevel: boolean,
 ): Promise<Block> => {
   const doc = editorView.state.doc
   const cursorPos = editorView.state.selection.main.head
@@ -74,45 +73,25 @@ const splitCodeMirrorBlockAtCursor = async (
   const afterCursor = doc.sliceString(cursorPos)
   const repo = block.repo
 
-  // Push the prefix into the editor synchronously so its debounced
+  // Push the suffix into the editor synchronously so its debounced
   // pushChange re-arms with the post-split text. Without this the
   // pending debounce would later flush the pre-split full content
-  // and clobber the prefix that core.split wrote to SQL.
+  // and clobber the suffix that core.split wrote to SQL.
   editorView.dispatch({
-    changes: {from: 0, to: doc.length, insert: beforeCursor},
+    changes: {from: 0, to: doc.length, insert: afterCursor},
     selection: EditorSelection.cursor(0),
   })
 
-  if (isTopLevel) {
-    // Top-level: drop the after-cursor content into a new first
-    // child; the original block keeps the before-cursor content. We
-    // do both in one tx so the visible split is atomic. Use
-    // tx.run(createChildMutator, …) instead of repo.mutate.createChild
-    // so the child create + parent update share a single tx (avoids
-    // a nested writeTransaction that would split the work into two
-    // commits / undo entries on PowerSync).
-    let newChildId = ''
-    await repo.tx(async tx => {
-      newChildId = await tx.run(createChildMutator, {
-        parentId: block.id,
-        content: afterCursor,
-        position: {kind: 'first'},
-      })
-      await tx.update(block.id, {content: beforeCursor})
-    }, {scope: ChangeScope.BlockDefault, description: 'split top-level block'})
-    return repo.block(newChildId)
-  }
-
-  // Non-top-level: core.split puts before-text in self and creates a
-  // new sibling AFTER self with after-text. Pass the live before/after
+  // core.split creates a new sibling BEFORE self with before-text, and
+  // leaves self as the after-text block. Pass the live before/after
   // strings — the mutator does NOT slice persisted content, since a
   // debounced editor can leave SQL stale.
-  const newSiblingId = await repo.mutate.split({
+  await repo.mutate.split({
     id: block.id,
     before: beforeCursor,
     after: afterCursor,
-  }) as string
-  return repo.block(newSiblingId)
+  })
+  return block
 }
 
 const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -598,7 +577,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         // Case 1: Cursor is in middle of text
         if (cursorPos < doc.length) {
-          const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView, isTopLevel)
+          const blockInFocus = await splitCodeMirrorBlockAtCursor(block, editorView)
+          await uiStateBlock.set(editorSelection, {
+            blockId: blockInFocus.id,
+            start: 0,
+          })
           setFocusedBlockId(uiStateBlock, blockInFocus.id)
         }
         // Case 2: Cursor is at end of text and block has children

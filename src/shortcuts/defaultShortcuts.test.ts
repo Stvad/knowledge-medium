@@ -40,19 +40,61 @@ const setup = async (): Promise<Harness> => {
   return {h, repo}
 }
 
-const codeMirrorEditorView = (content: string, cursor: number): EditorView => ({
-  state: {
-    selection: {
-      main: {empty: true, from: cursor, to: cursor, anchor: cursor, head: cursor},
-    },
-    doc: {
-      length: content.length,
-      toString: () => content,
-    },
-  },
-}) as unknown as EditorView
+interface FakeEditorDispatchSpec {
+  changes?: {from: number; to: number; insert: string}
+  selection?: unknown
+}
+
+const makeSelection = (from: number, to = from) => ({
+  main: {empty: from === to, from, to, anchor: from, head: to},
+})
+
+const codeMirrorEditorView = (content: string, cursor: number): EditorView => {
+  let text = content
+  let selection = makeSelection(cursor)
+
+  const view = {
+    dispatch: vi.fn((spec: FakeEditorDispatchSpec) => {
+      if (spec.changes) {
+        text = text.slice(0, spec.changes.from) + spec.changes.insert + text.slice(spec.changes.to)
+      }
+
+      const nextSelection = spec.selection
+      if (nextSelection && typeof nextSelection === 'object') {
+        if ('main' in nextSelection) {
+          const main = (nextSelection as {main: {from?: number; to?: number; head?: number}}).main
+          const from = main.from ?? main.head ?? 0
+          selection = makeSelection(from, main.to ?? main.head ?? from)
+        } else if ('anchor' in nextSelection) {
+          const range = nextSelection as {anchor: number; head?: number}
+          selection = makeSelection(range.anchor, range.head ?? range.anchor)
+        }
+      }
+    }),
+  }
+
+  Object.defineProperty(view, 'state', {
+    get: () => ({
+      selection,
+      doc: {
+        length: text.length,
+        toString: () => text,
+        sliceString: (from: number, to = text.length) => text.slice(from, to),
+      },
+    }),
+  })
+
+  return view as unknown as EditorView
+}
 
 const emptyEditorView = (): EditorView => codeMirrorEditorView('', 0)
+
+const childIds = async (parentId: string | null): Promise<string[]> => {
+  const rows = parentId === null
+    ? await env.h.db.getAll<{id: string}>("SELECT id FROM blocks WHERE parent_id IS NULL AND deleted = 0 ORDER BY order_key, id")
+    : await env.h.db.getAll<{id: string}>("SELECT id FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id", [parentId])
+  return rows.map(row => row.id)
+}
 
 const findEditModeAction = (
   repo: Repo,
@@ -156,6 +198,44 @@ describe('default CodeMirror shortcuts', () => {
     expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
       blockId: 'prev',
       start: 'previous'.length,
+    })
+  })
+
+  it('splits a middle block into a prefix sibling above and keeps focus on the suffix block', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.createChild({parentId: 'root', id: 'current', content: 'left right'})
+    await env.repo.mutate.createChild({parentId: 'current', id: 'child', content: 'child'})
+
+    const uiStateBlock = env.repo.block('ui')
+    await uiStateBlock.set(topLevelBlockIdProp, 'root')
+    await uiStateBlock.set(focusedBlockIdProp, 'current')
+
+    const editorView = codeMirrorEditorView('left right', 'left '.length)
+    const action = findEditModeAction(env.repo, 'split_block_cm')
+
+    await action.handler({
+      block: env.repo.block('current'),
+      editorView,
+      uiStateBlock,
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    const rootChildren = await childIds('root')
+    const prefixId = rootChildren[0]
+
+    expect(rootChildren).toEqual([prefixId, 'current'])
+    expect(env.repo.block(prefixId).peek()?.content).toBe('left ')
+    expect(env.repo.block('current').peek()?.content).toBe('right')
+    expect(await childIds(prefixId)).toEqual([])
+    expect(await childIds('current')).toEqual(['child'])
+    expect(editorView.state.doc.toString()).toBe('right')
+    expect(editorView.state.selection.main.head).toBe(0)
+    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('current')
+    expect(uiStateBlock.peekProperty(editorSelection)).toEqual({
+      blockId: 'current',
+      start: 0,
     })
   })
 })

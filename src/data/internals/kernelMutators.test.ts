@@ -488,7 +488,7 @@ describe('core.outdent', () => {
 // ──── split ────
 
 describe('core.split', () => {
-  it('keeps before-text on the original; after-text lives on a new sibling-after', async () => {
+  it('creates a sibling-before with before-text; after-text stays on the original', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
@@ -496,20 +496,20 @@ describe('core.split', () => {
     const orig = await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'helloworld'})
     void orig
     const newId = await env.repo.mutate.split({id: 'orig', before: 'hello', after: 'world'})
-    expect(env.read('orig')!.content).toBe('hello')
-    expect(env.read(newId)!.content).toBe('world')
-    expect(await env.childIds('p')).toEqual(['orig', newId])
+    expect(env.read(newId)!.content).toBe('hello')
+    expect(env.read('orig')!.content).toBe('world')
+    expect(await env.childIds('p')).toEqual([newId, 'orig'])
   })
 
-  it('empty before leaves the original empty and full content goes to the new sibling', async () => {
+  it('empty before creates an empty sibling-before and leaves full content on the original', async () => {
     await env.repo.tx(
       tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
       {scope: ChangeScope.BlockDefault},
     )
     await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'abc'})
     const newId = await env.repo.mutate.split({id: 'orig', before: '', after: 'abc'})
-    expect(env.read('orig')!.content).toBe('')
-    expect(env.read(newId)!.content).toBe('abc')
+    expect(env.read(newId)!.content).toBe('')
+    expect(env.read('orig')!.content).toBe('abc')
   })
 
   it('uses caller-supplied text — does not re-slice persisted content', async () => {
@@ -526,8 +526,25 @@ describe('core.split', () => {
       before: 'live-prefix',
       after: 'live-suffix',
     })
-    expect(env.read('orig')!.content).toBe('live-prefix')
-    expect(env.read(newId)!.content).toBe('live-suffix')
+    expect(env.read(newId)!.content).toBe('live-prefix')
+    expect(env.read('orig')!.content).toBe('live-suffix')
+  })
+
+  it('leaves existing children attached to the original suffix block', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await env.repo.mutate.createChild({parentId: 'p', id: 'orig', content: 'left right'})
+    await env.repo.mutate.createChild({parentId: 'orig', id: 'child', content: 'child'})
+
+    const newId = await env.repo.mutate.split({id: 'orig', before: 'left ', after: 'right'})
+
+    expect(await env.childIds('p')).toEqual([newId, 'orig'])
+    expect(await env.childIds(newId)).toEqual([])
+    expect(await env.childIds('orig')).toEqual(['child'])
+    expect(env.read(newId)!.content).toBe('left ')
+    expect(env.read('orig')!.content).toBe('right')
   })
 })
 
