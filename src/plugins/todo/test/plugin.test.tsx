@@ -16,12 +16,12 @@ import {
 } from '../index.tsx'
 
 describe('todoPlugin', () => {
-  it('contributes todo type and property schemas', () => {
+  it('contributes todo type and directly-owned property schemas', () => {
     const runtime = resolveFacetRuntimeSync(todoPlugin)
     const schemas = runtime.read(propertySchemasFacet)
     const types = runtime.read(typesFacet)
 
-    expect(schemas.get(statusProp.name)).toBe(statusProp)
+    expect(schemas.has(statusProp.name)).toBe(false)
     expect(schemas.get(roamTodoStateProp.name)).toBe(roamTodoStateProp)
     expect(types.get(TODO_TYPE)?.properties).toEqual([statusProp])
   })

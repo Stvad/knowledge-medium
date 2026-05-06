@@ -31,6 +31,7 @@ beforeEach(async () => {
     kernelDataExtension,
     todoDataExtension,
   ]))
+  expect(repo.propertySchemas.get(statusProp.name)).toBe(statusProp)
   await repo.tx(tx => tx.create({
     id: 'block-1',
     workspaceId: 'ws-1',
