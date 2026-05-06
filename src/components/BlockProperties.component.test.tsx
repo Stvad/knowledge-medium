@@ -203,6 +203,13 @@ describe('BlockProperties component', () => {
     const input = screen.getByRole('combobox', {name: /add block type/i})
     await act(async () => {
       fireEvent.change(input, {target: {value: 'assignment'}})
+    })
+
+    const listbox = screen.getByRole('listbox')
+    expect(listbox.parentElement).toBe(document.body)
+    expect(listbox.classList.contains('fixed')).toBe(true)
+
+    await act(async () => {
       fireEvent.keyDown(input, {key: 'Enter'})
     })
 

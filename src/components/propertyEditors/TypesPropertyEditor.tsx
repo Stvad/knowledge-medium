@@ -1,4 +1,14 @@
-import { useId, useMemo, useState, type KeyboardEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from 'react'
+import { createPortal } from 'react-dom'
 import { Plus, X } from 'lucide-react'
 import { type PropertyEditorProps } from '@/data/api'
 import { typesFacet } from '@/data/facets.ts'
@@ -11,8 +21,31 @@ interface TypeOption {
   description?: string
 }
 
+interface ListboxPlacement {
+  left: number
+  top: number
+  width: number
+  maxHeight: number
+}
+
+const LISTBOX_MAX_WIDTH = 352
+const LISTBOX_MIN_WIDTH = 256
+const LISTBOX_MAX_HEIGHT = 224
+const VIEWPORT_MARGIN = 8
+const LISTBOX_GAP = 4
+
 const normalizedTypes = (value: readonly string[]): readonly string[] =>
   Array.from(new Set(value.map(type => type.trim()).filter(Boolean)))
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.min(Math.max(value, min), max)
+
+const listboxStyle = (placement: ListboxPlacement): CSSProperties => ({
+  left: placement.left,
+  top: placement.top,
+  width: placement.width,
+  maxHeight: placement.maxHeight,
+})
 
 export function TypesPropertyEditor({
   value,
@@ -20,6 +53,7 @@ export function TypesPropertyEditor({
 }: PropertyEditorProps<readonly string[]>) {
   const runtime = useAppRuntime()
   const listboxId = useId()
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const typedBlock = block instanceof Block ? block : null
   const readOnly = typedBlock?.repo.isReadOnly ?? true
   const selected = useMemo(() => normalizedTypes(value), [value])
@@ -27,6 +61,7 @@ export function TypesPropertyEditor({
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [placement, setPlacement] = useState<ListboxPlacement | null>(null)
   const typesRegistry = runtime.read(typesFacet)
   const options = useMemo<TypeOption[]>(() => Array.from(typesRegistry.values()).map(type => ({
     id: type.id,
@@ -41,6 +76,50 @@ export function TypesPropertyEditor({
     return option.id.toLowerCase().includes(queryText) ||
       option.label.toLowerCase().includes(queryText)
   }), [options, queryText, selectedSet])
+
+  const refreshPlacement = useCallback(() => {
+    const shell = shellRef.current
+    if (!shell || typeof window === 'undefined') return
+
+    const rect = shell.getBoundingClientRect()
+    const viewportWidth = window.innerWidth
+    const viewportHeight = window.innerHeight
+    const maxUsableWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2)
+    const minWidth = Math.min(LISTBOX_MIN_WIDTH, maxUsableWidth)
+    const width = Math.min(Math.max(rect.width, minWidth), LISTBOX_MAX_WIDTH, maxUsableWidth)
+    const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN)
+    const left = clamp(rect.left, VIEWPORT_MARGIN, maxLeft)
+    const spaceBelow = viewportHeight - rect.bottom - VIEWPORT_MARGIN
+    const spaceAbove = rect.top - VIEWPORT_MARGIN
+    const openAbove = spaceBelow < 144 && spaceAbove > spaceBelow
+    const maxUsableHeight = Math.max(0, viewportHeight - VIEWPORT_MARGIN * 2)
+    const minHeight = Math.min(96, maxUsableHeight)
+    const availableHeight = Math.max(minHeight, openAbove ? spaceAbove - LISTBOX_GAP : spaceBelow - LISTBOX_GAP)
+    const maxHeight = Math.min(LISTBOX_MAX_HEIGHT, availableHeight, maxUsableHeight)
+    const maxTop = Math.max(VIEWPORT_MARGIN, viewportHeight - maxHeight - VIEWPORT_MARGIN)
+    const top = openAbove
+      ? clamp(rect.top - maxHeight - LISTBOX_GAP, VIEWPORT_MARGIN, maxTop)
+      : clamp(rect.bottom + LISTBOX_GAP, VIEWPORT_MARGIN, maxTop)
+
+    setPlacement({left, top, width, maxHeight})
+  }, [])
+
+  const openListbox = () => {
+    refreshPlacement()
+    setOpen(true)
+  }
+
+  useEffect(() => {
+    if (!open) return undefined
+
+    const handleViewportChange = () => refreshPlacement()
+    window.addEventListener('resize', handleViewportChange)
+    window.addEventListener('scroll', handleViewportChange, true)
+    return () => {
+      window.removeEventListener('resize', handleViewportChange)
+      window.removeEventListener('scroll', handleViewportChange, true)
+    }
+  }, [open, refreshPlacement])
 
   const setTypes = (nextTypes: readonly string[]) => {
     if (!typedBlock || readOnly) return
@@ -75,7 +154,7 @@ export function TypesPropertyEditor({
 
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      setOpen(true)
+      openListbox()
       setActiveIndex(index => Math.min(index + 1, Math.max(filtered.length - 1, 0)))
       return
     }
@@ -104,12 +183,15 @@ export function TypesPropertyEditor({
 
   return (
     <div
-      className="relative min-w-0"
+      className="min-w-0"
       onBlur={() => {
         window.setTimeout(() => setOpen(false), 120)
       }}
     >
-      <div className="flex min-h-7 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-transparent bg-transparent px-0 py-0.5 focus-within:border-input focus-within:px-1.5">
+      <div
+        ref={shellRef}
+        className="flex min-h-7 min-w-0 flex-wrap items-center gap-1.5 rounded-md border border-transparent bg-transparent px-0 py-0.5 focus-within:border-input focus-within:px-1.5"
+      >
         {selected.map(typeId => {
           const option = optionsById.get(typeId)
           const label = option?.label ?? typeId
@@ -144,21 +226,22 @@ export function TypesPropertyEditor({
           aria-expanded={open}
           aria-controls={listboxId}
           aria-autocomplete="list"
-          onFocus={() => setOpen(true)}
+          onFocus={openListbox}
           onChange={event => {
             setQuery(event.target.value)
             setActiveIndex(0)
-            setOpen(true)
+            openListbox()
           }}
           onKeyDown={handleInputKeyDown}
         />
       </div>
 
-      {open && !readOnly && (
+      {open && !readOnly && placement && typeof document !== 'undefined' && createPortal((
         <div
           id={listboxId}
           role="listbox"
-          className="absolute left-0 top-full z-50 mt-1 max-h-56 w-[min(22rem,100%)] overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-lg"
+          className="fixed z-[1000] overflow-auto rounded-md border border-border bg-popover p-1 text-sm shadow-lg"
+          style={listboxStyle(placement)}
         >
           {filtered.length > 0 ? filtered.map((option, index) => (
             <button
@@ -183,7 +266,7 @@ export function TypesPropertyEditor({
             <div className="px-2 py-1.5 text-muted-foreground">No matching types</div>
           )}
         </div>
-      )}
+      ), document.body)}
     </div>
   )
 }
