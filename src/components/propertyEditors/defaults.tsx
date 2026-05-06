@@ -111,7 +111,7 @@ interface DefaultValueEditorProps {
  *  property; plugin-contributed `PropertyUiContribution.Editor`s
  *  override per-property. */
 export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: DefaultValueEditorProps) {
-  if (kind === 'list') {
+  if (kind === 'list' || kind === 'refList') {
     return (
       <DefaultListPropertyEditor
         value={Array.isArray(value) ? value : []}
@@ -209,6 +209,8 @@ export const defaultValueForKind = (kind: PropertyKind): unknown => {
     case 'number':  return 0
     case 'boolean': return false
     case 'list':    return [] as unknown[]
+    case 'ref':     return ''
+    case 'refList': return [] as string[]
     case 'object':  return {}
     case 'date':    return undefined
   }

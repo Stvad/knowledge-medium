@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { codecs, CodecError } from './codecs'
+import { codecs, CodecError, isRefCodec, isRefListCodec } from './codecs'
 
 describe('codecs.string', () => {
   it('round-trips ascii and unicode', () => {
@@ -94,6 +94,37 @@ describe('codecs.list', () => {
 
   it('propagates inner-codec errors on bad elements', () => {
     expect(() => inner.decode([1, 'two'])).toThrow(CodecError)
+  })
+})
+
+describe('codecs.ref', () => {
+  it('round-trips target ids and exposes ref metadata', () => {
+    const inner = codecs.ref({targetTypes: ['project']})
+    expect(inner.decode(inner.encode('target-1'))).toBe('target-1')
+    expect(inner.refKind).toBe('ref')
+    expect(inner.targetTypes).toEqual(['project'])
+    expect(isRefCodec(inner)).toBe(true)
+    expect(isRefListCodec(inner)).toBe(false)
+  })
+
+  it('rejects non-string targets', () => {
+    expect(() => codecs.ref().decode(['target-1'])).toThrow(CodecError)
+  })
+})
+
+describe('codecs.refList', () => {
+  it('round-trips target id arrays and exposes ref-list metadata', () => {
+    const inner = codecs.refList({targetTypes: ['task']})
+    expect(inner.decode(inner.encode(['a', 'b']))).toEqual(['a', 'b'])
+    expect(inner.refKind).toBe('refList')
+    expect(inner.targetTypes).toEqual(['task'])
+    expect(isRefListCodec(inner)).toBe(true)
+    expect(isRefCodec(inner)).toBe(false)
+  })
+
+  it('rejects non-arrays and non-string members', () => {
+    expect(() => codecs.refList().decode('target-1')).toThrow(CodecError)
+    expect(() => codecs.refList().decode(['target-1', 42])).toThrow(CodecError)
   })
 })
 

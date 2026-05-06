@@ -11,8 +11,10 @@ import { CLIENT_SCHEMA_STATEMENTS } from '@/data/internals/clientSchema'
 import {
   BACKFILL_BLOCK_REFERENCES_SQL,
   BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
+  BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY,
   backlinksLocalSchema,
   backfillBlockReferencesIfEmpty,
+  backfillBlockReferencesSourceFieldIfNeeded,
 } from '../localSchema.ts'
 
 interface TestDb {
@@ -42,6 +44,7 @@ interface ReferenceRow {
   target_id: string
   workspace_id: string
   alias: string
+  source_field: string
 }
 
 const defaultBlock: BlockInsert = {
@@ -103,10 +106,10 @@ const setupDb = (): TestDb => {
 
 const refRows = (db: DatabaseSync): ReferenceRow[] =>
   db
-    .prepare('SELECT source_id, target_id, workspace_id, alias FROM block_references ORDER BY source_id, target_id, alias')
+    .prepare('SELECT source_id, target_id, workspace_id, alias, source_field FROM block_references ORDER BY source_id, target_id, alias, source_field')
     .all() as unknown as ReferenceRow[]
 
-const refsJson = (entries: Array<{ id: string; alias: string }>): string =>
+const refsJson = (entries: Array<{ id: string; alias: string; sourceField?: string }>): string =>
   JSON.stringify(entries)
 
 let h: TestDb
@@ -151,8 +154,8 @@ describe('block_references trigger - INSERT', () => {
       ]),
     })
     expect(refRows(h.db)).toEqual([
-      {source_id: 'src', target_id: 'tgt-a', workspace_id: 'ws1', alias: 'A'},
-      {source_id: 'src', target_id: 'tgt-b', workspace_id: 'ws1', alias: 'B'},
+      {source_id: 'src', target_id: 'tgt-a', workspace_id: 'ws1', alias: 'A', source_field: ''},
+      {source_id: 'src', target_id: 'tgt-b', workspace_id: 'ws1', alias: 'B', source_field: ''},
     ])
   })
 
@@ -179,6 +182,20 @@ describe('block_references trigger - INSERT', () => {
       ]),
     })
     expect(refRows(h.db).map(r => r.alias)).toEqual(['Foo', 'foo'])
+  })
+
+  it('keeps property refs distinct by source field', () => {
+    h.insertBlock({
+      id: 'src',
+      references_json: refsJson([
+        {id: 'tgt', alias: 'tgt', sourceField: 'blocked-by'},
+        {id: 'tgt', alias: 'tgt', sourceField: 'reviewer'},
+      ]),
+    })
+    expect(refRows(h.db)).toEqual([
+      {source_id: 'src', target_id: 'tgt', workspace_id: 'ws1', alias: 'tgt', source_field: 'blocked-by'},
+      {source_id: 'src', target_id: 'tgt', workspace_id: 'ws1', alias: 'tgt', source_field: 'reviewer'},
+    ])
   })
 
   it('skips defensively-malformed entries', () => {
@@ -237,7 +254,7 @@ describe('block_references trigger - UPDATE', () => {
       references_json: refsJson([{id: 'tgt', alias: 'A'}]),
     })
     h.db
-      .prepare('INSERT INTO block_references VALUES (?, ?, ?, ?)')
+      .prepare('INSERT INTO block_references (source_id, target_id, workspace_id, alias) VALUES (?, ?, ?, ?)')
       .run('src', 'manual-tgt', 'ws1', 'manual-alias')
     h.updateBlock('src', {content: 'changed'})
     expect(refRows(h.db).map(r => r.target_id)).toContain('manual-tgt')
@@ -281,9 +298,25 @@ describe('block_references backfill', () => {
     h.db.exec(BACKFILL_BLOCK_REFERENCES_SQL)
 
     expect(refRows(h.db)).toEqual([
-      {source_id: 'src1', target_id: 'tgt-a', workspace_id: 'ws1', alias: 'A'},
-      {source_id: 'src1', target_id: 'tgt-b', workspace_id: 'ws1', alias: 'B'},
-      {source_id: 'src3', target_id: 'tgt-d', workspace_id: 'ws2', alias: 'D'},
+      {source_id: 'src1', target_id: 'tgt-a', workspace_id: 'ws1', alias: 'A', source_field: ''},
+      {source_id: 'src1', target_id: 'tgt-b', workspace_id: 'ws1', alias: 'B', source_field: ''},
+      {source_id: 'src3', target_id: 'tgt-d', workspace_id: 'ws2', alias: 'D', source_field: ''},
+    ])
+  })
+
+  it('backfills source_field from references_json sourceField', () => {
+    h.insertBlock({
+      id: 'src',
+      references_json: refsJson([
+        {id: 'tgt', alias: 'tgt', sourceField: 'blocked-by'},
+      ]),
+    })
+    h.db.exec('DELETE FROM block_references')
+
+    h.db.exec(BACKFILL_BLOCK_REFERENCES_SQL)
+
+    expect(refRows(h.db)).toEqual([
+      {source_id: 'src', target_id: 'tgt', workspace_id: 'ws1', alias: 'tgt', source_field: 'blocked-by'},
     ])
   })
 
@@ -341,6 +374,72 @@ describe('block_references backfill', () => {
 
       h.db.exec('DELETE FROM block_references')
       await runBackfill()
+      expect(refRows(h.db)).toHaveLength(0)
+    })
+  })
+
+  describe('backfillBlockReferencesSourceFieldIfNeeded marker gate', () => {
+    const runMigration = async () => {
+      await backfillBlockReferencesSourceFieldIfNeeded({
+        execute: async (sql) => h.db.exec(sql),
+        getOptional: async <T,>(sql: string) => {
+          const row = h.db.prepare(sql).get() as T | undefined
+          return row ?? null
+        },
+      })
+    }
+    const markerExists = (): boolean =>
+      h.db
+        .prepare(`SELECT 1 FROM client_schema_state WHERE key = '${BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY}'`)
+        .get() !== undefined
+
+    it('rebuilds an old block_references table and records the marker', async () => {
+      h.insertBlock({
+        id: 'src',
+        references_json: refsJson([
+          {id: 'tgt', alias: 'tgt', sourceField: 'reviewer'},
+        ]),
+      })
+      for (const triggerName of backlinksLocalSchema.triggerNames ?? []) {
+        h.db.exec(`DROP TRIGGER IF EXISTS ${triggerName}`)
+      }
+      h.db.exec('DROP TABLE block_references')
+      h.db.exec(`
+        CREATE TABLE block_references (
+          source_id    TEXT NOT NULL,
+          target_id    TEXT NOT NULL,
+          workspace_id TEXT NOT NULL,
+          alias        TEXT NOT NULL,
+          PRIMARY KEY (source_id, target_id, alias)
+        )
+      `)
+      h.db
+        .prepare('INSERT INTO block_references (source_id, target_id, workspace_id, alias) VALUES (?, ?, ?, ?)')
+        .run('old-src', 'old-tgt', 'ws1', 'Old')
+
+      await runMigration()
+
+      expect(markerExists()).toBe(true)
+      expect(refRows(h.db)).toEqual([
+        {source_id: 'src', target_id: 'tgt', workspace_id: 'ws1', alias: 'tgt', source_field: 'reviewer'},
+      ])
+      expect(() => h.insertBlock({
+        id: 'src2',
+        references_json: refsJson([{id: 'tgt', alias: 'tgt', sourceField: 'blocked-by'}]),
+      })).not.toThrow()
+      expect(refRows(h.db).map(row => row.source_field)).toEqual(['reviewer', 'blocked-by'])
+    })
+
+    it('short-circuits once the source-field marker is present', async () => {
+      await runMigration()
+      h.insertBlock({
+        id: 'src',
+        references_json: refsJson([{id: 'tgt', alias: 'tgt', sourceField: 'reviewer'}]),
+      })
+      h.db.exec('DELETE FROM block_references')
+
+      await runMigration()
+
       expect(refRows(h.db)).toHaveLength(0)
     })
   })

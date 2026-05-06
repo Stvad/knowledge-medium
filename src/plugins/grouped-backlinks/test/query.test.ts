@@ -203,6 +203,47 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(sorted(out.groups[0].sourceIds)).toEqual(['child-1', 'child-2'])
   })
 
+  it('groups incoming property references by source field even for a singleton source', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({
+      id: 'src',
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.total).toBe(1)
+    expect(out.groups).toEqual([{
+      groupId: 'field:reviewer',
+      label: 'reviewer',
+      sourceIds: ['src'],
+      fallback: false,
+    }])
+  })
+
+  it('keeps two source fields from the same source to the same target distinct', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({
+      id: 'src',
+      references: [
+        {id: 'target', alias: 'target', sourceField: 'reviewer'},
+        {id: 'target', alias: 'target', sourceField: 'blocked-by'},
+      ],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.total).toBe(1)
+    expect(out.groups.map(group => group.label)).toEqual(['blocked-by', 'reviewer'])
+    expect(out.groups.map(group => group.sourceIds)).toEqual([['src'], ['src']])
+  })
+
   it('applies include/remove filters before grouping and honors high priority config', async () => {
     await create({id: 'target', content: 'Target'})
     await create({id: 'project', content: 'Project'})

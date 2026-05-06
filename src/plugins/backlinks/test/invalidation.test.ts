@@ -129,6 +129,25 @@ describe('backlinks invalidation rule', () => {
     expect(targetInvalidations(snapshots)).toEqual([])
   })
 
+  it('source-field-only changes invalidate the target for regrouping', () => {
+    const snapshots = new Map<string, ChangeSnapshot>([
+      ['src', {
+        before: {
+          parentId: null,
+          workspaceId: 'w',
+          references: [{id: 'tgt', sourceField: 'reviewer'}],
+        },
+        after: {
+          parentId: null,
+          workspaceId: 'w',
+          references: [{id: 'tgt', sourceField: 'blocked-by'}],
+        },
+      }],
+    ])
+
+    expect(targetInvalidations(snapshots)).toEqual(['tgt'])
+  })
+
   it('row-event collector uses the same effective reference diff', () => {
     expect(collectFromRowEvent({
       blockId: 'src',

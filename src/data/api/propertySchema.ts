@@ -9,6 +9,8 @@ export type PropertyKind =
   | 'list'
   | 'object'
   | 'date'
+  | 'ref'
+  | 'refList'
 
 /** Data-layer schema. Pure data — usable from non-React surfaces (server,
  *  CLI, headless tests, future non-React UIs). React presentation lives on

@@ -7,23 +7,34 @@ import type {
 export const BACKLINKS_TARGET_INVALIDATION_CHANNEL = 'backlinks.target'
 
 const emitReferenceTargetDiff = (
-  before: ReadonlyArray<{id: string}>,
-  after: ReadonlyArray<{id: string}>,
+  before: ReadonlyArray<{id: string; sourceField?: string}>,
+  after: ReadonlyArray<{id: string; sourceField?: string}>,
   emit: PluginInvalidationEmit,
 ): void => {
   if (before.length === 0 && after.length === 0) return
 
-  const beforeIds = new Set<string>()
-  for (const ref of before) beforeIds.add(ref.id)
-
-  const afterIds = new Set<string>()
-  for (const ref of after) afterIds.add(ref.id)
-
-  for (const id of beforeIds) {
-    if (!afterIds.has(id)) emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+  const beforePairs = new Map<string, string>()
+  for (const ref of before) {
+    beforePairs.set(`${ref.id}\u0000${ref.sourceField ?? ''}`, ref.id)
   }
-  for (const id of afterIds) {
-    if (!beforeIds.has(id)) emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+
+  const afterPairs = new Map<string, string>()
+  for (const ref of after) {
+    afterPairs.set(`${ref.id}\u0000${ref.sourceField ?? ''}`, ref.id)
+  }
+
+  const emitted = new Set<string>()
+  for (const [key, id] of beforePairs) {
+    if (!afterPairs.has(key) && !emitted.has(id)) {
+      emitted.add(id)
+      emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+    }
+  }
+  for (const [key, id] of afterPairs) {
+    if (!beforePairs.has(key) && !emitted.has(id)) {
+      emitted.add(id)
+      emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+    }
   }
 }
 

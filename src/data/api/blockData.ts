@@ -1,6 +1,8 @@
-/** Outgoing reference parsed from content. For wikilinks `[[Inbox]]`, `alias`
- *  is the user-typed text and `id` is the resolved target. For block refs
- *  `((uuid))`, `alias === id` so backlinks queries don't have to branch. */
+/** Outgoing reference parsed from content or a ref-typed property. For
+ *  wikilinks `[[Inbox]]`, `alias` is the user-typed text and `id` is the
+ *  resolved target. For block refs `((uuid))` and property refs,
+ *  `alias === id` so content wikilink rendering doesn't accidentally
+ *  resolve through non-wikilink edges. */
 export interface BlockReference {
   /** Resolved target block id. */
   id: string
@@ -8,6 +10,9 @@ export interface BlockReference {
    *  rendering can show the alias the user typed, which may differ from
    *  the target's current name/aliases). */
   alias: string
+  /** Empty/omitted for content refs; set to `PropertySchema.name` for
+   *  refs projected from typed properties. */
+  sourceField?: string
 }
 
 /** Domain shape — public, camelCase. SQL columns are snake_case

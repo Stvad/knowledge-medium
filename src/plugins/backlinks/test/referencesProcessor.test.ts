@@ -22,12 +22,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, codecs, defineProperty } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { computeAliasSeatId, computeDailyNoteId } from '@/data/targets'
-import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { propertySchemasFacet } from '@/data/facets.ts'
+import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
 import {
@@ -44,7 +45,9 @@ interface Harness {
   read(id: string): Promise<{id: string; content: string; deleted: 0 | 1; properties_json: string; references_json: string} | null>
 }
 
-const setup = async (): Promise<Harness> => {
+const setup = async (
+  extraExtensions: readonly AppExtension[] = [],
+): Promise<Harness> => {
   const h = await createTestDb()
   const cache = new BlockCache()
   let timeCursor = 1700_000_000_000
@@ -60,6 +63,7 @@ const setup = async (): Promise<Harness> => {
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     backlinksDataExtension,
+    ...extraExtensions,
   ]))
   return {
     h,
@@ -136,6 +140,156 @@ describe('parseReferences — basic alias creation', () => {
     await flush()
     const refs = JSON.parse((await env.read('src'))!.references_json)
     expect(refs).toEqual([{id: someUuid, alias: someUuid}])
+  })
+})
+
+describe('parseReferences — ref-typed properties', () => {
+  const reviewerProp = defineProperty<string>('reviewer', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+    kind: 'ref',
+  })
+  const relatedProp = defineProperty<readonly string[]>('related', {
+    codec: codecs.refList(),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+    kind: 'refList',
+  })
+  const malformedProp = defineProperty<readonly string[]>('malformed-ref-list', {
+    codec: codecs.refList(),
+    defaultValue: [],
+    changeScope: ChangeScope.BlockDefault,
+    kind: 'refList',
+  })
+  const refSchemaExtension = [
+    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    propertySchemasFacet.of(relatedProp, {source: 'test'}),
+    propertySchemasFacet.of(malformedProp, {source: 'test'}),
+  ]
+
+  beforeEach(async () => {
+    await env.h.cleanup()
+    env = await setup(refSchemaExtension)
+  })
+
+  it('projects ref and refList properties with sourceField without alias-target creation', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {
+          reviewer: 'target-a',
+          related: ['target-b', 'target-a', ''],
+          'malformed-ref-list': [42],
+        },
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json)
+    expect(refs).toEqual([
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+      {id: 'target-b', alias: 'target-b', sourceField: 'related'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'related'},
+    ])
+    expect(await env.read('target-a')).toBeNull()
+    expect(await env.read('target-b')).toBeNull()
+  })
+
+  it('reprojects when only properties change', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[content-target]]',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    await env.repo.tx(
+      tx => tx.update('src', {properties: {reviewer: 'target-c'}}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json)
+    expect(refs).toEqual([
+      {id: aliasId('content-target'), alias: 'content-target'},
+      {id: 'target-c', alias: 'target-c', sourceField: 'reviewer'},
+    ])
+  })
+})
+
+describe('parseReferences — schema-swap reprojection', () => {
+  const reviewerProp = defineProperty<string>('reviewer', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+    kind: 'ref',
+  })
+  const runtimeWithReviewer = () => resolveFacetRuntimeSync([
+    kernelDataExtension,
+    backlinksDataExtension,
+    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+  ])
+  const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
+    kernelDataExtension,
+    backlinksDataExtension,
+  ])
+
+  it('projects existing blocks when a property becomes ref-typed', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([])
+
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+
+    await vi.waitFor(async () => {
+      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+        {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+      ])
+    })
+  })
+
+  it('removes stale field refs when a property stops being ref-typed', async () => {
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'see [[content-target]]',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    env.repo.setFacetRuntime(runtimeWithoutReviewer())
+
+    await vi.waitFor(async () => {
+      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+        {id: aliasId('content-target'), alias: 'content-target'},
+      ])
+    })
   })
 })
 

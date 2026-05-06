@@ -3,9 +3,10 @@
  * processors (spec §7).
  *
  * `backlinks.parseReferences`
- *   - watches: { kind: 'field', table: 'blocks', fields: ['content'] }
- *   - For each changedRow whose `content` changed (insert or update),
- *     parse `[[alias]]` and `((uuid))` references.
+ *   - watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] }
+ *   - For each changedRow whose `content` or `properties` changed (insert
+ *     or update), parse `[[alias]]` / `((uuid))` references and ref-typed
+ *     properties.
  *   - Resolve aliases to existing target ids via a workspace-scoped
  *     SQL lookup (committed-state read via ctx.db). On miss, create
  *     the target via ensureAliasTarget / ensureDailyNoteTarget.
@@ -51,6 +52,8 @@ import {
   type CommittedEvent,
   type ProcessorCtx,
   type Tx,
+  isRefCodec,
+  isRefListCodec,
 } from '@/data/api'
 import {
   parseReferences as parseAliasMarks,
@@ -86,6 +89,55 @@ interface SourcePlan {
    *  the row — used to skip a no-op write that would re-fire the
    *  field-watcher and produce a useless row_events / ps_crud entry. */
   referencesChanged: boolean
+}
+
+const appendPropertyRef = (
+  refs: BlockReference[],
+  seen: Set<string>,
+  sourceField: string,
+  id: string,
+): void => {
+  const targetId = id.trim()
+  if (!targetId) return
+  const key = `${sourceField}\u0000${targetId}`
+  if (seen.has(key)) return
+  seen.add(key)
+  refs.push({id: targetId, alias: targetId, sourceField})
+}
+
+const parsePropertyReferences = (
+  source: BlockData,
+  propertySchemas: ProcessorCtx['propertySchemas'],
+): BlockReference[] => {
+  const refs: BlockReference[] = []
+  const seen = new Set<string>()
+
+  for (const [name, encodedValue] of Object.entries(source.properties)) {
+    const schema = propertySchemas.get(name)
+    if (!schema) continue
+
+    if (isRefCodec(schema.codec)) {
+      try {
+        appendPropertyRef(refs, seen, name, schema.codec.decode(encodedValue))
+      } catch {
+        // Decode failures are property-local. One malformed typed field
+        // should not block content refs or other well-formed ref fields.
+      }
+      continue
+    }
+
+    if (isRefListCodec(schema.codec)) {
+      try {
+        for (const id of schema.codec.decode(encodedValue)) {
+          appendPropertyRef(refs, seen, name, id)
+        }
+      } catch {
+        // See single-ref case above.
+      }
+    }
+  }
+
+  return refs
 }
 
 /** Read phase: parse refs, resolve existing alias targets via committed-
@@ -144,7 +196,8 @@ const buildSourcePlan = async (
     blockRefs.push({id: mark.blockId, alias: mark.blockId})
   }
 
-  const references: BlockReference[] = [...aliasRefs, ...dateRefs, ...blockRefs]
+  const propertyRefs = parsePropertyReferences(source, ctx.propertySchemas)
+  const references: BlockReference[] = [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs]
   const referencesChanged = JSON.stringify(source.references) !== JSON.stringify(references)
 
   return {
@@ -190,7 +243,7 @@ const planNeedsWrite = (plan: SourcePlan): boolean =>
 
 export const parseReferencesProcessor = definePostCommitProcessor({
   name: PARSE_REFERENCES_PROCESSOR,
-  watches: { kind: 'field', table: 'blocks', fields: ['content'] },
+  watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] },
   apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
     // Read phase — outside any tx; bare-connection reads, no writer
     // contention. Each plan describes what the write phase needs to do

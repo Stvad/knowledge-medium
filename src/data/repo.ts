@@ -22,6 +22,7 @@ import type {
   AnyPropertySchema,
   AnyQuery,
   BlockData,
+  BlockReference,
   Mutator,
   MutatorRegistry,
   Query,
@@ -36,10 +37,12 @@ import {
   ChangeScope,
   MutatorNotRegisteredError,
   QueryNotRegisteredError,
+  isRefCodec,
+  isRefListCodec,
 } from '@/data/api'
 import { runTx, type PowerSyncDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
-import { parseBlockRow, type BlockRow } from '@/data/blockSchema'
+import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
@@ -166,6 +169,68 @@ const mergeLiftedSchemas = (
 
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
+
+type RefCodecKind = 'ref' | 'refList' | undefined
+
+const refCodecKind = (schema: AnyPropertySchema | undefined): RefCodecKind => {
+  if (schema === undefined) return undefined
+  if (isRefCodec(schema.codec)) return 'ref'
+  if (isRefListCodec(schema.codec)) return 'refList'
+  return undefined
+}
+
+const changedRefSchemaNames = (
+  before: ReadonlyMap<string, AnyPropertySchema>,
+  after: ReadonlyMap<string, AnyPropertySchema>,
+): string[] => {
+  const names = new Set([...before.keys(), ...after.keys()])
+  return Array.from(names)
+    .filter(name => refCodecKind(before.get(name)) !== refCodecKind(after.get(name)))
+    .sort()
+}
+
+const appendRefProjection = (
+  refs: BlockReference[],
+  seen: Set<string>,
+  sourceField: string,
+  id: string,
+): void => {
+  const targetId = id.trim()
+  if (!targetId) return
+  const key = `${sourceField}\u0000${targetId}`
+  if (seen.has(key)) return
+  seen.add(key)
+  refs.push({id: targetId, alias: targetId, sourceField})
+}
+
+const projectedRefsForField = (
+  block: BlockData,
+  schema: AnyPropertySchema | undefined,
+  sourceField: string,
+): BlockReference[] => {
+  if (schema === undefined || !(sourceField in block.properties)) return []
+  const encodedValue = block.properties[sourceField]
+  const refs: BlockReference[] = []
+  const seen = new Set<string>()
+  if (isRefCodec(schema.codec)) {
+    try {
+      appendRefProjection(refs, seen, sourceField, schema.codec.decode(encodedValue))
+    } catch {
+      return []
+    }
+    return refs
+  }
+  if (isRefListCodec(schema.codec)) {
+    try {
+      for (const id of schema.codec.decode(encodedValue)) {
+        appendRefProjection(refs, seen, sourceField, id)
+      }
+    } catch {
+      return []
+    }
+  }
+  return refs
+}
 
 export interface RepoOptions {
   db: PowerSyncDb
@@ -788,6 +853,7 @@ export class Repo {
    *  runtime if the caller wants them — pass them in via the
    *  static-facet bundle the kernel ships. */
   setFacetRuntime(runtime: FacetRuntime): void {
+    const previousPropertySchemas = this._propertySchemas
     this.mutators = new Map(runtime.read(mutatorsFacet))
     this.processors = new Map(runtime.read(postCommitProcessorsFacet))
     this.invalidationRules = runtime.read(invalidationRulesFacet)
@@ -796,12 +862,68 @@ export class Repo {
       runtime.read(propertySchemasFacet),
       this._types,
     )
+    const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, this._propertySchemas)
+    if (refSchemaChanges.length > 0) {
+      void this.reprojectRefTypedProperties(refSchemaChanges, this._propertySchemas)
+    }
     const newQueries = new Map(runtime.read(queriesFacet))
     this.swapQueries(newQueries)
   }
 
   snapshotTypeRegistries(): TypeRegistrySnapshot {
     return {types: this._types, propertySchemas: this._propertySchemas}
+  }
+
+  private async reprojectRefTypedProperties(
+    propertyNames: readonly string[],
+    propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  ): Promise<void> {
+    if (this.isReadOnly || propertyNames.length === 0) return
+    try {
+      const placeholders = propertyNames.map(() => '?').join(', ')
+      const rows = await this.db.getAll<BlockRow>(
+        `
+          SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
+          FROM blocks b, json_each(b.properties_json) prop
+          WHERE b.deleted = 0
+            AND prop.key IN (${placeholders})
+        `,
+        [...propertyNames],
+      )
+      if (rows.length === 0) return
+      if (this._propertySchemas !== propertySchemas) return
+
+      const blocksByWorkspace = new Map<string, BlockData[]>()
+      for (const row of rows) {
+        const block = parseBlockRow(row)
+        const blocks = blocksByWorkspace.get(block.workspaceId) ?? []
+        blocks.push(block)
+        blocksByWorkspace.set(block.workspaceId, blocks)
+      }
+
+      for (const blocks of blocksByWorkspace.values()) {
+        if (this._propertySchemas !== propertySchemas) return
+        await this.tx(async tx => {
+          for (const block of blocks) {
+            const retainedRefs = block.references.filter(ref =>
+              !ref.sourceField || !propertyNames.includes(ref.sourceField)
+            )
+            const addedRefs = propertyNames.flatMap(name =>
+              projectedRefsForField(block, propertySchemas.get(name), name)
+            )
+            const nextReferences = [...retainedRefs, ...addedRefs]
+            if (JSON.stringify(block.references) === JSON.stringify(nextReferences)) continue
+            await tx.update(block.id, {references: nextReferences}, {skipMetadata: true})
+          }
+        }, {
+          scope: ChangeScope.References,
+          description: 'reproject ref-typed properties after schema swap',
+        })
+      }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(`[setFacetRuntime] ref-typed property reprojection failed: ${reason}`)
+    }
   }
 
   private async _addTypeInTx(

@@ -35,6 +35,11 @@ type CandidateRow = BlockRow & {
   context_kind: 'ref' | 'root'
 }
 
+interface FieldCandidateRow {
+  source_id: string
+  source_field: string
+}
+
 const groupedBacklinksSchema: Schema<GroupedBacklinksResult> = {
   parse: (input) => input as GroupedBacklinksResult,
 }
@@ -98,7 +103,21 @@ export const selectGroupedBacklinkCandidatesSql = (
         AND ancestor_chain.depth < 100
         AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
     ),
-    context_refs AS (
+    filter_context_refs AS (
+      SELECT DISTINCT
+        ancestor_chain.source_id,
+        refs.target_id AS context_id
+      FROM ancestor_chain
+      JOIN block_references refs ON refs.source_id = ancestor_chain.id
+      WHERE refs.workspace_id = ?
+      UNION
+      SELECT
+        ancestor_chain.source_id,
+        ancestor_chain.id AS context_id
+      FROM ancestor_chain
+      WHERE ancestor_chain.parent_id IS NULL
+    ),
+    group_context_refs AS (
       SELECT DISTINCT
         ancestor_chain.source_id,
         refs.target_id AS context_id,
@@ -106,6 +125,7 @@ export const selectGroupedBacklinkCandidatesSql = (
       FROM ancestor_chain
       JOIN block_references refs ON refs.source_id = ancestor_chain.id
       WHERE refs.workspace_id = ?
+        AND (refs.source_field = '' OR refs.target_id != ?)
       UNION
       SELECT
         ancestor_chain.source_id,
@@ -122,14 +142,14 @@ export const selectGroupedBacklinkCandidatesSql = (
           FROM include_filter required
           WHERE NOT EXISTS (
             SELECT 1
-            FROM context_refs cr
+            FROM filter_context_refs cr
             WHERE cr.source_id = bs.source_id
               AND cr.context_id = required.id
           )
         )
         AND NOT EXISTS (
           SELECT 1
-          FROM context_refs cr
+          FROM filter_context_refs cr
           JOIN remove_filter removed ON removed.id = cr.context_id
           WHERE cr.source_id = bs.source_id
         )
@@ -139,10 +159,95 @@ export const selectGroupedBacklinkCandidatesSql = (
     cr.context_kind AS context_kind,
     ${buildQualifiedBlockColumnsSql('group_block')}
   FROM filtered_sources fs
-  JOIN context_refs cr ON cr.source_id = fs.source_id
+  JOIN group_context_refs cr ON cr.source_id = fs.source_id
   JOIN blocks group_block ON group_block.id = cr.context_id
   WHERE group_block.deleted = 0
   ORDER BY cr.source_id, group_block.updated_at DESC, group_block.id
+`
+
+export const selectGroupedBacklinkFieldCandidatesSql = (
+  includeCount: number,
+  removeCount: number,
+): string => `
+  WITH
+    backlink_sources AS (
+      SELECT DISTINCT br.source_id
+      FROM block_references br
+      JOIN blocks source ON source.id = br.source_id
+      WHERE br.workspace_id = ?
+        AND source.id != ?
+        AND br.target_id = ?
+        AND source.deleted = 0
+    ),
+    ${filterValuesCteSql('include_filter', includeCount)},
+    ${filterValuesCteSql('remove_filter', removeCount)},
+    ancestor_chain(source_id, id, parent_id, depth, path) AS (
+      SELECT
+        bs.source_id,
+        source.id,
+        source.parent_id,
+        0,
+        '!' || hex(source.id) || '/'
+      FROM backlink_sources bs
+      JOIN blocks source ON source.id = bs.source_id
+      WHERE source.deleted = 0
+      UNION ALL
+      SELECT
+        ancestor_chain.source_id,
+        parent.id,
+        parent.parent_id,
+        ancestor_chain.depth + 1,
+        ancestor_chain.path || '!' || hex(parent.id) || '/'
+      FROM ancestor_chain
+      JOIN blocks parent ON parent.id = ancestor_chain.parent_id
+      WHERE parent.deleted = 0
+        AND ancestor_chain.depth < 100
+        AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
+    ),
+    filter_context_refs AS (
+      SELECT DISTINCT
+        ancestor_chain.source_id,
+        refs.target_id AS context_id
+      FROM ancestor_chain
+      JOIN block_references refs ON refs.source_id = ancestor_chain.id
+      WHERE refs.workspace_id = ?
+      UNION
+      SELECT
+        ancestor_chain.source_id,
+        ancestor_chain.id AS context_id
+      FROM ancestor_chain
+      WHERE ancestor_chain.parent_id IS NULL
+    ),
+    filtered_sources AS (
+      SELECT bs.source_id
+      FROM backlink_sources bs
+      WHERE NOT EXISTS (
+          SELECT 1
+          FROM include_filter required
+          WHERE NOT EXISTS (
+            SELECT 1
+            FROM filter_context_refs cr
+            WHERE cr.source_id = bs.source_id
+              AND cr.context_id = required.id
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM filter_context_refs cr
+          JOIN remove_filter removed ON removed.id = cr.context_id
+          WHERE cr.source_id = bs.source_id
+        )
+    )
+  SELECT DISTINCT
+    ancestor_chain.source_id AS source_id,
+    refs.source_field AS source_field
+  FROM filtered_sources fs
+  JOIN ancestor_chain ON ancestor_chain.source_id = fs.source_id
+  JOIN block_references refs ON refs.source_id = ancestor_chain.id
+  WHERE refs.workspace_id = ?
+    AND refs.target_id = ?
+    AND refs.source_field != ''
+  ORDER BY ancestor_chain.source_id, refs.source_field
 `
 
 export const groupedBacklinksForBlockQuery = defineQuery<
@@ -203,6 +308,24 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         ...normalizedFilter.includeIds,
         ...normalizedFilter.removeIds,
         workspaceId,
+        workspaceId,
+        id,
+      ],
+    )
+    const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
+      selectGroupedBacklinkFieldCandidatesSql(
+        normalizedFilter.includeIds.length,
+        normalizedFilter.removeIds.length,
+      ),
+      [
+        workspaceId,
+        id,
+        id,
+        ...normalizedFilter.includeIds,
+        ...normalizedFilter.removeIds,
+        workspaceId,
+        workspaceId,
+        id,
       ],
     )
 
@@ -219,6 +342,14 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       groupLabel: labelByGroupId.get(row.id) ?? (row.content.trim() || row.id),
       kind: row.context_kind === 'root' ? 'root' : 'ref',
     }))
+    for (const row of fieldCandidateRows) {
+      candidates.push({
+        sourceId: row.source_id,
+        groupId: `field:${row.source_field}`,
+        groupLabel: row.source_field,
+        kind: 'field',
+      })
+    }
 
     return {
       groups: buildGroupedBacklinks({

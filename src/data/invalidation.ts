@@ -8,13 +8,13 @@ export interface ChangeSnapshot {
     parentId: string | null
     workspaceId: string
     deleted?: boolean
-    references?: ReadonlyArray<{ id: string }>
+    references?: ReadonlyArray<{ id: string; sourceField?: string }>
   } | null
   after: {
     parentId: string | null
     workspaceId: string
     deleted?: boolean
-    references?: ReadonlyArray<{ id: string }>
+    references?: ReadonlyArray<{ id: string; sourceField?: string }>
   } | null
 }
 

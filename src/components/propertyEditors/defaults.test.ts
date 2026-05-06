@@ -49,6 +49,8 @@ describe('defaultValueForKind', () => {
     expect(defaultValueForKind('number')).toBe(0)
     expect(defaultValueForKind('boolean')).toBe(false)
     expect(defaultValueForKind('list')).toEqual([])
+    expect(defaultValueForKind('ref')).toBe('')
+    expect(defaultValueForKind('refList')).toEqual([])
     expect(defaultValueForKind('object')).toEqual({})
     expect(defaultValueForKind('date')).toBeUndefined()
   })

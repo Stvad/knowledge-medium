@@ -11,6 +11,20 @@ export interface Codec<T> {
   decode(json: unknown): T
 }
 
+export interface RefCodecOptions {
+  readonly targetTypes?: readonly string[]
+}
+
+export interface RefCodec extends Codec<string> {
+  readonly refKind: 'ref'
+  readonly targetTypes: readonly string[]
+}
+
+export interface RefListCodec extends Codec<readonly string[]> {
+  readonly refKind: 'refList'
+  readonly targetTypes: readonly string[]
+}
+
 const stringCodec: Codec<string> = {
   encode: v => v,
   decode: j => {
@@ -62,6 +76,34 @@ const list = <T>(inner: Codec<T>): Codec<T[]> => ({
   },
 })
 
+const normalizeTargetTypes = (options: RefCodecOptions = {}): readonly string[] =>
+  Object.freeze([...(options.targetTypes ?? [])])
+
+const ref = (options?: RefCodecOptions): RefCodec => ({
+  refKind: 'ref',
+  targetTypes: normalizeTargetTypes(options),
+  encode: stringCodec.encode,
+  decode: stringCodec.decode,
+})
+
+const refList = (options?: RefCodecOptions): RefListCodec => {
+  return {
+    refKind: 'refList',
+    targetTypes: normalizeTargetTypes(options),
+    encode: v => v.map(item => stringCodec.encode(item)),
+    decode: j => {
+      if (!Array.isArray(j)) throw new CodecError('array', j)
+      return j.map(item => stringCodec.decode(item))
+    },
+  }
+}
+
+export const isRefCodec = (codec: unknown): codec is RefCodec =>
+  (codec as Partial<RefCodec>).refKind === 'ref'
+
+export const isRefListCodec = (codec: unknown): codec is RefListCodec =>
+  (codec as Partial<RefListCodec>).refKind === 'refList'
+
 /** Explicitly unsafe identity codec. Reserved for kernel-internal use where
  *  the JSON shape is guaranteed by construction. NOT a default for plugin
  *  authors — pick a primitive codec or compose your own. */
@@ -77,6 +119,8 @@ export const codecs = {
   date: dateCodec,
   optional,
   list,
+  ref,
+  refList,
   unsafeIdentity,
 }
 

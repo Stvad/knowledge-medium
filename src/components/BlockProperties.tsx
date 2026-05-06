@@ -56,8 +56,10 @@ interface BlockPropertiesProps {
  *  Excludes `date` because the JSON-shape inference can't recover dates
  *  on read (they round-trip as strings); date-typed properties should be
  *  contributed by a plugin with a real `PropertySchema` so the codec
- *  handles encode/decode. */
-type AddableKind = Exclude<PropertyKind, 'date' | 'object'> | 'object'
+ *  handles encode/decode. Reference-typed fields are likewise schema-only:
+ *  a plugin needs to declare target semantics before the backlink projector
+ *  treats string values as references. */
+type AddableKind = Exclude<PropertyKind, 'date' | 'object' | 'ref' | 'refList'> | 'object'
 
 const ADDABLE_KINDS: ReadonlyArray<AddableKind> = ['string', 'number', 'boolean', 'list', 'object']
 const EMPTY_BLOCK_TYPES: readonly string[] = []
