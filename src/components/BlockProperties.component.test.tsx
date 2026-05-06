@@ -53,6 +53,19 @@ const reviewType = defineBlockType({
   properties: [reviewStatusProp],
 })
 
+const reviewerProp = defineProperty<string>('phase2:reviewer', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'string',
+})
+
+const assignmentType = defineBlockType({
+  id: 'phase2-assignment',
+  label: 'Phase 2 Assignment',
+  properties: [reviewerProp],
+})
+
 describe('BlockProperties component', () => {
   let h: TestDb
   let repo: Repo
@@ -75,6 +88,7 @@ describe('BlockProperties component', () => {
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       typesFacet.of(reviewType, {source: 'test'}),
+      typesFacet.of(assignmentType, {source: 'test'}),
     ])
     repo.setFacetRuntime(runtime)
     repoRef.current = repo
@@ -114,7 +128,6 @@ describe('BlockProperties component', () => {
       </AppRuntimeContextProvider>,
     )
 
-    expect(screen.getByText('Phase 2 Review')).toBeTruthy()
     expect(screen.getByText('phase2:review-status')).toBeTruthy()
 
     const input = screen.getByDisplayValue('open')
@@ -146,6 +159,62 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
     expect(screen.getByText('types')).toBeTruthy()
+  })
+
+  it('places hidden fields in the first group when revealed', async () => {
+    const block = repo.block('block-1')
+    await repo.addType(block.id, assignmentType.id)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const groups = screen.getAllByText(/^(Hidden|# Phase 2 Review|# Phase 2 Assignment)$/)
+    expect(groups.map(group => group.textContent)).toEqual([
+      'Hidden',
+      '# Phase 2 Review',
+      '# Phase 2 Assignment',
+    ])
+  })
+
+  it('opens field configuration from the type icon', async () => {
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /configure phase2:review-status/i}))
+    })
+
+    expect(screen.getByRole('dialog', {name: /phase2:review-status field configuration/i})).toBeTruthy()
+    expect(screen.getByText('Field type')).toBeTruthy()
+    expect(screen.getByText('Registered field')).toBeTruthy()
+  })
+
+  it('keeps fields visually grouped by contributing type when multiple types apply', async () => {
+    const block = repo.block('block-1')
+    await repo.addType(block.id, assignmentType.id)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    expect(screen.getByText('# Phase 2 Review')).toBeTruthy()
+    expect(screen.getByText('phase2:review-status')).toBeTruthy()
+    expect(screen.getByText('# Phase 2 Assignment')).toBeTruthy()
+    expect(screen.getByText('phase2:reviewer')).toBeTruthy()
   })
 
   it('opens property creation from a Tana-style request and tabs into the value row', async () => {
