@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
   ChangeScope,
   codecs,
@@ -15,10 +15,14 @@ import { Repo } from '@/data/repo'
 import { typesFacet } from '@/data/facets'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
+import { blockRenderersFacet } from '@/extensions/core'
 import { BlockProperties } from './BlockProperties'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
 import { typesPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import type { Block } from '@/data/block'
+import { aliasesProp } from '@/data/properties'
+import { useContent } from '@/hooks/block'
+import type { BlockRendererProps } from '@/types'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
@@ -48,10 +52,24 @@ const reviewStatusProp = defineProperty<string>('phase2:review-status', {
   kind: 'string',
 })
 
+const reviewerRefProp = defineProperty<string>('phase2:reviewer-ref', {
+  codec: codecs.ref({targetTypes: ['reviewer']}),
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'ref',
+})
+
+const relatedRefsProp = defineProperty<readonly string[]>('phase2:related-refs', {
+  codec: codecs.refList({targetTypes: ['related']}),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+  kind: 'refList',
+})
+
 const reviewType = defineBlockType({
   id: 'phase2-review',
   label: 'Phase 2 Review',
-  properties: [reviewStatusProp],
+  properties: [reviewStatusProp, reviewerRefProp, relatedRefsProp],
 })
 
 const reviewerProp = defineProperty<string>('phase2:reviewer', {
@@ -66,6 +84,11 @@ const assignmentType = defineBlockType({
   label: 'Phase 2 Assignment',
   properties: [reviewerProp],
 })
+
+const TestBlockRenderer = ({block}: BlockRendererProps) => {
+  const content = useContent(block)
+  return <div>{content}</div>
+}
 
 describe('BlockProperties component', () => {
   let h: TestDb
@@ -89,6 +112,7 @@ describe('BlockProperties component', () => {
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       typesPropertyUiExtension,
+      blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),
     ])
@@ -280,4 +304,132 @@ describe('BlockProperties component', () => {
       expect(document.activeElement).toBe(moodInput)
     })
   })
+
+  it('opens block search autocomplete for an empty ref field', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'target-alias',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'b0',
+        content: 'Aliased target content',
+        properties: {
+          [aliasesProp.name]: aliasesProp.codec.encode(['Target Alias']),
+        },
+      })
+      await tx.create({
+        id: 'target-recent',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'b1',
+        content: 'Recent target content',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create target alias'})
+
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    const row = propertyRow(reviewerRefProp.name)
+    const input = within(row).getByRole('combobox', {name: /search block reference/i})
+
+    await act(async () => {
+      fireEvent.focus(input)
+    })
+
+    expect(await within(row).findByRole('option', {name: /Target Alias/})).toBeTruthy()
+    expect(await within(row).findByRole('option', {name: /Recent target content/})).toBeTruthy()
+  })
+
+  it('stores a searched ref target and renders it as a block embed', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'target-ref',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'b0',
+        content: 'Target ref block',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create target ref'})
+
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    const row = propertyRow(reviewerRefProp.name)
+    const input = within(row).getByRole('combobox', {name: /search block reference/i})
+
+    await act(async () => {
+      fireEvent.change(input, {target: {value: 'Target ref'}})
+    })
+
+    const option = await within(row).findByRole('option', {name: /Target ref block/})
+    await act(async () => {
+      fireEvent.click(option)
+    })
+
+    await waitFor(() => {
+      expect(block.peekProperty(reviewerRefProp)).toBe('target-ref')
+    })
+    await waitFor(() => {
+      const nextRow = propertyRow(reviewerRefProp.name)
+      expect(nextRow.querySelector('.blockembed')).toBeTruthy()
+      expect(within(nextRow).getByText('Target ref block')).toBeTruthy()
+    })
+  })
+
+  it('adds searched ref-list targets and renders them as block embeds', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'target-related',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'b0',
+        content: 'Related target block',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'create related target'})
+
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    const row = propertyRow(relatedRefsProp.name)
+    const input = within(row).getByRole('combobox', {name: /search block reference/i})
+
+    await act(async () => {
+      fireEvent.change(input, {target: {value: 'Related target'}})
+    })
+
+    const option = await within(row).findByRole('option', {name: /Related target block/})
+    await act(async () => {
+      fireEvent.click(option)
+    })
+
+    await waitFor(() => {
+      expect(block.peekProperty(relatedRefsProp)).toEqual(['target-related'])
+    })
+    await waitFor(() => {
+      const nextRow = propertyRow(relatedRefsProp.name)
+      expect(nextRow.querySelectorAll('.blockembed')).toHaveLength(1)
+      expect(within(nextRow).getByText('Related target block')).toBeTruthy()
+    })
+  })
 })
+
+const propertyRow = (propertyName: string): HTMLElement => {
+  const row = document.querySelector<HTMLElement>(`[data-property-name="${propertyName}"]`)
+  expect(row).toBeTruthy()
+  return row as HTMLElement
+}

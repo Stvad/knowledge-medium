@@ -26,6 +26,7 @@ import {
 } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 
 // ──── List editor ────
 
@@ -255,11 +256,11 @@ export const adhocSchema = (name: string, kind: PropertyKind): PropertySchema<un
 export interface PropertyDisplayInfo {
   schema: AnyPropertySchema
   kind: PropertyKind
-  /** Custom Editor from a registered `PropertyUiContribution`, or
-   *  `undefined` when only the kernel default applies. Callers should
-   *  fall back to `DefaultPropertyValueEditor` when this is undefined.
-   *  The element type is the variance-erased editor signature; render
-   *  sites pass through the decoded value with confidence. */
+  /** Editor selected by the resolver. Usually this is a registered
+   *  `PropertyUiContribution.Editor`; for kind-level UI that needs more
+   *  than the primitive inline editor, the resolver can supply a kernel
+   *  fallback. Callers should fall back to their primitive inline editor
+   *  when this is undefined. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   customEditor?: PropertyEditor<any>
   /** True iff a real `PropertySchema` was found in the registry; false
@@ -267,12 +268,25 @@ export interface PropertyDisplayInfo {
   isKnown: boolean
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const defaultEditorForKind = (kind: PropertyKind): PropertyEditor<any> | undefined => {
+  switch (kind) {
+    case 'ref':
+      return RefPropertyEditor
+    case 'refList':
+      return RefListPropertyEditor
+    default:
+      return undefined
+  }
+}
+
 /** Implements the §5.6.1 lookup chain:
  *
  *    1. Look up the schema in `propertySchemasFacet`'s registry by `name`.
  *    2. Look up the matching UI contribution in `propertyUiFacet`.
  *    3. If schema is known → use the contributed `Editor` if any, else
- *       fall back to the default editor for the schema's `kind`.
+ *       any kind-specialized kernel editor, else the caller's primitive
+ *       default editor for the schema's `kind`.
  *    4. If schema is unknown → infer a kind from the JSON value, build
  *       an ad-hoc schema, render via the default editor for that kind.
  *
@@ -290,7 +304,7 @@ export const resolvePropertyDisplay = (args: {
     return {
       schema: known,
       kind: known.kind,
-      customEditor: ui?.Editor,
+      customEditor: ui?.Editor ?? defaultEditorForKind(known.kind),
       isKnown: true,
     }
   }

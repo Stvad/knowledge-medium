@@ -264,6 +264,29 @@ describe('repo.query.searchByContent', () => {
   })
 })
 
+describe('repo.query.recentBlocks', () => {
+  it('returns recent non-empty blocks in a workspace', async () => {
+    await create({id: 'old', content: 'old block'})
+    await create({id: 'empty', content: ''})
+    await create({id: 'other', content: 'other workspace', workspaceId: OTHER_WS})
+    await create({id: 'new', content: 'new block'})
+
+    const out = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 5}).load())
+
+    expect(out.map(r => r.id)).toEqual(['new', 'old'])
+  })
+
+  it('respects the limit argument', async () => {
+    await create({id: 'a', content: 'a'})
+    await create({id: 'b', content: 'b'})
+    await create({id: 'c', content: 'c'})
+
+    const out = asBlocks(await env.repo.query.recentBlocks({workspaceId: WS, limit: 2}).load())
+
+    expect(out.map(r => r.id)).toEqual(['c', 'b'])
+  })
+})
+
 describe('repo.query.firstChildByContent', () => {
   it('returns the first child by (orderKey, id) on exact match', async () => {
     await create({id: 'p'})
@@ -512,7 +535,7 @@ describe('kernelDataExtension queriesFacet wiring', () => {
     const queries = runtime.read(queriesFacet)
     const expected = [
       'core.subtree', 'core.ancestors', 'core.children', 'core.childIds',
-      'core.byType', 'core.searchByContent',
+      'core.byType', 'core.searchByContent', 'core.recentBlocks',
       'core.firstChildByContent', 'core.aliasesInWorkspace',
       'core.aliasMatches', 'core.aliasLookup', 'core.findExtensionBlocks',
     ]

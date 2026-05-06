@@ -46,6 +46,10 @@ export interface PropertyUiContribution<T = unknown> {
 export interface PropertyEditorProps<T> {
   value: T
   onChange: (next: T) => void
+  /** Schema being edited. Present for schema-backed property panel
+   *  renderers; optional so older UI contributions that only need
+   *  value/onChange/block keep their existing shape. */
+  schema?: PropertySchema<T>
   /** The block being edited. Type kept loose here so the data-layer api
    *  module doesn't need to import the `Block` facade (defined in
    *  `src/data/block.ts`). UI consumers narrow at the call site. */

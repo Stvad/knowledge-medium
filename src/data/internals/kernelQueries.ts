@@ -70,6 +70,17 @@ export const SELECT_BLOCKS_BY_CONTENT_SQL = `
   LIMIT ?
 `
 
+/** Recent non-empty blocks in a workspace, used by empty-query pickers. */
+export const SELECT_RECENT_BLOCKS_SQL = `
+  SELECT ${SELECT_BLOCK_COLUMNS_SQL}
+  FROM blocks
+  WHERE workspace_id = ?
+    AND deleted = 0
+    AND content != ''
+  ORDER BY updated_at DESC, id ASC
+  LIMIT ?
+`
+
 /** Distinct alias values in a workspace, optionally substring-filtered.
  *  Reads `block_aliases` (the trigger-maintained side index in
  *  clientSchema.ts) instead of scanning `json_each(properties_json,
@@ -322,6 +333,27 @@ export const searchByContentQuery = defineQuery<
   },
 })
 
+/** Recent non-empty block candidates. Empty workspaceId returns []. */
+export const recentBlocksQuery = defineQuery<
+  {workspaceId: string; limit?: number},
+  BlockData[]
+>({
+  name: 'core.recentBlocks',
+  argsSchema: z.object({
+    workspaceId: z.string(),
+    limit: z.number().optional(),
+  }),
+  resultSchema: blockDataArraySchema,
+  resolve: async ({workspaceId, limit = 50}, ctx) => {
+    if (!workspaceId) return []
+    ctx.depend({kind: 'workspace', workspaceId})
+    const rows = await ctx.db.getAll<BlockRow>(
+      SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
 /** First child of `parentId` whose content matches exactly. */
 export const firstChildByContentQuery = defineQuery<
   {parentId: string; content: string},
@@ -447,6 +479,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   byTypeQuery,
   typedBlocksQuery,
   searchByContentQuery,
+  recentBlocksQuery,
   firstChildByContentQuery,
   aliasesInWorkspaceQuery,
   aliasMatchesQuery,
@@ -469,6 +502,7 @@ declare module '@/data/api' {
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery
     'core.searchByContent': typeof searchByContentQuery
+    'core.recentBlocks': typeof recentBlocksQuery
     'core.firstChildByContent': typeof firstChildByContentQuery
     'core.aliasesInWorkspace': typeof aliasesInWorkspaceQuery
     'core.aliasMatches': typeof aliasMatchesQuery

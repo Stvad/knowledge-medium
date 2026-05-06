@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import { actionsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+import { propertySchemasFacet, propertyUiFacet, typesFacet } from '@/data/facets.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
 import {
   SRS_SM25_TYPE,
   srsFactorProp,
   srsIntervalProp,
   srsNextReviewDateProp,
+  srsNextReviewDateUi,
   srsReschedulingPlugin,
   srsReviewCountProp,
 } from '../index.ts'
@@ -16,11 +17,13 @@ describe('srsReschedulingPlugin', () => {
   it('contributes the SRS SM-2.5 type and property schemas', () => {
     const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
     const schemas = runtime.read(propertySchemasFacet)
+    const uis = runtime.read(propertyUiFacet)
     const types = runtime.read(typesFacet)
 
     expect(schemas.get(srsIntervalProp.name)).toBe(srsIntervalProp)
     expect(schemas.get(srsFactorProp.name)).toBe(srsFactorProp)
     expect(schemas.get(srsNextReviewDateProp.name)).toBe(srsNextReviewDateProp)
+    expect(uis.get(srsNextReviewDateProp.name)).toBe(srsNextReviewDateUi)
     expect(schemas.get(srsReviewCountProp.name)).toBe(srsReviewCountProp)
     expect(types.get(SRS_SM25_TYPE)?.properties).toEqual([
       srsIntervalProp,

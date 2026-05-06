@@ -35,7 +35,6 @@ import { Block } from '../data/block'
 import {
   ChangeScope,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
   type PropertyEditor,
   type PropertyKind,
 } from '@/data/api'
@@ -70,7 +69,6 @@ import { Input } from './ui/input'
 import {
   adhocSchema,
   defaultValueForKind,
-  type PropertyDisplayInfo,
   resolvePropertyDisplay,
 } from './propertyEditors/defaults'
 import {
@@ -402,11 +400,14 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const renderPropertyRow = (section: PropertyPanelSection, row: PropertyPanelRow) => {
-    const display = row.isSet
-      ? resolvePropertyDisplay({name: row.name, encodedValue: row.encodedValue, schemas, uis})
-      : resolveKnownPropertyDisplay(row.name, schemas, uis)
+    const display = resolvePropertyDisplay({
+      name: row.name,
+      encodedValue: row.isSet ? row.encodedValue : undefined,
+      schemas,
+      uis,
+    })
 
-    if (!display) return null
+    if (!row.isSet && !display.isKnown) return null
 
     // Decode if a real schema is registered; otherwise the encoded
     // shape IS the editor's value (ad-hoc schema uses unsafeIdentity).
@@ -431,6 +432,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         decodeFailed={decodeFailed}
         value={decodeFailed ? row.encodedValue : value}
         customEditor={display.customEditor}
+        schema={display.schema}
         block={block}
         kind={display.kind}
         readOnly={rowReadOnly}
@@ -523,6 +525,7 @@ interface PropertyRowProps {
   value: unknown
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   customEditor: PropertyEditor<any> | undefined
+  schema: AnyPropertySchema
   block: Block
   kind: PropertyKind
   readOnly: boolean
@@ -541,6 +544,7 @@ function PropertyRow({
   decodeFailed,
   value,
   customEditor,
+  schema,
   block,
   kind,
   readOnly,
@@ -560,6 +564,7 @@ function PropertyRow({
   // key (`name`) as the input's value so plugin-supplied UI labels
   // ("Due date") never accidentally persist as the new key on blur.
   const renameAllowed = schemaUnknown && !readOnly
+  const rowAlignment = kind === 'ref' || kind === 'refList' ? 'items-start' : 'items-center'
   const hintText = [
     kindLabel,
     schemaUnknown ? 'schema not registered' : null,
@@ -568,7 +573,7 @@ function PropertyRow({
   ].filter(Boolean).join(' · ')
   return (
     <div
-      className="group/property-row grid items-center gap-2 border-b border-transparent py-0.5 text-sm hover:border-border/50 focus-within:border-border/70"
+      className={`group/property-row grid ${rowAlignment} gap-2 border-b border-transparent py-0.5 text-sm hover:border-border/50 focus-within:border-border/70`}
       style={PROPERTY_ROW_GRID_STYLE}
       data-property-row="true"
       data-block-id={block.id}
@@ -619,7 +624,7 @@ function PropertyRow({
       </div>
       <div className="min-w-0" data-property-value="true">
         {Editor !== undefined && !decodeFailed ? (
-          <Editor value={value} onChange={onChange} block={block} />
+          <Editor value={value} onChange={onChange} block={block} schema={schema} />
         ) : (
           <InlinePropertyValueEditor
             kind={kind}
@@ -996,22 +1001,6 @@ function ConfigRow({label, children}: {label: string; children: ReactNode}) {
 // ──── Codec-decode helper ────
 
 const DECODE_FAILED = Symbol('decode-failed')
-
-const resolveKnownPropertyDisplay = (
-  name: string,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>,
-): PropertyDisplayInfo | null => {
-  const schema = schemas.get(name)
-  if (!schema) return null
-  const ui = uis.get(name)
-  return {
-    schema,
-    kind: schema.kind,
-    customEditor: ui?.Editor,
-    isKnown: true,
-  }
-}
 
 /** Decode an encoded value through `schema.codec.decode`, returning a
  *  sentinel symbol when the codec throws. The panel falls back to the

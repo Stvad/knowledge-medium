@@ -18,6 +18,7 @@ import {
   type AnyPropertyUiContribution,
 } from '@/data/api'
 import { adhocSchema, defaultValueForKind, inferKindFromValue, resolvePropertyDisplay } from './defaults'
+import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 
 const schemasMap = (entries: AnyPropertySchema[]): ReadonlyMap<string, AnyPropertySchema> =>
   new Map(entries.map(s => [s.name, s]))
@@ -113,6 +114,38 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     expect(display.isKnown).toBe(true)
     expect(display.schema).toBe(titleSchema)
     expect(display.customEditor).toBeUndefined()
+  })
+
+  it('schema known + ref kind → uses the kernel ref editor fallback', () => {
+    const refSchema = defineProperty<string>('reviewer', {
+      codec: codecs.ref(),
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'ref',
+    })
+    const display = resolvePropertyDisplay({
+      name: 'reviewer',
+      encodedValue: 'target-1',
+      schemas: schemasMap([refSchema]),
+      uis: uisMap([]),
+    })
+    expect(display.customEditor).toBe(RefPropertyEditor)
+  })
+
+  it('schema known + refList kind → uses the kernel ref-list editor fallback', () => {
+    const refListSchema = defineProperty<readonly string[]>('related', {
+      codec: codecs.refList(),
+      defaultValue: [],
+      changeScope: ChangeScope.BlockDefault,
+      kind: 'refList',
+    })
+    const display = resolvePropertyDisplay({
+      name: 'related',
+      encodedValue: ['target-1'],
+      schemas: schemasMap([refListSchema]),
+      uis: uisMap([]),
+    })
+    expect(display.customEditor).toBe(RefListPropertyEditor)
   })
 
   it('schema unknown → infers kind from value, returns an ad-hoc schema, isKnown=false', () => {
