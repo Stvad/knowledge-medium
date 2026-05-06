@@ -314,6 +314,49 @@ describe('upload-routing triggers', () => {
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
   })
 
+  it('forwards only changed columns in UPDATE PATCH payloads', () => {
+    h.insertBlock({
+      id: 'b1',
+      content: 'old',
+      properties_json: '{"alias":["Old"]}',
+      references_json: '[{"id":"target","alias":"Target"}]',
+    })
+    h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {
+      content: 'new',
+      updated_at: 1700000999000,
+      updated_by: 'user-2',
+    })
+    h.clearTxContext()
+
+    const payload = JSON.parse(h.psCrud()[0].data)
+    expect(payload).toMatchObject({op: 'PATCH', type: 'blocks', id: 'b1'})
+    expect(payload.data).toEqual({
+      content: 'new',
+      updated_at: 1700000999000,
+      updated_by: 'user-2',
+    })
+  })
+
+  it('keeps explicit nulls in changed UPDATE PATCH payloads', () => {
+    h.insertBlock({id: 'b1', parent_id: 'old-parent'})
+    h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {parent_id: null})
+    h.clearTxContext()
+
+    const payload = JSON.parse(h.psCrud()[0].data)
+    expect(payload.data).toEqual({parent_id: null})
+  })
+
+  it('does not queue an empty PATCH for no-op UPDATE statements', () => {
+    h.insertBlock({id: 'b1', content: 'same'})
+    h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('b1', {content: 'same'})
+    h.clearTxContext()
+
+    expect(h.psCrud()).toHaveLength(0)
+  })
+
   it('groups all writes from one tx under the same ps_crud.tx_id', () => {
     // Multi-row repo.tx — emulates two creates inside one writeTransaction
     // by holding tx_context constant across two inserts. PowerSync's

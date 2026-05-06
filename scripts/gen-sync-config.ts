@@ -19,47 +19,31 @@ import {
   WORKSPACE_MEMBER_COLUMNS,
 } from '@/data/workspaceSchema'
 
-interface Stream {
-  readonly name: string
+interface StreamQuery {
   // Public-schema-qualified table the SELECT reads from. Also drives
   // the column prefix (e.g. `public.blocks` → `blocks.<col>`).
   readonly table: `public.${string}`
   readonly columns: readonly { readonly name: string }[]
-  // Everything between FROM <table> and the next stream — typically a
-  // workspace_members JOIN or a WHERE … IN (subselect). Already indented
-  // to match the YAML body (6 spaces).
-  readonly joinAndPredicate: string
+  // WHERE clause that scopes the table to the workspaces the requesting
+  // user belongs to. Already indented to match the YAML body.
+  readonly predicate: string
 }
 
-const STREAMS: readonly Stream[] = [
+const STREAM_QUERIES: readonly StreamQuery[] = [
   {
-    name: 'workspaces',
     table: 'public.workspaces',
     columns: WORKSPACE_COLUMNS,
-    joinAndPredicate:
-`      JOIN public.workspace_members
-        ON workspace_members.workspace_id = workspaces.id
-       AND workspace_members.user_id = auth.user_id()`,
+    predicate: '        WHERE workspaces.id IN user_workspaces',
   },
   {
-    name: 'workspace_members',
     table: 'public.workspace_members',
     columns: WORKSPACE_MEMBER_COLUMNS,
-    joinAndPredicate:
-`      WHERE workspace_members.workspace_id IN (
-        SELECT workspace_id
-        FROM public.workspace_members
-        WHERE user_id = auth.user_id()
-      )`,
+    predicate: '        WHERE workspace_members.workspace_id IN user_workspaces',
   },
   {
-    name: 'blocks',
     table: 'public.blocks',
     columns: BLOCK_STORAGE_COLUMNS,
-    joinAndPredicate:
-`      JOIN public.workspace_members
-        ON workspace_members.workspace_id = blocks.workspace_id
-       AND workspace_members.user_id = auth.user_id()`,
+    predicate: '        WHERE blocks.workspace_id IN user_workspaces',
   },
 ] as const
 
@@ -69,8 +53,10 @@ const HEADER =
 # src/data/blockSchema.ts or src/data/workspaceSchema.ts.
 # CI runs \`yarn check:sync-config\` to catch hand-edits.
 #
-# Sync streams scoped to the requesting user. PowerSync re-evaluates the set
-# whenever workspace_members changes.
+# One auto-subscribed stream scoped to the requesting user's workspaces.
+# Grouping the related tables into one stream keeps the client subscription
+# surface and bucket count smaller than three independent auto streams.
+# PowerSync re-evaluates the set whenever workspace_members changes.
 #
 # IMPORTANT: do not alias the primary table in the FROM clause. PowerSync uses
 # the FROM-clause name as the row_type that maps back to the client's raw
@@ -89,22 +75,31 @@ config:
 streams:
 `
 
-const renderStream = ({ name, table, columns, joinAndPredicate }: Stream): string => {
+const renderQuery = ({ table, columns, predicate }: StreamQuery): string => {
   const tableShortName = table.replace(/^public\./, '')
   const projection = columns
-    .map((c) => `        ${tableShortName}.${c.name}`)
+    .map((c) => `          ${tableShortName}.${c.name}`)
     .join(',\n')
-  return `  ${name}:
-    auto_subscribe: true
-    query: |
-      SELECT
+  return `      - |
+        SELECT
 ${projection}
-      FROM ${table}
-${joinAndPredicate}
+        FROM ${table}
+${predicate}
 `
 }
 
-const generated = HEADER + STREAMS.map(renderStream).join('\n')
+const renderStream = (): string => `  workspace_data:
+    auto_subscribe: true
+    with:
+      user_workspaces: |
+        SELECT workspace_id
+        FROM public.workspace_members
+        WHERE user_id = auth.user_id()
+    queries:
+${STREAM_QUERIES.map(renderQuery).join('')}
+`
+
+const generated = HEADER + renderStream()
 
 const here = dirname(fileURLToPath(import.meta.url))
 const targetPath = resolve(here, '..', 'powersync', 'sync-config.yaml')

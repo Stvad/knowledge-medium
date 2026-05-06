@@ -323,19 +323,47 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // rows out of ps_crud and uploads them via the configured connector.
 // ============================================================================
 
+interface UploadColumnSpec {
+  readonly name: string
+  readonly jsonValue: (rowRef: 'NEW' | 'OLD') => string
+}
+
+const BLOCK_UPLOAD_COLUMNS: readonly UploadColumnSpec[] = [
+  {name: 'workspace_id', jsonValue: rowRef => `${rowRef}.workspace_id`},
+  {name: 'parent_id', jsonValue: rowRef => `${rowRef}.parent_id`},
+  {name: 'order_key', jsonValue: rowRef => `${rowRef}.order_key`},
+  {name: 'content', jsonValue: rowRef => `${rowRef}.content`},
+  {name: 'properties_json', jsonValue: rowRef => `${rowRef}.properties_json`},
+  {name: 'references_json', jsonValue: rowRef => `${rowRef}.references_json`},
+  {name: 'created_at', jsonValue: rowRef => `${rowRef}.created_at`},
+  {name: 'updated_at', jsonValue: rowRef => `${rowRef}.updated_at`},
+  {name: 'created_by', jsonValue: rowRef => `${rowRef}.created_by`},
+  {name: 'updated_by', jsonValue: rowRef => `${rowRef}.updated_by`},
+  {
+    name: 'deleted',
+    jsonValue: rowRef => `json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)`,
+  },
+]
+
 const blockUploadJsonSql = (rowRef: 'NEW' | 'OLD') => `
       json_object(
-        'workspace_id', ${rowRef}.workspace_id,
-        'parent_id', ${rowRef}.parent_id,
-        'order_key', ${rowRef}.order_key,
-        'content', ${rowRef}.content,
-        'properties_json', ${rowRef}.properties_json,
-        'references_json', ${rowRef}.references_json,
-        'created_at', ${rowRef}.created_at,
-        'updated_at', ${rowRef}.updated_at,
-        'created_by', ${rowRef}.created_by,
-        'updated_by', ${rowRef}.updated_by,
-        'deleted', json(CASE WHEN ${rowRef}.deleted THEN 'true' ELSE 'false' END)
+${BLOCK_UPLOAD_COLUMNS.map(column => `        '${column.name}', ${column.jsonValue(rowRef)}`).join(',\n')}
+      )
+`.trim()
+
+const blockUploadDiffPredicateSql = BLOCK_UPLOAD_COLUMNS
+  .map(column => `OLD.${column.name} IS NOT NEW.${column.name}`)
+  .join('\n    OR ')
+
+const blockUploadPatchJsonSql = () => `
+      json_remove(
+        json_set(
+          '{}',
+${BLOCK_UPLOAD_COLUMNS.map(column =>
+  `          CASE WHEN OLD.${column.name} IS NOT NEW.${column.name} THEN '$.${column.name}' ELSE '$.__noop' END, ${column.jsonValue('NEW')}`,
+).join(',\n')}
+        ),
+        '$.__noop'
       )
 `.trim()
 
@@ -367,6 +395,9 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_upload_update
   AFTER UPDATE ON blocks
   WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
+    AND (
+    ${blockUploadDiffPredicateSql}
+    )
   BEGIN
     INSERT INTO ps_crud (tx_id, data) VALUES (
       ${triggerTxSeqSql},
@@ -374,7 +405,7 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
         'op', 'PATCH',
         'type', 'blocks',
         'id', NEW.id,
-        'data', ${blockUploadJsonSql('NEW')}
+        'data', ${blockUploadPatchJsonSql()}
       )
     );
   END
