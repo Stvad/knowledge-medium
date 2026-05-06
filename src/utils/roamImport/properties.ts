@@ -4,6 +4,7 @@ const NS_PREFIX = 'roam'
 export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`
 export const ROAM_AUTHOR_PROP = `${NS_PREFIX}:author`
 export const ROAM_ISA_PROP = `${NS_PREFIX}:isa`
+export const ROAM_EMBED_PATH_PROP = `${NS_PREFIX}:embed-path`
 
 export const uniqueStrings = (values: readonly string[]): string[] => {
   const out: string[] = []
@@ -74,14 +75,59 @@ export const normalizeRoamPropertyValue = (value: string): string => {
 }
 
 export const PAGE_TOKEN_RE = /\[\[([^\]]+)\]\]/g
-const PAGE_LIST_VALUE_RE = /^[\s,;]*(\[\[[^\]]+\]\][\s,;]*)+$/
+
+interface PageToken {
+  alias: string
+  start: number
+  end: number
+}
+
+const parseOuterPageTokens = (value: string): PageToken[] => {
+  const out: PageToken[] = []
+  const stack: number[] = []
+  let i = 0
+
+  while (i < value.length - 1) {
+    const token = value.slice(i, i + 2)
+    if (token === '[[') {
+      stack.push(i)
+      i += 2
+      continue
+    }
+    if (token === ']]') {
+      if (stack.length > 0) {
+        const start = stack.pop()!
+        if (stack.length === 0) {
+          const alias = value.slice(start + 2, i).trim()
+          if (alias) out.push({alias, start, end: i + 2})
+        }
+      }
+      i += 2
+      continue
+    }
+    i += 1
+  }
+
+  return out
+}
+
+const isPageTokenListValue = (
+  value: string,
+  tokens: ReadonlyArray<PageToken>,
+): boolean => {
+  if (tokens.length === 0) return false
+  let cursor = 0
+  for (const token of tokens) {
+    if (!/^[\s,;]*$/.test(value.slice(cursor, token.start))) return false
+    cursor = token.end
+  }
+  return /^[\s,;]*$/.test(value.slice(cursor))
+}
 
 export const explodePageTokens = (value: string): string[] | null => {
-  if (!PAGE_LIST_VALUE_RE.test(value)) return null
-  const out: string[] = []
-  PAGE_TOKEN_RE.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = PAGE_TOKEN_RE.exec(value)) !== null) out.push(`[[${m[1]}]]`)
+  const tokens = parseOuterPageTokens(value)
+  if (!isPageTokenListValue(value, tokens)) return null
+  const out = tokens.map(token => `[[${token.alias}]]`)
   // Single token: not really a "list", let the caller keep the scalar.
   if (out.length < 2) return null
   return out
@@ -96,9 +142,7 @@ export const collectAliasesFromPropertyValues = (
   const out = new Set<string>()
   const visit = (v: unknown) => {
     if (typeof v === 'string') {
-      PAGE_TOKEN_RE.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = PAGE_TOKEN_RE.exec(v)) !== null) out.add(m[1])
+      for (const token of parseOuterPageTokens(v)) out.add(token.alias)
     } else if (Array.isArray(v)) {
       for (const item of v) visit(item)
     }
@@ -153,8 +197,8 @@ export const nonStandardPageAliasValues = (
     }
     const trimmed = item.trim()
     if (!trimmed) continue
-    PAGE_TOKEN_RE.lastIndex = 0
-    if (!PAGE_TOKEN_RE.test(trimmed)) out.push(trimmed)
+    const tokens = parseOuterPageTokens(trimmed)
+    if (!isPageTokenListValue(trimmed, tokens)) out.push(trimmed)
   }
   return out
 }

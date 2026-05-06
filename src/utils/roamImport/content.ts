@@ -3,6 +3,7 @@
 // What this does:
 //   - `((roamUid))`            → `((<our-uuid>))`        (block ref)
 //   - `{{embed: ((roamUid))}}` / `{{[[embed]]: ((roamUid))}}`
+//   - `{{embed-path: ((roamUid))}}` / `{{[[embed-path]]: ((roamUid))}}`
 //                              → `!((<our-uuid>))`       (block embed,
 //                                                        Obsidian-style)
 //   - `[label](((roamUid)))`   → `[label](((<our-uuid>)))`
@@ -19,10 +20,12 @@
 
 const ROAM_UID = '[A-Za-z0-9_-]+'
 
-// `{{embed: ((uid))}}` / `{{[[embed]]: ((uid))}}` — match BEFORE the bare
-// `((uid))` so we don't double-replace.
+// `{{embed: ((uid))}}` / `{{[[embed]]: ((uid))}}` and the embed-path
+// variants — match BEFORE the bare `((uid))` so we don't double-replace.
 const ROAM_EMBED_DIRECTIVE = '(?:embed|\\[\\[embed\\]\\])'
-const EMBED_RE = new RegExp(`\\{\\{\\s*${ROAM_EMBED_DIRECTIVE}\\s*:\\s*\\(\\((${ROAM_UID})\\)\\)\\s*\\}\\}`, 'g')
+const ROAM_EMBED_PATH_DIRECTIVE = '(?:embed-path|\\[\\[embed-path\\]\\])'
+const EMBED_RE = new RegExp(`\\{\\{\\s*${ROAM_EMBED_DIRECTIVE}\\s*:{1,2}\\s*\\(\\((${ROAM_UID})\\)\\)\\s*\\}\\}`, 'g')
+const EMBED_PATH_RE = new RegExp(`\\{\\{\\s*${ROAM_EMBED_PATH_DIRECTIVE}\\s*:{1,2}\\s*\\(\\((${ROAM_UID})\\)\\)\\s*\\}\\}`, 'g')
 
 // `[label](((uid)))` — Roam's aliased block ref. Markdown link with a
 // `((uid))` href.
@@ -43,6 +46,7 @@ const URL_RE = /https?:\/\/[^\s<>)\]]+/g
 export interface ContentRewriteResult {
   content: string
   unresolvedBlockUids: string[]
+  embedPathTargets: string[]
 }
 
 // Surface every Roam uid the content uses as a `((uid))` block-ref or
@@ -54,11 +58,16 @@ export interface ContentRewriteResult {
 // later import that brings in the real block upserts onto that row.
 export const collectContentRefUids = (content: string): string[] => {
   const out = new Set<string>()
+  const protectedRanges = collectCodeRanges(content)
   const matchAllAt = (re: RegExp, captureIndex: number) => {
     re.lastIndex = 0
     let m: RegExpExecArray | null
-    while ((m = re.exec(content)) !== null) out.add(m[captureIndex])
+    while ((m = re.exec(content)) !== null) {
+      if (isProtected(protectedRanges, m.index, m.index + m[0].length)) continue
+      out.add(m[captureIndex])
+    }
   }
+  matchAllAt(EMBED_PATH_RE, 1)
   matchAllAt(EMBED_RE, 1)
   // ALIASED_BLOCK_REF_RE: [label](((uid))) — group 1 is label, group 2 is uid.
   matchAllAt(ALIASED_BLOCK_REF_RE, 2)
@@ -70,6 +79,7 @@ interface BlockRefMatch {
   start: number
   end: number
   replacement: string
+  embedPathTarget?: string
 }
 
 // Resolve all `((uid))` / `{{embed: ((uid))}}` /
@@ -84,6 +94,7 @@ const collectBlockRefRewrites = (
 ): BlockRefMatch[] => {
   const found: BlockRefMatch[] = []
   const consumed: Array<[number, number]> = []
+  const protectedRanges = collectCodeRanges(raw)
 
   const overlapsConsumed = (start: number, end: number) =>
     consumed.some(([s, e]) => start < e && end > s)
@@ -93,6 +104,7 @@ const collectBlockRefRewrites = (
     let m: RegExpExecArray | null
     while ((m = re.exec(raw)) !== null) {
       const match = makeMatch(m)
+      if (isProtected(protectedRanges, match.start, match.end)) continue
       if (overlapsConsumed(match.start, match.end)) continue
       found.push(match)
       consumed.push([match.start, match.end])
@@ -101,6 +113,15 @@ const collectBlockRefRewrites = (
 
   // Embeds first — the most-specific shape wins so the inner `((uid))`
   // isn't double-counted.
+  collect(EMBED_PATH_RE, m => {
+    const target = resolve(m[1])
+    return {
+      start: m.index,
+      end: m.index + m[0].length,
+      replacement: `!((${target}))`,
+      embedPathTarget: target,
+    }
+  })
   collect(EMBED_RE, m => ({
     start: m.index,
     end: m.index + m[0].length,
@@ -276,6 +297,9 @@ export const rewriteRoamContent = (
   // Stitch the block-ref rewrites in one pass over the source so each
   // `((uid))` is resolved exactly once.
   const rewrites = collectBlockRefRewrites(raw, resolve)
+  const embedPathTargets = rewrites
+    .map(r => r.embedPathTarget)
+    .filter((target): target is string => Boolean(target))
   let out = ''
   let cursor = 0
   for (const r of rewrites) {
@@ -291,7 +315,7 @@ export const rewriteRoamContent = (
   out = rewriteHashPages(out, protectedRanges)
   out = rewriteHashTags(out, protectedRanges)
 
-  return {content: out, unresolvedBlockUids: [...unresolved]}
+  return {content: out, unresolvedBlockUids: [...unresolved], embedPathTargets}
 }
 
 export const applyHeading = (content: string, heading: number | undefined): string => {

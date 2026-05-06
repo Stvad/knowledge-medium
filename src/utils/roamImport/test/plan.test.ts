@@ -341,6 +341,42 @@ describe('planImport', () => {
     expect(marker?.srsSchedule).toBeUndefined()
   })
 
+  it('still promotes marker children that only add hash-page tags around SRS metadata', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [{
+          string: '[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]] #[[programming]] *',
+          uid: 'markerUid',
+        }],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    const marker = plan.descendants.find(d => d.roamUid === 'markerUid')
+    expect(parent?.srsSchedule?.interval).toBe(5)
+    expect(marker?.srsSchedule).toBeUndefined()
+  })
+
+  it('reports SRS-looking markers whose daily review date cannot be parsed', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: '[[[[interval]]:615.9]] [[[[factor]]:1.60]] [[January 29th, 202 6]] *',
+        uid: 'badSrsUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.diagnostics.some(d =>
+      d.includes('badSrsUid') &&
+      d.includes('no parseable daily review date'),
+    )).toBe(true)
+  })
+
   it('reports multiple marker-only SRS children under one parent', () => {
     const plan = planImport([{
       title: 'p',
@@ -375,6 +411,12 @@ describe('planImport', () => {
         'June 6th, 2026',
       ])
     expect(extractSrsScheduleMarker(marker, WORKSPACE)?.reviewCount).toBe(3)
+  })
+
+  it('does not parse page refs inside code spans or fences as import aliases', () => {
+    expect(parseRoamImportReferences(
+      '`[[Nope]]` ```clojure\n[[Also Nope]]\n``` [[Yes]]',
+    ).map(ref => ref.alias)).toEqual(['Yes'])
   })
 
   it('imports roam/memo snapshots onto referenced SRS blocks', () => {
@@ -512,6 +554,43 @@ describe('planImport', () => {
     expect(source?.content).toBe(`source:: [View Highlight](${url})`)
   })
 
+  it('strips SRS metadata from promoted property values while keeping SRS on the source block', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'initial review date::[[November 3rd, 2025]] [[[[interval]]:5.1]] [[[[factor]]:2.50]] *',
+        uid: 'reviewUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const page = plan.pages.find(p => p.roamUid === 'pUid')
+    const review = plan.descendants.find(d => d.roamUid === 'reviewUid')
+    expect(page?.data?.properties['roam:initial review date']).toBe('[[November 3rd, 2025]]')
+    expect(review?.srsSchedule).toMatchObject({
+      interval: 5.1,
+      factor: 2.5,
+      nextReviewDateAlias: 'November 3rd, 2025',
+      reviewCount: 1,
+    })
+  })
+
+  it('preserves embed-path source metadata while importing it as a block embed', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {string: '{{[[embed-path]]: ((targetUid))}}', uid: 'embedPathUid'},
+        {string: 'target', uid: 'targetUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const embedPath = plan.descendants.find(d => d.roamUid === 'embedPathUid')?.data
+    const targetId = roamBlockId(WORKSPACE, 'targetUid')
+    expect(embedPath?.content).toBe(`!((${targetId}))`)
+    expect(embedPath?.properties['roam:embed-path']).toBe(targetId)
+  })
+
   it('keeps `key::` blocks with non-attr children and lifts the bullets as a list value (case 4)', () => {
     const plan = planImport([{
       title: 'p',
@@ -624,6 +703,20 @@ describe('planImport', () => {
     )).toBe(true)
   })
 
+  it('handles nested page refs in page_alias values without creating partial aliases', () => {
+    const plan = planImport([{
+      title: 'EVOC',
+      uid: 'pUid',
+      children: [
+        {string: 'page_alias:: [[defensive [[driving]]]]', uid: 'aliasUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].pageAliases).toEqual(['defensive [[driving]]'])
+    expect(plan.aliasesUsed.has('defensive [[driving]]')).toBe(true)
+    expect(plan.aliasesUsed.has('defensive [[driving')).toBe(false)
+  })
+
   it('reports page title and Roam command weirdness summaries', () => {
     const plan = planImport([{
       title: ' odd\npage ',
@@ -641,6 +734,22 @@ describe('planImport', () => {
     expect(plan.diagnostics.some(d =>
       d.includes('Roam command follow-up') &&
       d.includes('query 1'),
+    )).toBe(true)
+  })
+
+  it('reports unknown Roam commands while ignoring code blocks', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {string: '{{word-count}} and `{{ignored-code-command}}`', uid: 'commandUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.diagnostics.some(d =>
+      d.includes('Unknown Roam command follow-up') &&
+      d.includes('word-count 1') &&
+      !d.includes('ignored-code-command'),
     )).toBe(true)
   })
 
@@ -823,6 +932,23 @@ describe('planImport', () => {
     expect(byUid('reviewUid')?.data.content)
       .toBe('initial review date::[[April 27th, 2026]]')
     expect(byUid('reviewUid')?.todoState).toBe('DONE')
+  })
+
+  it('promotes broader real-world Roam attribute keys without treating page-ref attr values as keys', () => {
+    const promotion = computePromotedFromChildren([
+      {string: 'Have Backbone; Disagree and Commit::4', uid: 'lp1'},
+      {string: 'Any risks / hazards? Potential distractions, procrastination, etc.:: usual setup hazards', uid: 'risk'},
+      {string: 'Nino Annighöfer:: contact', uid: 'person'},
+      {string: '[[account number]]:: 1234', uid: 'pageRefKey'},
+      {string: 'Connecting layer [[local priority::1]]', uid: 'notAttr'},
+    ], new Set())
+
+    expect(promotion.promoted['roam:Have Backbone; Disagree and Commit']).toBe('4')
+    expect(promotion.promoted['roam:Any risks / hazards? Potential distractions, procrastination, etc.'])
+      .toBe('usual setup hazards')
+    expect(promotion.promoted['roam:Nino Annighöfer']).toBe('contact')
+    expect(promotion.promoted['roam:[[account number]]']).toBe('1234')
+    expect(promotion.promoted['roam:Connecting layer [[local priority']).toBeUndefined()
   })
 
   it('case 3: explodes a `[[X]] [[Y]]` scalar value into a list of bracketed pages', () => {

@@ -27,12 +27,24 @@ const roamInlinePropertyValue = (text: string, name: string): string | undefined
 }
 
 const ROAM_SRS_INLINE_PROPERTY_RE = /\[\[\[\[(interval|factor)\]\]::?[^\]]+\]\]/gi
+const ROAM_HASH_PAGE_RE = /(^|[^\w/:])#\[\[[^\]]+\]\]/g
 const REVIEW_STAR_RE = /(?:^|\s)\*(?=\s|$)/g
 
 const countReviewStars = (text: string): number => {
   const matches = text.match(REVIEW_STAR_RE)
   return matches?.length ?? 0
 }
+
+const hasFiniteRoamInlineNumber = (rawContent: string, name: string): boolean =>
+  Number.isFinite(Number.parseFloat(roamInlinePropertyValue(rawContent, name) ?? ''))
+
+export const hasSrsScheduleFields = (rawContent: string): boolean =>
+  hasFiniteRoamInlineNumber(rawContent, 'interval') &&
+  hasFiniteRoamInlineNumber(rawContent, 'factor')
+
+export const hasSrsScheduleDate = (rawContent: string): boolean =>
+  parseRoamImportReferences(rawContent)
+    .some(ref => parseLiteralDailyPageTitle(ref.alias) !== null)
 
 export const extractSrsScheduleMarker = (
   rawContent: string,
@@ -84,6 +96,7 @@ const removePageRefs = (content: string): string => {
 export const srsScheduleMarkerResidue = (rawContent: string): string =>
   removePageRefs(removeParsedDateRefs(stripRoamTodoContent(rawContent))
     .replace(ROAM_SRS_INLINE_PROPERTY_RE, ' ')
+    .replace(ROAM_HASH_PAGE_RE, ' ')
     .replace(/(^|[^\w/:])#[\w/-]+/g, ' '))
     .replace(REVIEW_STAR_RE, ' ')
     .replace(/\s+/g, ' ')
@@ -92,6 +105,13 @@ export const srsScheduleMarkerResidue = (rawContent: string): string =>
 export const isSrsScheduleMarkerOnly = (rawContent: string): boolean =>
   extractSrsScheduleMarker(rawContent, '00000000-0000-4000-8000-000000000000') !== null &&
   srsScheduleMarkerResidue(rawContent).length === 0
+
+export const stripSrsScheduleMetadataFromValue = (rawContent: string): string =>
+  rawContent
+    .replace(ROAM_SRS_INLINE_PROPERTY_RE, ' ')
+    .replace(REVIEW_STAR_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 
 export interface PromotedSrsScheduleResult {
   schedule?: PreparedSrsSchedule

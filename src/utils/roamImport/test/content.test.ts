@@ -36,6 +36,20 @@ describe('rewriteRoamContent', () => {
     )
   })
 
+  it('rewrites embed-path macros to embeds and reports their source targets', () => {
+    const {content, embedPathTargets} = rewriteRoamContent(
+      '{{embed-path: ((vgkFNA64b))}} and {{[[embed-path]]:: ((3iAWxE3r8))}}',
+      uidMap,
+    )
+    expect(content).toBe(
+      '!((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee)) and !((11111111-2222-4333-8444-555555555555))',
+    )
+    expect(embedPathTargets).toEqual([
+      'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      '11111111-2222-4333-8444-555555555555',
+    ])
+  })
+
   it('preserves label on aliased block ref [text](((uid)))', () => {
     const {content} = rewriteRoamContent(
       '[control hip weight transfer](((vgkFNA64b)))',
@@ -123,17 +137,39 @@ describe('rewriteRoamContent', () => {
     expect(content).toBe('a#b is not a tag, but [[b]] is')
   })
 
+  it('does not rewrite trailing hashes like door codes', () => {
+    const {content} = rewriteRoamContent('door code:: 46612748# and #tag', new Map())
+    expect(content).toBe('door code:: 46612748# and [[tag]]')
+  })
+
   it('leaves [[Page]] page refs alone', () => {
     const {content} = rewriteRoamContent('see [[April 28th, 2026]]', uidMap)
     expect(content).toBe('see [[April 28th, 2026]]')
   })
+
+  it('does not rewrite block refs inside code spans or code fences', () => {
+    const {content, unresolvedBlockUids} = rewriteRoamContent(
+      '`((vgkFNA64b))` and ```js\n((3iAWxE3r8))\n``` and ((vgkFNA64b))',
+      uidMap,
+    )
+    expect(content).toBe(
+      '`((vgkFNA64b))` and ```js\n((3iAWxE3r8))\n``` and ((aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee))',
+    )
+    expect(unresolvedBlockUids).toEqual([])
+  })
 })
 
 describe('collectContentRefUids', () => {
-  it('collects both embed directive spellings', () => {
+  it('collects embed and embed-path directive spellings', () => {
     expect(collectContentRefUids(
-      '{{embed: ((vgkFNA64b))}} {{[[embed]]: ((3iAWxE3r8))}}',
-    )).toEqual(['vgkFNA64b', '3iAWxE3r8'])
+      '{{embed: ((vgkFNA64b))}} {{[[embed]]: ((3iAWxE3r8))}} {{[[embed-path]]: ((pathUid))}}',
+    )).toEqual(['pathUid', 'vgkFNA64b', '3iAWxE3r8'])
+  })
+
+  it('ignores block refs inside code spans or code fences', () => {
+    expect(collectContentRefUids(
+      '`((vgkFNA64b))` ```js\n((3iAWxE3r8))\n``` ((realUid))',
+    )).toEqual(['realUid'])
   })
 })
 

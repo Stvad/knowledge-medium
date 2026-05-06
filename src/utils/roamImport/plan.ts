@@ -12,6 +12,7 @@ import {
   derivePropertiesFromContent,
   nonStandardPageAliasValues,
   propertiesFromRoam,
+  ROAM_EMBED_PATH_PROP,
   uniqueStrings,
 } from './properties'
 import { computePromotedFromChildren } from './promotion'
@@ -25,6 +26,8 @@ import {
 import {
   extractSrsScheduleMarker,
   findPromotedSrsScheduleInChildren,
+  hasSrsScheduleDate,
+  hasSrsScheduleFields,
   isSrsScheduleMarkerOnly,
   propertiesFromSrsSchedule,
   type PreparedSrsSchedule,
@@ -34,6 +37,7 @@ import { extractRoamTodoMarker } from './todo'
 
 export {
   ROAM_AUTHOR_PROP,
+  ROAM_EMBED_PATH_PROP,
   ROAM_ISA_PROP,
   ROAM_PAGE_ALIAS_PROP,
   normalizeRoamPropertyValue,
@@ -177,8 +181,15 @@ const buildBlock = (
   const children = block.children ?? []
   const promotion = computePromotedFromChildren(children, ctx.bubbledUids)
   const promotedSrs = findPromotedSrsScheduleInChildren(children, ctx.options.workspaceId, block.uid)
-  const ownSrsSchedule = extractSrsScheduleMarker(block.string ?? '', ctx.options.workspaceId)
-  const ownSrsApplies = ownSrsSchedule !== null && !isSrsScheduleMarkerOnly(block.string ?? '')
+  const rawContent = block.string ?? ''
+  const ownSrsSchedule = extractSrsScheduleMarker(rawContent, ctx.options.workspaceId)
+  if (!ownSrsSchedule && hasSrsScheduleFields(rawContent) && !hasSrsScheduleDate(rawContent)) {
+    ctx.diagnostics.push(
+      `Roam SRS marker on uid ${block.uid} has interval/factor but no parseable daily review date; ` +
+      `preserved literally without SRS properties.`,
+    )
+  }
+  const ownSrsApplies = ownSrsSchedule !== null && !isSrsScheduleMarkerOnly(rawContent)
   const srsSchedule = ownSrsApplies ? ownSrsSchedule : promotedSrs.schedule
   const roamMemo = ctx.roamMemoByTargetUid.get(block.uid)
   for (const d of promotion.diagnostics) ctx.diagnostics.push(d)
@@ -301,6 +312,10 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
   }
+  if (rewritten.embedPathTargets.length > 0 && properties[ROAM_EMBED_PATH_PROP] === undefined) {
+    const targets = uniqueStrings(rewritten.embedPathTargets)
+    properties[ROAM_EMBED_PATH_PROP] = targets.length === 1 ? targets[0] : targets
+  }
 
   // Property values can carry `[[X]]` page tokens (case 3 explosion or
   // hoisted-as-string values like `author::[[stvad]]`). Register those
@@ -407,31 +422,74 @@ const collectPageTitleDiagnostics = (pages: RoamExport): string[] => {
     : []
 }
 
-const ROAM_COMMAND_FOLLOW_UPS: ReadonlyArray<{name: string, re: RegExp}> = [
-  {name: 'query', re: /\{\{\s*(?:\[\[query\]\]|query)(?=\s*[:}])/gi},
-  {name: 'audio', re: /\{\{\s*(?:\[\[audio\]\]|audio)(?=\s*[:}])/gi},
-  {name: 'video', re: /\{\{\s*(?:\[\[video\]\]|video)(?=\s*[:}])/gi},
-  {name: 'iframe', re: /\{\{\s*(?:\[\[iframe\]\]|iframe)(?=\s*[:}])/gi},
-  {name: 'pdf', re: /\{\{\s*(?:\[\[pdf\]\]|pdf)(?=\s*[:}])/gi},
-  {name: 'tweet', re: /\{\{\s*(?:\[\[tweet\]\]|tweet)(?=\s*[:}])/gi},
-  {name: 'table', re: /\{\{\s*(?:\[\[table\]\]|table)(?=\s*[:}])/gi},
-  {name: 'calc', re: /\{\{\s*(?:\[\[calc\]\]|calc)(?=\s*[:}])/gi},
-]
+const ROAM_COMMAND_RE = /\{\{\s*(?:\[\[([^\]]+)\]\]|([^\s:{}]+))/g
+const ROAM_COMMANDS_HANDLED = new Set(['TODO', 'DONE', 'embed', 'embed-path'])
+const ROAM_COMMANDS_KNOWN_FOLLOW_UP = new Set([
+  'query',
+  'audio',
+  'video',
+  'youtube',
+  'iframe',
+  'pdf',
+  'tweet',
+  'table',
+  'calc',
+])
 
-const countMatches = (value: string, re: RegExp): number => {
-  re.lastIndex = 0
-  let count = 0
-  while (re.exec(value) !== null) count += 1
-  return count
+const commandScanContent = (content: string): string => {
+  let out = ''
+  let i = 0
+  while (i < content.length) {
+    if (content.startsWith('```', i)) {
+      const end = content.indexOf('```', i + 3)
+      const rangeEnd = end < 0 ? content.length : end + 3
+      out += ' '.repeat(rangeEnd - i)
+      i = rangeEnd
+      continue
+    }
+    if (content[i] === '`') {
+      const end = content.indexOf('`', i + 1)
+      if (end < 0) break
+      out += ' '.repeat(end + 1 - i)
+      i = end + 1
+      continue
+    }
+    out += content[i]
+    i += 1
+  }
+  return out
 }
 
+const collectRoamCommands = (content: string): string[] => {
+  const out: string[] = []
+  ROAM_COMMAND_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  const scannable = commandScanContent(content)
+  while ((match = ROAM_COMMAND_RE.exec(scannable)) !== null) {
+    const name = (match[1] ?? match[2] ?? '').trim()
+    if (name) out.push(name)
+  }
+  return out
+}
+
+const formatCommandCounts = (counts: ReadonlyMap<string, number>): string =>
+  [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 20)
+    .map(([name, count]) => `${name} ${count}`)
+    .join(', ')
+
 const collectRoamCommandFollowUpDiagnostics = (pages: RoamExport): string[] => {
-  const counts = new Map<string, number>()
+  const knownCounts = new Map<string, number>()
+  const unknownCounts = new Map<string, number>()
   const visit = (block: RoamBlock) => {
-    const content = block.string ?? ''
-    for (const command of ROAM_COMMAND_FOLLOW_UPS) {
-      const count = countMatches(content, command.re)
-      if (count > 0) counts.set(command.name, (counts.get(command.name) ?? 0) + count)
+    for (const name of collectRoamCommands(block.string ?? '')) {
+      if (ROAM_COMMANDS_HANDLED.has(name)) continue
+      if (ROAM_COMMANDS_KNOWN_FOLLOW_UP.has(name)) {
+        knownCounts.set(name, (knownCounts.get(name) ?? 0) + 1)
+      } else {
+        unknownCounts.set(name, (unknownCounts.get(name) ?? 0) + 1)
+      }
     }
     for (const child of block.children ?? []) visit(child)
   }
@@ -440,17 +498,24 @@ const collectRoamCommandFollowUpDiagnostics = (pages: RoamExport): string[] => {
     for (const child of page.children ?? []) visit(child)
   }
 
-  const total = [...counts.values()].reduce((sum, count) => sum + count, 0)
-  if (total === 0) return []
+  const diagnostics: string[] = []
+  const knownTotal = [...knownCounts.values()].reduce((sum, count) => sum + count, 0)
+  if (knownTotal > 0) {
+    diagnostics.push(
+      `Roam command follow-up: preserved ${knownTotal} known command occurrence(s) literally ` +
+      `(${formatCommandCounts(knownCounts)}); media/query normalization is still a follow-up.`,
+    )
+  }
 
-  const top = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .map(([name, count]) => `${name} ${count}`)
-    .join(', ')
-  return [
-    `Roam command follow-up: preserved ${total} command occurrence(s) literally ` +
-    `(${top}); media/query normalization is still a follow-up.`,
-  ]
+  const unknownTotal = [...unknownCounts.values()].reduce((sum, count) => sum + count, 0)
+  if (unknownTotal > 0) {
+    diagnostics.push(
+      `Unknown Roam command follow-up: preserved ${unknownTotal} command occurrence(s) literally ` +
+      `(${formatCommandCounts(unknownCounts)}); review custom command handling.`,
+    )
+  }
+
+  return diagnostics
 }
 
 const pageTitleForDiagnostic = (title: string): string => {

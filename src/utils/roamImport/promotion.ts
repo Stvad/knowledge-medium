@@ -1,6 +1,7 @@
 import type { RoamBlock } from './types'
 import { explodePageTokens, normalizeRoamPropertyValue } from './properties'
 import { stripRoamTodoContent } from './todo'
+import { stripSrsScheduleMetadataFromValue } from './srsMarkers'
 
 // Roam inline attribute: a block whose content matches `key:: value`.
 // Keys in real graphs often contain spaces or punctuation (`Full
@@ -8,7 +9,11 @@ import { stripRoamTodoContent } from './todo'
 // at the start of a single block and require a letter-first key so
 // prose/code fragments like `6. Runs ::fix...` don't become props.
 const INLINE_ATTR_RE = /^([^:\n]{1,100})::\s*(.*)$/
-const INLINE_ATTR_KEY_RE = /^[A-Za-z][A-Za-z0-9 _%?'’()./-]*$/
+const INLINE_ATTR_KEY_RE = /^[\p{L}][\p{L}\p{N} _%?'’().,;/-]*$/u
+const PAGE_REF_ATTR_KEY_RE = /^\[\[[^\n]+\]\]$/
+
+const isInlineAttrKey = (key: string): boolean =>
+  INLINE_ATTR_KEY_RE.test(key) || PAGE_REF_ATTR_KEY_RE.test(key)
 
 export const detectInlineAttribute = (
   rawContent: string | undefined,
@@ -19,8 +24,8 @@ export const detectInlineAttribute = (
   const match = INLINE_ATTR_RE.exec(content)
   if (!match) return null
   const key = match[1].trim()
-  if (!INLINE_ATTR_KEY_RE.test(key)) return null
-  return {key, value: match[2]}
+  if (!isInlineAttrKey(key)) return null
+  return {key, value: stripSrsScheduleMetadataFromValue(match[2])}
 }
 
 /**
