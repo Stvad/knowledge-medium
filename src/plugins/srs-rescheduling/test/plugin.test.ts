@@ -69,7 +69,8 @@ describe('srsReschedulingPlugin', () => {
     ) as ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>
     const setContent = vi.fn()
     const block = {
-      peek: () => ({content: 'Review [[May 1st, 2026]]'}),
+      repo: {isReadOnly: false},
+      peek: () => ({content: 'Review [[May 1st, 2026]]', properties: {}}),
       load: vi.fn(),
       setContent,
     }

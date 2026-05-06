@@ -5,7 +5,7 @@ export const SRS_SM25_TYPE = 'srs-sm2.5'
 
 export const srsIntervalProp = defineProperty<number>('interval', {
   codec: codecs.number,
-  defaultValue: 0,
+  defaultValue: 2,
   changeScope: ChangeScope.BlockDefault,
   kind: 'number',
 })

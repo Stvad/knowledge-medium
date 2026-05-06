@@ -21,13 +21,17 @@ export interface SrsScheduleOptions {
   random?: () => number
 }
 
-interface SrsParams {
+export interface SrsParams {
   interval: number
   factor: number
 }
 
-const DEFAULT_FACTOR = 2.5
-const DEFAULT_INTERVAL = 2
+export interface ScheduledSrsParams extends SrsParams {
+  nextReviewDate: Date
+}
+
+export const DEFAULT_FACTOR = 2.5
+export const DEFAULT_INTERVAL = 2
 const MAX_INTERVAL = 50 * 365
 const MIN_FACTOR = 1.3
 const HARD_FACTOR = 1.3
@@ -120,6 +124,14 @@ export const getNewSrsParameters = (
   const factor = getNumberProperty(text, 'factor') || DEFAULT_FACTOR
   const interval = getNumberProperty(text, 'interval') || DEFAULT_INTERVAL
 
+  return getNewSrsParametersFromValues({interval, factor}, signal, random)
+}
+
+export const getNewSrsParametersFromValues = (
+  {interval, factor}: SrsParams,
+  signal: SrsSignal,
+  random: () => number = Math.random,
+): SrsParams => {
   let newFactor = factor
   let newInterval = interval
 
@@ -145,6 +157,20 @@ export const getNewSrsParameters = (
   }
 
   return enforceLimits(addJitter({interval: newInterval, factor: newFactor}, random))
+}
+
+export const scheduleSrsProperties = (
+  params: SrsParams,
+  signal: SrsSignal,
+  options: SrsScheduleOptions = {},
+): ScheduledSrsParams => {
+  const now = options.now ?? new Date()
+  const random = options.random ?? Math.random
+  const next = getNewSrsParametersFromValues(params, signal, random)
+  return {
+    ...next,
+    nextReviewDate: addDays(now, Math.ceil(next.interval)),
+  }
 }
 
 export const scheduleSrsContent = (
