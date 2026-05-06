@@ -177,6 +177,15 @@ describe('repo.queryBlocks', () => {
     await expect(env.repo.queryBlocks({where: {status: undefined}}))
       .rejects.toThrow('is undefined')
   })
+
+  it('does not alias invalid undefined where filters to a cached empty where handle', async () => {
+    await create({id: 'todo-open', types: ['todo'], properties: {status: 'open'}})
+
+    await expect(env.repo.queryBlocks({where: {}}))
+      .resolves.toMatchObject([{id: 'todo-open'}])
+    await expect(env.repo.queryBlocks({where: {status: undefined}}))
+      .rejects.toThrow('is undefined')
+  })
 })
 
 describe('repo.subscribeBlocks', () => {

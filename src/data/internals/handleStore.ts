@@ -3,8 +3,8 @@
  *
  * HandleStore is the central registry for `Handle<T>` instances.
  *
- *   - Identity rule: same key (`(name, JSON.stringify(args))`) → same handle
- *     instance returned from `getOrCreate`.
+ *   - Identity rule: same key (`(name, stable typed serialization(args))`)
+ *     → same handle instance returned from `getOrCreate`.
  *   - Ref-count GC: handles dispose `gcTimeMs` after refCount reaches zero
  *     (drained subscribers + drained in-flight loads).
  *   - Invalidation index: handles declare `Dependency`s during `resolve`;
@@ -694,30 +694,68 @@ const has = (xs: ReadonlySet<string> | readonly string[], target: string): boole
   return false
 }
 
-/** Stable args→key serializer. JSON.stringify with sorted object keys
- *  so `{a:1,b:2}` and `{b:2,a:1}` yield the same key (spec identity rule). */
-export const stableArgsKey = (args: unknown): string => {
-  if (args === undefined || args === null) return ''
-  return JSON.stringify(args, sortedReplacer(args))
+/** Stable args→key serializer. Object keys are sorted so `{a:1,b:2}`
+ *  and `{b:2,a:1}` yield the same key, while type tags preserve
+ *  otherwise JSON-colliding values such as omitted vs undefined fields
+ *  and Date instances vs ISO strings. */
+type StableKeyValue =
+  | readonly ['undefined']
+  | readonly ['null']
+  | readonly ['boolean', boolean]
+  | readonly ['number', number | string]
+  | readonly ['bigint', string]
+  | readonly ['string', string]
+  | readonly ['date', string]
+  | readonly ['array', readonly StableKeyValue[]]
+  | readonly ['object', readonly (readonly [string, StableKeyValue])[]]
+
+const stableKeyValue = (
+  value: unknown,
+  seen: WeakSet<object>,
+): StableKeyValue => {
+  if (value === undefined) return ['undefined']
+  if (value === null) return ['null']
+  if (typeof value === 'boolean') return ['boolean', value]
+  if (typeof value === 'string') return ['string', value]
+  if (typeof value === 'bigint') return ['bigint', value.toString()]
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) return ['number', 'NaN']
+    if (Object.is(value, -0)) return ['number', '-0']
+    if (value === Infinity) return ['number', 'Infinity']
+    if (value === -Infinity) return ['number', '-Infinity']
+    return ['number', value]
+  }
+  if (typeof value === 'function' || typeof value === 'symbol') {
+    throw new Error(`[handleKey] unsupported query arg value type: ${typeof value}`)
+  }
+
+  if (value instanceof Date) {
+    return ['date', Number.isNaN(value.getTime()) ? 'Invalid Date' : value.toISOString()]
+  }
+
+  if (seen.has(value)) {
+    throw new Error('[handleKey] cannot key cyclic query args')
+  }
+  seen.add(value)
+  try {
+    if (Array.isArray(value)) {
+      return ['array', value.map(item => stableKeyValue(item, seen))]
+    }
+
+    const obj = value as Record<string, unknown>
+    return [
+      'object',
+      Object.keys(obj)
+        .sort()
+        .map(key => [key, stableKeyValue(obj[key], seen)] as const),
+    ]
+  } finally {
+    seen.delete(value)
+  }
 }
 
-const sortedReplacer = (root: unknown) => {
-  // For plain objects, walk with sorted keys. Arrays + primitives untouched.
-  // We keep this allocation-free for the common no-object case via the
-  // root-type peek above.
-  if (typeof root !== 'object' || root === null || Array.isArray(root)) {
-    return undefined
-  }
-  return (_key: string, value: unknown) => {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      const obj = value as Record<string, unknown>
-      const out: Record<string, unknown> = {}
-      for (const k of Object.keys(obj).sort()) out[k] = obj[k]
-      return out
-    }
-    return value
-  }
-}
+export const stableArgsKey = (args: unknown): string =>
+  JSON.stringify(stableKeyValue(args, new WeakSet()))
 
 /** Compose a Handle key from a name + optional args. Used by Repo
  *  factories to construct identity-stable keys. */

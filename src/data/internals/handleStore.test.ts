@@ -111,6 +111,21 @@ describe('HandleStore identity', () => {
     )
     expect(stableArgsKey({ a: 1, b: 2 })).toBe(stableArgsKey({ b: 2, a: 1 }))
   })
+
+  it('handleKey() preserves non-JSON-distinct value types', () => {
+    expect(handleKey('q', {where: {}})).not.toBe(
+      handleKey('q', {where: {status: undefined}}),
+    )
+    expect(handleKey('q', {where: {due: new Date('2026-01-02T03:04:05.000Z')}}))
+      .not.toBe(handleKey('q', {where: {due: '2026-01-02T03:04:05.000Z'}}))
+  })
+
+  it('handleKey() rejects cyclic args instead of aliasing them', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+
+    expect(() => handleKey('q', cyclic)).toThrow('cyclic query args')
+  })
 })
 
 describe('LoaderHandle lifecycle', () => {
