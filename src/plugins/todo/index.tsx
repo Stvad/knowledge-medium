@@ -10,6 +10,7 @@ import {
 import type { AppExtension } from '@/extensions/facet.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
 import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
+import { todoActionsExtension } from './actions.ts'
 import { todoDataExtension } from './dataExtension.ts'
 import { statusProp, TODO_TYPE, type TodoStatus } from './schema.ts'
 
@@ -70,9 +71,11 @@ const todoContentDecoratorContribution: BlockContentDecoratorContribution =
 
 export const todoPlugin: AppExtension = [
   todoDataExtension,
+  todoActionsExtension,
   blockContentDecoratorsFacet.of(todoContentDecoratorContribution, {source: 'todo'}),
 ]
 
+export { cycleTodoState, todoActions } from './actions.ts'
 export { todoDataExtension } from './dataExtension.ts'
 export {
   roamTodoStateProp,
