@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState, type KeyboardEvent } from 'react'
-import { Check, Plus, Search, X } from 'lucide-react'
+import { Plus, Search, X } from 'lucide-react'
 import {
   isRefCodec,
   isRefListCodec,
@@ -329,9 +329,9 @@ function ReferenceSearch({
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => pick(candidate)}
             >
-              {selectionMode === 'multiple'
-                ? <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                : <Check className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
+              {selectionMode === 'multiple' && (
+                <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              )}
               <span className="min-w-0 flex-1 truncate">{label}</span>
               {detail && detail !== label && (
                 <span className="max-w-[11rem] truncate text-xs text-muted-foreground">{detail}</span>
