@@ -15,6 +15,7 @@ const literalCodec = <T extends string>(
   expected: readonly T[],
   label: string,
 ): Codec<T> => ({
+  shape: 'string',
   encode: value => {
     if (!expected.includes(value)) throw new CodecError(label, value)
     return value
@@ -31,14 +32,12 @@ export const statusProp = defineProperty<TodoStatus>('status', {
   codec: literalCodec<TodoStatus>(['open', 'done'], 'todo status'),
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 export const roamTodoStateProp = defineProperty<RoamTodoState>('roam:todo-state', {
   codec: literalCodec<RoamTodoState>(['TODO', 'DONE'], 'Roam todo state'),
   defaultValue: 'TODO',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 export const todoType = defineBlockType({

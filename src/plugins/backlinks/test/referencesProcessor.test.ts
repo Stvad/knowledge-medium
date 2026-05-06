@@ -148,19 +148,16 @@ describe('parseReferences — ref-typed properties', () => {
     codec: codecs.ref(),
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
-    kind: 'ref',
   })
   const relatedProp = defineProperty<readonly string[]>('related', {
     codec: codecs.refList(),
     defaultValue: [],
     changeScope: ChangeScope.BlockDefault,
-    kind: 'refList',
   })
   const malformedProp = defineProperty<readonly string[]>('malformed-ref-list', {
     codec: codecs.refList(),
     defaultValue: [],
     changeScope: ChangeScope.BlockDefault,
-    kind: 'refList',
   })
   const refSchemaExtension = [
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
@@ -233,7 +230,6 @@ describe('parseReferences — schema-swap reprojection', () => {
     codec: codecs.ref(),
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
-    kind: 'ref',
   })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,

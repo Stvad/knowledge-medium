@@ -23,13 +23,11 @@ describe('buildPropertyPanelModel', () => {
       codec: codecs.string,
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     const internalProp = defineProperty<string>('plugin:internal', {
       codec: codecs.string,
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
 
     const model = buildPropertyPanelModel({
@@ -48,6 +46,7 @@ describe('buildPropertyPanelModel', () => {
           hidden: true,
         }),
       ]),
+      editorFallbacks: [],
       typesRegistry: new Map(),
     })
 
@@ -59,14 +58,14 @@ describe('buildPropertyPanelModel', () => {
       labelText: row.labelText,
       canRename: row.canRename,
       canDelete: row.canDelete,
-      canChangeKind: row.canChangeKind,
+      canChangeShape: row.canChangeShape,
       isHidden: row.isHidden,
     }))).toEqual([{
       name: internalProp.name,
       labelText: 'Internal',
       canRename: false,
       canDelete: false,
-      canChangeKind: false,
+      canChangeShape: false,
       isHidden: true,
     }])
   })
@@ -76,13 +75,11 @@ describe('buildPropertyPanelModel', () => {
       codec: codecs.string,
       defaultValue: '',
       changeScope: ChangeScope.UiState,
-      kind: 'string',
     })
     const systemProp = defineProperty<boolean>('system:plugin-flag', {
       codec: codecs.boolean,
       defaultValue: false,
       changeScope: ChangeScope.BlockDefault,
-      kind: 'boolean',
     })
 
     const model = buildPropertyPanelModel({
@@ -95,6 +92,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: schemasMap([uiStateProp, systemProp]),
       uis: uisMap([]),
+      editorFallbacks: [],
       typesRegistry: new Map(),
     })
 

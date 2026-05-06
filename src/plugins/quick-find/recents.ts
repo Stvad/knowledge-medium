@@ -7,7 +7,6 @@ export const recentBlockIdsProp = defineProperty<string[]>('recentBlockIds', {
   codec: codecs.list(codecs.string),
   defaultValue: [],
   changeScope: ChangeScope.UserPrefs,
-  kind: 'list',
 })
 
 export const pushRecentBlockId = (prefsBlock: Block, blockId: string): void => {

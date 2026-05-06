@@ -51,14 +51,12 @@ const titleProp = defineProperty<string>('title', {
   codec: codecs.string,
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const dateProp = defineProperty<Date | undefined>('due-date', {
   codec: codecs.optional(codecs.date),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'date',
 })
 
 /** Explicit-watching test processor used by the afterCommit tests. The

@@ -95,21 +95,18 @@ describe('core.setProperty', () => {
     codec: codecs.string,
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
-    kind: 'string',
   })
 
   const uiFlagProp = defineProperty<boolean>('ui:flag', {
     codec: codecs.boolean,
     defaultValue: false,
     changeScope: ChangeScope.UiState,
-    kind: 'boolean',
   })
 
   const prefsFlagProp = defineProperty<boolean>('prefs:flag', {
     codec: codecs.boolean,
     defaultValue: false,
     changeScope: ChangeScope.UserPrefs,
-    kind: 'boolean',
   })
 
   it('encodes the value via codec and stores under properties[name]', async () => {

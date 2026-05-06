@@ -53,7 +53,6 @@ const titleProp = defineProperty<string>('title', {
   codec: codecs.string,
   defaultValue: 'untitled',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 describe('Block.data / peek (sync)', () => {

@@ -1,16 +1,14 @@
 /**
- * Kernel default property editors per `PropertyKind` (spec §5.6.1).
+ * Property editor resolution helpers.
  *
- * The §5.6.1 rendering chain says: look up the schema by name; look up
- * the UI contribution; if no per-property `Editor` is contributed, fall
- * back to the default editor for the schema's `kind`. These components
- * are that fallback — they ship from the kernel and are reached by
- * `resolvePropertyDisplay` (this module) and consumed by
- * `BlockProperties.tsx`.
+ * The lookup chain is:
+ *   1. Resolve the schema by name.
+ *   2. Resolve an exact `PropertyUiContribution.Editor`.
+ *   3. Resolve a fallback editor contribution by matching the schema/codec.
+ *   4. Use that fallback editor for primitive codec shapes too.
  *
- * Plugins that want a custom shape register a `PropertyUiContribution`
- * keyed on the same `PropertySchema.name`; the contribution's `Editor`
- * overrides the default for that property only.
+ * Unknown properties synthesize an ad-hoc schema from the encoded JSON shape
+ * and run through the same fallback editor chain.
  */
 
 import { useState } from 'react'
@@ -18,27 +16,86 @@ import { Plus, X } from 'lucide-react'
 import {
   ChangeScope,
   codecs,
+  type AnyPropertyEditorFallbackContribution,
   type AnyPropertySchema,
   type AnyPropertyUiContribution,
-  type PropertyEditor,
-  type PropertyKind,
+  type CodecShape,
+  type PropertyEditorProps,
   type PropertySchema,
 } from '@/data/api'
+import { Block } from '@/data/block'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
-import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 
-// ──── List editor ────
+const INLINE_INPUT_CLASS =
+  'h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none placeholder:text-muted-foreground/55 focus-visible:border-transparent focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60'
 
-interface ListEditorProps {
-  value: unknown[]
-  onChange: (next: unknown[]) => void
-  readOnly: boolean
+const readOnlyForBlock = (block: unknown): boolean =>
+  block instanceof Block && block.repo.isReadOnly
+
+// ──── Primitive fallback editors ────
+
+export function StringPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
+  const readOnly = readOnlyForBlock(block)
+  return (
+    <Input
+      className={INLINE_INPUT_CLASS}
+      value={value === undefined || value === null ? '' : String(value)}
+      placeholder="Empty"
+      readOnly={readOnly}
+      onChange={(event) => {
+        if (!readOnly) onChange(event.target.value)
+      }}
+    />
+  )
 }
 
-export function DefaultListPropertyEditor({value, onChange, readOnly}: ListEditorProps) {
+export function NumberPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
+  const readOnly = readOnlyForBlock(block)
+  return (
+    <Input
+      type="number"
+      className={INLINE_INPUT_CLASS}
+      value={value === undefined || value === null ? '' : String(value)}
+      placeholder="Empty"
+      readOnly={readOnly}
+      onChange={(event) => {
+        if (readOnly) return
+        const n = parseFloat(event.target.value)
+        onChange(Number.isNaN(n) ? undefined : n)
+      }}
+    />
+  )
+}
+
+export function BooleanPropertyEditor({
+  value,
+  onChange,
+  block,
+  schema,
+}: PropertyEditorProps<boolean>) {
+  const readOnly = readOnlyForBlock(block)
+  return (
+    <div className="flex h-7 items-center">
+      <Checkbox
+        aria-label={schema?.name ? `Toggle ${schema.name}` : 'Toggle boolean value'}
+        checked={value === true}
+        disabled={readOnly}
+        onCheckedChange={(checked) => {
+          if (!readOnly) onChange(checked === true)
+        }}
+      />
+    </div>
+  )
+}
+
+export function ListPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
+  const readOnly = readOnlyForBlock(block)
   const [newItem, setNewItem] = useState('')
-  const items = value.map(v => typeof v === 'string' ? v : String(v))
+  const items = Array.isArray(value)
+    ? value.map(v => typeof v === 'string' ? v : String(v))
+    : []
 
   const addItem = () => {
     if (newItem.trim()) {
@@ -99,102 +156,43 @@ export function DefaultListPropertyEditor({value, onChange, readOnly}: ListEdito
   )
 }
 
-// ──── Per-kind value editor ────
-
-interface DefaultValueEditorProps {
-  kind: PropertyKind
-  value: unknown
-  onChange: (next: unknown) => void
-  readOnly: boolean
-}
-
-/** Single switch on `kind`. The §5.6.1 default UI for every primitive
- *  property; plugin-contributed `PropertyUiContribution.Editor`s
- *  override per-property. */
-export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: DefaultValueEditorProps) {
-  if (kind === 'list' || kind === 'refList') {
-    return (
-      <DefaultListPropertyEditor
-        value={Array.isArray(value) ? value : []}
-        onChange={onChange}
-        readOnly={readOnly}
-      />
-    )
-  }
-
-  if (kind === 'boolean') {
-    return (
-      <select
-        className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs md:text-sm disabled:cursor-not-allowed disabled:opacity-50"
-        value={String(value ?? false)}
-        onChange={(e) => onChange(e.target.value === 'true')}
-        disabled={readOnly}
-      >
-        <option value="true">true</option>
-        <option value="false">false</option>
-      </select>
-    )
-  }
-
-  if (kind === 'number') {
-    return (
-      <Input
-        type="number"
-        className="h-7 text-xs md:text-sm"
-        value={value === undefined || value === null ? '' : String(value)}
-        onChange={(e) => {
-          const n = parseFloat(e.target.value)
-          onChange(Number.isNaN(n) ? undefined : n)
-        }}
-        disabled={readOnly}
-      />
-    )
-  }
-
-  if (kind === 'object') {
-    return (
-      <Input
-        className="h-7 text-xs font-mono md:text-sm"
-        value={JSON.stringify(value ?? {})}
-        onChange={(e) => {
-          try {
-            onChange(JSON.parse(e.target.value))
-          } catch {
-            // Ignore malformed JSON during typing; the editor restores
-            // on next render if the user navigates away.
-          }
-        }}
-        disabled={readOnly}
-      />
-    )
-  }
-
-  if (kind === 'date') {
-    const isoString = value instanceof Date
-      ? value.toISOString().slice(0, 10)
-      : (typeof value === 'string' && value ? value.slice(0, 10) : '')
-    return (
-      <Input
-        type="date"
-        className="h-7 text-xs md:text-sm"
-        value={isoString}
-        onChange={(e) => {
-          const text = e.target.value
-          if (!text) onChange(undefined)
-          else onChange(new Date(text))
-        }}
-        disabled={readOnly}
-      />
-    )
-  }
-
-  // Default: string.
+export function ObjectPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
+  const readOnly = readOnlyForBlock(block)
   return (
     <Input
-      className="h-7 text-xs md:text-sm"
-      value={value === undefined || value === null ? '' : String(value)}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={readOnly}
+      className={`${INLINE_INPUT_CLASS} font-mono`}
+      value={JSON.stringify(value ?? {})}
+      placeholder="Empty"
+      readOnly={readOnly}
+      onChange={(event) => {
+        if (readOnly) return
+        try {
+          onChange(JSON.parse(event.target.value))
+        } catch {
+          // Keep the editor forgiving while the user is typing malformed JSON.
+        }
+      }}
+    />
+  )
+}
+
+export function DatePropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
+  const readOnly = readOnlyForBlock(block)
+  const isoString = value instanceof Date
+    ? value.toISOString().slice(0, 10)
+    : (typeof value === 'string' && value ? value.slice(0, 10) : '')
+  return (
+    <Input
+      type="date"
+      className={INLINE_INPUT_CLASS}
+      value={isoString}
+      placeholder="Empty"
+      readOnly={readOnly}
+      onChange={(event) => {
+        if (readOnly) return
+        const text = event.target.value
+        onChange(text ? new Date(text) : undefined)
+      }}
     />
   )
 }
@@ -202,26 +200,24 @@ export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: De
 // ──── Lookup-chain helper ────
 
 /** Default value used when the property panel adds a new property of a
- *  given kind. Mirrors the shape `defaultValue` would carry on a real
+ *  given shape. Mirrors the shape `defaultValue` would carry on a real
  *  schema — strings are empty, numbers zero, etc. */
-export const defaultValueForKind = (kind: PropertyKind): unknown => {
-  switch (kind) {
+export const defaultValueForShape = (shape: CodecShape): unknown => {
+  switch (shape) {
     case 'string':  return ''
     case 'number':  return 0
     case 'boolean': return false
     case 'list':    return [] as unknown[]
-    case 'ref':     return ''
-    case 'refList': return [] as string[]
     case 'object':  return {}
     case 'date':    return undefined
   }
 }
 
-/** Lossy kind inference used when no schema is registered for a
+/** Lossy shape inference used when no schema is registered for a
  *  property name (spec §5.6.1 fallback). The §5.6.1 unknown-schema
- *  fallback inspects the encoded JSON shape and picks a kind so the
+ *  fallback inspects the encoded JSON shape and picks a shape so the
  *  panel can still render an editor. */
-export const inferKindFromValue = (value: unknown): PropertyKind => {
+export const inferShapeFromValue = (value: unknown): CodecShape => {
   if (Array.isArray(value)) return 'list'
   if (typeof value === 'boolean') return 'boolean'
   if (typeof value === 'number') return 'number'
@@ -233,18 +229,17 @@ export const inferKindFromValue = (value: unknown): PropertyKind => {
  *  isn't registered. Used by the unknown-schema fallback and by the
  *  add-property form: both need a schema reference to feed `block.set`,
  *  which encodes the value through the codec before storage. */
-export const adhocSchema = (name: string, kind: PropertyKind): PropertySchema<unknown> => ({
+export const adhocSchema = (name: string, shape: CodecShape): PropertySchema<unknown> => ({
   name,
-  codec: kind === 'list'
+  codec: shape === 'list'
     ? codecs.list(codecs.unsafeIdentity<unknown>()) as PropertySchema<unknown>['codec']
-    : codecs.unsafeIdentity<unknown>(),
-  defaultValue: defaultValueForKind(kind),
+    : codecs.unsafeIdentity<unknown>(shape),
+  defaultValue: defaultValueForShape(shape),
   changeScope: ChangeScope.BlockDefault,
-  kind,
 })
 
 /** Result of resolving a property's display: which schema (registered
- *  or ad-hoc), which kind, and which UI Editor to render with. The
+ *  or ad-hoc), which primitive shape, and which UI Editor to render with. The
  *  `isKnown` flag drives the "schema not registered" UI hint per
  *  §5.6.1.
  *
@@ -255,40 +250,31 @@ export const adhocSchema = (name: string, kind: PropertyKind): PropertySchema<un
  *  `AnyMutator` exists). */
 export interface PropertyDisplayInfo {
   schema: AnyPropertySchema
-  kind: PropertyKind
+  shape: CodecShape
   /** Editor selected by the resolver. Usually this is a registered
-   *  `PropertyUiContribution.Editor`; for kind-level UI that needs more
-   *  than the primitive inline editor, the resolver can supply a kernel
-   *  fallback. Callers should fall back to their primitive inline editor
-   *  when this is undefined. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  customEditor?: PropertyEditor<any>
+   *  `PropertyUiContribution.Editor`; schema/codec fallback editor
+   *  contributions are considered second. Undefined means no fallback
+   *  contribution was registered for the schema. */
+  Editor?: AnyPropertyEditorFallbackContribution['Editor']
   /** True iff a real `PropertySchema` was found in the registry; false
-   *  when we synthesised an ad-hoc schema from `inferKindFromValue`. */
+   *  when we synthesised an ad-hoc schema from `inferShapeFromValue`. */
   isKnown: boolean
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const defaultEditorForKind = (kind: PropertyKind): PropertyEditor<any> | undefined => {
-  switch (kind) {
-    case 'ref':
-      return RefPropertyEditor
-    case 'refList':
-      return RefListPropertyEditor
-    default:
-      return undefined
-  }
-}
+const fallbackEditorForSchema = (
+  schema: AnyPropertySchema,
+  fallbacks: readonly AnyPropertyEditorFallbackContribution[],
+): AnyPropertyEditorFallbackContribution['Editor'] | undefined =>
+  fallbacks.find(fallback => fallback.matches(schema))?.Editor
 
 /** Implements the §5.6.1 lookup chain:
  *
  *    1. Look up the schema in `propertySchemasFacet`'s registry by `name`.
  *    2. Look up the matching UI contribution in `propertyUiFacet`.
  *    3. If schema is known → use the contributed `Editor` if any, else
- *       any kind-specialized kernel editor, else the caller's primitive
- *       default editor for the schema's `kind`.
- *    4. If schema is unknown → infer a kind from the JSON value, build
- *       an ad-hoc schema, render via the default editor for that kind.
+ *       any matching fallback editor contribution.
+ *    4. If schema is unknown → infer a shape from the JSON value, build
+ *       an ad-hoc schema, and run the same fallback editor chain.
  *
  *  Returns enough information for the caller to render and to wire
  *  `block.set` via `schema` (codec encodes to storage). */
@@ -297,22 +283,24 @@ export const resolvePropertyDisplay = (args: {
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
 }): PropertyDisplayInfo => {
   const known = args.schemas.get(args.name)
   if (known) {
     const ui = args.uis.get(args.name)
     return {
       schema: known,
-      kind: known.kind,
-      customEditor: ui?.Editor ?? defaultEditorForKind(known.kind),
+      shape: known.codec.shape,
+      Editor: ui?.Editor ?? fallbackEditorForSchema(known, args.editorFallbacks),
       isKnown: true,
     }
   }
-  const kind = inferKindFromValue(args.encodedValue)
+  const shape = inferShapeFromValue(args.encodedValue)
+  const schema = adhocSchema(args.name, shape)
   return {
-    schema: adhocSchema(args.name, kind),
-    kind,
-    customEditor: undefined,
+    schema,
+    shape,
+    Editor: fallbackEditorForSchema(schema, args.editorFallbacks),
     isKnown: false,
   }
 }

@@ -8,12 +8,11 @@ import {
   subscribePropertyCreateRequests,
 } from '@/utils/propertyNavigation.ts'
 import {
-  ADDABLE_PROPERTY_KINDS,
-  type AddablePropertyKind,
-  isAddablePropertyKind,
-} from './kinds'
-import { PropertyKindButton } from './kindUi'
-import { InlineEmptyValue } from './InlinePropertyValueEditor'
+  ADDABLE_PROPERTY_SHAPES,
+  type AddablePropertyShape,
+  isAddablePropertyShape,
+} from './shapes'
+import { PropertyShapeButton } from './shapeUi'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
 import { FieldConfigSheet } from './FieldConfigSheet'
 
@@ -22,12 +21,12 @@ export function AddPropertyForm({
   onAdd,
 }: {
   blockId: string
-  onAdd: (name: string, kind: AddablePropertyKind) => void
+  onAdd: (name: string, shape: AddablePropertyShape) => void
 }) {
   const [initialRequest] = useState(() => consumePendingPropertyCreateRequest(blockId))
   const [isOpen, setIsOpen] = useState(Boolean(initialRequest))
   const [propertyName, setPropertyName] = useState(initialRequest?.initialName ?? '')
-  const [propertyKind, setPropertyKind] = useState<AddablePropertyKind>('string')
+  const [propertyShape, setPropertyShape] = useState<AddablePropertyShape>('string')
   const [configOpen, setConfigOpen] = useState(false)
   const nameInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -42,7 +41,7 @@ export function AddPropertyForm({
 
   const openForm = useCallback((initialName = '') => {
     setPropertyName(initialName)
-    setPropertyKind('string')
+    setPropertyShape('string')
     setConfigOpen(false)
     setIsOpen(true)
     focusNameInput()
@@ -59,9 +58,9 @@ export function AddPropertyForm({
   const handleAdd = () => {
     const name = propertyName.trim()
     if (!name) return
-    onAdd(name, propertyKind)
+    onAdd(name, propertyShape)
     setPropertyName('')
-    setPropertyKind('string')
+    setPropertyShape('string')
     setConfigOpen(false)
     setIsOpen(false)
     focusPropertyRowByNameWhenReady(blockId, name)
@@ -87,8 +86,8 @@ export function AddPropertyForm({
       className="grid items-center gap-2 border-b border-border/40 py-0.5 text-sm"
       style={PROPERTY_ROW_GRID_STYLE}
     >
-      <PropertyKindButton
-        kind={propertyKind}
+      <PropertyShapeButton
+        shape={propertyShape}
         schemaUnknown
         label="New field"
         onClick={() => setConfigOpen(true)}
@@ -111,22 +110,32 @@ export function AddPropertyForm({
           }
         }}
       />
-      <InlineEmptyValue kind={propertyKind} />
+      <PropertyEmptyValue shape={propertyShape} />
       <div />
       <FieldConfigSheet
         field={configOpen ? {
           labelText: propertyName.trim() || 'New field',
-          kind: propertyKind,
-          kindOptions: ADDABLE_PROPERTY_KINDS,
+          shape: propertyShape,
+          shapeOptions: ADDABLE_PROPERTY_SHAPES,
           schemaUnknown: true,
           decodeFailed: false,
           readOnly: false,
         } : null}
-        onKindChange={(next) => {
-          if (isAddablePropertyKind(next)) setPropertyKind(next)
+        onShapeChange={(next) => {
+          if (isAddablePropertyShape(next)) setPropertyShape(next)
         }}
         onClose={() => setConfigOpen(false)}
       />
+    </div>
+  )
+}
+
+function PropertyEmptyValue({shape}: {shape: AddablePropertyShape}) {
+  return (
+    <div className="min-w-0">
+      <div className="h-7 truncate py-1 text-sm text-muted-foreground/55">
+        {shape === 'list' ? 'Select option' : 'Empty'}
+      </div>
     </div>
   )
 }

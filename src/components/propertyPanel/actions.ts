@@ -7,10 +7,10 @@ import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.ts'
 import {
   adhocSchema,
-  defaultValueForKind,
+  defaultValueForShape,
 } from '@/components/propertyEditors/defaults'
 import { isPropertyPanelHiddenProperty } from './visibility'
-import type { AddablePropertyKind } from './kinds'
+import type { AddablePropertyShape } from './shapes'
 
 const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
   Object.prototype.hasOwnProperty.call(properties, name)
@@ -28,25 +28,25 @@ export const addProperty = (
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyUiContribution>,
   rawName: string,
-  kind: AddablePropertyKind,
+  shape: AddablePropertyShape,
 ) => {
   const name = rawName.trim()
   if (!name || isPropertyPanelHiddenProperty(name, schemas, uis)) return
 
   const registered = schemas.get(name)
   if (registered) writeProperty(block, registered, registered.defaultValue)
-  else writeProperty(block, adhocSchema(name, kind), defaultValueForKind(kind))
+  else writeProperty(block, adhocSchema(name, shape), defaultValueForShape(shape))
 }
 
-export const changeAdhocPropertyKind = (
+export const changeAdhocPropertyShape = (
   block: Block,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyUiContribution>,
   name: string,
-  kind: AddablePropertyKind,
+  shape: AddablePropertyShape,
 ) => {
   if (isPropertyPanelHiddenProperty(name, schemas, uis) || schemas.has(name)) return
-  void block.set(adhocSchema(name, kind), defaultValueForKind(kind))
+  void block.set(adhocSchema(name, shape), defaultValueForShape(shape))
 }
 
 export const renameProperty = async (args: {

@@ -11,14 +11,12 @@ export const previousLoadTimeProp = defineProperty<number | undefined>('previous
   codec: codecs.optional(codecs.number),
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
-  kind: 'number',
 })
 
 export const currentLoadTimeProp = defineProperty<number | undefined>('currentLoadTime', {
   codec: codecs.optional(codecs.number),
   defaultValue: undefined,
   changeScope: ChangeScope.UserPrefs,
-  kind: 'number',
 })
 
 const recordedLoadTimes = new Map<string, Promise<void>>()

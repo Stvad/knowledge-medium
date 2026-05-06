@@ -12,6 +12,7 @@ import { defineFacet } from '@/extensions/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnyPropertyEditorFallbackContribution,
   AnyPropertySchema,
   AnyPropertyUiContribution,
   AnyQuery,
@@ -161,6 +162,15 @@ export const propertyUiFacet = defineFacet<AnyPropertyUiContribution, ReadonlyMa
     return out
   },
   empty: () => new Map(),
+})
+
+export const propertyEditorFallbackFacet = defineFacet<
+  AnyPropertyEditorFallbackContribution,
+  readonly AnyPropertyEditorFallbackContribution[]
+>({
+  id: 'data.propertyEditorFallbacks',
+  combine: values => [...values].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)),
+  empty: () => [],
 })
 
 export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, ReadonlyMap<string, AnyPostCommitProcessor>>({

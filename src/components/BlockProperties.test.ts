@@ -15,28 +15,24 @@ const statusProp = defineProperty<string>('status', {
   codec: codecs.string,
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const dueProp = defineProperty<string>('due', {
   codec: codecs.string,
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const ownerProp = defineProperty<string>('owner', {
   codec: codecs.string,
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const priorityProp = defineProperty<number>('priority', {
   codec: codecs.number,
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
 })
 
 const schemasMap = (schemas: readonly AnyPropertySchema[]) =>

@@ -1,11 +1,11 @@
 import type { KeyboardEvent } from 'react'
 import { Trash2 } from 'lucide-react'
 import type { Block } from '@/data/block'
+import { isRefCodec, isRefListCodec } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { propertyKindLabel } from './kinds'
-import { PropertyKindButton } from './kindUi'
-import { InlinePropertyValueEditor } from './InlinePropertyValueEditor'
+import { propertyShapeLabel } from './shapes'
+import { PropertyShapeButton } from './shapeUi'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
 import type { PropertyPanelModelRow } from './model'
 
@@ -28,12 +28,14 @@ export function PropertyRow({
   onRename: (newName: string) => void
   onDelete: () => void
 }) {
-  const Editor = row.customEditor
+  const Editor = row.Editor
   const rowReadOnly = readOnly
   const renameAllowed = row.canRename && !rowReadOnly
-  const rowAlignment = row.kind === 'ref' || row.kind === 'refList' ? 'items-start' : 'items-center'
+  const rowAlignment = isRefCodec(row.schema.codec) || isRefListCodec(row.schema.codec)
+    ? 'items-start'
+    : 'items-center'
   const hintText = [
-    propertyKindLabel(row.kind),
+    propertyShapeLabel(row.shape),
     row.schemaUnknown ? 'schema not registered' : null,
     row.decodeFailed ? 'decode failed' : null,
     row.isHidden ? 'hidden field' : null,
@@ -52,8 +54,8 @@ export function PropertyRow({
         if (event.key === 'ArrowDown') onNavigate(event, 1)
       }}
     >
-      <PropertyKindButton
-        kind={row.kind}
+      <PropertyShapeButton
+        shape={row.shape}
         label={row.labelText}
         schemaUnknown={row.schemaUnknown}
         decodeFailed={row.decodeFailed}
@@ -92,13 +94,9 @@ export function PropertyRow({
         {Editor !== undefined && !row.decodeFailed ? (
           <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
         ) : (
-          <InlinePropertyValueEditor
-            kind={row.kind}
-            value={row.value}
-            onChange={onChange}
-            readOnly={rowReadOnly}
-            ariaLabel={`Toggle ${row.labelText}`}
-          />
+          <div className="h-7 truncate py-1 text-sm text-muted-foreground/55">
+            {row.decodeFailed ? 'Decode failed' : 'No editor registered'}
+          </div>
         )}
       </div>
       <div className="flex h-7 items-center justify-center" data-property-row-control="true">

@@ -15,49 +15,42 @@ export const srsIntervalProp = defineProperty<number>('interval', {
   codec: codecs.number,
   defaultValue: 2,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
 })
 
 export const srsFactorProp = defineProperty<number>('factor', {
   codec: codecs.number,
   defaultValue: 2.5,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
 })
 
 export const srsNextReviewDateProp = defineProperty<string>('next-review-date', {
   codec: codecs.ref({targetTypes: [DAILY_NOTE_TYPE]}),
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'ref',
 })
 
 export const srsReviewCountProp = defineProperty<number>('review-count', {
   codec: codecs.number,
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
 })
 
 export const srsGradeProp = defineProperty<number>('grade', {
   codec: codecs.number,
   defaultValue: 0,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
 })
 
 export const srsArchivedProp = defineProperty<boolean>('archived', {
   codec: codecs.boolean,
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'boolean',
 })
 
 export const srsSnapshotHistoryProp = defineProperty<SrsReviewSnapshot[]>('snapshot-history', {
   codec: codecs.list(codecs.unsafeIdentity<SrsReviewSnapshot>()),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'list',
 })
 
 export const srsSm25Type = defineBlockType({

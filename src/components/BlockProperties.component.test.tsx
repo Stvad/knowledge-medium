@@ -50,21 +50,18 @@ const reviewStatusProp = defineProperty<string>('phase2:review-status', {
   codec: codecs.string,
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const reviewerRefProp = defineProperty<string>('phase2:reviewer-ref', {
   codec: codecs.ref({targetTypes: ['reviewer']}),
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'ref',
 })
 
 const relatedRefsProp = defineProperty<readonly string[]>('phase2:related-refs', {
   codec: codecs.refList({targetTypes: ['related']}),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'refList',
 })
 
 const reviewType = defineBlockType({
@@ -77,7 +74,6 @@ const reviewerProp = defineProperty<string>('phase2:reviewer', {
   codec: codecs.string,
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const assignmentType = defineBlockType({

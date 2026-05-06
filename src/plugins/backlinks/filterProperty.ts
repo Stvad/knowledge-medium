@@ -29,6 +29,7 @@ const parseBacklinksFilter = (value: unknown): BacklinksFilter => {
 }
 
 const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
+  shape: 'object',
   encode: value => normalizeBacklinksFilter(value),
   decode: value => normalizeBacklinksFilter(parseBacklinksFilter(value)),
 }
@@ -37,7 +38,6 @@ export const backlinksFilterProp = defineProperty<StoredBacklinksFilter>('backli
   codec: backlinksFilterCodec,
   defaultValue: EMPTY_BACKLINKS_FILTER,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'object',
 })
 
 export const readBacklinksFilterProperty = (

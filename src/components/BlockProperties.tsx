@@ -11,7 +11,7 @@ import { useChildIds, useHandle } from '@/hooks/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
-import { propertyUiFacet, typesFacet } from '../data/facets.ts'
+import { propertyEditorFallbackFacet, propertyUiFacet, typesFacet } from '../data/facets.ts'
 import {
   editorSelection,
   requestEditorFocus,
@@ -25,16 +25,16 @@ import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.ts'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
-  changeAdhocPropertyKind,
+  changeAdhocPropertyShape,
   deleteProperty,
   renameProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import { FieldConfigSheet, type FieldConfig } from './propertyPanel/FieldConfigSheet'
 import {
-  ADDABLE_PROPERTY_KINDS,
-  isAddablePropertyKind,
-} from './propertyPanel/kinds'
+  ADDABLE_PROPERTY_SHAPES,
+  isAddablePropertyShape,
+} from './propertyPanel/shapes'
 import {
   buildPropertyPanelModel,
   type PropertyPanelModel,
@@ -71,11 +71,11 @@ const fieldConfigForRow = (
   if (!row) return null
   return {
     labelText: row.labelText,
-    kind: row.kind,
-    kindOptions: row.canChangeKind ? ADDABLE_PROPERTY_KINDS : [row.kind],
+    shape: row.shape,
+    shapeOptions: row.canChangeShape ? ADDABLE_PROPERTY_SHAPES : [row.shape],
     schemaUnknown: row.schemaUnknown,
     decodeFailed: row.decodeFailed,
-    readOnly: panelReadOnly || !row.canChangeKind,
+    readOnly: panelReadOnly || !row.canChangeShape,
   }
 }
 
@@ -100,6 +100,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
   const uis = runtime.read(propertyUiFacet)
+  const editorFallbacks = runtime.read(propertyEditorFallbackFacet)
   const typesRegistry = runtime.read(typesFacet)
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
@@ -112,10 +113,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       properties,
       schemas,
       uis,
+      editorFallbacks,
       typesRegistry,
     })
     : null,
-  [blockData, properties, schemas, typesRegistry, uis])
+  [blockData, editorFallbacks, properties, schemas, typesRegistry, uis])
 
   const activeConfigRow = useMemo(() => {
     if (!model || !activeConfigRowName) return null
@@ -222,7 +224,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         <AddPropertyForm
           key={block.id}
           blockId={block.id}
-          onAdd={(name, kind) => addProperty(block, schemas, uis, name, kind)}
+          onAdd={(name, shape) => addProperty(block, schemas, uis, name, shape)}
         />
       )}
 
@@ -239,9 +241,9 @@ export function BlockProperties({block}: BlockPropertiesProps) {
 
       <FieldConfigSheet
         field={activeFieldConfig}
-        onKindChange={(kind) => {
-          if (!activeConfigRow || !isAddablePropertyKind(kind)) return
-          changeAdhocPropertyKind(block, schemas, uis, activeConfigRow.name, kind)
+        onShapeChange={(shape) => {
+          if (!activeConfigRow || !isAddablePropertyShape(shape)) return
+          changeAdhocPropertyShape(block, schemas, uis, activeConfigRow.name, shape)
         }}
         onClose={() => setActiveConfigRowName(null)}
       />

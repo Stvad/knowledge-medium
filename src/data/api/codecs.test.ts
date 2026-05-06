@@ -1,5 +1,40 @@
 import { describe, expect, it } from 'vitest'
-import { codecs, CodecError, isRefCodec, isRefListCodec } from './codecs'
+import {
+  codecs,
+  CodecError,
+  isBooleanCodec,
+  isDateCodec,
+  isListCodec,
+  isNumberCodec,
+  isObjectCodec,
+  isRefCodec,
+  isRefListCodec,
+  isStringCodec,
+} from './codecs'
+
+describe('codec shape metadata', () => {
+  it('tags primitive and composed codecs with editor shapes', () => {
+    expect(codecs.string.shape).toBe('string')
+    expect(codecs.number.shape).toBe('number')
+    expect(codecs.boolean.shape).toBe('boolean')
+    expect(codecs.date.shape).toBe('date')
+    expect(codecs.optional(codecs.string).shape).toBe('string')
+    expect(codecs.list(codecs.number).shape).toBe('list')
+    expect(codecs.ref().shape).toBe('string')
+    expect(codecs.refList().shape).toBe('list')
+    expect(codecs.unsafeIdentity().shape).toBe('object')
+    expect(codecs.unsafeIdentity('string').shape).toBe('string')
+  })
+
+  it('exposes shape predicates for fallback editor matching', () => {
+    expect(isStringCodec(codecs.string)).toBe(true)
+    expect(isNumberCodec(codecs.number)).toBe(true)
+    expect(isBooleanCodec(codecs.boolean)).toBe(true)
+    expect(isListCodec(codecs.list(codecs.string))).toBe(true)
+    expect(isObjectCodec(codecs.unsafeIdentity())).toBe(true)
+    expect(isDateCodec(codecs.date)).toBe(true)
+  })
+})
 
 describe('codecs.string', () => {
   it('round-trips ascii and unicode', () => {

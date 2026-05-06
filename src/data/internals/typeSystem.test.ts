@@ -55,13 +55,11 @@ describe('Repo type membership orchestration', () => {
       codec: codecs.date,
       defaultValue: new Date(0),
       changeScope: ChangeScope.BlockDefault,
-      kind: 'date',
     })
     const setupCountProp = defineProperty<number>('setupCount', {
       codec: codecs.number,
       defaultValue: 0,
       changeScope: ChangeScope.BlockDefault,
-      kind: 'number',
     })
     let setupCalls = 0
     const taskType = defineBlockType({
@@ -104,7 +102,6 @@ describe('Repo type membership orchestration', () => {
       codec: codecs.string,
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),
@@ -158,7 +155,6 @@ describe('Repo type membership orchestration', () => {
       codec: codecs.string,
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     repo.setFacetRuntime(resolveFacetRuntimeSync([
       typesFacet.of(defineBlockType({id: 'todo', properties: [statusProp]}), {source: 'test'}),

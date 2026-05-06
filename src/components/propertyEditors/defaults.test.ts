@@ -3,8 +3,8 @@
  * Pure-function tests for the §5.6.1 lookup chain. Cover the three
  * paths that drive `BlockProperties`'s rendering decision:
  *   1. Schema known + custom UI contribution → use the contribution.
- *   2. Schema known + no UI contribution → fall back to default for kind.
- *   3. Schema unknown → infer kind from the value, ad-hoc schema.
+ *   2. Schema known + no UI contribution → fall back via schema/codec match.
+ *   3. Schema unknown → infer shape from the value, ad-hoc schema, fallback match.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -14,10 +14,24 @@ import {
   codecs,
   defineProperty,
   definePropertyUi,
+  isListCodec,
+  isNumberCodec,
+  isRefCodec,
+  isRefListCodec,
+  isStringCodec,
+  type AnyPropertyEditorFallbackContribution,
   type AnyPropertySchema,
   type AnyPropertyUiContribution,
 } from '@/data/api'
-import { adhocSchema, defaultValueForKind, inferKindFromValue, resolvePropertyDisplay } from './defaults'
+import {
+  adhocSchema,
+  defaultValueForShape,
+  inferShapeFromValue,
+  ListPropertyEditor,
+  NumberPropertyEditor,
+  resolvePropertyDisplay,
+  StringPropertyEditor,
+} from './defaults'
 import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 
 const schemasMap = (entries: AnyPropertySchema[]): ReadonlyMap<string, AnyPropertySchema> =>
@@ -30,38 +44,69 @@ const uisMap = (entries: AnyPropertyUiContribution[]): ReadonlyMap<string, AnyPr
  *  `PropertyEditor<T>`'s `JSX.Element` return contract. */
 const noopEditor = (): JSX.Element => createElement('span', null, null)
 
-describe('inferKindFromValue', () => {
-  it('returns the right kind for each JSON shape', () => {
-    expect(inferKindFromValue('hi')).toBe('string')
-    expect(inferKindFromValue(42)).toBe('number')
-    expect(inferKindFromValue(true)).toBe('boolean')
-    expect(inferKindFromValue([])).toBe('list')
-    expect(inferKindFromValue([1, 2])).toBe('list')
-    expect(inferKindFromValue({a: 1})).toBe('object')
+const editorFallbacks: readonly AnyPropertyEditorFallbackContribution[] = [
+  {
+    id: 'test.ref',
+    priority: 100,
+    matches: schema => isRefCodec(schema.codec),
+    Editor: RefPropertyEditor,
+  },
+  {
+    id: 'test.refList',
+    priority: 100,
+    matches: schema => isRefListCodec(schema.codec),
+    Editor: RefListPropertyEditor,
+  },
+  {
+    id: 'test.list',
+    priority: 0,
+    matches: schema => isListCodec(schema.codec),
+    Editor: ListPropertyEditor,
+  },
+  {
+    id: 'test.number',
+    priority: 0,
+    matches: schema => isNumberCodec(schema.codec),
+    Editor: NumberPropertyEditor,
+  },
+  {
+    id: 'test.string',
+    priority: 0,
+    matches: schema => isStringCodec(schema.codec),
+    Editor: StringPropertyEditor,
+  },
+]
+
+describe('inferShapeFromValue', () => {
+  it('returns the right shape for each JSON shape', () => {
+    expect(inferShapeFromValue('hi')).toBe('string')
+    expect(inferShapeFromValue(42)).toBe('number')
+    expect(inferShapeFromValue(true)).toBe('boolean')
+    expect(inferShapeFromValue([])).toBe('list')
+    expect(inferShapeFromValue([1, 2])).toBe('list')
+    expect(inferShapeFromValue({a: 1})).toBe('object')
     // null falls through to string per the kernel's lossy-inference contract.
-    expect(inferKindFromValue(null)).toBe('string')
-    expect(inferKindFromValue(undefined)).toBe('string')
+    expect(inferShapeFromValue(null)).toBe('string')
+    expect(inferShapeFromValue(undefined)).toBe('string')
   })
 })
 
-describe('defaultValueForKind', () => {
-  it('returns the right starting value per kind', () => {
-    expect(defaultValueForKind('string')).toBe('')
-    expect(defaultValueForKind('number')).toBe(0)
-    expect(defaultValueForKind('boolean')).toBe(false)
-    expect(defaultValueForKind('list')).toEqual([])
-    expect(defaultValueForKind('ref')).toBe('')
-    expect(defaultValueForKind('refList')).toEqual([])
-    expect(defaultValueForKind('object')).toEqual({})
-    expect(defaultValueForKind('date')).toBeUndefined()
+describe('defaultValueForShape', () => {
+  it('returns the right starting value per shape', () => {
+    expect(defaultValueForShape('string')).toBe('')
+    expect(defaultValueForShape('number')).toBe(0)
+    expect(defaultValueForShape('boolean')).toBe(false)
+    expect(defaultValueForShape('list')).toEqual([])
+    expect(defaultValueForShape('object')).toEqual({})
+    expect(defaultValueForShape('date')).toBeUndefined()
   })
 })
 
 describe('adhocSchema', () => {
-  it('builds a PropertySchema with the requested kind and BlockDefault scope', () => {
+  it('builds a PropertySchema with the requested shape and BlockDefault scope', () => {
     const schema = adhocSchema('rogue', 'number')
     expect(schema.name).toBe('rogue')
-    expect(schema.kind).toBe('number')
+    expect(schema.codec.shape).toBe('number')
     expect(schema.changeScope).toBe(ChangeScope.BlockDefault)
     expect(schema.defaultValue).toBe(0)
     // Identity codec — encoded shape passes through unchanged.
@@ -81,14 +126,13 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     codec: codecs.string,
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
-    kind: 'string',
   })
 
-  const customEditor = noopEditor
+  const exactEditor = noopEditor
   const titleUi = definePropertyUi<string>({
     name: 'title',
     label: 'Title',
-    Editor: customEditor,
+    Editor: exactEditor,
   })
 
   it('schema known + UI contribution registered → returns the contribution Editor', () => {
@@ -97,84 +141,90 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
       uis: uisMap([titleUi]),
+      editorFallbacks,
     })
     expect(display.isKnown).toBe(true)
     expect(display.schema).toBe(titleSchema)
-    expect(display.kind).toBe('string')
-    expect(display.customEditor).toBe(customEditor)
+    expect(display.shape).toBe('string')
+    expect(display.Editor).toBe(exactEditor)
   })
 
-  it('schema known + no UI contribution → customEditor undefined, caller falls back to default', () => {
+  it('schema known + no UI contribution → uses the matching fallback editor', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
       uis: uisMap([]),
+      editorFallbacks,
     })
     expect(display.isKnown).toBe(true)
     expect(display.schema).toBe(titleSchema)
-    expect(display.customEditor).toBeUndefined()
+    expect(display.Editor).toBe(StringPropertyEditor)
   })
 
-  it('schema known + ref kind → uses the kernel ref editor fallback', () => {
+  it('schema known + ref codec → uses the higher-priority ref editor fallback', () => {
     const refSchema = defineProperty<string>('reviewer', {
       codec: codecs.ref(),
       defaultValue: '',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'ref',
     })
     const display = resolvePropertyDisplay({
       name: 'reviewer',
       encodedValue: 'target-1',
       schemas: schemasMap([refSchema]),
       uis: uisMap([]),
+      editorFallbacks,
     })
-    expect(display.customEditor).toBe(RefPropertyEditor)
+    expect(display.shape).toBe('string')
+    expect(display.Editor).toBe(RefPropertyEditor)
   })
 
-  it('schema known + refList kind → uses the kernel ref-list editor fallback', () => {
+  it('schema known + refList codec → uses the higher-priority ref-list editor fallback', () => {
     const refListSchema = defineProperty<readonly string[]>('related', {
       codec: codecs.refList(),
       defaultValue: [],
       changeScope: ChangeScope.BlockDefault,
-      kind: 'refList',
     })
     const display = resolvePropertyDisplay({
       name: 'related',
       encodedValue: ['target-1'],
       schemas: schemasMap([refListSchema]),
       uis: uisMap([]),
+      editorFallbacks,
     })
-    expect(display.customEditor).toBe(RefListPropertyEditor)
+    expect(display.shape).toBe('list')
+    expect(display.Editor).toBe(RefListPropertyEditor)
   })
 
-  it('schema unknown → infers kind from value, returns an ad-hoc schema, isKnown=false', () => {
+  it('schema unknown → infers shape from value, returns an ad-hoc schema, uses fallback editor', () => {
     const display = resolvePropertyDisplay({
       name: 'newish-prop',
       encodedValue: [1, 2, 3],
       schemas: schemasMap([]),
       uis: uisMap([]),
+      editorFallbacks,
     })
     expect(display.isKnown).toBe(false)
     expect(display.schema.name).toBe('newish-prop')
-    expect(display.schema.kind).toBe('list')
-    expect(display.kind).toBe('list')
-    expect(display.customEditor).toBeUndefined()
+    expect(display.schema.codec.shape).toBe('list')
+    expect(display.shape).toBe('list')
+    expect(display.Editor).toBe(ListPropertyEditor)
   })
 
-  it('schema unknown + UI contribution registered → still falls through (no schema = no real editor)', () => {
+  it('schema unknown + UI contribution registered → ignores orphan UI and uses fallback', () => {
     // A UI contribution without a matching schema is ignored — the
     // facet join key is the schema name. Only-UI registrations from
     // an inattentive plugin author shouldn't accidentally apply to
-    // every unknown property; the panel infers + uses defaults.
+    // every unknown property; the panel infers + uses fallback editors.
     const display = resolvePropertyDisplay({
       name: 'orphan-prop',
       encodedValue: 'x',
       schemas: schemasMap([]),
       uis: uisMap([titleUi]),
+      editorFallbacks,
     })
     expect(display.isKnown).toBe(false)
-    expect(display.customEditor).toBeUndefined()
+    expect(display.Editor).toBe(StringPropertyEditor)
   })
 
   it('multiple schemas registered → only the matching name is consulted', () => {
@@ -182,16 +232,27 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       codec: codecs.number,
       defaultValue: 0,
       changeScope: ChangeScope.BlockDefault,
-      kind: 'number',
     })
     const display = resolvePropertyDisplay({
       name: 'count',
       encodedValue: 7,
       schemas: schemasMap([titleSchema, otherSchema]),
       uis: uisMap([titleUi]),
+      editorFallbacks,
     })
     expect(display.schema).toBe(otherSchema)
-    expect(display.kind).toBe('number')
-    expect(display.customEditor).toBeUndefined()
+    expect(display.shape).toBe('number')
+    expect(display.Editor).toBe(NumberPropertyEditor)
+  })
+
+  it('returns undefined Editor when no exact UI or fallback contribution matches', () => {
+    const display = resolvePropertyDisplay({
+      name: 'title',
+      encodedValue: 'Hello',
+      schemas: schemasMap([titleSchema]),
+      uis: uisMap([]),
+      editorFallbacks: [],
+    })
+    expect(display.Editor).toBeUndefined()
   })
 })

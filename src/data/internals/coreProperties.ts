@@ -18,5 +18,4 @@ export const aliasesProp: PropertySchema<string[]> = defineProperty<string[]>('a
   codec: codecs.list(codecs.string),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'list',
 })

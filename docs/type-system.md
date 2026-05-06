@@ -12,9 +12,9 @@ These pieces are load-bearing and the design composes them, not replaces them:
 
 - **`typeProp`** ([src/data/properties.ts:106](src/data/properties.ts:106)) — a `string | undefined` prop named `type`. Set today to `'extension'` (extension blocks, [exampleExtensions.ts:309](src/extensions/exampleExtensions.ts:309), [agent-runtime/commands.ts:189](src/plugins/agent-runtime/commands.ts:189)), `'page'` (Roam import + plan, [roamImport/import.ts:836](src/utils/roamImport/import.ts:836), [roamImport/plan.ts:562](src/utils/roamImport/plan.ts:562)), `'panel'` ([LayoutRenderer.tsx:74](src/components/renderer/LayoutRenderer.tsx:74), [:120](src/components/renderer/LayoutRenderer.tsx:120)), `'journal'` and `'daily-note'` ([dailyNotes.ts:86](src/data/dailyNotes.ts:86), [:159](src/data/dailyNotes.ts:159)).
 - **`rendererProp`** ([src/data/properties.ts:113](src/data/properties.ts:113)) — explicit per-block renderer-id override. Read by [useRendererRegistry.tsx:22](src/hooks/useRendererRegistry.tsx:22).
-- **`PropertySchema<T>`** ([src/data/api/propertySchema.ts:16](src/data/api/propertySchema.ts:16)) — typed property with codec, default, change-scope, and a `kind` for unknown-schema fallback.
+- **`PropertySchema<T>`** ([src/data/api/propertySchema.ts](src/data/api/propertySchema.ts)) — typed property with codec, default, and change-scope. Primitive editor shape lives on `schema.codec.shape`; semantic codecs add their own metadata.
 - **`PropertyUiContribution<T>`** ([src/data/api/propertySchema.ts:33](src/data/api/propertySchema.ts:33)) — React `Editor` / `Renderer` joined to a schema by `name`. Already used by `grouped-backlinks` ([plugins/grouped-backlinks/index.ts:21](src/plugins/grouped-backlinks/index.ts:21)).
-- **`propertySchemasFacet` / `propertyUiFacet`** ([src/data/facets.ts:114](src/data/facets.ts:114), [:131](src/data/facets.ts:131)) — registries keyed by `name`, last-wins on duplicates.
+- **`propertySchemasFacet` / `propertyUiFacet` / `propertyEditorFallbackFacet`** ([src/data/facets.ts](src/data/facets.ts)) — schema and exact-UI registries keyed by `name`, plus ordered fallback editor contributions that match registered schemas/codecs.
 - **`blockRenderersFacet`** ([src/extensions/core.ts](src/extensions/core.ts)) — renderer registry with `id` + optional `aliases`; `BlockRenderer` supports `canRender` / `priority` for dynamic dispatch ([src/types.ts:65](src/types.ts:65)).
 - **`BlockData.references: BlockReference[]`** ([src/data/api/blockData.ts:26](src/data/api/blockData.ts:26)) — content-derived (parsed from `[[alias]]` and `((uuid))`) by the `backlinks.parseReferences` post-commit processor ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)). `BlockReference = { id, alias }` ([src/data/api/blockData.ts:4](src/data/api/blockData.ts:4)).
 - **`AppExtension`** + facets — plugins contribute via `someFacet.of(contribution, {source})` ([video-player/index.ts](src/plugins/video-player/index.ts) is a good template).
@@ -209,7 +209,6 @@ export const typesProp = defineProperty<readonly string[]>('types', {
   codec: codecs.list(codecs.string),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'list',
 })
 ```
 
@@ -775,9 +774,9 @@ for (const typeId of block.types) {
 
 The dedup by `name` is exactly what §3b's "field discovery is union by name" means at the code level. Multi-type composition is automatic — a prop declared by both `todo` and `task` lands in the map once.
 
-**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, render `DefaultPropertyValueEditor` (or the contributed `PropertyUiContribution.Editor`) with `schema.defaultValue` as its value — same global default `block.get` returns for an unset property, since defaults live on the schema, not on type contributions. The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property.
+**Empty slots render via the existing editor path, no new component.** For each entry in `applicable`: if `name in properties`, decode and edit (existing path); if not set, run `resolvePropertyDisplay` and render the resolved editor with `schema.defaultValue` as its value — same global default `block.get` returns for an unset property, since defaults live on the schema, not on type contributions. Exact `PropertyUiContribution.Editor`s win first; otherwise `propertyEditorFallbackFacet` matches the schema/codec (`kernel.boolean`, `kernel.ref`, etc.). The editor doesn't need a "placeholder mode" — first user interaction calls `block.set(schema, …)` which materialises the property.
 
-For each entry in `unknownNames` — properties set on the block whose schema isn't registered (legacy ad-hoc props, plugin-not-loaded refs, etc.) — keep the existing unknown-schema fallback in [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx) ([:201](src/components/BlockProperties.tsx:201)–[:204](src/components/BlockProperties.tsx:204)): `resolvePropertyDisplay` builds an `adhocSchema` and routes through the kind-inferred default editor. These rows still appear in the panel — the union must not silently drop them.
+For each entry in `unknownNames` — properties set on the block whose schema isn't registered (legacy ad-hoc props, plugin-not-loaded refs, etc.) — keep the existing unknown-schema fallback: `resolvePropertyDisplay` infers a primitive codec shape from the encoded JSON value, builds an `adhocSchema`, and routes through the same fallback editor facet. These rows still appear in the panel — the union must not silently drop them.
 
 **Render order:** type-contributed properties in `block.types` array order, then in each type's `properties[]` order; ad-hoc / set-but-no-type properties last. Within each group, set values before unset slots so users see materialised state first. Aesthetic call, not a correctness one.
 
@@ -875,15 +874,15 @@ Today's codec set ([src/data/api/codecs.ts:73](src/data/api/codecs.ts:73)) is `s
 // crosses a worker boundary.
 export interface RefCodec<T> extends Codec<T> {
   readonly refKind: 'ref' | 'refList'
-  readonly targetTypes?: readonly string[]
+  readonly targetTypes: readonly string[]
 }
 
 // Storage: a string block id. Codec exists so the data layer can
 // recognise ref-bearing properties without per-block scanning, and
 // so editor lookup in propertyUiFacet can default to a ref picker.
 // Empty/missing targetTypes = "any type."
-export const ref: (targetTypes?: readonly string[]) => RefCodec<string>
-export const refList: (targetTypes?: readonly string[]) => RefCodec<readonly string[]>
+export const ref: (options?: { targetTypes?: readonly string[] }) => RefCodec<string>
+export const refList: (options?: { targetTypes?: readonly string[] }) => RefCodec<readonly string[]>
 
 // AnyCodec = variance-erased Codec for storage in heterogeneous
 // collections + predicate inputs, mirroring AnyPropertySchema /
@@ -901,17 +900,16 @@ export const isRefCodec: (codec: AnyCodec) => codec is RefCodec<string>
 export const isRefListCodec: (codec: AnyCodec) => codec is RefCodec<readonly string[]>
 ```
 
-Add a `kind: 'ref' | 'refList'` to `PropertyKind` in [propertySchema.ts:5](src/data/api/propertySchema.ts:5) so the property panel can pick a ref-aware editor when a `PropertySchema` is registered. The projector in §7 only needs the ref-ness check (`isRefCodec` / `isRefListCodec`); picker UIs additionally read `targetTypes` after narrowing.
+Reference properties do not add schema kinds. `codecs.ref()` is a string-shaped codec with `refKind: 'ref'`; `codecs.refList()` is a list-shaped codec with `refKind: 'refList'`. The property panel picks ref-aware editors through `propertyEditorFallbackFacet` contributions that match `isRefCodec(schema.codec)` / `isRefListCodec(schema.codec)`, with higher priority than the generic string/list fallbacks. The projector in §7 uses the same predicates; picker UIs additionally read `targetTypes` after narrowing.
 
-**Unknown-schema fallback for refs is intentionally limited.** The unknown-schema path in [propertyEditors/defaults.tsx](src/components/propertyEditors/defaults.tsx) infers `kind` from raw JSON shape; a ref stored as a plain string id is indistinguishable from any other string, and a `refList` from any other `string[]`. Without a registered schema or an out-of-band marker on the value, the data layer has no way to know it's a ref. Accept this: unknown refs render via the primitive `string` / `list` editors, with no picker affordance, until the contributing plugin loads. Adding a `_ref: true` marker to stored values to make refs self-describing was considered and rejected — invasive, breaks JSON-equality compares, and "plugin not loaded" is rare enough that primitive-editor fallback is the right trade-off.
+**Unknown-schema fallback for refs is intentionally limited.** The unknown-schema path in [propertyEditors/defaults.tsx](src/components/propertyEditors/defaults.tsx) infers primitive shape from raw JSON; a ref stored as a plain string id is indistinguishable from any other string, and a `refList` from any other array. Without a registered schema or an out-of-band marker on the value, the data layer has no way to know it's a ref. Accept this: unknown refs render via the primitive string/list fallback editors, with no picker affordance, until the contributing plugin loads. Adding a `_ref: true` marker to stored values to make refs self-describing was considered and rejected — invasive, breaks JSON-equality compares, and "plugin not loaded" is rare enough that primitive-editor fallback is the right trade-off.
 
 Schemas declare ref properties with their target-type constraint colocated on the codec:
 
 ```ts
 export const projectTasksProp = defineProperty<readonly string[]>('tasks', {
-  codec: codecs.refList(['task']),   // picker constraint lives on the codec
+  codec: codecs.refList({ targetTypes: ['task'] }), // picker constraint lives on the codec
   defaultValue: [],
-  kind: 'refList',
   changeScope: ChangeScope.BlockDefault,
 })
 ```
@@ -1094,7 +1092,7 @@ interface TypedQuery {
   ```
 - `where` on a property → compile each `(name, decodedValue)` entry to `json_extract(properties_json, ?) = ?` and bind two parameters: the **JSON path** (computed safely — see below) and the **encoded** value run through the matching `PropertySchema.codec`. **Don't string-interpolate the property name into a `$.<name>` literal** — property names with `:`, `-`, or `.` (e.g. `system:collapsed`, `daily-note`) break naive interpolation. Use SQLite's path syntax: `'$.' || quote(name)` doesn't work directly, so build the path in JS with proper escaping (wrap in `"..."` and escape inner quotes — SQLite's JSON path accepts `$."weird:name"`). Look up the schema in **the merged `repo.propertySchemas` map** (§1a-public — not `propertySchemasFacet` directly, otherwise type-lifted-only schemas won't be found); if no schema is registered for that name, refuse the query with a clear error rather than guessing the codec — the caller is asking for typed-equality, ad-hoc schemas have `unsafeIdentity` codec which is meaningless to compare.
 
-  **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `kind` is `list`, `object`, `ref`, or `refList`. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
+  **`where` is restricted to scalar-encoded fields in v1.** `json_extract` returns SQL primitives (`TEXT` / `INTEGER` / `REAL` / `NULL`) for scalar values and JSON-text strings for arrays/objects. Comparing a bound JS array/object against the JSON-text return is unreliable (whitespace, key ordering, codec encoding all diverge), so refuse `where` on schemas whose `codec.shape` is `list` or `object`, and refuse ref codecs even though `ref()` stores as a string. Callers needing membership-style filters use `referencedBy` (which goes through `block_references`, not `properties_json`) or wait for a follow-up that defines explicit JSON-comparison semantics. Document the restriction at the API site so a typed-query author hits a clear error rather than silent miss.
 
   **`null` / `undefined` semantics on the where value.** SQL `=` doesn't match NULL — `json_extract(...) = NULL` is always FALSE — and `json_extract` itself returns NULL for missing JSON paths, so naive `= ?` against an encoded null silently matches nothing. v1 rules:
   - Caller-supplied `where` value is `undefined` → reject the query with a clear error. `undefined` is the JS "no value" sentinel and almost always indicates a caller bug like `where: {status: someVar}` where `someVar` isn't set; rejecting forces the caller to be explicit. To filter "field is unset," pass `null` explicitly (next bullet).
@@ -1227,7 +1225,7 @@ Each phase is independently shippable and testable.
 ### Phase 3 — ref codecs + named-backlinks (`block_references.source_field` + `ProcessorCtx`)
 
 1. Add `codecs.ref()` / `codecs.refList()` to [src/data/api/codecs.ts](src/data/api/codecs.ts) with runtime `isRefCodec` / `isRefListCodec` predicates.
-2. Add `kind: 'ref' | 'refList'` to `PropertyKind`.
+2. Register `kernel.ref` / `kernel.refList` fallback editors in `propertyEditorFallbackFacet` with higher priority than generic string/list fallbacks.
 3. Extend `BlockReference` with optional `sourceField`.
 4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Update `backlinksInvalidationRule` ([src/plugins/backlinks/invalidation.ts](src/plugins/backlinks/invalidation.ts)) to diff by `(id, sourceField)` per §6b so source-field-only changes invalidate grouped backlinks.
 5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Add `propertySchemas` to `CommittedTxOutcome` ([src/data/internals/processorRunner.ts:55](src/data/internals/processorRunner.ts:55)) so it's snapshotted alongside `processors` at tx-start; the commit pipeline at [src/data/repo.ts:664](src/data/repo.ts:664) passes `this._propertySchemas` through. `processorRunner.dispatch` reads the bundle's snapshot rather than reading the public `repo.propertySchemas` afresh, so processors and schemas come from the same resolved runtime.
@@ -1239,7 +1237,7 @@ Each phase is independently shippable and testable.
 
 ### Phase 4 — reactive typed-query primitive (SQLite-backed)
 
-1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `EXISTS` subqueries against `block_types` for type filters and `block_references` for `referencedBy` (avoids duplicating block rows when multiple edge rows match); `json_extract(properties_json, ?) = ?` for scalar `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters. Refuse the query when no schema is registered for a referenced field; refuse `where` on non-scalar kinds (`list`, `object`, `ref`, `refList`) per §8; refuse `undefined` `where` values; compile encoded `null` to `IS NULL` (matches both unset and explicit-null per §8). Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
+1. Implement `repo.queryBlocks` / `repo.subscribeBlocks` per §8 backed by SQL: `EXISTS` subqueries against `block_types` for type filters and `block_references` for `referencedBy` (avoids duplicating block rows when multiple edge rows match); `json_extract(properties_json, ?) = ?` for scalar `where` — bind the JSON path (built safely per §8 to handle property names containing `:`/`-`/`.`) and the codec-encoded value as parameters. Refuse the query when no schema is registered for a referenced field; refuse `where` on non-scalar shapes (`list`, `object`) and on ref codecs per §8; refuse `undefined` `where` values; compile encoded `null` to `IS NULL` (matches both unset and explicit-null per §8). Per-property indexes added incrementally as hot fields are identified, following the same path-quoting rule.
 2. Wire `subscribeBlocks` to the existing repo change-notification stream (which is already row-event-aware) so updates flow from both local commits and sync-applied changes.
 3. Add `useBlockQuery` hook in `src/hooks/`.
 

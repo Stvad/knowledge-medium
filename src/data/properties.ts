@@ -1,7 +1,7 @@
 /**
  * Kernel + UI-state property descriptors. Each export is a
  * `PropertySchema<T>` (data-layer definition with codec + default +
- * change scope + kind). React UI contributions live separately under
+ * change scope). React UI contributions live separately under
  * `propertyUiFacet` (Phase 3). See spec §4.1.1 / §5.6 / §6.
  *
  * Migration note (1.6): legacy creator helpers (`stringProperty`,
@@ -30,28 +30,24 @@ export const showPropertiesProp = defineProperty<boolean>('system:showProperties
   codec: codecs.boolean,
   defaultValue: false,
   changeScope: ChangeScope.UiState,
-  kind: 'boolean',
 })
 
 export const isEditingProp = defineProperty<boolean>('isEditing', {
   codec: codecs.boolean,
   defaultValue: false,
   changeScope: ChangeScope.UiState,
-  kind: 'boolean',
 })
 
 export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelBlockId', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
-  kind: 'string',
 })
 
 export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlockId', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
-  kind: 'string',
 })
 
 /** Editor-selection state for the active block. Object-typed; the
@@ -73,14 +69,12 @@ export const editorSelection = defineProperty<EditorSelectionState | undefined>(
   codec: codecs.optional<EditorSelectionState>(codecs.unsafeIdentity<EditorSelectionState>()),
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
-  kind: 'object',
 })
 
 export const editorFocusRequestProp = defineProperty<number>('editorFocusRequest', {
   codec: codecs.number,
   defaultValue: 0,
   changeScope: ChangeScope.UiState,
-  kind: 'number',
 })
 
 export interface BlockSelectionState {
@@ -92,7 +86,6 @@ export const selectionStateProp = defineProperty<BlockSelectionState>('blockSele
   codec: codecs.unsafeIdentity<BlockSelectionState>(),
   defaultValue: {selectedBlockIds: [], anchorBlockId: null},
   changeScope: ChangeScope.UiState,
-  kind: 'object',
 })
 
 // ──── Block-content schemas (changeScope: BlockDefault) ────
@@ -101,28 +94,24 @@ export const isCollapsedProp = defineProperty<boolean>('system:collapsed', {
   codec: codecs.boolean,
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'boolean',
 })
 
 export const typesProp = defineProperty<readonly string[]>('types', {
   codec: codecs.list(codecs.string),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'list',
 })
 
 export const rendererProp = defineProperty<string | undefined>('renderer', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 export const rendererNameProp = defineProperty<string | undefined>('rendererName', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 /** Extension lifecycle — content-scope (a flagged extension stays
@@ -131,21 +120,18 @@ export const extensionDisabledProp = defineProperty<boolean>('system:disabled', 
   codec: codecs.boolean,
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'boolean',
 })
 
 export const createdAtProp = defineProperty<number | undefined>('createdAt', {
   codec: codecs.optional(codecs.number),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'number',
 })
 
 export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlockId', {
   codec: codecs.optional(codecs.string),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 /** Re-export of the canonical alias schema (defined under

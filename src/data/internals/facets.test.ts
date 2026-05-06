@@ -30,7 +30,14 @@ import {
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
-import { mutatorsFacet, propertySchemasFacet, propertyUiFacet, queriesFacet, typesFacet } from '../facets'
+import {
+  mutatorsFacet,
+  propertyEditorFallbackFacet,
+  propertySchemasFacet,
+  propertyUiFacet,
+  queriesFacet,
+  typesFacet,
+} from '../facets'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import { Repo } from '../repo'
@@ -157,7 +164,6 @@ describe('propertySchemasFacet — kernel registration', () => {
       codec: codecs.optional(codecs.string),
       defaultValue: undefined,
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     const runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
@@ -178,13 +184,11 @@ describe('propertySchemasFacet — kernel registration', () => {
         codec: codecs.optional(codecs.string),
         defaultValue: undefined,
         changeScope: ChangeScope.BlockDefault,
-        kind: 'string',
       })
       const b = defineProperty<string | undefined>('plugin:dup', {
         codec: codecs.optional(codecs.string),
         defaultValue: undefined,
         changeScope: ChangeScope.BlockDefault,
-        kind: 'string',
       })
       const runtime = resolveFacetRuntimeSync([
         propertySchemasFacet.of(a, {source: 'test'}),
@@ -231,7 +235,6 @@ describe('typesFacet + schema lift', () => {
       codec: codecs.string,
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     const taskType = defineBlockType({id: 'task', properties: [liftedSchema]})
     const runtime = resolveFacetRuntimeSync([
@@ -250,13 +253,11 @@ describe('typesFacet + schema lift', () => {
         codec: codecs.string,
         defaultValue: 'open',
         changeScope: ChangeScope.BlockDefault,
-        kind: 'string',
       })
       const directSchema = defineProperty<string>('status', {
         codec: codecs.string,
         defaultValue: 'todo',
         changeScope: ChangeScope.BlockDefault,
-        kind: 'string',
       })
       const runtime = resolveFacetRuntimeSync([
         typesFacet.of(defineBlockType({id: 'task', properties: [liftedSchema]}), {source: 'test'}),
@@ -278,7 +279,6 @@ describe('typesFacet + schema lift', () => {
         codec: codecs.string,
         defaultValue: 'open',
         changeScope: ChangeScope.BlockDefault,
-        kind: 'string',
       })
       const runtime = resolveFacetRuntimeSync([
         typesFacet.of(defineBlockType({id: 'todo', properties: [sharedSchema]}), {source: 'test'}),
@@ -291,6 +291,31 @@ describe('typesFacet + schema lift', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe('propertyEditorFallbackFacet', () => {
+  it('orders fallback editors by descending priority', () => {
+    const low = {
+      id: 'test.low',
+      priority: 0,
+      matches: () => true,
+      Editor: (): JSX.Element => createElement('span', null, null),
+    }
+    const high = {
+      id: 'test.high',
+      priority: 100,
+      matches: () => true,
+      Editor: (): JSX.Element => createElement('span', null, null),
+    }
+
+    const runtime = resolveFacetRuntimeSync([
+      propertyEditorFallbackFacet.of(low, {source: 'test'}),
+      propertyEditorFallbackFacet.of(high, {source: 'test'}),
+    ])
+
+    expect(runtime.read(propertyEditorFallbackFacet).map(fallback => fallback.id))
+      .toEqual(['test.high', 'test.low'])
   })
 })
 
@@ -336,7 +361,6 @@ describe('facet variance — typed plugin contributions register without widenin
       codec: codecs.optional(codecs.date),
       defaultValue: undefined,
       changeScope: ChangeScope.BlockDefault,
-      kind: 'date',
     })
     const runtime = resolveFacetRuntimeSync([
       propertySchemasFacet.of(typedSchema, {source: 'plugin'}),

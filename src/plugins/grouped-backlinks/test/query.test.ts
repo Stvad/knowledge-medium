@@ -8,6 +8,7 @@ import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.t
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import {
   invalidationRulesFacet,
+  propertyEditorFallbackFacet,
   propertySchemasFacet,
   propertyUiFacet,
   queriesFacet,
@@ -115,7 +116,8 @@ describe('groupedBacklinksDataExtension query', () => {
       encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
       schemas,
       uis,
-    }).customEditor).toBe(groupedBacklinksDefaultsUi.Editor)
+      editorFallbacks: runtime.read(propertyEditorFallbackFacet),
+    }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
   })
 
   it('initializes grouped backlinks defaults on the user prefs block', async () => {

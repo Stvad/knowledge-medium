@@ -1,8 +1,8 @@
 import {
+  type AnyPropertyEditorFallbackContribution,
   type AnyPropertySchema,
   type AnyPropertyUiContribution,
-  type PropertyEditor,
-  type PropertyKind,
+  type CodecShape,
   type TypeContribution,
 } from '@/data/api'
 import { getBlockTypes, typesProp } from '@/data/properties.ts'
@@ -26,16 +26,15 @@ export interface PropertyPanelModelRow {
   readonly encodedValue: unknown
   readonly isSet: boolean
   readonly labelText: string
-  readonly kind: PropertyKind
+  readonly shape: CodecShape
   readonly schema: AnyPropertySchema
   readonly schemaUnknown: boolean
   readonly decodeFailed: boolean
   readonly value: unknown
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly customEditor?: PropertyEditor<any>
+  readonly Editor?: AnyPropertyEditorFallbackContribution['Editor']
   readonly canRename: boolean
   readonly canDelete: boolean
-  readonly canChangeKind: boolean
+  readonly canChangeShape: boolean
   readonly isHidden: boolean
 }
 
@@ -99,6 +98,7 @@ const resolveModelRow = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyUiContribution>
+    editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
     hidden: boolean
   },
 ): PropertyPanelModelRow | null => {
@@ -107,6 +107,7 @@ const resolveModelRow = (
     encodedValue: row.isSet ? row.encodedValue : undefined,
     schemas: args.schemas,
     uis: args.uis,
+    editorFallbacks: args.editorFallbacks,
   })
 
   if (!row.isSet && !display.isKnown) return null
@@ -125,15 +126,15 @@ const resolveModelRow = (
     encodedValue: row.encodedValue,
     isSet: row.isSet,
     labelText: ui?.label ?? row.name,
-    kind: display.kind,
+    shape: display.shape,
     schema: display.schema,
     schemaUnknown: !display.isKnown,
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
-    customEditor: display.customEditor,
+    Editor: display.Editor,
     canRename: !args.hidden && !display.isKnown,
     canDelete: !args.hidden && row.isSet && !isTypeMembershipRow,
-    canChangeKind: !args.hidden && !display.isKnown,
+    canChangeShape: !args.hidden && !display.isKnown,
     isHidden: args.hidden,
   }
 }
@@ -143,6 +144,7 @@ const resolveSection = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyUiContribution>
+    editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
     hidden: boolean
   },
 ): PropertyPanelModelSection | null => {
@@ -167,6 +169,7 @@ export const buildPropertyPanelModel = (args: {
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
   typesRegistry: ReadonlyMap<string, TypeContribution>
 }): PropertyPanelModel => {
   const blockTypes = readBlockTypes(args.properties)
@@ -191,6 +194,7 @@ export const buildPropertyPanelModel = (args: {
     .map(section => resolveSection(section, {
       schemas: args.schemas,
       uis: args.uis,
+      editorFallbacks: args.editorFallbacks,
       hidden: false,
     }))
     .filter((section): section is PropertyPanelModelSection => section !== null)
@@ -206,6 +210,7 @@ export const buildPropertyPanelModel = (args: {
   }, {
     schemas: args.schemas,
     uis: args.uis,
+    editorFallbacks: args.editorFallbacks,
     hidden: true,
   }) ?? {...HIDDEN_SECTION, rows: []}
 

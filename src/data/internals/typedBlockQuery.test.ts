@@ -21,28 +21,30 @@ const statusProp = defineProperty<string>('status', {
   codec: codecs.string,
   defaultValue: 'open',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const doneProp = defineProperty<boolean>('done', {
   codec: codecs.boolean,
   defaultValue: false,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'boolean',
 })
 
 const weirdNameProp = defineProperty<string>('weird:name.with-dot-hyphen', {
   codec: codecs.string,
   defaultValue: '',
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const labelsProp = defineProperty<readonly string[]>('labels', {
   codec: codecs.list(codecs.string),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'list',
+})
+
+const reviewerProp = defineProperty<string>('reviewer', {
+  codec: codecs.ref(),
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
 })
 
 interface Harness {
@@ -69,6 +71,7 @@ const setup = async (): Promise<Harness> => {
     propertySchemasFacet.of(doneProp, {source: 'test'}),
     propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
     propertySchemasFacet.of(labelsProp, {source: 'test'}),
+    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
   ]))
   repo.setActiveWorkspaceId(WS)
   return {h, repo}
@@ -173,7 +176,9 @@ describe('repo.queryBlocks', () => {
     await expect(env.repo.queryBlocks({where: {missing: 'x'}}))
       .rejects.toThrow('has no registered PropertySchema')
     await expect(env.repo.queryBlocks({where: {labels: ['x']}}))
-      .rejects.toThrow('uses non-scalar kind')
+      .rejects.toThrow('uses non-scalar or reference codec')
+    await expect(env.repo.queryBlocks({where: {reviewer: 'target'}}))
+      .rejects.toThrow('uses non-scalar or reference codec')
     await expect(env.repo.queryBlocks({where: {status: undefined}}))
       .rejects.toThrow('is undefined')
   })

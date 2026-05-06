@@ -294,13 +294,11 @@ describe('ProcessorRunner — registry snapshot semantics', () => {
       codec: codecs.string,
       defaultValue: 'open',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     const replacementSchema = defineProperty<string>('status', {
       codec: codecs.string,
       defaultValue: 'done',
       changeScope: ChangeScope.BlockDefault,
-      kind: 'string',
     })
     const observed: unknown[] = []
     const processor: AnyPostCommitProcessor = {

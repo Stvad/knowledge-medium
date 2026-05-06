@@ -42,8 +42,14 @@ import {
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
-import { mutatorsFacet, propertySchemasFacet, propertyUiFacet } from '../facets'
-import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
+import {
+  mutatorsFacet,
+  propertyEditorFallbackFacet,
+  propertySchemasFacet,
+  propertyUiFacet,
+} from '../facets'
+import { DatePropertyEditor, resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
+import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { Repo } from '../repo'
 
 // ──── §12.1 plugin contributions ────
@@ -52,7 +58,6 @@ const dueDateProp = defineProperty<Date | undefined>('tasks:due-date', {
   codec: codecs.optional(codecs.date),
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'date',
 })
 
 const TaskDueDateEditor: PropertyEditor<Date | undefined> = (): JSX.Element =>
@@ -180,7 +185,7 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
   })
 
   it('propertyUiFacet exposes the plugin contribution and resolvePropertyDisplay returns it', () => {
-    const runtime = resolveFacetRuntimeSync([kernelDataExtension, ...tasksPluginExtension])
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelPropertyUiExtension, ...tasksPluginExtension])
     const schemas = runtime.read(propertySchemasFacet)
     const uis = runtime.read(propertyUiFacet)
     expect(uis.get('tasks:due-date')).toBe(dueDateUi)
@@ -192,18 +197,20 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas,
       uis,
+      editorFallbacks: runtime.read(propertyEditorFallbackFacet),
     })
     expect(display.isKnown).toBe(true)
-    expect(display.kind).toBe('date')
-    expect(display.customEditor).toBe(TaskDueDateEditor)
+    expect(display.shape).toBe('date')
+    expect(display.Editor).toBe(TaskDueDateEditor)
     expect(display.schema).toBe(dueDateProp)
   })
 
-  it('plugin ships schema without UI contribution → resolver falls through to default-for-kind', () => {
+  it('plugin ships schema without UI contribution → resolver falls through to fallback editor', () => {
     // §12.1 explicitly notes: a plugin happy with the kernel default
-    // editor for its kind can skip propertyUiFacet.of.
+    // editor for its codec shape can skip propertyUiFacet.of.
     const runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
+      kernelPropertyUiExtension,
       mutatorsFacet.of(setDueDate, {source: 'tasks'}),
       propertySchemasFacet.of(dueDateProp, {source: 'tasks'}),
       // no propertyUiFacet.of(dueDateUi)
@@ -213,9 +220,10 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas: runtime.read(propertySchemasFacet),
       uis: runtime.read(propertyUiFacet),
+      editorFallbacks: runtime.read(propertyEditorFallbackFacet),
     })
     expect(display.isKnown).toBe(true)
-    expect(display.kind).toBe('date')
-    expect(display.customEditor).toBeUndefined()
+    expect(display.shape).toBe('date')
+    expect(display.Editor).toBe(DatePropertyEditor)
   })
 })

@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react'
 import { ChevronDown, X } from 'lucide-react'
-import type { PropertyKind } from '@/data/api'
+import type { CodecShape } from '@/data/api'
 import { Button } from '@/components/ui/button'
-import { propertyKindLabel } from './kinds'
-import { PropertyKindGlyph } from './kindUi'
+import { propertyShapeLabel } from './shapes'
+import { PropertyShapeGlyph } from './shapeUi'
 
 export interface FieldConfig {
   labelText: string
-  kind: PropertyKind
-  kindOptions: readonly PropertyKind[]
+  shape: CodecShape
+  shapeOptions: readonly CodecShape[]
   schemaUnknown: boolean
   decodeFailed: boolean
   readOnly: boolean
@@ -16,11 +16,11 @@ export interface FieldConfig {
 
 export function FieldConfigSheet({
   field,
-  onKindChange,
+  onShapeChange,
   onClose,
 }: {
   field: FieldConfig | null
-  onKindChange: (kind: PropertyKind) => void
+  onShapeChange: (shape: CodecShape) => void
   onClose: () => void
 }) {
   if (!field) return null
@@ -35,8 +35,8 @@ export function FieldConfigSheet({
       <div className="mb-8 flex items-start justify-between gap-4">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2 text-lg font-semibold">
-            <PropertyKindGlyph
-              kind={field.kind}
+            <PropertyShapeGlyph
+              shape={field.shape}
               className={field.schemaUnknown ? 'text-muted-foreground' : 'text-fuchsia-500'}
             />
             <span className="truncate">{field.labelText}</span>
@@ -60,12 +60,12 @@ export function FieldConfigSheet({
             <select
               className="h-9 w-full appearance-none rounded-md border border-input bg-background px-2 pr-9 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
               aria-label={`${field.labelText} field type`}
-              value={field.kind}
+              value={field.shape}
               disabled={field.readOnly}
-              onChange={(event) => onKindChange(event.target.value as PropertyKind)}
+              onChange={(event) => onShapeChange(event.target.value as CodecShape)}
             >
-              {field.kindOptions.map(option => (
-                <option key={option} value={option}>{propertyKindLabel(option)}</option>
+              {field.shapeOptions.map(option => (
+                <option key={option} value={option}>{propertyShapeLabel(option)}</option>
               ))}
             </select>
             <ChevronDown

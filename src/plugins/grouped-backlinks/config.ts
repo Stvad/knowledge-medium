@@ -114,11 +114,13 @@ export const mergeGroupedBacklinksConfig = (
 })
 
 const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
+  shape: 'object',
   encode: normalizeGroupedBacklinksConfig,
   decode: normalizeGroupedBacklinksConfig,
 }
 
 const groupedBacklinksOverridesCodec: Codec<GroupedBacklinksOverrides> = {
+  shape: 'object',
   encode: normalizeGroupedBacklinksOverrides,
   decode: normalizeGroupedBacklinksOverrides,
 }
@@ -129,7 +131,6 @@ export const groupedBacklinksDefaultsProp = defineProperty<GroupedBacklinksConfi
     codec: groupedBacklinksConfigCodec,
     defaultValue: EMPTY_GROUPED_BACKLINKS_CONFIG,
     changeScope: ChangeScope.UserPrefs,
-    kind: 'object',
   },
 )
 
@@ -139,6 +140,5 @@ export const groupedBacklinksOverridesProp = defineProperty<GroupedBacklinksOver
     codec: groupedBacklinksOverridesCodec,
     defaultValue: EMPTY_GROUPED_BACKLINKS_OVERRIDES,
     changeScope: ChangeScope.BlockDefault,
-    kind: 'object',
   },
 )

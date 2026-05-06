@@ -1,7 +1,13 @@
-import type { AnyPropertySchema, ResolvedTypedBlockQuery } from '@/data/api'
+import {
+  isRefCodec,
+  isRefListCodec,
+  type AnyPropertySchema,
+  type CodecShape,
+  type ResolvedTypedBlockQuery,
+} from '@/data/api'
 import { buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
 
-const SCALAR_WHERE_KINDS = new Set(['string', 'number', 'boolean', 'date'])
+const SCALAR_WHERE_SHAPES: ReadonlySet<CodecShape> = new Set(['string', 'number', 'boolean', 'date'])
 
 export interface CompiledTypedBlockQuery {
   readonly sql: string
@@ -31,9 +37,9 @@ const compileWhereFilter = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  if (!SCALAR_WHERE_KINDS.has(schema.kind)) {
+  if (!SCALAR_WHERE_SHAPES.has(schema.codec.shape) || isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
     throw new Error(
-      `[queryBlocks] where.${name} uses non-scalar kind ${JSON.stringify(schema.kind)}; ` +
+      `[queryBlocks] where.${name} uses non-scalar or reference codec ${JSON.stringify(schema.codec.shape)}; ` +
       'use referencedBy for refs or add a dedicated query for collection/object filters',
     )
   }

@@ -2,16 +2,6 @@ import type { JSX } from 'react'
 import type { Codec } from './codecs'
 import type { ChangeScope } from './changeScope'
 
-export type PropertyKind =
-  | 'string'
-  | 'number'
-  | 'boolean'
-  | 'list'
-  | 'object'
-  | 'date'
-  | 'ref'
-  | 'refList'
-
 /** Data-layer schema. Pure data — usable from non-React surfaces (server,
  *  CLI, headless tests, future non-React UIs). React presentation lives on
  *  `PropertyUiContribution<T>` (joined to schemas by `name`). See spec §5.6. */
@@ -21,16 +11,12 @@ export interface PropertySchema<T> {
   readonly codec: Codec<T>
   readonly defaultValue: T
   readonly changeScope: ChangeScope
-  /** Drives the unknown-schema fallback (§5.6.1) — when a plugin's schema
-   *  is absent, the property panel infers a kind from JSON shape and
-   *  renders via the default editor for that kind. */
-  readonly kind: PropertyKind
 }
 
 /** React UI contribution. Joined to a registered `PropertySchema` by
  *  `name` at render time. Optional — primitive-typed properties render
- *  via the kernel's default editor for their `kind` if no contribution
- *  is present. See spec §5.6 + §6. */
+ *  via codec-shape fallback editors if no contribution is present.
+ *  See spec §5.6 + §6. */
 export interface PropertyUiContribution<T = unknown> {
   /** Must match a registered `PropertySchema.name`. Multiple contributions
    *  for the same name log a warning and last-wins (facet convention). */
@@ -40,8 +26,8 @@ export interface PropertyUiContribution<T = unknown> {
   /** Property-editor grouping. */
   readonly category?: string
   /** Hide from the normal property panel. Hidden rows can still be
-   *  revealed in the debug/metadata section, but the panel treats them
-   *  as read-only internal fields. */
+   *  revealed in the debug/metadata section; this affects placement and
+   *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
   readonly Renderer?: PropertyRenderer<T>
@@ -61,6 +47,17 @@ export interface PropertyEditorProps<T> {
 }
 
 export type PropertyEditor<T> = (props: PropertyEditorProps<T>) => JSX.Element
+
+/** Fallback editor contribution selected by inspecting a registered schema.
+ *  Exact `PropertyUiContribution.Editor`s win first; these are for shape or
+ *  codec-metadata editors such as booleans, references, and reference lists. */
+export interface PropertyEditorFallbackContribution {
+  readonly id: string
+  readonly priority?: number
+  readonly matches: (schema: AnyPropertySchema) => boolean
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly Editor: PropertyEditor<any>
+}
 
 export interface PropertyRendererProps<T> {
   value: T
@@ -106,3 +103,5 @@ export type AnyPropertySchema = PropertySchema<any>
  *  `PropertyUiContribution<unknown>`. Same `any`-escape pattern. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertyUiContribution = PropertyUiContribution<any>
+
+export type AnyPropertyEditorFallbackContribution = PropertyEditorFallbackContribution

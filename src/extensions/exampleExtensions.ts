@@ -124,7 +124,6 @@ const reactionsProp = defineProperty('user:reactions', {
   codec: codecs.list(codecs.string),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-  kind: 'list',
 })
 
 const EMOJI_OPTIONS = ['🔥', '👍', '🎉', '❤️']
@@ -239,7 +238,6 @@ const SPLIT_LAYOUT_SOURCE = `import {
 const layoutProp = defineProperty('user:layout', {
   codec: codecs.string,
   changeScope: ChangeScope.BlockDefault,
-  kind: 'string',
 })
 
 const SplitLayout = ({ Content, Children, Properties, Footer }) => (
