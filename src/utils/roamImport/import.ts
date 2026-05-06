@@ -86,6 +86,13 @@ interface PageReconciliation {
   page: PreparedPage
   /** True when an existing block already owns this title's alias. */
   merging: boolean
+  /** True when this exported page is merged into another exported page
+   *  because that page declared it through page_alias::[[...]]. */
+  aliasRuleMerged: boolean
+  /** Canonical exported page title for this reconciliation. */
+  rootTitle: string
+  /** Alias labels that should be present on the final page row. */
+  aliasesToApply: string[]
 }
 
 export interface RoamImportOptions {
@@ -153,7 +160,13 @@ export const importRoam = async (
   // 1. Reconcile pages against the live workspace so we know which
   //    plannedIds get rerouted to existing alias-pages.
   log(`Reconciling ${plan.pages.length} pages against existing workspace…`)
-  const reconciliations = await reconcilePages(plan.pages, repo, options.workspaceId, log)
+  const reconciliations = await reconcilePages(
+    plan.pages,
+    repo,
+    options.workspaceId,
+    plan.diagnostics,
+    log,
+  )
   const reparentMap = buildReparentMap(reconciliations)
   log(`Reconciled ${reconciliations.length} pages ` +
     `(${reconciliations.filter(r => r.merging).length} merge into existing) (${sinceLastPhase()})`)
@@ -303,8 +316,12 @@ export const importRoam = async (
     //     page row) need to be in place. Daily pages were already
     //     created in step 4. Merging pages get an alias union via
     //     mergeIntoExistingPage; non-merging pages create the row.
-    for (const recon of reconciliations) {
+    const rootReconciliations = reconciliations.filter(r => !r.aliasRuleMerged)
+    const aliasRuleMergedReconciliations = reconciliations.filter(r => r.aliasRuleMerged)
+
+    for (const recon of rootReconciliations) {
       if (recon.page.isDaily) {
+        await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
         await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
         continue
       }
@@ -316,7 +333,17 @@ export const importRoam = async (
       }
       pagesCreated += 1
       if (!recon.page.data) throw new Error('Non-daily, non-merging page must have data')
-      await upsertImportedBlock(tx, recon.page.data, pageImportMergeOptions())
+      await upsertImportedBlock(
+        tx,
+        withPageAliases(recon.page.data, recon.aliasesToApply),
+        pageImportMergeOptions(),
+      )
+    }
+
+    for (const recon of aliasRuleMergedReconciliations) {
+      if (!recon.page.isDaily) pagesMerged += 1
+      await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
+      await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
     }
   }, {scope: ChangeScope.BlockDefault, description: 'roam import: pages'})
 
@@ -570,27 +597,229 @@ const ensureAliasSeat = async (
   }
 }
 
+interface PageAliasRulePlan {
+  rootByTitle: Map<string, string>
+  aliasesByRootTitle: Map<string, string[]>
+  diagnostics: string[]
+}
+
+const uniqueStrings = (values: readonly string[]): string[] => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
+
+const quotedList = (values: readonly string[]): string => {
+  const quoted = values.map(value => `'${value}'`)
+  if (quoted.length <= 2) return quoted.join(' and ')
+  return `${quoted.slice(0, -1).join(', ')}, and ${quoted[quoted.length - 1]}`
+}
+
+const buildPageAliasRulePlan = (
+  preparedPages: RoamImportPlan['pages'],
+): PageAliasRulePlan => {
+  const directOwnerByAlias = new Map<string, string>()
+  const diagnostics: string[] = []
+  const pageOrder = new Map(preparedPages.map((page, index) => [page.title, index]))
+
+  for (const page of preparedPages) {
+    for (const alias of uniqueStrings(page.pageAliases)) {
+      if (alias === page.title) continue
+      const existingOwner = directOwnerByAlias.get(alias)
+      if (existingOwner && existingOwner !== page.title) {
+        diagnostics.push(
+          `Page alias "${alias}" was claimed by both [[${existingOwner}]] and ` +
+          `[[${page.title}]]; keeping [[${existingOwner}]].`,
+        )
+        continue
+      }
+      directOwnerByAlias.set(alias, page.title)
+    }
+  }
+
+  const rootCache = new Map<string, string>()
+  const chooseCycleRoot = (cycle: readonly string[]): string =>
+    [...cycle].sort((a, b) => {
+      const aOrder = pageOrder.get(a) ?? Number.MAX_SAFE_INTEGER
+      const bOrder = pageOrder.get(b) ?? Number.MAX_SAFE_INTEGER
+      if (aOrder !== bOrder) return aOrder - bOrder
+      return a.localeCompare(b)
+    })[0]
+
+  const rootFor = (title: string): string => {
+    const cached = rootCache.get(title)
+    if (cached) return cached
+
+    const path: string[] = []
+    const seen = new Map<string, number>()
+    let current = title
+
+    const remember = (root: string): string => {
+      for (const titleInPath of path) rootCache.set(titleInPath, root)
+      return root
+    }
+
+    while (true) {
+      const cachedCurrent = rootCache.get(current)
+      if (cachedCurrent) {
+        return remember(cachedCurrent)
+      }
+
+      const seenAt = seen.get(current)
+      if (seenAt !== undefined) {
+        const cycle = path.slice(seenAt)
+        const root = chooseCycleRoot(cycle)
+        diagnostics.push(
+          `page_alias cycle involving ${cycle.map(t => `[[${t}]]`).join(', ')}; ` +
+          `using [[${root}]] as the canonical page.`,
+        )
+        return remember(root)
+      }
+
+      seen.set(current, path.length)
+      path.push(current)
+
+      const owner = directOwnerByAlias.get(current)
+      if (!owner || owner === current) {
+        return remember(current)
+      }
+      current = owner
+    }
+  }
+
+  const rootByTitle = new Map<string, string>()
+  const pageByTitle = new Map(preparedPages.map(page => [page.title, page]))
+  for (const page of preparedPages) {
+    rootByTitle.set(page.title, rootFor(page.title))
+  }
+
+  const aliasesByRootTitle = new Map<string, string[]>()
+  const mergedTitlesByRootTitle = new Map<string, string[]>()
+
+  for (const page of preparedPages) {
+    const root = rootByTitle.get(page.title) ?? page.title
+    if (root !== page.title) continue
+
+    const aliases: string[] = [page.title]
+    const visitedPages = new Set<string>()
+    const visit = (source: PreparedPage) => {
+      if (visitedPages.has(source.title)) return
+      visitedPages.add(source.title)
+
+      for (const alias of uniqueStrings(source.pageAliases)) {
+        if (alias !== source.title && directOwnerByAlias.get(alias) !== source.title) continue
+        aliases.push(alias)
+
+        const aliasPage = pageByTitle.get(alias)
+        if (aliasPage && rootByTitle.get(aliasPage.title) === root) {
+          visit(aliasPage)
+        }
+      }
+    }
+
+    visit(page)
+    const uniqueAliases = uniqueStrings(aliases)
+    aliasesByRootTitle.set(root, uniqueAliases)
+
+    const merged = uniqueAliases.filter(alias => {
+      if (alias === root) return false
+      const aliasPage = pageByTitle.get(alias)
+      return Boolean(aliasPage && rootByTitle.get(aliasPage.title) === root)
+    })
+    if (merged.length > 0) {
+      mergedTitlesByRootTitle.set(root, merged)
+    }
+  }
+
+  for (const [root, mergedTitles] of mergedTitlesByRootTitle) {
+    diagnostics.push(
+      `[[${root}]] also had ${quotedList(mergedTitles)} merged in bc of the alias rule`,
+    )
+  }
+
+  return {rootByTitle, aliasesByRootTitle, diagnostics}
+}
+
+const lookupExistingPageByAliases = async (
+  repo: Repo,
+  workspaceId: string,
+  aliases: readonly string[],
+): Promise<BlockData | null> => {
+  for (const alias of aliases) {
+    const existing = await repo.query.aliasLookup({workspaceId, alias}).load()
+    if (existing) return existing
+  }
+  return null
+}
+
 const reconcilePages = async (
   preparedPages: RoamImportPlan['pages'],
   repo: Repo,
   workspaceId: string,
+  diagnostics: string[],
   log?: (msg: string) => void,
 ): Promise<PageReconciliation[]> => {
+  const aliasRule = buildPageAliasRulePlan(preparedPages)
+  diagnostics.push(...aliasRule.diagnostics)
+
+  const rootRecons = new Map<string, PageReconciliation>()
+  for (const page of preparedPages) {
+    const rootTitle = aliasRule.rootByTitle.get(page.title) ?? page.title
+    if (rootTitle !== page.title) continue
+
+    const aliasesToApply = aliasRule.aliasesByRootTitle.get(rootTitle) ?? [page.title]
+    if (page.isDaily) {
+      rootRecons.set(rootTitle, {
+        plannedId: page.blockId,
+        finalId: page.blockId,
+        page,
+        merging: false,
+        aliasRuleMerged: false,
+        rootTitle,
+        aliasesToApply,
+      })
+      continue
+    }
+
+    const existing = await lookupExistingPageByAliases(repo, workspaceId, aliasesToApply)
+    rootRecons.set(rootTitle, {
+      plannedId: page.blockId,
+      finalId: existing?.id ?? page.blockId,
+      page,
+      merging: Boolean(existing),
+      aliasRuleMerged: false,
+      rootTitle,
+      aliasesToApply,
+    })
+  }
+
   const out: PageReconciliation[] = []
   for (let i = 0; i < preparedPages.length; i++) {
     const page = preparedPages[i]
-    if (page.isDaily) {
-      // Daily pages always route through getOrCreateDailyNote. Plan id
-      // already equals dailyNoteBlockId, so finalId === plannedId and
-      // there's no reparenting.
-      out.push({plannedId: page.blockId, finalId: page.blockId, page, merging: false})
+    const rootTitle = aliasRule.rootByTitle.get(page.title) ?? page.title
+    const rootRecon = rootRecons.get(rootTitle)
+    if (!rootRecon) {
+      throw new Error(`reconcilePages: missing root reconciliation for ${rootTitle}`)
+    }
+
+    if (rootTitle === page.title) {
+      out.push(rootRecon)
     } else {
-      const existing = await repo.query.aliasLookup({workspaceId, alias: page.title}).load()
-      if (existing) {
-        out.push({plannedId: page.blockId, finalId: existing.id, page, merging: true})
-      } else {
-        out.push({plannedId: page.blockId, finalId: page.blockId, page, merging: false})
-      }
+      out.push({
+        plannedId: page.blockId,
+        finalId: rootRecon.finalId,
+        page,
+        merging: true,
+        aliasRuleMerged: true,
+        rootTitle,
+        aliasesToApply: rootRecon.aliasesToApply,
+      })
     }
     if (log && (i + 1) % 100 === 0 && i + 1 < preparedPages.length) {
       log(`Reconciled ${i + 1}/${preparedPages.length} pages`)
@@ -653,10 +882,17 @@ const resolveAliases = async (
   const aliasesNeedingSeat: string[] = []
 
   // First, alias = imported-page-title shortcuts to that page's final id
-  // (covers references between imported pages, including merge-into
-  // existing alias).
+  // or page_alias-derived alias shortcuts to that page's final id
+  // (covers references between imported pages, merge-into-existing,
+  // and aliases whose target page is not separately present in the
+  // export).
   const importedPagesByTitle = new Map<string, string>()
-  for (const r of recons) importedPagesByTitle.set(r.page.title, r.finalId)
+  for (const r of recons) {
+    importedPagesByTitle.set(r.page.title, r.finalId)
+    for (const alias of r.aliasesToApply) {
+      if (!importedPagesByTitle.has(alias)) importedPagesByTitle.set(alias, r.finalId)
+    }
+  }
 
   const total = aliases.size
   let processed = 0
@@ -952,6 +1188,35 @@ const applyPromotedAttributes = async (
   await tx.update(id, {properties: next})
 }
 
+const withPageAliases = (
+  data: NewBlockData & {id: string; content: string},
+  aliases: readonly string[],
+): NewBlockData & {id: string; content: string} => ({
+  ...data,
+  properties: {
+    ...(data.properties ?? {}),
+    [aliasesProp.name]: aliasesProp.codec.encode(uniqueStrings(aliases)),
+  },
+})
+
+const mergePageAliases = async (
+  tx: Tx,
+  id: string,
+  aliasesToApply: readonly string[],
+) => {
+  const existing = await tx.get(id)
+  if (!existing) return
+
+  const currentValue = existing.properties[aliasesProp.name]
+  const current = Array.isArray(currentValue)
+    ? currentValue.filter((v): v is string => typeof v === 'string')
+    : []
+  const next = uniqueStrings([...current, ...aliasesToApply])
+  if (next.length === current.length && next.every((alias, index) => alias === current[index])) return
+
+  await tx.setProperty(id, aliasesProp, next)
+}
+
 const mergeIntoExistingPage = async (
   tx: Tx,
   recon: PageReconciliation,
@@ -962,16 +1227,10 @@ const mergeIntoExistingPage = async (
   if (!existing) {
     throw new Error(`mergeIntoExistingPage: existing page ${recon.finalId} not found`)
   }
-  // Make sure the existing page records the imported alias too — Roam
-  // can have aliases the local block doesn't know about. If the title
-  // already appears, this is a no-op.
-  const aliasesValue = existing.properties[aliasesProp.name]
-  const aliases = Array.isArray(aliasesValue)
-    ? aliasesValue.filter((v): v is string => typeof v === 'string')
-    : []
-  if (!aliases.includes(recon.page.title)) {
-    await tx.setProperty(recon.finalId, aliasesProp, [...aliases, recon.page.title])
-  }
+  // Make sure the existing page records all imported aliases too —
+  // Roam can have aliases the local block doesn't know about. If they
+  // already appear, this is a no-op.
+  await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
   await repo.addTypeInTx(tx, recon.finalId, PAGE_TYPE, {}, typeSnapshot)
   // Descendants are already routed under recon.finalId via the
   // reparentMap (their parentId was rewritten before tx.createOrGet).

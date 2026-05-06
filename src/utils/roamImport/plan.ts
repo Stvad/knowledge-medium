@@ -34,6 +34,10 @@ export interface PreparedPage {
    *  orchestrator applies them to the live row with fill-if-missing
    *  semantics so existing values aren't clobbered. */
   promotedFromChildren: Record<string, unknown>
+  /** Page aliases declared through Roam's page_alias::[[Other Page]]
+   *  convention. These are applied to the page's canonical alias list
+   *  and used by the importer to merge duplicate exported pages. */
+  pageAliases: string[]
 }
 
 export interface PreparedBlock {
@@ -74,6 +78,20 @@ export interface PlanOptions {
 }
 
 const NS_PREFIX = 'roam'
+export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`
+export const ROAM_AUTHOR_PROP = `${NS_PREFIX}:author`
+
+const uniqueStrings = (values: readonly string[]): string[] => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+  }
+  return out
+}
 
 const cloneTimestamp = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
@@ -103,6 +121,55 @@ const detectInlineAttribute = (rawContent: string | undefined): {key: string, va
   const match = SIMPLE_ATTR_RE.exec(rawContent)
   if (!match) return null
   return {key: match[1], value: match[2]}
+}
+
+const findUnescaped = (value: string, target: string, start: number): number => {
+  for (let i = start; i < value.length; i++) {
+    if (value[i] === '\\') {
+      i += 1
+      continue
+    }
+    if (value[i] === target) return i
+  }
+  return -1
+}
+
+const findMarkdownLinkDestinationEnd = (value: string, start: number): number => {
+  let depth = 1
+  for (let i = start; i < value.length; i++) {
+    const ch = value[i]
+    if (ch === '\\') {
+      i += 1
+      continue
+    }
+    if (ch === '(') {
+      depth += 1
+      continue
+    }
+    if (ch === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+/** If a Roam property value is exactly one markdown link, store the
+ *  destination as the queryable value while leaving the original
+ *  source block's content untouched in the imported tree. */
+export const normalizeRoamPropertyValue = (value: string): string => {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('[')) return value
+
+  const labelEnd = findUnescaped(trimmed, ']', 1)
+  if (labelEnd < 0 || trimmed[labelEnd + 1] !== '(') return value
+
+  const destinationStart = labelEnd + 2
+  const destinationEnd = findMarkdownLinkDestinationEnd(trimmed, destinationStart)
+  if (destinationEnd < 0 || destinationEnd !== trimmed.length - 1) return value
+
+  const destination = trimmed.slice(destinationStart, destinationEnd).trim()
+  return destination === '' ? value : destination
 }
 
 const ROAM_TODO_MARKER_RE =
@@ -194,7 +261,7 @@ export const computePromotedFromChildren = (
   const push = (key: string, value: unknown) => {
     const propName = `${namespacePrefix}:${transformKey(key)}`
     const list = accumulator.get(propName) ?? []
-    list.push(value)
+    list.push(typeof value === 'string' ? normalizeRoamPropertyValue(value) : value)
     accumulator.set(propName, list)
   }
 
@@ -307,7 +374,7 @@ const propertiesFromRoam = (
     if (typeof value === 'number') {
       out[propName] = value
     } else if (typeof value === 'string') {
-      out[propName] = value
+      out[propName] = normalizeRoamPropertyValue(value)
     } else if (value !== null && value !== undefined) {
       // Object/array values: stringify so the data round-trips;
       // a follow-up can promote structured values once we have
@@ -317,6 +384,23 @@ const propertiesFromRoam = (
   }
 
   return out
+}
+
+const collectPageAliases = (properties: Record<string, unknown>): string[] =>
+  uniqueStrings(collectAliasesFromPropertyValues({
+    [ROAM_PAGE_ALIAS_PROP]: properties[ROAM_PAGE_ALIAS_PROP],
+  }))
+
+const derivePropertiesFromContent = (content: string): Record<string, unknown> => {
+  const match = /^\s*\[\[[^\]]+\]\]\s+by\s+(.+?)\s*$/i.exec(content)
+  if (!match) return {}
+
+  const authors = parseReferences(match[1]).map(ref => `[[${ref.alias}]]`)
+  if (authors.length === 0) return {}
+
+  return {
+    [ROAM_AUTHOR_PROP]: authors.length === 1 ? authors[0] : authors,
+  }
 }
 
 interface BuildContext {
@@ -424,6 +508,7 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
     .map(mapped => ({id: mapped, alias: mapped}))
 
   const properties: Record<string, unknown> = {
+    ...derivePropertiesFromContent(content),
     ...(promotedFromChildren ?? {}),
     ...propertiesFromRoam(roamProps),
     ...(extraProperties ?? {}),
@@ -551,6 +636,11 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       childIds.push(buildBlock(ctx, pageChildren[i], pageBlockId, i, pushDescendant))
     }
     const promotedFromChildren = pagePromotion.promoted
+    const pageRoamProps = collectRoamProps(page)
+    const pageAliases = collectPageAliases({
+      ...promotedFromChildren,
+      ...propertiesFromRoam(pageRoamProps),
+    })
 
     if (daily) {
       preparedPages.push({
@@ -561,6 +651,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
         iso: daily.iso,
         childIds,
         promotedFromChildren,
+        pageAliases,
       })
       continue
     }
@@ -577,12 +668,12 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       orderKey: 'a0',
       rawString: page.title,
       heading: undefined,
-      roamProps: collectRoamProps(page),
+      roamProps: pageRoamProps,
       roamRefUids: collectUidRefs(page),
       createdAt: cloneTimestamp(page['create-time'], Date.now()),
       updatedAt: cloneTimestamp(page['edit-time'] ?? page['create-time'], Date.now()),
       extraProperties: {
-        [aliasesProp.name]: aliasesProp.codec.encode([page.title]),
+        [aliasesProp.name]: aliasesProp.codec.encode(uniqueStrings([page.title, ...pageAliases])),
         [typesProp.name]: typesProp.codec.encode([PAGE_TYPE]),
       },
       promotedFromChildren,
@@ -596,6 +687,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       data: pageData,
       childIds,
       promotedFromChildren,
+      pageAliases,
     })
   }
 

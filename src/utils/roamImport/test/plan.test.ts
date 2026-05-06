@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computePromotedFromChildren, planImport } from '../plan'
+import { computePromotedFromChildren, extractRoamTodoMarker, planImport } from '../plan'
 import { roamBlockId } from '../ids'
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import { aliasesProp, typesProp } from '@/data/properties'
@@ -197,6 +197,28 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('Another')).toBe(true)
   })
 
+  it('extracts Roam TODO markers even when they are embedded later in the node', () => {
+    const todo = extractRoamTodoMarker('initial review date::[[April 27th, 2026]] {{[[DONE]]}}')
+
+    expect(todo.content).toBe('initial review date::[[April 27th, 2026]]')
+    expect(todo.todoState).toBe('DONE')
+  })
+
+  it('derives roam:author from `[[doc]] by [[Author]]` entries', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: '[[doc/Takes from two months as an aspiring LLM naturalist]] by [[AnnaSalamon]]',
+        uid: 'entryUid',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const entry = plan.descendants.find(d => d.roamUid === 'entryUid')?.data
+    expect(entry?.properties['roam:author']).toBe('[[AnnaSalamon]]')
+    expect(plan.aliasesUsed.has('AnnaSalamon')).toBe(true)
+  })
+
   it('hoists simple inline `key::value` children onto the parent while keeping the source blocks', () => {
     const plan = planImport([{
       title: 'p',
@@ -233,6 +255,22 @@ describe('planImport', () => {
       roamBlockId(WORKSPACE, 'b3'),
       roamBlockId(WORKSPACE, 'b4'),
     ])
+  })
+
+  it('unwraps scalar markdown-link property values while preserving the source property block', () => {
+    const url = 'https://read.readwise.io/read/01kq8b3ps566yg1m55r6qytjwx'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {string: `source:: [View Highlight](${url})`, uid: 'sourceUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const page = plan.pages.find(p => p.roamUid === 'pUid')
+    const source = plan.descendants.find(d => d.roamUid === 'sourceUid')?.data
+    expect(page?.data?.properties['roam:source']).toBe(url)
+    expect(source?.content).toBe(`source:: [View Highlight](${url})`)
   })
 
   it('keeps `key::` blocks with non-attr children and lifts the bullets as a list value (case 4)', () => {
@@ -518,8 +556,8 @@ describe('planImport', () => {
 
     const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)?.data
     expect(byUid('parentUid')?.properties['roam:email']).toEqual([
-      '[gliderok@gmail.com](mailto:gliderok@gmail.com)',
-      '[aix123@yandex.ru](mailto:aix123@yandex.ru)',
+      'mailto:gliderok@gmail.com',
+      'mailto:aix123@yandex.ru',
     ])
     // Block tree preserved: email:: kept, both children parented under it.
     expect(byUid('emailUid')?.content).toBe('email::')

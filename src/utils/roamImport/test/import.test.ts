@@ -656,6 +656,63 @@ describe('importRoam', () => {
     }
   })
 
+  it('merges imported pages through page_alias properties and reports the merge set', async () => {
+    const aliasExport: RoamExport = [
+      {
+        title: 'page z',
+        uid: 'pageZ',
+        children: [
+          {string: 'z child', uid: 'zChild'},
+        ],
+      },
+      {
+        title: 'page y',
+        uid: 'pageY',
+        children: [
+          {string: 'page_alias::[[page z]]', uid: 'aliasYZ'},
+          {string: 'y child', uid: 'yChild'},
+        ],
+      },
+      {
+        title: 'page x',
+        uid: 'pageX',
+        children: [
+          {string: 'page_alias::[[page y]]', uid: 'aliasXY'},
+          {string: 'x child', uid: 'xChild'},
+        ],
+      },
+    ]
+
+    const summary = await importRoam(aliasExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.pagesCreated).toBe(1)
+    expect(summary.pagesMerged).toBe(2)
+    expect(summary.diagnostics).toContain(
+      "[[page x]] also had 'page y' and 'page z' merged in bc of the alias rule",
+    )
+
+    const canonicalId = roamBlockId(WORKSPACE, 'pageX')
+    const canonical = await readBlock(canonicalId)
+    expect(canonical).not.toBeNull()
+    expect(JSON.parse(canonical!.properties_json)[aliasesProp.name])
+      .toEqual(['page x', 'page y', 'page z'])
+
+    expect(await readBlock(roamBlockId(WORKSPACE, 'pageY'))).toBeNull()
+    expect(await readBlock(roamBlockId(WORKSPACE, 'pageZ'))).toBeNull()
+
+    const yChild = await readBlock(roamBlockId(WORKSPACE, 'yChild'))
+    const zChild = await readBlock(roamBlockId(WORKSPACE, 'zChild'))
+    expect(yChild?.parent_id).toBe(canonicalId)
+    expect(zChild?.parent_id).toBe(canonicalId)
+
+    const aliasBlock = await readBlock(roamBlockId(WORKSPACE, 'aliasXY'))
+    expect(aliasBlock?.parent_id).toBe(canonicalId)
+    expect(aliasBlock?.content).toBe('page_alias::[[page y]]')
+  })
+
   it('dry-run reports counts without writing rows', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
