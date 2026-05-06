@@ -60,6 +60,7 @@ import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
 import { showProgressBanner } from '@/utils/roamImport/progressBanner.ts'
 import type { RoamExport } from '@/utils/roamImport/types.ts'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
+import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -657,6 +658,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
         if (!prevVisible) return
+        const data = block.peek() ?? await block.load()
+        if (data?.parentId === prevVisible.id && focusPropertyRow(prevVisible.id, 'last')) {
+          setIsEditing(uiStateBlock, false)
+          return
+        }
 
         await uiStateBlock.set(editorSelection, {
           blockId: prevVisible.id,
@@ -693,6 +699,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // the user came from.
         const caretX = getCaretRect(editorView)?.left
         trigger.preventDefault()
+
+        if (focusPropertyRow(block.id, 'first')) {
+          setIsEditing(uiStateBlock, false)
+          return
+        }
 
         const nextVisible = await nextVisibleBlock(block, topLevelBlockId)
         if (!nextVisible) return

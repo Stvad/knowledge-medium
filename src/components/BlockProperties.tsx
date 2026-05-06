@@ -15,8 +15,8 @@
  *  builder, kind inference) live in `propertyEditors/defaults.tsx`.
  */
 
-import { useMemo, useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import {
   ChangeScope,
@@ -25,14 +25,34 @@ import {
   type PropertyEditor,
   type PropertyKind,
 } from '@/data/api'
-import { useHandle } from '@/hooks/block.ts'
+import { useChildIds, useHandle } from '@/hooks/block.ts'
+import { useUIStateBlock } from '@/data/globalState.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
 import { propertyUiFacet, typesFacet } from '../data/facets.ts'
-import { getBlockTypes, typesProp } from '@/data/properties.ts'
+import {
+  aliasesProp,
+  createdAtProp,
+  editorFocusRequestProp,
+  editorSelection,
+  extensionDisabledProp,
+  focusedBlockIdProp,
+  getBlockTypes,
+  isCollapsedProp,
+  isEditingProp,
+  rendererNameProp,
+  rendererProp,
+  requestEditorFocus,
+  selectionStateProp,
+  setFocusedBlockId,
+  setIsEditing,
+  showPropertiesProp,
+  sourceBlockIdProp,
+  topLevelBlockIdProp,
+  typesProp,
+} from '@/data/properties.ts'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { Label } from './ui/label'
 import {
   DefaultPropertyValueEditor,
   adhocSchema,
@@ -45,6 +65,13 @@ import {
   type PropertyPanelRow,
   type PropertyPanelSection,
 } from './propertyPanelSections'
+import { nextVisibleBlock } from '@/utils/selection.ts'
+import {
+  consumePendingPropertyCreateRequest,
+  focusAdjacentPropertyRow,
+  focusPropertyRowByNameWhenReady,
+  subscribePropertyCreateRequests,
+} from '@/utils/propertyNavigation.ts'
 
 interface BlockPropertiesProps {
   block: Block
@@ -63,68 +90,142 @@ type AddableKind = Exclude<PropertyKind, 'date' | 'object' | 'ref' | 'refList'> 
 
 const ADDABLE_KINDS: ReadonlyArray<AddableKind> = ['string', 'number', 'boolean', 'list', 'object']
 const EMPTY_BLOCK_TYPES: readonly string[] = []
+const INLINE_HIDDEN_PROPERTY_NAMES = new Set([
+  aliasesProp.name,
+  createdAtProp.name,
+  editorFocusRequestProp.name,
+  editorSelection.name,
+  extensionDisabledProp.name,
+  focusedBlockIdProp.name,
+  isCollapsedProp.name,
+  isEditingProp.name,
+  rendererNameProp.name,
+  rendererProp.name,
+  selectionStateProp.name,
+  showPropertiesProp.name,
+  sourceBlockIdProp.name,
+  topLevelBlockIdProp.name,
+  typesProp.name,
+])
 
-function AddPropertyForm({onAdd}: {onAdd: (name: string, kind: AddableKind) => void}) {
-  const [isOpen, setIsOpen] = useState(false)
-  const [propertyName, setPropertyName] = useState('')
+const isInlineHiddenProperty = (
+  name: string,
+  schemas: ReadonlyMap<string, AnyPropertySchema>,
+): boolean => {
+  const schema = schemas.get(name)
+  return INLINE_HIDDEN_PROPERTY_NAMES.has(name) ||
+    name.startsWith('system:') ||
+    schema?.changeScope === ChangeScope.UiState
+}
+
+function AddPropertyForm({
+  blockId,
+  onAdd,
+}: {
+  blockId: string
+  onAdd: (name: string, kind: AddableKind) => void
+}) {
+  const [initialRequest] = useState(() => consumePendingPropertyCreateRequest(blockId))
+  const [isOpen, setIsOpen] = useState(Boolean(initialRequest))
+  const [propertyName, setPropertyName] = useState(initialRequest?.initialName ?? '')
   const [propertyKind, setPropertyKind] = useState<AddableKind>('string')
+  const nameInputRef = useRef<HTMLInputElement | null>(null)
+
+  const focusNameInput = useCallback(() => {
+    const focus = () => {
+      nameInputRef.current?.focus()
+      nameInputRef.current?.setSelectionRange(0, nameInputRef.current.value.length)
+    }
+    if (typeof requestAnimationFrame === 'undefined') focus()
+    else requestAnimationFrame(focus)
+  }, [])
+
+  const openForm = useCallback((initialName = '') => {
+    setPropertyName(initialName)
+    setPropertyKind('string')
+    setIsOpen(true)
+    focusNameInput()
+  }, [focusNameInput])
+
+  useEffect(() => {
+    return subscribePropertyCreateRequests(blockId, detail => openForm(detail.initialName))
+  }, [blockId, openForm])
+
+  useEffect(() => {
+    if (isOpen) focusNameInput()
+  }, [focusNameInput, isOpen])
 
   const handleAdd = () => {
-    if (!propertyName.trim()) return
-    onAdd(propertyName.trim(), propertyKind)
+    const name = propertyName.trim()
+    if (!name) return
+    onAdd(name, propertyKind)
     setPropertyName('')
     setPropertyKind('string')
     setIsOpen(false)
+    focusPropertyRowByNameWhenReady(blockId, name)
   }
 
   if (!isOpen) {
     return (
       <Button
-        variant="outline"
+        variant="ghost"
         size="sm"
-        className="text-xs md:text-sm"
-        onClick={() => setIsOpen(true)}
+        className="h-7 w-fit gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+        title="Add field"
+        onClick={() => openForm()}
       >
-        Add Property
+        <Plus className="h-3.5 w-3.5" />
+        Field
       </Button>
     )
   }
 
   return (
-    <div className="space-y-2 p-3 border rounded-md bg-muted/20">
-      <div className="flex gap-2">
+    <div className="grid grid-cols-[1rem,minmax(7rem,13rem),minmax(0,1fr)] items-center gap-1.5 py-0.5 text-xs md:text-sm">
+      <span className="select-none text-muted-foreground">&gt;</span>
+      <Input
+        ref={nameInputRef}
+        placeholder="Field"
+        value={propertyName}
+        onChange={(e) => setPropertyName(e.target.value)}
+        className="h-7 text-xs md:text-sm"
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault()
+            handleAdd()
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            setIsOpen(false)
+          }
+        }}
+      />
+      <div className="flex min-w-0 gap-1.5">
         <Input
-          placeholder="Property name"
-          value={propertyName}
-          onChange={(e) => setPropertyName(e.target.value)}
-          className="text-xs md:text-sm"
+          value=""
+          disabled
+          placeholder="Value"
+          className="h-7 min-w-0 flex-1 text-xs md:text-sm"
+        />
+        <select
+          className="flex h-7 rounded-md border border-input bg-transparent px-2 py-1 text-xs md:text-sm"
+          value={propertyKind}
+          onChange={(e) => setPropertyKind(e.target.value as AddableKind)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault()
               handleAdd()
             }
             if (e.key === 'Escape') {
+              e.preventDefault()
               setIsOpen(false)
             }
           }}
-        />
-        <select
-          className="flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm"
-          value={propertyKind}
-          onChange={(e) => setPropertyKind(e.target.value as AddableKind)}
         >
           {ADDABLE_KINDS.map(k => (
             <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>
           ))}
         </select>
-      </div>
-      <div className="flex gap-2">
-        <Button size="sm" onClick={handleAdd} disabled={!propertyName.trim()}>
-          Add
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => setIsOpen(false)}>
-          Cancel
-        </Button>
       </div>
     </div>
   )
@@ -143,7 +244,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       }
       : undefined,
   })
+  const childIds = useChildIds(block)
+  const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
+  const [showHiddenFields, setShowHiddenFields] = useState(false)
   // Read both registries once per render — combine() is memoised inside
   // FacetRuntime, so re-read is cheap (Map identity-stable across the
   // same runtime).
@@ -152,23 +256,92 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const typesRegistry = runtime.read(typesFacet)
 
   const properties = useMemo(() => blockData?.properties ?? {}, [blockData?.properties])
+  const visibleProperties = useMemo(() => {
+    const next: Record<string, unknown> = {}
+    for (const [name, value] of Object.entries(properties)) {
+      if (!isInlineHiddenProperty(name, schemas)) next[name] = value
+    }
+    return next
+  }, [properties, schemas])
+  const hiddenProperties = useMemo(() => {
+    const next: Record<string, unknown> = {}
+    for (const [name, value] of Object.entries(properties)) {
+      if (isInlineHiddenProperty(name, schemas)) next[name] = value
+    }
+    return next
+  }, [properties, schemas])
   const blockTypes = useMemo(() => {
     if (!blockData) return EMPTY_BLOCK_TYPES
     try {
-      return getBlockTypes(blockData)
+      return getBlockTypes({properties})
     } catch {
       return EMPTY_BLOCK_TYPES
     }
-  }, [blockData])
+  }, [blockData, properties])
   const propertySections = useMemo(() => buildPropertyPanelSections({
-    properties,
+    properties: visibleProperties,
     blockTypes,
     typesRegistry,
     schemas,
-  }), [properties, blockTypes, typesRegistry, schemas])
+  }), [visibleProperties, blockTypes, typesRegistry, schemas])
+  const hiddenRows = useMemo<PropertyPanelRow[]>(
+    () => Object.keys(hiddenProperties).sort().map(name => ({
+      name,
+      encodedValue: hiddenProperties[name],
+      isSet: true,
+    })),
+    [hiddenProperties],
+  )
 
   if (!blockData) return null
   const readOnly = block.repo.isReadOnly
+
+  const focusBlockEditor = async (
+    target: Block,
+    selection: { start?: number; line?: 'first' | 'last'; x?: number },
+  ) => {
+    await uiStateBlock.set(editorSelection, {
+      blockId: target.id,
+      ...selection,
+    })
+    setFocusedBlockId(uiStateBlock, target.id)
+    setIsEditing(uiStateBlock, true)
+    requestEditorFocus(uiStateBlock)
+  }
+
+  const focusThisBlockContentEnd = async () => {
+    const data = block.peek() ?? await block.load()
+    await focusBlockEditor(block, {start: data?.content.length ?? 0})
+  }
+
+  const focusAfterProperties = async () => {
+    const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+    if (!topLevelBlockId) return
+
+    const next = await nextVisibleBlock(block, topLevelBlockId)
+    if (!next) return
+    await next.load()
+    await focusBlockEditor(next, {start: 0})
+  }
+
+  const handlePropertyRowKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+    direction: -1 | 1,
+  ) => {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
+
+    event.preventDefault()
+    event.stopPropagation()
+
+    const row = event.currentTarget
+    if (focusAdjacentPropertyRow(block.id, row, direction)) return
+
+    if (direction < 0) {
+      void focusThisBlockContentEnd()
+    } else {
+      void focusAfterProperties()
+    }
+  }
 
   /** Encode + persist via the resolved schema. Decoded values come from
    *  the editor; the schema's codec encodes them on write. */
@@ -204,7 +377,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const addProperty = (name: string, kind: AddableKind) => {
-    if (name === typesProp.name) return
+    if (isInlineHiddenProperty(name, schemas)) return
     const registered = schemas.get(name)
     if (registered) writeProperty(registered, registered.defaultValue)
     else writeProperty(adhocSchema(name, kind), defaultValueForKind(kind))
@@ -244,6 +417,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         kind={display.kind}
         readOnly={rowReadOnly}
         canDelete={row.isSet && !typeMembershipRow}
+        onNavigate={(event, direction) => handlePropertyRowKeyDown(event, direction)}
         onChange={(next) => writeProperty(display.schema, next)}
         onRename={(newName) => void renameProperty(row.name, newName)}
         onDelete={() => void deleteProperty(row.name)}
@@ -252,24 +426,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   return (
-    <div className="mt-3 md:mt-4 space-y-2 md:space-y-3 border-l-2 border-muted pl-2 md:pl-4 pb-2">
-      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
-        <Label className="w-full sm:w-1/3 text-xs md:text-sm">ID</Label>
-        <Input value={blockData.id} disabled className="bg-muted/50 text-xs md:text-sm" />
-      </div>
-      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
-        <Label className="w-full sm:w-1/3 text-xs md:text-sm">Last Changed</Label>
-        <Input value={new Date(blockData.updatedAt).toLocaleString()} disabled className="bg-muted/50 text-xs md:text-sm" />
-      </div>
-      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-center">
-        <Label className="w-full sm:w-1/3 text-xs md:text-sm">Changed by User</Label>
-        <Input value={blockData.updatedBy} disabled className="bg-muted/50 text-xs md:text-sm" />
-      </div>
-
+    <div className={`tm-property-fields mt-1.5 space-y-1 pb-1 pl-1 ${childIds.length ? 'mb-1' : ''}`}>
       {propertySections.map(section => (
-        <div key={section.id} className="space-y-2 pt-2 border-t border-muted/70 first:border-t-0">
+        <div key={section.id} className="space-y-0.5">
           <div
-            className="text-xs md:text-sm font-medium text-muted-foreground"
+            className="ml-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70"
             title={section.description}
           >
             {section.label}
@@ -278,7 +439,42 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         </div>
       ))}
 
-      {!readOnly && <AddPropertyForm onAdd={addProperty} />}
+      {showHiddenFields && (
+        <div className="space-y-0.5">
+          <div className="ml-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+            Hidden
+          </div>
+          <MetadataRow label="ID" value={blockData.id} />
+          <MetadataRow label="Last changed" value={new Date(blockData.updatedAt).toLocaleString()} />
+          <MetadataRow label="Changed by" value={blockData.updatedBy} />
+          {hiddenRows.map(row => renderPropertyRow(HIDDEN_SECTION, row))}
+        </div>
+      )}
+
+      {!readOnly && <AddPropertyForm key={block.id} blockId={block.id} onAdd={addProperty} />}
+
+      <Button
+        variant="ghost"
+        size="sm"
+        type="button"
+        className="ml-3 h-7 w-fit gap-1 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => setShowHiddenFields(!showHiddenFields)}
+      >
+        {showHiddenFields ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+        {showHiddenFields ? 'Hide hidden fields' : `Show hidden fields (${hiddenRows.length + 3})`}
+      </Button>
+    </div>
+  )
+}
+
+const HIDDEN_SECTION: PropertyPanelSection = {id: 'hidden', label: 'Hidden', rows: []}
+
+function MetadataRow({label, value}: {label: string; value: string}) {
+  return (
+    <div className="grid grid-cols-[1rem,minmax(7rem,13rem),minmax(0,1fr)] items-center gap-1.5 py-0.5 text-xs md:text-sm">
+      <span className="select-none text-muted-foreground">&gt;</span>
+      <div className="truncate text-muted-foreground" title={label}>{label}</div>
+      <Input value={value} disabled className="h-7 min-w-0 bg-muted/30 text-xs md:text-sm" />
     </div>
   )
 }
@@ -298,6 +494,7 @@ interface PropertyRowProps {
   kind: PropertyKind
   readOnly: boolean
   canDelete?: boolean
+  onNavigate: (event: KeyboardEvent<HTMLDivElement>, direction: -1 | 1) => void
   onChange: (next: unknown) => void
   onRename: (newName: string) => void
   onDelete: () => void
@@ -315,6 +512,7 @@ function PropertyRow({
   kind,
   readOnly,
   canDelete = true,
+  onNavigate,
   onChange,
   onRename,
   onDelete,
@@ -328,74 +526,78 @@ function PropertyRow({
   // key (`name`) as the input's value so plugin-supplied UI labels
   // ("Due date") never accidentally persist as the new key on blur.
   const renameAllowed = schemaUnknown && !readOnly
+  const hintText = [
+    kindLabel,
+    schemaUnknown ? 'schema not registered' : null,
+    decodeFailed ? 'decode failed' : null,
+    labelText !== name ? name : null,
+  ].filter(Boolean).join(' · ')
   return (
-    <div className="space-y-2">
-      <div className="flex flex-col sm:flex-row gap-1 sm:gap-2 sm:items-start">
-        <div className="w-full sm:w-1/3 space-y-1">
-          <div className="flex gap-1">
-            {renameAllowed ? (
-              <Input
-                className="text-xs md:text-sm flex-1"
-                // Value = the storage key, not the UI label. For ad-hoc
-                // properties these match (no UI contribution sets a
-                // separate label), so this matches what the user sees.
-                defaultValue={name}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault()
-                    onRename(e.currentTarget.value)
-                  }
-                }}
-                onBlur={(e) => onRename(e.target.value)}
-              />
-            ) : (
-              // Registered schema → label is display-only. Show the
-              // contributed label (or the key when no contribution sets
-              // one); the raw key is also surfaced below when distinct.
-              <div className="flex h-9 flex-1 items-center px-3 text-xs md:text-sm text-foreground">
-                {labelText}
-              </div>
-            )}
+    <div
+      className="group/property-row grid grid-cols-[1rem,minmax(7rem,13rem),minmax(0,1fr),1.75rem] items-center gap-1.5 py-0.5 text-xs md:text-sm"
+      data-property-row="true"
+      data-block-id={block.id}
+      data-property-name={name}
+      onKeyDown={(event) => {
+        if (event.key === 'ArrowUp') onNavigate(event, -1)
+        if (event.key === 'ArrowDown') onNavigate(event, 1)
+      }}
+    >
+      <span className="select-none text-muted-foreground" title={hintText}>&gt;</span>
+      <div className="min-w-0">
+        {renameAllowed ? (
+          <Input
+            className="h-7 min-w-0 border-transparent px-0 text-xs shadow-none focus-visible:border-input focus-visible:px-2 md:text-sm"
+            // Value = the storage key, not the UI label. For ad-hoc
+            // properties these match (no UI contribution sets a
+            // separate label), so this matches what the user sees.
+            defaultValue={name}
+            aria-label={`Field ${labelText}`}
+            title={hintText}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault()
+                onRename(e.currentTarget.value)
+              }
+            }}
+            onBlur={(e) => onRename(e.target.value)}
+          />
+        ) : (
+          // Registered schema → label is display-only. Show the
+          // contributed label (or the key when no contribution sets
+          // one); the raw key is still exposed in the row tooltip.
+          <div
+            className="truncate text-muted-foreground"
+            title={hintText}
+          >
+            {labelText}
+            {schemaUnknown && <span className="ml-1 text-amber-600">*</span>}
+            {decodeFailed && <span className="ml-1 text-destructive">*</span>}
           </div>
-          <div className="text-xs text-muted-foreground">
-            {kindLabel}
-            {schemaUnknown && (
-              <span className="ml-1 text-amber-600" title="No PropertySchema registered for this name; using JSON-shape inference.">
-                · schema not registered
-              </span>
-            )}
-            {decodeFailed && (
-              <span className="ml-1 text-destructive" title="Stored value didn't match the schema's codec; rendering raw value.">
-                · decode failed
-              </span>
-            )}
-          </div>
-          {labelText !== name && (
-            <div className="text-xs text-muted-foreground/60 truncate" title={name}>
-              {name}
-            </div>
-          )}
-        </div>
-        <div className="flex-1">
-          {Editor !== undefined && !decodeFailed ? (
-            <Editor value={value} onChange={onChange} block={block} />
-          ) : (
-            <DefaultPropertyValueEditor
-              kind={kind}
-              value={value}
-              onChange={onChange}
-              readOnly={readOnly}
-            />
-          )}
-        </div>
+        )}
+      </div>
+      <div className="min-w-0" data-property-value="true">
+        {Editor !== undefined && !decodeFailed ? (
+          <Editor value={value} onChange={onChange} block={block} />
+        ) : (
+          <DefaultPropertyValueEditor
+            kind={kind}
+            value={value}
+            onChange={onChange}
+            readOnly={readOnly}
+          />
+        )}
+      </div>
+      <div className="flex h-7 items-center justify-center">
         {!readOnly && canDelete && (
           <Button
             variant="ghost"
             size="sm"
             onClick={onDelete}
-            className="h-9 w-9 p-0 text-destructive hover:text-destructive"
+            title={`Delete ${labelText}`}
+            className="h-7 w-7 p-0 text-muted-foreground opacity-0 hover:text-destructive group-hover/property-row:opacity-100 focus-visible:opacity-100"
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-3.5 w-3.5" />
           </Button>
         )}
       </div>

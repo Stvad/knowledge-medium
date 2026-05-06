@@ -59,7 +59,7 @@ export function DefaultListPropertyEditor({value, onChange, readOnly}: ListEdito
           <Input
             value={item}
             onChange={(e) => updateItem(index, e.target.value)}
-            className="text-xs md:text-sm"
+            className="h-7 text-xs md:text-sm"
             placeholder="Enter value..."
             disabled={readOnly}
           />
@@ -68,9 +68,9 @@ export function DefaultListPropertyEditor({value, onChange, readOnly}: ListEdito
               variant="ghost"
               size="sm"
               onClick={() => removeItem(index)}
-              className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+              className="h-7 w-7 p-0 text-destructive hover:text-destructive"
             >
-              <X className="h-4 w-4" />
+              <X className="h-3.5 w-3.5" />
             </Button>
           )}
         </div>
@@ -86,11 +86,11 @@ export function DefaultListPropertyEditor({value, onChange, readOnly}: ListEdito
                 addItem()
               }
             }}
-            className="text-xs md:text-sm"
+            className="h-7 text-xs md:text-sm"
             placeholder="Add new item..."
           />
-          <Button variant="ghost" size="sm" onClick={addItem} className="h-8 w-8 p-0">
-            <Plus className="h-4 w-4" />
+          <Button variant="ghost" size="sm" onClick={addItem} className="h-7 w-7 p-0">
+            <Plus className="h-3.5 w-3.5" />
           </Button>
         </div>
       )}
@@ -124,7 +124,7 @@ export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: De
   if (kind === 'boolean') {
     return (
       <select
-        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-xs md:text-sm disabled:cursor-not-allowed disabled:opacity-50"
+        className="flex h-7 w-full rounded-md border border-input bg-transparent px-2 py-1 text-xs md:text-sm disabled:cursor-not-allowed disabled:opacity-50"
         value={String(value ?? false)}
         onChange={(e) => onChange(e.target.value === 'true')}
         disabled={readOnly}
@@ -139,7 +139,7 @@ export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: De
     return (
       <Input
         type="number"
-        className="text-xs md:text-sm"
+        className="h-7 text-xs md:text-sm"
         value={value === undefined || value === null ? '' : String(value)}
         onChange={(e) => {
           const n = parseFloat(e.target.value)
@@ -153,7 +153,7 @@ export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: De
   if (kind === 'object') {
     return (
       <Input
-        className="text-xs md:text-sm font-mono"
+        className="h-7 text-xs font-mono md:text-sm"
         value={JSON.stringify(value ?? {})}
         onChange={(e) => {
           try {
@@ -175,7 +175,7 @@ export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: De
     return (
       <Input
         type="date"
-        className="text-xs md:text-sm"
+        className="h-7 text-xs md:text-sm"
         value={isoString}
         onChange={(e) => {
           const text = e.target.value
@@ -190,7 +190,7 @@ export function DefaultPropertyValueEditor({kind, value, onChange, readOnly}: De
   // Default: string.
   return (
     <Input
-      className="text-xs md:text-sm"
+      className="h-7 text-xs md:text-sm"
       value={value === undefined || value === null ? '' : String(value)}
       onChange={(e) => onChange(e.target.value)}
       disabled={readOnly}
