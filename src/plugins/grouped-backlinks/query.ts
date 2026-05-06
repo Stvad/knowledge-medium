@@ -239,15 +239,14 @@ export const selectGroupedBacklinkFieldCandidatesSql = (
         )
     )
   SELECT DISTINCT
-    ancestor_chain.source_id AS source_id,
+    fs.source_id AS source_id,
     refs.source_field AS source_field
   FROM filtered_sources fs
-  JOIN ancestor_chain ON ancestor_chain.source_id = fs.source_id
-  JOIN block_references refs ON refs.source_id = ancestor_chain.id
+  JOIN block_references refs ON refs.source_id = fs.source_id
   WHERE refs.workspace_id = ?
     AND refs.target_id = ?
     AND refs.source_field != ''
-  ORDER BY ancestor_chain.source_id, refs.source_field
+  ORDER BY fs.source_id, refs.source_field
 `
 
 export const groupedBacklinksForBlockQuery = defineQuery<

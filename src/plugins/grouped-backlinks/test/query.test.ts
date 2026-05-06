@@ -244,6 +244,41 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(out.groups.map(group => group.sourceIds)).toEqual([['src'], ['src']])
   })
 
+  it('does not inherit source-field groups from ancestor property references', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({
+      id: 'parent',
+      content: 'Parent',
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    })
+    await create({
+      id: 'child',
+      parentId: 'parent',
+      references: [{id: 'target', alias: 'T'}],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.total).toBe(2)
+    expect(out.groups).toEqual([
+      {
+        groupId: 'field:reviewer',
+        label: 'reviewer',
+        sourceIds: ['parent'],
+        fallback: false,
+      },
+      {
+        groupId: '__grouped_backlinks_other__',
+        label: 'Other',
+        sourceIds: ['child'],
+        fallback: true,
+      },
+    ])
+  })
+
   it('applies include/remove filters before grouping and honors high priority config', async () => {
     await create({id: 'target', content: 'Target'})
     await create({id: 'project', content: 'Project'})

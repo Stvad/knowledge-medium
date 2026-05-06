@@ -22,7 +22,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, codecs, defineProperty } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -266,6 +266,51 @@ describe('parseReferences — schema-swap reprojection', () => {
         {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
       ])
     })
+  })
+
+  it('preserves references committed after the schema-swap scan starts', async () => {
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    const liveReference: BlockReference = {id: 'live-content', alias: 'live-content'}
+    const originalGetAll = env.h.db.getAll.bind(env.h.db)
+    let intercepted = false
+    const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
+      sql: string,
+      params?: unknown[],
+    ): Promise<T[]> => {
+      const rows = await originalGetAll<T>(sql, params)
+      if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
+        intercepted = true
+        await env.repo.tx(
+          tx => tx.update('src', {references: [liveReference]}, {skipMetadata: true}),
+          {scope: ChangeScope.References},
+        )
+      }
+      return rows
+    })
+
+    try {
+      env.repo.setFacetRuntime(runtimeWithReviewer())
+
+      await vi.waitFor(async () => {
+        expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+          liveReference,
+          {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
+        ])
+      })
+      expect(intercepted).toBe(true)
+    } finally {
+      getAllSpy.mockRestore()
+    }
   })
 
   it('removes stale field refs when a property stops being ref-typed', async () => {

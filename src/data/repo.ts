@@ -892,6 +892,7 @@ export class Repo {
       )
       if (rows.length === 0) return
       if (this._propertySchemas !== propertySchemas) return
+      const propertyNameSet = new Set(propertyNames)
 
       const blocksByWorkspace = new Map<string, BlockData[]>()
       for (const row of rows) {
@@ -905,15 +906,17 @@ export class Repo {
         if (this._propertySchemas !== propertySchemas) return
         await this.tx(async tx => {
           for (const block of blocks) {
-            const retainedRefs = block.references.filter(ref =>
-              !ref.sourceField || !propertyNames.includes(ref.sourceField)
+            const liveBlock = await tx.get(block.id)
+            if (liveBlock === null || liveBlock.deleted) continue
+            const retainedRefs = liveBlock.references.filter(ref =>
+              !ref.sourceField || !propertyNameSet.has(ref.sourceField)
             )
             const addedRefs = propertyNames.flatMap(name =>
-              projectedRefsForField(block, propertySchemas.get(name), name)
+              projectedRefsForField(liveBlock, propertySchemas.get(name), name)
             )
             const nextReferences = [...retainedRefs, ...addedRefs]
-            if (JSON.stringify(block.references) === JSON.stringify(nextReferences)) continue
-            await tx.update(block.id, {references: nextReferences}, {skipMetadata: true})
+            if (JSON.stringify(liveBlock.references) === JSON.stringify(nextReferences)) continue
+            await tx.update(liveBlock.id, {references: nextReferences}, {skipMetadata: true})
           }
         }, {
           scope: ChangeScope.References,
