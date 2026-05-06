@@ -1,11 +1,13 @@
 import { RuleTester } from 'eslint'
 import { describe } from 'vitest'
+import tseslint from 'typescript-eslint'
 // The local ESLint plugin is plain JS because eslint.config.js imports it directly.
 // @ts-expect-error no declaration file for the local rule module
 import blockSubscriptions from '../../eslint-rules/block-subscriptions.js'
 
 const ruleTester = new RuleTester({
   languageOptions: {
+    parser: tseslint.parser,
     ecmaVersion: 2020,
     sourceType: 'module',
   },
@@ -21,6 +23,17 @@ describe('block subscription ESLint rules', () => {
           code: `
             import { typesProp } from '@/data/properties'
             const [types] = usePropertyValue(block, typesProp)
+          `,
+        },
+        {
+          code: `
+            const query = {types: ['page']}
+          `,
+        },
+        {
+          code: `
+            const blockMap = new Map()
+            blockMap.set('types', ['page'])
           `,
         },
         {
@@ -69,6 +82,56 @@ describe('block subscription ESLint rules', () => {
           code: `
             import { typesProp } from '@/data/properties'
             block.set(typesProp, ['page'])
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/utils/import.ts',
+          code: `
+            tx.update(id, {properties: {types: ['page']}})
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/utils/import.ts',
+          code: `
+            const properties = {'types': ['page']}
+            tx.update(id, {properties})
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/utils/import.ts',
+          code: `
+            const next = {...block.properties, ['types']: ['page']}
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/utils/import.ts',
+          code: `
+            properties.types = ['page']
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/data/targets.ts',
+          code: `
+            tx.setProperty(id, 'types' as any, ['page'])
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/components/BlockProperties.tsx',
+          code: `
+            block.set('types' as any, ['page'])
+          `,
+          errors: [{messageId: 'directWrite'}],
+        },
+        {
+          filename: '/repo/src/components/BlockProperties.tsx',
+          code: `
+            repo.mutate.setProperty({id, schema: 'types' as any, value: ['page']})
           `,
           errors: [{messageId: 'directWrite'}],
         },

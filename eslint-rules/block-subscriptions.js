@@ -114,6 +114,21 @@ const memberPropertyName = (node) => {
   return undefined
 }
 
+const parentAfterExpressionWrappers = (node) => {
+  let current = node
+  let parent = current.parent
+  while (
+    parent?.type === 'TSAsExpression'
+    || parent?.type === 'TSSatisfiesExpression'
+    || parent?.type === 'TSNonNullExpression'
+    || parent?.type === 'TSTypeAssertion'
+  ) {
+    current = parent
+    parent = current.parent
+  }
+  return parent
+}
+
 const noDirectTypesPropWrites = {
   meta: {
     type: 'problem',
@@ -155,6 +170,55 @@ const noDirectTypesPropWrites = {
         && expression.computed
         && isTypesPropNameMember(expression.property)
     }
+    const isTypesLiteral = (node) => {
+      const expression = unwrap(node)
+      return expression?.type === 'Literal' && expression.value === 'types'
+    }
+    const isPropertiesObjectReference = (node) => {
+      const expression = unwrap(node)
+      if (expression?.type === 'Identifier') return expression.name === 'properties'
+      return expression?.type === 'MemberExpression'
+        && memberPropertyName(expression.property) === 'properties'
+    }
+    const hasPropertiesSpread = (objectExpression) =>
+      objectExpression.properties.some(property =>
+        property.type === 'SpreadElement' && isPropertiesObjectReference(property.argument),
+      )
+    const isRawPropertiesPayloadObject = (objectExpression) => {
+      const parent = parentAfterExpressionWrappers(objectExpression)
+      if (parent?.type === 'Property' && keyName(parent.key) === 'properties') return true
+      if (
+        parent?.type === 'VariableDeclarator'
+        && parent.id.type === 'Identifier'
+        && parent.id.name === 'properties'
+      ) {
+        return true
+      }
+      if (
+        parent?.type === 'AssignmentExpression'
+        && parent.left.type === 'Identifier'
+        && parent.left.name === 'properties'
+      ) {
+        return true
+      }
+      return hasPropertiesSpread(objectExpression)
+    }
+    const isTypesLiteralProperty = (node) =>
+      keyName(node.key) === 'types' || (node.computed && isTypesLiteral(node.key))
+    const isTypesLiteralMemberWrite = (node) => {
+      const expression = unwrap(node)
+      return expression?.type === 'MemberExpression'
+        && memberPropertyName(expression.property) === 'types'
+        && isPropertiesObjectReference(expression.object)
+    }
+    const isBlockLikeSetCallee = (callee) => {
+      const expression = unwrap(callee)
+      if (expression?.type !== 'MemberExpression') return false
+      if (memberPropertyName(expression.property) !== 'set') return false
+      const object = unwrap(expression.object)
+      return object?.type === 'Identifier'
+        && (object.name === 'block' || object.name.endsWith('Block'))
+    }
     const report = (node) => {
       if (!shouldSkip()) context.report({node, messageId: 'directWrite'})
     }
@@ -170,9 +234,13 @@ const noDirectTypesPropWrites = {
       Property(node) {
         if (node.parent?.type !== 'ObjectExpression') return
         if (node.computed && isTypesPropNameMember(node.key)) report(node.key)
+        if (isTypesLiteralProperty(node) && isRawPropertiesPayloadObject(node.parent)) {
+          report(node.key)
+        }
       },
       AssignmentExpression(node) {
         if (isTypesPropIndexedWrite(node.left)) report(node.left)
+        if (isTypesLiteralMemberWrite(node.left)) report(node.left)
       },
       CallExpression(node) {
         const callee = unwrap(node.callee)
@@ -181,7 +249,24 @@ const noDirectTypesPropWrites = {
         if (propertyName === 'setProperty' && isTypesPropIdentifier(unwrap(node.arguments[1]))) {
           report(node.arguments[1])
         }
+        if (propertyName === 'setProperty' && isTypesLiteral(node.arguments[1])) {
+          report(node.arguments[1])
+        }
+        if (propertyName === 'setProperty') {
+          const argsObject = unwrap(node.arguments[0])
+          const schemaProperty = argsObject?.type === 'ObjectExpression'
+            ? argsObject.properties.find(property =>
+              property.type === 'Property' &&
+              keyName(property.key) === 'schema' &&
+              isTypesLiteral(property.value),
+            )
+            : undefined
+          if (schemaProperty?.type === 'Property') report(schemaProperty.value)
+        }
         if (propertyName === 'set' && isTypesPropIdentifier(unwrap(node.arguments[0]))) {
+          report(node.arguments[0])
+        }
+        if (isBlockLikeSetCallee(callee) && isTypesLiteral(node.arguments[0])) {
           report(node.arguments[0])
         }
       },
