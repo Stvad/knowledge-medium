@@ -22,7 +22,7 @@ import {
 } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
 import {
   roamTodoStateProp,
   statusProp,
@@ -41,7 +41,6 @@ import {
   srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
 import { computeAliasSeatId } from '../../data/targets'
-import { keyAtEnd, keysBetween } from '../../data/orderKey'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '../../data/repo'
 import {
@@ -49,12 +48,12 @@ import {
   planImport,
   type PreparedBlock,
   type PreparedPage,
-  type RoamMemoImportPlanSummary,
-  ROAM_ISA_PROP,
-  ROAM_PAGE_ALIAS_PROP,
   type RoamImportPlan,
 } from './plan'
 import type { RoamExport } from './types'
+import { writeImportLog } from './report'
+import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'
+import type { RoamMemoImportPlanSummary } from './roamMemo'
 
 type AliasIdMap = ReadonlyMap<string, string>
 
@@ -124,19 +123,6 @@ export interface RoamImportOptions {
    *  can exercise multi-chunk behaviour without generating thousands
    *  of rows; production callers should leave this unset. */
   descendantChunkSize?: number
-}
-
-export interface RoamTypeCandidateProperty {
-  name: string
-  count: number
-  percent: number
-}
-
-export interface RoamTypeCandidate {
-  alias: string
-  typeId: string
-  count: number
-  commonProperties: RoamTypeCandidateProperty[]
 }
 
 export interface RoamImportSummary {
@@ -469,291 +455,6 @@ export const importRoam = async (
     durationMs: Date.now() - start,
     dryRun: false,
   }
-}
-
-interface TypeCandidateAccumulator {
-  alias: string
-  typeId: string
-  count: number
-  propCounts: Map<string, number>
-}
-
-const TYPE_CANDIDATE_EXCLUDED_PROPERTIES = new Set([
-  aliasesProp.name,
-  typesProp.name,
-  ROAM_ISA_PROP,
-  ROAM_PAGE_ALIAS_PROP,
-])
-
-const MAX_TYPE_CANDIDATES_IN_REPORT = 20
-const MAX_COMMON_PROPS_IN_REPORT = 5
-
-const typeIdFromIsaAlias = (alias: string): string => {
-  const slug = alias
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug || alias.trim()
-}
-
-const collectIsaAliases = (value: unknown): string[] => {
-  if (Array.isArray(value)) {
-    return uniqueNonEmpty(value.flatMap(collectIsaAliases))
-  }
-  if (typeof value !== 'string') return []
-
-  const trimmed = value.trim()
-  if (trimmed.length === 0) return []
-
-  const parsed = parseRoamImportReferences(trimmed).map(ref => ref.alias)
-  if (parsed.length > 0) return uniqueNonEmpty(parsed)
-
-  const unwrapped = /^\[\[(.+)]]$/.exec(trimmed)?.[1]?.trim()
-  return [unwrapped ?? trimmed]
-}
-
-const uniqueNonEmpty = (values: readonly string[]): string[] => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const value of values) {
-    const trimmed = value.trim()
-    if (trimmed.length === 0 || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
-  }
-  return out
-}
-
-const reportablePropertyNames = (properties: Record<string, unknown>): string[] =>
-  Object.keys(properties)
-    .filter(name =>
-      !TYPE_CANDIDATE_EXCLUDED_PROPERTIES.has(name) &&
-      properties[name] !== undefined,
-    )
-
-const addTypeCandidateSource = (
-  groups: Map<string, TypeCandidateAccumulator>,
-  registeredTypes: ReadonlyMap<string, unknown>,
-  properties: Record<string, unknown>,
-) => {
-  const aliases = collectIsaAliases(properties[ROAM_ISA_PROP])
-  if (aliases.length === 0) return
-  const props = reportablePropertyNames(properties)
-
-  for (const alias of aliases) {
-    const typeId = typeIdFromIsaAlias(alias)
-    if (registeredTypes.has(typeId) || registeredTypes.has(alias)) continue
-
-    let group = groups.get(alias)
-    if (!group) {
-      group = {alias, typeId, count: 0, propCounts: new Map()}
-      groups.set(alias, group)
-    }
-    group.count += 1
-    for (const prop of props) {
-      group.propCounts.set(prop, (group.propCounts.get(prop) ?? 0) + 1)
-    }
-  }
-}
-
-const collectTypeCandidates = (
-  plan: RoamImportPlan,
-  registeredTypes: ReadonlyMap<string, unknown>,
-): RoamTypeCandidate[] => {
-  const groups = new Map<string, TypeCandidateAccumulator>()
-
-  for (const page of plan.pages) {
-    const properties = page.data?.properties ?? page.promotedFromChildren
-    addTypeCandidateSource(groups, registeredTypes, properties)
-  }
-  for (const desc of plan.descendants) {
-    addTypeCandidateSource(groups, registeredTypes, desc.data.properties)
-  }
-
-  return [...groups.values()]
-    .map(group => {
-      const minCommonCount = group.count === 1
-        ? 1
-        : Math.max(2, Math.ceil(group.count * 0.15))
-      const commonProperties = [...group.propCounts.entries()]
-        .filter(([, count]) => count >= minCommonCount)
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, MAX_COMMON_PROPS_IN_REPORT)
-        .map(([name, count]) => ({
-          name,
-          count,
-          percent: Math.round((count / group.count) * 100),
-        }))
-      return {
-        alias: group.alias,
-        typeId: group.typeId,
-        count: group.count,
-        commonProperties,
-      }
-    })
-    .sort((a, b) => b.count - a.count || a.alias.localeCompare(b.alias))
-}
-
-const formatTypeCandidateReport = (
-  candidates: ReadonlyArray<RoamTypeCandidate>,
-): string[] => {
-  const lines = candidates.slice(0, MAX_TYPE_CANDIDATES_IN_REPORT).map(candidate => {
-    const nodeLabel = candidate.count === 1
-      ? '1 node'
-      : `${candidate.count} nodes`
-    const props = candidate.commonProperties.length > 0
-      ? candidate.commonProperties
-        .map(prop => `${prop.name} ${prop.count}/${candidate.count} (${prop.percent}%)`)
-        .join(', ')
-      : 'no recurring props'
-    return `[[${candidate.alias}]] -> type "${candidate.typeId}" (${nodeLabel}); common props: ${props}`
-  })
-
-  if (candidates.length > MAX_TYPE_CANDIDATES_IN_REPORT) {
-    lines.push(`${candidates.length - MAX_TYPE_CANDIDATES_IN_REPORT} more isa:: candidates omitted from this report.`)
-  }
-
-  return lines
-}
-
-const formatRoamMemoReport = (
-  summary: RoamMemoImportPlanSummary,
-): string[] => {
-  if (summary.entries === 0) return []
-
-  const lines = [
-    `${summary.matchedTargets}/${summary.entries} entries matched imported blocks`,
-    `${summary.activeTargets} active, ${summary.archivedTargets} archived, ${summary.toReviewRefs} to-review refs preserved as source tags`,
-    `${summary.snapshots} snapshots imported across ${summary.matchedTargets} blocks`,
-    `${summary.targetsWithHistory} blocks had multi-snapshot review history`,
-  ]
-  if (summary.missingTargets > 0) {
-    lines.push(`${summary.missingTargets} entries referenced missing target blocks`)
-  }
-  if (summary.unsupportedSessions > 0) {
-    lines.push(`${summary.unsupportedSessions} session rows were skipped because they were not SPACED_INTERVAL snapshots`)
-  }
-  return lines
-}
-
-interface ImportLogStats {
-  pagesCreated: number
-  pagesMerged: number
-  pagesDaily: number
-  blocksWritten: number
-  placeholdersCreated: number
-  aliasBlocksCreated: number
-  typeCandidates: ReadonlyArray<RoamTypeCandidate>
-  roamMemo: RoamMemoImportPlanSummary
-  durationMs: number
-  diagnostics: ReadonlyArray<string>
-}
-
-/**
- * Append a one-parent + N-children block to today's daily-note that
- * records the just-finished import. Header summarises counts; each
- * diagnostic becomes a sub-bullet.
- *
- * The header is parented under the daily-note row at the end of its
- * existing children (via `keyAtEnd`). The user's existing bullets
- * keep their order; the log lands below them. Sub-bullets get jittered
- * keys via `keysBetween(null, null, n)` since the header is fresh
- * (no neighbors yet).
- */
-const writeImportLog = async (
-  repo: Repo,
-  workspaceId: string,
-  stats: ImportLogStats,
-): Promise<void> => {
-  const iso = todayIso()
-  // Make sure today's daily-note row exists. Idempotent — if today's
-  // import already touched it, this is a cache hit.
-  await getOrCreateDailyNote(repo, workspaceId, iso)
-  const dailyId = dailyNoteBlockId(workspaceId, iso)
-  const typeCandidateLines = formatTypeCandidateReport(stats.typeCandidates)
-  const roamMemoLines = formatRoamMemoReport(stats.roamMemo)
-  const typeCandidateSummary = stats.typeCandidates.length > 0
-    ? `, ${stats.typeCandidates.length} type candidates`
-    : ''
-  const roamMemoSummary = stats.roamMemo.entries > 0
-    ? `, ${stats.roamMemo.snapshots} roam/memo snapshots`
-    : ''
-
-  const stamp = new Date().toISOString().replace('T', ' ').slice(0, 19)
-  const headerContent =
-    `Roam import ${stamp}: ` +
-    `${stats.pagesCreated} new pages, ${stats.pagesMerged} merged, ` +
-    `${stats.pagesDaily} daily, ${stats.blocksWritten} blocks ` +
-    `(${stats.placeholdersCreated} placeholders, ` +
-    `${stats.aliasBlocksCreated} alias seats, ` +
-    `${stats.diagnostics.length} notes${typeCandidateSummary}${roamMemoSummary}, ` +
-    `${(stats.durationMs / 1000).toFixed(1)}s)`
-
-  await repo.tx(async tx => {
-    const existing = await tx.childrenOf(dailyId, workspaceId)
-    const lastKey = existing.length > 0
-      ? existing[existing.length - 1].orderKey
-      : null
-    const headerOrderKey = keyAtEnd(lastKey)
-
-    const headerId = await tx.create({
-      workspaceId,
-      parentId: dailyId,
-      orderKey: headerOrderKey,
-      content: headerContent,
-    })
-
-    const childCount =
-      stats.diagnostics.length +
-      (roamMemoLines.length > 0 ? 1 : 0) +
-      (typeCandidateLines.length > 0 ? 1 : 0)
-    if (childCount === 0) return
-    const childKeys = keysBetween(null, null, childCount)
-    let childIndex = 0
-    for (let i = 0; i < stats.diagnostics.length; i++) {
-      await tx.create({
-        workspaceId,
-        parentId: headerId,
-        orderKey: childKeys[childIndex++],
-        content: stats.diagnostics[i],
-      })
-    }
-    if (roamMemoLines.length > 0) {
-      const sectionId = await tx.create({
-        workspaceId,
-        parentId: headerId,
-        orderKey: childKeys[childIndex++],
-        content: 'Roam Memo SRS',
-      })
-      const sectionKeys = keysBetween(null, null, roamMemoLines.length)
-      for (let i = 0; i < roamMemoLines.length; i++) {
-        await tx.create({
-          workspaceId,
-          parentId: sectionId,
-          orderKey: sectionKeys[i],
-          content: roamMemoLines[i],
-        })
-      }
-    }
-    if (typeCandidateLines.length > 0) {
-      const sectionId = await tx.create({
-        workspaceId,
-        parentId: headerId,
-        orderKey: childKeys[childIndex],
-        content: 'Type candidates from isa::',
-      })
-      const sectionKeys = keysBetween(null, null, typeCandidateLines.length)
-      for (let i = 0; i < typeCandidateLines.length; i++) {
-        await tx.create({
-          workspaceId,
-          parentId: sectionId,
-          orderKey: sectionKeys[i],
-          content: typeCandidateLines[i],
-        })
-      }
-    }
-  }, {scope: ChangeScope.BlockDefault, description: 'roam import: log'})
 }
 
 // Render a remaining-seconds estimate as e.g. "12s", "1m20s", "1h05m".

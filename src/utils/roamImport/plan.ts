@@ -1,23 +1,56 @@
 import type { BlockData, BlockReference } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteBlockId } from '@/data/dailyNotes'
-import {
-  type SrsReviewSnapshot,
-  srsArchivedProp,
-  srsFactorProp,
-  srsGradeProp,
-  srsIntervalProp,
-  srsNextReviewDateProp,
-  srsReviewCountProp,
-  srsSnapshotHistoryProp,
-} from '@/plugins/srs-rescheduling/schema'
+import { srsNextReviewDateProp } from '@/plugins/srs-rescheduling/schema'
 import type { RoamTodoState } from '@/plugins/todo/schema'
-import { parseReferences } from '@/utils/referenceParser'
-import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import { applyHeading, collectContentRefUids, rewriteRoamContent } from './content'
 import { resolveDailyPage, roamBlockId } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
+import {
+  collectAliasesFromPropertyValues,
+  collectPageAliases,
+  derivePropertiesFromContent,
+  propertiesFromRoam,
+  uniqueStrings,
+} from './properties'
+import { computePromotedFromChildren } from './promotion'
+import {
+  collectRoamMemoEntries,
+  propertiesFromRoamMemo,
+  srsSourceConflictDiagnostics,
+  type PreparedRoamMemoEntry,
+  type RoamMemoImportPlanSummary,
+} from './roamMemo'
+import {
+  findSrsScheduleInChildren,
+  propertiesFromSrsSchedule,
+  type PreparedSrsSchedule,
+} from './srsMarkers'
+import { parseRoamImportReferences } from './references'
+import { extractRoamTodoMarker } from './todo'
+
+export {
+  ROAM_AUTHOR_PROP,
+  ROAM_ISA_PROP,
+  ROAM_PAGE_ALIAS_PROP,
+  normalizeRoamPropertyValue,
+} from './properties'
+export {
+  computePromotedFromChildren,
+  type PromotionOptions,
+  type PromotionResult,
+} from './promotion'
+export {
+  type PreparedRoamMemoEntry,
+  type PreparedRoamMemoSnapshot,
+  type RoamMemoImportPlanSummary,
+} from './roamMemo'
+export {
+  extractSrsScheduleMarker,
+  type PreparedSrsSchedule,
+} from './srsMarkers'
+export { parseRoamImportReferences } from './references'
+export { extractRoamTodoMarker } from './todo'
 
 export interface PreparedPage {
   /** ID of the page-level block in our system. */
@@ -60,41 +93,6 @@ export interface PreparedBlock {
   roamMemo?: PreparedRoamMemoEntry
 }
 
-export interface PreparedSrsSchedule {
-  interval: number
-  factor: number
-  nextReviewDateAlias: string
-  nextReviewDateId: string
-  reviewCount: number
-}
-
-export interface PreparedRoamMemoSnapshot extends SrsReviewSnapshot {
-  reviewedAtAlias: string
-  reviewedAtIso: string
-  nextReviewDateAlias: string
-  nextReviewDateId: string
-}
-
-export interface PreparedRoamMemoEntry {
-  targetRoamUid: string
-  sourceRoamUid: string
-  archived: boolean
-  toReview: boolean
-  snapshots: PreparedRoamMemoSnapshot[]
-}
-
-export interface RoamMemoImportPlanSummary {
-  entries: number
-  matchedTargets: number
-  activeTargets: number
-  archivedTargets: number
-  toReviewRefs: number
-  snapshots: number
-  targetsWithHistory: number
-  missingTargets: number
-  unsupportedSessions: number
-}
-
 export interface PreparedPlaceholder {
   /** Our deterministic id for the placeholder block. */
   blockId: string
@@ -127,23 +125,6 @@ export interface PlanOptions {
   currentUserId: string
 }
 
-const NS_PREFIX = 'roam'
-export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`
-export const ROAM_AUTHOR_PROP = `${NS_PREFIX}:author`
-export const ROAM_ISA_PROP = `${NS_PREFIX}:isa`
-
-const uniqueStrings = (values: readonly string[]): string[] => {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const value of values) {
-    const trimmed = value.trim()
-    if (!trimmed || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
-  }
-  return out
-}
-
 const cloneTimestamp = (value: unknown, fallback: number): number =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback
 
@@ -154,580 +135,9 @@ const collectUidRefs = (block: RoamBlock | RoamPage): string[] => {
     .filter((uid): uid is string => typeof uid === 'string' && uid.length > 0)
 }
 
-const namespacedKey = (key: string): string => {
-  // Roam keys come in two flavors: `:foo` (Datalog) and `foo` (camel).
-  // Strip the leading `:` if present, then prefix our namespace.
-  const cleaned = key.startsWith(':') ? key.slice(1) : key
-  return `${NS_PREFIX}:${cleaned}`
-}
-
-// Roam inline attribute: a block whose content matches `key:: value`.
-// Keys in real graphs often contain spaces or punctuation (`Full
-// Title`, `initial review date`, `muscle mass %`). Keep this anchored
-// at the start of a single block and require a letter-first key so
-// prose/code fragments like `6. Runs ::fix...` don't become props.
-const INLINE_ATTR_RE = /^([^:\n]{1,100})::\s*(.*)$/
-const INLINE_ATTR_KEY_RE = /^[A-Za-z][A-Za-z0-9 _%?'’()./-]*$/
-
-const stripRoamTodoContent = (rawContent: string | undefined): string =>
-  extractRoamTodoMarker(rawContent ?? '').content
-
-const detectInlineAttribute = (rawContent: string | undefined): {key: string, value: string} | null => {
-  if (!rawContent) return null
-  const content = stripRoamTodoContent(rawContent)
-  if (content.includes('\n')) return null
-  const match = INLINE_ATTR_RE.exec(content)
-  if (!match) return null
-  const key = match[1].trim()
-  if (!INLINE_ATTR_KEY_RE.test(key)) return null
-  return {key, value: match[2]}
-}
-
-const findUnescaped = (value: string, target: string, start: number): number => {
-  for (let i = start; i < value.length; i++) {
-    if (value[i] === '\\') {
-      i += 1
-      continue
-    }
-    if (value[i] === target) return i
-  }
-  return -1
-}
-
-const findMarkdownLinkDestinationEnd = (value: string, start: number): number => {
-  let depth = 1
-  for (let i = start; i < value.length; i++) {
-    const ch = value[i]
-    if (ch === '\\') {
-      i += 1
-      continue
-    }
-    if (ch === '(') {
-      depth += 1
-      continue
-    }
-    if (ch === ')') {
-      depth -= 1
-      if (depth === 0) return i
-    }
-  }
-  return -1
-}
-
-/** If a Roam property value is exactly one markdown link, store the
- *  destination as the queryable value while leaving the original
- *  source block's content untouched in the imported tree. */
-export const normalizeRoamPropertyValue = (value: string): string => {
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('[')) return value
-
-  const labelEnd = findUnescaped(trimmed, ']', 1)
-  if (labelEnd < 0 || trimmed[labelEnd + 1] !== '(') return value
-
-  const destinationStart = labelEnd + 2
-  const destinationEnd = findMarkdownLinkDestinationEnd(trimmed, destinationStart)
-  if (destinationEnd < 0 || destinationEnd !== trimmed.length - 1) return value
-
-  const destination = trimmed.slice(destinationStart, destinationEnd).trim()
-  return destination === '' ? value : destination
-}
-
-const ROAM_TODO_MARKER_RE =
-  /(^|\s)(?:#\[\[(TODO|DONE)\]\]|#(TODO|DONE)\b|\{\{\s*\[\[(TODO|DONE)\]\]\s*\}\})(?=$|\s)/g
-
-export const extractRoamTodoMarker = (
-  rawContent: string,
-): {content: string; todoState?: RoamTodoState} => {
-  let todoState: RoamTodoState | undefined
-  ROAM_TODO_MARKER_RE.lastIndex = 0
-  const content = rawContent
-    .replace(ROAM_TODO_MARKER_RE, (_match, _lead, pageState, tagState, commandState) => {
-      const nextState = (pageState ?? tagState ?? commandState) as RoamTodoState
-      todoState ??= nextState
-      return ' '
-    })
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim()
-
-  return {content, todoState}
-}
-
-export const parseRoamImportReferences = parseReferences
-
-const escapeRegExp = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-
-const roamInlinePropertyValue = (text: string, name: string): string | undefined => {
-  const pattern = new RegExp(`\\[\\[\\[\\[${escapeRegExp(name)}\\]\\]::?([^\\]]+)\\]\\]`)
-  return pattern.exec(text)?.[1]?.trim()
-}
-
-const countReviewStars = (text: string): number => {
-  const matches = text.match(/(?:^|\s)\*(?=\s|$)/g)
-  return matches?.length ?? 0
-}
-
-export const extractSrsScheduleMarker = (
-  rawContent: string,
-  workspaceId: string,
-): PreparedSrsSchedule | null => {
-  const interval = Number.parseFloat(roamInlinePropertyValue(rawContent, 'interval') ?? '')
-  const factor = Number.parseFloat(roamInlinePropertyValue(rawContent, 'factor') ?? '')
-  if (!Number.isFinite(interval) || !Number.isFinite(factor)) return null
-
-  const reviewCount = countReviewStars(rawContent)
-  if (reviewCount === 0) return null
-
-  const dateRef = parseRoamImportReferences(rawContent)
-    .map(ref => ({ref, parsed: parseLiteralDailyPageTitle(ref.alias)}))
-    .find(item => item.parsed !== null)
-  if (!dateRef?.parsed) return null
-
-  return {
-    interval,
-    factor,
-    nextReviewDateAlias: dateRef.ref.alias,
-    nextReviewDateId: dailyNoteBlockId(workspaceId, dateRef.parsed.iso),
-    reviewCount,
-  }
-}
-
-const findSrsScheduleInChildren = (
-  children: ReadonlyArray<RoamBlock>,
-  workspaceId: string,
-): PreparedSrsSchedule | undefined => {
-  for (const child of children) {
-    const schedule = extractSrsScheduleMarker(child.string ?? '', workspaceId)
-    if (schedule) return schedule
-  }
-  return undefined
-}
-
-const propertiesFromSrsSchedule = (
-  schedule: PreparedSrsSchedule | undefined,
-): Record<string, unknown> => {
-  if (!schedule) return {}
-  return {
-    [srsIntervalProp.name]: schedule.interval,
-    [srsFactorProp.name]: schedule.factor,
-    [srsNextReviewDateProp.name]: schedule.nextReviewDateId,
-    [srsReviewCountProp.name]: schedule.reviewCount,
-  }
-}
-
-const blockRefUidFromContent = (content: string | undefined): string | undefined => {
-  const match = /^\s*\(\(([^)]+)\)\)\s*$/.exec(content ?? '')
-  return match?.[1]?.trim()
-}
-
-const pageRefAliasFromContent = (content: string | undefined): string | undefined => {
-  const match = /^\s*\[\[([^\]]+)]]\s*$/.exec(content ?? '')
-  return match?.[1]?.trim()
-}
-
-const numberFromMemoField = (value: string | undefined): number | undefined => {
-  if (value === undefined) return undefined
-  const n = Number.parseFloat(value)
-  return Number.isFinite(n) ? n : undefined
-}
-
-const firstDailyAliasInValue = (
-  value: string | undefined,
-): {alias: string, iso: string} | undefined => {
-  if (!value) return undefined
-  for (const ref of parseRoamImportReferences(value)) {
-    const parsed = parseLiteralDailyPageTitle(ref.alias)
-    if (parsed) return {alias: ref.alias, iso: parsed.iso}
-  }
-  return undefined
-}
-
-const parseRoamMemoSession = (
-  block: RoamBlock,
-  workspaceId: string,
-): PreparedRoamMemoSnapshot | null => {
-  const headingMatch = /^\s*\[\[([^\]]+)]]/.exec(block.string ?? '')
-  const reviewedAtAlias = headingMatch?.[1]?.trim()
-  if (!reviewedAtAlias) return null
-  const reviewedAt = parseLiteralDailyPageTitle(reviewedAtAlias)
-  if (!reviewedAt) return null
-
-  const fields = new Map<string, string>()
-  for (const child of block.children ?? []) {
-    const attr = detectInlineAttribute(child.string)
-    if (attr) fields.set(attr.key, attr.value.trim())
-  }
-
-  const reviewMode = fields.get('reviewMode')
-  if (reviewMode && reviewMode !== 'SPACED_INTERVAL') return null
-
-  const grade = numberFromMemoField(fields.get('grade'))
-  const interval = numberFromMemoField(fields.get('interval'))
-  const factor = numberFromMemoField(fields.get('eFactor'))
-  const reviewCount = numberFromMemoField(fields.get('repetitions'))
-  const nextReviewDate = firstDailyAliasInValue(fields.get('nextDueDate'))
-  if (
-    grade === undefined ||
-    interval === undefined ||
-    factor === undefined ||
-    reviewCount === undefined ||
-    !nextReviewDate
-  ) {
-    return null
-  }
-
-  return {
-    reviewedAt: dailyNoteBlockId(workspaceId, reviewedAt.iso),
-    reviewedAtAlias,
-    reviewedAtIso: reviewedAt.iso,
-    grade,
-    interval,
-    factor,
-    reviewCount,
-    nextReviewDateAlias: nextReviewDate.alias,
-    nextReviewDateId: dailyNoteBlockId(workspaceId, nextReviewDate.iso),
-  }
-}
-
-const storedSnapshot = (snapshot: PreparedRoamMemoSnapshot): SrsReviewSnapshot => ({
-  reviewedAt: snapshot.reviewedAt,
-  grade: snapshot.grade,
-  interval: snapshot.interval,
-  factor: snapshot.factor,
-  reviewCount: snapshot.reviewCount,
-})
-
-const propertiesFromRoamMemo = (
-  entry: PreparedRoamMemoEntry | undefined,
-): Record<string, unknown> => {
-  if (!entry) return {}
-  const latest = entry.snapshots.at(-1)
-  const out: Record<string, unknown> = {}
-
-  if (latest) {
-    out[srsIntervalProp.name] = latest.interval
-    out[srsFactorProp.name] = latest.factor
-    out[srsNextReviewDateProp.name] = latest.nextReviewDateId
-    out[srsReviewCountProp.name] = latest.reviewCount
-    out[srsGradeProp.name] = latest.grade
-    out[srsSnapshotHistoryProp.name] = srsSnapshotHistoryProp.codec.encode(
-      entry.snapshots.map(storedSnapshot),
-    )
-  }
-
-  if (entry.archived) out[srsArchivedProp.name] = true
-  return out
-}
-
-interface RoamMemoCollection {
-  byTargetUid: Map<string, PreparedRoamMemoEntry>
-  summary: RoamMemoImportPlanSummary
-}
-
-const emptyRoamMemoSummary = (): RoamMemoImportPlanSummary => ({
-  entries: 0,
-  matchedTargets: 0,
-  activeTargets: 0,
-  archivedTargets: 0,
-  toReviewRefs: 0,
-  snapshots: 0,
-  targetsWithHistory: 0,
-  missingTargets: 0,
-  unsupportedSessions: 0,
-})
-
-const collectRoamMemoEntries = (
-  pages: RoamExport,
-  knownUids: ReadonlySet<string>,
-  workspaceId: string,
-): RoamMemoCollection => {
-  const byTargetUid = new Map<string, PreparedRoamMemoEntry>()
-  const summary = emptyRoamMemoSummary()
-
-  const memoPage = pages.find(page => page.title === 'roam/memo')
-  const dataBlock = memoPage?.children?.find(child => child.string === 'data')
-  if (!dataBlock?.children) return {byTargetUid, summary}
-
-  for (const entryBlock of dataBlock.children) {
-    summary.entries += 1
-    const targetRoamUid = blockRefUidFromContent(entryBlock.string)
-    const children = entryBlock.children ?? []
-    const archived = children.some(child => pageRefAliasFromContent(child.string) === 'memo/archived')
-    const toReview = children.some(child => pageRefAliasFromContent(child.string) === 'memo/to-review')
-    if (toReview) summary.toReviewRefs += 1
-
-    const snapshots: PreparedRoamMemoSnapshot[] = []
-    for (const child of children) {
-      if (!/^\s*\[\[/.test(child.string ?? '') || !child.children?.length) continue
-      const session = parseRoamMemoSession(child, workspaceId)
-      if (session) snapshots.push(session)
-      else summary.unsupportedSessions += 1
-    }
-
-    if (!targetRoamUid || !knownUids.has(targetRoamUid)) {
-      summary.missingTargets += 1
-      continue
-    }
-
-    snapshots.sort((a, b) => a.reviewedAtIso.localeCompare(b.reviewedAtIso))
-
-    const existing = byTargetUid.get(targetRoamUid)
-    const mergedSnapshots = existing
-      ? [...existing.snapshots, ...snapshots]
-      : snapshots
-    mergedSnapshots.sort((a, b) => a.reviewedAtIso.localeCompare(b.reviewedAtIso))
-    byTargetUid.set(targetRoamUid, {
-      targetRoamUid,
-      sourceRoamUid: entryBlock.uid,
-      archived: (existing?.archived ?? false) || archived,
-      toReview: (existing?.toReview ?? false) || toReview,
-      snapshots: mergedSnapshots,
-    })
-  }
-
-  for (const entry of byTargetUid.values()) {
-    summary.matchedTargets += 1
-    summary.snapshots += entry.snapshots.length
-    if (entry.snapshots.length > 0 && !entry.archived) summary.activeTargets += 1
-    if (entry.archived) summary.archivedTargets += 1
-    if (entry.snapshots.length > 1) summary.targetsWithHistory += 1
-  }
-
-  return {byTargetUid, summary}
-}
-
-const srsSourceConflictDiagnostics = (
-  roamUid: string,
-  schedule: PreparedSrsSchedule | undefined,
-  memo: PreparedRoamMemoEntry | undefined,
-): string[] => {
-  if (!schedule || !memo) return []
-  const latest = memo.snapshots.at(-1)
-  if (!latest) return []
-  const conflicts: string[] = []
-  const check = (name: string, scheduleValue: unknown, memoValue: unknown) => {
-    if (scheduleValue !== memoValue) {
-      conflicts.push(`${name} marker=${String(scheduleValue)} memo=${String(memoValue)}`)
-    }
-  }
-  check(srsIntervalProp.name, schedule.interval, latest.interval)
-  check(srsFactorProp.name, schedule.factor, latest.factor)
-  check(srsNextReviewDateProp.name, schedule.nextReviewDateId, latest.nextReviewDateId)
-  check(srsReviewCountProp.name, schedule.reviewCount, latest.reviewCount)
-  return conflicts.length === 0
-    ? []
-    : [`roam/memo SRS conflict on uid ${roamUid}: ${conflicts.join(', ')}`]
-}
-
-// `[[X]]` tokens with whitespace / `,` / `;` separators between them,
-// the whole string nothing else. Used to recognise scalar property
-// values that should be exploded into a list of page references —
-// e.g. `isa::[[person]] [[friend]]` becomes `isa: ['[[person]]', '[[friend]]']`.
-const PAGE_TOKEN_RE = /\[\[([^\]]+)\]\]/g
-const PAGE_LIST_VALUE_RE = /^[\s,;]*(\[\[[^\]]+\]\][\s,;]*)+$/
-
-const explodePageTokens = (value: string): string[] | null => {
-  if (!PAGE_LIST_VALUE_RE.test(value)) return null
-  const out: string[] = []
-  PAGE_TOKEN_RE.lastIndex = 0
-  let m: RegExpExecArray | null
-  while ((m = PAGE_TOKEN_RE.exec(value)) !== null) out.push(`[[${m[1]}]]`)
-  // Single token: not really a "list", let the caller keep the scalar.
-  if (out.length < 2) return null
-  return out
-}
-
-/**
- * Promotion result for a parent block's direct children.
- *
- *   - `promoted` is the namespaced property bag to merge onto the
- *     parent. Single-value entries are scalars; multi-value entries
- *     are arrays (case 2: same-key siblings, case 4: list-children of
- *     an attr block).
- *   - `bubbled` lists uids whose values were pulled into `promoted`
- *     (directly or recursively through an attr → attr chain). A
- *     deeper promotion pass on a kept intermediate block consults
- *     this set so it doesn't re-bubble the same descendants onto
- *     itself and produce duplicate property entries.
- *   - `diagnostics` surfaces unusual structures (e.g. attr nesting
- *     deeper than two levels) so the post-import log can flag them.
- */
-export interface PromotionResult {
-  promoted: Record<string, unknown>
-  diagnostics: string[]
-  bubbled: Set<string>
-}
-
-export interface PromotionOptions {
-  namespacePrefix?: string
-  transformKey?: (key: string) => string
-}
-
-/** Walk a parent's direct children and compute case-1/2/3/4 promotion.
- *  No tree edits — every source block survives as a descendant of its
- *  original parent. The promotion is purely additive: we collect
- *  property values onto the parent (and recursively up through attr
- *  chains) and let the original Roam blocks remain as-is for browsing,
- *  backlinks via their content, and re-import idempotency.
- *
- *  `alreadyBubbled` is a set of uids whose values were already pulled
- *  up by an ancestor's promotion pass. Without it, an intermediate
- *  kept attr block (along an `attr → attr` chain) would re-bubble the
- *  same descendants onto itself when buildBlock recurses into it. */
-export const computePromotedFromChildren = (
-  children: ReadonlyArray<RoamBlock>,
-  alreadyBubbled: ReadonlySet<string>,
-  options: PromotionOptions = {},
-): PromotionResult => {
-  const accumulator = new Map<string, unknown[]>()
-  const diagnostics: string[] = []
-  const newlyBubbled = new Set<string>()
-  const namespacePrefix = options.namespacePrefix ?? NS_PREFIX
-  const transformKey = options.transformKey ?? ((key: string) => key)
-
-  const push = (key: string, value: unknown) => {
-    const propName = `${namespacePrefix}:${transformKey(key)}`
-    const list = accumulator.get(propName) ?? []
-    list.push(typeof value === 'string' ? normalizeRoamPropertyValue(value) : value)
-    accumulator.set(propName, list)
-  }
-
-  // `depth` is the bubbling distance from the original parent
-  // (0 = direct child of parent).
-  const consume = (block: RoamBlock, depth: number): void => {
-    if (alreadyBubbled.has(block.uid) || newlyBubbled.has(block.uid)) return
-    const attr = detectInlineAttribute(block.string)
-    if (!attr) return
-
-    if (depth >= 2) {
-      diagnostics.push(
-        `Attribute "${attr.key}" hoisted from depth ${depth + 1} (uid ${block.uid}) — ` +
-        `unusual nesting; review the source structure.`,
-      )
-    }
-
-    newlyBubbled.add(block.uid)
-    if (attr.value.trim() !== '') push(attr.key, attr.value)
-
-    for (const sub of block.children ?? []) {
-      if (detectInlineAttribute(sub.string)) {
-        // Sub-attr: bubble it up to the original parent through the
-        // attr chain. Recurses arbitrarily deep; depth-> 2 logs above.
-        consume(sub, depth + 1)
-      } else {
-        // Non-attr sub-bullet: contributes its raw string as another
-        // value for the enclosing attr's key (case 4).
-        push(attr.key, stripRoamTodoContent(sub.string))
-      }
-    }
-  }
-
-  for (const child of children) consume(child, 0)
-
-  // Finalize: scalar for length-1, list for length>1, then post-process
-  // any scalar that's a sequence of `[[X]]` tokens into a page list (case 3).
-  const promoted: Record<string, unknown> = {}
-  for (const [key, values] of accumulator) {
-    if (values.length === 1) {
-      const single = values[0]
-      if (typeof single === 'string') {
-        const exploded = explodePageTokens(single)
-        promoted[key] = exploded ?? single
-      } else {
-        promoted[key] = single
-      }
-    } else {
-      // Multi-value: keep each string item but flatten any page-token
-      // strings so a mix like ['[[a]] [[b]]', '[[c]]'] becomes
-      // ['[[a]]', '[[b]]', '[[c]]'].
-      const flat: unknown[] = []
-      for (const v of values) {
-        if (typeof v === 'string') {
-          const exploded = explodePageTokens(v)
-          if (exploded) flat.push(...exploded)
-          else flat.push(v)
-        } else {
-          flat.push(v)
-        }
-      }
-      promoted[key] = flat
-    }
-  }
-
-  return {promoted, diagnostics, bubbled: newlyBubbled}
-}
-
-// Collect every `[[X]]` token nested inside a property value. Used to
-// register page-link targets from property values into ctx.aliasesUsed
-// so the seat-creation pipeline materialises them. The original attr
-// blocks survive in the tree and carry their own content-side
-// references[] entries — this helper just makes sure the seat exists
-// even when a property value reaches the parent without a corresponding
-// `[[X]]` token in the parent's own content.
-const collectAliasesFromPropertyValues = (
-  promoted: Record<string, unknown>,
-): string[] => {
-  const out = new Set<string>()
-  const visit = (v: unknown) => {
-    if (typeof v === 'string') {
-      PAGE_TOKEN_RE.lastIndex = 0
-      let m: RegExpExecArray | null
-      while ((m = PAGE_TOKEN_RE.exec(v)) !== null) out.add(m[1])
-    } else if (Array.isArray(v)) {
-      for (const item of v) visit(item)
-    }
-  }
-  for (const v of Object.values(promoted)) visit(v)
-  return [...out]
-}
-
 const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> => {
   const fromBlockProps = (block[':block/props'] ?? block.props ?? {}) as Record<string, unknown>
   return {...fromBlockProps, ...getExtraRoamProps(block)}
-}
-
-/** Translate Roam's property bag into the new flat-property shape:
- *  values are stored encoded directly under their (namespaced) key.
- *  Numbers stay numbers, strings stay strings, structured values are
- *  JSON-stringified for round-trip. The Roam namespace prefix
- *  (`roam:`) keeps these from colliding with kernel properties. */
-const propertiesFromRoam = (
-  raw: Record<string, unknown>,
-): Record<string, unknown> => {
-  const out: Record<string, unknown> = {}
-
-  for (const [key, value] of Object.entries(raw)) {
-    const propName = namespacedKey(key)
-    if (typeof value === 'number') {
-      out[propName] = value
-    } else if (typeof value === 'string') {
-      out[propName] = normalizeRoamPropertyValue(value)
-    } else if (value !== null && value !== undefined) {
-      // Object/array values: stringify so the data round-trips;
-      // a follow-up can promote structured values once we have
-      // more known shapes.
-      out[propName] = JSON.stringify(value)
-    }
-  }
-
-  return out
-}
-
-const collectPageAliases = (properties: Record<string, unknown>): string[] =>
-  uniqueStrings(collectAliasesFromPropertyValues({
-    [ROAM_PAGE_ALIAS_PROP]: properties[ROAM_PAGE_ALIAS_PROP],
-  }))
-
-const derivePropertiesFromContent = (content: string): Record<string, unknown> => {
-  const match = /^\s*\[\[[^\]]+\]\]\s+by\s+(.+?)\s*$/i.exec(content)
-  if (!match) return {}
-
-  const authors = parseReferences(match[1]).map(ref => `[[${ref.alias}]]`)
-  if (authors.length === 0) return {}
-
-  return {
-    [ROAM_AUTHOR_PROP]: authors.length === 1 ? authors[0] : authors,
-  }
 }
 
 interface BuildContext {
