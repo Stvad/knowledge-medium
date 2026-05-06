@@ -22,9 +22,8 @@ import {
   SeekToEventDetail,
 } from './events.ts'
 import { enterVideoNotesView } from './notes.ts'
-import { videoPlayerViewProp } from './view.ts'
+import { videoNotesPaneRatioProp, videoPlayerViewProp } from './view.ts'
 
-const DEFAULT_VIDEO_NOTES_PANE_RATIO = 0.8
 const MIN_VIDEO_NOTES_PANE_RATIO = 0.28
 const MAX_VIDEO_NOTES_PANE_RATIO = 0.9
 const VIDEO_NOTES_DESKTOP_BREAKPOINT = 768
@@ -140,9 +139,14 @@ const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
  */
 const VideoPlayerLayout: BlockLayout = (slots) => {
   const [view, setView] = usePropertyValue(slots.block, videoPlayerViewProp)
-  const [videoPaneRatio, setVideoPaneRatio] = useState(DEFAULT_VIDEO_NOTES_PANE_RATIO)
+  const [storedVideoPaneRatio, setStoredVideoPaneRatio] = usePropertyValue(
+    slots.block,
+    videoNotesPaneRatioProp,
+  )
+  const [draftVideoPaneRatio, setDraftVideoPaneRatio] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const dragCleanupRef = useRef<(() => void) | null>(null)
+  const videoPaneRatio = draftVideoPaneRatio ?? storedVideoPaneRatio
 
   useEffect(() => () => {
     dragCleanupRef.current?.()
@@ -163,10 +167,12 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
 
     const previousCursor = document.body.style.cursor
     const previousUserSelect = document.body.style.userSelect
+    let latestRatio = clampVideoNotesPaneRatio(videoPaneRatio)
 
     const updateRatio = (clientX: number, clientY: number) => {
       const offset = isDesktopLayout ? clientX - rect.left : clientY - rect.top
-      setVideoPaneRatio(clampVideoNotesPaneRatio(offset / totalSize))
+      latestRatio = clampVideoNotesPaneRatio(offset / totalSize)
+      setDraftVideoPaneRatio(latestRatio)
     }
 
     const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
@@ -174,27 +180,38 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
       updateRatio(moveEvent.clientX, moveEvent.clientY)
     }
 
-    const cleanup = () => {
+    const cleanupPointerListeners = () => {
       window.removeEventListener('pointermove', handlePointerMove)
       window.removeEventListener('pointerup', handlePointerUp)
-      window.removeEventListener('pointercancel', handlePointerUp)
+      window.removeEventListener('pointercancel', handlePointerCancel)
       document.body.style.cursor = previousCursor
       document.body.style.userSelect = previousUserSelect
       dragCleanupRef.current = null
     }
 
+    const finishResize = (commit: boolean) => {
+      cleanupPointerListeners()
+      setDraftVideoPaneRatio(null)
+      if (commit) setStoredVideoPaneRatio(latestRatio)
+    }
+
     const handlePointerUp = (upEvent: globalThis.PointerEvent) => {
       upEvent.preventDefault()
-      cleanup()
+      finishResize(true)
+    }
+
+    const handlePointerCancel = (cancelEvent: globalThis.PointerEvent) => {
+      cancelEvent.preventDefault()
+      finishResize(false)
     }
 
     document.body.style.cursor = isDesktopLayout ? 'col-resize' : 'row-resize'
     document.body.style.userSelect = 'none'
     window.addEventListener('pointermove', handlePointerMove, {passive: false})
     window.addEventListener('pointerup', handlePointerUp, {passive: false})
-    window.addEventListener('pointercancel', handlePointerUp, {passive: false})
+    window.addEventListener('pointercancel', handlePointerCancel, {passive: false})
 
-    dragCleanupRef.current = cleanup
+    dragCleanupRef.current = cleanupPointerListeners
     event.preventDefault()
     updateRatio(event.clientX, event.clientY)
   }
@@ -212,7 +229,8 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
     if (delta === undefined) return
 
     event.preventDefault()
-    setVideoPaneRatio(current => clampVideoNotesPaneRatio(current + delta))
+    setDraftVideoPaneRatio(null)
+    setStoredVideoPaneRatio(clampVideoNotesPaneRatio(videoPaneRatio + delta))
   }
 
   if (view !== 'notes') {
@@ -274,13 +292,14 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
         className="min-h-0 min-w-0 flex-none overflow-y-auto bg-background p-3"
         style={notesPaneStyle}
       >
-        <div className="sticky top-0 z-10 mb-2 flex justify-end bg-background/95 pb-2">
+        <div className="pointer-events-none sticky top-2 z-10 -mb-9 flex justify-end">
           <Button
             type="button"
             variant="ghost"
             size="icon"
             aria-label="Close video notes view"
             title="Close video notes view"
+            className="pointer-events-auto"
             onClick={() => setView('default')}
           >
             <PanelRightClose className="h-4 w-4"/>
