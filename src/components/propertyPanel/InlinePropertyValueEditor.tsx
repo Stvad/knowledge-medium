@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { PropertyKind } from '@/data/api'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 
 const INLINE_INPUT_CLASS =
@@ -26,11 +27,13 @@ export function InlinePropertyValueEditor({
   value,
   onChange,
   readOnly,
+  ariaLabel,
 }: {
   kind: PropertyKind
   value: unknown
   onChange: (next: unknown) => void
   readOnly: boolean
+  ariaLabel?: string
 }) {
   if (kind === 'list' || kind === 'refList') {
     const items = Array.isArray(value) ? value.map(v => typeof v === 'string' ? v : String(v)) : []
@@ -54,15 +57,17 @@ export function InlinePropertyValueEditor({
   if (kind === 'boolean') {
     return (
       <InlineValueShell>
-        <select
-          className="flex h-7 w-full rounded-md border border-transparent bg-transparent px-0 py-1 text-sm shadow-none focus-visible:outline-none focus-visible:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
-          value={String(value ?? false)}
-          onChange={(event) => onChange(event.target.value === 'true')}
-          disabled={readOnly}
-        >
-          <option value="true">Yes</option>
-          <option value="false">No</option>
-        </select>
+        <div className="flex h-7 items-center">
+          <Checkbox
+            aria-label={ariaLabel ?? 'Toggle boolean value'}
+            checked={value === true}
+            disabled={readOnly}
+            onCheckedChange={(checked) => {
+              if (readOnly) return
+              onChange(checked === true)
+            }}
+          />
+        </div>
       </InlineValueShell>
     )
   }

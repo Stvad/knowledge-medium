@@ -21,7 +21,7 @@ import { adhocSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
 import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import type { Block } from '@/data/block'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, showPropertiesProp } from '@/data/properties'
 import { useContent } from '@/hooks/block'
 import type { BlockRendererProps } from '@/types'
 
@@ -187,6 +187,33 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
     expect(screen.queryByText('types')).toBeNull()
+  })
+
+  it('keeps hidden boolean fields editable with a checkbox', async () => {
+    const block = repo.block('block-1')
+    await block.set(showPropertiesProp, true)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /show hidden fields/i}))
+    })
+
+    const row = propertyRow(showPropertiesProp.name)
+    const checkbox = within(row).getByRole('checkbox', {name: /toggle system:showproperties/i})
+    expect(checkbox.getAttribute('aria-checked')).toBe('true')
+
+    await act(async () => {
+      fireEvent.click(checkbox)
+    })
+
+    await waitFor(() => {
+      expect(block.peekProperty(showPropertiesProp)).toBe(false)
+    })
   })
 
   it('edits block type membership with the contributed autocomplete editor', async () => {

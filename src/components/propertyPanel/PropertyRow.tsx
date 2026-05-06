@@ -29,7 +29,7 @@ export function PropertyRow({
   onDelete: () => void
 }) {
   const Editor = row.customEditor
-  const rowReadOnly = readOnly || row.isHidden
+  const rowReadOnly = readOnly
   const renameAllowed = row.canRename && !rowReadOnly
   const rowAlignment = row.kind === 'ref' || row.kind === 'refList' ? 'items-start' : 'items-center'
   const hintText = [
@@ -89,7 +89,7 @@ export function PropertyRow({
         )}
       </div>
       <div className="min-w-0" data-property-value="true">
-        {Editor !== undefined && !row.decodeFailed && !row.isHidden ? (
+        {Editor !== undefined && !row.decodeFailed ? (
           <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
         ) : (
           <InlinePropertyValueEditor
@@ -97,6 +97,7 @@ export function PropertyRow({
             value={row.value}
             onChange={onChange}
             readOnly={rowReadOnly}
+            ariaLabel={`Toggle ${row.labelText}`}
           />
         )}
       </div>

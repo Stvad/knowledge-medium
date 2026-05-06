@@ -18,7 +18,7 @@ const uisMap = (uis: readonly AnyPropertyUiContribution[]) =>
   new Map(uis.map(ui => [ui.name, ui]))
 
 describe('buildPropertyPanelModel', () => {
-  it('uses property UI hidden metadata to move fields into read-only hidden rows', () => {
+  it('uses property UI hidden metadata to move fields into capability-limited hidden rows', () => {
     const visibleProp = defineProperty<string>('visible', {
       codec: codecs.string,
       defaultValue: '',
