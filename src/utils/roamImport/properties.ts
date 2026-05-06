@@ -139,6 +139,26 @@ export const collectPageAliases = (properties: Record<string, unknown>): string[
     [ROAM_PAGE_ALIAS_PROP]: properties[ROAM_PAGE_ALIAS_PROP],
   }))
 
+export const nonStandardPageAliasValues = (
+  properties: Record<string, unknown>,
+): string[] => {
+  const value = properties[ROAM_PAGE_ALIAS_PROP]
+  const values = Array.isArray(value) ? value : [value]
+  const out: string[] = []
+  for (const item of values) {
+    if (item === undefined || item === null) continue
+    if (typeof item !== 'string') {
+      out.push(JSON.stringify(item))
+      continue
+    }
+    const trimmed = item.trim()
+    if (!trimmed) continue
+    PAGE_TOKEN_RE.lastIndex = 0
+    if (!PAGE_TOKEN_RE.test(trimmed)) out.push(trimmed)
+  }
+  return out
+}
+
 export const derivePropertiesFromContent = (content: string): Record<string, unknown> => {
   const match = /^\s*\[\[[^\]]+\]\]\s+by\s+(.+?)\s*$/i.exec(content)
   if (!match) return {}

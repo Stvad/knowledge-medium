@@ -881,6 +881,47 @@ describe('importRoam', () => {
     ]))
   })
 
+  it('imports embedded Roam SRS SM-2.5 markers as typed block metadata', async () => {
+    const srsExport: RoamExport = [
+      {
+        title: 'srs',
+        uid: 'srsPage',
+        children: [
+          {
+            string: 'parent',
+            uid: 'srsParent',
+            children: [
+              {
+                string: 'check in [[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]]',
+                uid: 'srsTask',
+              },
+            ],
+          },
+        ],
+      },
+    ]
+
+    const summary = await importRoam(srsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.diagnostics.some(d => d.includes('SRS marker conflict'))).toBe(false)
+
+    const parent = await readBlock(roamBlockId(WORKSPACE, 'srsParent'))
+    const parentProps = JSON.parse(parent!.properties_json) as Record<string, unknown>
+    expect(parentProps[srsIntervalProp.name]).toBeUndefined()
+
+    const task = await readBlock(roamBlockId(WORKSPACE, 'srsTask'))
+    const taskProps = JSON.parse(task!.properties_json) as Record<string, unknown>
+    expect(taskProps[typesProp.name]).toContain(SRS_SM25_TYPE)
+    expect(taskProps[srsIntervalProp.name]).toBe(31.1)
+    expect(taskProps[srsFactorProp.name]).toBe(2.5)
+    expect(taskProps[srsReviewCountProp.name]).toBe(0)
+    expect(taskProps[srsNextReviewDateProp.name])
+      .toBe(dailyNoteBlockId(WORKSPACE, '2026-06-06'))
+  })
+
   it('imports roam/memo review snapshots and reports existing SRS conflicts', async () => {
     const targetId = roamBlockId(WORKSPACE, 'targetUid')
     await env.repo.tx(async tx => {

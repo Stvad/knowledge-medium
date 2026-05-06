@@ -270,6 +270,99 @@ describe('planImport', () => {
     expect(markerBlock?.content).toBe(marker)
   })
 
+  it('extracts no-star SRS marker metadata with review count zero', () => {
+    const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]]'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [{string: marker, uid: 'srsUid'}],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    expect(parent?.srsSchedule?.reviewCount).toBe(0)
+    expect(parent?.data.properties[srsReviewCountProp.name]).toBe(0)
+  })
+
+  it('applies embedded SRS metadata to the block that contains substantial content', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [{
+          string: 'check in on [[Alice]] [[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]]',
+          uid: 'taskUid',
+        }],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    const task = plan.descendants.find(d => d.roamUid === 'taskUid')
+    const expectedDateId = dailyNoteBlockId(WORKSPACE, '2026-06-06')
+
+    expect(parent?.srsSchedule).toBeUndefined()
+    expect(parent?.data.properties[srsIntervalProp.name]).toBeUndefined()
+    expect(task?.srsSchedule).toMatchObject({
+      interval: 5,
+      factor: 2,
+      nextReviewDateId: expectedDateId,
+      reviewCount: 0,
+    })
+    expect(task?.data.properties[srsIntervalProp.name]).toBe(5)
+    expect(task?.data.references).toContainEqual({
+      id: expectedDateId,
+      alias: 'June 6th, 2026',
+      sourceField: srsNextReviewDateProp.name,
+    })
+  })
+
+  it('still promotes marker children that only add refs or tags around SRS metadata', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [{
+          string: '[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]] [[health]] #w *',
+          uid: 'markerUid',
+        }],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    const marker = plan.descendants.find(d => d.roamUid === 'markerUid')
+    expect(parent?.srsSchedule?.interval).toBe(5)
+    expect(marker?.srsSchedule).toBeUndefined()
+  })
+
+  it('reports multiple marker-only SRS children under one parent', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [
+          {string: '[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]]', uid: 'firstMarker'},
+          {string: '[[[[interval]]:7]] [[[[factor]]:2.10]] [[June 8th, 2026]]', uid: 'secondMarker'},
+        ],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    expect(parent?.srsSchedule?.interval).toBe(5)
+    expect(plan.diagnostics.some(d =>
+      d.includes('Multiple marker-only Roam SRS children') &&
+      d.includes('parentUid'),
+    )).toBe(true)
+  })
+
   it('treats Roam inline property wrappers as page references', () => {
     const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] * * *'
 
@@ -496,6 +589,59 @@ describe('planImport', () => {
     const block = plan.descendants[0]
     // Flat property shape: number values land directly as numbers.
     expect(block.data.properties['roam:readwise-highlight-id']).toBe(1009146325)
+  })
+
+  it('preserves Roam view types as namespaced properties', () => {
+    const sample = [{
+      title: 'p',
+      uid: 'pUid',
+      ':children/view-type': ':document',
+      children: [{
+        string: 'numbered parent',
+        uid: 'b',
+        ':children/view-type': ':numbered',
+      }],
+    }] satisfies RoamExport
+    const plan = planImport(sample, {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].data?.properties['roam:children/view-type']).toBe(':document')
+    expect(plan.descendants[0].data.properties['roam:children/view-type']).toBe(':numbered')
+  })
+
+  it('reports non-standard page_alias values without using them for alias merging', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [
+        {string: 'page_alias::LukeProg', uid: 'aliasUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].pageAliases).toEqual([])
+    expect(plan.diagnostics.some(d =>
+      d.includes('Non-standard page_alias') &&
+      d.includes('LukeProg'),
+    )).toBe(true)
+  })
+
+  it('reports page title and Roam command weirdness summaries', () => {
+    const plan = planImport([{
+      title: ' odd\npage ',
+      uid: 'pUid',
+      children: [
+        {string: '{{[[query]]: {and: [[TODO]]}}}', uid: 'queryUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.diagnostics.some(d =>
+      d.includes('Roam page title weirdness') &&
+      d.includes('leading/trailing whitespace') &&
+      d.includes('newlines'),
+    )).toBe(true)
+    expect(plan.diagnostics.some(d =>
+      d.includes('Roam command follow-up') &&
+      d.includes('query 1'),
+    )).toBe(true)
   })
 
   // ──── Property-promotion cases ────

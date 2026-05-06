@@ -10,6 +10,7 @@ import {
   collectAliasesFromPropertyValues,
   collectPageAliases,
   derivePropertiesFromContent,
+  nonStandardPageAliasValues,
   propertiesFromRoam,
   uniqueStrings,
 } from './properties'
@@ -22,7 +23,9 @@ import {
   type RoamMemoImportPlanSummary,
 } from './roamMemo'
 import {
-  findSrsScheduleInChildren,
+  extractSrsScheduleMarker,
+  findPromotedSrsScheduleInChildren,
+  isSrsScheduleMarkerOnly,
   propertiesFromSrsSchedule,
   type PreparedSrsSchedule,
 } from './srsMarkers'
@@ -136,7 +139,13 @@ const collectUidRefs = (block: RoamBlock | RoamPage): string[] => {
 }
 
 const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> => {
-  const fromBlockProps = (block[':block/props'] ?? block.props ?? {}) as Record<string, unknown>
+  const fromBlockProps = {...((block[':block/props'] ?? block.props ?? {}) as Record<string, unknown>)}
+  if (block[':children/view-type']) {
+    fromBlockProps[':children/view-type'] = block[':children/view-type']
+  }
+  if (block[':block/view-type']) {
+    fromBlockProps[':block/view-type'] = block[':block/view-type']
+  }
   return {...fromBlockProps, ...getExtraRoamProps(block)}
 }
 
@@ -167,9 +176,19 @@ const buildBlock = (
 
   const children = block.children ?? []
   const promotion = computePromotedFromChildren(children, ctx.bubbledUids)
-  const srsSchedule = findSrsScheduleInChildren(children, ctx.options.workspaceId)
+  const promotedSrs = findPromotedSrsScheduleInChildren(children, ctx.options.workspaceId, block.uid)
+  const ownSrsSchedule = extractSrsScheduleMarker(block.string ?? '', ctx.options.workspaceId)
+  const ownSrsApplies = ownSrsSchedule !== null && !isSrsScheduleMarkerOnly(block.string ?? '')
+  const srsSchedule = ownSrsApplies ? ownSrsSchedule : promotedSrs.schedule
   const roamMemo = ctx.roamMemoByTargetUid.get(block.uid)
   for (const d of promotion.diagnostics) ctx.diagnostics.push(d)
+  for (const d of promotedSrs.diagnostics) ctx.diagnostics.push(d)
+  if (ownSrsApplies && promotedSrs.schedule) {
+    ctx.diagnostics.push(
+      `Roam SRS marker conflict on uid ${block.uid}: block has embedded SRS metadata and ` +
+      `marker-only child metadata; applied the embedded block metadata.`,
+    )
+  }
   for (const d of srsSourceConflictDiagnostics(block.uid, srsSchedule, roamMemo)) {
     ctx.diagnostics.push(d)
   }
@@ -366,6 +385,96 @@ const collectPlaceholderUids = (
   return [...out]
 }
 
+const collectPageTitleDiagnostics = (pages: RoamExport): string[] => {
+  let blank = 0
+  let whitespace = 0
+  let newline = 0
+  let long = 0
+  for (const page of pages) {
+    if (page.title === '') blank += 1
+    if (page.title !== page.title.trim()) whitespace += 1
+    if (page.title.includes('\n')) newline += 1
+    if (page.title.length > 160) long += 1
+  }
+  const parts = [
+    blank > 0 ? `${blank} blank` : '',
+    whitespace > 0 ? `${whitespace} with leading/trailing whitespace` : '',
+    newline > 0 ? `${newline} with newlines` : '',
+    long > 0 ? `${long} longer than 160 chars` : '',
+  ].filter(Boolean)
+  return parts.length > 0
+    ? [`Roam page title weirdness: ${parts.join(', ')}; imported titles literally.`]
+    : []
+}
+
+const ROAM_COMMAND_FOLLOW_UPS: ReadonlyArray<{name: string, re: RegExp}> = [
+  {name: 'query', re: /\{\{\s*(?:\[\[query\]\]|query)(?=\s*[:}])/gi},
+  {name: 'audio', re: /\{\{\s*(?:\[\[audio\]\]|audio)(?=\s*[:}])/gi},
+  {name: 'video', re: /\{\{\s*(?:\[\[video\]\]|video)(?=\s*[:}])/gi},
+  {name: 'iframe', re: /\{\{\s*(?:\[\[iframe\]\]|iframe)(?=\s*[:}])/gi},
+  {name: 'pdf', re: /\{\{\s*(?:\[\[pdf\]\]|pdf)(?=\s*[:}])/gi},
+  {name: 'tweet', re: /\{\{\s*(?:\[\[tweet\]\]|tweet)(?=\s*[:}])/gi},
+  {name: 'table', re: /\{\{\s*(?:\[\[table\]\]|table)(?=\s*[:}])/gi},
+  {name: 'calc', re: /\{\{\s*(?:\[\[calc\]\]|calc)(?=\s*[:}])/gi},
+]
+
+const countMatches = (value: string, re: RegExp): number => {
+  re.lastIndex = 0
+  let count = 0
+  while (re.exec(value) !== null) count += 1
+  return count
+}
+
+const collectRoamCommandFollowUpDiagnostics = (pages: RoamExport): string[] => {
+  const counts = new Map<string, number>()
+  const visit = (block: RoamBlock) => {
+    const content = block.string ?? ''
+    for (const command of ROAM_COMMAND_FOLLOW_UPS) {
+      const count = countMatches(content, command.re)
+      if (count > 0) counts.set(command.name, (counts.get(command.name) ?? 0) + count)
+    }
+    for (const child of block.children ?? []) visit(child)
+  }
+
+  for (const page of pages) {
+    for (const child of page.children ?? []) visit(child)
+  }
+
+  const total = [...counts.values()].reduce((sum, count) => sum + count, 0)
+  if (total === 0) return []
+
+  const top = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([name, count]) => `${name} ${count}`)
+    .join(', ')
+  return [
+    `Roam command follow-up: preserved ${total} command occurrence(s) literally ` +
+    `(${top}); media/query normalization is still a follow-up.`,
+  ]
+}
+
+const pageTitleForDiagnostic = (title: string): string => {
+  const normalized = title.replace(/\s+/g, ' ').trim()
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized
+}
+
+const appendPageAliasDiagnostics = (
+  diagnostics: string[],
+  page: RoamPage,
+  properties: Record<string, unknown>,
+) => {
+  const values = nonStandardPageAliasValues(properties)
+  if (values.length === 0) return
+  const sample = values
+    .slice(0, 3)
+    .map(value => JSON.stringify(value))
+    .join(', ')
+  diagnostics.push(
+    `Non-standard page_alias on [[${pageTitleForDiagnostic(page.title)}]] ` +
+    `(uid ${page.uid}) was not used for alias-rule merging: ${sample}`,
+  )
+}
+
 export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportPlan => {
   const {uidMap, dailyByUid, knownUids} = buildUidMap(pages, options.workspaceId)
   const roamMemo = collectRoamMemoEntries(pages, knownUids, options.workspaceId)
@@ -378,6 +487,8 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
   })
 
   const diagnostics: string[] = []
+  diagnostics.push(...collectPageTitleDiagnostics(pages))
+  diagnostics.push(...collectRoamCommandFollowUpDiagnostics(pages))
   const ctx: BuildContext = {
     options,
     uidMap,
@@ -408,10 +519,12 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
     }
     const promotedFromChildren = pagePromotion.promoted
     const pageRoamProps = collectRoamProps(page)
-    const pageAliases = collectPageAliases({
+    const pageProperties = {
       ...promotedFromChildren,
       ...propertiesFromRoam(pageRoamProps),
-    })
+    }
+    const pageAliases = collectPageAliases(pageProperties)
+    appendPageAliasDiagnostics(diagnostics, page, pageProperties)
 
     if (daily) {
       preparedPages.push({

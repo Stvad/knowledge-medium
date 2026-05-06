@@ -94,6 +94,30 @@ describe('rewriteRoamContent', () => {
     expect(content).toBe('visit https://example.com/foo#bar and [[realtag]]')
   })
 
+  it('does not rewrite hashes inside existing page refs', () => {
+    const {content} = rewriteRoamContent(
+      'see [[Promotion #L6]] and #todo',
+      new Map(),
+    )
+    expect(content).toBe('see [[Promotion #L6]] and [[todo]]')
+  })
+
+  it('does not rewrite hashes inside code spans or code fences', () => {
+    const {content} = rewriteRoamContent(
+      '`#not-a-tag` and ```js\n#still-not\n``` and #tag',
+      new Map(),
+    )
+    expect(content).toBe('`#not-a-tag` and ```js\n#still-not\n``` and [[tag]]')
+  })
+
+  it('does not rewrite URL fragments in markdown link destinations', () => {
+    const {content} = rewriteRoamContent(
+      '[comments](https://vlad.roam.garden/post?#comments) #tag',
+      new Map(),
+    )
+    expect(content).toBe('[comments](https://vlad.roam.garden/post?#comments) [[tag]]')
+  })
+
   it('does not match # mid-identifier', () => {
     const {content} = rewriteRoamContent('a#b is not a tag, but #b is', new Map())
     expect(content).toBe('a#b is not a tag, but [[b]] is')

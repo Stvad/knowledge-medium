@@ -33,10 +33,12 @@ const ALIASED_BLOCK_REF_RE = new RegExp(`\\[([^\\]]+)\\]\\(\\(\\((${ROAM_UID})\\
 const BLOCK_REF_RE = new RegExp(`\\(\\((${ROAM_UID})\\)\\)`, 'g')
 
 // `#[[anything]]` and `#word` (word being [\w/-]+, allowing namespacey
-// tags like `#wcs/concept`). The leading lookbehind guard prevents URL
-// fragment ids and mid-identifier hashes from matching.
+// tags like `#wcs/concept`). The leading guard prevents mid-identifier
+// hashes from matching; protected ranges below handle page refs, code,
+// and URLs.
 const HASH_PAGE_RE = /(^|[^\w/:])#\[\[([^\]]+)\]\]/g
 const HASH_TAG_RE = /(^|[^\w/:])#([\w/-]+)/g
+const URL_RE = /https?:\/\/[^\s<>)\]]+/g
 
 export interface ContentRewriteResult {
   content: string
@@ -118,6 +120,146 @@ const collectBlockRefRewrites = (
   return found.sort((a, b) => a.start - b.start)
 }
 
+interface ProtectedRange {
+  start: number
+  end: number
+}
+
+const rangeContains = (range: ProtectedRange, index: number): boolean =>
+  index >= range.start && index < range.end
+
+const rangeOverlaps = (range: ProtectedRange, start: number, end: number): boolean =>
+  start < range.end && end > range.start
+
+const isProtected = (
+  ranges: ReadonlyArray<ProtectedRange>,
+  start: number,
+  end: number,
+): boolean =>
+  ranges.some(range => rangeContains(range, start) || rangeOverlaps(range, start, end))
+
+const findClosingParen = (value: string, start: number): number => {
+  let depth = 1
+  for (let i = start; i < value.length; i++) {
+    const ch = value[i]
+    if (ch === '\\') {
+      i += 1
+      continue
+    }
+    if (ch === '(') {
+      depth += 1
+      continue
+    }
+    if (ch === ')') {
+      depth -= 1
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+const collectMarkdownLinkDestinationRanges = (content: string): ProtectedRange[] => {
+  const ranges: ProtectedRange[] = []
+  for (let i = 0; i < content.length - 1; i++) {
+    if (content[i] !== ']' || content[i + 1] !== '(') continue
+    const destinationStart = i + 2
+    const destinationEnd = findClosingParen(content, destinationStart)
+    if (destinationEnd < 0) continue
+    ranges.push({start: destinationStart, end: destinationEnd})
+    i = destinationEnd
+  }
+  return ranges
+}
+
+const collectCodeRanges = (content: string): ProtectedRange[] => {
+  const ranges: ProtectedRange[] = []
+  let i = 0
+  while (i < content.length) {
+    if (content.startsWith('```', i)) {
+      const end = content.indexOf('```', i + 3)
+      const rangeEnd = end < 0 ? content.length : end + 3
+      ranges.push({start: i, end: rangeEnd})
+      i = rangeEnd
+      continue
+    }
+    if (content[i] === '`') {
+      const end = content.indexOf('`', i + 1)
+      if (end < 0) break
+      ranges.push({start: i, end: end + 1})
+      i = end + 1
+      continue
+    }
+    i += 1
+  }
+  return ranges
+}
+
+const collectPageRefRanges = (content: string): ProtectedRange[] => {
+  const ranges: ProtectedRange[] = []
+  const stack: number[] = []
+  let i = 0
+  while (i < content.length - 1) {
+    const token = content.slice(i, i + 2)
+    if (token === '[[') {
+      // Roam hash-page syntax (`#[[tag]]`) is intentionally rewritten,
+      // so do not protect that page-ref-shaped fragment.
+      if (content[i - 1] !== '#') stack.push(i)
+      i += 2
+      continue
+    }
+    if (token === ']]') {
+      if (stack.length > 0) {
+        const start = stack.pop()!
+        if (stack.length === 0) ranges.push({start, end: i + 2})
+      }
+      i += 2
+      continue
+    }
+    i += 1
+  }
+  return ranges
+}
+
+const collectUrlRanges = (content: string): ProtectedRange[] => {
+  const ranges: ProtectedRange[] = []
+  URL_RE.lastIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = URL_RE.exec(content)) !== null) {
+    ranges.push({start: match.index, end: match.index + match[0].length})
+  }
+  return ranges
+}
+
+const collectHashRewriteProtectedRanges = (content: string): ProtectedRange[] =>
+  [
+    ...collectCodeRanges(content),
+    ...collectMarkdownLinkDestinationRanges(content),
+    ...collectPageRefRanges(content),
+    ...collectUrlRanges(content),
+  ].sort((a, b) => a.start - b.start || a.end - b.end)
+
+const rewriteHashPages = (
+  content: string,
+  protectedRanges: ReadonlyArray<ProtectedRange>,
+): string =>
+  content.replace(HASH_PAGE_RE, (match, lead: string, label: string, offset: number) => {
+    const hashStart = offset + lead.length
+    return isProtected(protectedRanges, hashStart, offset + match.length)
+      ? match
+      : `${lead}[[${label}]]`
+  })
+
+const rewriteHashTags = (
+  content: string,
+  protectedRanges: ReadonlyArray<ProtectedRange>,
+): string =>
+  content.replace(HASH_TAG_RE, (match, lead: string, label: string, offset: number) => {
+    const hashStart = offset + lead.length
+    return isProtected(protectedRanges, hashStart, offset + match.length)
+      ? match
+      : `${lead}[[${label}]]`
+  })
+
 export const rewriteRoamContent = (
   raw: string,
   uidMap: ReadonlyMap<string, string>,
@@ -142,10 +284,12 @@ export const rewriteRoamContent = (
   }
   out += raw.slice(cursor)
 
-  // Tag rewrites operate on the post-block-ref string. They don't share
-  // syntax with the block-ref forms, so plain sequential replace is safe.
-  out = out.replace(HASH_PAGE_RE, (_, lead: string, label: string) => `${lead}[[${label}]]`)
-  out = out.replace(HASH_TAG_RE, (_, lead: string, label: string) => `${lead}[[${label}]]`)
+  // Hash-tag rewrites operate on the post-block-ref string, but must not
+  // touch syntax that merely contains a hash: existing page refs like
+  // `[[Promotion #L6]]`, URLs, or code snippets.
+  const protectedRanges = collectHashRewriteProtectedRanges(out)
+  out = rewriteHashPages(out, protectedRanges)
+  out = rewriteHashTags(out, protectedRanges)
 
   return {content: out, unresolvedBlockUids: [...unresolved]}
 }

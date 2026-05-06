@@ -21,6 +21,7 @@ export interface RoamBlock {
   'edit-time'?: number
   heading?: number
   ':children/view-type'?: string
+  ':block/view-type'?: string
   refs?: RoamUidRef[]
   ':block/refs'?: RoamUidRef[]
   ':block/props'?: Record<string, unknown>

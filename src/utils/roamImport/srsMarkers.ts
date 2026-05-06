@@ -8,6 +8,7 @@ import {
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamBlock } from './types'
 import { parseRoamImportReferences } from './references'
+import { stripRoamTodoContent } from './todo'
 
 export interface PreparedSrsSchedule {
   interval: number
@@ -25,8 +26,11 @@ const roamInlinePropertyValue = (text: string, name: string): string | undefined
   return pattern.exec(text)?.[1]?.trim()
 }
 
+const ROAM_SRS_INLINE_PROPERTY_RE = /\[\[\[\[(interval|factor)\]\]::?[^\]]+\]\]/gi
+const REVIEW_STAR_RE = /(?:^|\s)\*(?=\s|$)/g
+
 const countReviewStars = (text: string): number => {
-  const matches = text.match(/(?:^|\s)\*(?=\s|$)/g)
+  const matches = text.match(REVIEW_STAR_RE)
   return matches?.length ?? 0
 }
 
@@ -39,7 +43,6 @@ export const extractSrsScheduleMarker = (
   if (!Number.isFinite(interval) || !Number.isFinite(factor)) return null
 
   const reviewCount = countReviewStars(rawContent)
-  if (reviewCount === 0) return null
 
   const dateRef = parseRoamImportReferences(rawContent)
     .map(ref => ({ref, parsed: parseLiteralDailyPageTitle(ref.alias)}))
@@ -55,15 +58,66 @@ export const extractSrsScheduleMarker = (
   }
 }
 
-export const findSrsScheduleInChildren = (
+const removeParsedDateRefs = (content: string): string => {
+  const refs = parseRoamImportReferences(content)
+    .filter(ref => parseLiteralDailyPageTitle(ref.alias) !== null)
+    .sort((a, b) => b.startIndex - a.startIndex)
+
+  let out = content
+  for (const ref of refs) {
+    out = out.slice(0, ref.startIndex) + out.slice(ref.endIndex)
+  }
+  return out
+}
+
+const removePageRefs = (content: string): string => {
+  const refs = parseRoamImportReferences(content)
+    .sort((a, b) => b.startIndex - a.startIndex)
+
+  let out = content
+  for (const ref of refs) {
+    out = out.slice(0, ref.startIndex) + out.slice(ref.endIndex)
+  }
+  return out
+}
+
+export const srsScheduleMarkerResidue = (rawContent: string): string =>
+  removePageRefs(removeParsedDateRefs(stripRoamTodoContent(rawContent))
+    .replace(ROAM_SRS_INLINE_PROPERTY_RE, ' ')
+    .replace(/(^|[^\w/:])#[\w/-]+/g, ' '))
+    .replace(REVIEW_STAR_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+export const isSrsScheduleMarkerOnly = (rawContent: string): boolean =>
+  extractSrsScheduleMarker(rawContent, '00000000-0000-4000-8000-000000000000') !== null &&
+  srsScheduleMarkerResidue(rawContent).length === 0
+
+export interface PromotedSrsScheduleResult {
+  schedule?: PreparedSrsSchedule
+  diagnostics: string[]
+}
+
+export const findPromotedSrsScheduleInChildren = (
   children: ReadonlyArray<RoamBlock>,
   workspaceId: string,
-): PreparedSrsSchedule | undefined => {
+  parentUid: string,
+): PromotedSrsScheduleResult => {
+  const markerOnlyChildren: Array<{child: RoamBlock, schedule: PreparedSrsSchedule}> = []
   for (const child of children) {
     const schedule = extractSrsScheduleMarker(child.string ?? '', workspaceId)
-    if (schedule) return schedule
+    if (schedule && isSrsScheduleMarkerOnly(child.string ?? '')) {
+      markerOnlyChildren.push({child, schedule})
+    }
   }
-  return undefined
+  const diagnostics = markerOnlyChildren.length > 1
+    ? [
+      `Multiple marker-only Roam SRS children under uid ${parentUid}; ` +
+      `promoted the first (${markerOnlyChildren[0].child.uid}) and preserved ` +
+      `${markerOnlyChildren.length - 1} additional marker block(s) literally.`,
+    ]
+    : []
+  return {schedule: markerOnlyChildren[0]?.schedule, diagnostics}
 }
 
 export const propertiesFromSrsSchedule = (
