@@ -128,17 +128,26 @@ const namespacedKey = (key: string): string => {
   return `${NS_PREFIX}:${cleaned}`
 }
 
-// "Simple" Roam inline attribute: a block whose content matches
-// `key:: value` (single-line, key = `[A-Za-z][\w-]*`). Multi-line
-// bodies or anything that doesn't match the shape are out of scope
-// for promotion and pass through untouched as plain blocks.
-const SIMPLE_ATTR_RE = /^([A-Za-z][\w-]*)::\s*(.*)$/
+// Roam inline attribute: a block whose content matches `key:: value`.
+// Keys in real graphs often contain spaces or punctuation (`Full
+// Title`, `initial review date`, `muscle mass %`). Keep this anchored
+// at the start of a single block and require a letter-first key so
+// prose/code fragments like `6. Runs ::fix...` don't become props.
+const INLINE_ATTR_RE = /^([^:\n]{1,100})::\s*(.*)$/
+const INLINE_ATTR_KEY_RE = /^[A-Za-z][A-Za-z0-9 _%?'’()./-]*$/
+
+const stripRoamTodoContent = (rawContent: string | undefined): string =>
+  extractRoamTodoMarker(rawContent ?? '').content
 
 const detectInlineAttribute = (rawContent: string | undefined): {key: string, value: string} | null => {
-  if (!rawContent || rawContent.includes('\n')) return null
-  const match = SIMPLE_ATTR_RE.exec(rawContent)
+  if (!rawContent) return null
+  const content = stripRoamTodoContent(rawContent)
+  if (content.includes('\n')) return null
+  const match = INLINE_ATTR_RE.exec(content)
   if (!match) return null
-  return {key: match[1], value: match[2]}
+  const key = match[1].trim()
+  if (!INLINE_ATTR_KEY_RE.test(key)) return null
+  return {key, value: match[2]}
 }
 
 const findUnescaped = (value: string, target: string, start: number): number => {
@@ -371,7 +380,7 @@ export const computePromotedFromChildren = (
       } else {
         // Non-attr sub-bullet: contributes its raw string as another
         // value for the enclosing attr's key (case 4).
-        push(attr.key, sub.string ?? '')
+        push(attr.key, stripRoamTodoContent(sub.string))
       }
     }
   }

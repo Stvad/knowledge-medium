@@ -564,6 +564,37 @@ describe('planImport', () => {
     })
   })
 
+  it('promotes spaced property keys after stripping TODO markers from values', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [
+          {
+            string: 'initial review date::[[April 27th, 2026]] {{[[DONE]]}}',
+            uid: 'reviewUid',
+          },
+          {string: 'Full Title:: Algorithms to Live By', uid: 'titleUid'},
+          {string: 'muscle mass %:: 41', uid: 'muscleUid'},
+          {string: '6. Runs ::fix-needs-update after transact', uid: 'proseUid'},
+        ],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const byUid = (uid: string) => plan.descendants.find(d => d.roamUid === uid)
+    const props = byUid('parentUid')?.data.properties
+    expect(props?.['roam:initial review date']).toBe('[[April 27th, 2026]]')
+    expect(props?.['roam:Full Title']).toBe('Algorithms to Live By')
+    expect(props?.['roam:muscle mass %']).toBe('41')
+    expect(props?.['roam:6. Runs']).toBeUndefined()
+
+    expect(byUid('reviewUid')?.data.content)
+      .toBe('initial review date::[[April 27th, 2026]]')
+    expect(byUid('reviewUid')?.todoState).toBe('DONE')
+  })
+
   it('case 3: explodes a `[[X]] [[Y]]` scalar value into a list of bracketed pages', () => {
     const plan = planImport([{
       title: 'p',
