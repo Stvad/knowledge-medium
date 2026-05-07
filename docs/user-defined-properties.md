@@ -35,11 +35,23 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
   readonly label: string
   /** Build the codec from preset-specific config. Called at schema
    *  registration time and on runtime rebuild — must be deterministic
-   *  in `config`. */
+   *  in `config` and only run on validated config (see configCodec). */
   readonly build: (config: TConfig) => Codec<TValue>
   /** Default value used when the schema is registered and the property
    *  is first materialised. Lives on the resulting `PropertySchema`. */
   readonly defaultValue: TValue
+  /** Default config used when the preset is registered through
+   *  `AddPropertyForm` without user-supplied config. Required when
+   *  `TConfig` is non-void; void presets omit it (and `configCodec`). */
+  readonly defaultConfig?: TConfig
+  /** Validates and parses raw JSON read from `presetConfigProp` into
+   *  `TConfig`. Required when `TConfig` is non-void. Throws on
+   *  malformed input — `UserSchemasService` catches, logs, and skips
+   *  schemas with invalid config rather than passing untyped JSON to
+   *  `build`. The encoding side is used when persisting config from
+   *  `AddPropertyForm` and from the property-schema block renderer:
+   *  `presetConfigProp.codec.encode(preset.configCodec.encode(cfg))`. */
+  readonly configCodec?: Codec<TConfig>
   /** Editor used for any property whose codec's `type` matches this
    *  preset's `id`. Required — every preset ships its own editor;
    *  there's no separate fallback facet. Exact-name
@@ -50,17 +62,10 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
    *  picker. Plugins without designed icons can omit; falls back to a
    *  generic icon (or text-styled label). */
   readonly Glyph?: ComponentType<{className?: string}>
-  /** Optional config UI rendered inside `FieldConfigSheet` and
-   *  `AddPropertyForm` when the user is creating a property. Only
-   *  meaningful when `TConfig` is non-void; primitive presets
-   *  (`TConfig = void`) have nothing to configure and omit it.
-   *
-   *  Even non-void presets can omit the ConfigEditor — the preset
-   *  is then created with default config from the picker (caller
-   *  passes a default `TConfig`), and users edit the property-schema
-   *  block directly to change config later. Ship a ConfigEditor when
-   *  the config is meaningful enough that users should set it at
-   *  creation time (ref's `targetTypes`, future enum option lists). */
+  /** Optional config UI rendered inside `FieldConfigSheet` and the
+   *  property-schema block renderer (§4a). Only meaningful when
+   *  `TConfig` is non-void; primitive presets (`TConfig = void`) have
+   *  nothing to configure and omit it. */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
 }
 
@@ -74,9 +79,30 @@ export const definePreset = <TValue, TConfig>(
 ): ValuePreset<TValue, TConfig> => preset
 ```
 
+**Config-validation contract.** `presetConfigProp` stores arbitrary JSON, including JSON written by hand-edits in the property-schema block renderer or by import code. Passing that JSON straight to `build` means malformed config either crashes synthesis or produces a subtly-wrong codec (e.g. ref with a non-string `targetTypes`). The contract: every non-void preset declares a `configCodec` whose `decode` is the validated parse boundary. `UserSchemasService` runs raw JSON through the codec; on throw, it logs a diagnostic naming the schema and skips the contribution (the schema temporarily falls into the unknown-schema fallback path until config is fixed). Void presets have no config to validate and skip the codec.
+
 Kernel preset set, registered via a new `valuePresetsFacet`:
 
 ```ts
+// Codec for ref/refList config — validates targetTypes is string[]
+// when present, rejects anything else.
+const refConfigCodec: Codec<RefCodecOptions> = {
+  type: 'object',
+  encode: cfg => cfg as unknown,
+  decode: json => {
+    if (json === null || typeof json !== 'object' || Array.isArray(json)) {
+      throw new CodecError('ref config object', json)
+    }
+    const obj = json as Record<string, unknown>
+    if (obj.targetTypes !== undefined) {
+      if (!Array.isArray(obj.targetTypes) || !obj.targetTypes.every(t => typeof t === 'string')) {
+        throw new CodecError('ref config targetTypes (string[])', obj.targetTypes)
+      }
+    }
+    return {targetTypes: obj.targetTypes as readonly string[] | undefined}
+  },
+}
+
 const kernelValuePresets: readonly AnyValuePreset[] = [
   definePreset({id: 'string',  label: 'Plain text', Glyph: TypeIcon,    build: () => codecs.string,             defaultValue: '',         Editor: StringPropertyEditor}),
   definePreset({id: 'number',  label: 'Number',     Glyph: Hash,        build: () => codecs.number,             defaultValue: 0,          Editor: NumberPropertyEditor}),
@@ -88,6 +114,8 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
     id: 'ref',     label: 'Reference',  Glyph: AtSign,
     build: cfg => codecs.ref(cfg),
     defaultValue: '',
+    defaultConfig: {},
+    configCodec: refConfigCodec,
     Editor: RefPropertyEditor,
     ConfigEditor: RefTargetTypePicker,
   }),
@@ -95,6 +123,8 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
     id: 'refList', label: 'References', Glyph: AtSignList,
     build: cfg => codecs.refList(cfg),
     defaultValue: [],
+    defaultConfig: {},
+    configCodec: refConfigCodec,
     Editor: RefListPropertyEditor,
     ConfigEditor: RefTargetTypePicker,
   }),
@@ -401,28 +431,70 @@ export class UserSchemasService {
       const presets = this.repo.read(valuePresetsFacet)
       const contributions: AnyPropertySchema[] = []
       for (const block of blocks) {
-        const presetId = block.get(presetIdProp)
-        const preset = presets.get(presetId)
-        if (!preset) continue   // preset's plugin not loaded yet — skip
-        const name = block.get(propertyNameProp)
-        if (!name) continue
-        contributions.push({
-          name,
-          codec: preset.build(block.get(presetConfigProp)),
-          defaultValue: preset.defaultValue,
-          changeScope: ChangeScope.BlockDefault,
-        })
+        const built = this.tryBuildSchema(block, presets)
+        if (built) contributions.push(built)
       }
       this.repo.setRuntimeContributions(propertySchemasFacet, 'user-data', contributions)
     })
+  }
+
+  /** Validates a schema block against the current presets and returns
+   *  the schema if it parses, or null with a logged diagnostic if not.
+   *  Three skip paths: (1) preset not loaded, (2) name empty,
+   *  (3) configCodec.decode throws. The block stays in the database
+   *  untouched; a fix to the block re-runs this on the next
+   *  subscription tick. */
+  private tryBuildSchema(
+    block: Block,
+    presets: ReadonlyMap<string, AnyValuePreset>,
+  ): AnyPropertySchema | null {
+    const presetId = block.get(presetIdProp)
+    const preset = presets.get(presetId)
+    if (!preset) {
+      console.warn(`[UserSchemasService] schema block ${block.id} references unknown preset ${JSON.stringify(presetId)}; preset's plugin may not be loaded`)
+      return null
+    }
+    const name = block.get(propertyNameProp)
+    if (!name) {
+      console.warn(`[UserSchemasService] schema block ${block.id} has empty propertyName`)
+      return null
+    }
+    let config: unknown
+    try {
+      const raw = block.get(presetConfigProp)
+      config = preset.configCodec ? preset.configCodec.decode(raw) : preset.defaultConfig
+    } catch (err) {
+      console.warn(`[UserSchemasService] schema "${name}" has invalid config: ${(err as Error).message}; skipping until fixed`)
+      return null
+    }
+    return {
+      name,
+      codec: preset.build(config),
+      defaultValue: preset.defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    }
+  }
+
+  has(name: string): boolean {
+    // Used by AddPropertyForm's collision preflight. Reads the most
+    // recently emitted contribution list (kept on the service in the
+    // implementation; omitted from this sketch for brevity).
+    return this.contributions.some(s => s.name === name)
+  }
+
+  appendUserSchema(schema: AnyPropertySchema): void {
+    // Synchronous slot-update primitive used by addSchema (§7).
+    this.contributions = [...this.contributions.filter(s => s.name !== schema.name), schema]
+    this.repo.setRuntimeContributions(propertySchemasFacet, 'user-data', this.contributions)
   }
 }
 ```
 
 Behavior:
 
-- Every time a property-schema block is created, edited, or deleted, the subscription fires, the service rebuilds the user-data contribution list, the runtime updates the facet's `'user-data'` bucket, the `propertySchemas` step re-runs, the merged map updates, subscribers re-render.
-- Preset-not-loaded entries are skipped silently. They reappear on the next subscription fire after the plugin lands (the subscription doesn't refire on plugin load alone — see "preset facet changes" below).
+- Every time a property-schema block is created, edited, or deleted, the subscription fires and the service rebuilds the user-data contribution list. Each block goes through `tryBuildSchema`, which validates preset existence + name presence + config decode through the preset's `configCodec`. Failures log a diagnostic and skip the contribution; the block stays in the database for the user to fix.
+- Preset-not-loaded entries are skipped with a logged warning. They reappear on the next subscription fire after the plugin lands (the subscription doesn't refire on plugin load alone — see "preset facet changes" below).
+- Invalid config entries are skipped with a logged warning. The schema-block renderer (§4a) surfaces the same status visually so the user sees what's wrong without checking the console.
 - No SQL migrations, no separate persistence path. Sync, undo, history all work because schemas are blocks.
 
 #### Preset facet changes
@@ -460,18 +532,19 @@ The adoption-cheap path reinforces the §3 hybrid rule (shared vocabulary stays 
 
 #### Collision preflight
 
-Before calling `addSchema`, decide adoption vs. creation vs. refusal:
+The rule is simpler than user-data-vs-direct source attribution: **any visible registered schema is adoptable; hidden/reserved names are refused.** The §3 hybrid rule in [type-system.md](type-system.md) explicitly wants users to share vocabulary — adopting kernel's `status` for a block is a feature, not a bug. There's no reason to refuse based on whose source registered the schema.
 
 ```ts
 const existing = repo.propertySchemas.get(name)
-if (!existing)                             /* miss → create new */
-if (userSchemasService.has(name))          /* user-data owned → treat as adoption */
-                                           /* (form's "pick from autocomplete" path) */
-else                                       /* direct facet (kernel/plugin) → refuse */
-                                           /* with "this name is reserved" message */
+if (!existing) return 'create-new'         // miss → addSchema with current preset
+const ui = repo.propertyUis.get(name)
+if (ui?.hidden) return 'refused-reserved'  // kernel-internal slot (editorFocusRequest, etc.)
+return 'adopt'                             // shared vocabulary or user's own — same path
 ```
 
-`userSchemasService.has(name)` is a direct read against the service's own contribution list — no need to thread schema-source provenance through the merged map. The service maintains the list, the form's collision logic asks the service. The merged-map shape stays `ReadonlyMap<string, AnyPropertySchema>` (no provenance value) and source attribution lives where it's authored — on the contribution side, not the merged-read side.
+`PropertyUiContribution.hidden` (or `PropertyEditorOverride.hidden` after the rename — see the spawned cleanup task) is the existing flag the kernel uses on its ~13 internal state schemas. The form reads it for the refusal case; no schema-source-provenance metadata is threaded through the merged map. The merged-map shape stays `ReadonlyMap<string, AnyPropertySchema>` with no provenance value.
+
+This drops the prior "user-data → adopt; kernel/plugin → refuse" distinction. Adopting `status` from a kernel/plugin source is exactly what the §3 hybrid rule wants. The only refusal case is "this name is a reserved slot, not a property" — which the hidden flag already encodes.
 
 ### 7. `addSchema` — create the schema block AND register synchronously
 
@@ -522,25 +595,41 @@ private appendUserSchema(schema: AnyPropertySchema): void {
 }
 ```
 
-**Why synchronous registration is load-bearing.** The form's flow is "addSchema, then write the property's initial value." If we leaned on the subscription to update the user-data bucket, the next write could race the subscription tick and `repo.propertySchemas.get(name)` would return undefined — the unknown-schema fallback path takes over and we end up with an ad-hoc string property instead of a properly-typed one. The same race shows up in the Roam importer's apply phase (schemas-then-content order requires the schema registration to be visible by the time content rows write). Both paths use the synchronous registration; the subscription is steady-state for *external* changes (sync from another device, hand-edit of a property-schema block, undo/redo) where there's no caller waiting for the next write.
+**Why synchronous registration is load-bearing.** The form's flow is "addSchema, then write the property's initial value." If we leaned on the subscription to update the user-data bucket, the next write could race the subscription tick and `repo.propertySchemas.get(name)` would return undefined — the unknown-schema fallback path takes over and we end up with an ad-hoc string property instead of a properly-typed one. The same shape applies to the Roam importer (§8): planned schema objects are registered synchronously via `appendUserSchema` during apply, before any content write that depends on them. Both call sites take the registration into the **command path** rather than waiting for the reactive subscription. The subscription is steady-state for *external* changes (sync from another device, hand-edit of a property-schema block, undo/redo) where there's no caller waiting for the next write.
 
 **Removal and edit.** `repo.removeBlock(schemaBlockId)` — the subscription fires, `appendUserSchema`'s symmetric removal counterpart updates the slot. Editing config (e.g., adding `targetTypes` to a ref): change the property-schema block's `presetConfigProp` value, subscription fires, schema gets rebuilt with the new codec. A ref-codec set change triggers §7-bis reprojection over rows carrying the property name. No special path needed; the subscription is sufficient because edits aren't followed by an immediate dependent write.
 
 ### 8. Roam importer — schema reconciliation
 
-Schemaless properties go away as a steady-state design. Every imported `key:: value` attribute resolves to a registered schema. The importer's plan phase grows a reconciliation step:
+Schemaless properties go away as a steady-state design. Every imported `key:: value` attribute resolves to a registered schema. The importer's plan phase grows a reconciliation step that produces *both* the planned property-schema blocks *and* the corresponding `PropertySchema` objects, threaded into the apply phase as a single bundle. Apply registers schemas synchronously — never relies on the subscription to deliver schemas in time for downstream property writes.
+
+#### Plan phase
 
 1. **Collect.** Walk the parsed dump, build the set of unique property names appearing across all blocks.
-2. **Resolve against current registry.** For each name, if a schema is already in `repo.propertySchemas` (kernel, plugin, or pre-existing user schema) → use it as-is; record the binding for the apply phase.
+2. **Resolve against current registry.** For each name, if a schema is already in `repo.propertySchemas` (kernel, plugin, or pre-existing user schema) → record the binding (schema object → name) and skip classification.
 3. **Classify unregistered names.** For each remaining name, sample values across the dump:
    - All values are `[[…]]` page references → `refList` preset, no `targetTypes` constraint (we don't know what types the targets should be).
    - All values are valid numbers → `number` preset.
    - All values are `true` / `false` → `boolean` preset.
    - Otherwise → `string` preset.
-   The defaults are deliberately conservative — `refList` for the common Roam-attribute case, fall through to `string` for anything ambiguous. Users can edit the resulting property-schema blocks to narrow (e.g., `refList` → single `ref`, add `targetTypes`).
-4. **Plan schema blocks.** For each newly-classified name, emit a property-schema block into the deterministic-id plan. Schema block id is `hash(workspaceId, propertyName)` so re-importing the same dump doesn't duplicate. Parent is the Properties page.
-5. **Apply order.** Phase the apply pipeline so schema blocks land **before** any block carrying their properties. The reliable shape: schema blocks form a first apply chunk, the importer calls `userSchemasService.appendUserSchema` (or addSchema's equivalent in-tx primitive) synchronously per schema-block write so the slot is updated before content chunks run. The subscription will also fire later — same idempotent-arrival semantics as `addSchema`. Don't rely on the subscription alone to make schemas visible by the time content writes; the timing is unspecified.
-6. **Normalize ref values to ids before writing.** A Roam `Status:: [[Project]]` parsed value is the *token* `[[Project]]`, not a block id — but the `refList` codec decodes string arrays of *ids*, not tokens. The importer's existing reference-resolution layer (the same code that resolves `[[Project]]` in block content to a target block id) must run on attribute values before they're written to a refList property; otherwise decode throws and `references_json` projection emits bogus target ids. Concretely: when classifying a property value as `refList`, transform the parsed value through the existing token→id resolver, write the array of resolved ids to the property, and only then commit. Ambiguous tokens (page that doesn't exist in the dump, multiple matches, etc.) follow the importer's existing not-found policy — typically create the target page if it's a `[[…]]` reference, or fall back to a string preset for that property if resolution is ambiguous across the dump.
+   The defaults are deliberately conservative — `refList` for the common Roam-attribute case, fall through to `string` for anything ambiguous. Users can edit the resulting property-schema blocks via §4a to narrow (`refList` → single `ref`, add `targetTypes`, etc).
+4. **Build schema objects up-front.** For each newly-classified name, build the `PropertySchema` immediately by running the chosen preset's `build` against `defaultConfig`. The plan now carries `{schemaBlock: BlockData, schema: PropertySchema}` pairs — the block plus the runtime registration object, decided at plan time.
+5. **Plan schema blocks.** For each newly-classified name, emit a property-schema block into the deterministic-id plan. Schema block id is `hash(workspaceId, propertyName)` so re-importing the same dump doesn't duplicate. Parent is the Properties page. The block's `presetConfigProp` value is encoded via the preset's `configCodec` (so it round-trips through validation when the subscription later picks it up).
+
+#### Apply phase
+
+6. **Register schemas synchronously, then write blocks, then write content.** The apply phase iterates the planned schemas and:
+   - Calls `userSchemasService.appendUserSchema(schema)` for each planned schema *before any property write that depends on it*. This updates the user-data facet bucket in the same tick, before the importer continues. The schemas are now in `repo.propertySchemas` and visible to all subsequent writes.
+   - Writes the property-schema blocks (their persistence). The subscription will fire later, walk the schema blocks, and arrive at an idempotent state (same name + presetId + decoded config = same schema object structurally, modulo the function-identity of the codec; the slot's last-wins-on-source means the later subscription-emitted contribution replaces the earlier-appended one with no observable change).
+   - Writes the content blocks and their properties, encoded against the now-registered schemas.
+
+   The subscription is **not in the critical path** for the importer. Schema visibility is established by the synchronous `appendUserSchema` calls, not by waiting for a subscription tick.
+
+7. **Normalize ref values to ids before writing.** A Roam `Status:: [[Project]]` parsed value is the *token* `[[Project]]`, not a block id — but the `refList` codec decodes string arrays of *ids*, not tokens. The importer's existing reference-resolution layer (the same code that resolves `[[Project]]` in block content to a target block id) must run on attribute values before they're written to a refList property; otherwise decode throws and `references_json` projection emits bogus target ids. Concretely: when classifying a property value as `refList`, transform the parsed value through the existing token→id resolver, write the array of resolved ids to the property, and only then commit. Ambiguous tokens (page that doesn't exist in the dump, multiple matches, etc.) follow the importer's existing not-found policy — typically create the target page if it's a `[[…]]` reference, or fall back to a string preset for that property if resolution is ambiguous across the dump.
+
+#### Why plan-time schema objects matter
+
+Carrying schema *objects* (not just block plans) through plan→apply means the importer never has a window where it has written content but not yet registered the schema. The previous "schema chunk first, content chunks second; rely on subscription tick between chunks" shape was fragile precisely because it crossed the boundary between writes and reactivity. With schemas-as-data threaded through the plan, registration is deterministic and synchronous; the schema-block writes are still part of the plan (they're how the registration *persists*), but they aren't on the critical path for in-tick visibility.
 
 #### Existing alpha data — drop and recreate
 
