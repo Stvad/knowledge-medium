@@ -393,6 +393,38 @@ const propertySchemasStep: RebuildStep<{
 
 User schemas don't need a separate input — they arrive through `propertySchemasFacet`'s `'user-data'` source bucket, combined automatically by the facet's existing `combine`.
 
+Two more rebuild outputs join `_propertySchemas` and `_types`, retained on Repo with public getters in the same shape as §1a-public:
+
+```ts
+const valuePresetsStep: RebuildStep<{
+  _valuePresets: ReadonlyMap<string, AnyValuePreset>
+}> = {
+  id: 'valuePresets',
+  inputs: [{kind: 'facet', facet: valuePresetsFacet}],
+  outputs: ['_valuePresets'],
+  run: ({read}) => ({_valuePresets: read(valuePresetsFacet)}),
+}
+
+const propertyEditorOverridesStep: RebuildStep<{
+  _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride>
+}> = {
+  id: 'propertyEditorOverrides',
+  inputs: [{kind: 'facet', facet: propertyEditorOverridesFacet}],
+  outputs: ['_propertyEditorOverrides'],
+  run: ({read}) => ({_propertyEditorOverrides: read(propertyEditorOverridesFacet)}),
+}
+
+// Repo exposes:
+class Repo {
+  get propertySchemas(): ReadonlyMap<string, AnyPropertySchema> { return this._propertySchemas }
+  get valuePresets(): ReadonlyMap<string, AnyValuePreset> { return this._valuePresets }
+  get propertyEditorOverrides(): ReadonlyMap<string, AnyPropertyEditorOverride> { return this._propertyEditorOverrides }
+  get types(): ReadonlyMap<string, TypeContribution> { return this._types }
+}
+```
+
+Why retained on Repo (vs. passing the runtime store into every consumer): consistent with the §1a `_propertySchemas` getter pattern. `UserSchemasService` reads `this.repo.valuePresets` rather than `this.repo.read(valuePresetsFacet)` — the runtime is an internal detail, the public surface is named getters that flip atomically when `setRuntimeContributions` notifies. The form's collision preflight reads `repo.propertyEditorOverrides.get(name)?.hidden` against the same retained map. React subscribers go through `useAppRuntime()`-dependent hooks (`usePropertySchemas`, `useValuePresets`, `usePropertyEditorOverrides`) following §1a-public's pattern.
+
 Precedence inside the merge stays as in [type-system.md §1a](type-system.md): type-lifted first, direct second (last-wins among direct sources). `'user-data'` is one direct source among others; if a kernel/plugin source registers the same name in the same `setFacetRuntime` pass, last-wins among direct decides — which the form's preflight prevents anyway by refusing collisions before the user submits.
 
 ### 4. Schemas are blocks under a Properties page
@@ -458,7 +490,7 @@ export class UserSchemasService {
 
   start(): () => void {
     return this.repo.subscribeBlocks({types: ['property-schema']}, blocks => {
-      const presets = this.repo.read(valuePresetsFacet)
+      const presets = this.repo.valuePresets
       const contributions: AnyPropertySchema[] = []
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
@@ -577,11 +609,12 @@ async addSchema(args: {
   name: string
   presetId: string
   /** Caller-supplied config. Runs through preset.configCodec.decode
-   *  for validation; pass undefined to start from preset.defaultConfig. */
+   *  for validation. Pass `undefined` to fall back to
+   *  preset.defaultConfig — `null` is a real (typically invalid)
+   *  value that's passed through to the codec so it can reject. */
   config?: unknown
 }): Promise<AnyPropertySchema> {
-  const presets = this.repo.read(valuePresetsFacet)
-  const preset = presets.get(args.presetId)
+  const preset = this.repo.valuePresets.get(args.presetId)
   if (!preset) throw new Error(`[addSchema] no preset registered for id ${args.presetId}`)
 
   // Run caller config through the same validation boundary the
@@ -589,11 +622,14 @@ async addSchema(args: {
   // synchronous addSchema path would build from raw caller input while
   // the later subscription-rebuilt schema goes through configCodec —
   // two different codecs for the same "registered" schema until the
-  // tick. Use defaultConfig when caller didn't pass one (or when
-  // configCodec is absent for void presets).
+  // tick. Only `undefined` falls back to defaultConfig: `null` and
+  // other malformed values are passed through to configCodec.decode
+  // so the codec can reject them with a precise error rather than
+  // being silently replaced. (refConfigCodec explicitly rejects null,
+  // so `args.config ?? defaultConfig` would let null skip validation.)
   let parsedConfig: unknown
   if (preset.configCodec) {
-    const raw = args.config ?? preset.defaultConfig ?? {}
+    const raw = args.config === undefined ? preset.defaultConfig ?? {} : args.config
     try {
       parsedConfig = preset.configCodec.decode(raw)
     } catch (err) {
