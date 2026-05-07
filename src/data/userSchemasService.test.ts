@@ -2,13 +2,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { ChangeScope, codecs, definePreset, type AnyValuePreset } from '@/data/api'
+import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
-import { valuePresetsFacet } from '@/data/facets'
+import { propertySchemasFacet, valuePresetsFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
@@ -166,5 +166,57 @@ describe('UserSchemasService subscription', () => {
       presetId: 'refList',
       config: {targetTypes: ['ok', 42]},
     })).rejects.toThrow(/invalid config/)
+  })
+})
+
+describe('Repo.setFacetRuntime — runtime contribution survival', () => {
+  it('user-data schema bucket survives a runtime swap', async () => {
+    env = await setup()
+    await env.service.addSchema({name: 'homepage', presetId: 'url'})
+    expect(env.repo.propertySchemas.get('homepage')?.codec.type).toBe('url')
+
+    // Swap to a fresh runtime that does NOT include the user-data
+    // bucket explicitly. The bucket is persisted on Repo and replayed
+    // onto the fresh runtime, so the schema must still be visible.
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ]))
+    expect(env.repo.propertySchemas.get('homepage')?.codec.type).toBe('url')
+  })
+
+  it('direct setRuntimeContributions bucket survives a runtime swap', async () => {
+    env = await setup()
+    const pluginSchema = defineProperty<string | undefined>('plugin:custom', {
+      codec: codecs.optionalString,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+    env.repo.setRuntimeContributions(propertySchemasFacet, 'plugin', [pluginSchema])
+    expect(env.repo.propertySchemas.get('plugin:custom')).toBe(pluginSchema)
+
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ]))
+    expect(env.repo.propertySchemas.get('plugin:custom')).toBe(pluginSchema)
+  })
+
+  it('addSchema concurrent with a runtime swap lands on the new runtime', async () => {
+    env = await setup()
+    // Kick off an addSchema; while the persisting tx is in flight,
+    // race a setFacetRuntime swap. The persisted bucket should be
+    // replayed onto the new runtime so the schema remains visible
+    // regardless of which runtime won the race.
+    const addPromise = env.service.addSchema({name: 'siteUrl', presetId: 'url'})
+    env.repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+    ]))
+    const schema = await addPromise
+    expect(env.repo.propertySchemas.get('siteUrl')).toBe(schema)
   })
 })
