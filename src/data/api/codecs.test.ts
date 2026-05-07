@@ -11,10 +11,9 @@ describe('codec type metadata', () => {
     expect(codecs.string.type).toBe('string')
     expect(codecs.number.type).toBe('number')
     expect(codecs.boolean.type).toBe('boolean')
+    // Date is natively absence-aware (Codec<Date | undefined>).
     expect(codecs.date.type).toBe('date')
     expect(codecs.url.type).toBe('url')
-    // optional spreads inner — type carries through.
-    expect(codecs.optional(codecs.string).type).toBe('string')
     expect(codecs.list(codecs.number).type).toBe('list')
     expect(codecs.ref().type).toBe('ref')
     expect(codecs.refList().type).toBe('refList')
@@ -60,11 +59,10 @@ describe('codec where capability', () => {
     expect(() => codecs.date.where!.encode('not a date' as unknown as Date)).toThrow(CodecError)
   })
 
-  it('optional.where rejects undefined and delegates to inner.where', () => {
-    const opt = codecs.optional(codecs.date)
-    expect(() => opt.where!.encode(undefined)).toThrow(CodecError)
+  it('date.where rejects undefined directly (codec is natively absence-aware)', () => {
+    expect(() => codecs.date.where!.encode(undefined)).toThrow(CodecError)
     const d = new Date('2026-04-29T00:00:00.000Z')
-    expect(opt.where!.encode(d)).toBe('2026-04-29T00:00:00.000Z')
+    expect(codecs.date.where!.encode(d)).toBe('2026-04-29T00:00:00.000Z')
   })
 })
 
@@ -111,43 +109,24 @@ describe('codecs.boolean', () => {
   })
 })
 
-describe('codecs.date', () => {
-  it('encodes to ISO string and decodes back', () => {
+describe('codecs.date (natively absence-aware)', () => {
+  it('encodes a defined Date to ISO string and round-trips', () => {
     const d = new Date('2026-04-29T12:34:56.789Z')
     const encoded = codecs.date.encode(d)
     expect(encoded).toBe('2026-04-29T12:34:56.789Z')
     const decoded = codecs.date.decode(encoded)
-    expect(decoded.getTime()).toBe(d.getTime())
+    expect(decoded?.getTime()).toBe(d.getTime())
   })
-
-  it('rejects non-ISO strings and bad shapes', () => {
-    expect(() => codecs.date.decode('not a date')).toThrow(CodecError)
-    expect(() => codecs.date.decode(1234567890)).toThrow(CodecError)
-    expect(() => codecs.date.decode(null)).toThrow(CodecError)
-  })
-})
-
-describe('codecs.optional', () => {
-  const inner = codecs.optional(codecs.string)
 
   it('encodes undefined as null and decodes null/undefined to undefined', () => {
-    expect(inner.encode(undefined)).toBeNull()
-    expect(inner.decode(null)).toBeUndefined()
-    expect(inner.decode(undefined)).toBeUndefined()
+    expect(codecs.date.encode(undefined)).toBeNull()
+    expect(codecs.date.decode(null)).toBeUndefined()
+    expect(codecs.date.decode(undefined)).toBeUndefined()
   })
 
-  it('round-trips a defined value through the inner codec', () => {
-    expect(inner.encode('x')).toBe('x')
-    expect(inner.decode(inner.encode('x'))).toBe('x')
-  })
-
-  it('forwards the inner codec error on shape mismatch', () => {
-    expect(() => inner.decode(42)).toThrow(CodecError)
-  })
-
-  it('refuses ref/refList wrapping', () => {
-    expect(() => codecs.optional(codecs.ref())).toThrow(/cannot wrap ref\/refList/)
-    expect(() => codecs.optional(codecs.refList())).toThrow(/cannot wrap ref\/refList/)
+  it('rejects non-ISO strings and bad non-null shapes', () => {
+    expect(() => codecs.date.decode('not a date')).toThrow(CodecError)
+    expect(() => codecs.date.decode(1234567890)).toThrow(CodecError)
   })
 })
 

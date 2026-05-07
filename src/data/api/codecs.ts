@@ -103,10 +103,16 @@ const booleanCodec: Codec<boolean> = {
   },
 }
 
-const dateCodec: Codec<Date> = {
+/** Date codec is natively absence-aware — value type is `Date | undefined`,
+ *  encode produces JSON null on undefined, decode round-trips. There's
+ *  no inert "no value" Date sentinel (every Date instance is a real
+ *  time), so absence has to be expressible at the codec level. See the
+ *  user-defined-properties.md "Why no codecs.optional" section. */
+const dateCodec: Codec<Date | undefined> = {
   type: 'date',
-  encode: v => v.toISOString(),
+  encode: v => (v === undefined ? null : v.toISOString()),
   decode: j => {
+    if (j === null || j === undefined) return undefined
     if (typeof j !== 'string') throw new CodecError('date', j)
     const d = new Date(j)
     if (Number.isNaN(d.getTime())) throw new CodecError('date', j)
@@ -114,37 +120,14 @@ const dateCodec: Codec<Date> = {
   },
   where: {
     encode: v => {
+      // null is short-circuited to IS NULL by the typed-query compiler
+      // before reaching where.encode. undefined arriving here is a
+      // caller bug — typed-query callers use null for unset matching.
+      if (v === undefined) throw new CodecError('date (use null for unset)', v)
       if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v)
       return v.toISOString()
     },
   },
-}
-
-const REF_LIKE_TYPES: ReadonlySet<string> = new Set(['ref', 'refList'])
-
-const optional = <T>(inner: Codec<T>): Codec<T | undefined> => {
-  if (REF_LIKE_TYPES.has(inner.type)) {
-    throw new Error(
-      '[codecs.optional] cannot wrap ref/refList codecs; ' +
-      'refs use unset-property / defaultValue for "no value" instead',
-    )
-  }
-  // Spread `inner` so subtype metadata (future codec fields) carries
-  // through. Override encode/decode for the null-on-undefined behaviour
-  // and override `where` to reject undefined while delegating to inner.
-  return {
-    ...inner,
-    encode: v => (v === undefined ? null : inner.encode(v)),
-    decode: j => (j === null || j === undefined ? undefined : inner.decode(j)),
-    where: inner.where && {
-      encode: v => {
-        if (v === undefined) {
-          throw new CodecError(`${inner.type} (use null for unset)`, v)
-        }
-        return inner.where!.encode(v)
-      },
-    },
-  }
 }
 
 const list = <T>(inner: Codec<T>): Codec<T[]> => ({
@@ -214,9 +197,11 @@ export const codecs = {
   string: stringCodec,
   number: numberCodec,
   boolean: booleanCodec,
+  /** Date codec is natively absence-aware (`Codec<Date | undefined>`).
+   *  No generic `codecs.optional` wrapper exists — see the
+   *  user-defined-properties.md "Why no codecs.optional" section. */
   date: dateCodec,
   url: urlCodec,
-  optional,
   list,
   ref,
   refList,

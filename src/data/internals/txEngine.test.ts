@@ -54,7 +54,8 @@ const titleProp = defineProperty<string>('title', {
 })
 
 const dateProp = defineProperty<Date | undefined>('due-date', {
-  codec: codecs.optional(codecs.date),
+  // codecs.date is natively absence-aware (Codec<Date | undefined>).
+  codec: codecs.date,
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })

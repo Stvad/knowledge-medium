@@ -51,7 +51,7 @@ afterEach(async () => {
 
 describe('Repo type membership orchestration', () => {
   it('adds a type, encodes initial values, and runs setup only on the first transition', async () => {
-    const dueProp = defineProperty<Date>('due', {
+    const dueProp = defineProperty<Date | undefined>('due', {
       codec: codecs.date,
       defaultValue: new Date(0),
       changeScope: ChangeScope.BlockDefault,
@@ -92,7 +92,7 @@ describe('Repo type membership orchestration', () => {
     await repo.addType('b1', 'task', {due})
     block = repo.block('b1')
     expect(block.types).toEqual(['task'])
-    expect(block.get(dueProp).toISOString()).toBe(due.toISOString())
+    expect(block.get(dueProp)?.toISOString()).toBe(due.toISOString())
     expect(block.get(setupCountProp)).toBe(1)
     expect(setupCalls).toBe(1)
   })

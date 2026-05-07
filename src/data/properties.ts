@@ -20,10 +20,63 @@ import type { BlockData } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import {
   ChangeScope,
+  CodecError,
   codecs,
   defineProperty,
+  type Codec,
   type PropertySchema,
 } from '@/data/api'
+
+/** Absence-aware string codec for kernel-internal properties whose value
+ *  type is `string | undefined`. Defined inline (per the spec's
+ *  "Why no codecs.optional" carve-out — codecs wanting absence
+ *  semantics declare their value type as `T | undefined` upfront and
+ *  write the null-handling themselves) rather than as a generic
+ *  wrapper that would lie about the value type. */
+const optionalStringCodec: Codec<string | undefined> = {
+  type: 'string',
+  encode: v => (v === undefined ? null : v),
+  decode: j => {
+    if (j === null || j === undefined) return undefined
+    if (typeof j !== 'string') throw new CodecError('string', j)
+    return j
+  },
+  where: {
+    encode: v => {
+      if (v === undefined) throw new CodecError('string (use null for unset)', v)
+      if (typeof v !== 'string') throw new CodecError('string', v)
+      return v
+    },
+  },
+}
+
+/** Absence-aware number codec — same shape as `optionalStringCodec`,
+ *  for `Codec<number | undefined>` kernel properties (createdAt etc.). */
+const optionalNumberCodec: Codec<number | undefined> = {
+  type: 'number',
+  encode: v => (v === undefined ? null : v),
+  decode: j => {
+    if (j === null || j === undefined) return undefined
+    if (typeof j !== 'number' || !Number.isFinite(j)) throw new CodecError('finite number', j)
+    return j
+  },
+  where: {
+    encode: v => {
+      if (v === undefined) throw new CodecError('number (use null for unset)', v)
+      if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v)
+      return v
+    },
+  },
+}
+
+/** Absence-aware identity codec for object-shaped kernel state
+ *  (editorSelection etc). `unsafeIdentity` because the value type
+ *  is engine-controlled and not exposed for plugin extension. */
+const optionalIdentityCodec = <T>(): Codec<T | undefined> => ({
+  type: 'object',
+  encode: v => (v === undefined ? null : (v as unknown)),
+  decode: j => (j === null || j === undefined ? undefined : (j as T)),
+})
 
 // ──── UI-state schemas (changeScope: UiState) ────
 
@@ -40,13 +93,13 @@ export const isEditingProp = defineProperty<boolean>('isEditing', {
 })
 
 export const topLevelBlockIdProp = defineProperty<string | undefined>('topLevelBlockId', {
-  codec: codecs.optional(codecs.string),
+  codec: optionalStringCodec,
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
 })
 
 export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlockId', {
-  codec: codecs.optional(codecs.string),
+  codec: optionalStringCodec,
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
 })
@@ -67,7 +120,7 @@ export interface EditorSelectionState {
 }
 
 export const editorSelection = defineProperty<EditorSelectionState | undefined>('editorSelection', {
-  codec: codecs.optional<EditorSelectionState>(codecs.unsafeIdentity<EditorSelectionState>()),
+  codec: optionalIdentityCodec<EditorSelectionState>(),
   defaultValue: undefined,
   changeScope: ChangeScope.UiState,
 })
@@ -104,13 +157,13 @@ export const typesProp = defineProperty<readonly string[]>('types', {
 })
 
 export const rendererProp = defineProperty<string | undefined>('renderer', {
-  codec: codecs.optional(codecs.string),
+  codec: optionalStringCodec,
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
 export const rendererNameProp = defineProperty<string | undefined>('rendererName', {
-  codec: codecs.optional(codecs.string),
+  codec: optionalStringCodec,
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
@@ -124,13 +177,13 @@ export const extensionDisabledProp = defineProperty<boolean>('system:disabled', 
 })
 
 export const createdAtProp = defineProperty<number | undefined>('createdAt', {
-  codec: codecs.optional(codecs.number),
+  codec: optionalNumberCodec,
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })
 
 export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlockId', {
-  codec: codecs.optional(codecs.string),
+  codec: optionalStringCodec,
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })

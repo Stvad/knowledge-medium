@@ -19,6 +19,7 @@ import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
   ChangeScope,
+  CodecError,
   codecs,
   defineBlockType,
   defineMutator,
@@ -27,6 +28,7 @@ import {
   definePropertyEditorOverride,
   defineQuery,
   MutatorNotRegisteredError,
+  type Codec,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -42,6 +44,18 @@ import {
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import { Repo } from '../repo'
+
+/** Test helper: absence-aware string codec. Inline since the data-API
+ *  surface no longer ships a generic `codecs.optional` wrapper. */
+const optionalStringCodec: Codec<string | undefined> = {
+  type: 'string',
+  encode: v => (v === undefined ? null : v),
+  decode: j => {
+    if (j === null || j === undefined) return undefined
+    if (typeof j !== 'string') throw new CodecError('string', j)
+    return j
+  },
+}
 
 let h: TestDb
 let cache: BlockCache
@@ -162,7 +176,7 @@ describe('propertySchemasFacet — kernel registration', () => {
 
   it('plugin schema layered onto kernel coexists by name', () => {
     const pluginSchema = defineProperty<string | undefined>('plugin:foo', {
-      codec: codecs.optional(codecs.string),
+      codec: optionalStringCodec,
       defaultValue: undefined,
       changeScope: ChangeScope.BlockDefault,
     })
@@ -182,12 +196,12 @@ describe('propertySchemasFacet — kernel registration', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const a = defineProperty<string | undefined>('plugin:dup', {
-        codec: codecs.optional(codecs.string),
+        codec: optionalStringCodec,
         defaultValue: undefined,
         changeScope: ChangeScope.BlockDefault,
       })
       const b = defineProperty<string | undefined>('plugin:dup', {
-        codec: codecs.optional(codecs.string),
+        codec: optionalStringCodec,
         defaultValue: undefined,
         changeScope: ChangeScope.BlockDefault,
       })
@@ -359,7 +373,7 @@ describe('facet variance — typed plugin contributions register without widenin
 
   it('propertySchemasFacet accepts a typed PropertySchema<Date | undefined>', () => {
     const typedSchema = defineProperty<Date | undefined>('tasks:due-date', {
-      codec: codecs.optional(codecs.date),
+      codec: codecs.date,
       defaultValue: undefined,
       changeScope: ChangeScope.BlockDefault,
     })

@@ -56,7 +56,7 @@ import { Repo } from '../repo'
 // ──── §12.1 plugin contributions ────
 
 const dueDateProp = defineProperty<Date | undefined>('tasks:due-date', {
-  codec: codecs.optional(codecs.date),
+  codec: codecs.date,
   defaultValue: undefined,
   changeScope: ChangeScope.BlockDefault,
 })

@@ -103,7 +103,9 @@ export const kernelValuePresets: readonly AnyValuePreset[] = [
     id: 'date',
     label: 'Date',
     Glyph: Calendar,
-    build: () => codecs.optional(codecs.date),
+    // codecs.date is natively absence-aware (Codec<Date | undefined>) —
+    // see codecs.ts for why no codecs.optional wrapper exists.
+    build: () => codecs.date,
     defaultValue: undefined,
     Editor: asEditor<Date | undefined>(DatePropertyEditor),
   }),
