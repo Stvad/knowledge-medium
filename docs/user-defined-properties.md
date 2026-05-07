@@ -326,15 +326,33 @@ if (!schema.codec.where) {
     `codec type ${schema.codec.type} doesn't support equality predicates ` +
     `(use referencedBy for refs, dedicated query for collections)`)
 }
+
+// `null` is the typed-query "match unset / explicitly-null" sentinel
+// per [type-system.md §8](type-system.md). SQLite `=` against NULL
+// never matches, so compile to `IS NULL` and skip where.encode
+// entirely — the codec doesn't need to encode NULL because we don't
+// bind it as a value. (Existing kernel codec where.encode validators
+// would reject null via `typeof !== T`; routing around them is
+// correct, not a bypass.)
+if (value === null) {
+  return {
+    sql: 'json_extract(b.properties_json, ?) IS NULL',
+    params: [path],
+  }
+}
+
 // where.encode is the validation boundary — it throws on non-T
 // inputs. The compiler doesn't pre-validate; the codec does.
 let sqlValue: WhereValue
 try {
-  sqlValue = value === null ? null : schema.codec.where.encode(value)
+  sqlValue = schema.codec.where.encode(value)
 } catch (err) {
   throw new Error(`[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`)
 }
-// ... bind sqlValue into json_extract(...) = ?
+return {
+  sql: 'json_extract(b.properties_json, ?) = ?',
+  params: [path, sqlValue],
+}
 ```
 
 `SCALAR_WHERE_SHAPES`, `normalizeSqlValue`, the `isRefCodec || isRefListCodec` special-case, and the kernel-curated `WHERE_ALLOWED_TYPES` set all go away. Each codec answers for itself.
@@ -785,18 +803,20 @@ Schemaless properties go away as a steady-state design. Every imported `key:: va
 
 #### Apply phase
 
-6. **Register schemas synchronously, then write blocks, then write content.** The apply phase iterates the planned schemas and:
-   - Calls `userSchemasService.appendUserSchema(schema)` for each planned schema *before any property write that depends on it*. This updates the user-data facet bucket in the same tick, before the importer continues. The schemas are now in `repo.propertySchemas` and visible to all subsequent writes.
-   - Writes the property-schema blocks (their persistence). The subscription will fire later, walk the schema blocks, and arrive at an idempotent state (same name + presetId + decoded config = same schema object structurally, modulo the function-identity of the codec; the slot's last-wins-on-source means the later subscription-emitted contribution replaces the earlier-appended one with no observable change).
-   - Writes the content blocks and their properties, encoded against the now-registered schemas.
+6. **Persist schema blocks first, then register, then write content.** The apply phase strictly orders:
+   1. **Write the planned property-schema blocks** in a tx (or chunk of txs). These are the durable record of every user-data schema; without them, an `appendUserSchema` call leaves the runtime carrying a schema with no backing block — and the next subscription rebuild will drop it (rebuild reads from blocks, doesn't see one for that name, omits it from the contribution list).
+   2. **For each successfully-written schema block, call `userSchemasService.appendUserSchema(schema)`** with the planned schema object. The user-data facet bucket updates synchronously, schemas are visible to subsequent reads.
+   3. **Write the content blocks + their properties.** Schemas are now in `repo.propertySchemas`; property writes encode through the registered schemas as expected.
 
-   The subscription is **not in the critical path** for the importer. Schema visibility is established by the synchronous `appendUserSchema` calls, not by waiting for a subscription tick.
+   Step ordering matters: registering before persisting opens a window where a partial failure (process crash, db write error, abort signal) leaves the runtime advertising schemas that don't exist on disk. The next subscription tick or app restart resolves to a different schema set and content writes that already happened race against that. Persisting first means the disk state is always at least as advanced as the runtime — any subscription rebuild, reload, or restart sees the same schemas the runtime saw.
+
+   If durability of the block writes can't be guaranteed atomically with `appendUserSchema` (it usually can't — they're separate operations), the **failure-recovery rule** is: if step 1 fails for a planned schema, do NOT call step 2 for that schema. If step 2 fires and step 3 fails, the runtime registration stays (it's idempotent with the persisted block), the importer can retry content writes. If step 1 succeeds and step 2 throws (shouldn't happen — it's pure in-memory), the next subscription tick reconciles from the disk state.
 
 7. **Normalize ref values to ids before writing.** A Roam `Status:: [[Project]]` parsed value is the *token* `[[Project]]`, not a block id — but the `refList` codec decodes string arrays of *ids*, not tokens. The importer's existing reference-resolution layer (the same code that resolves `[[Project]]` in block content to a target block id) must run on attribute values before they're written to a refList property; otherwise decode throws and `references_json` projection emits bogus target ids. Concretely: when classifying a property value as `refList`, transform the parsed value through the existing token→id resolver, write the array of resolved ids to the property, and only then commit. Ambiguous tokens (page that doesn't exist in the dump, multiple matches, etc.) follow the importer's existing not-found policy — typically create the target page if it's a `[[…]]` reference, or fall back to a string preset for that property if resolution is ambiguous across the dump.
 
 #### Why plan-time schema objects matter
 
-Carrying schema *objects* (not just block plans) through plan→apply means the importer never has a window where it has written content but not yet registered the schema. The previous "schema chunk first, content chunks second; rely on subscription tick between chunks" shape was fragile precisely because it crossed the boundary between writes and reactivity. With schemas-as-data threaded through the plan, registration is deterministic and synchronous; the schema-block writes are still part of the plan (they're how the registration *persists*), but they aren't on the critical path for in-tick visibility.
+Carrying schema *objects* (not just block plans) through plan→apply means the importer doesn't have to re-run preset resolution / config validation between persisting and registering. The plan computes everything once; apply just orders the writes correctly (persist → register → content). Without the schema-as-data threading, apply would have to subscribe-and-wait to know what schema was rebuilt from the block, with all the timing fragility that implies.
 
 #### Existing alpha data — drop and recreate
 
