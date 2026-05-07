@@ -92,8 +92,14 @@ const WS = 'ws-1'
 const aliasId = (alias: string) => computeAliasSeatId(alias, WS)
 const dailyId = (date: string) => computeDailyNoteId(date, WS)
 
-/** Run all pending processors to completion (synchronous + delayed). */
+/** Run all pending processors to completion (synchronous + delayed).
+ *  Also advances fake time by 1 ms so any pending `setTimeout(0)`
+ *  callbacks (e.g. deferred reprojections scheduled by the rebuild
+ *  step) fire before assertions. The 1 ms advance is too small to
+ *  trip the orphan-cleanup processor's 4 s delay timers, so those
+ *  tests still see the pre-cleanup intermediate state. */
 const flush = async (delayMs = 0) => {
+  await vi.advanceTimersByTimeAsync(1)
   await env.repo.awaitProcessors()
   if (delayMs > 0) {
     await vi.advanceTimersByTimeAsync(delayMs)
@@ -336,6 +342,7 @@ describe('parseReferences — schema-swap reprojection', () => {
     await flush()
 
     env.repo.setFacetRuntime(runtimeWithoutReviewer())
+    await flush()
 
     await vi.waitFor(async () => {
       expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([

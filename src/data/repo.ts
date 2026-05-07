@@ -1283,6 +1283,34 @@ export class Repo {
     }
   }
 
+  /** Defer reprojection off the cold-start critical path. The first
+   *  cold start on a fresh device (or one whose `client_schema_state`
+   *  was wiped) has no markers in place yet, so reprojection scans
+   *  every block whose properties_json mentions any ref-typed name —
+   *  ~1.4 s on a real graph, holding the SQLite connection and
+   *  blocking every read issued during page render. The references
+   *  processor handles every write that lands during the deferral
+   *  window, so projection correctness is preserved.
+   *
+   *  Browser path: `requestIdleCallback` with a 2 s safety timeout —
+   *  we want to wait until the main thread is idle, but never longer
+   *  than that (so a busy session still gets its catch-up scan).
+   *  Test / Node path: `setTimeout(0)` so vitest fake timers can
+   *  advance the call deterministically; `requestIdleCallback` is not
+   *  defined under jsdom / Node. */
+  private scheduleReprojection(
+    names: readonly string[],
+    schemas: ReadonlyMap<string, AnyPropertySchema>,
+  ): void {
+    const run = () => { void this.reprojectRefTypedProperties(names, schemas) }
+    const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
+    if (typeof idle === 'function') {
+      idle(run, {timeout: 2000})
+    } else {
+      setTimeout(run, 0)
+    }
+  }
+
   /** Lazy load the per-name marker set on first call, then keep it
    *  in-memory. One SQL round-trip per Repo lifetime. */
   private async loadReprojectionMarkers(): Promise<Set<string>> {
@@ -1493,7 +1521,7 @@ export class Repo {
           )
           const refSchemaChanges = changedRefSchemaNames(previousPropertySchemas, this._propertySchemas)
           if (refSchemaChanges.length > 0) {
-            void this.reprojectRefTypedProperties(refSchemaChanges, this._propertySchemas)
+            this.scheduleReprojection(refSchemaChanges, this._propertySchemas)
           }
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
