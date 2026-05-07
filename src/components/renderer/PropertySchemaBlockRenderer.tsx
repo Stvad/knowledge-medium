@@ -204,6 +204,12 @@ export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
   PropertySchemaBlockRendererImpl,
   {
     canRender: ({block}: BlockRendererProps): boolean => {
+      // useRenderer's chooser also calls useData(block) before
+      // running canRender, so by the time we get here block.peek()
+      // is non-null on hot loads. On the very first render, peek
+      // can be null — return false in that case so the chooser
+      // falls back to the default renderer; once the block loads,
+      // useRenderer reruns and we'll match.
       const data = block.peek()
       if (!data) return false
       const types = data.properties.types
