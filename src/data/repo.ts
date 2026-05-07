@@ -1212,7 +1212,17 @@ export class Repo {
         [...namesToScan],
       )
       this.reprojectionMetrics.rowsScanned += rows.length
-      if (this._propertySchemas !== propertySchemas) return
+      // Note: we do NOT bail when `this._propertySchemas !== propertySchemas`.
+      // `AppRuntimeProvider` calls `setFacetRuntime` twice during cold-start
+      // (kernel+static, then async with dynamic extensions), so a follow-up
+      // setFacetRuntime always lands while reprojection-1 is mid-SELECT —
+      // bailing here meant reprojection-1 never wrote markers and the same
+      // 1.4 s scan repeated on every reload. Dynamic extensions are additive
+      // (no codec redefinitions), so reprojection-1's snapshot is still
+      // correct against the current state; per-block tx.get reads live
+      // references and the JSON.stringify diff skips writes when nothing
+      // changed. If a real codec redefinition ever races a reprojection,
+      // the rebuild step's follow-up reprojection corrects it.
       // Even when `rows.length === 0` we still want to record the
       // markers below so the next cold start short-circuits — for many
       // plugin-contributed ref schemas there's simply no legacy data,
@@ -1229,7 +1239,6 @@ export class Repo {
       }
 
       for (const blocks of blocksByWorkspace.values()) {
-        if (this._propertySchemas !== propertySchemas) return
         await this.tx(async tx => {
           for (const block of blocks) {
             const liveBlock = await tx.get(block.id)

@@ -231,10 +231,21 @@ describe('parseReferences — schema-swap reprojection', () => {
     defaultValue: '',
     changeScope: ChangeScope.BlockDefault,
   })
+  const approverProp = defineProperty<string>('approver', {
+    codec: codecs.ref(),
+    defaultValue: '',
+    changeScope: ChangeScope.BlockDefault,
+  })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     backlinksDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+  ])
+  const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
+    kernelDataExtension,
+    backlinksDataExtension,
+    propertySchemasFacet.of(reviewerProp, {source: 'test'}),
+    propertySchemasFacet.of(approverProp, {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
@@ -331,6 +342,73 @@ describe('parseReferences — schema-swap reprojection', () => {
         {id: aliasId('content-target'), alias: 'content-target'},
       ])
     })
+  })
+
+  it('records markers when a follow-up setFacetRuntime swaps the merged map mid-scan', async () => {
+    // Reproduces the AppRuntimeProvider double-setFacetRuntime cold-start
+    // race: kernel+static plugins go in synchronously, then a second
+    // setFacetRuntime lands once dynamic extensions resolve. Before the
+    // bail-removal fix, reprojection-1 (triggered by setFacetRuntime#1)
+    // was abandoned mid-flight when setFacetRuntime#2 replaced
+    // _propertySchemas, and its names never got marked → the same scan
+    // re-fired on every reload.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // Stall reprojection-1's SELECT just long enough for setFacetRuntime#2
+    // to land and bump _propertySchemas. The spy lets the SELECT resolve
+    // only after we've forced the swap.
+    const originalGetAll = env.h.db.getAll.bind(env.h.db)
+    let releaseScan: (() => void) | null = null
+    let intercepted = false
+    const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
+      sql: string,
+      params?: unknown[],
+    ): Promise<T[]> => {
+      if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
+        intercepted = true
+        const rows = await originalGetAll<T>(sql, params)
+        await new Promise<void>(resolve => { releaseScan = resolve })
+        return rows
+      }
+      return originalGetAll<T>(sql, params)
+    })
+
+    try {
+      env.repo.setFacetRuntime(runtimeWithReviewer())
+      // Wait for reprojection-1 to enter its SELECT.
+      await vi.waitFor(() => { expect(intercepted).toBe(true) })
+      // Now race: drop another setFacetRuntime that adds approver.
+      // Pre-fix, this would invalidate reprojection-1's snapshot and
+      // cause the bail.
+      env.repo.setFacetRuntime(runtimeWithReviewerAndApprover())
+      // Release reprojection-1's SELECT.
+      releaseScan!()
+
+      // Both reviewer and approver should end up markered. Reviewer
+      // would not have been markered before the fix.
+      await vi.waitFor(async () => {
+        const reviewerMarker = await env.h.db.getOptional(
+          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+        )
+        const approverMarker = await env.h.db.getOptional(
+          `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:approver'`,
+        )
+        expect(reviewerMarker).not.toBeNull()
+        expect(approverMarker).not.toBeNull()
+      })
+    } finally {
+      getAllSpy.mockRestore()
+    }
   })
 
   it('persists the marker across Repo restarts so the cold-start scan is skipped', async () => {
