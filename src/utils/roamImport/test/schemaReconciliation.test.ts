@@ -258,10 +258,17 @@ describe('normalizeRefPropertyValues', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:isa': 'person'}),
       block('b', {'roam:page_alias': 'LukeProg'}),
+      block('c', {'roam:page_alias': '"Lily Anna", "Katerina Kolyada"'}),
+      block('d', {'roam:page_alias': 'built a prototype inside it, and it is thematically appropriate'}),
+      block('e', {'roam:page_alias': '{{[[mentions]]: [[Voice notes inbox process]]}}'}),
+      block('f', {'roam:isa': 'mental model'}),
     ]
     const aliasIdMap = new Map([
       ['person', 'person-id'],
       ['LukeProg', 'alias-id'],
+      ['Lily Anna', 'lily-anna-id'],
+      ['Katerina Kolyada', 'katerina-id'],
+      ['mental model', 'mental-model-id'],
     ])
     const diagnostics: string[] = []
     normalizeRefPropertyValues(
@@ -275,6 +282,10 @@ describe('normalizeRefPropertyValues', () => {
     )
     expect(blocks[0].properties['roam:isa']).toEqual(['person-id'])
     expect(blocks[1].properties['roam:page_alias']).toEqual(['alias-id'])
+    expect(blocks[2].properties['roam:page_alias']).toEqual(['lily-anna-id', 'katerina-id'])
+    expect(blocks[3].properties['roam:page_alias']).toEqual([])
+    expect(blocks[4].properties['roam:page_alias']).toEqual([])
+    expect(blocks[5].properties['roam:isa']).toEqual(['mental-model-id'])
     expect(diagnostics).toEqual([])
   })
 

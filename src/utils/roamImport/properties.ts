@@ -175,7 +175,10 @@ export const collectAliasesFromPropertyValues = (
       for (const item of v) visit(item)
     }
   }
-  for (const v of Object.values(promoted)) visit(v)
+  for (const [name, v] of Object.entries(promoted)) {
+    if (isRoamSemanticRefListProperty(name)) continue
+    visit(v)
+  }
   return [...out]
 }
 
@@ -183,9 +186,76 @@ const looksSerializedJson = (value: string): boolean =>
   (value.startsWith('{') && value.endsWith('}')) ||
   (value.startsWith('[') && value.endsWith(']') && !value.startsWith('[['))
 
-export const collectAliasesFromRoamSemanticRefListValue = (value: unknown): string[] => {
+const parseQuotedAliasListValue = (value: string): string[] | null => {
+  const out: string[] = []
+  let i = 0
+  const skipSpace = () => {
+    while (i < value.length && /\s/.test(value[i])) i += 1
+  }
+
+  while (i < value.length) {
+    skipSpace()
+    if (i >= value.length) break
+    const quote = value[i]
+    if (quote !== '"' && quote !== "'") return null
+    i += 1
+
+    let alias = ''
+    let closed = false
+    while (i < value.length) {
+      const ch = value[i]
+      if (ch === '\\' && i + 1 < value.length) {
+        alias += value[i + 1]
+        i += 2
+        continue
+      }
+      if (ch === quote) {
+        closed = true
+        i += 1
+        break
+      }
+      alias += ch
+      i += 1
+    }
+    if (!closed) return null
+
+    const trimmed = alias.trim()
+    if (!trimmed) return null
+    out.push(trimmed)
+
+    skipSpace()
+    if (i >= value.length) break
+    if (value[i] !== ',') return null
+    i += 1
+  }
+
+  return out.length > 0 ? uniqueStrings(out) : null
+}
+
+const isConservativePlainAlias = (value: string): boolean => {
+  if (!value) return false
+  if (looksSerializedJson(value)) return false
+  if (value.startsWith('#')) return false
+  if (['{', '}', '[', ']', '*', ',', ';', ':'].some(ch => value.includes(ch))) return false
+  if (/https?:\/\//i.test(value)) return false
+
+  const words = value.split(/\s+/).filter(Boolean)
+  if (words.length === 0 || words.length > 4) return false
+
+  const hasNonAscii = Array.from(value).some(ch => ch.codePointAt(0)! > 0x7F)
+  const hasExplicitNameSignal = /[A-Z0-9@]/.test(value) || hasNonAscii
+  return hasExplicitNameSignal || words.length === 1
+}
+
+type PlainAliasMode = 'broad' | 'conservative'
+
+export const collectAliasesFromRoamSemanticRefListValue = (
+  value: unknown,
+  plainAliasMode: PlainAliasMode = 'broad',
+): string[] => {
   if (Array.isArray(value)) {
-    return uniqueStrings(value.flatMap(collectAliasesFromRoamSemanticRefListValue))
+    return uniqueStrings(value.flatMap(item =>
+      collectAliasesFromRoamSemanticRefListValue(item, plainAliasMode)))
   }
   if (typeof value !== 'string') return []
 
@@ -193,8 +263,15 @@ export const collectAliasesFromRoamSemanticRefListValue = (value: unknown): stri
   if (!trimmed) return []
 
   const tokens = parseOuterPageTokens(trimmed)
-  if (tokens.length > 0) return uniqueStrings(tokens.map(token => token.alias))
+  if (isPageTokenListValue(trimmed, tokens)) return uniqueStrings(tokens.map(token => token.alias))
+  if (tokens.length > 0) return []
 
+  const quotedAliases = parseQuotedAliasListValue(trimmed)
+  if (quotedAliases) return quotedAliases
+
+  if (plainAliasMode === 'conservative') {
+    return isConservativePlainAlias(trimmed) ? [trimmed] : []
+  }
   return looksSerializedJson(trimmed) ? [] : [trimmed]
 }
 
@@ -203,7 +280,11 @@ export const collectAliasesFromRoamSemanticRefListProperties = (
 ): string[] =>
   uniqueStrings(Object.entries(properties)
     .filter(([name]) => isRoamSemanticRefListProperty(name))
-    .flatMap(([, value]) => collectAliasesFromRoamSemanticRefListValue(value)))
+    .flatMap(([name, value]) =>
+      collectAliasesFromRoamSemanticRefListValue(
+        value,
+        name === ROAM_PAGE_ALIAS_PROP ? 'conservative' : 'broad',
+      )))
 
 /** Translate Roam's property bag into the new flat-property shape:
  *  values are stored encoded directly under their (namespaced) key.

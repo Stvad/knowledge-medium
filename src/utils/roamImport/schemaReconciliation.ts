@@ -19,6 +19,7 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import {
   PAGE_TOKEN_RE,
+  ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
   explodePageTokens,
   isRoamSemanticRefListProperty,
@@ -226,8 +227,9 @@ export const normalizeRefPropertyValues = (
     for (const [name, kind] of refPropertyKinds) {
       if (!(name in block.properties)) continue
       const raw = block.properties[name]
+      const plainAliasMode = name === ROAM_PAGE_ALIAS_PROP ? 'conservative' : 'broad'
       const tokens = isRoamSemanticRefListProperty(name)
-        ? collectAliasesFromRoamSemanticRefListValue(raw)
+        ? collectAliasesFromRoamSemanticRefListValue(raw, plainAliasMode)
         : collectTokens(raw)
       if (tokens === null) continue
 

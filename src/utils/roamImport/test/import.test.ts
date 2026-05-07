@@ -45,6 +45,7 @@ import {
 import { computeAliasSeatId } from '../../../data/targets'
 import { importRoam } from '../import'
 import { roamBlockId } from '../ids'
+import { ROAM_PAGE_ALIAS_PROP } from '../properties'
 import type { RoamExport } from '../types'
 
 const WORKSPACE = 'ws-1'
@@ -921,6 +922,47 @@ describe('importRoam', () => {
     )
     expect(mergeLines.some(line => line.content.includes('omitted from this report section')))
       .toBe(false)
+  })
+
+  it('materializes conservative non-standard page_alias values without merging pages', async () => {
+    const aliasExport: RoamExport = [
+      {
+        title: 'Lily @evoenn',
+        uid: 'lilyPage',
+        children: [
+          {string: 'page_alias::"Lily Anna", "Katerina Kolyada"', uid: 'lilyAliases'},
+        ],
+      },
+      {
+        title: 'Katerina Kolyada',
+        uid: 'katerinaPage',
+        children: [
+          {string: 'still its own page', uid: 'katerinaChild'},
+        ],
+      },
+    ]
+
+    const summary = await importRoam(aliasExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.pagesCreated).toBe(2)
+    expect(summary.pagesMerged).toBe(0)
+    expect(summary.aliasBlocksCreated).toBe(1)
+
+    const lily = await readBlock(roamBlockId(WORKSPACE, 'lilyPage'))
+    expect(lily).not.toBeNull()
+    const lilyProperties = JSON.parse(lily!.properties_json) as Record<string, unknown>
+    expect(lilyProperties[ROAM_PAGE_ALIAS_PROP]).toEqual([
+      computeAliasSeatId('Lily Anna', WORKSPACE),
+      roamBlockId(WORKSPACE, 'katerinaPage'),
+    ])
+    expect(lilyProperties[aliasesProp.name]).toEqual(['Lily @evoenn'])
+
+    const katerina = await readBlock(roamBlockId(WORKSPACE, 'katerinaPage'))
+    expect(katerina).not.toBeNull()
+    expect(katerina?.parent_id).toBeNull()
   })
 
   it('does not merge daily pages through page_alias properties', async () => {
