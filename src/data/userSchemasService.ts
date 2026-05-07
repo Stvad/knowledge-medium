@@ -14,7 +14,6 @@ import {
   presetConfigProp,
   presetIdProp,
   propertyNameProp,
-  typesProp,
 } from '@/data/properties'
 import { PROPERTY_SCHEMA_TYPE } from '@/data/blockTypes'
 import { propertySchemasFacet } from '@/data/facets'
@@ -176,6 +175,7 @@ export class UserSchemasService {
       } catch (err) {
         throw new Error(
           `[addSchema] invalid config for preset ${JSON.stringify(args.presetId)}: ${(err as Error).message}`,
+          {cause: err},
         )
       }
     } else {
@@ -207,14 +207,14 @@ export class UserSchemasService {
     })
 
     await this.repo.tx(async tx => {
-      await tx.update(childId, {
-        properties: {
-          [typesProp.name]: typesProp.codec.encode([PROPERTY_SCHEMA_TYPE]),
-          [propertyNameProp.name]: propertyNameProp.codec.encode(name),
-          [presetIdProp.name]: presetIdProp.codec.encode(args.presetId),
-          [presetConfigProp.name]: presetConfigProp.codec.encode(persistConfig as Record<string, unknown>),
-        },
-      })
+      // Lift property-schema type membership through Repo.addTypeInTx
+      // so types invariants stay consistent (block_types row + the
+      // typesProp lift). The remaining property-schema fields are
+      // written directly since they're scoped to this block.
+      await this.repo.addTypeInTx(tx, childId, PROPERTY_SCHEMA_TYPE, {})
+      await tx.setProperty(childId, propertyNameProp, name)
+      await tx.setProperty(childId, presetIdProp, args.presetId)
+      await tx.setProperty(childId, presetConfigProp, persistConfig as Record<string, unknown>)
     }, {scope: ChangeScope.BlockDefault, description: `addSchema ${name}`})
 
     // Register synchronously, before returning. The subscription will

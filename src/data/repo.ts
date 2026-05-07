@@ -89,6 +89,7 @@ import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
+import { UserSchemasService } from './userSchemasService'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -433,6 +434,15 @@ export class Repo {
     if (!this._activeWorkspaceId) return null
     return propertiesPageBlockId(this._activeWorkspaceId)
   }
+
+  /** UserSchemasService singleton bound to this Repo. Owns the
+   *  user-data contribution bucket on `propertySchemasFacet`; sharing
+   *  one instance means imperative call sites (the AddPropertyForm,
+   *  the Roam importer) all hit the same in-memory list rather than
+   *  each fresh instance clobbering the bucket from an empty start.
+   *  The block-subscription path is opt-in via `start()`; the React
+   *  provider starts it once per workspace. */
+  readonly userSchemas: UserSchemasService = new UserSchemasService(this)
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
    *  per-row cache. Shared by the `repo.load(id, {children: true})`

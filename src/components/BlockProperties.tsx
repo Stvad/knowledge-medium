@@ -224,7 +224,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         <AddPropertyForm
           key={block.id}
           blockId={block.id}
-          onAdd={(name, shape) => addProperty(block, schemas, uis, name, shape)}
+          onAdd={(args) => addProperty(block, schemas, uis, args)}
         />
       )}
 

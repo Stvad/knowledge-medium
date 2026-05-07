@@ -10,7 +10,7 @@ import {
   defaultValueForShape,
 } from '@/components/propertyEditors/defaults'
 import { isPropertyPanelHiddenProperty } from './visibility'
-import type { AddablePropertyShape } from './shapes'
+import type { AddPropertyArgs } from './AddPropertyForm'
 
 const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
   Object.prototype.hasOwnProperty.call(properties, name)
@@ -23,19 +23,45 @@ export const writeProperty = (
   void block.set(schema, decodedValue)
 }
 
-export const addProperty = (
+/** AddPropertyForm submit handler: adopt a registered schema if the
+ *  user picked one, or have UserSchemasService.addSchema register a
+ *  new one synchronously. Either way, write the schema's defaultValue
+ *  on the target block as the property's initial value. Refuses
+ *  hidden / reserved names. */
+export const addProperty = async (
   block: Block,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
-  rawName: string,
-  shape: AddablePropertyShape,
-) => {
-  const name = rawName.trim()
-  if (!name || isPropertyPanelHiddenProperty(name, schemas, uis)) return
+  args: AddPropertyArgs,
+): Promise<void> => {
+  const name = args.name.trim()
+  if (!name) return
+  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return
 
-  const registered = schemas.get(name)
-  if (registered) writeProperty(block, registered, registered.defaultValue)
-  else writeProperty(block, adhocSchema(name, shape), defaultValueForShape(shape))
+  if (args.adopted) {
+    writeProperty(block, args.adopted, args.adopted.defaultValue)
+    return
+  }
+
+  // Existing registered schema with the same name → adopt it instead
+  // of creating a duplicate (the form should have offered it as a
+  // suggestion; this is the fallback for non-autocomplete submits).
+  const existing = schemas.get(name)
+  if (existing) {
+    writeProperty(block, existing, existing.defaultValue)
+    return
+  }
+
+  try {
+    const schema = await block.repo.userSchemas.addSchema({
+      name,
+      presetId: args.presetId,
+      config: args.config,
+    })
+    writeProperty(block, schema, schema.defaultValue)
+  } catch (err) {
+    console.error(`[addProperty] failed to register schema for "${name}":`, err)
+  }
 }
 
 export const changeAdhocPropertyShape = (
@@ -43,7 +69,7 @@ export const changeAdhocPropertyShape = (
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
   name: string,
-  shape: AddablePropertyShape,
+  shape: string,
 ) => {
   if (isPropertyPanelHiddenProperty(name, schemas, uis) || schemas.has(name)) return
   void block.set(adhocSchema(name, shape), defaultValueForShape(shape))

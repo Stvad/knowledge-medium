@@ -10,7 +10,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { valuePresetsFacet } from '@/data/facets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
-import { UserSchemasService } from './userSchemasService'
+import type { UserSchemasService } from './userSchemasService'
 import { Repo } from './repo'
 
 const WS = 'ws-user-schemas'
@@ -44,7 +44,7 @@ const setup = async (extraPresets: readonly AnyValuePreset[] = []): Promise<Harn
     ...extraPresets.map(p => valuePresetsFacet.of(p, {source: 'test'})),
   ]))
   await getOrCreatePropertiesPage(repo, WS)
-  const service = new UserSchemasService(repo)
+  const service = repo.userSchemas
   const dispose = service.start()
   return {h, repo, service, dispose}
 }

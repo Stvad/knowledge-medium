@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { ChevronDown, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import type { AnyValuePreset } from '@/data/api'
 import { propertyShapeLabel } from './shapes'
 import { PropertyShapeGlyph } from './shapeUi'
 
@@ -12,6 +13,13 @@ export interface FieldConfig {
   schemaUnknown: boolean
   decodeFailed: boolean
   readOnly: boolean
+  /** Optional preset-driven config: when present and the preset
+   *  ships a `ConfigEditor`, the sheet renders it under a "Config"
+   *  row so users can configure ref target types etc. before
+   *  registering the schema. */
+  preset?: AnyValuePreset
+  configValue?: unknown
+  onConfigChange?: (next: unknown) => void
 }
 
 export function FieldConfigSheet({
@@ -24,6 +32,8 @@ export function FieldConfigSheet({
   onClose: () => void
 }) {
   if (!field) return null
+
+  const ConfigEditor = field.preset?.ConfigEditor
 
   return (
     <div
@@ -75,6 +85,12 @@ export function FieldConfigSheet({
             />
           </div>
         </ConfigRow>
+
+        {ConfigEditor && field.onConfigChange && (
+          <ConfigRow label="Config">
+            <ConfigEditor value={field.configValue} onChange={field.onConfigChange} />
+          </ConfigRow>
+        )}
 
         <ConfigRow label="Status">
           <div className="text-muted-foreground">

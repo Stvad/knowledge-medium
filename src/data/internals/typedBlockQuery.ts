@@ -49,6 +49,7 @@ const compileWhereFilter = (
   } catch (err) {
     throw new Error(
       `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+      {cause: err},
     )
   }
   return {

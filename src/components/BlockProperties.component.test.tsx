@@ -21,6 +21,7 @@ import { adhocSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
 import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { Block } from '@/data/block'
 import { aliasesProp, showPropertiesProp } from '@/data/properties'
 import { useContent } from '@/hooks/block'
@@ -116,6 +117,7 @@ describe('BlockProperties component', () => {
       typesFacet.of(assignmentType, {source: 'test'}),
     ])
     repo.setFacetRuntime(runtime)
+    repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
 
     await repo.tx(async tx => {
@@ -133,6 +135,10 @@ describe('BlockProperties component', () => {
       })
     }, {scope: ChangeScope.BlockDefault, description: 'create test block'})
     await repo.addType('block-1', reviewType.id)
+    // Ensure the Properties page exists so AddPropertyForm submits
+    // (which now route through UserSchemasService.addSchema) can
+    // persist their property-schema blocks.
+    await getOrCreatePropertiesPage(repo, 'ws-1')
     uiStateBlockRef.current = repo.block('ui-state')
   })
 
