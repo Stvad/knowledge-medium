@@ -50,8 +50,17 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
    *  picker. Plugins without designed icons can omit; falls back to a
    *  generic icon (or text-styled label). */
   readonly Glyph?: ComponentType<{className?: string}>
-  /** Optional config UI rendered inside `FieldConfigSheet`. Only
-   *  presets with non-trivial config (refs, future enums) ship one. */
+  /** Optional config UI rendered inside `FieldConfigSheet` and
+   *  `AddPropertyForm` when the user is creating a property. Only
+   *  meaningful when `TConfig` is non-void; primitive presets
+   *  (`TConfig = void`) have nothing to configure and omit it.
+   *
+   *  Even non-void presets can omit the ConfigEditor — the preset
+   *  is then created with default config from the picker (caller
+   *  passes a default `TConfig`), and users edit the property-schema
+   *  block directly to change config later. Ship a ConfigEditor when
+   *  the config is meaningful enough that users should set it at
+   *  creation time (ref's `targetTypes`, future enum option lists). */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
 }
 
