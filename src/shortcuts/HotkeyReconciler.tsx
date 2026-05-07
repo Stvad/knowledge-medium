@@ -7,7 +7,6 @@ import { setRunActionDispatcher } from '@/shortcuts/runAction.ts'
 import {
   ActionConfig,
   ActionContextConfig,
-  ActionContextTypes,
   ActionContextType,
   ActionTrigger,
   EventOptions,
@@ -64,14 +63,12 @@ export function HotkeyReconciler(): null {
   // Refs so handler closures always see the latest state without rebinding.
   // Updated synchronously after each commit via useLayoutEffect, before the
   // browser fires any user input event.
-  const actionsRef = useRef<readonly ActionConfig[]>(actions)
   const activeRef = useRef<ActiveContextsMap>(active)
   const contextConfigsByTypeRef = useRef<ReadonlyMap<ActionContextType, ActionContextConfig>>(contextConfigsByType)
   useLayoutEffect(() => {
-    actionsRef.current = actions
     activeRef.current = active
     contextConfigsByTypeRef.current = contextConfigsByType
-  }, [actions, active, contextConfigsByType])
+  }, [active, contextConfigsByType])
 
   // Install the hotkeys-js event filter. It reads activeRef/contextConfigsByTypeRef
   // so it stays current without needing to re-install. Restore a permissive
@@ -87,54 +84,6 @@ export function HotkeyReconciler(): null {
     }
     return () => {
       hotkeys.filter = previousFilter
-    }
-  }, [])
-
-  // Tab and Shift+Tab have a destructive native default: browser focus
-  // traversal. Keep normal-mode Tab bindings on a capture listener so a focused
-  // block cannot lose DOM focus before the document-level hotkeys-js listener
-  // gets a chance to run.
-  useEffect(() => {
-    const handleNormalModeTab = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isTabEvent(event) || hasEditableTarget(event)) return
-
-      const deps = activeRef.current.get(ActionContextTypes.NORMAL_MODE)
-      if (!deps) return
-
-      const key = event.shiftKey ? 'shift+tab' : 'tab'
-      const action = actionsRef.current.find(candidate =>
-        candidate.context === ActionContextTypes.NORMAL_MODE &&
-        candidate.defaultBinding &&
-        normalizeKeys(candidate.defaultBinding.keys).includes(key),
-      )
-      if (!action?.defaultBinding) return
-
-      const contextConfig = contextConfigsByTypeRef.current.get(action.context)
-      const options: EventOptions = {
-        preventDefault: true,
-        stopPropagation: false,
-        ...contextConfig?.defaultEventOptions,
-        ...action.defaultBinding.eventOptions,
-      }
-      if (!options.preventDefault) return
-
-      event.preventDefault()
-      // We are executing the matching action here; stop the event so the
-      // bubble-phase hotkeys-js listener does not run the same binding again.
-      event.stopPropagation()
-
-      try {
-        void Promise.resolve(action.handler(deps, event)).catch(error => {
-          console.error(`[HotkeyReconciler] Action ${action.id} rejected`, error)
-        })
-      } catch (error) {
-        console.error(`[HotkeyReconciler] Action ${action.id} threw`, error)
-      }
-    }
-
-    document.addEventListener('keydown', handleNormalModeTab, {capture: true})
-    return () => {
-      document.removeEventListener('keydown', handleNormalModeTab, {capture: true})
     }
   }, [])
 
@@ -232,12 +181,6 @@ export function HotkeyReconciler(): null {
 
   return null
 }
-
-const isTabEvent = (event: KeyboardEvent): boolean =>
-  (event.key === 'Tab' || event.keyCode === 9 || event.which === 9) &&
-  !event.ctrlKey &&
-  !event.altKey &&
-  !event.metaKey
 
 const makeHandler = (
   action: ActionConfig,
