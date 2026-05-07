@@ -5,6 +5,7 @@ import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
 import { MissingDataRenderer } from '@/components/renderer/MissingDataRenderer.tsx'
 import { PanelRenderer } from '@/components/renderer/PanelRenderer.tsx'
+import { PropertySchemaBlockRenderer } from '@/components/renderer/PropertySchemaBlockRenderer.tsx'
 import { TopLevelRenderer } from '@/components/renderer/TopLevelRenderer.tsx'
 import { blockHeaderFacet } from '@/extensions/blockInteraction.ts'
 import { blockRenderersFacet, createRendererRegistry, RendererContribution } from '@/extensions/core.ts'
@@ -14,6 +15,7 @@ import { gfmMarkdownExtension } from '@/markdown/defaultMarkdownExtension.ts'
 export const defaultRendererContributions: RendererContribution[] = [
   {id: 'default', renderer: DefaultBlockRenderer},
   {id: 'extension', renderer: CodeMirrorExtensionBlockRenderer},
+  {id: 'propertySchema', renderer: PropertySchemaBlockRenderer},
   {id: 'topLevel', renderer: TopLevelRenderer},
   {id: 'layout', renderer: LayoutRenderer},
   {id: 'panel', renderer: PanelRenderer},

@@ -1,7 +1,8 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { ChangeScope, codecs, definePreset, type AnyValuePreset, type RefCodecOptions } from '@/data/api'
+import { ChangeScope, codecs, definePreset, type AnyValuePreset } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -138,7 +139,7 @@ describe('UserSchemasService subscription', () => {
       label: 'Priority',
       build: () => codecs.string,
       defaultValue: 'low',
-      Editor: () => null as unknown as JSX.Element,
+      Editor: (): JSX.Element => createElement('span', null, null),
     })
     env.repo.setRuntimeContributions(valuePresetsFacet, 'plugin', [priorityPreset])
     expect(env.repo.propertySchemas.get('priority')?.codec.type).toBe('string')
@@ -159,7 +160,7 @@ describe('UserSchemasService subscription', () => {
   })
 
   it('rejects ref config that breaks configCodec.decode contract (null targetTypes element)', async () => {
-    env = await setup<RefCodecOptions>()
+    env = await setup()
     await expect(env.service.addSchema({
       name: 'related',
       presetId: 'refList',
