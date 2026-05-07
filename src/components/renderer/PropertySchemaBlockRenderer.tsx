@@ -73,10 +73,17 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     }
   }, [persistedConfig, preset])
 
+  // Render-phase resync via two pieces of derived state. When the
+  // committed `propertyName` changes (remote edit, undo/redo, sync),
+  // we adopt it as the draft in the same render — React supports
+  // setState-during-render for this exact case. Focus is intentionally
+  // not preserved: if a remote write lands mid-edit, accepting the
+  // new committed name beats letting a stale draft overwrite it on
+  // the next blur.
   const [draftName, setDraftName] = useState(propertyName)
-  // Re-sync the draft on remote changes (subscription tick).
-  const lastSeenName = useMemo(() => propertyName, [propertyName])
-  if (lastSeenName !== propertyName && draftName !== propertyName && !readOnly) {
+  const [committedName, setCommittedName] = useState(propertyName)
+  if (propertyName !== committedName) {
+    setCommittedName(propertyName)
     setDraftName(propertyName)
   }
 
@@ -128,6 +135,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
       <div className="flex items-center gap-2">
         <PropertyShapeGlyph
           shape={presetId}
+          Glyph={preset?.Glyph}
           className={preset ? 'text-fuchsia-500' : 'text-muted-foreground'}
         />
         <Input
