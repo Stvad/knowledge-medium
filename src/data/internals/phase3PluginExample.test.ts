@@ -6,19 +6,19 @@
  * and call site invokes via `repo.mutate['plugin:foo']({...})` typed."
  *
  * This test simulates a static plugin that contributes one mutator,
- * one PropertySchema, and one PropertyUiContribution exactly as §12.1
+ * one PropertySchema, and one PropertyEditorOverride exactly as §12.1
  * shows, and checks the full Phase 3 chain end-to-end:
  *   - mutatorsFacet.of registration → repo.mutate['tasks:setDueDate'] dispatches.
  *   - declare module '@/data/api' augmentation → repo.mutate is typed.
  *   - propertySchemasFacet.of registration → schema appears in the registry
  *     under the same name plugin authors call from BlockProperties /
  *     resolvePropertyDisplay.
- *   - propertyUiFacet.of registration → UI contribution appears in the
- *     registry; resolvePropertyDisplay's join-by-name returns the contribution.
+ *   - propertyEditorOverridesFacet.of registration → override appears in
+ *     the registry; resolvePropertyDisplay's join-by-name returns it.
  *
  * It also pins the variance-erasure work (chunk B reviewer P2):
  * `Query<{x:number}, string>` / `PropertySchema<Date | undefined>` /
- * `PropertyUiContribution<Date | undefined>` register cleanly without
+ * `PropertyEditorOverride<Date | undefined>` register cleanly without
  * having to widen to <unknown>.
  *
  * Why a test, not a real plugin: a real plugin under src/plugins/
@@ -36,7 +36,7 @@ import {
   codecs,
   defineMutator,
   defineProperty,
-  definePropertyUi,
+  definePropertyEditorOverride,
   type PropertyEditor,
 } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
@@ -45,8 +45,8 @@ import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
   propertyEditorFallbackFacet,
+  propertyEditorOverridesFacet,
   propertySchemasFacet,
-  propertyUiFacet,
 } from '../facets'
 import { DatePropertyEditor, resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
@@ -63,7 +63,7 @@ const dueDateProp = defineProperty<Date | undefined>('tasks:due-date', {
 const TaskDueDateEditor: PropertyEditor<Date | undefined> = (): JSX.Element =>
   createElement('input', {type: 'date'})
 
-const dueDateUi = definePropertyUi<Date | undefined>({
+const dueDateUi = definePropertyEditorOverride<Date | undefined>({
   name: 'tasks:due-date',
   label: 'Due date',
   Editor: TaskDueDateEditor,
@@ -93,7 +93,7 @@ declare module '@/data/api' {
 const tasksPluginExtension = [
   mutatorsFacet.of(setDueDate, {source: 'tasks'}),
   propertySchemasFacet.of(dueDateProp, {source: 'tasks'}),
-  propertyUiFacet.of(dueDateUi, {source: 'tasks'}),
+  propertyEditorOverridesFacet.of(dueDateUi, {source: 'tasks'}),
 ]
 
 // ──── Test setup ────
@@ -183,13 +183,13 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
     expect(schemas.get('tasks:due-date')).toBe(dueDateProp)
   })
 
-  it('propertyUiFacet exposes the plugin contribution and resolvePropertyDisplay returns it', () => {
+  it('propertyEditorOverridesFacet exposes the plugin override and resolvePropertyDisplay returns it', () => {
     const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelPropertyUiExtension, ...tasksPluginExtension])
     const schemas = runtime.read(propertySchemasFacet)
-    const uis = runtime.read(propertyUiFacet)
+    const uis = runtime.read(propertyEditorOverridesFacet)
     expect(uis.get('tasks:due-date')).toBe(dueDateUi)
 
-    // §5.6.1 lookup chain: resolves to the contributed Editor (not a default).
+    // §5.6.1 lookup chain: resolves to the override Editor (not a default).
     const display = resolvePropertyDisplay({
       name: 'tasks:due-date',
       // Encoded shape — date codec stores ISO strings.
@@ -206,19 +206,19 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
 
   it('plugin ships schema without UI contribution → resolver falls through to fallback editor', () => {
     // §12.1 explicitly notes: a plugin happy with the kernel default
-    // editor for its codec shape can skip propertyUiFacet.of.
+    // editor for its codec shape can skip propertyEditorOverridesFacet.of.
     const runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelPropertyUiExtension,
       mutatorsFacet.of(setDueDate, {source: 'tasks'}),
       propertySchemasFacet.of(dueDateProp, {source: 'tasks'}),
-      // no propertyUiFacet.of(dueDateUi)
+      // no propertyEditorOverridesFacet.of(dueDateUi)
     ])
     const display = resolvePropertyDisplay({
       name: 'tasks:due-date',
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas: runtime.read(propertySchemasFacet),
-      uis: runtime.read(propertyUiFacet),
+      uis: runtime.read(propertyEditorOverridesFacet),
       editorFallbacks: runtime.read(propertyEditorFallbackFacet),
     })
     expect(display.isKnown).toBe(true)

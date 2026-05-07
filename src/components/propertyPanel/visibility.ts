@@ -1,19 +1,20 @@
 import {
   ChangeScope,
+  type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
 } from '@/data/api'
 
 /**
- * Property-panel visibility policy. Prefer propertyUiFacet metadata so
- * plugins/kernel UI can mark internal fields without BlockProperties
- * importing individual schemas. The scope/name fallbacks keep dynamic
- * and legacy system properties hidden even without a UI contribution.
+ * Property-panel visibility policy. Prefer propertyEditorOverridesFacet
+ * metadata so plugins/kernel UI can mark internal fields without
+ * BlockProperties importing individual schemas. The scope/name fallbacks
+ * keep dynamic and legacy system properties hidden even without an
+ * override.
  */
 export const isPropertyPanelHiddenProperty = (
   name: string,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>,
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
 ): boolean => {
   const schema = schemas.get(name)
   const ui = uis.get(name)

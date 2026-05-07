@@ -5,16 +5,16 @@ import {
   ChangeScope,
   codecs,
   defineProperty,
-  definePropertyUi,
+  definePropertyEditorOverride,
+  type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
 } from '@/data/api'
 import { buildPropertyPanelModel } from './model'
 
 const schemasMap = (schemas: readonly AnyPropertySchema[]) =>
   new Map(schemas.map(schema => [schema.name, schema]))
 
-const uisMap = (uis: readonly AnyPropertyUiContribution[]) =>
+const uisMap = (uis: readonly AnyPropertyEditorOverride[]) =>
   new Map(uis.map(ui => [ui.name, ui]))
 
 describe('buildPropertyPanelModel', () => {
@@ -40,7 +40,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: schemasMap([visibleProp, internalProp]),
       uis: uisMap([
-        definePropertyUi<string>({
+        definePropertyEditorOverride<string>({
           name: internalProp.name,
           label: 'Internal',
           hidden: true,

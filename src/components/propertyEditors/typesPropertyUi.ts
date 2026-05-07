@@ -1,5 +1,5 @@
 import {
-  definePropertyUi,
+  definePropertyEditorOverride,
   isBooleanCodec,
   isDateCodec,
   isListCodec,
@@ -10,7 +10,7 @@ import {
   isStringCodec,
   type AnyPropertyEditorFallbackContribution,
 } from '@/data/api'
-import { propertyEditorFallbackFacet, propertyUiFacet } from '@/data/facets.ts'
+import { propertyEditorFallbackFacet, propertyEditorOverridesFacet } from '@/data/facets.ts'
 import {
   createdAtProp,
   editorFocusRequestProp,
@@ -39,7 +39,7 @@ import {
 import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 import { TypesPropertyEditor } from './TypesPropertyEditor'
 
-export const typesPropertyUi = definePropertyUi<readonly string[]>({
+export const typesPropertyUi = definePropertyEditorOverride<readonly string[]>({
   name: typesProp.name,
   label: 'Types',
   Editor: TypesPropertyEditor,
@@ -59,7 +59,7 @@ const hiddenKernelPropertyUis = [
   showPropertiesProp,
   sourceBlockIdProp,
   topLevelBlockIdProp,
-].map(schema => definePropertyUi({
+].map(schema => definePropertyEditorOverride({
   name: schema.name,
   hidden: true,
 }))
@@ -116,8 +116,8 @@ const kernelPropertyEditorFallbacks: readonly AnyPropertyEditorFallbackContribut
 ]
 
 export const kernelPropertyUiExtension: AppExtension = [
-  propertyUiFacet.of(typesPropertyUi, {source: 'kernel-ui'}),
-  hiddenKernelPropertyUis.map(ui => propertyUiFacet.of(ui, {source: 'kernel-ui'})),
+  propertyEditorOverridesFacet.of(typesPropertyUi, {source: 'kernel-ui'}),
+  hiddenKernelPropertyUis.map(ui => propertyEditorOverridesFacet.of(ui, {source: 'kernel-ui'})),
   kernelPropertyEditorFallbacks.map(editor => propertyEditorFallbackFacet.of(editor, {source: 'kernel-ui'})),
 ]
 

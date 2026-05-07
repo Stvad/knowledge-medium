@@ -1,11 +1,11 @@
-import { definePropertyUi } from '@/data/api'
+import { definePropertyEditorOverride } from '@/data/api'
 import {
   groupedBacklinksDefaultsProp,
   type GroupedBacklinksConfig,
 } from './config.ts'
 import { GroupedBacklinksDefaultsEditor } from './GroupedBacklinksConfigEditor.tsx'
 
-export const groupedBacklinksDefaultsUi = definePropertyUi<GroupedBacklinksConfig>({
+export const groupedBacklinksDefaultsUi = definePropertyEditorOverride<GroupedBacklinksConfig>({
   name: groupedBacklinksDefaultsProp.name,
   label: 'Grouped backlinks defaults',
   Editor: GroupedBacklinksDefaultsEditor,

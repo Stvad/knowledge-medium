@@ -42,9 +42,9 @@ describe('@/extensions/api — public surface', () => {
     // numberProperty / stringProperty / uiChangeScope)
     'defineBlockType',
     'defineProperty',
-    'definePropertyUi',
+    'definePropertyEditorOverride',
     'propertySchemasFacet',
-    'propertyUiFacet',
+    'propertyEditorOverridesFacet',
     'typesFacet',
     'codecs',
     'ChangeScope',

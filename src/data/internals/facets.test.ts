@@ -23,7 +23,7 @@ import {
   defineBlockType,
   defineMutator,
   defineProperty,
-  definePropertyUi,
+  definePropertyEditorOverride,
   defineQuery,
   MutatorNotRegisteredError,
 } from '@/data/api'
@@ -33,8 +33,8 @@ import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
   propertyEditorFallbackFacet,
+  propertyEditorOverridesFacet,
   propertySchemasFacet,
-  propertyUiFacet,
   queriesFacet,
   typesFacet,
 } from '../facets'
@@ -320,9 +320,9 @@ describe('propertyEditorFallbackFacet', () => {
 })
 
 describe('facet variance — typed plugin contributions register without widening', () => {
-  // Reviewer P2: prior to AnyQuery / AnyPropertyUiContribution / AnyPropertySchema,
+  // Reviewer P2: prior to AnyQuery / AnyPropertyEditorOverride / AnyPropertySchema,
   // typed plugin contributions failed to register because the facet's
-  // contribution type (`Query<unknown, unknown>` / `PropertyUiContribution<unknown>`
+  // contribution type (`Query<unknown, unknown>` / `PropertyEditorOverride<unknown>`
   // / `PropertySchema<unknown>`) is contravariant in the parameter and so a typed
   // plugin shape couldn't be assigned. These tests pin the variance escape.
 
@@ -343,16 +343,16 @@ describe('facet variance — typed plugin contributions register without widenin
     expect(registered.get('plugin:typedQuery')).toBe(typedQuery)
   })
 
-  it('propertyUiFacet accepts a typed PropertyUiContribution<Date | undefined>', () => {
-    const typedUi = definePropertyUi<Date | undefined>({
+  it('propertyEditorOverridesFacet accepts a typed PropertyEditorOverride<Date | undefined>', () => {
+    const typedUi = definePropertyEditorOverride<Date | undefined>({
       name: 'tasks:due-date',
       label: 'Due date',
       Editor: (): JSX.Element => createElement('span', null, null),
     })
     const runtime = resolveFacetRuntimeSync([
-      propertyUiFacet.of(typedUi, {source: 'plugin'}),
+      propertyEditorOverridesFacet.of(typedUi, {source: 'plugin'}),
     ])
-    const registered = runtime.read(propertyUiFacet)
+    const registered = runtime.read(propertyEditorOverridesFacet)
     expect(registered.get('tasks:due-date')).toBe(typedUi)
   })
 

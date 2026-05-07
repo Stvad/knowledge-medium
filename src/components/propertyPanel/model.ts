@@ -1,7 +1,7 @@
 import {
   type AnyPropertyEditorFallbackContribution,
+  type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
   type CodecShape,
   type TypeContribution,
 } from '@/data/api'
@@ -77,7 +77,7 @@ const readBlockTypes = (properties: Record<string, unknown>): readonly string[] 
 const partitionProperties = (
   properties: Record<string, unknown>,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>,
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
 ): {
   visibleProperties: Record<string, unknown>
   hiddenProperties: Record<string, unknown>
@@ -97,7 +97,7 @@ const resolveModelRow = (
   row: PropertyPanelRow,
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
-    uis: ReadonlyMap<string, AnyPropertyUiContribution>
+    uis: ReadonlyMap<string, AnyPropertyEditorOverride>
     editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
     hidden: boolean
   },
@@ -143,7 +143,7 @@ const resolveSection = (
   section: PropertyPanelSection,
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
-    uis: ReadonlyMap<string, AnyPropertyUiContribution>
+    uis: ReadonlyMap<string, AnyPropertyEditorOverride>
     editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
     hidden: boolean
   },
@@ -168,7 +168,7 @@ export const buildPropertyPanelModel = (args: {
   updatedBy: string
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
   typesRegistry: ReadonlyMap<string, TypeContribution>
 }): PropertyPanelModel => {

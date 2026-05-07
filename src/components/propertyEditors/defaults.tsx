@@ -3,7 +3,7 @@
  *
  * The lookup chain is:
  *   1. Resolve the schema by name.
- *   2. Resolve an exact `PropertyUiContribution.Editor`.
+ *   2. Resolve an exact `PropertyEditorOverride.Editor`.
  *   3. Resolve a fallback editor contribution by matching the schema/codec.
  *   4. Use that fallback editor for primitive codec shapes too.
  *
@@ -17,8 +17,8 @@ import {
   ChangeScope,
   codecs,
   type AnyPropertyEditorFallbackContribution,
+  type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
   type CodecShape,
   type PropertyEditorProps,
   type PropertySchema,
@@ -251,10 +251,10 @@ export const adhocSchema = (name: string, shape: CodecShape): PropertySchema<unk
 export interface PropertyDisplayInfo {
   schema: AnyPropertySchema
   shape: CodecShape
-  /** Editor selected by the resolver. Usually this is a registered
-   *  `PropertyUiContribution.Editor`; schema/codec fallback editor
-   *  contributions are considered second. Undefined means no fallback
-   *  contribution was registered for the schema. */
+  /** Editor selected by the resolver. Usually this comes from the
+   *  schema/codec fallback chain; a registered
+   *  `PropertyEditorOverride.Editor` wins when present. Undefined means
+   *  no fallback contribution was registered for the schema. */
   Editor?: AnyPropertyEditorFallbackContribution['Editor']
   /** True iff a real `PropertySchema` was found in the registry; false
    *  when we synthesised an ad-hoc schema from `inferShapeFromValue`. */
@@ -270,8 +270,8 @@ const fallbackEditorForSchema = (
 /** Implements the §5.6.1 lookup chain:
  *
  *    1. Look up the schema in `propertySchemasFacet`'s registry by `name`.
- *    2. Look up the matching UI contribution in `propertyUiFacet`.
- *    3. If schema is known → use the contributed `Editor` if any, else
+ *    2. Look up any per-name override in `propertyEditorOverridesFacet`.
+ *    3. If schema is known → use the override `Editor` if any, else
  *       any matching fallback editor contribution.
  *    4. If schema is unknown → infer a shape from the JSON value, build
  *       an ad-hoc schema, and run the same fallback editor chain.
@@ -282,7 +282,7 @@ export const resolvePropertyDisplay = (args: {
   name: string
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
 }): PropertyDisplayInfo => {
   const known = args.schemas.get(args.name)

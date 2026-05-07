@@ -1,8 +1,9 @@
 /**
  * Kernel + UI-state property descriptors. Each export is a
  * `PropertySchema<T>` (data-layer definition with codec + default +
- * change scope). React UI contributions live separately under
- * `propertyUiFacet` (Phase 3). See spec §4.1.1 / §5.6 / §6.
+ * change scope). Per-name editor overrides for the rare property that
+ * needs one live separately under `propertyEditorOverridesFacet`
+ * (Phase 3). See spec §4.1.1 / §5.6 / §6.
  *
  * Migration note (1.6): legacy creator helpers (`stringProperty`,
  * `boolProp`, `objectProperty`, etc.) returned a record-shape

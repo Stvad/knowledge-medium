@@ -1,7 +1,7 @@
 import {
   ChangeScope,
+  type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.ts'
@@ -26,7 +26,7 @@ export const writeProperty = (
 export const addProperty = (
   block: Block,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>,
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
   rawName: string,
   shape: AddablePropertyShape,
 ) => {
@@ -41,7 +41,7 @@ export const addProperty = (
 export const changeAdhocPropertyShape = (
   block: Block,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>,
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
   name: string,
   shape: AddablePropertyShape,
 ) => {
@@ -53,7 +53,7 @@ export const renameProperty = async (args: {
   block: Block
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   oldName: string
   newName: string
 }) => {
@@ -82,7 +82,7 @@ export const deleteProperty = async (args: {
   block: Block
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   name: string
 }) => {
   if (args.name === typesProp.name) return

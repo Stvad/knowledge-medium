@@ -11,7 +11,7 @@ import { useChildIds, useHandle } from '@/hooks/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
-import { propertyEditorFallbackFacet, propertyUiFacet, typesFacet } from '../data/facets.ts'
+import { propertyEditorFallbackFacet, propertyEditorOverridesFacet, typesFacet } from '../data/facets.ts'
 import {
   editorSelection,
   requestEditorFocus,
@@ -99,7 +99,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // FacetRuntime memoises combine() results, so these reads are identity-stable
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
-  const uis = runtime.read(propertyUiFacet)
+  const uis = runtime.read(propertyEditorOverridesFacet)
   const editorFallbacks = runtime.read(propertyEditorFallbackFacet)
   const typesRegistry = runtime.read(typesFacet)
   const properties = blockData?.properties ?? EMPTY_PROPERTIES

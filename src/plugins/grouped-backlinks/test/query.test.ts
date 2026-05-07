@@ -9,8 +9,8 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import {
   invalidationRulesFacet,
   propertyEditorFallbackFacet,
+  propertyEditorOverridesFacet,
   propertySchemasFacet,
-  propertyUiFacet,
   queriesFacet,
 } from '@/data/facets.ts'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
@@ -22,7 +22,7 @@ import {
 } from '../query.ts'
 import { groupedBacklinksPlugin } from '../index.ts'
 import { groupedBacklinksDataExtension } from '../dataExtension.ts'
-import { groupedBacklinksDefaultsUi } from '../propertyUi.ts'
+import { groupedBacklinksDefaultsUi } from '../propertyEditorOverride.ts'
 import {
   groupedBacklinksDefaultsProp,
   groupedBacklinksOverridesProp,
@@ -108,7 +108,7 @@ describe('groupedBacklinksDataExtension query', () => {
   it('contributes a custom property UI for grouped backlinks defaults', () => {
     const runtime = resolveFacetRuntimeSync(groupedBacklinksPlugin)
     const schemas = runtime.read(propertySchemasFacet)
-    const uis = runtime.read(propertyUiFacet)
+    const uis = runtime.read(propertyEditorOverridesFacet)
 
     expect(uis.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({

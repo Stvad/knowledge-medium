@@ -2,8 +2,8 @@
 /**
  * Pure-function tests for the §5.6.1 lookup chain. Cover the three
  * paths that drive `BlockProperties`'s rendering decision:
- *   1. Schema known + custom UI contribution → use the contribution.
- *   2. Schema known + no UI contribution → fall back via schema/codec match.
+ *   1. Schema known + per-name editor override → use the override.
+ *   2. Schema known + no override → fall back via schema/codec match.
  *   3. Schema unknown → infer shape from the value, ad-hoc schema, fallback match.
  */
 
@@ -13,15 +13,15 @@ import {
   ChangeScope,
   codecs,
   defineProperty,
-  definePropertyUi,
+  definePropertyEditorOverride,
   isListCodec,
   isNumberCodec,
   isRefCodec,
   isRefListCodec,
   isStringCodec,
   type AnyPropertyEditorFallbackContribution,
+  type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type AnyPropertyUiContribution,
 } from '@/data/api'
 import {
   adhocSchema,
@@ -37,7 +37,7 @@ import { RefListPropertyEditor, RefPropertyEditor } from './RefPropertyEditor'
 const schemasMap = (entries: AnyPropertySchema[]): ReadonlyMap<string, AnyPropertySchema> =>
   new Map(entries.map(s => [s.name, s]))
 
-const uisMap = (entries: AnyPropertyUiContribution[]): ReadonlyMap<string, AnyPropertyUiContribution> =>
+const uisMap = (entries: AnyPropertyEditorOverride[]): ReadonlyMap<string, AnyPropertyEditorOverride> =>
   new Map(entries.map(u => [u.name, u]))
 
 /** Test-only Editor that returns a real fragment element so it satisfies
@@ -129,13 +129,13 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
   })
 
   const exactEditor = noopEditor
-  const titleUi = definePropertyUi<string>({
+  const titleUi = definePropertyEditorOverride<string>({
     name: 'title',
     label: 'Title',
     Editor: exactEditor,
   })
 
-  it('schema known + UI contribution registered → returns the contribution Editor', () => {
+  it('schema known + editor override registered → returns the override Editor', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',
@@ -149,7 +149,7 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     expect(display.Editor).toBe(exactEditor)
   })
 
-  it('schema known + no UI contribution → uses the matching fallback editor', () => {
+  it('schema known + no editor override → uses the matching fallback editor', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',
@@ -211,10 +211,10 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     expect(display.Editor).toBe(ListPropertyEditor)
   })
 
-  it('schema unknown + UI contribution registered → ignores orphan UI and uses fallback', () => {
-    // A UI contribution without a matching schema is ignored — the
-    // facet join key is the schema name. Only-UI registrations from
-    // an inattentive plugin author shouldn't accidentally apply to
+  it('schema unknown + editor override registered → ignores orphan override and uses fallback', () => {
+    // An override without a matching schema is ignored — the
+    // facet join key is the schema name. Only-override registrations
+    // from an inattentive plugin author shouldn't accidentally apply to
     // every unknown property; the panel infers + uses fallback editors.
     const display = resolvePropertyDisplay({
       name: 'orphan-prop',
@@ -245,7 +245,7 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     expect(display.Editor).toBe(NumberPropertyEditor)
   })
 
-  it('returns undefined Editor when no exact UI or fallback contribution matches', () => {
+  it('returns undefined Editor when no override or fallback contribution matches', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',

@@ -3,7 +3,7 @@
  * contributions and the `Repo` lifecycle (spec §6, §8).
  *
  * Stage 1.4 ships `mutatorsFacet` only. The remaining four facets
- * (`queriesFacet`, `propertySchemasFacet`, `propertyUiFacet`,
+ * (`queriesFacet`, `propertySchemasFacet`, `propertyEditorOverridesFacet`,
  * `postCommitProcessorsFacet`) land in stages 1.5+ as the matching
  * machinery comes online.
  */
@@ -13,8 +13,8 @@ import type {
   AnyMutator,
   AnyPostCommitProcessor,
   AnyPropertyEditorFallbackContribution,
+  AnyPropertyEditorOverride,
   AnyPropertySchema,
-  AnyPropertyUiContribution,
   AnyQuery,
   TypeContribution,
 } from '@/data/api'
@@ -147,14 +147,14 @@ export const typesFacet = defineFacet<TypeContribution, ReadonlyMap<string, Type
   empty: () => new Map(),
 })
 
-export const propertyUiFacet = defineFacet<AnyPropertyUiContribution, ReadonlyMap<string, AnyPropertyUiContribution>>({
-  id: 'data.propertyUi',
+export const propertyEditorOverridesFacet = defineFacet<AnyPropertyEditorOverride, ReadonlyMap<string, AnyPropertyEditorOverride>>({
+  id: 'data.property-editor-overrides',
   combine: (values) => {
-    const out = new Map<string, AnyPropertyUiContribution>()
+    const out = new Map<string, AnyPropertyEditorOverride>()
     for (const c of values) {
       if (out.has(c.name)) {
         console.warn(
-          `[propertyUiFacet] duplicate registration for "${c.name}"; last-wins per facet convention`,
+          `[propertyEditorOverridesFacet] duplicate registration for "${c.name}"; last-wins per facet convention`,
         )
       }
       out.set(c.name, c)
