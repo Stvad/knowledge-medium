@@ -81,6 +81,12 @@ import {
   type RowEventsTail,
   type RowEventsTailOptions,
 } from './internals/rowEventsTail'
+import {
+  CLEAR_REPROJECT_REF_MARKER_SQL,
+  RECORD_REPROJECT_REF_MARKER_SQL,
+  REPROJECT_REF_MARKER_PREFIX,
+  SELECT_REPROJECT_REF_MARKERS_SQL,
+} from './internals/clientSchema'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
@@ -404,7 +410,16 @@ export class Repo {
     rowsScanned: 0,
     blocksUpdated: 0,
     msTotal: 0,
+    skippedByMarker: 0,
   }
+  /** Lazy in-memory mirror of the per-name reprojection markers in
+   *  `client_schema_state` (rows keyed `reproject_ref:<name>`). `null`
+   *  until the first reprojection call hydrates it via a single
+   *  `SELECT key … LIKE 'reproject_ref:%'` round-trip; afterwards
+   *  `reprojectRefTypedProperties` skips ref-typed names already in
+   *  this set without further SQL. Tests / migrations that wipe the
+   *  table can call `__resetReprojectionMarkerCache` to force a reload. */
+  private reprojectionMarkers: Set<string> | null = null
   /** Slowest writeTransaction observed since the last reset, by
    *  description (`opts.description` passed to `repo.tx`). Updated only
    *  when a tx exceeds the previous high-water mark, so the field is
@@ -689,6 +704,7 @@ export class Repo {
       rowsScanned: number
       blocksUpdated: number
       msTotal: number
+      skippedByMarker: number
     }>
   }> {
     return Object.freeze({
@@ -715,6 +731,7 @@ export class Repo {
     this.reprojectionMetrics.rowsScanned = 0
     this.reprojectionMetrics.blocksUpdated = 0
     this.reprojectionMetrics.msTotal = 0
+    this.reprojectionMetrics.skippedByMarker = 0
     this.slowestTx = {description: null, ms: 0}
   }
 
@@ -1157,11 +1174,34 @@ export class Repo {
   ): Promise<void> {
     if (this.isReadOnly || propertyNames.length === 0) return
     const t0 = performance.now()
-    this.reprojectionMetrics.calls += 1
-    this.reprojectionMetrics.schemasReprojected += propertyNames.length
     let blocksUpdated = 0
+    let scanScheduled = false
     try {
-      const placeholders = propertyNames.map(() => '?').join(', ')
+      // Filter out names that have already been reprojected on this
+      // device AND are still ref-typed in `propertySchemas`. The
+      // references processor has been maintaining `references_json`
+      // incrementally on every write since the marker landed, so a
+      // re-scan would be pure overhead. Names whose current schema is
+      // no longer ref-typed (cleanup case) always run regardless of the
+      // marker; we want to strip stale refs from `references_json`.
+      const markers = await this.loadReprojectionMarkers()
+      const namesToScan: string[] = []
+      let skippedByMarker = 0
+      for (const name of propertyNames) {
+        const kind = refCodecKind(propertySchemas.get(name))
+        if (kind !== undefined && markers.has(name)) {
+          skippedByMarker += 1
+          continue
+        }
+        namesToScan.push(name)
+      }
+      this.reprojectionMetrics.skippedByMarker += skippedByMarker
+      if (namesToScan.length === 0) return
+      scanScheduled = true
+      this.reprojectionMetrics.calls += 1
+      this.reprojectionMetrics.schemasReprojected += namesToScan.length
+
+      const placeholders = namesToScan.map(() => '?').join(', ')
       const rows = await this.db.getAll<BlockRow>(
         `
           SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
@@ -1169,12 +1209,16 @@ export class Repo {
           WHERE b.deleted = 0
             AND prop.key IN (${placeholders})
         `,
-        [...propertyNames],
+        [...namesToScan],
       )
       this.reprojectionMetrics.rowsScanned += rows.length
-      if (rows.length === 0) return
       if (this._propertySchemas !== propertySchemas) return
-      const propertyNameSet = new Set(propertyNames)
+      // Even when `rows.length === 0` we still want to record the
+      // markers below so the next cold start short-circuits — for many
+      // plugin-contributed ref schemas there's simply no legacy data,
+      // and we should stamp them as "caught up" the first time.
+
+      const propertyNameSet = new Set(namesToScan)
 
       const blocksByWorkspace = new Map<string, BlockData[]>()
       for (const row of rows) {
@@ -1193,7 +1237,7 @@ export class Repo {
             const retainedRefs = liveBlock.references.filter(ref =>
               !ref.sourceField || !propertyNameSet.has(ref.sourceField)
             )
-            const addedRefs = propertyNames.flatMap(name =>
+            const addedRefs = namesToScan.flatMap(name =>
               projectedRefsForField(liveBlock, propertySchemas.get(name), name)
             )
             const nextReferences = [...retainedRefs, ...addedRefs]
@@ -1206,13 +1250,56 @@ export class Repo {
           description: 'reproject ref-typed properties after schema swap',
         })
       }
+
+      // Record markers for names that are now ref-typed; clear markers
+      // for names that have transitioned to non-ref (cleanup case) so a
+      // future re-add as ref triggers a fresh scan. Doing this after
+      // the per-workspace tx loop means a partial failure leaves some
+      // names un-marked → next start retries them, which is the
+      // conservative behavior we want.
+      for (const name of namesToScan) {
+        const kind = refCodecKind(propertySchemas.get(name))
+        if (kind === undefined) {
+          await this.clearReprojectionMarker(name)
+        } else {
+          await this.setReprojectionMarker(name)
+        }
+      }
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[setFacetRuntime] ref-typed property reprojection failed: ${reason}`)
     } finally {
       this.reprojectionMetrics.blocksUpdated += blocksUpdated
-      this.reprojectionMetrics.msTotal += performance.now() - t0
+      if (scanScheduled) this.reprojectionMetrics.msTotal += performance.now() - t0
     }
+  }
+
+  /** Lazy load the per-name marker set on first call, then keep it
+   *  in-memory. One SQL round-trip per Repo lifetime. */
+  private async loadReprojectionMarkers(): Promise<Set<string>> {
+    if (this.reprojectionMarkers !== null) return this.reprojectionMarkers
+    const rows = await this.db.getAll<{key: string}>(SELECT_REPROJECT_REF_MARKERS_SQL)
+    const set = new Set<string>()
+    for (const r of rows) set.add(r.key.slice(REPROJECT_REF_MARKER_PREFIX.length))
+    this.reprojectionMarkers = set
+    return set
+  }
+
+  private async setReprojectionMarker(name: string): Promise<void> {
+    await this.db.execute(RECORD_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${name}`])
+    this.reprojectionMarkers?.add(name)
+  }
+
+  private async clearReprojectionMarker(name: string): Promise<void> {
+    await this.db.execute(CLEAR_REPROJECT_REF_MARKER_SQL, [`${REPROJECT_REF_MARKER_PREFIX}${name}`])
+    this.reprojectionMarkers?.delete(name)
+  }
+
+  /** Test escape hatch — drop the in-memory marker mirror so the next
+   *  reprojection re-reads from `client_schema_state`. Used by tests
+   *  that mutate the table out-of-band to simulate cross-session state. */
+  __resetReprojectionMarkerCache(): void {
+    this.reprojectionMarkers = null
   }
 
   private async _addTypeInTx(

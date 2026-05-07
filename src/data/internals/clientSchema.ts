@@ -619,6 +619,33 @@ export const BACKFILL_BLOCK_TYPES_SQL = `
   WHERE b.deleted = 0 AND typeof(je.value) = 'text'
 `
 
+/** Per-name reprojection markers. Once `reprojectRefTypedProperties`
+ *  has done a catch-up pass for property name `X`, a row keyed
+ *  `reproject_ref:<X>` lands in `client_schema_state`. Subsequent
+ *  cold-starts (kernel→merged delta, plugins→user-data delta) skip
+ *  scanning blocks for `X` because the references processor has been
+ *  maintaining `references_json` incrementally on every write since.
+ *
+ *  Marker is cleared (DELETE) when reprojection runs for a name whose
+ *  current schema is no longer ref-typed (cleanup case): a future
+ *  re-add-as-ref needs the catch-up scan again because writes during
+ *  the non-ref window left properties_json values without
+ *  references_json entries. */
+export const REPROJECT_REF_MARKER_PREFIX = 'reproject_ref:'
+
+export const SELECT_REPROJECT_REF_MARKERS_SQL = `
+  SELECT key FROM client_schema_state WHERE key LIKE '${REPROJECT_REF_MARKER_PREFIX}%'
+`
+
+export const RECORD_REPROJECT_REF_MARKER_SQL = `
+  INSERT OR REPLACE INTO client_schema_state (key, completed_at)
+  VALUES (?, strftime('%s', 'now') * 1000)
+`
+
+export const CLEAR_REPROJECT_REF_MARKER_SQL = `
+  DELETE FROM client_schema_state WHERE key = ?
+`
+
 // ============================================================================
 // Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
 // initialization creates it). Idempotent (`IF NOT EXISTS`).

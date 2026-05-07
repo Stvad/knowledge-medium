@@ -332,6 +332,54 @@ describe('parseReferences — schema-swap reprojection', () => {
       ])
     })
   })
+
+  it('persists the marker across Repo restarts so the cold-start scan is skipped', async () => {
+    // First Repo: scan + project. Marker for `reviewer` lands in
+    // client_schema_state during the trailing setReprojectionMarker
+    // pass (after all per-workspace txs).
+    env.repo.setFacetRuntime(runtimeWithReviewer())
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {reviewer: 'target-a'},
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    // Wait for both the projection write AND the marker write to land.
+    // The references-write happens before the marker write, so polling
+    // on the marker is the strict-er gate.
+    await vi.waitFor(async () => {
+      const row = await env.h.db.getOptional<{1: number}>(
+        `SELECT 1 FROM client_schema_state WHERE key = 'reproject_ref:reviewer'`,
+      )
+      expect(row).not.toBeNull()
+    })
+
+    // Second Repo over the same SQLite file: emulates a fresh app start.
+    // The merged schema map is kernel→merged-with-reviewer, which would
+    // normally re-scan every block. The persisted marker should make
+    // this a no-op.
+    const cache2 = new BlockCache()
+    const repo2 = new Repo({
+      db: env.h.db,
+      cache: cache2,
+      user: {id: 'user-1'},
+      registerKernelProcessors: false,
+    })
+    repo2.setFacetRuntime(runtimeWithReviewer())
+    // The reprojection short-circuit is async (it awaits
+    // loadReprojectionMarkers). Wait for the bookkeeping to land.
+    await vi.waitFor(() => {
+      expect(repo2.metrics().reprojection.skippedByMarker).toBeGreaterThanOrEqual(1)
+    })
+    const m = repo2.metrics()
+    expect(m.reprojection.calls).toBe(0)
+    expect(m.reprojection.rowsScanned).toBe(0)
+  })
 })
 
 describe('parseReferences — daily-note routing (§7.6)', () => {
