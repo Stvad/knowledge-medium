@@ -82,7 +82,7 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
   definePreset({id: 'number',  label: 'Number',     Glyph: Hash,        build: () => codecs.number,             defaultValue: 0,          Editor: NumberPropertyEditor}),
   definePreset({id: 'boolean', label: 'Checkbox',   Glyph: CheckSquare, build: () => codecs.boolean,            defaultValue: false,      Editor: BooleanPropertyEditor}),
   definePreset({id: 'list',    label: 'Options',    Glyph: List,        build: () => codecs.list(codecs.string), defaultValue: [],         Editor: ListPropertyEditor}),
-  definePreset({id: 'date',    label: 'Date',       Glyph: Calendar,    build: () => codecs.date,               defaultValue: undefined,  Editor: DatePropertyEditor}),
+  definePreset<Date | undefined>({id: 'date', label: 'Date', Glyph: Calendar, build: () => codecs.optional(codecs.date), defaultValue: undefined, Editor: DatePropertyEditor}),
   definePreset({id: 'url',     label: 'URL',        Glyph: LinkIcon,    build: () => urlCodec,                  defaultValue: '',         Editor: UrlPropertyEditor}),
   definePreset<string, RefCodecOptions>({
     id: 'ref',     label: 'Reference',  Glyph: AtSign,
@@ -101,7 +101,7 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
 ]
 ```
 
-`unsafeIdentity('object')` and similar internal-use codecs intentionally have no preset — they're used on kernel-internal hidden properties (e.g. `presetConfigProp`) that opt out of the panel via `PropertyUiContribution.hidden` and never need an editor. If a future visible property genuinely wants a JSON-object editor, it goes through the exact-name `PropertyUiContribution.Editor` path, not a preset.
+`unsafeIdentity('object')` and similar internal-use codecs intentionally have no preset — they're used on kernel-internal hidden properties (e.g. `presetConfigProp`) that opt out of the property panel via `PropertyUiContribution.hidden`. The schema's config isn't edited through the *property panel* — it's edited via a dedicated **property-schema block renderer** that owns the schema-editing UI for blocks of type `'property-schema'` (see §4). The renderer reads the schema's preset, dispatches to `preset.ConfigEditor`, and writes back to `presetConfigProp` directly. The property panel never sees presetConfigProp because it's hidden — correct, that's not where schema editing happens.
 
 Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {source: 'plugin'})`. No imperative API.
 
@@ -360,7 +360,34 @@ export const presetConfigProp = defineProperty<Record<string, unknown>>('propert
 
 These three are *kernel* schemas (registered directly via `propertySchemasFacet`). The chicken-and-egg "schema for schemas" is solved by making the meta-layer kernel-owned — kernel schemas are always present, user schemas read from kernel-defined property-schema blocks.
 
-A canonical Properties page exists per workspace, created at workspace bootstrap. Property-schema blocks live as its children. Convention: one Properties page per workspace, identified by a stable id or a `panel:properties` type tag. The page is a normal navigable block — users can open it and edit schemas inline like any other content.
+A canonical Properties page exists per workspace, created at workspace bootstrap. Property-schema blocks live as its children. Convention: one Properties page per workspace, identified by a stable id or a `panel:properties` type tag. The page is a normal navigable block — users can open it to see the list of schemas, click into one, and edit it.
+
+#### 4a. Dedicated block renderer for property-schema blocks
+
+Editing a schema isn't a property-panel concern. The property-schema block has its own **block renderer** registered via `blockRenderersFacet` ([type-system.md §4b](type-system.md)), with `canRender: block => block.hasType('property-schema')`. The renderer owns the schema-editing UI:
+
+```
+┌───────────────────────────────────────────────┐
+│  [Glyph]  homepage                            │  ← propertyName field, inline-editable
+│                                               │
+│  Type:  [URL ▾]                               │  ← preset picker; reads valuePresetsFacet
+│                                               │
+│  ┌─────────────────────────────────────────┐  │
+│  │ <preset.ConfigEditor for current preset>│  │  ← reuses the same component the
+│  └─────────────────────────────────────────┘  │     AddPropertyForm shows in
+│                                               │     FieldConfigSheet
+└───────────────────────────────────────────────┘
+```
+
+The renderer reads `presetIdProp` to find the current preset, dispatches to `preset.ConfigEditor` for the config field, and writes back to `presetConfigProp` directly through the existing `block.set` path. No property panel involvement; `presetConfigProp` stays hidden from the panel.
+
+This solves three things at once:
+
+- **Schema editing has a real surface.** Not "navigate to the Properties page and edit raw JSON in some dev-tool path" — a normal in-app UI.
+- **`ConfigEditor` is reused.** The same component the AddPropertyForm renders inside `FieldConfigSheet` is the one the schema-block renderer dispatches to. One implementation, two callsites. A `'ref'` preset shipping `RefTargetTypePicker` covers both creation-time configuration and after-the-fact editing.
+- **Changing presets is a real operation.** The picker lets users swap the preset (e.g., `string` → `url`) — writing the new preset id to `presetIdProp`, the subscription re-runs, the schema's codec changes, and §7-bis reprojection fires for ref-codec changes if applicable. Same path as a write through `addSchema`.
+
+For schemas whose preset has no `ConfigEditor` (primitive presets — `string`, `number`, etc.), the renderer just shows the name and preset picker. The config editor area is empty.
 
 ### 5. `UserSchemasService` — reactive subscription over schema blocks
 
@@ -427,21 +454,26 @@ Suggestions are drawn from `repo.propertySchemas` filtered by name prefix. Each 
 Two submit paths:
 
 - **User picks a suggestion** → form adopts the existing schema (preset + config locked to whatever's registered). Submit calls `block.set(existingSchema, existingSchema.defaultValue)`. No new schema is created.
-- **User types a fresh name and submits without picking** → form calls `userSchemasService.addSchema({name, presetId, config})`. The service creates a property-schema block under the Properties page, the subscription fires, the merged map updates, and the form then writes the initial value through the now-registered schema.
+- **User types a fresh name and submits without picking** → form `await`s `userSchemasService.addSchema({name, presetId, config})`. The service creates the property-schema block **and** synchronously updates the user-data facet bucket inside the same step (per §7's "synchronous registration" subsection), so by the time the promise resolves, `repo.propertySchemas.get(name)` returns the new schema. The form then writes the initial value through the now-registered schema. **The form must not write the property value before `addSchema` resolves** — the subscription path is async and racing with it leads to a fall-through to the unknown-schema fallback.
 
 The adoption-cheap path reinforces the §3 hybrid rule (shared vocabulary stays shared) by making "use the existing one" the default outcome.
 
 #### Collision preflight
 
-Before calling `addSchema`, check `repo.propertySchemas.get(name)`:
+Before calling `addSchema`, decide adoption vs. creation vs. refusal:
 
-- Hit, source is `'user-data'` → existing user schema, treated as adoption (same as picking from autocomplete).
-- Hit, source is direct facet (kernel/plugin) → kernel/plugin owns the name. Refuse with a clear message, suggest the user pick a different name.
-- Miss → proceed with `addSchema`.
+```ts
+const existing = repo.propertySchemas.get(name)
+if (!existing)                             /* miss → create new */
+if (userSchemasService.has(name))          /* user-data owned → treat as adoption */
+                                           /* (form's "pick from autocomplete" path) */
+else                                       /* direct facet (kernel/plugin) → refuse */
+                                           /* with "this name is reserved" message */
+```
 
-This avoids the user-data write that would lose to direct-source last-wins anyway, and keeps the error path obvious.
+`userSchemasService.has(name)` is a direct read against the service's own contribution list — no need to thread schema-source provenance through the merged map. The service maintains the list, the form's collision logic asks the service. The merged-map shape stays `ReadonlyMap<string, AnyPropertySchema>` (no provenance value) and source attribution lives where it's authored — on the contribution side, not the merged-read side.
 
-### 7. `addSchema` — create the schema block
+### 7. `addSchema` — create the schema block AND register synchronously
 
 ```ts
 // On UserSchemasService
@@ -449,8 +481,20 @@ async addSchema(args: {
   name: string
   presetId: string
   config?: unknown
-}): Promise<void> {
-  const propertiesPageId = this.repo.propertiesPageId  // resolved at workspace bootstrap
+}): Promise<AnyPropertySchema> {
+  const presets = this.repo.read(valuePresetsFacet)
+  const preset = presets.get(args.presetId)
+  if (!preset) throw new Error(`[addSchema] no preset registered for id ${args.presetId}`)
+
+  // Build the schema up-front so it's ready to register synchronously.
+  const newSchema: AnyPropertySchema = {
+    name: args.name,
+    codec: preset.build(args.config),
+    defaultValue: preset.defaultValue,
+    changeScope: ChangeScope.BlockDefault,
+  }
+
+  const propertiesPageId = this.repo.propertiesPageId
   await this.repo.tx(async tx => {
     const id = await tx.run(createChild, {parentId: propertiesPageId, position: {kind: 'last'}})
     await tx.update(id, {
@@ -462,10 +506,25 @@ async addSchema(args: {
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: `addSchema ${args.name}`})
+
+  // Register the schema synchronously, before returning. The
+  // subscription will fire later (the block write triggers it) but
+  // arrive at an idempotent state — same name, same preset, same
+  // config decoded back into the same codec.
+  this.appendUserSchema(newSchema)
+  return newSchema
+}
+
+// On UserSchemasService — synchronous slot update
+private appendUserSchema(schema: AnyPropertySchema): void {
+  this.userSchemas = [...this.userSchemas.filter(s => s.name !== schema.name), schema]
+  this.repo.setRuntimeContributions(propertySchemasFacet, 'user-data', this.userSchemas)
 }
 ```
 
-The subscription handles the rest. Removal: `repo.removeBlock(schemaBlockId)` — same path. Editing: change the property-schema block's `presetConfigProp` (e.g., add a target type to a ref). The subscription rebuilds the facet contribution and the schema's codec changes — which **is** a §7-bis ref-codec set change, so reprojection runs over rows carrying the property name. This is correct behavior and requires no special path.
+**Why synchronous registration is load-bearing.** The form's flow is "addSchema, then write the property's initial value." If we leaned on the subscription to update the user-data bucket, the next write could race the subscription tick and `repo.propertySchemas.get(name)` would return undefined — the unknown-schema fallback path takes over and we end up with an ad-hoc string property instead of a properly-typed one. The same race shows up in the Roam importer's apply phase (schemas-then-content order requires the schema registration to be visible by the time content rows write). Both paths use the synchronous registration; the subscription is steady-state for *external* changes (sync from another device, hand-edit of a property-schema block, undo/redo) where there's no caller waiting for the next write.
+
+**Removal and edit.** `repo.removeBlock(schemaBlockId)` — the subscription fires, `appendUserSchema`'s symmetric removal counterpart updates the slot. Editing config (e.g., adding `targetTypes` to a ref): change the property-schema block's `presetConfigProp` value, subscription fires, schema gets rebuilt with the new codec. A ref-codec set change triggers §7-bis reprojection over rows carrying the property name. No special path needed; the subscription is sufficient because edits aren't followed by an immediate dependent write.
 
 ### 8. Roam importer — schema reconciliation
 
@@ -480,7 +539,8 @@ Schemaless properties go away as a steady-state design. Every imported `key:: va
    - Otherwise → `string` preset.
    The defaults are deliberately conservative — `refList` for the common Roam-attribute case, fall through to `string` for anything ambiguous. Users can edit the resulting property-schema blocks to narrow (e.g., `refList` → single `ref`, add `targetTypes`).
 4. **Plan schema blocks.** For each newly-classified name, emit a property-schema block into the deterministic-id plan. Schema block id is `hash(workspaceId, propertyName)` so re-importing the same dump doesn't duplicate. Parent is the Properties page.
-5. **Apply order.** Phase the apply pipeline so schema blocks land **before** any block carrying their properties. The simplest reliable shape: schema blocks form a first apply chunk; subscribers (`UserSchemasService`) fire and `setRuntimeContributions` runs synchronously; subsequent chunks write content + properties against an already-registered registry. If synchronous re-resolution proves brittle, the importer can call `setRuntimeContributions` directly inside the same tx after writing the schema blocks.
+5. **Apply order.** Phase the apply pipeline so schema blocks land **before** any block carrying their properties. The reliable shape: schema blocks form a first apply chunk, the importer calls `userSchemasService.appendUserSchema` (or addSchema's equivalent in-tx primitive) synchronously per schema-block write so the slot is updated before content chunks run. The subscription will also fire later — same idempotent-arrival semantics as `addSchema`. Don't rely on the subscription alone to make schemas visible by the time content writes; the timing is unspecified.
+6. **Normalize ref values to ids before writing.** A Roam `Status:: [[Project]]` parsed value is the *token* `[[Project]]`, not a block id — but the `refList` codec decodes string arrays of *ids*, not tokens. The importer's existing reference-resolution layer (the same code that resolves `[[Project]]` in block content to a target block id) must run on attribute values before they're written to a refList property; otherwise decode throws and `references_json` projection emits bogus target ids. Concretely: when classifying a property value as `refList`, transform the parsed value through the existing token→id resolver, write the array of resolved ids to the property, and only then commit. Ambiguous tokens (page that doesn't exist in the dump, multiple matches, etc.) follow the importer's existing not-found policy — typically create the target page if it's a `[[…]]` reference, or fall back to a string preset for that property if resolution is ambiguous across the dump.
 
 #### Existing alpha data — drop and recreate
 
@@ -532,12 +592,13 @@ After this phase, the form lets users pick rich presets but still synthesizes in
 
 ### Phase 3 — property-schema as block + `UserSchemasService`
 
-1. Add `'property-schema'` type contribution and the three kernel schemas (`propertyNameProp`, `presetIdProp`, `presetConfigProp`).
+1. Add `'property-schema'` type contribution and the three kernel schemas (`propertyNameProp`, `presetIdProp`, `presetConfigProp`). `presetConfigProp` is hidden via `PropertyUiContribution.hidden = true`.
 2. Workspace bootstrap creates the Properties page if it doesn't exist (deterministic id, idempotent).
-3. Implement `UserSchemasService` with the `subscribeBlocks` subscription. (Requires [type-system.md §8](type-system.md)'s typed-query primitive — phase order this one after.)
-4. Wire `AddPropertyForm`'s submit path: collision preflight → either adopt existing schema or call `userSchemasService.addSchema`.
-5. Add name autocomplete to `AddPropertyForm` keyed off `repo.propertySchemas`.
-6. Tests: creating a schema via the form persists as a block, survives reload, fires the subscription, updates the merged map, makes the schema visible to `BlockProperties`. Edit + delete of schema blocks reactively updates.
+3. Register a `blockRenderersFacet` contribution for blocks of type `'property-schema'` per §4a — preset picker + dispatched `ConfigEditor`. Reuses the same `preset.ConfigEditor` component the AddPropertyForm renders inside `FieldConfigSheet`.
+4. Implement `UserSchemasService` with the `subscribeBlocks` subscription **and** the synchronous `appendUserSchema` slot-update path used by `addSchema` (per §7). (Requires [type-system.md §8](type-system.md)'s typed-query primitive — phase order this one after.)
+5. Wire `AddPropertyForm`'s submit path: collision preflight via `userSchemasService.has(name)` → either adopt existing schema or `await userSchemasService.addSchema(...)` and only then write the property's initial value.
+6. Add name autocomplete to `AddPropertyForm` keyed off `repo.propertySchemas`.
+7. Tests: creating a schema via the form persists as a block, survives reload, fires the subscription, updates the merged map, makes the schema visible to `BlockProperties` synchronously after `addSchema` resolves (no race with subscription tick). Edit + delete of schema blocks reactively updates.
 
 After this phase, user-created schemas with full preset semantics persist across reloads and sync.
 
@@ -552,7 +613,7 @@ Existing alpha local databases are wiped (per the no-back-compat rule); users re
 
 ## Decisions deferred / out of scope
 
-- **Schema editing UI beyond raw block editing.** v1 has no dedicated "edit schema" form. Users edit the property-schema block's properties directly (or via the standard property panel). A dedicated form is fine to add later but not load-bearing.
+- **Schema editing surfaces beyond the property-schema renderer.** §4a's dedicated renderer covers the per-schema editing UI. v1 doesn't ship a bulk-rename / bulk-config-update path or schema-search beyond what navigating to the Properties page provides. Fine to add later if needed.
 - **Per-block schema overrides.** The §3 hybrid rule says distinct semantics → distinct schema names. No per-block override mechanism in v1.
 - **Cross-workspace schema sharing.** Schemas are workspace-scoped (Properties page is per workspace). Sharing a schema definition across workspaces would need a separate import / link mechanism; not v1.
 - **Validation rules on schemas.** A schema's codec defines storage shape; it doesn't validate semantic constraints (URL format beyond what `urlCodec` enforces, ref target-type intersection, value ranges on numbers). Validation is the deferred follow-up from [type-system.md §3b](type-system.md).
