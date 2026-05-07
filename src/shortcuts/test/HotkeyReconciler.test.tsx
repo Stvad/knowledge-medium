@@ -12,6 +12,7 @@ import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import {
   ActionConfig,
   ActionContextConfig,
+  ActionContextTypes,
   ActionContextType,
   BaseShortcutDependencies,
 } from '@/shortcuts/types.ts'
@@ -22,6 +23,13 @@ const TEST_CONTEXT = 'test-mode' as ActionContextType
 const testContextConfig: ActionContextConfig = {
   type: TEST_CONTEXT,
   displayName: 'Test Mode',
+  validateDependencies: (deps): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null,
+}
+
+const normalModeContextConfig: ActionContextConfig = {
+  type: ActionContextTypes.NORMAL_MODE,
+  displayName: 'Normal Mode',
   validateDependencies: (deps): deps is BaseShortcutDependencies =>
     typeof deps === 'object' && deps !== null,
 }
@@ -40,23 +48,32 @@ const buildAction = (overrides: Partial<ActionConfig> & Pick<ActionConfig, 'id' 
   ...overrides,
 } as ActionConfig)
 
-const dispatchKeydown = (key: string) => {
+const specialKeyCodes: Record<string, number> = {
+  Tab: 9,
+}
+
+const dispatchKeydown = (
+  key: string,
+  init: KeyboardEventInit & {target?: EventTarget} = {},
+): KeyboardEvent => {
   // hotkeys-js installs a keydown listener on document and reads the legacy
   // `event.keyCode`/`event.which` to look up handlers. jsdom doesn't populate
   // those automatically from `key`, so we set them explicitly here.
+  const {target = document, ...eventInit} = init
   const code =
     key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
-  const keyCode = key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0
-  document.dispatchEvent(
-    new KeyboardEvent('keydown', {
-      key,
-      code,
-      keyCode,
-      which: keyCode,
-      bubbles: true,
-      cancelable: true,
-    }),
-  )
+  const keyCode = key.length === 1 ? key.toUpperCase().charCodeAt(0) : specialKeyCodes[key] ?? 0
+  const event = new KeyboardEvent('keydown', {
+    key,
+    code,
+    keyCode,
+    which: keyCode,
+    bubbles: true,
+    cancelable: true,
+    ...eventInit,
+  })
+  target.dispatchEvent(event)
+  return event
 }
 
 const Activator = ({context}: {context: ActionContextType}) => {
@@ -237,5 +254,37 @@ describe('HotkeyReconciler', () => {
     )
     act(() => dispatchKeydown('k'))
     expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'second'})
+  })
+
+  it('captures normal-mode shift+tab before browser focus traversal can leak through', () => {
+    const handler = vi.fn()
+    const action = buildAction({
+      id: 'normal.outdent',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler,
+      defaultBinding: {
+        keys: 'shift+tab',
+        eventOptions: {preventDefault: true},
+      },
+    })
+    const target = document.createElement('div')
+    target.tabIndex = 0
+    target.addEventListener('keydown', event => event.stopPropagation())
+    document.body.append(target)
+
+    render(
+      <Harness actions={[action]} contexts={[normalModeContextConfig]}>
+        <Activator context={ActionContextTypes.NORMAL_MODE}/>
+      </Harness>,
+    )
+
+    let event: KeyboardEvent | undefined
+    act(() => {
+      event = dispatchKeydown('Tab', {target, shiftKey: true})
+    })
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(handler).toHaveBeenCalledWith(mockDeps, expect.any(KeyboardEvent))
+    expect(event?.defaultPrevented).toBe(true)
   })
 })
