@@ -394,6 +394,23 @@ export class Repo {
   /** Per-query-name resolve timings. The dispatcher records each
    *  `loader(ctx)` invocation here keyed by the query's full name. */
   readonly queryMetrics = new QueryMetrics()
+  /** Counters for `reprojectRefTypedProperties`. Each call to the
+   *  reprojection path increments these — useful when investigating
+   *  bootstrap-time write-tx amplification triggered by user/plugin
+   *  schema changes. Surfaced through `repo.metrics().reprojection`. */
+  private readonly reprojectionMetrics = {
+    calls: 0,
+    schemasReprojected: 0,
+    rowsScanned: 0,
+    blocksUpdated: 0,
+    msTotal: 0,
+  }
+  /** Slowest writeTransaction observed since the last reset, by
+   *  description (`opts.description` passed to `repo.tx`). Updated only
+   *  when a tx exceeds the previous high-water mark, so the field is
+   *  cheap to maintain in the hot path. Surfaces through
+   *  `repo.metrics().db.slowestTx`. */
+  private slowestTx: {description: string | null; ms: number} = {description: null, ms: 0}
   /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
@@ -660,12 +677,27 @@ export class Repo {
     blockCache: Readonly<Record<string, number>>
     queries: Readonly<Record<string, ReturnType<QueryMetrics['snapshot']>[string]>>
     db: ReturnType<DbMetrics['snapshot']>
+    /** High-water mark across all `repo.tx` calls since the last reset.
+     *  Pairs with `db.writeTransaction.maxMs` to attribute outliers to a
+     *  concrete description (e.g. 'reproject ref-typed properties after
+     *  schema swap'). `description: null` means the slowest tx so far
+     *  was opened without a description. */
+    slowestTx: Readonly<{description: string | null; ms: number}>
+    reprojection: Readonly<{
+      calls: number
+      schemasReprojected: number
+      rowsScanned: number
+      blocksUpdated: number
+      msTotal: number
+    }>
   }> {
     return Object.freeze({
       handleStore: this.handleStore.metrics.snapshot(),
       blockCache: this.cache.metrics.snapshot(),
       queries: this.queryMetrics.snapshot(),
       db: this.dbMetrics.snapshot(),
+      slowestTx: Object.freeze({...this.slowestTx}),
+      reprojection: Object.freeze({...this.reprojectionMetrics}),
     })
   }
 
@@ -678,6 +710,12 @@ export class Repo {
     this.cache.metrics.reset()
     this.queryMetrics.reset()
     this.dbMetrics.reset()
+    this.reprojectionMetrics.calls = 0
+    this.reprojectionMetrics.schemasReprojected = 0
+    this.reprojectionMetrics.rowsScanned = 0
+    this.reprojectionMetrics.blocksUpdated = 0
+    this.reprojectionMetrics.msTotal = 0
+    this.slowestTx = {description: null, ms: 0}
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -850,6 +888,7 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ) {
+    const txT0 = performance.now()
     const result = await runTx({
       db: this.db,
       cache: this.cache,
@@ -865,6 +904,14 @@ export class Repo {
       processors: this.processors,
       propertySchemas: this._propertySchemas,
     })
+    // Track the slowest tx by description so cold-start metrics can
+    // attribute writeTransaction outliers to a concrete site (e.g.
+    // 'reproject ref-typed properties after schema swap', mutator names).
+    // Cheaper than recording every tx; only the high-water mark wins.
+    const txMs = performance.now() - txT0
+    if (txMs > this.slowestTx.ms) {
+      this.slowestTx = {description: opts.description ?? null, ms: txMs}
+    }
     // TxEngine fast path (spec §9.3 path 1): post-commit, fan-out the
     // tx's snapshots diff to dep-matching collection handles. The
     // commit pipeline already updated the BlockCache (which fires
@@ -1109,6 +1156,10 @@ export class Repo {
     propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
   ): Promise<void> {
     if (this.isReadOnly || propertyNames.length === 0) return
+    const t0 = performance.now()
+    this.reprojectionMetrics.calls += 1
+    this.reprojectionMetrics.schemasReprojected += propertyNames.length
+    let blocksUpdated = 0
     try {
       const placeholders = propertyNames.map(() => '?').join(', ')
       const rows = await this.db.getAll<BlockRow>(
@@ -1120,6 +1171,7 @@ export class Repo {
         `,
         [...propertyNames],
       )
+      this.reprojectionMetrics.rowsScanned += rows.length
       if (rows.length === 0) return
       if (this._propertySchemas !== propertySchemas) return
       const propertyNameSet = new Set(propertyNames)
@@ -1147,6 +1199,7 @@ export class Repo {
             const nextReferences = [...retainedRefs, ...addedRefs]
             if (JSON.stringify(liveBlock.references) === JSON.stringify(nextReferences)) continue
             await tx.update(liveBlock.id, {references: nextReferences}, {skipMetadata: true})
+            blocksUpdated += 1
           }
         }, {
           scope: ChangeScope.References,
@@ -1156,6 +1209,9 @@ export class Repo {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       console.error(`[setFacetRuntime] ref-typed property reprojection failed: ${reason}`)
+    } finally {
+      this.reprojectionMetrics.blocksUpdated += blocksUpdated
+      this.reprojectionMetrics.msTotal += performance.now() - t0
     }
   }
 
