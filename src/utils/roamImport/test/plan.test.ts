@@ -930,6 +930,7 @@ describe('planImport', () => {
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 
     expect(plan.pages[0].pageAliases).toEqual([])
+    expect(plan.aliasesUsed.has('LukeProg')).toBe(true)
     expect(plan.diagnostics.some(d =>
       d.includes('Non-standard page_alias') &&
       d.includes('LukeProg'),

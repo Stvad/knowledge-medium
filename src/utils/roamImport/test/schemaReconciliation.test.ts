@@ -110,6 +110,18 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:topics', presetId: 'refList'}])
   })
 
+  it('forces semantic Roam ref fields to the refList preset', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:isa': 'person'}),
+      block('b', {'roam:page_alias': 'not a bracketed page ref'}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([
+      {name: 'roam:isa', presetId: 'refList'},
+      {name: 'roam:page_alias', presetId: 'refList'},
+    ])
+  })
+
   it('falls back to string when at least one value isn\'t a token list', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:notes': '[[A]]'}),
@@ -240,6 +252,30 @@ describe('normalizeRefPropertyValues', () => {
     expect(blocks[0].properties['roam:topics']).toEqual(['id-known'])
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]).toMatch(/unresolved aliases: Missing/)
+  })
+
+  it('refList: treats semantic Roam ref field plain strings as aliases', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:isa': 'person'}),
+      block('b', {'roam:page_alias': 'LukeProg'}),
+    ]
+    const aliasIdMap = new Map([
+      ['person', 'person-id'],
+      ['LukeProg', 'alias-id'],
+    ])
+    const diagnostics: string[] = []
+    normalizeRefPropertyValues(
+      blocks,
+      new Map([
+        ['roam:isa', 'refList'],
+        ['roam:page_alias', 'refList'],
+      ]),
+      aliasIdMap,
+      diagnostics,
+    )
+    expect(blocks[0].properties['roam:isa']).toEqual(['person-id'])
+    expect(blocks[1].properties['roam:page_alias']).toEqual(['alias-id'])
+    expect(diagnostics).toEqual([])
   })
 
   it('ref: writes a single resolved id (string), not an array', () => {

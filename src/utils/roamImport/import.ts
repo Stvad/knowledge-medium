@@ -237,6 +237,22 @@ export const importRoam = async (
   for (const desc of plan.descendants) allPlannedBlocks.push(desc.data)
   for (const page of plan.pages) {
     if (page.data) allPlannedBlocks.push(page.data)
+    else if (Object.keys(page.promotedFromChildren).length > 0) {
+      allPlannedBlocks.push({
+        id: page.blockId,
+        workspaceId: options.workspaceId,
+        parentId: null,
+        orderKey: 'a0',
+        content: page.title,
+        properties: page.promotedFromChildren,
+        references: [],
+        createdAt: 0,
+        updatedAt: 0,
+        createdBy: options.currentUserId,
+        updatedBy: options.currentUserId,
+        deleted: false,
+      })
+    }
   }
   const reconciliation = collectSchemaReconciliationPlan(allPlannedBlocks, repo)
   if (reconciliation.skippedReserved.length > 0) {
@@ -287,6 +303,14 @@ export const importRoam = async (
       aliasResolution.aliasIdMap,
       plan.diagnostics,
     )
+  }
+  for (const page of plan.pages) {
+    if (!page.data) continue
+    for (const name of Object.keys(page.promotedFromChildren)) {
+      if (name in page.data.properties) {
+        page.promotedFromChildren[name] = page.data.properties[name]
+      }
+    }
   }
 
   if (options.dryRun) {

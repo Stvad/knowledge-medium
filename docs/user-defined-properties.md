@@ -827,6 +827,7 @@ Schemaless properties go away as a steady-state design. Every imported `key:: va
 1. **Collect.** Walk the parsed dump, build the set of unique property names appearing across all blocks.
 2. **Resolve against current registry, refusing reserved names.** For each name, check `repo.propertyEditorOverrides.get(name)?.hidden` — if true, the name is a reserved kernel/internal slot (editorFocusRequest, selectionState, etc.). **Skip the property entirely**: don't classify, don't plan a schema block, don't write values into that name from any imported block. Log a diagnostic so the user knows their Roam attribute named `editorFocusRequest` (or similar) silently dropped. For non-reserved names, if a schema is already in `repo.propertySchemas` (kernel, plugin, or pre-existing user schema) → record the binding (schema object → name) and skip classification. This mirrors `AddPropertyForm`'s collision rule (§6) — the importer can't ask the user, so refusal is silent-skip with a log rather than a prompt.
 3. **Classify unregistered names.** For each remaining name, sample values across the dump:
+   - `roam:isa` and `roam:page_alias` are semantic Roam reference lists → `refList` preset, even when a dump contains a plain-string spelling.
    - All values are `[[…]]` page references → `refList` preset, no `targetTypes` constraint (we don't know what types the targets should be).
    - All values are valid numbers → `number` preset.
    - All values are `true` / `false` → `boolean` preset.

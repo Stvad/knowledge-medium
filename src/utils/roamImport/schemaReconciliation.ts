@@ -19,7 +19,9 @@ import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import {
   PAGE_TOKEN_RE,
+  collectAliasesFromRoamSemanticRefListValue,
   explodePageTokens,
+  isRoamSemanticRefListProperty,
 } from './properties'
 
 type ClassifiedPresetId = 'string' | 'number' | 'boolean' | 'list' | 'refList'
@@ -138,7 +140,10 @@ export const collectSchemaReconciliationPlan = (
       continue
     }
 
-    toRegister.push({name, presetId: classify(stats)})
+    toRegister.push({
+      name,
+      presetId: isRoamSemanticRefListProperty(name) ? 'refList' : classify(stats),
+    })
   }
 
   return {toRegister, skippedReserved}
@@ -221,7 +226,9 @@ export const normalizeRefPropertyValues = (
     for (const [name, kind] of refPropertyKinds) {
       if (!(name in block.properties)) continue
       const raw = block.properties[name]
-      const tokens = collectTokens(raw)
+      const tokens = isRoamSemanticRefListProperty(name)
+        ? collectAliasesFromRoamSemanticRefListValue(raw)
+        : collectTokens(raw)
       if (tokens === null) continue
 
       const ids: string[] = []

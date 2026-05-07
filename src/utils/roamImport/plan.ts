@@ -8,6 +8,7 @@ import { resolveDailyPage, roamBlockId } from './ids'
 import { getExtraRoamProps, type RoamBlock, type RoamExport, type RoamPage, type RoamUidRef } from './types'
 import {
   collectAliasesFromPropertyValues,
+  collectAliasesFromRoamSemanticRefListProperties,
   collectPageAliases,
   derivePropertiesFromContent,
   nonStandardPageAliasValues,
@@ -485,6 +486,9 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
   for (const alias of collectAliasesFromPropertyValues(properties)) {
     ctx.aliasesUsed.add(alias)
   }
+  for (const alias of collectAliasesFromRoamSemanticRefListProperties(properties)) {
+    ctx.aliasesUsed.add(alias)
+  }
 
   const data: BlockData = {
     id,
@@ -897,6 +901,9 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       ...propertiesFromRoam(pageRoamProps),
     }
     const pageAliases = collectPageAliases(pageProperties)
+    for (const alias of collectAliasesFromRoamSemanticRefListProperties(pageProperties)) {
+      ctx.aliasesUsed.add(alias)
+    }
     appendPageAliasDiagnostics(diagnostics, page, pageProperties)
 
     if (daily) {

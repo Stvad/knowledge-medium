@@ -11,6 +11,9 @@ export const ROAM_MESSAGE_URL_PROP = `${NS_PREFIX}:message-url`
 export const ROAM_MESSAGE_AUTHOR_PROP = `${NS_PREFIX}:message-author`
 export const ROAM_MESSAGE_TIMESTAMP_PROP = `${NS_PREFIX}:message-timestamp`
 
+export const isRoamSemanticRefListProperty = (name: string): boolean =>
+  name === ROAM_ISA_PROP || name === ROAM_PAGE_ALIAS_PROP
+
 export const uniqueStrings = (values: readonly string[]): string[] => {
   const out: string[] = []
   const seen = new Set<string>()
@@ -175,6 +178,32 @@ export const collectAliasesFromPropertyValues = (
   for (const v of Object.values(promoted)) visit(v)
   return [...out]
 }
+
+const looksSerializedJson = (value: string): boolean =>
+  (value.startsWith('{') && value.endsWith('}')) ||
+  (value.startsWith('[') && value.endsWith(']') && !value.startsWith('[['))
+
+export const collectAliasesFromRoamSemanticRefListValue = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap(collectAliasesFromRoamSemanticRefListValue))
+  }
+  if (typeof value !== 'string') return []
+
+  const trimmed = value.trim()
+  if (!trimmed) return []
+
+  const tokens = parseOuterPageTokens(trimmed)
+  if (tokens.length > 0) return uniqueStrings(tokens.map(token => token.alias))
+
+  return looksSerializedJson(trimmed) ? [] : [trimmed]
+}
+
+export const collectAliasesFromRoamSemanticRefListProperties = (
+  properties: Record<string, unknown>,
+): string[] =>
+  uniqueStrings(Object.entries(properties)
+    .filter(([name]) => isRoamSemanticRefListProperty(name))
+    .flatMap(([, value]) => collectAliasesFromRoamSemanticRefListValue(value)))
 
 /** Translate Roam's property bag into the new flat-property shape:
  *  values are stored encoded directly under their (namespaced) key.
