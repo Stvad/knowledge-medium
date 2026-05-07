@@ -53,11 +53,6 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
   /** Optional config UI rendered inside `FieldConfigSheet`. Only
    *  presets with non-trivial config (refs, future enums) ship one. */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
-  /** Whether to surface this preset in `AddPropertyForm`'s picker.
-   *  Defaults to `true`. Set `false` for system-only presets that exist
-   *  purely to bind editors to codec types not meant to be user-pickable
-   *  (e.g. `'object'` — the unsafeIdentity catch-all). */
-  readonly pickable?: boolean
 }
 
 export interface ValuePresetConfigEditorProps<TConfig> {
@@ -94,11 +89,10 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
     Editor: RefListPropertyEditor,
     ConfigEditor: RefTargetTypePicker,
   }),
-  // Internal-only — bound to the unsafeIdentity catch-all codec; not
-  // exposed in the AddPropertyForm picker.
-  definePreset({id: 'object', label: 'Object', build: () => codecs.unsafeIdentity('object'), defaultValue: {}, Editor: ObjectPropertyEditor, pickable: false}),
 ]
 ```
+
+`unsafeIdentity('object')` and similar internal-use codecs intentionally have no preset — they're used on kernel-internal hidden properties (e.g. `presetConfigProp`) that opt out of the panel via `PropertyUiContribution.hidden` and never need an editor. If a future visible property genuinely wants a JSON-object editor, it goes through the exact-name `PropertyUiContribution.Editor` path, not a preset.
 
 Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {source: 'plugin'})`. No imperative API.
 
@@ -151,7 +145,7 @@ Three properties this gives:
 Loss to flag: the predicate-based facet allowed weirder match shapes (e.g., "match any string-shaped codec including unrecognized plugin types"). Open `type` doesn't have a wildcard; an unknown plugin codec type with no registered preset has no editor. Two ways out:
 
 - **Conservative.** Accept that schemas whose codec type has no registered preset render via the unknown-schema fallback path (whose primitive type comes from JSON inference, not from `codec.type`). This is the same degraded path used for sync-race / plugin-not-loaded cases.
-- **Permissive.** A `pickable: false` "default" preset registered against a wildcard / known-primitive type list, picked when the codec type doesn't match any registered preset id. Ugly; not worth it.
+- **Permissive.** A "default" preset registered against a wildcard / known-primitive type list, picked when the codec type doesn't match any registered preset id. Ugly; not worth it.
 
 Conservative is the call — degraded fallback for un-presented codec types matches the rest of the design.
 
