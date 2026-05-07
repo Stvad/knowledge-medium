@@ -58,6 +58,7 @@ import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
   normalizeRefPropertyValues,
+  normalizeStringPropertyValues,
 } from './schemaReconciliation'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -98,6 +99,8 @@ const TAG_TO_TYPE: Readonly<Record<RoamTodoState, RoamTypeMapping>> = {
 }
 
 const ROAM_SOURCE_PREFIXES = ['roam:']
+const isRoamSourceField = (name: string): boolean =>
+  ROAM_SOURCE_PREFIXES.some(prefix => name.startsWith(prefix))
 const PAGE_SOURCE_FIELDS = [aliasesProp.name, typesProp.name]
 
 interface PageReconciliation {
@@ -246,6 +249,18 @@ export const importRoam = async (
     await applySchemaReconciliation(reconciliation.toRegister, repo, plan.diagnostics)
     log(`Registered ${reconciliation.toRegister.length} property schemas (${sinceLastPhase()})`)
   }
+
+  // String-schema normalization. Mixed scalar/list Roam attributes can
+  // legitimately fall back to the string preset; convert the list/object
+  // cases to JSON text so the resulting stored shape matches the schema.
+  const stringPropertyNames = new Set<string>()
+  for (const r of reconciliation.toRegister) {
+    if (r.presetId === 'string' && isRoamSourceField(r.name)) stringPropertyNames.add(r.name)
+  }
+  for (const [name, schema] of repo.propertySchemas) {
+    if (schema.codec.type === 'string' && isRoamSourceField(name)) stringPropertyNames.add(name)
+  }
+  normalizeStringPropertyValues(allPlannedBlocks, stringPropertyNames)
 
   // §8.7 ref-token-→-id normalization. For every property classified
   // as refList here AND for any pre-existing ref/refList schema the

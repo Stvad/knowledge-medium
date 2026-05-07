@@ -13,6 +13,7 @@ import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
   normalizeRefPropertyValues,
+  normalizeStringPropertyValues,
 } from '../schemaReconciliation'
 
 const WS = 'ws-roam'
@@ -185,6 +186,29 @@ describe('applySchemaReconciliation', () => {
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]).toMatch(/Failed to register schema "roam:bad"/)
     expect(env.repo.propertySchemas.has('roam:bad')).toBe(false)
+  })
+})
+
+describe('normalizeStringPropertyValues', () => {
+  it('stringifies non-string JSON values for string-classified properties', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:mixed': 'plain'}),
+      block('b', {'roam:mixed': 1}),
+      block('c', {'roam:mixed': ['one', 'two']}),
+      block('d', {'roam:mixed': {nested: true}}),
+      block('e', {'roam:other': ['untouched']}),
+    ]
+
+    normalizeStringPropertyValues(blocks, new Set(['roam:mixed']))
+
+    expect(blocks.map(b => b.properties['roam:mixed'])).toEqual([
+      'plain',
+      '1',
+      '["one","two"]',
+      '{"nested":true}',
+      undefined,
+    ])
+    expect(blocks[4].properties['roam:other']).toEqual(['untouched'])
   })
 })
 

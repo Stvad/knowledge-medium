@@ -166,6 +166,37 @@ export const applySchemaReconciliation = async (
   }
 }
 
+const jsonStringify = (value: unknown): string => {
+  try {
+    const json = JSON.stringify(value)
+    return json === undefined ? String(value) : json
+  } catch {
+    return String(value)
+  }
+}
+
+/** String-schema normalization for mixed Roam attributes. Some Roam
+ *  fields are scalar on most pages but multi-value arrays on a few
+ *  pages (`email::` with child bullets, `Twitter::` with multiple
+ *  accounts, etc.). When reconciliation chooses the string preset for
+ *  that mixed field, preserve the non-string JSON shape as a JSON text
+ *  value so the registered string codec can decode it. */
+export const normalizeStringPropertyValues = (
+  blocks: ReadonlyArray<BlockData>,
+  stringPropertyNames: ReadonlySet<string>,
+): void => {
+  if (stringPropertyNames.size === 0) return
+  for (const block of blocks) {
+    if (!block.properties) continue
+    for (const name of stringPropertyNames) {
+      if (!(name in block.properties)) continue
+      const raw = block.properties[name]
+      if (typeof raw === 'string') continue
+      block.properties[name] = jsonStringify(raw)
+    }
+  }
+}
+
 /** Token-→-id normalization for ref/refList-typed properties. Walks
  *  every planned block and, for each property whose name is in
  *  `refPropertyKinds`, converts `[[X]]` token strings/arrays into the

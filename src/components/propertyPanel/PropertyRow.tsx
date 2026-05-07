@@ -9,6 +9,27 @@ import { PropertyShapeButton } from './shapeUi'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
 import type { PropertyPanelModelRow } from './model'
 
+const formatRawJsonValue = (value: unknown): string => {
+  try {
+    const json = JSON.stringify(value)
+    return json === undefined ? String(value) : json
+  } catch {
+    return String(value)
+  }
+}
+
+function RawJsonValue({value}: {value: unknown}) {
+  const rawJson = formatRawJsonValue(value)
+  return (
+    <div
+      className="h-7 truncate py-1 font-mono text-sm text-muted-foreground"
+      title={`Decode failed; raw JSON value: ${rawJson}`}
+    >
+      {rawJson}
+    </div>
+  )
+}
+
 export function PropertyRow({
   row,
   block,
@@ -115,9 +136,11 @@ export function PropertyRow({
       <div className="min-w-0" data-property-value="true">
         {Editor !== undefined && !row.decodeFailed ? (
           <Editor value={row.value} onChange={onChange} block={block} schema={row.schema} />
+        ) : row.decodeFailed ? (
+          <RawJsonValue value={row.encodedValue} />
         ) : (
           <div className="h-7 truncate py-1 text-sm text-muted-foreground/55">
-            {row.decodeFailed ? 'Decode failed' : 'No editor registered'}
+            No editor registered
           </div>
         )}
       </div>
