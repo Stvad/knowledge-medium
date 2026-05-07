@@ -1,5 +1,6 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 import { useRepo } from '@/context/repo.tsx'
+import { UserSchemasService } from '@/data/userSchemasService.ts'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
 import {
   AppExtension,
@@ -173,6 +174,15 @@ export function AppRuntimeProvider({
       cleanups.length = 0
     }
   }, [repo, runtime, safeMode, workspaceId])
+
+  // Reactive bridge between user-defined property-schema blocks and
+  // propertySchemasFacet's user-data bucket (Phase 3b).
+  useEffect(() => {
+    if (!workspaceId) return
+    const service = new UserSchemasService(repo)
+    const dispose = service.start()
+    return () => dispose()
+  }, [repo, workspaceId])
 
   return (
     <AppRuntimeContextProvider value={runtime}>
