@@ -249,11 +249,25 @@ export interface Codec<T> {
 }
 
 export interface WhereCapability<T> {
-  /** Encode a decoded value to its scalar SQLite-comparable form. For
-   *  many codecs this equals `encode` (string, number, date all encode
-   *  to scalars already). Booleans diverge: storage encodes `true` /
-   *  `false`, but `=`-comparison binds `1` / `0`. URL: storage and
-   *  comparison both use the normalized URL string. */
+  /** Encode a decoded value to its scalar SQLite-comparable form.
+   *
+   *  **Validation boundary.** Typed-query callers can pass any
+   *  runtime value; TypeScript's `T` parameter isn't a runtime check.
+   *  `where.encode` MUST validate that the input is actually a value
+   *  of type T and throw `CodecError` (or equivalent) otherwise —
+   *  same shape as `decode` validating its JSON input. A naive
+   *  `v => v ? 1 : 0` would coerce truthy-strings to `1` and silently
+   *  return wrong rows; the boolean codec's `where.encode` validates
+   *  `typeof v === 'boolean'` first.
+   *
+   *  For many codecs `where.encode` is structurally similar to
+   *  `encode` (string/number/date all encode to scalars already);
+   *  the difference is that `where.encode` runs *before* trusting
+   *  the input, while `encode` is documented as "called only on
+   *  validated T from the type system" at the four boundary call
+   *  sites. Borrowing `decode`'s validation logic via a shared
+   *  helper (`assertT(v): T`) and then encoding is the cleanest
+   *  pattern. */
   encode(value: T): WhereValue
 }
 
@@ -269,16 +283,31 @@ export interface RefListCodec extends Codec<readonly string[]> {
   // No `where`.
 }
 
-// Kernel codecs:
-const stringCodec:  Codec<string>  = { type: 'string',  encode, decode, where: { encode: v => v } }
-const numberCodec:  Codec<number>  = { type: 'number',  encode, decode, where: { encode: v => v } }
-const booleanCodec: Codec<boolean> = { type: 'boolean', encode, decode, where: { encode: v => v ? 1 : 0 } }
-const dateCodec:    Codec<Date>    = { type: 'date',    encode, decode, where: { encode: v => v.toISOString() } }
+// Kernel codecs — `where.encode` validates input first, then encodes.
+const stringCodec:  Codec<string>  = {
+  type: 'string', encode, decode,
+  where: { encode: v => { if (typeof v !== 'string')  throw new CodecError('string',  v); return v } },
+}
+const numberCodec:  Codec<number>  = {
+  type: 'number', encode, decode,
+  where: { encode: v => { if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v); return v } },
+}
+const booleanCodec: Codec<boolean> = {
+  type: 'boolean', encode, decode,
+  where: { encode: v => { if (typeof v !== 'boolean') throw new CodecError('boolean', v); return v ? 1 : 0 } },
+}
+const dateCodec:    Codec<Date>    = {
+  type: 'date', encode, decode,
+  where: { encode: v => { if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v); return v.toISOString() } },
+}
+const url: Codec<string> = {
+  type: 'url', encode: validateUrl, decode: validateUrl,
+  where: { encode: v => { if (typeof v !== 'string') throw new CodecError('string', v); return validateUrl(v) } },
+}
 const listCodec    = <T>(inner: Codec<T>): Codec<T[]> => ({ type: 'list', encode, decode })       // no where
 const objectCodec  = <T>(): Codec<T> => ({ type: 'object', encode, decode })                      // no where
 const ref     = (opts?) => ({ type: 'ref',     targetTypes: ..., encode, decode })                // no where
 const refList = (opts?) => ({ type: 'refList', targetTypes: ..., encode, decode })                // no where
-const url:    Codec<string> = { type: 'url', encode: validateUrl, decode: validateUrl, where: { encode: v => v } }
 ```
 
 Predicates collapse to one-liners on `type`:
@@ -297,7 +326,14 @@ if (!schema.codec.where) {
     `codec type ${schema.codec.type} doesn't support equality predicates ` +
     `(use referencedBy for refs, dedicated query for collections)`)
 }
-const sqlValue = value === null ? null : schema.codec.where.encode(value)
+// where.encode is the validation boundary — it throws on non-T
+// inputs. The compiler doesn't pre-validate; the codec does.
+let sqlValue: WhereValue
+try {
+  sqlValue = value === null ? null : schema.codec.where.encode(value)
+} catch (err) {
+  throw new Error(`[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`)
+}
 // ... bind sqlValue into json_extract(...) = ?
 ```
 
@@ -483,20 +519,32 @@ For schemas whose preset has no `ConfigEditor` (primitive presets — `string`, 
 
 ### 5. `UserSchemasService` — reactive subscription over schema blocks
 
+The service holds **one** in-memory list, `this.contributions`, that's the source of truth for both reactive (subscription) and command (`appendUserSchema` from §7's `addSchema`) updates. Both paths assign to and publish from this same field. Any divergence — e.g. command path mutating `this.contributions` while subscription writes a freshly-rebuilt local array directly to the runtime bucket without updating `this.contributions` — would mean the next command-path append starts from a stale view and clobbers the subscription's rebuild.
+
 ```ts
 // src/data/userSchemasService.ts (new)
 export class UserSchemasService {
   constructor(private readonly repo: Repo) {}
 
+  /** Single source of truth for the user-data slot. Both the
+   *  subscription rebuild and `appendUserSchema` assign to this
+   *  field, then publish it via setRuntimeContributions. */
+  private contributions: readonly AnyPropertySchema[] = []
+
   start(): () => void {
     return this.repo.subscribeBlocks({types: ['property-schema']}, blocks => {
       const presets = this.repo.valuePresets
-      const contributions: AnyPropertySchema[] = []
+      const next: AnyPropertySchema[] = []
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
-        if (built) contributions.push(built)
+        if (built) next.push(built)
       }
-      this.repo.setRuntimeContributions(propertySchemasFacet, 'user-data', contributions)
+      // Assign first, then publish — same shape as appendUserSchema
+      // so command-path and reactive-path updates share one in-memory
+      // source of truth. A subsequent appendUserSchema starts from
+      // the rebuilt list, not from a stale snapshot.
+      this.contributions = next
+      this.repo.setRuntimeContributions(propertySchemasFacet, 'user-data', this.contributions)
     })
   }
 
