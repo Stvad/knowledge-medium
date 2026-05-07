@@ -7,6 +7,7 @@
 import { useMemo, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
+import { useBlockContext } from '@/context/block'
 import { useChildIds, useHandle } from '@/hooks/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
@@ -91,6 +92,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const childIds = useChildIds(block)
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
+  const {panelId} = useBlockContext()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   const [activeConfigRowName, setActiveConfigRowName] = useState<string | null>(null)
 
@@ -172,6 +174,22 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     }
   }
 
+  const handleConfigure = (rowName: string) => {
+    // User-defined schemas have a backing property-schema block — open
+    // it in a side panel so the user can edit name/preset/config in the
+    // same renderer they'd see inline. Kernel/plugin schemas don't have
+    // a block; fall back to the inline FieldConfigSheet so the row's
+    // glyph click still does something useful.
+    const schemaBlockId = block.repo.userSchemas.getSchemaBlockId(rowName)
+    if (schemaBlockId) {
+      window.dispatchEvent(new CustomEvent('open-panel', {
+        detail: {blockId: schemaBlockId, sourcePanelId: panelId},
+      }))
+      return
+    }
+    setActiveConfigRowName(rowName)
+  }
+
   const renderPropertyRow = (sectionId: string, row: PropertyPanelModelRow) => (
     <PropertyRow
       key={`${sectionId}:${row.name}`}
@@ -179,7 +197,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       block={block}
       readOnly={readOnly}
       onNavigate={handlePropertyRowKeyDown}
-      onConfigure={() => setActiveConfigRowName(row.name)}
+      onConfigure={() => handleConfigure(row.name)}
       onChange={(next) => writeProperty(block, row.schema, next)}
       onRename={(newName) => void renameProperty({
         block,

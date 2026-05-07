@@ -36,6 +36,13 @@ export class UserSchemasService {
    *  and publish via `setRuntimeContributions`. */
   private contributions: readonly AnyPropertySchema[] = []
 
+  /** Maps a registered schema's `name` to the property-schema block
+   *  that materialised it. Lets UI surfaces (e.g. the property panel
+   *  glyph button) open the schema block in a panel for in-place
+   *  editing. Built from the same subscription that produces
+   *  `contributions`, so it's always in sync. */
+  private nameToBlockId = new Map<string, string>()
+
   /** Active block-subscription disposer, set by `start()`. */
   private subscriptionDisposer: Unsubscribe | null = null
 
@@ -50,6 +57,13 @@ export class UserSchemasService {
 
   constructor(private readonly repo: Repo) {}
 
+  /** Look up the property-schema block id for a registered user-data
+   *  schema name. Returns undefined for kernel/plugin schemas (which
+   *  don't have backing blocks) or names that aren't registered. */
+  getSchemaBlockId(name: string): string | undefined {
+    return this.nameToBlockId.get(name)
+  }
+
   start(): () => void {
     if (this.subscriptionDisposer) {
       throw new Error('[UserSchemasService] already started')
@@ -59,11 +73,16 @@ export class UserSchemasService {
       this.latestBlocks = blocks
       const presets = this.repo.valuePresets
       const next: AnyPropertySchema[] = []
+      const nextNameToBlockId = new Map<string, string>()
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
-        if (built) next.push(built)
+        if (built) {
+          next.push(built)
+          nextNameToBlockId.set(built.name, block.id)
+        }
       }
       this.contributions = next
+      this.nameToBlockId = nextNameToBlockId
       this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
     }
 
@@ -143,12 +162,14 @@ export class UserSchemasService {
   /** Synchronously add a user-data schema to the runtime bucket. Used
    *  by `addSchema` after persisting the schema block — registers
    *  before any dependent property write so the form's "create-then-
-   *  write-initial-value" flow doesn't race the subscription tick. */
-  appendUserSchema(schema: AnyPropertySchema): void {
+   *  write-initial-value" flow doesn't race the subscription tick.
+   *  `blockId` is the property-schema block that produced `schema`. */
+  appendUserSchema(schema: AnyPropertySchema, blockId: string): void {
     this.contributions = [
       ...this.contributions.filter(s => s.name !== schema.name),
       schema,
     ]
+    this.nameToBlockId.set(schema.name, blockId)
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
   }
 
@@ -220,7 +241,7 @@ export class UserSchemasService {
     // Register synchronously, before returning. The subscription will
     // fire later (the block write triggers it) but arrives at an
     // idempotent state.
-    this.appendUserSchema(newSchema)
+    this.appendUserSchema(newSchema, childId)
     return newSchema
   }
 }

@@ -1,6 +1,8 @@
-/** Dedicated renderer for `'property-schema'` blocks. Owns the
- *  schema-editing UI: a name input, a preset picker, and a dispatched
- *  `preset.ConfigEditor` for presets that ship one. See
+/** Renderer for `'property-schema'` blocks. Wraps the default block
+ *  layout (so the block keeps normal indentation, children, focus,
+ *  drag, hover, etc.) and only replaces the content area with a
+ *  schema editor — name input, preset picker, dispatched
+ *  `preset.ConfigEditor`, and a delete button. See
  *  user-defined-properties.md §4a. */
 
 import { useCallback, useMemo, useState, type ChangeEvent } from 'react'
@@ -18,6 +20,7 @@ import { Input } from '@/components/ui/input.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import type { BlockRenderer, BlockRendererProps } from '@/types.ts'
 import { PropertyShapeGlyph } from '@/components/propertyPanel/shapeUi.tsx'
+import { DefaultBlockRenderer } from './DefaultBlockRenderer.tsx'
 
 const renderConfigEditor = (
   preset: AnyValuePreset,
@@ -29,7 +32,7 @@ const renderConfigEditor = (
   return <ConfigEditor value={value} onChange={onChange} />
 }
 
-const PropertySchemaBlockRendererImpl = ({block}: BlockRendererProps) => {
+const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProps) => {
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
@@ -110,7 +113,7 @@ const PropertySchemaBlockRendererImpl = ({block}: BlockRendererProps) => {
     try {
       encoded = preset.configCodec.encode(next as never) as Record<string, unknown>
     } catch (err) {
-      console.warn(`[PropertySchemaBlockRenderer] cannot encode config:`, err)
+      console.warn(`[PropertySchemaContentRenderer] cannot encode config:`, err)
       return
     }
     await block.set(presetConfigProp, encoded)
@@ -121,8 +124,8 @@ const PropertySchemaBlockRendererImpl = ({block}: BlockRendererProps) => {
   const presetEntries = Array.from(presets.values()).sort((a, b) => a.label.localeCompare(b.label))
 
   return (
-    <div className="rounded-md border border-border bg-card px-4 py-3 text-sm">
-      <div className="mb-3 flex items-center gap-2">
+    <div className="w-full space-y-2 py-1">
+      <div className="flex items-center gap-2">
         <PropertyShapeGlyph
           shape={presetId}
           className={preset ? 'text-fuchsia-500' : 'text-muted-foreground'}
@@ -143,7 +146,7 @@ const PropertySchemaBlockRendererImpl = ({block}: BlockRendererProps) => {
         />
       </div>
 
-      <div className="mb-3 grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
+      <div className="grid grid-cols-[6rem,minmax(0,1fr)] items-center gap-3">
         <label className="text-xs font-semibold text-muted-foreground">Type</label>
         <div className="relative max-w-xs">
           <select
@@ -184,7 +187,7 @@ const PropertySchemaBlockRendererImpl = ({block}: BlockRendererProps) => {
       )}
 
       {!readOnly && (
-        <div className="mt-3 flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <Button
             type="button"
             variant="ghost"
@@ -199,9 +202,19 @@ const PropertySchemaBlockRendererImpl = ({block}: BlockRendererProps) => {
     </div>
   )
 }
+PropertySchemaContentRenderer.displayName = 'PropertySchemaContentRenderer'
 
+/** Outer wrapper: keeps the default block layout (children,
+ *  indentation, drag handle, focus chrome) and swaps in the
+ *  schema-editing content renderer. */
 export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
-  PropertySchemaBlockRendererImpl,
+  (props: BlockRendererProps) => (
+    <DefaultBlockRenderer
+      {...props}
+      ContentRenderer={PropertySchemaContentRenderer}
+      EditContentRenderer={PropertySchemaContentRenderer}
+    />
+  ),
   {
     canRender: ({block}: BlockRendererProps): boolean => {
       // useRenderer's chooser also calls useData(block) before
@@ -218,3 +231,4 @@ export const PropertySchemaBlockRenderer: BlockRenderer = Object.assign(
     priority: () => 100,
   },
 )
+PropertySchemaBlockRenderer.displayName = 'PropertySchemaBlockRenderer'
