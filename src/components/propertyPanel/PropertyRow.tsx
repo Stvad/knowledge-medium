@@ -56,6 +56,7 @@ export function PropertyRow({
     >
       <PropertyShapeButton
         shape={row.shape}
+        Glyph={row.Glyph}
         label={row.labelText}
         schemaUnknown={row.schemaUnknown}
         decodeFailed={row.decodeFailed}

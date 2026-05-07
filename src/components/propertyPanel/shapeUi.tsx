@@ -1,3 +1,4 @@
+import type { ComponentType } from 'react'
 import {
   Braces,
   Calendar,
@@ -19,27 +20,39 @@ const TYPE_GLYPHS: Record<string, typeof TypeIcon> = {
   url: LinkIcon,
 }
 
+/** Resolves the icon component for a property row, preset picker, or
+ *  field-config sheet. The `Glyph` prop wins (used for per-name
+ *  `PropertyEditorOverride.Glyph` overrides AND `ValuePreset.Glyph`
+ *  contributions threaded through `resolvePropertyDisplay`); falling
+ *  back to the codec-type-keyed kernel table for plugin types without
+ *  a registered glyph, and finally to the generic text icon. */
 export function PropertyShapeGlyph({
   shape,
+  Glyph,
   className = '',
 }: {
-  /** Codec type (open string). Falls back to the generic text glyph
-   *  for plugin-contributed types without a kernel-mapped icon. */
+  /** Codec type (open string). Used for the kernel fallback when no
+   *  override `Glyph` is supplied. */
   shape: string
+  /** Optional override (per-name editor override or preset glyph). */
+  Glyph?: ComponentType<{className?: string}>
   className?: string
 }) {
+  if (Glyph) return <Glyph className={`h-3.5 w-3.5 ${className}`} />
   const Icon = TYPE_GLYPHS[shape] ?? TypeIcon
   return <Icon className={`h-3.5 w-3.5 ${className}`} strokeWidth={1.8} />
 }
 
 export function PropertyShapeButton({
   shape,
+  Glyph,
   label,
   schemaUnknown,
   decodeFailed = false,
   onClick,
 }: {
   shape: string
+  Glyph?: ComponentType<{className?: string}>
   label: string
   schemaUnknown: boolean
   decodeFailed?: boolean
@@ -65,7 +78,7 @@ export function PropertyShapeButton({
         onClick()
       }}
     >
-      <PropertyShapeGlyph shape={shape} />
+      <PropertyShapeGlyph shape={shape} Glyph={Glyph} />
     </button>
   )
 }

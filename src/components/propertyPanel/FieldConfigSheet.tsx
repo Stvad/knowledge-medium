@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { ChevronDown, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { AnyValuePreset } from '@/data/api'
@@ -9,6 +9,9 @@ export interface FieldConfig {
   labelText: string
   /** Codec type (open string). */
   shape: string
+  /** Optional override glyph from the resolved `PropertyEditorOverride`
+   *  or `ValuePreset`. Falls back to the codec-type icon when absent. */
+  Glyph?: ComponentType<{className?: string}>
   shapeOptions: readonly string[]
   schemaUnknown: boolean
   decodeFailed: boolean
@@ -47,6 +50,7 @@ export function FieldConfigSheet({
           <div className="flex min-w-0 items-center gap-2 text-lg font-semibold">
             <PropertyShapeGlyph
               shape={field.shape}
+              Glyph={field.Glyph}
               className={field.schemaUnknown ? 'text-muted-foreground' : 'text-fuchsia-500'}
             />
             <span className="truncate">{field.labelText}</span>

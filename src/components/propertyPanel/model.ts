@@ -1,3 +1,4 @@
+import { type ComponentType } from 'react'
 import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
@@ -34,6 +35,10 @@ export interface PropertyPanelModelRow {
   readonly value: unknown
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly Editor?: PropertyEditor<any>
+  /** Resolved glyph: per-name `PropertyEditorOverride.Glyph` wins, else
+   *  the matching `ValuePreset.Glyph`. Undefined falls back to the
+   *  codec-type-keyed icon table inside `PropertyShapeGlyph`. */
+  readonly Glyph?: ComponentType<{className?: string}>
   readonly canRename: boolean
   readonly canDelete: boolean
   readonly canChangeShape: boolean
@@ -138,6 +143,7 @@ const resolveModelRow = (
     decodeFailed,
     value: decodeFailed ? row.encodedValue : decodedValue,
     Editor: display.Editor,
+    Glyph: display.Glyph,
     canRename: !args.hidden && !display.isKnown,
     canDelete: !args.hidden && row.isSet && !isTypeMembershipRow,
     canChangeShape: !args.hidden && !display.isKnown,

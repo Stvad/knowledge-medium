@@ -71,6 +71,7 @@ const fieldConfigForRow = (
   return {
     labelText: row.labelText,
     shape: row.shape,
+    Glyph: row.Glyph,
     shapeOptions: [row.shape],
     schemaUnknown: row.schemaUnknown,
     decodeFailed: row.decodeFailed,

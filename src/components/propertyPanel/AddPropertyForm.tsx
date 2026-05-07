@@ -190,6 +190,7 @@ export function AddPropertyForm({
     >
       <PropertyShapeButton
         shape={presetId}
+        Glyph={preset?.Glyph}
         schemaUnknown
         label="New field"
         onClick={() => setConfigOpen(true)}
@@ -263,6 +264,7 @@ export function AddPropertyForm({
             >
               <PropertyShapeGlyph
                 shape={s.schema.codec.type}
+                Glyph={uis.get(s.schema.name)?.Glyph ?? s.preset?.Glyph}
                 className="text-muted-foreground"
               />
               <span className="flex-1 truncate">{s.schema.name}</span>
@@ -279,6 +281,7 @@ export function AddPropertyForm({
         field={configOpen ? {
           labelText: propertyName.trim() || 'New field',
           shape: presetId,
+          Glyph: preset?.Glyph,
           shapeOptions: presetOptionIds,
           schemaUnknown: true,
           decodeFailed: false,
