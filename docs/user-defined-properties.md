@@ -347,6 +347,40 @@ Three properties this gives:
 
 The `where` namespace is intentionally a sub-object rather than a flat `whereEncode` field: future operators (`<` / `>` / range queries) extend the namespace (`where.compare`, `where.between`) without breaking codec authors.
 
+#### `codecs.optional(inner)` — wrapper contract
+
+`codecs.optional` is a kernel codec wrapper used by the `'date'` preset (`build: () => codecs.optional(codecs.date)` so unset dates surface as `undefined` rather than crashing on encode). After dropping `shape`, the wrapper's contract has to be explicit:
+
+```ts
+const optional = <T>(inner: Codec<T>): Codec<T | undefined> => ({
+  // Preserve inner.type — editor lookup keys on type, and an optional
+  // wrapper around 'date' is still semantically a date for picker /
+  // glyph / preset purposes. Wrapping doesn't change "what kind of
+  // value this is."
+  type: inner.type,
+  encode: v => v === undefined ? null : inner.encode(v),
+  decode: j => j === null || j === undefined ? undefined : inner.decode(j),
+  // Delegate `where` only when the inner is queryable.
+  where: inner.where && {
+    encode: v => {
+      // Per §8: typed-query callers use `null` (not `undefined`) for
+      // unset matching. `undefined` reaching where.encode is a caller
+      // bug — typed-query at the outer layer rejects undefined where
+      // values, but this layer of validation makes the codec
+      // self-defending too.
+      if (v === undefined) throw new CodecError(`${inner.type} (use null for unset)`, v)
+      return inner.where!.encode(v)
+    },
+  },
+})
+```
+
+Three properties:
+
+- **`type` is preserved.** `optional(codecs.date).type === 'date'`. Editor/glyph/preset lookup all see `'date'` and resolve to the date preset uniformly. Without this, an `optional`-wrapped codec would have a different type and lose its preset.
+- **`where` delegates to inner when present.** A non-`undefined` value passes through `inner.where.encode` (which validates and encodes per the §1a contract). `optional(codecs.date)` is queryable; `optional(codecs.list(...))` is not (inner has no `where`).
+- **`undefined` is rejected at the where boundary.** Typed-query's outer layer already rejects `where.foo = undefined` (caller passes `null` for unset matching per [type-system.md §8](type-system.md)), but the codec defends against it too. `null` itself is handled at the typed-query compiler level (compiles to `IS NULL`) and never reaches `where.encode`.
+
 What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. The where-clause check no longer needs it — `codec.where` answers queryability directly. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
 
 The pre-existing `Codec.shape: CodecShape` field, the `CodecShape` type itself, and the `isStringCodec` / `isListCodec` / `isObjectCodec` / etc. shape-keyed predicates all go away. `inferShapeFromValue` becomes `inferTypeFromValue`, returns one of `'string' | 'number' | 'boolean' | 'list' | 'object'` (a known-primitive subset of the open string namespace).
@@ -724,13 +758,9 @@ async addSchema(args: {
   this.appendUserSchema(newSchema)
   return newSchema
 }
-
-// On UserSchemasService — synchronous slot update
-private appendUserSchema(schema: AnyPropertySchema): void {
-  this.userSchemas = [...this.userSchemas.filter(s => s.name !== schema.name), schema]
-  this.repo.setRuntimeContributions(propertySchemasFacet, 'user-data', this.userSchemas)
-}
 ```
+
+(`appendUserSchema` is defined in §5 alongside the subscription handler — both assign to and publish from `this.contributions`, the single source of truth.)
 
 **Why synchronous registration is load-bearing.** The form's flow is "addSchema, then write the property's initial value." If we leaned on the subscription to update the user-data bucket, the next write could race the subscription tick and `repo.propertySchemas.get(name)` would return undefined — the unknown-schema fallback path takes over and we end up with an ad-hoc string property instead of a properly-typed one. The same shape applies to the Roam importer (§8): planned schema objects are registered synchronously via `appendUserSchema` during apply, before any content write that depends on them. Both call sites take the registration into the **command path** rather than waiting for the reactive subscription. The subscription is steady-state for *external* changes (sync from another device, hand-edit of a property-schema block, undo/redo) where there's no caller waiting for the next write.
 
