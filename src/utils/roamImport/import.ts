@@ -54,6 +54,10 @@ import type { RoamExport } from './types'
 import { writeImportLog } from './report'
 import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'
 import type { RoamMemoImportPlanSummary } from './roamMemo'
+import {
+  applySchemaReconciliation,
+  collectSchemaReconciliationPlan,
+} from './schemaReconciliation'
 
 type AliasIdMap = ReadonlyMap<string, string>
 
@@ -217,6 +221,29 @@ export const importRoam = async (
   const typeCandidates = collectTypeCandidates(plan, typeSnapshot.types)
   if (typeCandidates.length > 0) {
     log(`Found ${typeCandidates.length} isa:: type candidates`)
+  }
+
+  // Phase 4 schema reconciliation: classify every property name across
+  // the planned blocks and register a property schema for each
+  // unregistered name BEFORE content writes start. This way the
+  // descendant-chunk loop below sees a fully-populated property-schema
+  // registry; values encode through the registered codecs from the
+  // first write.
+  const allPlannedBlocks: BlockData[] = []
+  for (const desc of plan.descendants) allPlannedBlocks.push(desc.data)
+  for (const page of plan.pages) {
+    if (page.data) allPlannedBlocks.push(page.data)
+  }
+  const reconciliation = collectSchemaReconciliationPlan(allPlannedBlocks, repo)
+  if (reconciliation.skippedReserved.length > 0) {
+    plan.diagnostics.push(
+      `Skipped reserved names during schema reconciliation: ${reconciliation.skippedReserved.join(', ')}`,
+    )
+  }
+  if (reconciliation.toRegister.length > 0 && !options.dryRun) {
+    log(`Registering ${reconciliation.toRegister.length} new property schemas…`)
+    await applySchemaReconciliation(reconciliation.toRegister, repo, plan.diagnostics)
+    log(`Registered ${reconciliation.toRegister.length} property schemas (${sinceLastPhase()})`)
   }
 
   if (options.dryRun) {
