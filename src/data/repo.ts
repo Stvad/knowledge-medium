@@ -88,6 +88,7 @@ import { SELECT_BLOCK_BY_ID_SQL } from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
+import { propertiesPageBlockId } from './propertiesPage'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -423,6 +424,14 @@ export class Repo {
 
   get valuePresets(): ReadonlyMap<string, AnyValuePreset> {
     return this._valuePresets
+  }
+
+  /** Deterministic id of the workspace's Properties page (parent of
+   *  all `'property-schema'` blocks). Created lazily by
+   *  `getOrCreatePropertiesPage` during workspace bootstrap. */
+  get propertiesPageId(): string | null {
+    if (!this._activeWorkspaceId) return null
+    return propertiesPageBlockId(this._activeWorkspaceId)
   }
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the

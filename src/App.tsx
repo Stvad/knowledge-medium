@@ -21,6 +21,7 @@ import {
 import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedTutorial } from '@/initData.ts'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 
@@ -153,6 +154,10 @@ const getInitialBlock = memoize(
     if (freshlyCreated) {
       await seedTutorial(repo, workspaceId)
     }
+
+    // Ensure the Properties page exists (idempotent, deterministic id).
+    // User-defined property-schema blocks live under it.
+    await getOrCreatePropertiesPage(repo, workspaceId)
 
     // Land on today's daily note. getOrCreateDailyNote is idempotent
     // under deterministic UUIDs: two clients booting offline converge

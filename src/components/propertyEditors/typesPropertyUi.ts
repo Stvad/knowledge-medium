@@ -10,6 +10,7 @@ import {
   focusedBlockIdProp,
   isCollapsedProp,
   isEditingProp,
+  presetConfigProp,
   rendererNameProp,
   rendererProp,
   selectionStateProp,
@@ -35,6 +36,9 @@ const hiddenKernelPropertyUis = [
   focusedBlockIdProp,
   isCollapsedProp,
   isEditingProp,
+  // Schema-block config is edited through the property-schema block
+  // renderer (§4a), not the property panel.
+  presetConfigProp,
   rendererNameProp,
   rendererProp,
   selectionStateProp,

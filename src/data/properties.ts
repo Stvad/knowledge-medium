@@ -135,6 +135,33 @@ export const sourceBlockIdProp = defineProperty<string | undefined>('sourceBlock
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── property-schema kernel type fields (user-defined-properties §4) ────
+
+/** User-supplied property name on a `'property-schema'` block. */
+export const propertyNameProp = defineProperty<string>('property-schema:name', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Preset id on a `'property-schema'` block — matches a registered
+ *  `ValuePreset.id` (and the codec's `type` for codecs built by that
+ *  preset). */
+export const presetIdProp = defineProperty<string>('property-schema:preset', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Preset-specific config JSON. Stored as opaque JSON via the
+ *  `unsafeIdentity` codec; validation happens in the preset's
+ *  `configCodec.decode` at registration time. */
+export const presetConfigProp = defineProperty<Record<string, unknown>>('property-schema:config', {
+  codec: codecs.unsafeIdentity<Record<string, unknown>>('object'),
+  defaultValue: {},
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Re-export of the canonical alias schema (defined under
  *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
  *  processor can reference it without circling back through this
@@ -219,4 +246,8 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,
+  // property-schema fields
+  propertyNameProp,
+  presetIdProp,
+  presetConfigProp,
 ] as ReadonlyArray<PropertySchema<unknown>>
