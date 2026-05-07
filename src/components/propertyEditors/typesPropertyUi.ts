@@ -42,7 +42,6 @@ import { TypesPropertyEditor } from './TypesPropertyEditor'
 export const typesPropertyUi = definePropertyUi<readonly string[]>({
   name: typesProp.name,
   label: 'Types',
-  category: 'Core',
   Editor: TypesPropertyEditor,
 })
 

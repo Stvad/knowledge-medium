@@ -23,14 +23,11 @@ export interface PropertyUiContribution<T = unknown> {
   readonly name: string
   /** Display name (defaults to `name` when absent). */
   readonly label?: string
-  /** Property-editor grouping. */
-  readonly category?: string
   /** Hide from the normal property panel. Hidden rows can still be
    *  revealed in the debug/metadata section; this affects placement and
    *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
-  readonly Renderer?: PropertyRenderer<T>
 }
 
 export interface PropertyEditorProps<T> {
@@ -58,13 +55,6 @@ export interface PropertyEditorFallbackContribution {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   readonly Editor: PropertyEditor<any>
 }
-
-export interface PropertyRendererProps<T> {
-  value: T
-  block: unknown
-}
-
-export type PropertyRenderer<T> = (props: PropertyRendererProps<T>) => JSX.Element
 
 /** Plugin-augmentable type registry for property schemas — mirrors
  *  `MutatorRegistry` and `QueryRegistry`. Static plugins augment via
@@ -97,10 +87,10 @@ export const definePropertyUi = <T>(
 export type AnyPropertySchema = PropertySchema<any>
 
 /** Variance-erased UI-contribution type for storage in
- *  `propertyUiFacet`'s contributions. `PropertyEditor<T>` /
- *  `PropertyRenderer<T>` are contravariant in `T` (they accept
- *  `value: T`), so typed plugin contributions can't widen to
- *  `PropertyUiContribution<unknown>`. Same `any`-escape pattern. */
+ *  `propertyUiFacet`'s contributions. `PropertyEditor<T>` is
+ *  contravariant in `T` (it accepts `value: T`), so typed plugin
+ *  contributions can't widen to `PropertyUiContribution<unknown>`.
+ *  Same `any`-escape pattern. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertyUiContribution = PropertyUiContribution<any>
 

@@ -66,7 +66,6 @@ const TaskDueDateEditor: PropertyEditor<Date | undefined> = (): JSX.Element =>
 const dueDateUi = definePropertyUi<Date | undefined>({
   name: 'tasks:due-date',
   label: 'Due date',
-  category: 'Tasks',
   Editor: TaskDueDateEditor,
 })
 

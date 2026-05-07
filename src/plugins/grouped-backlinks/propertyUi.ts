@@ -8,6 +8,5 @@ import { GroupedBacklinksDefaultsEditor } from './GroupedBacklinksConfigEditor.t
 export const groupedBacklinksDefaultsUi = definePropertyUi<GroupedBacklinksConfig>({
   name: groupedBacklinksDefaultsProp.name,
   label: 'Grouped backlinks defaults',
-  category: 'Grouped Backlinks',
   Editor: GroupedBacklinksDefaultsEditor,
 })
