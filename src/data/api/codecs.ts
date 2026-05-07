@@ -184,13 +184,62 @@ const urlCodec: Codec<string> = {
 /** Explicitly unsafe identity codec. Reserved for kernel-internal use where
  *  the JSON shape is guaranteed by construction. NOT a default for plugin
  *  authors — pick a primitive codec or compose your own. The `type`
- *  argument lets callers tag the codec for the inferTypeFromValue
+ *  argument lets callers tag the codec for the `inferTypeFromValue`
  *  fallback path; pass `'object'` for object-shaped data, `'string'`
  *  for opaque strings, etc. */
 const unsafeIdentity = <T>(type = 'object'): Codec<T> => ({
   type,
   encode: v => v as unknown,
   decode: j => j as T,
+})
+
+/** Absence-aware string codec for kernel/plugin properties whose value
+ *  type is `string | undefined`. NOT a generic wrapper — concrete codec
+ *  with the `'string'` `type` discriminator. Callers narrow to the
+ *  absence-aware variant via TypeScript on the schema's value type, not
+ *  via `c.type`. See the "Why no codecs.optional" section. */
+const optionalStringCodec: Codec<string | undefined> = {
+  type: 'string',
+  encode: v => (v === undefined ? null : v),
+  decode: j => {
+    if (j === null || j === undefined) return undefined
+    if (typeof j !== 'string') throw new CodecError('string', j)
+    return j
+  },
+  where: {
+    encode: v => {
+      if (v === undefined) throw new CodecError('string (use null for unset)', v)
+      if (typeof v !== 'string') throw new CodecError('string', v)
+      return v
+    },
+  },
+}
+
+/** Absence-aware number codec — pair to `optionalString`. */
+const optionalNumberCodec: Codec<number | undefined> = {
+  type: 'number',
+  encode: v => (v === undefined ? null : v),
+  decode: j => {
+    if (j === null || j === undefined) return undefined
+    if (typeof j !== 'number' || !Number.isFinite(j)) throw new CodecError('finite number', j)
+    return j
+  },
+  where: {
+    encode: v => {
+      if (v === undefined) throw new CodecError('number (use null for unset)', v)
+      if (typeof v !== 'number' || !Number.isFinite(v)) throw new CodecError('finite number', v)
+      return v
+    },
+  },
+}
+
+/** Absence-aware unsafe-identity codec for engine-controlled object
+ *  state (editor selection, plugin-internal blobs). Same trust model as
+ *  `unsafeIdentity`: kernel/plugin owns the JSON shape, no validation. */
+const optionalIdentity = <T>(type = 'object'): Codec<T | undefined> => ({
+  type,
+  encode: v => (v === undefined ? null : (v as unknown)),
+  decode: j => (j === null || j === undefined ? undefined : (j as T)),
 })
 
 export const codecs = {
@@ -206,6 +255,9 @@ export const codecs = {
   ref,
   refList,
   unsafeIdentity,
+  optionalString: optionalStringCodec,
+  optionalNumber: optionalNumberCodec,
+  optionalIdentity,
 }
 
 export { CodecError }
