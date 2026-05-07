@@ -16,6 +16,7 @@ import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
+  AnyValuePreset,
   TypeContribution,
 } from '@/data/api'
 import type { InvalidationRule } from './invalidation.ts'
@@ -158,6 +159,27 @@ export const propertyEditorOverridesFacet = defineFacet<AnyPropertyEditorOverrid
         )
       }
       out.set(c.name, c)
+    }
+    return out
+  },
+  empty: () => new Map(),
+})
+
+/** Open-vocabulary preset registry. Keyed by preset id (matches the
+ *  codec `type` for codecs built by the preset). Last-wins on
+ *  collision, per facet convention. Plugins register through
+ *  `valuePresetsFacet.of(preset, {source: 'plugin'})`. */
+export const valuePresetsFacet = defineFacet<AnyValuePreset, ReadonlyMap<string, AnyValuePreset>>({
+  id: 'data.valuePresets',
+  combine: (values) => {
+    const out = new Map<string, AnyValuePreset>()
+    for (const p of values) {
+      if (out.has(p.id)) {
+        console.warn(
+          `[valuePresetsFacet] duplicate registration for "${p.id}"; last-wins per facet convention`,
+        )
+      }
+      out.set(p.id, p)
     }
     return out
   },

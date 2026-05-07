@@ -35,6 +35,23 @@ const readOnlyForBlock = (block: unknown): boolean =>
 
 // ──── Primitive fallback editors ────
 
+export function UrlPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
+  const readOnly = readOnlyForBlock(block)
+  const text = value === undefined || value === null ? '' : String(value)
+  return (
+    <Input
+      type="url"
+      className={INLINE_INPUT_CLASS}
+      value={text}
+      placeholder="https://…"
+      readOnly={readOnly}
+      onChange={(event) => {
+        if (!readOnly) onChange(event.target.value)
+      }}
+    />
+  )
+}
+
 export function StringPropertyEditor({value, onChange, block}: PropertyEditorProps<unknown>) {
   const readOnly = readOnlyForBlock(block)
   return (

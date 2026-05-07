@@ -4,6 +4,7 @@ import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.ts'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
 import { quickFindPlugin } from '@/plugins/quick-find'
@@ -26,6 +27,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernel contribution must be present in every static runtime.
   kernelDataExtension,
   kernelPropertyUiExtension,
+  kernelValuePresetsExtension,
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),

@@ -22,6 +22,7 @@ import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
+  AnyValuePreset,
   BlockData,
   BlockReference,
   Mutator,
@@ -58,6 +59,7 @@ import {
   propertySchemasFacet,
   queriesFacet,
   typesFacet,
+  valuePresetsFacet,
 } from './facets'
 import { ProcessorRunner } from './internals/processorRunner'
 import { Block } from './block'
@@ -318,6 +320,7 @@ export class Repo {
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
   private _propertyEditorOverrides: ReadonlyMap<string, AnyPropertyEditorOverride> = new Map()
+  private _valuePresets: ReadonlyMap<string, AnyValuePreset> = new Map()
   private invalidationRules: readonly InvalidationRule[] = []
   /** Currently-installed FacetRuntime, retained so
    *  `setRuntimeContributions` can mutate runtime contribution buckets
@@ -334,6 +337,8 @@ export class Repo {
   private readonly propertySchemasListeners = new Set<() => void>()
   /** Listeners for property-editor-override map changes. */
   private readonly propertyEditorOverridesListeners = new Set<() => void>()
+  /** Listeners for value-preset map changes. */
+  private readonly valuePresetsListeners = new Set<() => void>()
   /** Rebuild step descriptors. Defined once per Repo at construction;
    *  each step declares which facets it reads. `setFacetRuntime` runs
    *  every step; `setRuntimeContributions` runs only the steps whose
@@ -414,6 +419,10 @@ export class Repo {
 
   get propertyEditorOverrides(): ReadonlyMap<string, AnyPropertyEditorOverride> {
     return this._propertyEditorOverrides
+  }
+
+  get valuePresets(): ReadonlyMap<string, AnyValuePreset> {
+    return this._valuePresets
   }
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
@@ -1001,6 +1010,12 @@ export class Repo {
     return () => { this.propertyEditorOverridesListeners.delete(listener) }
   }
 
+  /** Subscribe to changes on the value-preset map. */
+  onValuePresetsChange(listener: () => void): () => void {
+    this.valuePresetsListeners.add(listener)
+    return () => { this.valuePresetsListeners.delete(listener) }
+  }
+
   snapshotTypeRegistries(): TypeRegistrySnapshot {
     return {types: this._types, propertySchemas: this._propertySchemas}
   }
@@ -1258,6 +1273,16 @@ export class Repo {
           this._propertyEditorOverrides = rt.read(propertyEditorOverridesFacet)
           for (const l of [...this.propertyEditorOverridesListeners]) {
             try { l() } catch (err) { console.error('[Repo] propertyEditorOverrides listener threw', err) }
+          }
+        },
+      },
+      {
+        id: 'valuePresets',
+        inputs: [valuePresetsFacet as Facet<unknown, unknown>],
+        run: (rt) => {
+          this._valuePresets = rt.read(valuePresetsFacet)
+          for (const l of [...this.valuePresetsListeners]) {
+            try { l() } catch (err) { console.error('[Repo] valuePresets listener threw', err) }
           }
         },
       },
