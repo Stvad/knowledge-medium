@@ -1,4 +1,4 @@
-import type { JSX } from 'react'
+import type { ComponentType, JSX } from 'react'
 import type { Codec } from './codecs'
 import type { ChangeScope } from './changeScope'
 
@@ -40,6 +40,11 @@ export interface PropertyEditorOverride<T = unknown> {
    *  destructive capabilities, not value editability. */
   readonly hidden?: boolean
   readonly Editor?: PropertyEditor<T>
+  /** Optional per-name glyph override. Defaults to the matching
+   *  `ValuePreset.Glyph` when absent. Use sparingly — most properties
+   *  pick up the codec-type-keyed glyph from the preset and don't
+   *  need a per-name shape. See user-defined-properties §1-ui. */
+  readonly Glyph?: ComponentType<{className?: string}>
 }
 
 export interface PropertyEditorProps<T> {

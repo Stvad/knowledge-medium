@@ -11,7 +11,7 @@
  * and run through the same fallback editor chain.
  */
 
-import { useState } from 'react'
+import { useState, type ComponentType } from 'react'
 import { Plus, X } from 'lucide-react'
 import {
   ChangeScope,
@@ -281,6 +281,11 @@ export interface PropertyDisplayInfo {
    *  the codec type — the unknown-schema fallback path renders nothing. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   Editor?: PropertyEditor<any>
+  /** Glyph for the property's row button / config sheet — picked from
+   *  the per-name `PropertyEditorOverride.Glyph` if present, else the
+   *  matching `ValuePreset.Glyph`. Undefined falls back to the
+   *  type-keyed glyph table in `PropertyShapeGlyph`. */
+  Glyph?: ComponentType<{className?: string}>
   /** True iff a real `PropertySchema` was found in the registry; false
    *  when we synthesised an ad-hoc schema from `inferShapeFromValue`. */
   isKnown: boolean
@@ -311,6 +316,7 @@ export const resolvePropertyDisplay = (args: {
       schema: known,
       shape: known.codec.type,
       Editor: ui?.Editor ?? preset?.Editor,
+      Glyph: ui?.Glyph ?? preset?.Glyph,
       isKnown: true,
     }
   }
@@ -321,6 +327,7 @@ export const resolvePropertyDisplay = (args: {
     schema,
     shape,
     Editor: preset?.Editor,
+    Glyph: preset?.Glyph,
     isKnown: false,
   }
 }
