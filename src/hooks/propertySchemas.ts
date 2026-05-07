@@ -1,10 +1,19 @@
+import { useCallback, useSyncExternalStore } from 'react'
 import { type AnyPropertySchema } from '@/data/api'
 import { useRepo } from '@/context/repo.tsx'
-import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 
+/** Reactive view onto `repo.propertySchemas`. Fires on full
+ *  `setFacetRuntime` rebuilds AND on per-facet runtime contribution
+ *  updates (e.g. `UserSchemasService` adding a user-data schema). */
 export const usePropertySchemas = (): ReadonlyMap<string, AnyPropertySchema> => {
-  // Subscribe to runtime identity changes; Repo itself is stable across
-  // setFacetRuntime swaps, but its merged schema registry is replaced.
-  useAppRuntime()
-  return useRepo().propertySchemas
+  const repo = useRepo()
+  const subscribe = useCallback(
+    (cb: () => void) => repo.onPropertySchemasChange(cb),
+    [repo],
+  )
+  return useSyncExternalStore(
+    subscribe,
+    () => repo.propertySchemas,
+    () => repo.propertySchemas,
+  )
 }

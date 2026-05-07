@@ -85,19 +85,42 @@ export function defineFacet<Input, Output = readonly Input[]>({
   return facet
 }
 
+/** Per-facet identifier for a runtime contribution bucket. Each
+ *  subscription owner manages its own bucket; setRuntimeContributions
+ *  replaces the bucket for that source id. Static contributions (from
+ *  the extension graph) keep the source string they were registered
+ *  with — they never share a bucket id with a runtime source. */
+export type RuntimeSourceId = string
+
+type FacetChangeListener = () => void
+
 export class FacetRuntime {
-  private readonly contributionsByFacet = new Map<string, FacetContribution<unknown>[]>()
+  private readonly staticContributionsByFacet = new Map<string, FacetContribution<unknown>[]>()
+  private readonly runtimeContributionsByFacet = new Map<
+    string,
+    Map<RuntimeSourceId, FacetContribution<unknown>[]>
+  >()
   private readonly cache = new Map<string, unknown>()
+  private readonly facetListeners = new Map<string, Set<FacetChangeListener>>()
 
   constructor(
     public readonly context: FacetResolveContext,
     contributions: readonly FacetContribution<unknown>[],
   ) {
     for (const contribution of contributions) {
-      const bucket = this.contributionsByFacet.get(contribution.facet.id) ?? []
+      const bucket = this.staticContributionsByFacet.get(contribution.facet.id) ?? []
       bucket.push(contribution)
-      this.contributionsByFacet.set(contribution.facet.id, bucket)
+      this.staticContributionsByFacet.set(contribution.facet.id, bucket)
     }
+  }
+
+  private collectContributions(facetId: string): FacetContribution<unknown>[] {
+    const stat = this.staticContributionsByFacet.get(facetId) ?? []
+    const runtime = this.runtimeContributionsByFacet.get(facetId)
+    if (!runtime || runtime.size === 0) return stat
+    const out: FacetContribution<unknown>[] = [...stat]
+    for (const bucket of runtime.values()) out.push(...bucket)
+    return out
   }
 
   read<Input, Output>(facet: Facet<Input, Output>): Output {
@@ -105,7 +128,7 @@ export class FacetRuntime {
       return this.cache.get(facet.id) as Output
     }
 
-    const contributions = this.contributionsByFacet.get(facet.id) ?? []
+    const contributions = this.collectContributions(facet.id)
     if (!contributions.length) {
       const emptyValue = facet.empty(this.context)
       this.cache.set(facet.id, emptyValue)
@@ -121,16 +144,72 @@ export class FacetRuntime {
     return value
   }
 
+  /** Replace the runtime contributions bucket for this facet under
+   *  `sourceId`. Empty `contributions` removes the bucket. Notifies
+   *  per-facet subscribers after the cache is invalidated. */
+  setRuntimeContributions<Input>(
+    facet: Facet<Input, unknown>,
+    sourceId: RuntimeSourceId,
+    contributions: readonly Input[],
+  ): void {
+    const wrapped = contributions.map(value => ({
+      type: 'facet-contribution' as const,
+      facet: facet as unknown as Facet<unknown, unknown>,
+      value: value as unknown,
+      source: sourceId,
+    } satisfies FacetContribution<unknown>))
+
+    const existing = this.runtimeContributionsByFacet.get(facet.id) ?? new Map<RuntimeSourceId, FacetContribution<unknown>[]>()
+    if (wrapped.length === 0) {
+      existing.delete(sourceId)
+      if (existing.size === 0) this.runtimeContributionsByFacet.delete(facet.id)
+      else this.runtimeContributionsByFacet.set(facet.id, existing)
+    } else {
+      existing.set(sourceId, wrapped)
+      this.runtimeContributionsByFacet.set(facet.id, existing)
+    }
+    this.cache.delete(facet.id)
+    this.notifyFacetListeners(facet.id)
+  }
+
+  /** Subscribe to changes for one facet. Fires after every
+   *  setRuntimeContributions call that targets this facet. Static
+   *  extension contributions don't fire this — they only change when
+   *  the whole runtime is rebuilt. */
+  onFacetChange(facetId: string, listener: FacetChangeListener): () => void {
+    const set = this.facetListeners.get(facetId) ?? new Set<FacetChangeListener>()
+    set.add(listener)
+    this.facetListeners.set(facetId, set)
+    return () => {
+      const current = this.facetListeners.get(facetId)
+      if (!current) return
+      current.delete(listener)
+      if (current.size === 0) this.facetListeners.delete(facetId)
+    }
+  }
+
+  private notifyFacetListeners(facetId: string): void {
+    const listeners = this.facetListeners.get(facetId)
+    if (!listeners) return
+    for (const l of [...listeners]) {
+      try { l() } catch (err) { console.error(`[FacetRuntime] facet listener for ${facetId} threw`, err) }
+    }
+  }
+
   contributions<Input>(facet: Facet<Input, unknown>): FacetContribution<Input>[] {
-    return (this.contributionsByFacet.get(facet.id) ?? []) as FacetContribution<Input>[]
+    return this.collectContributions(facet.id) as FacetContribution<Input>[]
   }
 
   /**
-   * Every facet id that has at least one contribution. Useful for
-   * introspection (agent bridge describeRuntime, debug pages).
+   * Every facet id that has at least one contribution (static or
+   * runtime). Useful for introspection (agent bridge describeRuntime,
+   * debug pages).
    */
   facetIds(): string[] {
-    return Array.from(this.contributionsByFacet.keys())
+    const ids = new Set<string>()
+    for (const id of this.staticContributionsByFacet.keys()) ids.add(id)
+    for (const id of this.runtimeContributionsByFacet.keys()) ids.add(id)
+    return Array.from(ids)
   }
 
   /**
@@ -139,7 +218,7 @@ export class FacetRuntime {
    * needing the original Facet definition in scope.
    */
   contributionsById(facetId: string): FacetContribution<unknown>[] {
-    return this.contributionsByFacet.get(facetId) ?? []
+    return this.collectContributions(facetId)
   }
 }
 
