@@ -172,7 +172,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     await h.cleanup()
   })
 
-  const renderBlock = () => {
+  const renderBlock = () =>
     render(
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
@@ -183,7 +183,6 @@ describe('DefaultBlockRenderer paste handling', () => {
         </ActiveContextsProvider>
       </AppRuntimeContextProvider>,
     )
-  }
 
   it('leaves paste inside property inputs to the input instead of block paste', () => {
     renderBlock()
@@ -216,5 +215,31 @@ describe('DefaultBlockRenderer paste handling', () => {
       repo.block('block-1'),
       repo,
     )
+  })
+
+  it('restores DOM focus to a focused normal-mode block shell after remount', () => {
+    const renderTree = (version: number) => (
+      <AppRuntimeContextProvider value={runtime}>
+        <ActiveContextsProvider>
+          <DefaultBlockRenderer
+            key={version}
+            block={repo.block('block-1')}
+            ContentRenderer={TestContentRenderer}
+          />
+        </ActiveContextsProvider>
+      </AppRuntimeContextProvider>
+    )
+
+    const view = render(renderTree(1))
+    const firstShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    expect(document.activeElement).toBe(firstShell)
+
+    act(() => {
+      view.rerender(renderTree(2))
+    })
+
+    const remountedShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    expect(remountedShell).not.toBe(firstShell)
+    expect(document.activeElement).toBe(remountedShell)
   })
 })

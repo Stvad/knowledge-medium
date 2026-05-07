@@ -13,7 +13,7 @@ import {
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
-import { useRef, ClipboardEvent, useMemo, useEffect } from 'react'
+import { useRef, ClipboardEvent, useMemo, useEffect, useLayoutEffect } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -286,6 +286,7 @@ export function DefaultBlockRenderer(
   const [types] = usePropertyValue(block, typesProp)
 
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+  const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = block.id === topLevelBlockId
 
@@ -293,6 +294,19 @@ export function DefaultBlockRenderer(
   // on shellProps wants `inEditMode`. Other reactive state is read by
   // the layout / slots themselves, not threaded through here.
   const inFocus = useInFocus(block.id)
+
+  useLayoutEffect(() => {
+    if (!inFocus || inEditMode) return
+
+    const element = shellRef.current
+    if (!element) return
+
+    const activeElement = document.activeElement
+    if (activeElement === element || element.contains(activeElement)) return
+    if (activeElement && activeElement !== document.body) return
+
+    element.focus({preventScroll: true})
+  }, [block.id, inEditMode, inFocus])
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
@@ -501,6 +515,7 @@ export function DefaultBlockRenderer(
     'data-block-id': block.id,
     'data-editing': inEditMode ? 'true' : 'false',
     tabIndex: 0,
+    ref: shellRef,
     onClick: handleBlockClick
       ? (event) => { void handleBlockClick(event) }
       : undefined,

@@ -3,6 +3,7 @@ import type {
   ComponentType,
   HTMLAttributes,
   MouseEvent,
+  Ref,
 } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
@@ -165,6 +166,7 @@ export interface BlockShellProps {
   'data-block-id': string
   'data-editing': 'true' | 'false'
   tabIndex: number
+  ref?: Ref<HTMLDivElement>
   onClick?: (event: MouseEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent<HTMLElement>) => void
 }
