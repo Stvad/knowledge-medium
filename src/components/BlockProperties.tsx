@@ -25,16 +25,11 @@ import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.ts'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
-  changeAdhocPropertyShape,
   deleteProperty,
   renameProperty,
   writeProperty,
 } from './propertyPanel/actions'
 import { FieldConfigSheet, type FieldConfig } from './propertyPanel/FieldConfigSheet'
-import {
-  ADDABLE_PROPERTY_SHAPES,
-  isAddablePropertyShape,
-} from './propertyPanel/shapes.ts'
 import {
   buildPropertyPanelModel,
   type PropertyPanelModel,
@@ -66,16 +61,19 @@ const findModelRow = (
 
 const fieldConfigForRow = (
   row: PropertyPanelModelRow | null,
-  panelReadOnly: boolean,
 ): FieldConfig | null => {
   if (!row) return null
+  // Type changes route through schema definitions (Properties page +
+  // PropertySchemaBlockRenderer), not the panel — `shapeOptions`
+  // intentionally only carries the row's current type so the dropdown
+  // is non-editable.
   return {
     labelText: row.labelText,
     shape: row.shape,
-    shapeOptions: row.canChangeShape ? ADDABLE_PROPERTY_SHAPES : [row.shape],
+    shapeOptions: [row.shape],
     schemaUnknown: row.schemaUnknown,
     decodeFailed: row.decodeFailed,
-    readOnly: panelReadOnly || !row.canChangeShape,
+    readOnly: true,
   }
 }
 
@@ -123,7 +121,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     if (!model || !activeConfigRowName) return null
     return findModelRow(model, activeConfigRowName)
   }, [activeConfigRowName, model])
-  const activeFieldConfig = fieldConfigForRow(activeConfigRow, readOnly)
+  const activeFieldConfig = fieldConfigForRow(activeConfigRow)
 
   if (!blockData || !model) return null
 
@@ -241,10 +239,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
 
       <FieldConfigSheet
         field={activeFieldConfig}
-        onShapeChange={(shape) => {
-          if (!activeConfigRow || !isAddablePropertyShape(shape)) return
-          changeAdhocPropertyShape(block, schemas, uis, activeConfigRow.name, shape)
-        }}
+        // The panel's config sheet displays the current type but doesn't
+        // mutate it — type changes happen through the property-schema
+        // block renderer instead (Phase 3c).
+        onShapeChange={() => {}}
         onClose={() => setActiveConfigRowName(null)}
       />
     </div>

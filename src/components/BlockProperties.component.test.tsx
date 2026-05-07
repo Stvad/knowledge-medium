@@ -301,8 +301,13 @@ describe('BlockProperties component', () => {
     expect(screen.queryByText('Required')).toBeNull()
   })
 
-  it('persists field type changes for ad-hoc properties', async () => {
+  it('renders field-type select read-only for ad-hoc properties (type changes route through schema editor)', async () => {
     const block = repo.block('block-1')
+    // Simulate a degraded-fallback ad-hoc property (sync race / plugin
+    // not loaded). Per spec §9 the panel surfaces it via the inferred
+    // primitive editor but does NOT let the user mutate the type from
+    // here — type changes happen through the property-schema block
+    // renderer instead.
     await block.set(adhocSchema('mood', 'string'), 'ok')
 
     render(
@@ -316,18 +321,11 @@ describe('BlockProperties component', () => {
     })
 
     const typeSelect = screen.getByRole('combobox', {name: /mood field type/i}) as HTMLSelectElement
-    await act(async () => {
-      fireEvent.change(typeSelect, {target: {value: 'number'}})
-    })
-
-    await waitFor(() => {
-      expect(block.data.properties.mood).toBe(0)
-    })
-    await waitFor(() => {
-      expect((screen.getByRole('combobox', {name: /mood field type/i}) as HTMLSelectElement).value)
-        .toBe('number')
-    })
-    expect(screen.getByDisplayValue('0')).toBeTruthy()
+    expect(typeSelect.disabled).toBe(true)
+    expect(typeSelect.value).toBe('string')
+    // Only one option (the current type) is offered — the dropdown
+    // can't be used to mutate the property's storage shape.
+    expect(typeSelect.options).toHaveLength(1)
   })
 
   it('moves between property values and labels without selecting row controls', async () => {

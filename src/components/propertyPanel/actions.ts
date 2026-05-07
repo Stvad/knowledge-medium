@@ -5,10 +5,6 @@ import {
 } from '@/data/api'
 import type { Block } from '@/data/block'
 import { typesProp } from '@/data/properties.ts'
-import {
-  adhocSchema,
-  defaultValueForShape,
-} from '@/components/propertyEditors/defaults'
 import { isPropertyPanelHiddenProperty } from './visibility'
 import type { AddPropertyArgs } from './AddPropertyForm'
 
@@ -62,17 +58,6 @@ export const addProperty = async (
   } catch (err) {
     console.error(`[addProperty] failed to register schema for "${name}":`, err)
   }
-}
-
-export const changeAdhocPropertyShape = (
-  block: Block,
-  schemas: ReadonlyMap<string, AnyPropertySchema>,
-  uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
-  name: string,
-  shape: string,
-) => {
-  if (isPropertyPanelHiddenProperty(name, schemas, uis) || schemas.has(name)) return
-  void block.set(adhocSchema(name, shape), defaultValueForShape(shape))
 }
 
 export const renameProperty = async (args: {
