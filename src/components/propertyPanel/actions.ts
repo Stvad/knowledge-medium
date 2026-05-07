@@ -15,9 +15,8 @@ export const writeProperty = (
   block: Block,
   schema: AnyPropertySchema,
   decodedValue: unknown,
-) => {
-  void block.set(schema, decodedValue)
-}
+): Promise<void> =>
+  block.set(schema, decodedValue)
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a
@@ -35,7 +34,7 @@ export const addProperty = async (
   if (isPropertyPanelHiddenProperty(name, schemas, uis)) return
 
   if (args.adopted) {
-    writeProperty(block, args.adopted, args.adopted.defaultValue)
+    await writeProperty(block, args.adopted, args.adopted.defaultValue)
     return
   }
 
@@ -44,7 +43,7 @@ export const addProperty = async (
   // suggestion; this is the fallback for non-autocomplete submits).
   const existing = schemas.get(name)
   if (existing) {
-    writeProperty(block, existing, existing.defaultValue)
+    await writeProperty(block, existing, existing.defaultValue)
     return
   }
 
@@ -54,7 +53,7 @@ export const addProperty = async (
       presetId: args.presetId,
       config: args.config,
     })
-    writeProperty(block, schema, schema.defaultValue)
+    await writeProperty(block, schema, schema.defaultValue)
   } catch (err) {
     console.error(`[addProperty] failed to register schema for "${name}":`, err)
   }
