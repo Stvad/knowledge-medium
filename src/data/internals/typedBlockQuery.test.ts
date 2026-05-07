@@ -231,3 +231,31 @@ describe('repo.subscribeBlocks', () => {
     off()
   })
 })
+
+describe('repo.countBlocksUsingProperty', () => {
+  it('counts only non-deleted blocks where the property is set', async () => {
+    await create({id: 'a', properties: {status: 'open'}})
+    await create({id: 'b', properties: {status: 'done'}})
+    await create({id: 'c', properties: {}})
+    await create({id: 'd', properties: {status: 'open'}})
+    await env.repo.tx(tx => tx.delete('d'), {scope: ChangeScope.BlockDefault})
+
+    expect(await env.repo.countBlocksUsingProperty('status')).toBe(2)
+    expect(await env.repo.countBlocksUsingProperty('done')).toBe(0)
+  })
+
+  it('scopes to the active workspace by default and accepts an explicit one', async () => {
+    await create({id: 'local', properties: {status: 'open'}})
+    await create({id: 'remote', workspaceId: OTHER_WS, properties: {status: 'open'}})
+
+    expect(await env.repo.countBlocksUsingProperty('status')).toBe(1)
+    expect(await env.repo.countBlocksUsingProperty('status', OTHER_WS)).toBe(1)
+  })
+
+  it('escapes property names containing quotes and special characters', async () => {
+    await create({id: 'hit', properties: {[weirdNameProp.name]: 'yes'}})
+    await create({id: 'miss', properties: {status: 'open'}})
+
+    expect(await env.repo.countBlocksUsingProperty(weirdNameProp.name)).toBe(1)
+  })
+})

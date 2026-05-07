@@ -5,7 +5,7 @@
  *  `preset.ConfigEditor`, and a delete button. See
  *  user-defined-properties.md §4a. */
 
-import { useCallback, useMemo, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useHandle } from '@/hooks/block.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
@@ -36,6 +36,7 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
   const data = useHandle(block, {
     selector: d => d ? {
       id: d.id,
+      workspaceId: d.workspaceId,
       properties: d.properties,
       deleted: d.deleted,
     } : undefined,
@@ -126,6 +127,50 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
     await block.set(presetConfigProp, encoded)
   }, [block, preset])
 
+  // Lazy delete-confirm: first click counts users; if any, ask for a
+  // second click; second click (or no users) deletes. Confirm state
+  // resets when name/preset/data changes so a stale count never lands.
+  const [pendingDelete, setPendingDelete] = useState<{userCount: number} | null>(null)
+  const [scanningUsers, setScanningUsers] = useState(false)
+  const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (cancelTimerRef.current !== null) clearTimeout(cancelTimerRef.current)
+  }, [])
+
+  const performDelete = useCallback(async () => {
+    await block.repo.mutate.delete({id: block.id})
+  }, [block])
+
+  const handleDeleteClick = useCallback(async () => {
+    if (pendingDelete) {
+      setPendingDelete(null)
+      await performDelete()
+      return
+    }
+    if (!propertyName.trim()) {
+      await performDelete()
+      return
+    }
+    setScanningUsers(true)
+    try {
+      const userCount = await block.repo.countBlocksUsingProperty(
+        propertyName,
+        data?.workspaceId,
+      )
+      if (userCount === 0) {
+        await performDelete()
+        return
+      }
+      setPendingDelete({userCount})
+      // Auto-cancel the confirm after 6s so a forgotten dialog doesn't
+      // sit there waiting to fire on the next stray click.
+      if (cancelTimerRef.current !== null) clearTimeout(cancelTimerRef.current)
+      cancelTimerRef.current = setTimeout(() => setPendingDelete(null), 6000)
+    } finally {
+      setScanningUsers(false)
+    }
+  }, [block, data, pendingDelete, performDelete, propertyName])
+
   if (!data || data.deleted) return null
 
   const presetEntries = Array.from(presets.values()).sort((a, b) => a.label.localeCompare(b.label))
@@ -195,16 +240,37 @@ const PropertySchemaContentRenderer: BlockRenderer = ({block}: BlockRendererProp
       )}
 
       {!readOnly && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             type="button"
             variant="ghost"
             size="sm"
+            disabled={scanningUsers}
             className="h-7 text-xs text-destructive hover:text-destructive"
-            onClick={() => { void block.repo.mutate.delete({id: block.id}) }}
+            onClick={() => { void handleDeleteClick() }}
           >
-            Delete schema
+            {pendingDelete
+              ? `Really delete? (${pendingDelete.userCount} ${pendingDelete.userCount === 1 ? 'block uses' : 'blocks use'} this)`
+              : scanningUsers
+                ? 'Checking…'
+                : 'Delete schema'}
           </Button>
+          {pendingDelete && (
+            <>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => setPendingDelete(null)}
+              >
+                Cancel
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Their values stay; the editor falls back to an inferred type.
+              </span>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -70,7 +70,7 @@ import {
   snapshotsToChangeNotification,
   type ResolveContext,
 } from './internals/handleStore'
-import { normalizeTypedBlockQuery } from './internals/typedBlockQuery'
+import { jsonPathForProperty, normalizeTypedBlockQuery } from './internals/typedBlockQuery'
 import {
   DbMetrics,
   QueryMetrics,
@@ -966,6 +966,29 @@ export class Repo {
     const current = handle.peek()
     if (current !== undefined) queueMicrotask(() => listener(current))
     return handle.subscribe(listener)
+  }
+
+  /** Count non-deleted blocks in `workspaceId` whose `properties` map
+   *  has a value at `name`. Used by the property-schema editor to warn
+   *  the user before deleting a schema definition that's still in use.
+   *  Workspace defaults to the active one; missing workspace returns 0. */
+  async countBlocksUsingProperty(
+    name: string,
+    workspaceId?: string,
+  ): Promise<number> {
+    const wsId = workspaceId ?? this.activeWorkspaceId
+    if (!wsId) return 0
+    const row = await this.db.getOptional<{count: number}>(
+      `
+        SELECT COUNT(*) AS count
+        FROM blocks b
+        WHERE b.workspace_id = ?
+          AND b.deleted = 0
+          AND json_extract(b.properties_json, ?) IS NOT NULL
+      `,
+      [wsId, jsonPathForProperty(name)],
+    )
+    return row?.count ?? 0
   }
 
   /** Update the data-layer registries from a FacetRuntime. Spec §8.

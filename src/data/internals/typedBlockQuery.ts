@@ -9,7 +9,7 @@ export interface CompiledTypedBlockQuery {
   readonly params: readonly unknown[]
 }
 
-const jsonPathForProperty = (name: string): string =>
+export const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 
 const compileWhereFilter = (
