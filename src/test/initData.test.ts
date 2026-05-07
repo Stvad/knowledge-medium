@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { aliasesProp, rendererProp } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -91,7 +91,10 @@ describe('seedTutorial', () => {
 
     const sample = env.repo.block(childIds[1])
     expect(sample.peek()?.content).toBe('A block that uses the hello-renderer extension')
-    expect(sample.peekProperty(rendererProp)).toBe('hello-renderer')
+    // Sample block opts into the hello-renderer content variant via
+    // its gating prop. The example extension registers the schema;
+    // the seed writes the raw encoded boolean.
+    expect(sample.peek()?.properties['user:hello']).toBe(true)
   })
 
   it('creates an extensions parent labeled "extensions" with the canonical alias', async () => {

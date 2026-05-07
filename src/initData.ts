@@ -1,9 +1,16 @@
 import { v4 as uuidv4 } from 'uuid'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from './data/repo'
-import { rendererProp, aliasesProp } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
+
+/** Property name + encoded value for the hello-renderer example
+ *  extension's gating prop (`user:hello = true`). The schema itself
+ *  is registered by the example extension at load time; the seed
+ *  just writes the encoded boolean. Kept inline so initData stays
+ *  decoupled from the example extension's TS source. */
+const HELLO_PROP_NAME = 'user:hello'
 
 /** Creates a parent-less Tutorial page carrying intro text + a sample
  *  renderer-bound block + the example-extensions subtree. Used by the
@@ -44,14 +51,16 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
       content: TUTORIAL_README,
     })
 
-    // Second child: sample renderer block.
+    // Second child: sample block routed to the hello-renderer
+    // example extension's content variant via the `user:hello`
+    // gating property.
     await tx.create({
       id: sampleId,
       workspaceId,
       parentId: tutorialRootId,
       orderKey: 'a1',
       content: 'A block that uses the hello-renderer extension',
-      properties: {[rendererProp.name]: rendererProp.codec.encode('hello-renderer')},
+      properties: {[HELLO_PROP_NAME]: true},
     })
 
     // Third child: extensions parent.

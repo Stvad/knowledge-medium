@@ -26,14 +26,28 @@ export interface ExampleExtensionDefinition {
   source: string
 }
 
-const HELLO_RENDERER_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
-import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+const HELLO_RENDERER_SOURCE = `import {
+  blockContentRendererFacet,
+  ChangeScope,
+  codecs,
+  defineProperty,
+  defineVariant,
+  propertySchemasFacet,
+} from '@/extensions/api.js'
 
-// Property-keyed renderer: any block with property 'renderer: hello-renderer'
-// routes here directly via the registry. The renderer delegates to
-// DefaultBlockRenderer so the bullet, children, properties, and edit
-// affordances all keep working — we just supply a custom ContentRenderer
-// for the content area.
+// Variant on blockContentRendererFacet: contributes an alternative
+// content renderer for blocks tagged 'user:hello = true'. Returning
+// null for everything else lets ordinary blocks fall through to the
+// host's primary renderer. The bullet, children, properties, and
+// edit affordances keep working because the variant only swaps the
+// content area inside DefaultBlockRenderer — the rest of the block
+// chrome is untouched.
+
+const helloProp = defineProperty('user:hello', {
+  codec: codecs.boolean,
+  defaultValue: false,
+  changeScope: ChangeScope.BlockDefault,
+})
 
 const HelloContent = ({ block }) => (
   <div style={{ padding: 8, border: '1px dashed #888', borderRadius: 4 }}>
@@ -44,13 +58,15 @@ const HelloContent = ({ block }) => (
   </div>
 )
 
-const HelloRenderer = (props) =>
-  <DefaultBlockRenderer {...props} ContentRenderer={HelloContent} />
-
-export default blockRenderersFacet.of({
-  id: 'hello-renderer',
-  renderer: HelloRenderer,
-})
+export default [
+  // Register the schema so the value-preset / property-editor lookups
+  // can find this prop, and describeRuntime can list it.
+  propertySchemasFacet.of(helloProp),
+  blockContentRendererFacet.of((ctx) => {
+    if (!ctx.block.peekProperty(helloProp)) return null
+    return defineVariant('user.hello', 'Hello', HelloContent)
+  }),
+]
 `
 
 const FOLD_ALL_ACTION_SOURCE = `import {
@@ -109,6 +125,7 @@ const EMOJI_REACT_SOURCE = `import {
   codecs,
   defineProperty,
   isSelectionClick,
+  propertySchemasFacet,
 } from '@/extensions/api.js'
 
 // Multi-facet plugin: an action, a click handler, and a content
@@ -141,6 +158,10 @@ const cycleReaction = async (block) => {
 }
 
 export default [
+  // Register the schema so the codec/editor lookups know about this
+  // property and describeRuntime can list it.
+  propertySchemasFacet.of(reactionsProp),
+
   // Click on a block while holding Alt to add a reaction.
   blockClickHandlersFacet.of((ctx) => (event) => {
     if (!event.altKey) return
@@ -221,6 +242,8 @@ const SPLIT_LAYOUT_SOURCE = `import {
   ChangeScope,
   codecs,
   defineProperty,
+  defineVariant,
+  propertySchemasFacet,
 } from '@/extensions/api.js'
 
 // blockLayoutFacet contributions arrange the four slots (Content,
@@ -260,12 +283,18 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 // fall through to the default vertical layout.
 //
 // blockLayoutFacet is a variant facet — contributions return
-// {id, label, render} so a future picker UI could enumerate them.
-// Returning null still means "this variant doesn't apply here".
-export default blockLayoutFacet.of((ctx) => {
-  if (ctx.block.peekProperty(layoutProp) !== 'split') return null
-  return {id: 'split', label: 'Split (content / children)', render: SplitLayout}
-})
+// {id, label, render} (or use defineVariant() sugar) so a future
+// picker UI could enumerate them. Returning null still means "this
+// variant doesn't apply here".
+export default [
+  // Register the schema so describeRuntime / property-editor lookups
+  // know about this property.
+  propertySchemasFacet.of(layoutProp),
+  blockLayoutFacet.of((ctx) => {
+    if (ctx.block.peekProperty(layoutProp) !== 'split') return null
+    return defineVariant('split', 'Split (content / children)', SplitLayout)
+  }),
+]
 `
 
 export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
@@ -280,7 +309,7 @@ export const TUTORIAL_README = `Welcome — this is a malleable thought medium.
 
 Below are example **extension blocks** (\`types: ['extension']\`) that show the kinds of things you can build:
 
-- **hello-renderer** — wraps the primary content renderer (no replacement of the host block).
+- **hello-renderer** — registers a content-renderer variant gated by \`user:hello = true\` (shows the variant-facet pattern).
 - **fold-all-action** — an action with a default keyboard shortcut.
 - **emoji-react** — a multi-facet plugin (decorating content renderer + click handler + action).
 - **kudos-facet** — defines a brand-new facet and decorates the content with a banner.
