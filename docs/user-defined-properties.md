@@ -227,36 +227,58 @@ The `label` row is the one that benefits from being explicit: preset's `label` i
 
 Pre-this-design `Codec` carries two fields: `shape: CodecShape` (closed JSON-primitive enum) and — on `RefCodec` only — `refKind: 'ref' | 'refList'` (an ad-hoc discriminator). Every new semantic codec would either invent its own `refKind`-style field (`format: 'url'`, …) or sit awkwardly under the existing `shape` while needing predicate-based exclusion (the way `isRefCodec` is special-cased outside the shape check in [typedBlockQuery.ts:40](src/data/internals/typedBlockQuery.ts:40)).
 
-Replace both with a **single open `type: string`** on every codec, whose value matches the preset id that built it:
+Replace both with a **single open `type: string`** on every codec (matching the preset id that built it), plus an **optional `where` capability** that opts the codec into typed-query equality predicates:
 
 ```ts
 // src/data/api/codecs.ts
+/** Scalar value compatible with `json_extract(...) = ?` parameter binding. */
+export type WhereValue = string | number | null
+
 export interface Codec<T> {
   readonly type: string            // stable preset id; e.g. 'string', 'ref', 'url'
   encode(value: T): unknown
   decode(json: unknown): T
+  /** Optional capability: this codec can produce a scalar SQLite value
+   *  for `json_extract(properties_json, ?) = ?` comparison. Codecs that
+   *  cannot — refs (route via referencedBy / block_references), lists,
+   *  objects — omit `where`. The presence/absence of `where` is the
+   *  authoritative answer to "is this property query-able?" — no
+   *  parallel registry, no kernel-curated allowlist, no risk of a
+   *  plugin advertising queryability without delivering it. */
+  readonly where?: WhereCapability<T>
+}
+
+export interface WhereCapability<T> {
+  /** Encode a decoded value to its scalar SQLite-comparable form. For
+   *  many codecs this equals `encode` (string, number, date all encode
+   *  to scalars already). Booleans diverge: storage encodes `true` /
+   *  `false`, but `=`-comparison binds `1` / `0`. URL: storage and
+   *  comparison both use the normalized URL string. */
+  encode(value: T): WhereValue
 }
 
 export interface RefCodec extends Codec<string> {
   readonly type: 'ref'             // replaces refKind
   readonly targetTypes: readonly string[]
+  // No `where` — refs route via referencedBy.
 }
 
 export interface RefListCodec extends Codec<readonly string[]> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
+  // No `where`.
 }
 
-// Kernel codecs declare their type:
-const stringCodec:  Codec<string>  = { type: 'string',  encode, decode }
-const numberCodec:  Codec<number>  = { type: 'number',  encode, decode }
-const booleanCodec: Codec<boolean> = { type: 'boolean', encode, decode }
-const dateCodec:    Codec<Date>    = { type: 'date',    encode, decode }
-const listCodec    = <T>(inner: Codec<T>): Codec<T[]> => ({ type: 'list', encode, decode })
-const objectCodec  = <T>(): Codec<T> => ({ type: 'object', encode, decode })
-const ref     = (opts?) => ({ type: 'ref',     targetTypes: ..., encode, decode })
-const refList = (opts?) => ({ type: 'refList', targetTypes: ..., encode, decode })
-const url:          Codec<string>  = { type: 'url',     encode: validateUrl, decode: validateUrl }
+// Kernel codecs:
+const stringCodec:  Codec<string>  = { type: 'string',  encode, decode, where: { encode: v => v } }
+const numberCodec:  Codec<number>  = { type: 'number',  encode, decode, where: { encode: v => v } }
+const booleanCodec: Codec<boolean> = { type: 'boolean', encode, decode, where: { encode: v => v ? 1 : 0 } }
+const dateCodec:    Codec<Date>    = { type: 'date',    encode, decode, where: { encode: v => v.toISOString() } }
+const listCodec    = <T>(inner: Codec<T>): Codec<T[]> => ({ type: 'list', encode, decode })       // no where
+const objectCodec  = <T>(): Codec<T> => ({ type: 'object', encode, decode })                      // no where
+const ref     = (opts?) => ({ type: 'ref',     targetTypes: ..., encode, decode })                // no where
+const refList = (opts?) => ({ type: 'refList', targetTypes: ..., encode, decode })                // no where
+const url:    Codec<string> = { type: 'url', encode: validateUrl, decode: validateUrl, where: { encode: v => v } }
 ```
 
 Predicates collapse to one-liners on `type`:
@@ -267,15 +289,29 @@ export const isRefListCodec = (c: AnyCodec): c is RefListCodec => c.type === 're
 export const isUrlCodec     = (c: AnyCodec): c is Codec<string> => c.type === 'url'
 ```
 
-A new semantic codec is a `type` string plus a preset (carrying `Editor` and codec factory together; see §1-edit) plus optional `whereAllowedTypesFacet` opt-in.
+`compileWhereFilter` ([typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts)) becomes:
+
+```ts
+if (!schema.codec.where) {
+  throw new Error(`[queryBlocks] where.${name} is not where-queryable; ` +
+    `codec type ${schema.codec.type} doesn't support equality predicates ` +
+    `(use referencedBy for refs, dedicated query for collections)`)
+}
+const sqlValue = value === null ? null : schema.codec.where.encode(value)
+// ... bind sqlValue into json_extract(...) = ?
+```
+
+`SCALAR_WHERE_SHAPES`, `normalizeSqlValue`, the `isRefCodec || isRefListCodec` special-case, and the kernel-curated `WHERE_ALLOWED_TYPES` set all go away. Each codec answers for itself.
 
 Three properties this gives:
 
 - **One vocabulary, two uses.** Preset id and codec type are the same string. A `'ref'` preset's `build()` returns a codec with `type: 'ref'`; the panel looks up the preset by `codec.type` and uses its `Editor`. No predicate matching, no translation layer.
-- **The `where`-clause check becomes one read.** Today's [typedBlockQuery.ts:40](src/data/internals/typedBlockQuery.ts:40) is `SCALAR_WHERE_SHAPES.has(shape) && !isRefCodec && !isRefListCodec` — shape conflates JSON storage primitive with semantic flavor, so refs (string-shaped but semantically reference) need a special-case exclusion. With open `type`, ref is its own value, naturally excluded by curation: `WHERE_ALLOWED_TYPES = new Set(['string', 'number', 'boolean', 'date', 'url'])` and the check is just `!WHERE_ALLOWED_TYPES.has(codec.type)`. Refs → `referencedBy` (indexed via `block_references`), not where-clause; lists/objects → JSON-text `=`-comparison is unreliable; both excluded by not being in the kernel-curated set. The set is itself a facet (`whereAllowedTypesFacet`) so plugin codecs can opt in.
-- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, registers `(codec factory, Editor, defaultValue, glyph?, configEditor?)` in one preset contribution, and contributes `'email'` to `whereAllowedTypesFacet` if it should be query-able. No new ad-hoc fields per codec subtype, no parallel fallback-facet registration.
+- **`where` is a codec capability, not a label.** Queryability is "this codec can produce a SQL-comparable value," which is authorship knowledge — the codec author writes the encoder once, and presence of `where` is the authoritative signal. No parallel registry to drift from the codec; no plugin advertising queryability without delivering it. Booleans correctly bind `0`/`1`, dates correctly bind ISO strings, URLs correctly bind the normalized form — all from the codec's own `where.encode`.
+- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, registers a codec with `where: { encode: v => normalizeEmail(v) }` (or omits `where` if email shouldn't be SQL-queryable), and the preset contribution covers `(codec factory, Editor, defaultValue, glyph?, configEditor?)`. No new ad-hoc fields per codec subtype, no parallel facet registration, no allowlist contribution.
 
-What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. Today's only data-layer consumer of that information is the where-clause check, which becomes the kernel-curated allowed-set. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
+The `where` namespace is intentionally a sub-object rather than a flat `whereEncode` field: future operators (`<` / `>` / range queries) extend the namespace (`where.compare`, `where.between`) without breaking codec authors.
+
+What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. The where-clause check no longer needs it — `codec.where` answers queryability directly. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
 
 The pre-existing `Codec.shape: CodecShape` field, the `CodecShape` type itself, and the `isStringCodec` / `isListCodec` / `isObjectCodec` / etc. shape-keyed predicates all go away. `inferShapeFromValue` becomes `inferTypeFromValue`, returns one of `'string' | 'number' | 'boolean' | 'list' | 'object'` (a known-primitive subset of the open string namespace).
 
@@ -687,10 +723,10 @@ No user-visible change yet. This is pure infrastructure.
 
 1. Add `ValuePreset` type and `valuePresetsFacet` ([src/data/api/valuePresets.ts](src/data/api/valuePresets.ts) new).
 2. Register kernel presets (string, number, boolean, list, date, url, ref, refList) including their `configCodec` where non-void.
-3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Drop the `CodecShape` type and `isStringCodec` / `isListCodec` / etc. shape-keyed predicates; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check against a `whereAllowedTypesFacet`-resolved kernel set instead of `SCALAR_WHERE_SHAPES` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case.
+3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Add the optional `Codec.where: WhereCapability` capability; kernel string/number/boolean/date/url codecs include it (boolean's `where.encode` returns `1`/`0`), kernel list/object/ref/refList codecs omit it. Drop the `CodecShape` type, `isStringCodec` / `isListCodec` / etc. shape-keyed predicates, and `normalizeSqlValue`; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check `if (!schema.codec.where) throw` and bind `schema.codec.where.encode(value)` instead of `SCALAR_WHERE_SHAPES.has(shape)` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case.
 4. Drop `propertyEditorFallbackFacet` (per §1-edit). Move every editor onto its preset's `Editor` field. Update `resolvePropertyDisplay` to look up `valuePresets.get(codec.type)?.Editor` for the fallback editor; `PropertyEditorOverride.Editor` exact-name path stays unchanged.
 5. Add `urlCodec` with `type: 'url'` and a `'url'` preset wrapping `(urlCodec, UrlPropertyEditor, '', LinkIcon)`.
-6. Tests: preset list resolves; editor selection routes through `valuePresets.get(codec.type)?.Editor` for codec-keyed lookup; ref/refList/url/etc. codecs match their respective presets; the where-clause check uses the new `whereAllowedTypesFacet` set.
+6. Tests: preset list resolves; editor selection routes through `valuePresets.get(codec.type)?.Editor` for codec-keyed lookup; ref/refList/url/etc. codecs match their respective presets; the where-clause check refuses codecs without `where` (refs/refList/list/object) and binds `where.encode(value)` for codecs that have it (booleans bind `0`/`1`, dates bind ISO strings).
 
 `AddPropertyForm` is **not changed** in this phase — surfacing rich presets in the picker while choices still synthesize in-memory `adhocSchema`s would be a misleading intermediate state (picking "Reference" implies durable ref semantics that don't survive reload). Phase 2 stays infrastructure-only; the visible picker change moves to Phase 3 where persistence lands and the choice is actually durable.
 
