@@ -7,7 +7,7 @@
  *   3. Resolve a fallback editor contribution by matching the schema/codec.
  *   4. Use that fallback editor for primitive codec shapes too.
  *
- * Unknown properties synthesize an ad-hoc schema from the encoded JSON shape
+ * Unknown properties synthesize a degraded fallback schema from the encoded JSON shape
  * and run through the same fallback editor chain.
  */
 
@@ -234,10 +234,10 @@ export const defaultValueForShape = (type: string): unknown => {
 }
 
 /** Lossy type inference used when no schema is registered for a
- *  property name. Inspects the encoded JSON shape and returns one of
+ *  property name. Inspects the encoded JSON value and returns one of
  *  the known JSON-primitive types (`'string' | 'number' | 'boolean' |
  *  'list' | 'object'`) so the panel can still render an editor. */
-export const inferShapeFromValue = (value: unknown): string => {
+export const inferTypeFromValue = (value: unknown): string => {
   if (Array.isArray(value)) return 'list'
   if (typeof value === 'boolean') return 'boolean'
   if (typeof value === 'number') return 'number'
@@ -245,17 +245,14 @@ export const inferShapeFromValue = (value: unknown): string => {
   return 'string'
 }
 
-/** Alias mirroring the spec rename (`inferShapeFromValue` →
- *  `inferTypeFromValue`). The legacy name stays exported for tests
- *  and call sites that haven't been migrated; both refer to the same
- *  function. */
-export const inferTypeFromValue = inferShapeFromValue
-
-/** Build an ad-hoc `PropertySchema` for a property whose actual schema
- *  isn't registered. Used by the unknown-schema fallback and by the
- *  add-property form: both need a schema reference to feed `block.set`,
- *  which encodes the value through the codec before storage. */
-export const adhocSchema = (name: string, type: string): PropertySchema<unknown> => ({
+/** Build a degraded fallback `PropertySchema` for a property whose
+ *  actual schema isn't registered. Used at read sites by the unknown-
+ *  schema renderer fallback path: when the registry doesn't know the
+ *  name, we still need *some* schema reference so the panel can run
+ *  encoded JSON through a codec and pick an editor. The resulting
+ *  schema is intentionally type-loose (`unsafeIdentity`) and never
+ *  persisted — it exists only to keep the read path rendering. */
+export const degradedFallbackSchema = (name: string, type: string): PropertySchema<unknown> => ({
   name,
   codec: type === 'list'
     ? codecs.list(codecs.unsafeIdentity<unknown>()) as PropertySchema<unknown>['codec']
@@ -287,7 +284,7 @@ export interface PropertyDisplayInfo {
    *  type-keyed glyph table in `PropertyShapeGlyph`. */
   Glyph?: ComponentType<{className?: string}>
   /** True iff a real `PropertySchema` was found in the registry; false
-   *  when we synthesised an ad-hoc schema from `inferShapeFromValue`. */
+   *  when we synthesised a degraded fallback schema from `inferTypeFromValue`. */
   isKnown: boolean
 }
 
@@ -320,8 +317,8 @@ export const resolvePropertyDisplay = (args: {
       isKnown: true,
     }
   }
-  const shape = inferShapeFromValue(args.encodedValue)
-  const schema = adhocSchema(args.name, shape)
+  const shape = inferTypeFromValue(args.encodedValue)
+  const schema = degradedFallbackSchema(args.name, shape)
   const preset = args.presets.get(schema.codec.type)
   return {
     schema,

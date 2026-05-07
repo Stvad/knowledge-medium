@@ -17,7 +17,7 @@ import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { blockRenderersFacet } from '@/extensions/core'
 import { BlockProperties } from './BlockProperties'
-import { adhocSchema } from './propertyEditors/defaults'
+import { degradedFallbackSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
 import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
@@ -308,7 +308,7 @@ describe('BlockProperties component', () => {
     // primitive editor but does NOT let the user mutate the type from
     // here — type changes happen through the property-schema block
     // renderer instead.
-    await block.set(adhocSchema('mood', 'string'), 'ok')
+    await block.set(degradedFallbackSchema('mood', 'string'), 'ok')
 
     render(
       <AppRuntimeContextProvider value={runtime}>

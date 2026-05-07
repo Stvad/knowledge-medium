@@ -23,9 +23,9 @@ import {
   type PropertyEditor,
 } from '@/data/api'
 import {
-  adhocSchema,
   defaultValueForShape,
-  inferShapeFromValue,
+  degradedFallbackSchema,
+  inferTypeFromValue,
   ListPropertyEditor,
   NumberPropertyEditor,
   resolvePropertyDisplay,
@@ -88,17 +88,17 @@ const presets: readonly AnyValuePreset[] = [
   }),
 ]
 
-describe('inferShapeFromValue', () => {
+describe('inferTypeFromValue', () => {
   it('returns the right type for each JSON shape', () => {
-    expect(inferShapeFromValue('hi')).toBe('string')
-    expect(inferShapeFromValue(42)).toBe('number')
-    expect(inferShapeFromValue(true)).toBe('boolean')
-    expect(inferShapeFromValue([])).toBe('list')
-    expect(inferShapeFromValue([1, 2])).toBe('list')
-    expect(inferShapeFromValue({a: 1})).toBe('object')
+    expect(inferTypeFromValue('hi')).toBe('string')
+    expect(inferTypeFromValue(42)).toBe('number')
+    expect(inferTypeFromValue(true)).toBe('boolean')
+    expect(inferTypeFromValue([])).toBe('list')
+    expect(inferTypeFromValue([1, 2])).toBe('list')
+    expect(inferTypeFromValue({a: 1})).toBe('object')
     // null falls through to string per the kernel's lossy-inference contract.
-    expect(inferShapeFromValue(null)).toBe('string')
-    expect(inferShapeFromValue(undefined)).toBe('string')
+    expect(inferTypeFromValue(null)).toBe('string')
+    expect(inferTypeFromValue(undefined)).toBe('string')
   })
 })
 
@@ -113,9 +113,9 @@ describe('defaultValueForShape', () => {
   })
 })
 
-describe('adhocSchema', () => {
+describe('degradedFallbackSchema', () => {
   it('builds a PropertySchema with the requested type and BlockDefault scope', () => {
-    const schema = adhocSchema('rogue', 'number')
+    const schema = degradedFallbackSchema('rogue', 'number')
     expect(schema.name).toBe('rogue')
     expect(schema.codec.type).toBe('number')
     expect(schema.changeScope).toBe(ChangeScope.BlockDefault)
@@ -126,7 +126,7 @@ describe('adhocSchema', () => {
   })
 
   it('lists wrap unsafeIdentity in a list combinator (encode/decode is array-aware)', () => {
-    const schema = adhocSchema('tags', 'list')
+    const schema = degradedFallbackSchema('tags', 'list')
     expect(Array.isArray(schema.codec.encode(['a', 'b']))).toBe(true)
     expect(schema.codec.decode([1, 2])).toEqual([1, 2])
   })
