@@ -14,11 +14,8 @@ import {
   codecs,
   defineProperty,
   definePropertyEditorOverride,
-  isListCodec,
-  isNumberCodec,
   isRefCodec,
   isRefListCodec,
-  isStringCodec,
   type AnyPropertyEditorFallbackContribution,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
@@ -60,19 +57,19 @@ const editorFallbacks: readonly AnyPropertyEditorFallbackContribution[] = [
   {
     id: 'test.list',
     priority: 0,
-    matches: schema => isListCodec(schema.codec),
+    matches: schema => schema.codec.type === 'list',
     Editor: ListPropertyEditor,
   },
   {
     id: 'test.number',
     priority: 0,
-    matches: schema => isNumberCodec(schema.codec),
+    matches: schema => schema.codec.type === 'number',
     Editor: NumberPropertyEditor,
   },
   {
     id: 'test.string',
     priority: 0,
-    matches: schema => isStringCodec(schema.codec),
+    matches: schema => schema.codec.type === 'string',
     Editor: StringPropertyEditor,
   },
 ]
@@ -106,7 +103,7 @@ describe('adhocSchema', () => {
   it('builds a PropertySchema with the requested shape and BlockDefault scope', () => {
     const schema = adhocSchema('rogue', 'number')
     expect(schema.name).toBe('rogue')
-    expect(schema.codec.shape).toBe('number')
+    expect(schema.codec.type).toBe('number')
     expect(schema.changeScope).toBe(ChangeScope.BlockDefault)
     expect(schema.defaultValue).toBe(0)
     // Identity codec — encoded shape passes through unchanged.
@@ -175,7 +172,7 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       uis: uisMap([]),
       editorFallbacks,
     })
-    expect(display.shape).toBe('string')
+    expect(display.shape).toBe('ref')
     expect(display.Editor).toBe(RefPropertyEditor)
   })
 
@@ -192,7 +189,7 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       uis: uisMap([]),
       editorFallbacks,
     })
-    expect(display.shape).toBe('list')
+    expect(display.shape).toBe('refList')
     expect(display.Editor).toBe(RefListPropertyEditor)
   })
 
@@ -206,7 +203,7 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     })
     expect(display.isKnown).toBe(false)
     expect(display.schema.name).toBe('newish-prop')
-    expect(display.schema.codec.shape).toBe('list')
+    expect(display.schema.codec.type).toBe('list')
     expect(display.shape).toBe('list')
     expect(display.Editor).toBe(ListPropertyEditor)
   })

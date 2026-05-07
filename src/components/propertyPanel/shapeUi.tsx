@@ -3,34 +3,33 @@ import {
   Calendar,
   CheckSquare,
   Hash,
+  Link as LinkIcon,
   List,
   Type as TypeIcon,
 } from 'lucide-react'
-import type { CodecShape } from '@/data/api'
 import { propertyShapeLabel } from './shapes'
+
+const TYPE_GLYPHS: Record<string, typeof TypeIcon> = {
+  number: Hash,
+  boolean: CheckSquare,
+  list: List,
+  date: Calendar,
+  object: Braces,
+  string: TypeIcon,
+  url: LinkIcon,
+}
 
 export function PropertyShapeGlyph({
   shape,
   className = '',
 }: {
-  shape: CodecShape
+  /** Codec type (open string). Falls back to the generic text glyph
+   *  for plugin-contributed types without a kernel-mapped icon. */
+  shape: string
   className?: string
 }) {
-  const props = {className: `h-3.5 w-3.5 ${className}`, strokeWidth: 1.8}
-  switch (shape) {
-    case 'number':
-      return <Hash {...props} />
-    case 'boolean':
-      return <CheckSquare {...props} />
-    case 'list':
-      return <List {...props} />
-    case 'date':
-      return <Calendar {...props} />
-    case 'object':
-      return <Braces {...props} />
-    case 'string':
-      return <TypeIcon {...props} />
-  }
+  const Icon = TYPE_GLYPHS[shape] ?? TypeIcon
+  return <Icon className={`h-3.5 w-3.5 ${className}`} strokeWidth={1.8} />
 }
 
 export function PropertyShapeButton({
@@ -40,7 +39,7 @@ export function PropertyShapeButton({
   decodeFailed = false,
   onClick,
 }: {
-  shape: CodecShape
+  shape: string
   label: string
   schemaUnknown: boolean
   decodeFailed?: boolean

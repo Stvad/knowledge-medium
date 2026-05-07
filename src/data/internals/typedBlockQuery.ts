@@ -1,13 +1,8 @@
 import {
-  isRefCodec,
-  isRefListCodec,
   type AnyPropertySchema,
-  type CodecShape,
   type ResolvedTypedBlockQuery,
 } from '@/data/api'
 import { buildQualifiedBlockColumnsSql } from '@/data/blockSchema'
-
-const SCALAR_WHERE_SHAPES: ReadonlySet<CodecShape> = new Set(['string', 'number', 'boolean', 'date'])
 
 export interface CompiledTypedBlockQuery {
   readonly sql: string
@@ -16,15 +11,6 @@ export interface CompiledTypedBlockQuery {
 
 const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
-
-const normalizeSqlValue = (value: unknown): string | number | null => {
-  if (value === null) return null
-  if (typeof value === 'boolean') return value ? 1 : 0
-  if (typeof value === 'string' || typeof value === 'number') return value
-  throw new Error(
-    `[queryBlocks] where values must encode to a scalar JSON value; got ${JSON.stringify(value)}`,
-  )
-}
 
 const compileWhereFilter = (
   name: string,
@@ -37,21 +23,33 @@ const compileWhereFilter = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  if (!SCALAR_WHERE_SHAPES.has(schema.codec.shape) || isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
-    throw new Error(
-      `[queryBlocks] where.${name} uses non-scalar or reference codec ${JSON.stringify(schema.codec.shape)}; ` +
-      'use referencedBy for refs or add a dedicated query for collection/object filters',
-    )
-  }
-
   const path = jsonPathForProperty(name)
-  const encoded = value === null ? null : schema.codec.encode(value)
-  const sqlValue = normalizeSqlValue(encoded)
-  if (sqlValue === null) {
+
+  // `null` is the typed-query "match unset / explicitly-null" sentinel;
+  // SQLite `=` against NULL never matches, so compile to `IS NULL` and
+  // skip `where.encode` entirely (it would reject null).
+  if (value === null) {
     return {
       sql: 'json_extract(b.properties_json, ?) IS NULL',
       params: [path],
     }
+  }
+
+  if (!schema.codec.where) {
+    throw new Error(
+      `[queryBlocks] where.${name} is not where-queryable; ` +
+      `codec type ${JSON.stringify(schema.codec.type)} doesn't support equality predicates ` +
+      '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
+    )
+  }
+
+  let sqlValue: string | number
+  try {
+    sqlValue = schema.codec.where.encode(value)
+  } catch (err) {
+    throw new Error(
+      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+    )
   }
   return {
     sql: 'json_extract(b.properties_json, ?) = ?',

@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react'
 import { ChevronDown, X } from 'lucide-react'
-import type { CodecShape } from '@/data/api'
 import { Button } from '@/components/ui/button'
 import { propertyShapeLabel } from './shapes'
 import { PropertyShapeGlyph } from './shapeUi'
 
 export interface FieldConfig {
   labelText: string
-  shape: CodecShape
-  shapeOptions: readonly CodecShape[]
+  /** Codec type (open string). */
+  shape: string
+  shapeOptions: readonly string[]
   schemaUnknown: boolean
   decodeFailed: boolean
   readOnly: boolean
@@ -20,7 +20,7 @@ export function FieldConfigSheet({
   onClose,
 }: {
   field: FieldConfig | null
-  onShapeChange: (shape: CodecShape) => void
+  onShapeChange: (shape: string) => void
   onClose: () => void
 }) {
   if (!field) return null
@@ -62,7 +62,7 @@ export function FieldConfigSheet({
               aria-label={`${field.labelText} field type`}
               value={field.shape}
               disabled={field.readOnly}
-              onChange={(event) => onShapeChange(event.target.value as CodecShape)}
+              onChange={(event) => onShapeChange(event.target.value)}
             >
               {field.shapeOptions.map(option => (
                 <option key={option} value={option}>{propertyShapeLabel(option)}</option>

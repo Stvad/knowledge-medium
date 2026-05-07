@@ -2,37 +2,69 @@ import { describe, expect, it } from 'vitest'
 import {
   codecs,
   CodecError,
-  isBooleanCodec,
-  isDateCodec,
-  isListCodec,
-  isNumberCodec,
-  isObjectCodec,
   isRefCodec,
   isRefListCodec,
-  isStringCodec,
 } from './codecs'
 
-describe('codec shape metadata', () => {
-  it('tags primitive and composed codecs with editor shapes', () => {
-    expect(codecs.string.shape).toBe('string')
-    expect(codecs.number.shape).toBe('number')
-    expect(codecs.boolean.shape).toBe('boolean')
-    expect(codecs.date.shape).toBe('date')
-    expect(codecs.optional(codecs.string).shape).toBe('string')
-    expect(codecs.list(codecs.number).shape).toBe('list')
-    expect(codecs.ref().shape).toBe('string')
-    expect(codecs.refList().shape).toBe('list')
-    expect(codecs.unsafeIdentity().shape).toBe('object')
-    expect(codecs.unsafeIdentity('string').shape).toBe('string')
+describe('codec type metadata', () => {
+  it('tags primitive and composed codecs with stable type ids', () => {
+    expect(codecs.string.type).toBe('string')
+    expect(codecs.number.type).toBe('number')
+    expect(codecs.boolean.type).toBe('boolean')
+    expect(codecs.date.type).toBe('date')
+    expect(codecs.url.type).toBe('url')
+    // optional spreads inner — type carries through.
+    expect(codecs.optional(codecs.string).type).toBe('string')
+    expect(codecs.list(codecs.number).type).toBe('list')
+    expect(codecs.ref().type).toBe('ref')
+    expect(codecs.refList().type).toBe('refList')
+    expect(codecs.unsafeIdentity().type).toBe('object')
+    expect(codecs.unsafeIdentity('string').type).toBe('string')
   })
 
-  it('exposes shape predicates for fallback editor matching', () => {
-    expect(isStringCodec(codecs.string)).toBe(true)
-    expect(isNumberCodec(codecs.number)).toBe(true)
-    expect(isBooleanCodec(codecs.boolean)).toBe(true)
-    expect(isListCodec(codecs.list(codecs.string))).toBe(true)
-    expect(isObjectCodec(codecs.unsafeIdentity())).toBe(true)
-    expect(isDateCodec(codecs.date)).toBe(true)
+  it('routes ref/refList recognition through type identity', () => {
+    expect(isRefCodec(codecs.ref())).toBe(true)
+    expect(isRefListCodec(codecs.refList())).toBe(true)
+    expect(isRefCodec(codecs.string)).toBe(false)
+    expect(isRefListCodec(codecs.list(codecs.string))).toBe(false)
+  })
+})
+
+describe('codec where capability', () => {
+  it('exposes where on scalar primitives but not on collections/refs', () => {
+    expect(codecs.string.where).toBeDefined()
+    expect(codecs.number.where).toBeDefined()
+    expect(codecs.boolean.where).toBeDefined()
+    expect(codecs.date.where).toBeDefined()
+    expect(codecs.url.where).toBeDefined()
+    expect(codecs.list(codecs.string).where).toBeUndefined()
+    expect(codecs.unsafeIdentity().where).toBeUndefined()
+    expect(codecs.ref().where).toBeUndefined()
+    expect(codecs.refList().where).toBeUndefined()
+  })
+
+  it('booleans bind 0/1 for SQL equality', () => {
+    expect(codecs.boolean.where!.encode(true)).toBe(1)
+    expect(codecs.boolean.where!.encode(false)).toBe(0)
+  })
+
+  it('dates bind ISO strings', () => {
+    const d = new Date('2026-04-29T12:34:56.789Z')
+    expect(codecs.date.where!.encode(d)).toBe('2026-04-29T12:34:56.789Z')
+  })
+
+  it('validates input types and rejects mismatches', () => {
+    expect(() => codecs.string.where!.encode(42 as unknown as string)).toThrow(CodecError)
+    expect(() => codecs.boolean.where!.encode('true' as unknown as boolean)).toThrow(CodecError)
+    expect(() => codecs.number.where!.encode('42' as unknown as number)).toThrow(CodecError)
+    expect(() => codecs.date.where!.encode('not a date' as unknown as Date)).toThrow(CodecError)
+  })
+
+  it('optional.where rejects undefined and delegates to inner.where', () => {
+    const opt = codecs.optional(codecs.date)
+    expect(() => opt.where!.encode(undefined)).toThrow(CodecError)
+    const d = new Date('2026-04-29T00:00:00.000Z')
+    expect(opt.where!.encode(d)).toBe('2026-04-29T00:00:00.000Z')
   })
 })
 
@@ -112,6 +144,11 @@ describe('codecs.optional', () => {
   it('forwards the inner codec error on shape mismatch', () => {
     expect(() => inner.decode(42)).toThrow(CodecError)
   })
+
+  it('refuses ref/refList wrapping', () => {
+    expect(() => codecs.optional(codecs.ref())).toThrow(/cannot wrap ref\/refList/)
+    expect(() => codecs.optional(codecs.refList())).toThrow(/cannot wrap ref\/refList/)
+  })
 })
 
 describe('codecs.list', () => {
@@ -136,7 +173,7 @@ describe('codecs.ref', () => {
   it('round-trips target ids and exposes ref metadata', () => {
     const inner = codecs.ref({targetTypes: ['project']})
     expect(inner.decode(inner.encode('target-1'))).toBe('target-1')
-    expect(inner.refKind).toBe('ref')
+    expect(inner.type).toBe('ref')
     expect(inner.targetTypes).toEqual(['project'])
     expect(isRefCodec(inner)).toBe(true)
     expect(isRefListCodec(inner)).toBe(false)
@@ -151,7 +188,7 @@ describe('codecs.refList', () => {
   it('round-trips target id arrays and exposes ref-list metadata', () => {
     const inner = codecs.refList({targetTypes: ['task']})
     expect(inner.decode(inner.encode(['a', 'b']))).toEqual(['a', 'b'])
-    expect(inner.refKind).toBe('refList')
+    expect(inner.type).toBe('refList')
     expect(inner.targetTypes).toEqual(['task'])
     expect(isRefListCodec(inner)).toBe(true)
     expect(isRefCodec(inner)).toBe(false)

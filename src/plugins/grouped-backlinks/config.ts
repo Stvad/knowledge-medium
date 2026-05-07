@@ -114,13 +114,13 @@ export const mergeGroupedBacklinksConfig = (
 })
 
 const groupedBacklinksConfigCodec: Codec<GroupedBacklinksConfig> = {
-  shape: 'object',
+  type: 'groupedBacklinks:config',
   encode: normalizeGroupedBacklinksConfig,
   decode: normalizeGroupedBacklinksConfig,
 }
 
 const groupedBacklinksOverridesCodec: Codec<GroupedBacklinksOverrides> = {
-  shape: 'object',
+  type: 'groupedBacklinks:overrides',
   encode: normalizeGroupedBacklinksOverrides,
   decode: normalizeGroupedBacklinksOverrides,
 }

@@ -2,7 +2,6 @@ import {
   type AnyPropertyEditorFallbackContribution,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type CodecShape,
   type TypeContribution,
 } from '@/data/api'
 import { getBlockTypes, typesProp } from '@/data/properties.ts'
@@ -26,7 +25,8 @@ export interface PropertyPanelModelRow {
   readonly encodedValue: unknown
   readonly isSet: boolean
   readonly labelText: string
-  readonly shape: CodecShape
+  /** Codec type (open string). */
+  readonly shape: string
   readonly schema: AnyPropertySchema
   readonly schemaUnknown: boolean
   readonly decodeFailed: boolean

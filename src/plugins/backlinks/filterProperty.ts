@@ -29,7 +29,7 @@ const parseBacklinksFilter = (value: unknown): BacklinksFilter => {
 }
 
 const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
-  shape: 'object',
+  type: 'backlinks:filter',
   encode: value => normalizeBacklinksFilter(value),
   decode: value => normalizeBacklinksFilter(parseBacklinksFilter(value)),
 }

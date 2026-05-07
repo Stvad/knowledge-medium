@@ -19,7 +19,6 @@ import {
   type AnyPropertyEditorFallbackContribution,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
-  type CodecShape,
   type PropertyEditorProps,
   type PropertySchema,
 } from '@/data/api'
@@ -200,24 +199,27 @@ export function DatePropertyEditor({value, onChange, block}: PropertyEditorProps
 // ──── Lookup-chain helper ────
 
 /** Default value used when the property panel adds a new property of a
- *  given shape. Mirrors the shape `defaultValue` would carry on a real
- *  schema — strings are empty, numbers zero, etc. */
-export const defaultValueForShape = (shape: CodecShape): unknown => {
-  switch (shape) {
+ *  given primitive type. Returns undefined for codec types without a
+ *  natural empty value (e.g. unknown plugin types) — the caller picks
+ *  a sensible fallback. */
+export const defaultValueForShape = (type: string): unknown => {
+  switch (type) {
     case 'string':  return ''
     case 'number':  return 0
     case 'boolean': return false
     case 'list':    return [] as unknown[]
     case 'object':  return {}
     case 'date':    return undefined
+    case 'url':     return ''
+    default:        return ''
   }
 }
 
-/** Lossy shape inference used when no schema is registered for a
- *  property name (spec §5.6.1 fallback). The §5.6.1 unknown-schema
- *  fallback inspects the encoded JSON shape and picks a shape so the
- *  panel can still render an editor. */
-export const inferShapeFromValue = (value: unknown): CodecShape => {
+/** Lossy type inference used when no schema is registered for a
+ *  property name. Inspects the encoded JSON shape and returns one of
+ *  the known JSON-primitive types (`'string' | 'number' | 'boolean' |
+ *  'list' | 'object'`) so the panel can still render an editor. */
+export const inferShapeFromValue = (value: unknown): string => {
   if (Array.isArray(value)) return 'list'
   if (typeof value === 'boolean') return 'boolean'
   if (typeof value === 'number') return 'number'
@@ -225,16 +227,22 @@ export const inferShapeFromValue = (value: unknown): CodecShape => {
   return 'string'
 }
 
+/** Alias mirroring the spec rename (`inferShapeFromValue` →
+ *  `inferTypeFromValue`). The legacy name stays exported for tests
+ *  and call sites that haven't been migrated; both refer to the same
+ *  function. */
+export const inferTypeFromValue = inferShapeFromValue
+
 /** Build an ad-hoc `PropertySchema` for a property whose actual schema
  *  isn't registered. Used by the unknown-schema fallback and by the
  *  add-property form: both need a schema reference to feed `block.set`,
  *  which encodes the value through the codec before storage. */
-export const adhocSchema = (name: string, shape: CodecShape): PropertySchema<unknown> => ({
+export const adhocSchema = (name: string, type: string): PropertySchema<unknown> => ({
   name,
-  codec: shape === 'list'
+  codec: type === 'list'
     ? codecs.list(codecs.unsafeIdentity<unknown>()) as PropertySchema<unknown>['codec']
-    : codecs.unsafeIdentity<unknown>(shape),
-  defaultValue: defaultValueForShape(shape),
+    : codecs.unsafeIdentity<unknown>(type),
+  defaultValue: defaultValueForShape(type),
   changeScope: ChangeScope.BlockDefault,
 })
 
@@ -250,7 +258,8 @@ export const adhocSchema = (name: string, shape: CodecShape): PropertySchema<unk
  *  `AnyMutator` exists). */
 export interface PropertyDisplayInfo {
   schema: AnyPropertySchema
-  shape: CodecShape
+  /** Codec type (open string). */
+  shape: string
   /** Editor selected by the resolver. Usually this comes from the
    *  schema/codec fallback chain; a registered
    *  `PropertyEditorOverride.Editor` wins when present. Undefined means
@@ -290,7 +299,7 @@ export const resolvePropertyDisplay = (args: {
     const ui = args.uis.get(args.name)
     return {
       schema: known,
-      shape: known.codec.shape,
+      shape: known.codec.type,
       Editor: ui?.Editor ?? fallbackEditorForSchema(known, args.editorFallbacks),
       isKnown: true,
     }

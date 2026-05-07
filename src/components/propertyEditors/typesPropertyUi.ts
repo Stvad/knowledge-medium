@@ -1,13 +1,5 @@
 import {
   definePropertyEditorOverride,
-  isBooleanCodec,
-  isDateCodec,
-  isListCodec,
-  isNumberCodec,
-  isObjectCodec,
-  isRefCodec,
-  isRefListCodec,
-  isStringCodec,
   type AnyPropertyEditorFallbackContribution,
 } from '@/data/api'
 import { propertyEditorFallbackFacet, propertyEditorOverridesFacet } from '@/data/facets.ts'
@@ -64,53 +56,59 @@ const hiddenKernelPropertyUis = [
   hidden: true,
 }))
 
+/** Codec-type → fallback editor mapping. With the open `type` string
+ *  replacing the closed `CodecShape` enum, predicate-based matching
+ *  collapses to a literal type comparison; an unknown plugin type
+ *  with no entry here falls through to the unknown-schema path
+ *  (per user-defined-properties §1-edit). The Phase 2c migration
+ *  moves these contributions onto presets via `valuePresetsFacet`. */
 const kernelPropertyEditorFallbacks: readonly AnyPropertyEditorFallbackContribution[] = [
   {
     id: 'kernel.ref',
     priority: 100,
-    matches: schema => isRefCodec(schema.codec),
+    matches: schema => schema.codec.type === 'ref',
     Editor: RefPropertyEditor,
   },
   {
     id: 'kernel.refList',
     priority: 100,
-    matches: schema => isRefListCodec(schema.codec),
+    matches: schema => schema.codec.type === 'refList',
     Editor: RefListPropertyEditor,
   },
   {
     id: 'kernel.boolean',
     priority: 10,
-    matches: schema => isBooleanCodec(schema.codec),
+    matches: schema => schema.codec.type === 'boolean',
     Editor: BooleanPropertyEditor,
   },
   {
     id: 'kernel.date',
     priority: 0,
-    matches: schema => isDateCodec(schema.codec),
+    matches: schema => schema.codec.type === 'date',
     Editor: DatePropertyEditor,
   },
   {
     id: 'kernel.list',
     priority: 0,
-    matches: schema => isListCodec(schema.codec),
+    matches: schema => schema.codec.type === 'list',
     Editor: ListPropertyEditor,
   },
   {
     id: 'kernel.number',
     priority: 0,
-    matches: schema => isNumberCodec(schema.codec),
+    matches: schema => schema.codec.type === 'number',
     Editor: NumberPropertyEditor,
   },
   {
     id: 'kernel.object',
     priority: 0,
-    matches: schema => isObjectCodec(schema.codec),
+    matches: schema => schema.codec.type === 'object',
     Editor: ObjectPropertyEditor,
   },
   {
     id: 'kernel.string',
     priority: 0,
-    matches: schema => isStringCodec(schema.codec),
+    matches: schema => schema.codec.type === 'string',
     Editor: StringPropertyEditor,
   },
 ]
