@@ -57,6 +57,7 @@ import type { RoamMemoImportPlanSummary } from './roamMemo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
+  normalizeRefListPropertyValues,
 } from './schemaReconciliation'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -244,6 +245,33 @@ export const importRoam = async (
     log(`Registering ${reconciliation.toRegister.length} new property schemas…`)
     await applySchemaReconciliation(reconciliation.toRegister, repo, plan.diagnostics)
     log(`Registered ${reconciliation.toRegister.length} property schemas (${sinceLastPhase()})`)
+  }
+
+  // §8.7 ref-token-→-id normalization. For every property classified
+  // as refList here AND for any pre-existing ref/refList schema the
+  // dump's values land on, walk planned blocks and replace `[[X]]`
+  // token strings with the corresponding alias-resolved ids. Without
+  // this pass the refList codec's `decode(string[])` would reject the
+  // raw token strings on first read.
+  const refListPropertyNames = new Set<string>()
+  for (const r of reconciliation.toRegister) {
+    if (r.presetId === 'refList') refListPropertyNames.add(r.name)
+  }
+  // Also normalize for already-registered ref/refList schemas — a
+  // kernel/plugin schema named `assignee` with codec.type ===
+  // 'refList' should still get its imported values normalized.
+  for (const [name, schema] of repo.propertySchemas) {
+    if (schema.codec.type === 'refList' || schema.codec.type === 'ref') {
+      refListPropertyNames.add(name)
+    }
+  }
+  if (refListPropertyNames.size > 0) {
+    normalizeRefListPropertyValues(
+      allPlannedBlocks,
+      refListPropertyNames,
+      aliasResolution.aliasIdMap,
+      plan.diagnostics,
+    )
   }
 
   if (options.dryRun) {

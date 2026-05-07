@@ -12,6 +12,7 @@ import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
+  normalizeRefListPropertyValues,
 } from '../schemaReconciliation'
 
 const WS = 'ws-roam'
@@ -98,6 +99,25 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:status', presetId: 'string'}])
   })
 
+  it('classifies pure-page-token values as the refList preset', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:topics': '[[A]] [[B]]'}),
+      block('b', {'roam:topics': '[[C]]'}),
+      block('c', {'roam:topics': ['[[D]]', '[[E]]']}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:topics', presetId: 'refList'}])
+  })
+
+  it('falls back to string when at least one value isn\'t a token list', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:notes': '[[A]]'}),
+      block('b', {'roam:notes': 'plain text [[B]]'}),  // mixed text + token → string
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:notes', presetId: 'string'}])
+  })
+
   it('skips names already registered (kernel/plugin/user-data)', () => {
     const blocks: BlockData[] = [
       block('a', {types: ['page']}),  // kernel-registered
@@ -147,5 +167,44 @@ describe('applySchemaReconciliation', () => {
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]).toMatch(/Failed to register schema "roam:bad"/)
     expect(env.repo.propertySchemas.has('roam:bad')).toBe(false)
+  })
+})
+
+describe('normalizeRefListPropertyValues', () => {
+  it('replaces page-token strings with id arrays via aliasIdMap', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:topics': '[[A]] [[B]]'}),
+      block('b', {'roam:topics': '[[C]]'}),
+      block('c', {'roam:topics': ['[[D]]', '[[E]]']}),
+    ]
+    const aliasIdMap = new Map([
+      ['A', 'id-a'], ['B', 'id-b'], ['C', 'id-c'], ['D', 'id-d'], ['E', 'id-e'],
+    ])
+    const diagnostics: string[] = []
+    normalizeRefListPropertyValues(blocks, new Set(['roam:topics']), aliasIdMap, diagnostics)
+    expect(blocks[0].properties['roam:topics']).toEqual(['id-a', 'id-b'])
+    expect(blocks[1].properties['roam:topics']).toEqual(['id-c'])
+    expect(blocks[2].properties['roam:topics']).toEqual(['id-d', 'id-e'])
+    expect(diagnostics).toEqual([])
+  })
+
+  it('reports unresolved aliases as diagnostics and drops them from the value', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:topics': '[[Known]] [[Missing]]'}),
+    ]
+    const aliasIdMap = new Map([['Known', 'id-known']])
+    const diagnostics: string[] = []
+    normalizeRefListPropertyValues(blocks, new Set(['roam:topics']), aliasIdMap, diagnostics)
+    expect(blocks[0].properties['roam:topics']).toEqual(['id-known'])
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toMatch(/unresolved aliases: Missing/)
+  })
+
+  it('leaves non-token values alone (defensive — classification should already prevent this)', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:plain': 'just a string'}),
+    ]
+    normalizeRefListPropertyValues(blocks, new Set(['roam:plain']), new Map(), [])
+    expect(blocks[0].properties['roam:plain']).toBe('just a string')
   })
 })
