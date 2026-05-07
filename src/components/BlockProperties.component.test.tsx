@@ -23,7 +23,7 @@ import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
 import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import type { Block } from '@/data/block'
-import { aliasesProp, showPropertiesProp } from '@/data/properties'
+import { aliasesProp, showPropertiesProp, typesProp } from '@/data/properties'
 import { useContent } from '@/hooks/block'
 import type { BlockRendererProps } from '@/types'
 
@@ -191,6 +191,24 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('Hidden')).toBeTruthy()
     expect(screen.getByText('ID')).toBeTruthy()
     expect(screen.queryByText('types')).toBeNull()
+  })
+
+  it('pins type membership above contributed property rows', () => {
+    const block = repo.block('block-1')
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-property-row="true"]'))
+    expect(rows.map(row => row.dataset.propertyName)).toEqual([
+      typesProp.name,
+      reviewStatusProp.name,
+      reviewerRefProp.name,
+      relatedRefsProp.name,
+    ])
   })
 
   it('keeps hidden boolean fields editable with a checkbox', async () => {

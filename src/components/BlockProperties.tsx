@@ -219,6 +219,12 @@ export function BlockProperties({block}: BlockPropertiesProps) {
 
   return (
     <div className={`tm-property-fields mt-1.5 max-w-[46rem] space-y-0.5 pb-1 pl-1 ${childIds.length ? 'mb-1' : ''}`}>
+      {model.pinnedRows.length > 0 && (
+        <div className="space-y-0.5">
+          {model.pinnedRows.map(row => renderPropertyRow('pinned', row))}
+        </div>
+      )}
+
       {showHiddenFields && (
         <div className="space-y-0.5">
           <PropertySectionLabel section={model.hiddenSection} />

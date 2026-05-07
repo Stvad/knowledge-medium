@@ -49,6 +49,7 @@ export interface PropertyPanelModelSection {
 
 export interface PropertyPanelModel {
   readonly blockTypes: readonly string[]
+  readonly pinnedRows: readonly PropertyPanelModelRow[]
   readonly sections: readonly PropertyPanelModelSection[]
   readonly hiddenSection: PropertyPanelModelSection
   readonly metadataRows: readonly PropertyPanelMetadataRow[]
@@ -94,6 +95,9 @@ const partitionProperties = (
 
   return {visibleProperties, hiddenProperties}
 }
+
+const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(properties, name)
 
 const resolveModelRow = (
   row: PropertyPanelRow,
@@ -180,16 +184,30 @@ export const buildPropertyPanelModel = (args: {
     args.schemas,
     args.uis,
   )
+  const pinnedRawRows: readonly PropertyPanelRow[] = [{
+    name: typesProp.name,
+    encodedValue: hasOwn(visibleProperties, typesProp.name)
+      ? visibleProperties[typesProp.name]
+      : typesProp.codec.encode(blockTypes),
+    isSet: true,
+  }]
+  const sectionProperties = {...visibleProperties}
+  delete sectionProperties[typesProp.name]
+
+  const pinnedRows = pinnedRawRows
+    .map(row => resolveModelRow(row, {
+      schemas: args.schemas,
+      uis: args.uis,
+      presets: args.presets,
+      hidden: false,
+    }))
+    .filter((row): row is PropertyPanelModelRow => row !== null)
+
   const rawSections = buildPropertyPanelSections({
-    properties: visibleProperties,
+    properties: sectionProperties,
     blockTypes,
     typesRegistry: args.typesRegistry,
     schemas: args.schemas,
-    syntheticRows: [{
-      name: typesProp.name,
-      encodedValue: typesProp.codec.encode(blockTypes),
-      isSet: true,
-    }],
   })
 
   const sections = rawSections
@@ -224,6 +242,7 @@ export const buildPropertyPanelModel = (args: {
 
   return {
     blockTypes,
+    pinnedRows,
     sections,
     hiddenSection,
     metadataRows,

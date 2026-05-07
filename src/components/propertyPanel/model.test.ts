@@ -9,6 +9,7 @@ import {
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
 } from '@/data/api'
+import { typesProp } from '@/data/properties'
 import { buildPropertyPanelModel } from './model'
 
 const schemasMap = (schemas: readonly AnyPropertySchema[]) =>
@@ -18,6 +19,33 @@ const uisMap = (uis: readonly AnyPropertyEditorOverride[]) =>
   new Map(uis.map(ui => [ui.name, ui]))
 
 describe('buildPropertyPanelModel', () => {
+  it('pins type membership outside loose property sections', () => {
+    const visibleProp = defineProperty<string>('visible', {
+      codec: codecs.string,
+      defaultValue: '',
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {
+        [visibleProp.name]: 'shown',
+        [typesProp.name]: typesProp.codec.encode(['task']),
+      },
+      schemas: schemasMap([visibleProp, typesProp]),
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+    })
+
+    expect(model.pinnedRows.map(row => row.name)).toEqual([typesProp.name])
+    expect(model.sections.flatMap(section => section.rows.map(row => row.name))).toEqual([
+      visibleProp.name,
+    ])
+  })
+
   it('uses property UI hidden metadata to move fields into capability-limited hidden rows', () => {
     const visibleProp = defineProperty<string>('visible', {
       codec: codecs.string,
