@@ -48,6 +48,7 @@ import {
   blockContentSurfacePropsFacet,
   blockHeaderFacet,
   blockLayoutFacet,
+  isInteractiveContentEvent,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
@@ -383,6 +384,7 @@ export function DefaultBlockRenderer(
   // todo this plausibly should be a global handler and not on the block
   const handlePaste = useMemo(
     () => async (e: ClipboardEvent<HTMLElement>) => {
+      if (e.defaultPrevented || isInteractiveContentEvent(e)) return
       if (uiStateBlock.peekProperty(focusedBlockIdProp) !== block.id) return
 
       e.preventDefault()
