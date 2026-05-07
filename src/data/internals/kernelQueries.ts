@@ -26,7 +26,7 @@ import {
   type Schema,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
-import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './treeQueries'
+import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
 import {
   compileTypedBlockQuery,
   normalizeTypedBlockQuery,
@@ -234,6 +234,61 @@ export const ancestorsQuery = defineQuery<{id: string}, BlockData[]>({
     ctx.depend({kind: 'row', id})
     const rows = await ctx.db.getAll<BlockRow>(ANCESTORS_SQL, [id, id])
     return ctx.hydrateBlocks(asBlockRows(rows))
+  },
+})
+
+interface ManyAncestorsEntry {
+  startId: string
+  ancestors: BlockData[]
+}
+
+const manyAncestorsResultSchema: Schema<ManyAncestorsEntry[]> = {
+  parse: (input) => input as ManyAncestorsEntry[],
+}
+
+/** Batched ancestor walk. Returns one entry per input id, in input
+ *  order, with the leaf-to-root chain (depth-ascending) — same
+ *  ordering as the single-id `core.ancestors` query.
+ *
+ *  Use over N `core.ancestors` calls when a UI needs ancestors for
+ *  many ids known up front (e.g. a backlinks panel rendering N
+ *  source blocks each with breadcrumbs). One round-trip vs. N gives
+ *  a meaningful cold-start win when the SQLite connection is
+ *  contended. Empty entries are returned for ids whose row doesn't
+ *  exist or is soft-deleted, so consumers can map 1:1 over the input
+ *  list without nullable lookups. */
+export const manyAncestorsQuery = defineQuery<
+  {ids: readonly string[]},
+  ManyAncestorsEntry[]
+>({
+  name: 'core.manyAncestors',
+  argsSchema: z.object({ids: z.array(z.string()).readonly()}),
+  resultSchema: manyAncestorsResultSchema,
+  resolve: async ({ids}, ctx) => {
+    if (ids.length === 0) return []
+    for (const id of ids) ctx.depend({kind: 'row', id})
+
+    type Row = BlockRow & {chain_start_id: string}
+    const rows = await ctx.db.getAll<Row>(manyAncestorsSql(ids.length), [...ids])
+
+    const rowsByStart = new Map<string, BlockRow[]>()
+    for (const id of ids) rowsByStart.set(id, [])
+    for (const row of rows) {
+      const list = rowsByStart.get(row.chain_start_id)
+      // The seed ids filter to deleted=0, so chain_start_id always
+      // matches one of the input ids — the conditional is just a
+      // belt-and-suspenders guard against a future SQL change.
+      if (list) list.push(row)
+    }
+
+    // Hydrate each chain through the dispatcher's hydrateBlocks so the
+    // per-row deps land and the BlockCache picks up the rows. We pass
+    // each chain in a single call so the hydrate-order is depth-asc
+    // per chain — a flat single-call hydrate would interleave chains.
+    return ids.map(startId => ({
+      startId,
+      ancestors: ctx.hydrateBlocks(asBlockRows(rowsByStart.get(startId) ?? [])),
+    }))
   },
 })
 
@@ -485,6 +540,7 @@ export const findExtensionBlocksQuery = defineQuery<{workspaceId: string}, Block
 export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   subtreeQuery,
   ancestorsQuery,
+  manyAncestorsQuery,
   childrenQuery,
   childIdsQuery,
   byTypeQuery,
@@ -508,6 +564,7 @@ declare module '@/data/api' {
   interface QueryRegistry {
     'core.subtree': typeof subtreeQuery
     'core.ancestors': typeof ancestorsQuery
+    'core.manyAncestors': typeof manyAncestorsQuery
     'core.children': typeof childrenQuery
     'core.childIds': typeof childIdsQuery
     'core.byType': typeof byTypeQuery

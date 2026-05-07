@@ -7,7 +7,7 @@ import { buildAppHash } from '@/utils/routing.ts'
 import { cn } from '@/lib/utils.ts'
 
 interface BreadcrumbListProps {
-  parents: Block[]
+  parents: readonly Block[]
   workspaceId: string
   overrides: Partial<BlockContextType>
   // When provided, plain primary clicks call onSelect (e.g. inline unfurl).

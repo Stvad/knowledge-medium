@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { Filter } from 'lucide-react'
 import type { BlockRendererProps } from '@/types.ts'
 import { Block } from '@/data/block'
-import { useWorkspaceId } from '@/hooks/block.ts'
+import { useManyParents, useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.tsx'
 import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.tsx'
@@ -19,9 +19,11 @@ import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
 const GroupItems = ({
   group,
   sourceBlocks,
+  parentsBySourceId,
 }: {
   group: GroupedBacklinkGroup
   sourceBlocks: Block[]
+  parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
   const [open, setOpen] = useState(true)
 
@@ -39,7 +41,11 @@ const GroupItems = ({
       {open && (
         <div className="mt-1 flex flex-col gap-2">
           {sourceBlocks.map(source => (
-            <LazyBacklinkItem key={source.id} block={source}/>
+            <LazyBacklinkItem
+              key={source.id}
+              block={source}
+              initialParents={parentsBySourceId.get(source.id)}
+            />
           ))}
         </div>
       )}
@@ -47,14 +53,20 @@ const GroupItems = ({
   )
 }
 
-const GroupedReferencesGroup = ({group}: { group: GroupedBacklinkGroup }) => {
+const GroupedReferencesGroup = ({
+  group,
+  parentsBySourceId,
+}: {
+  group: GroupedBacklinkGroup
+  parentsBySourceId: ReadonlyMap<string, Block[]>
+}) => {
   const repo = useRepo()
   const sourceBlocks = useMemo(
     () => group.sourceIds.map(id => repo.block(id)),
     [group.sourceIds, repo],
   )
 
-  return <GroupItems group={group} sourceBlocks={sourceBlocks}/>
+  return <GroupItems group={group} sourceBlocks={sourceBlocks} parentsBySourceId={parentsBySourceId}/>
 }
 
 export function GroupedLinkedReferences({block}: BlockRendererProps) {
@@ -87,6 +99,12 @@ function GroupedLinkedReferencesInner({
     groupingConfig,
     filterActive ? filter : undefined,
   )
+  // Same prefetch as `LinkedReferences` — one batched manyAncestors
+  // covering every visible source so per-entry breadcrumbs don't each
+  // fire `core.ancestors`. We use the `unfilteredBacklinks` set as
+  // the seed list so the prefetch handle is stable across filter
+  // toggles.
+  const initialParentsByBacklinkId = useManyParents(unfilteredBacklinks)
   const [open, setOpen] = useState(true)
   const [filtersOpen, setFiltersOpen] = useState(filterActive)
 
@@ -143,7 +161,11 @@ function GroupedLinkedReferencesInner({
           ) : (
             <div className="mt-3 flex flex-col gap-4">
               {grouped.groups.map(group => (
-                <GroupedReferencesGroup key={group.groupId} group={group}/>
+                <GroupedReferencesGroup
+                  key={group.groupId}
+                  group={group}
+                  parentsBySourceId={initialParentsByBacklinkId}
+                />
               ))}
             </div>
           )}

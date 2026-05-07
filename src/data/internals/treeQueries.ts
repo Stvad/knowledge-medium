@@ -73,6 +73,45 @@ export const ANCESTORS_SQL = `
   SELECT * FROM chain WHERE id != ? ORDER BY depth ASC
 `
 
+/** Many-id variant of `ANCESTORS_SQL` — runs the recursive walk for
+ *  every seed id in one statement, tagging each row with the seed it
+ *  belongs to. Used by `core.manyAncestors` to avoid N round-trips
+ *  when a backlinks panel needs the parent chain for every visible
+ *  source block.
+ *
+ *  Caller supplies `idCount` `?` placeholders bound to the seed ids;
+ *  ordering of the input array is not preserved in the result, so
+ *  consumers must group by `chain_start_id` themselves. Each chain is
+ *  returned leaf-to-root (ascending `depth`) so it matches the
+ *  single-id `ANCESTORS_SQL` shape exactly. */
+export const manyAncestorsSql = (idCount: number): string => {
+  if (idCount <= 0) throw new Error('manyAncestorsSql: idCount must be >= 1')
+  const placeholders = Array(idCount).fill('?').join(', ')
+  return `
+    WITH RECURSIVE chain AS (
+      SELECT blocks.*,
+             blocks.id AS chain_start_id,
+             '!' || hex(blocks.id) || '/' AS path,
+             0 AS depth
+        FROM blocks
+       WHERE blocks.id IN (${placeholders}) AND blocks.deleted = 0
+      UNION ALL
+      SELECT parent.*,
+             chain.chain_start_id,
+             chain.path || '!' || hex(parent.id) || '/',
+             chain.depth + 1
+        FROM chain
+        JOIN blocks AS parent ON parent.id = chain.parent_id
+       WHERE parent.deleted = 0
+         AND chain.depth < 100
+         AND INSTR(chain.path, '!' || hex(parent.id) || '/') = 0
+    )
+    SELECT * FROM chain
+    WHERE chain.id != chain.chain_start_id
+    ORDER BY chain.chain_start_id, chain.depth ASC
+  `
+}
+
 /** Existence check: is :potentialAncestor an ancestor of :id?
  *  Used by `tx.move`'s cycle-validation: would the new parent be a
  *  descendant of `id`? Parameter order in the SQL: `?, ?` for

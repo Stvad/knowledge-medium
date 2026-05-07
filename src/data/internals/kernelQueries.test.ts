@@ -134,6 +134,36 @@ describe('repo.query.ancestors', () => {
   })
 })
 
+describe('repo.query.manyAncestors', () => {
+  it('returns one entry per input id with each chain in leaf-to-root order', async () => {
+    await create({id: 'r'})
+    await create({id: 'c1', parentId: 'r'})
+    await create({id: 'c2', parentId: 'r'})
+    await create({id: 'gc', parentId: 'c1'})
+    const out = await env.repo.query.manyAncestors({ids: ['gc', 'c2', 'r']}).load()
+    expect(out).toHaveLength(3)
+    const byStart = new Map(out.map(e => [e.startId, e.ancestors.map(a => a.id)]))
+    // Each chain matches the single-id `core.ancestors` shape exactly.
+    expect(byStart.get('gc')).toEqual(['c1', 'r'])
+    expect(byStart.get('c2')).toEqual(['r'])
+    expect(byStart.get('r')).toEqual([])
+  })
+
+  it('returns empty entries for missing or soft-deleted ids', async () => {
+    await create({id: 'r'})
+    await create({id: 'c', parentId: 'r'})
+    await env.repo.tx(tx => tx.delete('c'), {scope: ChangeScope.BlockDefault})
+    const out = await env.repo.query.manyAncestors({ids: ['c', 'no-such']}).load()
+    expect(out).toHaveLength(2)
+    expect(out.find(e => e.startId === 'c')!.ancestors).toEqual([])
+    expect(out.find(e => e.startId === 'no-such')!.ancestors).toEqual([])
+  })
+
+  it('returns [] when the input list is empty', async () => {
+    expect(await env.repo.query.manyAncestors({ids: []}).load()).toEqual([])
+  })
+})
+
 describe('repo.query.children', () => {
   it('returns immediate children sorted by (orderKey, id)', async () => {
     await create({id: 'p'})
@@ -534,8 +564,9 @@ describe('kernelDataExtension queriesFacet wiring', () => {
     const runtime = resolveFacetRuntimeSync(kernelDataExtension)
     const queries = runtime.read(queriesFacet)
     const expected = [
-      'core.subtree', 'core.ancestors', 'core.children', 'core.childIds',
-      'core.byType', 'core.searchByContent', 'core.recentBlocks',
+      'core.subtree', 'core.ancestors', 'core.manyAncestors',
+      'core.children', 'core.childIds', 'core.byType',
+      'core.searchByContent', 'core.recentBlocks',
       'core.firstChildByContent', 'core.aliasesInWorkspace',
       'core.aliasMatches', 'core.aliasLookup', 'core.findExtensionBlocks',
     ]

@@ -2,7 +2,7 @@ import { useCallback, useState } from 'react'
 import { Filter } from 'lucide-react'
 import { Block } from '../../data/block'
 import { BlockRendererProps } from '@/types.ts'
-import { useWorkspaceId } from '@/hooks/block.ts'
+import { useManyParents, useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useBacklinks } from './useBacklinks.ts'
 import { BacklinkFilters } from './BacklinkFilters.tsx'
@@ -38,6 +38,12 @@ function LinkedReferencesInner({
   const unfilteredBacklinks = useBacklinks(block, workspaceId)
   const filteredBacklinks = useBacklinks(block, workspaceId, filterActive ? filter : undefined)
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
+  // Prefetch ancestors for every visible backlink in one batched
+  // query, instead of N concurrent `useParents` calls. Each entry's
+  // breadcrumbs read from this map; the per-entry `core.ancestors`
+  // handle only fires when the user clicks a breadcrumb (changing
+  // shownBlock to one we didn't prefetch).
+  const initialParentsByBacklinkId = useManyParents(backlinks)
   const [open, setOpen] = useState(true)
   const [filtersOpen, setFiltersOpen] = useState(filterActive)
 
@@ -94,7 +100,11 @@ function LinkedReferencesInner({
           ) : (
             <div className="mt-3 flex flex-col gap-3">
               {backlinks.map(backlinkBlock => (
-                <LazyBacklinkItem key={backlinkBlock.id} block={backlinkBlock}/>
+                <LazyBacklinkItem
+                  key={backlinkBlock.id}
+                  block={backlinkBlock}
+                  initialParents={initialParentsByBacklinkId.get(backlinkBlock.id)}
+                />
               ))}
             </div>
           )}
