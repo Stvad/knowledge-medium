@@ -19,6 +19,12 @@ import {
 } from '@/data/globalState.ts'
 import { Repo } from '../data/repo'
 import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.ts'
+import {
+  defineVariantFacet,
+  type Variant,
+  type VariantContribution,
+  type VariantResolver,
+} from '@/extensions/variantFacet.ts'
 import type { ActionContextActivation } from '@/shortcuts/types.ts'
 import type { BlockContextType, BlockRenderer } from '@/types.ts'
 import { extendSelection, validateSelectionHierarchy } from '@/utils/selection.ts'
@@ -75,11 +81,19 @@ export interface EditorActivationSelection {
 
 export type BlockMouseHandler = (event: MouseEvent) => void | Promise<void>
 
+export type BlockContentRendererVariant = Variant<BlockRenderer>
+
+// Variant facet — each contribution registers a named alternative
+// content renderer. Most contributions self-gate (e.g. plain-outliner's
+// edit-mode dispatcher returns its variant only when the primary slot
+// is set), and the consumer picks `last` to preserve the legacy "last
+// truthy contribution wins" behavior. Adding a user-facing picker
+// later means reading a saved id and calling `byId` instead.
 export type BlockContentRendererContribution =
-  (context: BlockResolveContext) => BlockRenderer | null | undefined | false
+  VariantContribution<BlockResolveContext, BlockRenderer>
 
 export type BlockContentRendererResolver =
-  (context: BlockResolveContext) => BlockRenderer | undefined
+  VariantResolver<BlockResolveContext, BlockRenderer>
 
 export type BlockContentDecorator =
   (innerRenderer: BlockRenderer) => BlockRenderer
@@ -175,11 +189,17 @@ export interface BlockLayoutSlots {
 
 export type BlockLayout = ComponentType<BlockLayoutSlots>
 
+export type BlockLayoutVariant = Variant<BlockLayout>
+
+// Variant facet — each contribution registers a named alternative
+// layout. Plugins typically self-gate by context (e.g. the video
+// player layout only contributes for the video block); the consumer
+// picks `last` to preserve last-wins behavior.
 export type BlockLayoutContribution =
-  (context: BlockResolveContext) => BlockLayout | null | undefined | false
+  VariantContribution<BlockResolveContext, BlockLayout>
 
 export type BlockLayoutResolver =
-  (context: BlockResolveContext) => BlockLayout | undefined
+  VariantResolver<BlockResolveContext, BlockLayout>
 
 export const blockHeaderFacet = defineFacet<
   BlockHeaderContribution,
@@ -215,14 +235,8 @@ export const blockChildrenFooterFacet = defineFacet<
   validate: isFunction<BlockChildrenFooterContribution>,
 })
 
-export const blockLayoutFacet = defineFacet<
-  BlockLayoutContribution,
-  BlockLayoutResolver
->({
+export const blockLayoutFacet = defineVariantFacet<BlockResolveContext, BlockLayout>({
   id: 'core.block-layout',
-  combine: combineLastContributionResult<BlockResolveContext, BlockLayout>(),
-  empty: () => () => undefined,
-  validate: isFunction<BlockLayoutContribution>,
 })
 
 export type ShortcutSurface =
@@ -247,16 +261,8 @@ export const getBlockContentRendererSlot = (
 ): BlockRenderer | undefined =>
   context.contentRenderers?.find(slot => slot.id === slotId)?.renderer
 
-export const blockContentRendererFacet = defineFacet<
-  BlockContentRendererContribution,
-  BlockContentRendererResolver
->({
+export const blockContentRendererFacet = defineVariantFacet<BlockResolveContext, BlockRenderer>({
   id: 'core.block-content-renderer',
-  combine: combineLastContributionResult<BlockResolveContext, BlockRenderer>(
-    context => getBlockContentRendererSlot(context, 'primary'),
-  ),
-  empty: () => context => getBlockContentRendererSlot(context, 'primary'),
-  validate: isFunction<BlockContentRendererContribution>,
 })
 
 // Layered decoration on top of the chosen content renderer. Lower

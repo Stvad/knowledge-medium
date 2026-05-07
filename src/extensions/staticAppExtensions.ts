@@ -15,6 +15,7 @@ import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
+import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
@@ -39,8 +40,13 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   plainOutlinerPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
+  // The backlinks-view coordinator reads variants registered by
+  // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
+  // for the picker UI (variants render in registration order); the
+  // selection itself is driven by `backlinksViewProp`.
   backlinksPlugin,
   groupedBacklinksPlugin,
+  backlinksViewPlugin,
   todoPlugin,
   srsReschedulingPlugin,
   updateIndicatorPlugin,

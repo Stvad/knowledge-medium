@@ -123,7 +123,10 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
       propertySchemasFacet.of(statusProp, {source: 'test'}),
-      blockLayoutFacet.of(() => propertyOnlyLayout, {source: 'test'}),
+      blockLayoutFacet.of(
+        () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
+        {source: 'test'},
+      ),
     ])
     repo.setFacetRuntime(runtime)
     repo.setActiveWorkspaceId('ws-1')

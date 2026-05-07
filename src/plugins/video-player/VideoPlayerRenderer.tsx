@@ -315,11 +315,20 @@ const VideoPlayerLayout: BlockLayout = (slots) => {
  * Only contribute a layout for the actual video block — child note blocks
  * inherit `videoPlayerBlockId` from the surrounding NestedBlockContext, so we
  * gate on `block.id === videoPlayerBlockId` to leave child layouts alone.
+ *
+ * Registered as a variant on `blockLayoutFacet` (see migration to
+ * defineVariantFacet); the consumer uses `last` so this single variant
+ * wins whenever the gate matches — matching the previous last-wins
+ * behavior of the facet.
  */
 export const videoPlayerLayoutContribution: BlockLayoutContribution = ctx => {
   const videoBlockId = ctx.blockContext?.videoPlayerBlockId
   if (videoBlockId !== ctx.block.id) return null
-  return VideoPlayerLayout
+  return {
+    id: 'video-player',
+    label: 'Video player',
+    render: VideoPlayerLayout,
+  }
 }
 
 export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>

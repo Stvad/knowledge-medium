@@ -334,8 +334,12 @@ export function DefaultBlockRenderer(
   // subtree underneath. The runtime.read result is itself cached per
   // facet runtime, so the resolver function is already stable.
   const resolveBlockContentRenderer = runtime.read(blockContentRendererFacet)
+  // Variant facet: contributions self-gate, last truthy variant wins —
+  // matches the previous combineLastContributionResult semantics. When
+  // nothing contributes, fall through to the host's primary renderer.
   const baseContentRenderer = useMemo(
-    () => resolveBlockContentRenderer(resolveContext) ?? DefaultContentRenderer,
+    () =>
+      resolveBlockContentRenderer(resolveContext).last?.render ?? DefaultContentRenderer,
     [resolveBlockContentRenderer, resolveContext, DefaultContentRenderer],
   )
   const decorateContent = runtime.read(blockContentDecoratorsFacet)
@@ -365,8 +369,10 @@ export function DefaultBlockRenderer(
     [resolveContext, resolveHeaderSections],
   )
   const resolveBlockLayout = runtime.read(blockLayoutFacet)
+  // Last-wins on the variant facet — same migration shape as content
+  // renderer above. `DefaultBlockLayout` is the no-contribution fallback.
   const Layout = useMemo(
-    () => resolveBlockLayout(resolveContext) ?? DefaultBlockLayout,
+    () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
     [resolveContext, resolveBlockLayout],
   )
 

@@ -58,7 +58,7 @@ const context = {
 } satisfies BlockInteractionContext
 
 describe('plain outliner interactions', () => {
-  it('returns a dispatcher that resolves to neither raw slot directly', () => {
+  it('returns a dispatcher variant that resolves to neither raw slot directly', () => {
     // Resolution-time output is now stable per (block, registry) — a
     // dispatcher component that picks Primary vs Secondary at render
     // time. The specific runtime selection is exercised end-to-end by
@@ -68,13 +68,13 @@ describe('plain outliner interactions', () => {
       blockContentRendererFacet.of(blockEditingContentRenderer),
     ])
 
-    const resolveRenderer = runtime.read(blockContentRendererFacet)
-    const renderer = resolveRenderer(context)
-
-    expect(renderer).toBeDefined()
+    const variant = runtime.read(blockContentRendererFacet)(context).last
+    expect(variant).toBeDefined()
+    expect(variant?.id).toBe('plain-outliner.editing-dispatcher')
+    const renderer = variant?.render
     expect(renderer).not.toBe(PrimaryRenderer)
     expect(renderer).not.toBe(SecondaryRenderer)
-    expect((renderer as { displayName?: string }).displayName).toBe('BlockEditingDispatcher')
+    expect((renderer as { displayName?: string } | undefined)?.displayName).toBe('BlockEditingDispatcher')
   })
 
   it('falls through to the primary slot when no secondary is registered', () => {
@@ -82,13 +82,12 @@ describe('plain outliner interactions', () => {
       blockContentRendererFacet.of(blockEditingContentRenderer),
     ])
 
-    const resolveRenderer = runtime.read(blockContentRendererFacet)
-    const renderer = resolveRenderer({
+    const variant = runtime.read(blockContentRendererFacet)({
       ...context,
       contentRenderers: [{id: 'primary', renderer: PrimaryRenderer}],
-    })
+    }).last
 
-    expect(renderer).toBe(PrimaryRenderer)
+    expect(variant?.render).toBe(PrimaryRenderer)
   })
 
   it.each(interactiveTargets)('leaves %s clicks to the interactive descendant', async (_label, createTarget) => {

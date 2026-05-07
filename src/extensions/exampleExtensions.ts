@@ -258,9 +258,13 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 // Apply side-by-side layout to any block whose 'user:layout' property
 // is 'split'. Returning null for everything else lets ordinary blocks
 // fall through to the default vertical layout.
+//
+// blockLayoutFacet is a variant facet — contributions return
+// {id, label, render} so a future picker UI could enumerate them.
+// Returning null still means "this variant doesn't apply here".
 export default blockLayoutFacet.of((ctx) => {
   if (ctx.block.peekProperty(layoutProp) !== 'split') return null
-  return SplitLayout
+  return {id: 'split', label: 'Split (content / children)', render: SplitLayout}
 })
 `
 

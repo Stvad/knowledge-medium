@@ -26,6 +26,14 @@ export {
   type FacetRuntime,
   type OptionalContributionResult,
 } from '@/extensions/facet.ts'
+export {
+  defineVariantFacet,
+  defineVariant,
+  type Variant,
+  type VariantContribution,
+  type VariantResolver,
+  type VariantSelection,
+} from '@/extensions/variantFacet.ts'
 
 // --- Blessed core facets ---
 export {
