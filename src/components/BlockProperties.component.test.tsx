@@ -351,6 +351,11 @@ describe('BlockProperties component', () => {
       await waitFor(() => {
         expect(openPanelEvents).toEqual([{blockId: newId}])
       })
+      // The user gets a transient "New schema" pill so the just-opened
+      // side panel doesn't feel like it appeared out of nowhere.
+      await waitFor(() => {
+        expect(screen.getByText('New schema')).toBeTruthy()
+      })
     } finally {
       window.removeEventListener('open-panel', onOpen)
     }
@@ -401,6 +406,54 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('phase2:review-status')).toBeTruthy()
     expect(screen.getByText('# Phase 2 Assignment')).toBeTruthy()
     expect(screen.getByText('phase2:reviewer')).toBeTruthy()
+  })
+
+  it('AddPropertyForm: glyph click materialises a schema, opens its panel, and confirms creation', async () => {
+    const block = repo.block('block-1')
+
+    const openPanelEvents: Array<{blockId: string}> = []
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{blockId: string}>).detail
+      openPanelEvents.push({blockId: detail.blockId})
+    }
+    window.addEventListener('open-panel', onOpen)
+
+    render(
+      <AppRuntimeContextProvider value={runtime}>
+        <BlockProperties block={block}/>
+      </AppRuntimeContextProvider>,
+    )
+
+    try {
+      await act(async () => {
+        requestPropertyCreate({blockId: block.id})
+      })
+      const fieldInput = screen.getByPlaceholderText('Field')
+      await act(async () => {
+        fireEvent.change(fieldInput, {target: {value: 'priority'}})
+      })
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', {name: /configure new field/i}))
+      })
+
+      await waitFor(() => {
+        expect(repo.userSchemas.getSchemaBlockId('priority')).toBeDefined()
+      })
+      const newId = repo.userSchemas.getSchemaBlockId('priority')!
+      await waitFor(() => {
+        expect(openPanelEvents).toEqual([{blockId: newId}])
+      })
+      await waitFor(() => {
+        expect('priority' in block.data.properties).toBe(true)
+      })
+      // Form has closed — the placeholder input is gone, replaced by the
+      // "Field" trigger button.
+      await waitFor(() => {
+        expect(screen.queryByPlaceholderText('Field')).toBeNull()
+      })
+    } finally {
+      window.removeEventListener('open-panel', onOpen)
+    }
   })
 
   it('opens property creation from a Tana-style request and tabs into the value row', async () => {

@@ -14,6 +14,7 @@ export function PropertyRow({
   block,
   readOnly,
   canConfigure,
+  recentlyMaterialized = false,
   onNavigate,
   onConfigure,
   onChange,
@@ -26,6 +27,10 @@ export function PropertyRow({
   /** Whether the glyph button should open a config UI. False for
    *  kernel/plugin schemas, which have no per-instance config. */
   canConfigure: boolean
+  /** True briefly after the row's schema was materialised through the
+   *  optimistic-create path; renders a transient "New schema" pill so
+   *  the user notices the side panel didn't just open out of nowhere. */
+  recentlyMaterialized?: boolean
   onNavigate: (event: KeyboardEvent<HTMLDivElement>, direction: -1 | 1) => void
   onConfigure: () => void
   onChange: (next: unknown) => void
@@ -67,33 +72,44 @@ export function PropertyRow({
         disabled={!canConfigure}
         onClick={onConfigure}
       />
-      <div className="min-w-0">
-        {renameAllowed ? (
-          <Input
-            className="h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none focus-visible:border-transparent focus-visible:ring-0"
-            defaultValue={row.name}
-            aria-label={`Field ${row.labelText}`}
-            data-property-label="true"
-            title={hintText}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === 'Tab') {
-                event.preventDefault()
-                onRename(event.currentTarget.value)
-              }
-            }}
-            onBlur={(event) => onRename(event.target.value)}
-          />
-        ) : (
-          <div
-            className="truncate text-foreground"
-            data-property-label="true"
-            tabIndex={-1}
-            title={hintText}
+      <div className="flex min-w-0 items-center gap-1.5">
+        <div className="min-w-0 flex-1">
+          {renameAllowed ? (
+            <Input
+              className="h-7 min-w-0 border-transparent bg-transparent px-0 text-sm shadow-none focus-visible:border-transparent focus-visible:ring-0"
+              defaultValue={row.name}
+              aria-label={`Field ${row.labelText}`}
+              data-property-label="true"
+              title={hintText}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === 'Tab') {
+                  event.preventDefault()
+                  onRename(event.currentTarget.value)
+                }
+              }}
+              onBlur={(event) => onRename(event.target.value)}
+            />
+          ) : (
+            <div
+              className="truncate text-foreground"
+              data-property-label="true"
+              tabIndex={-1}
+              title={hintText}
+            >
+              {row.labelText}
+              {row.schemaUnknown && <span className="ml-1 text-amber-600">*</span>}
+              {row.decodeFailed && <span className="ml-1 text-destructive">*</span>}
+            </div>
+          )}
+        </div>
+        {recentlyMaterialized && (
+          <span
+            className="shrink-0 rounded-full bg-fuchsia-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-200"
+            data-recently-materialized="true"
+            title="A schema was just registered for this property — open the side panel to configure type or details."
           >
-            {row.labelText}
-            {row.schemaUnknown && <span className="ml-1 text-amber-600">*</span>}
-            {row.decodeFailed && <span className="ml-1 text-destructive">*</span>}
-          </div>
+            New schema
+          </span>
         )}
       </div>
       <div className="min-w-0" data-property-value="true">

@@ -4,7 +4,7 @@
  * row/add/config UI lives under `propertyPanel/`.
  */
 
-import { useMemo, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
@@ -59,6 +59,23 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const runtime = useAppRuntime()
   const {panelId} = useBlockContext()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
+  // Name of the property whose row was just materialised through the
+  // optimistic-create path; cleared after a few seconds. The row renders
+  // a "New schema" pill while the name is here, so the user notices that
+  // a glyph click registered a schema rather than just opening a panel.
+  const [recentlyMaterializedName, setRecentlyMaterializedName] = useState<string | null>(null)
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current)
+  }, [])
+  const flashRecent = (name: string) => {
+    setRecentlyMaterializedName(name)
+    if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current)
+    flashTimerRef.current = setTimeout(() => {
+      setRecentlyMaterializedName(curr => curr === name ? null : curr)
+      flashTimerRef.current = null
+    }, 4000)
+  }
 
   // FacetRuntime memoises combine() results, so these reads are identity-stable
   // across renders for the same runtime.
@@ -152,7 +169,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       try {
         await block.repo.userSchemas.addSchema({name: row.name, presetId: row.shape})
         const newId = block.repo.userSchemas.getSchemaBlockId(row.name)
-        if (newId) openSchemaPanel(newId)
+        if (newId) {
+          flashRecent(row.name)
+          openSchemaPanel(newId)
+        }
       } catch (err) {
         console.error(`[BlockProperties] failed to register schema for "${row.name}":`, err)
       }
@@ -176,6 +196,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         block={block}
         readOnly={readOnly}
         canConfigure={canConfigure}
+        recentlyMaterialized={recentlyMaterializedName === row.name}
         onNavigate={handlePropertyRowKeyDown}
         onConfigure={() => void handleConfigure(row)}
         onChange={(next) => writeProperty(block, row.schema, next)}
@@ -230,22 +251,32 @@ export function BlockProperties({block}: BlockPropertiesProps) {
           onAdd={(args) => addProperty(block, schemas, uis, args)}
           onConfigureNewSchema={async ({name, presetId}) => {
             const trimmed = name.trim()
-            if (!trimmed) return
+            if (!trimmed) return undefined
             const existingId = block.repo.userSchemas.getSchemaBlockId(trimmed)
             if (existingId) {
               openSchemaPanel(existingId)
-              return
+              return schemas.get(trimmed)
             }
-            // If a kernel/plugin schema already owns this name, don't
-            // create a duplicate user schema (it would shadow the
-            // kernel/plugin one). The form's submit path will adopt it.
-            if (schemas.has(trimmed)) return
+            // If a kernel/plugin schema already owns this name, adopt
+            // it instead of creating a shadowing user schema. There's
+            // no panel to open (kernel schemas have no block) but the
+            // form still gets a schema back to submit with.
+            const kernelSchema = schemas.get(trimmed)
+            if (kernelSchema) return kernelSchema
             try {
-              await block.repo.userSchemas.addSchema({name: trimmed, presetId})
+              const schema = await block.repo.userSchemas.addSchema({
+                name: trimmed,
+                presetId,
+              })
               const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
-              if (newId) openSchemaPanel(newId)
+              if (newId) {
+                flashRecent(trimmed)
+                openSchemaPanel(newId)
+              }
+              return schema
             } catch (err) {
               console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
+              return undefined
             }
           }}
         />

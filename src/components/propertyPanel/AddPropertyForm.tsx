@@ -75,9 +75,13 @@ export function AddPropertyForm({
   onAdd: (args: AddPropertyArgs) => void | Promise<void>
   /** Glyph-click handler. Adopts an existing schema by name (opens its
    *  block in the side panel) or materializes a new one with the given
-   *  preset id and opens it. The form keeps its current name + preset
-   *  state so submitting later adopts the just-registered schema. */
-  onConfigureNewSchema: (args: ConfigureNewSchemaArgs) => void | Promise<void>
+   *  preset id and opens it. Returns the registered schema so the
+   *  form can adopt it as a confirmed submit (writes the property's
+   *  initial value and closes), or undefined if neither path applied
+   *  (e.g. blocked by a kernel-name collision). */
+  onConfigureNewSchema: (
+    args: ConfigureNewSchemaArgs,
+  ) => Promise<AnyPropertySchema | undefined>
 }) {
   const runtime = useAppRuntime()
   const presets = runtime.read(valuePresetsFacet)
@@ -159,14 +163,21 @@ export function AddPropertyForm({
     }
   }, [blockId, initialPresetId, onAdd, presetId, propertyName, submitting])
 
-  const handleGlyphClick = useCallback(() => {
+  const handleGlyphClick = useCallback(async () => {
     const name = propertyName.trim()
     if (!name) {
       focusNameInput()
       return
     }
-    void onConfigureNewSchema({name, presetId})
-  }, [focusNameInput, onConfigureNewSchema, presetId, propertyName])
+    if (submitting) return
+    const schema = await onConfigureNewSchema({name, presetId})
+    if (!schema) return
+    // The user confirmed creation by clicking the glyph; treat it as a
+    // submit so the row materialises in the panel and the form closes.
+    // Side-panel for further config has already opened via the
+    // callback.
+    void submit(schema)
+  }, [focusNameInput, onConfigureNewSchema, presetId, propertyName, submit, submitting])
 
   if (!isOpen) {
     return (
