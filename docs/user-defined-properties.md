@@ -683,30 +683,31 @@ Each phase is independently shippable and testable.
 
 No user-visible change yet. This is pure infrastructure.
 
-### Phase 2 — `ValuePreset` + value preset facet
+### Phase 2 — `ValuePreset` + codec/editor consolidation (infrastructure only)
 
 1. Add `ValuePreset` type and `valuePresetsFacet` ([src/data/api/valuePresets.ts](src/data/api/valuePresets.ts) new).
-2. Register kernel presets (string, number, boolean, list, date, url, ref, refList).
+2. Register kernel presets (string, number, boolean, list, date, url, ref, refList) including their `configCodec` where non-void.
 3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Drop the `CodecShape` type and `isStringCodec` / `isListCodec` / etc. shape-keyed predicates; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check against a `whereAllowedTypesFacet`-resolved kernel set instead of `SCALAR_WHERE_SHAPES` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case.
 4. Drop `propertyEditorFallbackFacet` (per §1-edit). Move every editor onto its preset's `Editor` field. Update `resolvePropertyDisplay` to look up `valuePresets.get(codec.type)?.Editor` for the fallback editor; `PropertyEditorOverride.Editor` exact-name path stays unchanged.
 5. Add `urlCodec` with `type: 'url'` and a `'url'` preset wrapping `(urlCodec, UrlPropertyEditor, '', LinkIcon)`.
-4. Replace `AddablePropertyShape` in `AddPropertyForm` and `FieldConfigSheet` with preset selection. Form's default preset is `ref`.
-5. Extend `FieldConfigSheet` to render a preset's optional `ConfigEditor`.
-6. Tests: preset list resolves, configEditor renders for ref, glyph + label propagate.
+6. Tests: preset list resolves; editor selection routes through `valuePresets.get(codec.type)?.Editor` for codec-keyed lookup; ref/refList/url/etc. codecs match their respective presets; the where-clause check uses the new `whereAllowedTypesFacet` set.
 
-After this phase, the form lets users pick rich presets but still synthesizes in-memory `adhocSchema`s — choices don't persist yet. Stepping stone.
+`AddPropertyForm` is **not changed** in this phase — surfacing rich presets in the picker while choices still synthesize in-memory `adhocSchema`s would be a misleading intermediate state (picking "Reference" implies durable ref semantics that don't survive reload). Phase 2 stays infrastructure-only; the visible picker change moves to Phase 3 where persistence lands and the choice is actually durable.
 
-### Phase 3 — property-schema as block + `UserSchemasService`
+After this phase, no user-visible change. The codec / preset / editor wiring is in place for Phase 3 to surface.
+
+### Phase 3 — property-schema as block + `UserSchemasService` + visible AddPropertyForm
 
 1. Add `'property-schema'` type contribution and the three kernel schemas (`propertyNameProp`, `presetIdProp`, `presetConfigProp`). `presetConfigProp` is hidden via `PropertyEditorOverride.hidden = true`.
 2. Workspace bootstrap creates the Properties page if it doesn't exist (deterministic id, idempotent).
 3. Register a `blockRenderersFacet` contribution for blocks of type `'property-schema'` per §4a — preset picker + dispatched `ConfigEditor`. Reuses the same `preset.ConfigEditor` component the AddPropertyForm renders inside `FieldConfigSheet`.
 4. Implement `UserSchemasService` with the `subscribeBlocks` subscription **and** the synchronous `appendUserSchema` slot-update path used by `addSchema` (per §7). (Requires [type-system.md §8](type-system.md)'s typed-query primitive — phase order this one after.)
-5. Wire `AddPropertyForm`'s submit path: collision preflight per §6 (read `repo.propertySchemas.get(name)` and `repo.propertyEditorOverrides.get(name)?.hidden` — covers kernel/plugin/type-lifted/user-data uniformly, refuses on `hidden: true`) → either adopt existing schema or `await userSchemasService.addSchema(...)` and only then write the property's initial value.
-6. Add name autocomplete to `AddPropertyForm` keyed off `repo.propertySchemas`.
-7. Tests: creating a schema via the form persists as a block, survives reload, fires the subscription, updates the merged map, makes the schema visible to `BlockProperties` synchronously after `addSchema` resolves (no race with subscription tick). Edit + delete of schema blocks reactively updates.
+5. Replace `AddablePropertyShape` in `AddPropertyForm` and `FieldConfigSheet` with `ValuePreset` selection. Default preset: `ref`. Extend `FieldConfigSheet` to render a preset's optional `ConfigEditor`. Glyph and label propagate from the resolved preset.
+6. Wire `AddPropertyForm`'s submit path: collision preflight per §6 (read `repo.propertySchemas.get(name)` and `repo.propertyEditorOverrides.get(name)?.hidden` — covers kernel/plugin/type-lifted/user-data uniformly, refuses on `hidden: true`) → either adopt existing schema or `await userSchemasService.addSchema(...)` and only then write the property's initial value.
+7. Add name autocomplete to `AddPropertyForm` keyed off `repo.propertySchemas`.
+8. Tests: creating a schema via the form persists as a block, survives reload, fires the subscription, updates the merged map, makes the schema visible to `BlockProperties` synchronously after `addSchema` resolves (no race with subscription tick). Edit + delete of schema blocks reactively updates. Picker shows preset labels/glyphs and ref's ConfigEditor renders.
 
-After this phase, user-created schemas with full preset semantics persist across reloads and sync.
+After this phase, user-created schemas with full preset semantics persist across reloads and sync; the AddPropertyForm exposes the rich preset vocabulary durably.
 
 ### Phase 4 — Roam importer schema reconciliation
 
