@@ -1,9 +1,10 @@
-/** AddPropertyForm — the panel's "add a field" entry point. After
- *  Phase 3 lands, the form picks a ValuePreset (default: 'ref')
- *  rather than a primitive shape, autocompletes the name input from
- *  the registered schemas, and on submit either adopts an existing
- *  schema or asks UserSchemasService.addSchema to create a new one
- *  before the property's initial value is written. */
+/** AddPropertyForm — the panel's "add a field" entry point. The form
+ *  autocompletes the name input from registered schemas; on submit it
+ *  either adopts an existing schema or asks UserSchemasService.addSchema
+ *  to create a new one (default preset: 'ref') before the property's
+ *  initial value is written. The glyph button materializes a schema
+ *  early and opens it in a side panel for preset/config editing —
+ *  the same path as configuring an unregistered row in the panel. */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
@@ -22,7 +23,6 @@ import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
 import { PropertyShapeGlyph, PropertyShapeButton } from './shapeUi'
 import { propertyShapeLabel } from './shapes'
 import { PROPERTY_ROW_GRID_STYLE } from './layout'
-import { FieldConfigSheet } from './FieldConfigSheet'
 
 const DEFAULT_PRESET_ID = 'ref'
 const FALLBACK_PRESET_ID = 'string'
@@ -31,11 +31,16 @@ const MAX_SUGGESTIONS = 8
 export interface AddPropertyArgs {
   /** Existing registered schema the user picked from autocomplete (if any). */
   adopted?: AnyPropertySchema
-  /** Otherwise: new schema name + chosen preset id + caller-supplied
-   *  config that should round through `preset.configCodec`. */
+  /** Otherwise: new schema name + chosen preset id. The form no longer
+   *  collects preset config inline — that's done in the side-panel
+   *  schema editor after the user clicks the glyph (or post-add). */
   name: string
   presetId: string
-  config?: unknown
+}
+
+export interface ConfigureNewSchemaArgs {
+  name: string
+  presetId: string
 }
 
 interface NameSuggestion {
@@ -64,9 +69,15 @@ const filterSuggestions = (
 export function AddPropertyForm({
   blockId,
   onAdd,
+  onConfigureNewSchema,
 }: {
   blockId: string
   onAdd: (args: AddPropertyArgs) => void | Promise<void>
+  /** Glyph-click handler. Adopts an existing schema by name (opens its
+   *  block in the side panel) or materializes a new one with the given
+   *  preset id and opens it. The form keeps its current name + preset
+   *  state so submitting later adopts the just-registered schema. */
+  onConfigureNewSchema: (args: ConfigureNewSchemaArgs) => void | Promise<void>
 }) {
   const runtime = useAppRuntime()
   const presets = runtime.read(valuePresetsFacet)
@@ -84,18 +95,10 @@ export function AddPropertyForm({
     return presetEntries[0]?.id ?? FALLBACK_PRESET_ID
   }, [presetEntries, presets])
 
-  const initialConfigForPreset = useCallback((id: string): unknown => {
-    const p = presets.get(id)
-    if (!p) return undefined
-    return p.configCodec ? p.defaultConfig ?? {} : undefined
-  }, [presets])
-
   const [initialRequest] = useState(() => consumePendingPropertyCreateRequest(blockId))
   const [isOpen, setIsOpen] = useState(Boolean(initialRequest))
   const [propertyName, setPropertyName] = useState(initialRequest?.initialName ?? '')
-  const [presetId, setPresetIdState] = useState<string>(initialPresetId)
-  const [config, setConfig] = useState<unknown>(() => initialConfigForPreset(initialPresetId))
-  const [configOpen, setConfigOpen] = useState(false)
+  const [presetId, setPresetId] = useState<string>(initialPresetId)
   const [suggestionsOpen, setSuggestionsOpen] = useState(false)
   const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [submitting, setSubmitting] = useState(false)
@@ -106,12 +109,6 @@ export function AddPropertyForm({
   const listboxId = useId()
 
   const preset = presets.get(presetId)
-
-  /** Set the preset and re-initialize config in one render tick. */
-  const setPresetId = useCallback((next: string) => {
-    setPresetIdState(next)
-    setConfig(initialConfigForPreset(next))
-  }, [initialConfigForPreset])
 
   const focusNameInput = useCallback(() => {
     const focus = () => {
@@ -125,7 +122,6 @@ export function AddPropertyForm({
   const openForm = useCallback((initialName = '') => {
     setPropertyName(initialName)
     setPresetId(initialPresetId)
-    setConfigOpen(false)
     setSuggestionsOpen(false)
     setIsOpen(true)
     focusNameInput()
@@ -150,20 +146,27 @@ export function AddPropertyForm({
     setSubmitting(true)
     try {
       await onAdd(adopted
-        ? {adopted, name, presetId: adopted.codec.type, config: undefined}
-        : {name, presetId, config},
+        ? {adopted, name, presetId: adopted.codec.type}
+        : {name, presetId},
       )
       setPropertyName('')
       setPresetId(initialPresetId)
-      setConfig(undefined)
-      setConfigOpen(false)
       setSuggestionsOpen(false)
       setIsOpen(false)
       focusPropertyRowByNameWhenReady(blockId, name)
     } finally {
       setSubmitting(false)
     }
-  }, [blockId, config, initialPresetId, onAdd, presetId, propertyName, submitting])
+  }, [blockId, initialPresetId, onAdd, presetId, propertyName, submitting])
+
+  const handleGlyphClick = useCallback(() => {
+    const name = propertyName.trim()
+    if (!name) {
+      focusNameInput()
+      return
+    }
+    void onConfigureNewSchema({name, presetId})
+  }, [focusNameInput, onConfigureNewSchema, presetId, propertyName])
 
   if (!isOpen) {
     return (
@@ -181,7 +184,6 @@ export function AddPropertyForm({
   }
 
   const showSuggestions = suggestionsOpen && suggestions.length > 0
-  const presetOptionIds = presetEntries.map(p => p.id)
 
   return (
     <div
@@ -193,7 +195,7 @@ export function AddPropertyForm({
         Glyph={preset?.Glyph}
         schemaUnknown
         label="New field"
-        onClick={() => setConfigOpen(true)}
+        onClick={handleGlyphClick}
       />
       <div className="relative min-w-0">
         <Input
@@ -238,7 +240,6 @@ export function AddPropertyForm({
             if (event.key === 'Escape') {
               event.preventDefault()
               if (suggestionsOpen) { setSuggestionsOpen(false); return }
-              setConfigOpen(false)
               setIsOpen(false)
             }
           }}
@@ -277,22 +278,6 @@ export function AddPropertyForm({
       </div>
       <PropertyEmptyValue presetId={presetId} />
       <div />
-      <FieldConfigSheet
-        field={configOpen ? {
-          labelText: propertyName.trim() || 'New field',
-          shape: presetId,
-          Glyph: preset?.Glyph,
-          shapeOptions: presetOptionIds,
-          schemaUnknown: true,
-          decodeFailed: false,
-          readOnly: false,
-          preset,
-          configValue: config,
-          onConfigChange: (next) => setConfig(next),
-        } : null}
-        onShapeChange={(next) => setPresetId(next)}
-        onClose={() => setConfigOpen(false)}
-      />
     </div>
   )
 }

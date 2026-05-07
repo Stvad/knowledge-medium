@@ -24,8 +24,9 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
    *  is first materialised. Lives on the resulting `PropertySchema`. */
   readonly defaultValue: TValue
   /** Default config used when the preset is registered through the
-   *  AddPropertyForm without user-supplied config. Required when
-   *  `TConfig` is non-void; void presets omit it. */
+   *  AddPropertyForm or the optimistic-materialize path without
+   *  user-supplied config. Required when `TConfig` is non-void; void
+   *  presets omit it. */
   readonly defaultConfig?: TConfig
   /** Validates and parses raw JSON read from `presetConfigProp` into
    *  `TConfig`. Required when `TConfig` is non-void. Throws on
@@ -42,9 +43,9 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
    *  picker. Plugins without designed icons can omit; falls back to a
    *  generic icon. */
   readonly Glyph?: ComponentType<{className?: string}>
-  /** Optional config UI rendered inside `FieldConfigSheet` and the
-   *  property-schema block renderer. Only meaningful when `TConfig`
-   *  is non-void. */
+  /** Optional config UI rendered inside the property-schema block
+   *  renderer (the side panel users open by clicking the property
+   *  glyph). Only meaningful when `TConfig` is non-void. */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
 }
 

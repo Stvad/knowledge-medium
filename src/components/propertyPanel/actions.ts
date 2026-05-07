@@ -51,7 +51,6 @@ export const addProperty = async (
     const schema = await block.repo.userSchemas.addSchema({
       name,
       presetId: args.presetId,
-      config: args.config,
     })
     await writeProperty(block, schema, schema.defaultValue)
   } catch (err) {

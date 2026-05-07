@@ -13,6 +13,7 @@ export function PropertyRow({
   row,
   block,
   readOnly,
+  canConfigure,
   onNavigate,
   onConfigure,
   onChange,
@@ -22,6 +23,9 @@ export function PropertyRow({
   row: PropertyPanelModelRow
   block: Block
   readOnly: boolean
+  /** Whether the glyph button should open a config UI. False for
+   *  kernel/plugin schemas, which have no per-instance config. */
+  canConfigure: boolean
   onNavigate: (event: KeyboardEvent<HTMLDivElement>, direction: -1 | 1) => void
   onConfigure: () => void
   onChange: (next: unknown) => void
@@ -60,6 +64,7 @@ export function PropertyRow({
         label={row.labelText}
         schemaUnknown={row.schemaUnknown}
         decodeFailed={row.decodeFailed}
+        disabled={!canConfigure}
         onClick={onConfigure}
       />
       <div className="min-w-0">

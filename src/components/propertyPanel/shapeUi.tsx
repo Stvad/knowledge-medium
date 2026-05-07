@@ -49,6 +49,7 @@ export function PropertyShapeButton({
   label,
   schemaUnknown,
   decodeFailed = false,
+  disabled = false,
   onClick,
 }: {
   shape: string
@@ -56,25 +57,37 @@ export function PropertyShapeButton({
   label: string
   schemaUnknown: boolean
   decodeFailed?: boolean
+  /** When true the button still renders (for layout + glyph color) but
+   *  click is a no-op and the title says so. Used for kernel/plugin
+   *  schema rows where there's no per-instance config. */
+  disabled?: boolean
   onClick: () => void
 }) {
-  const tone = decodeFailed
-    ? 'text-destructive hover:text-destructive'
-    : schemaUnknown
-      ? 'text-muted-foreground hover:text-foreground'
-      : 'text-fuchsia-500 hover:text-fuchsia-600'
+  const tone = disabled
+    ? 'text-fuchsia-500/70 cursor-default'
+    : decodeFailed
+      ? 'text-destructive hover:text-destructive hover:bg-muted'
+      : schemaUnknown
+        ? 'text-muted-foreground hover:text-foreground hover:bg-muted'
+        : 'text-fuchsia-500 hover:text-fuchsia-600 hover:bg-muted'
 
   return (
     <button
       type="button"
-      className={`flex h-7 w-5 items-center justify-center rounded-sm ${tone} hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`}
-      title={`Configure ${label} (${propertyShapeLabel(shape)})`}
+      disabled={disabled}
+      className={`flex h-7 w-5 items-center justify-center rounded-sm ${tone} focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`}
+      title={
+        disabled
+          ? `${label} — built-in ${propertyShapeLabel(shape)} field, no config`
+          : `Configure ${label} (${propertyShapeLabel(shape)})`
+      }
       aria-label={`Configure ${label}`}
       data-property-config-button="true"
       data-property-row-control="true"
       onClick={(event) => {
         event.preventDefault()
         event.stopPropagation()
+        if (disabled) return
         onClick()
       }}
     >

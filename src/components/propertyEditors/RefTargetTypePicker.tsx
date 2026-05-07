@@ -1,8 +1,7 @@
 /** Config editor for ref / refList presets. Lets the user constrain
  *  the property to one or more block types — empty list means "any
- *  type accepted." Used both inside `FieldConfigSheet` (creation-time
- *  configuration) and inside the property-schema block renderer
- *  (editing an existing schema). */
+ *  type accepted." Mounted inside the property-schema block renderer
+ *  (the side panel reached via the row's glyph button). */
 
 import { useCallback, useMemo, useState, type KeyboardEvent } from 'react'
 import { Plus, X } from 'lucide-react'

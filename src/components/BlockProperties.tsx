@@ -30,10 +30,8 @@ import {
   renameProperty,
   writeProperty,
 } from './propertyPanel/actions'
-import { FieldConfigSheet, type FieldConfig } from './propertyPanel/FieldConfigSheet'
 import {
   buildPropertyPanelModel,
-  type PropertyPanelModel,
   type PropertyPanelModelRow,
 } from './propertyPanel/model'
 import { PropertyRow } from './propertyPanel/PropertyRow'
@@ -44,40 +42,6 @@ interface BlockPropertiesProps {
 }
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
-
-const findModelRow = (
-  model: PropertyPanelModel,
-  name: string,
-): PropertyPanelModelRow | null => {
-  for (const row of model.hiddenSection.rows) {
-    if (row.name === name) return row
-  }
-  for (const section of model.sections) {
-    for (const row of section.rows) {
-      if (row.name === name) return row
-    }
-  }
-  return null
-}
-
-const fieldConfigForRow = (
-  row: PropertyPanelModelRow | null,
-): FieldConfig | null => {
-  if (!row) return null
-  // Type changes route through schema definitions (Properties page +
-  // PropertySchemaBlockRenderer), not the panel — `shapeOptions`
-  // intentionally only carries the row's current type so the dropdown
-  // is non-editable.
-  return {
-    labelText: row.labelText,
-    shape: row.shape,
-    Glyph: row.Glyph,
-    shapeOptions: [row.shape],
-    schemaUnknown: row.schemaUnknown,
-    decodeFailed: row.decodeFailed,
-    readOnly: true,
-  }
-}
 
 export function BlockProperties({block}: BlockPropertiesProps) {
   const blockData = useHandle(block, {
@@ -95,7 +59,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const runtime = useAppRuntime()
   const {panelId} = useBlockContext()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
-  const [activeConfigRowName, setActiveConfigRowName] = useState<string | null>(null)
 
   // FacetRuntime memoises combine() results, so these reads are identity-stable
   // across renders for the same runtime.
@@ -119,12 +82,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     })
     : null,
   [blockData, presets, properties, schemas, typesRegistry, uis])
-
-  const activeConfigRow = useMemo(() => {
-    if (!model || !activeConfigRowName) return null
-    return findModelRow(model, activeConfigRowName)
-  }, [activeConfigRowName, model])
-  const activeFieldConfig = fieldConfigForRow(activeConfigRow)
 
   if (!blockData || !model) return null
 
@@ -175,48 +132,71 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     }
   }
 
-  const handleConfigure = (rowName: string) => {
-    // User-defined schemas have a backing property-schema block — open
-    // it in a side panel so the user can edit name/preset/config in the
-    // same renderer they'd see inline. Kernel/plugin schemas don't have
-    // a block; fall back to the inline FieldConfigSheet so the row's
-    // glyph click still does something useful.
-    const schemaBlockId = block.repo.userSchemas.getSchemaBlockId(rowName)
-    if (schemaBlockId) {
-      window.dispatchEvent(new CustomEvent('open-panel', {
-        detail: {blockId: schemaBlockId, sourcePanelId: panelId},
-      }))
-      return
-    }
-    setActiveConfigRowName(rowName)
+  const openSchemaPanel = (schemaBlockId: string) => {
+    window.dispatchEvent(new CustomEvent('open-panel', {
+      detail: {blockId: schemaBlockId, sourcePanelId: panelId},
+    }))
   }
 
-  const renderPropertyRow = (sectionId: string, row: PropertyPanelModelRow) => (
-    <PropertyRow
-      key={`${sectionId}:${row.name}`}
-      row={row}
-      block={block}
-      readOnly={readOnly}
-      onNavigate={handlePropertyRowKeyDown}
-      onConfigure={() => handleConfigure(row.name)}
-      onChange={(next) => writeProperty(block, row.schema, next)}
-      onRename={(newName) => void renameProperty({
-        block,
-        properties,
-        schemas,
-        uis,
-        oldName: row.name,
-        newName,
-      })}
-      onDelete={() => void deleteProperty({
-        block,
-        properties,
-        schemas,
-        uis,
-        name: row.name,
-      })}
-    />
-  )
+  const handleConfigure = async (row: PropertyPanelModelRow) => {
+    // 1. User-defined schema → open its backing block in the side panel.
+    const existingId = block.repo.userSchemas.getSchemaBlockId(row.name)
+    if (existingId) {
+      openSchemaPanel(existingId)
+      return
+    }
+    // 2. Unregistered → optimistically materialize a user schema using
+    //    the inferred type (`row.shape`) as the preset id, then open
+    //    the new schema's block. Cmd-Z reverses the materialize.
+    if (row.schemaUnknown) {
+      try {
+        await block.repo.userSchemas.addSchema({name: row.name, presetId: row.shape})
+        const newId = block.repo.userSchemas.getSchemaBlockId(row.name)
+        if (newId) openSchemaPanel(newId)
+      } catch (err) {
+        console.error(`[BlockProperties] failed to register schema for "${row.name}":`, err)
+      }
+      return
+    }
+    // 3. Kernel/plugin schemas have no per-instance config; the glyph
+    //    button is rendered as `disabled` so this branch is unreachable
+    //    via UI clicks. Defensive fallback only.
+  }
+
+  const renderPropertyRow = (sectionId: string, row: PropertyPanelModelRow) => {
+    // canConfigure: user-data schema (block exists) OR unregistered
+    // (will materialize on click). Kernel/plugin rows fall through and
+    // get a disabled glyph button.
+    const canConfigure = row.schemaUnknown
+      || block.repo.userSchemas.getSchemaBlockId(row.name) !== undefined
+    return (
+      <PropertyRow
+        key={`${sectionId}:${row.name}`}
+        row={row}
+        block={block}
+        readOnly={readOnly}
+        canConfigure={canConfigure}
+        onNavigate={handlePropertyRowKeyDown}
+        onConfigure={() => void handleConfigure(row)}
+        onChange={(next) => writeProperty(block, row.schema, next)}
+        onRename={(newName) => void renameProperty({
+          block,
+          properties,
+          schemas,
+          uis,
+          oldName: row.name,
+          newName,
+        })}
+        onDelete={() => void deleteProperty({
+          block,
+          properties,
+          schemas,
+          uis,
+          name: row.name,
+        })}
+      />
+    )
+  }
 
   return (
     <div className={`tm-property-fields mt-1.5 max-w-[46rem] space-y-0.5 pb-1 pl-1 ${childIds.length ? 'mb-1' : ''}`}>
@@ -248,6 +228,26 @@ export function BlockProperties({block}: BlockPropertiesProps) {
           key={block.id}
           blockId={block.id}
           onAdd={(args) => addProperty(block, schemas, uis, args)}
+          onConfigureNewSchema={async ({name, presetId}) => {
+            const trimmed = name.trim()
+            if (!trimmed) return
+            const existingId = block.repo.userSchemas.getSchemaBlockId(trimmed)
+            if (existingId) {
+              openSchemaPanel(existingId)
+              return
+            }
+            // If a kernel/plugin schema already owns this name, don't
+            // create a duplicate user schema (it would shadow the
+            // kernel/plugin one). The form's submit path will adopt it.
+            if (schemas.has(trimmed)) return
+            try {
+              await block.repo.userSchemas.addSchema({name: trimmed, presetId})
+              const newId = block.repo.userSchemas.getSchemaBlockId(trimmed)
+              if (newId) openSchemaPanel(newId)
+            } catch (err) {
+              console.error(`[BlockProperties] failed to register schema for "${trimmed}":`, err)
+            }
+          }}
         />
       )}
 
@@ -261,15 +261,6 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         {showHiddenFields ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
         {showHiddenFields ? 'Hide hidden fields' : `Show hidden fields (${model.hiddenCount})`}
       </Button>
-
-      <FieldConfigSheet
-        field={activeFieldConfig}
-        // The panel's config sheet displays the current type but doesn't
-        // mutate it — type changes happen through the property-schema
-        // block renderer instead (Phase 3c).
-        onShapeChange={() => {}}
-        onClose={() => setActiveConfigRowName(null)}
-      />
     </div>
   )
 }

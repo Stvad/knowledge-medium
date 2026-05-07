@@ -298,7 +298,7 @@ describe('BlockProperties component', () => {
     ])
   })
 
-  it('opens field configuration from the type icon', async () => {
+  it('disables the glyph button for kernel/plugin-defined property rows', async () => {
     const block = repo.block('block-1')
 
     render(
@@ -307,26 +307,31 @@ describe('BlockProperties component', () => {
       </AppRuntimeContextProvider>,
     )
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', {name: /configure phase2:review-status/i}))
-    })
-
-    expect(screen.getByRole('dialog', {name: /phase2:review-status field configuration/i})).toBeTruthy()
-    expect(screen.getByText('Field type')).toBeTruthy()
-    expect(screen.getByText('Registered field')).toBeTruthy()
-    expect(screen.queryByText('Storage key')).toBeNull()
-    expect(screen.queryByText('Hide field')).toBeNull()
-    expect(screen.queryByText('Required')).toBeNull()
+    // phase2:review-status is registered by a kernel-extension type, not
+    // by a user-data schema block, so it has no per-instance config to
+    // edit. The glyph button stays clickable for layout but is disabled
+    // and explains itself in its title.
+    const glyph = screen.getByRole('button', {name: /configure phase2:review-status/i}) as HTMLButtonElement
+    expect(glyph.disabled).toBe(true)
+    expect(glyph.title.toLowerCase()).toContain('built-in')
+    expect(glyph.title.toLowerCase()).toContain('no config')
   })
 
-  it('renders field-type select read-only for ad-hoc properties (type changes route through schema editor)', async () => {
+  it('materialises a user schema and opens the side panel when the glyph is clicked on an unregistered property', async () => {
     const block = repo.block('block-1')
     // Simulate a degraded-fallback ad-hoc property (sync race / plugin
-    // not loaded). Per spec §9 the panel surfaces it via the inferred
-    // primitive editor but does NOT let the user mutate the type from
-    // here — type changes happen through the property-schema block
-    // renderer instead.
+    // not loaded). The panel surfaces it via the inferred primitive
+    // editor; clicking the glyph optimistically materialises a user
+    // schema and asks the panel layer to open the new schema's block.
     await block.set(degradedFallbackSchema('mood', 'string'), 'ok')
+    expect(repo.userSchemas.getSchemaBlockId('mood')).toBeUndefined()
+
+    const openPanelEvents: Array<{blockId: string}> = []
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{blockId: string}>).detail
+      openPanelEvents.push({blockId: detail.blockId})
+    }
+    window.addEventListener('open-panel', onOpen)
 
     render(
       <AppRuntimeContextProvider value={runtime}>
@@ -334,16 +339,21 @@ describe('BlockProperties component', () => {
       </AppRuntimeContextProvider>,
     )
 
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
-    })
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
+      })
 
-    const typeSelect = screen.getByRole('combobox', {name: /mood field type/i}) as HTMLSelectElement
-    expect(typeSelect.disabled).toBe(true)
-    expect(typeSelect.value).toBe('string')
-    // Only one option (the current type) is offered — the dropdown
-    // can't be used to mutate the property's storage shape.
-    expect(typeSelect.options).toHaveLength(1)
+      await waitFor(() => {
+        expect(repo.userSchemas.getSchemaBlockId('mood')).toBeDefined()
+      })
+      const newId = repo.userSchemas.getSchemaBlockId('mood')!
+      await waitFor(() => {
+        expect(openPanelEvents).toEqual([{blockId: newId}])
+      })
+    } finally {
+      window.removeEventListener('open-panel', onOpen)
+    }
   })
 
   it('moves between property values and labels without selecting row controls', async () => {
