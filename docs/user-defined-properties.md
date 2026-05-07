@@ -108,7 +108,7 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
   definePreset({id: 'number',  label: 'Number',     Glyph: Hash,        build: () => codecs.number,             defaultValue: 0,          Editor: NumberPropertyEditor}),
   definePreset({id: 'boolean', label: 'Checkbox',   Glyph: CheckSquare, build: () => codecs.boolean,            defaultValue: false,      Editor: BooleanPropertyEditor}),
   definePreset({id: 'list',    label: 'Options',    Glyph: List,        build: () => codecs.list(codecs.string), defaultValue: [],         Editor: ListPropertyEditor}),
-  definePreset<Date | undefined>({id: 'date', label: 'Date', Glyph: Calendar, build: () => codecs.optional(codecs.date), defaultValue: undefined, Editor: DatePropertyEditor}),
+  definePreset<Date | undefined>({id: 'date', label: 'Date', Glyph: Calendar, build: () => codecs.date, defaultValue: undefined, Editor: DatePropertyEditor}),
   definePreset({id: 'url',     label: 'URL',        Glyph: LinkIcon,    build: () => urlCodec,                  defaultValue: '',         Editor: UrlPropertyEditor}),
   definePreset<string, RefCodecOptions>({
     id: 'ref',     label: 'Reference',  Glyph: AtSign,
@@ -302,9 +302,32 @@ const booleanCodec: Codec<boolean> = {
   type: 'boolean', encode, decode,
   where: { encode: v => { if (typeof v !== 'boolean') throw new CodecError('boolean', v); return v ? 1 : 0 } },
 }
-const dateCodec:    Codec<Date>    = {
-  type: 'date', encode, decode,
-  where: { encode: v => { if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v); return v.toISOString() } },
+// Date is natively absence-aware: value type is `Date | undefined`,
+// no codecs.optional wrapper. Date has no inert "no value" sentinel
+// (every Date instance is a real time), so the codec encodes
+// undefined to JSON null directly. See "Why no codecs.optional"
+// below for why the generic wrapper isn't worth the type-trap.
+const dateCodec: Codec<Date | undefined> = {
+  type: 'date',
+  encode: v => v === undefined ? null : v.toISOString(),
+  decode: j => {
+    if (j === null || j === undefined) return undefined
+    if (typeof j !== 'string') throw new CodecError('date', j)
+    const d = new Date(j)
+    if (Number.isNaN(d.getTime())) throw new CodecError('date', j)
+    return d
+  },
+  where: {
+    encode: v => {
+      // null is short-circuited to IS NULL by the compiler before
+      // reaching where.encode (per the compileWhereFilter sketch).
+      // undefined is a caller bug — typed-query callers use null for
+      // unset matching, not undefined.
+      if (v === undefined) throw new CodecError('date (use null for unset)', v)
+      if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v)
+      return v.toISOString()
+    },
+  },
 }
 const url: Codec<string> = {
   type: 'url', encode: validateUrl, decode: validateUrl,
@@ -387,64 +410,28 @@ Three properties this gives:
 
 The `where` namespace is intentionally a sub-object rather than a flat `whereEncode` field: future operators (`<` / `>` / range queries) extend the namespace (`where.compare`, `where.between`) without breaking codec authors.
 
-#### `codecs.optional(inner)` — wrapper contract
+#### Why no `codecs.optional` wrapper
 
-`codecs.optional` is a kernel codec wrapper used by the `'date'` preset (`build: () => codecs.optional(codecs.date)` so unset dates surface as `undefined` rather than crashing on encode). After dropping `shape`, the wrapper's contract has to be explicit:
+A previous draft of this design defined `codecs.optional(inner): Codec<T | undefined>` as a generic "make any codec absence-aware" wrapper, used by the date preset as `build: () => codecs.optional(codecs.date)`. **It's not in v1.** The reason is that wrapping changes the codec's value type (`T → T | undefined`) but copies the `type` discriminator unchanged, which silently violates every type-keyed predicate downstream:
 
-```ts
-const REF_LIKE_TYPES = new Set(['ref', 'refList'])
+- `isRefCodec(c): c is Codec<string>` would still narrow to `string`-decoding when `optional(codecs.ref(...))` actually decodes to `string | undefined`. Ref projector and ref editors get an undefined where TypeScript promised a string.
+- `isUrlCodec(c): c is Codec<string>` has the same trap for `optional(urlCodec)`. Future semantic codecs (`email`, `duration`, etc.) inherit it.
+- The trap is fundamental to the wrapper pattern: `type` is the lookup key for editors / presets / projectors / predicates, and the wrapper has to copy it to keep those lookups working — but copying it lies about the value type.
 
-const optional = <T>(inner: Codec<T>): Codec<T | undefined> => {
-  // Refuse ref/refList wrapping. With the metadata-spread below, an
-  // optional-wrapped ref would pass `isRefCodec(c)` (type === 'ref')
-  // and TypeScript would narrow to RefCodec extends Codec<string> —
-  // but the wrapper's decode actually returns `string | undefined`.
-  // Ref projector / ref editors would receive an undefined where they
-  // expect a string id, with no static signal that this can happen.
-  // Refs already represent "no value" via the unset-property path
-  // (block.get returns the schema's defaultValue, typically '', when
-  // properties_json doesn't contain the key); wrapping in optional
-  // adds a redundant slot for the cost of the type-narrowing trap.
-  // If a future case genuinely needs a settable-and-clearable ref
-  // distinct from unset, it gets a dedicated `optionalRef` wrapper
-  // with its own predicate (`isOptionalRefCodec`) and explicit
-  // consumer handling.
-  if (REF_LIKE_TYPES.has(inner.type)) {
-    throw new Error(`[codecs.optional] cannot wrap ref/refList codecs; ` +
-      `refs use unset-property / defaultValue for "no value" instead`)
-  }
+Three options the wrapper alternative gave us, all with downsides:
 
-  return {
-    // Spread inner so any subtype metadata (future codec fields)
-    // carries through transparently. With ref/refList already refused
-    // above, this spread doesn't tickle the isRefCodec narrowing trap.
-    ...inner,
-    // Override encode/decode for null-on-undefined behaviour.
-    encode: v => v === undefined ? null : inner.encode(v),
-    decode: j => j === null || j === undefined ? undefined : inner.decode(j),
-    // Override `where` to reject undefined; delegate to inner otherwise.
-    where: inner.where && {
-      encode: v => {
-        // Per §8: typed-query callers use `null` (not `undefined`) for
-        // unset matching, and the compiler short-circuits null to
-        // `IS NULL` before this point. `undefined` reaching
-        // where.encode is therefore a caller bug; reject loudly.
-        if (v === undefined) throw new CodecError(`${inner.type} (use null for unset)`, v)
-        return inner.where!.encode(v)
-      },
-    },
-  }
-}
-```
+- **Allowlist** of "wrappable" codec types. Awkward maintenance; every new codec needs an explicit decision; plugin codecs need extension points.
+- **Wrapper-aware lookup** that strips an `optional:` prefix from the type. Invasive — every editor / preset / projector lookup site grows a special case.
+- **Widen every type-keyed predicate** to accept `T | undefined`. Pushes undefined-handling into every consumer for codecs that aren't even wrapped in practice.
 
-Three properties:
+The cleaner answer is to **not have a generic wrapper.** A codec that wants to express absence declares its value type as `T | undefined` directly. The single v1 use case (date) does this natively — `dateCodec: Codec<Date | undefined>` with explicit null-on-undefined encode/decode and a `where.encode` that throws on undefined (per the typed-query contract). `isDateCodec` narrows to `Codec<Date | undefined>`, predicates are honest, no trap.
 
-- **Subtype metadata is preserved for non-ref codecs.** A future semantic codec like `'duration'` can carry extra fields and `optional(codecs.duration({...}))` will preserve them. The spread does this transparently. `optional(codecs.date).type === 'date'` and editor lookup still resolves to the date preset.
-- **Ref/refList wrapping is refused.** `optional(codecs.ref(...))` throws at construction time. The reason is type safety: `isRefCodec(c) => c.type === 'ref'` narrows to `Codec<string>`, and an optional-wrapped ref's decode returning `undefined` would silently violate that. Refs already carry a "no value" semantics via the unset-property path (the property simply isn't in `properties_json`; `block.get` returns the schema's `defaultValue`, typically `''`); the optional wrapper would add a parallel "explicitly null in storage" representation with no real-world payoff for the type-unsafety it introduces. If a future case genuinely needs a settable-and-clearable ref distinct from unset, it gets a dedicated `optionalRef` wrapper with its own predicate and explicit consumer handling.
-- **`where` delegates to inner when present.** A non-`undefined` value passes through `inner.where.encode` (which validates and encodes per the §1a contract). `optional(codecs.date)` is queryable; `optional(codecs.list(...))` is not (inner has no `where`).
-- **`undefined` is rejected at the where boundary.** Typed-query's outer layer already rejects `where.foo = undefined` (caller passes `null` for unset matching per [type-system.md §8](type-system.md)), but the codec defends against it too. `null` itself is handled at the typed-query compiler level (compiles to `IS NULL`) and never reaches `where.encode`.
+Costs of dropping the wrapper:
 
-The TypeScript return type is `Codec<T | undefined>` rather than the inner's narrower subtype — static narrowing through `optional` wrappers isn't preserved at the value-type level. Runtime narrowing via `c.type === 'foo'` still works because the spread carries `type` and the metadata. With ref-wrapping refused, the dangerous case of "narrow to a subtype with the wrong value-type expectation" doesn't arise.
+- Codecs wanting absence semantics write the encode/decode null-handling themselves. ~5 extra lines per codec — small enough that "ergonomic ease of `optional(...)`" isn't worth the type-safety cost.
+- Plugin codec authors writing semantic codecs decide upfront whether their value type is `T` or `T | undefined`. They can't add absence later via a wrapper; they pick when defining the codec. This is also more honest — adding absence later changes the codec's contract anyway.
+
+Refs and refLists explicitly **don't** widen to `string | undefined`. `RefCodec extends Codec<string>` and `RefListCodec extends Codec<readonly string[]>`. Refs represent "no value" via the unset-property path (the property simply isn't in `properties_json`; `block.get` returns `defaultValue`, typically `''`). If a future case needs a settable-and-clearable ref distinct from unset, it gets a dedicated `optionalRef` codec (not a wrapper) with its own predicate (`isOptionalRefCodec`) — explicit at every consumer site, see deferred-decisions.
 
 What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. The where-clause check no longer needs it — `codec.where` answers queryability directly. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
 
@@ -850,7 +837,7 @@ Schemaless properties go away as a steady-state design. Every imported `key:: va
    - **Void preset (`configCodec` absent — string/number/boolean/url etc.):** build with `undefined` (the void-config call); persist `{}` into `presetConfigProp` (the schema block's config field is unsafeIdentity-shaped and needs *something*; an empty object is the inert canonical value).
 
    Either way, the plan carries `{schemaBlock: BlockData, schema: PropertySchema}` pairs — block plus runtime registration object, decided at plan time, structurally equivalent to what `addSchema` would produce for the same args.
-5. **Plan schema blocks.** For each newly-classified name, emit a property-schema block into the deterministic-id plan. Schema block id is `hash(workspaceId, propertyName)` so re-importing the same dump doesn't duplicate. Parent is the Properties page. The block's `presetConfigProp` value is encoded via the preset's `configCodec` (so it round-trips through validation when the subscription later picks it up).
+5. **Plan schema blocks.** For each newly-classified name, emit a property-schema block into the deterministic-id plan. Schema block id is `hash(workspaceId, propertyName)` so re-importing the same dump doesn't duplicate. Parent is the Properties page. The block's `presetConfigProp` value is the effective config computed in step 4 — `preset.configCodec.encode(parsed)` for non-void presets, or `{}` for void presets — so it round-trips correctly when the subscription later picks it up.
 
 #### Apply phase
 
@@ -960,4 +947,4 @@ Existing alpha local databases are wiped (per the no-back-compat rule); users re
 - **Validation rules on schemas.** A schema's codec defines storage shape; it doesn't validate semantic constraints (URL format beyond what `urlCodec` enforces, ref target-type intersection, value ranges on numbers). Validation is the deferred follow-up from [type-system.md §3b](type-system.md).
 - **Top-level reconfigure granularity beyond per-facet.** CodeMirror-style compartments wrapping arbitrary extension subtrees are out of scope; the per-facet runtime-source granularity covers the projected use cases (user schemas, future user types, future user keymap overrides) without dependency tracking inside facet `combine`.
 - **Editor-only override of an existing preset id.** Today the only way to "replace the kernel ref editor" is to contribute a whole preset with `id: 'ref'`, which also replaces `build` / `defaultValue` / `configCodec`. A plugin keeping codec equivalence by hand is brittle. If this becomes a real footgun, a follow-up `valuePresetEditorOverridesFacet` keyed by preset id (carrying just `Editor` and/or `Glyph`, layered on top of the resolved preset) covers it without touching data semantics. Deferred — no current call site needs it.
-- **`optionalRef` / `optionalRefList` wrappers.** v1's `codecs.optional` refuses ref/refList input (per §1a's wrapper contract) because optional-wrapping a ref widens its decoded value to `string | undefined` while `isRefCodec` would still narrow to `Codec<string>`, silently violating the type predicate. v1 covers "no ref selected" through the unset-property path (`block.get` returns the schema's `defaultValue`, typically `''`). If a future case genuinely needs a settable-and-clearable ref distinct from unset (e.g., where empty-string and never-set need to be distinguishable in storage), it gets a dedicated `optionalRef` / `optionalRefList` wrapper with its own predicate (`isOptionalRefCodec` / `isOptionalRefListCodec`) and explicit consumer handling in the projector / editor / picker — opt-in at the consumer level rather than implicit through `codecs.optional`.
+- **`optionalRef` / `optionalRefList` codecs.** v1 doesn't ship a generic `codecs.optional` wrapper at all (§1a "Why no codecs.optional"); ref and refList specifically have value types `Codec<string>` and `Codec<readonly string[]>` with no absence-aware variant. v1 covers "no ref selected" through the unset-property path (`block.get` returns the schema's `defaultValue`, typically `''`). If a future case needs a settable-and-clearable ref distinct from unset (e.g., where empty-string and never-set must be distinguishable in storage), the right shape is a dedicated `optionalRef` / `optionalRefList` codec — not a wrapper, but a fresh codec type with its own discriminator (`type: 'optionalRef'`), its own predicate (`isOptionalRefCodec`), and explicit consumer handling in the projector / editor / picker. Opt-in at the consumer level, no type-narrowing trap.
