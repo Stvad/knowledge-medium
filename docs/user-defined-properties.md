@@ -12,7 +12,7 @@ Load-bearing pieces this design composes:
 
 - **`PropertySchema<T>`** ([src/data/api/propertySchema.ts:8](src/data/api/propertySchema.ts:8)) — name + codec + defaultValue + changeScope. The codec is the single source of truth for value semantics after the [db2a987](https://github.com/) refactor (`kind` removed; editor selection derives from codec via `propertyEditorFallbackFacet`, which this design replaces with editor-on-preset — see §1-edit).
 - **`Codec<T>`** ([src/data/api/codecs.ts:9](src/data/api/codecs.ts:9)) — primitive encode/decode contract running at four boundary call sites. After this design lands, codec carries a single open-string `type: string` discriminator matching its preset id (see §1a — replaces both the closed `shape: CodecShape` enum and the ad-hoc `RefCodec.refKind` field).
-- **`propertySchemasFacet` / `propertyUiFacet`** ([src/data/facets.ts](src/data/facets.ts)) — facet-resolved registries; today read once at `setFacetRuntime` and merged per [type-system.md §1a](type-system.md) into `repo.propertySchemas`. (`propertyEditorFallbackFacet` exists today but goes away under §1-edit — editor lookup folds into `valuePresetsFacet`.)
+- **`propertySchemasFacet` / `propertyEditorOverridesFacet`** ([src/data/facets.ts](src/data/facets.ts)) — facet-resolved registries; today read once at `setFacetRuntime` and merged per [type-system.md §1a](type-system.md) into `repo.propertySchemas`. (`propertyEditorFallbackFacet` exists today but goes away under §1-edit — editor lookup folds into `valuePresetsFacet`.)
 - **`AddPropertyForm`** ([src/components/propertyPanel/AddPropertyForm.tsx](src/components/propertyPanel/AddPropertyForm.tsx)) — the panel's "add field" UI. Currently picks an `AddablePropertyShape` (subset of `CodecShape`, excludes `date` and refs) and synthesizes an in-memory `adhocSchema`.
 - **`adhocSchema` / `inferShapeFromValue`** ([src/components/propertyEditors/defaults.tsx:220](src/components/propertyEditors/defaults.tsx:220)) — the unknown-schema fallback path. Lossy by design: a stored ref looks like a string on read.
 - **`subscribeBlocks`** (deferred — [type-system.md §8](type-system.md)) — typed-query primitive backing reactive subscriptions on type-tagged blocks.
@@ -55,7 +55,7 @@ export interface ValuePreset<TValue = unknown, TConfig = void> {
   /** Editor used for any property whose codec's `type` matches this
    *  preset's `id`. Required — every preset ships its own editor;
    *  there's no separate fallback facet. Exact-name
-   *  `PropertyUiContribution.Editor` contributions still win first
+   *  `PropertyEditorOverride.Editor` contributions still win first
    *  (per [defaults.tsx:294](src/components/propertyEditors/defaults.tsx:294)). */
   readonly Editor: PropertyEditor<TValue>
   /** Optional glyph for the property-row button, config sheet, and
@@ -131,7 +131,7 @@ const kernelValuePresets: readonly AnyValuePreset[] = [
 ]
 ```
 
-`unsafeIdentity('object')` and similar internal-use codecs intentionally have no preset — they're used on kernel-internal hidden properties (e.g. `presetConfigProp`) that opt out of the property panel via `PropertyUiContribution.hidden`. The schema's config isn't edited through the *property panel* — it's edited via a dedicated **property-schema block renderer** that owns the schema-editing UI for blocks of type `'property-schema'` (see §4). The renderer reads the schema's preset, dispatches to `preset.ConfigEditor`, and writes back to `presetConfigProp` directly. The property panel never sees presetConfigProp because it's hidden — correct, that's not where schema editing happens.
+`unsafeIdentity('object')` and similar internal-use codecs intentionally have no preset — they're used on kernel-internal hidden properties (e.g. `presetConfigProp`) that opt out of the property panel via `PropertyEditorOverride.hidden`. The schema's config isn't edited through the *property panel* — it's edited via a dedicated **property-schema block renderer** that owns the schema-editing UI for blocks of type `'property-schema'` (see §4). The renderer reads the schema's preset, dispatches to `preset.ConfigEditor`, and writes back to `presetConfigProp` directly. The property panel never sees presetConfigProp because it's hidden — correct, that's not where schema editing happens.
 
 Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {source: 'plugin'})`. No imperative API.
 
@@ -139,22 +139,20 @@ Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {sourc
 
 The pre-this-design `propertyEditorFallbackFacet` ([typesPropertyUi.ts:68](src/components/propertyEditors/typesPropertyUi.ts:68)) is a parallel registry of `(predicate, Editor, priority)` triples that the panel walks to find an editor matching a schema's codec. With every codec now carrying `type: string` and every preset carrying its own `Editor`, the predicate-and-priority machinery is redundant: the codec's `type` is exactly the preset's `id`, the preset's `Editor` is exactly the editor to use. **Drop `propertyEditorFallbackFacet` entirely.**
 
-`resolvePropertyDisplay` ([defaults.tsx:281](src/components/propertyEditors/defaults.tsx:281)) is the **single point** at which `ValuePreset` and `PropertyUiContribution` are merged. Every consumer (panel rows, autocomplete, `BlockProperties` model builder) goes through it; nowhere should inline the `ui?.X ?? preset?.X` pattern. This is the load-bearing reuse — neither a shared base interface nor a merged facet — between the two registries:
+`resolvePropertyDisplay` ([defaults.tsx:281](src/components/propertyEditors/defaults.tsx:281)) is the **single point** at which `ValuePreset` and `PropertyEditorOverride` are merged. Every consumer (panel rows, autocomplete, `BlockProperties` model builder) goes through it; nowhere should inline the `ui?.X ?? preset?.X` pattern. This is the load-bearing reuse — neither a shared base interface nor a merged facet — between the two registries:
 
 ```ts
 export interface ResolvedPropertyDisplay {
   schema: AnyPropertySchema
   type: string                    // codec.type
   Editor?: PropertyEditor<unknown>
-  Renderer?: PropertyRenderer<unknown>
   Glyph?: ComponentType<{className?: string}>
   /** Row display name in the property panel. Comes from
-   *  PropertyUiContribution.label, falls back to schema.name. NOT
+   *  PropertyEditorOverride.label, falls back to schema.name. NOT
    *  the preset's label (that one is the picker entry, only used
    *  in AddPropertyForm). */
   rowLabel: string
   hidden: boolean
-  category?: string
   isKnown: boolean
 }
 
@@ -162,7 +160,7 @@ export const resolvePropertyDisplay = (args: {
   name: string
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
-  uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   presets: ReadonlyMap<string, AnyValuePreset>
 }): ResolvedPropertyDisplay => {
   const known = args.schemas.get(args.name)
@@ -172,15 +170,13 @@ export const resolvePropertyDisplay = (args: {
   return {
     schema,
     type: schema.codec.type,
-    // Per §1-ui: name overrides type for Editor / Renderer / Glyph.
+    // Per §1-ui: name overrides type for Editor / Glyph.
     // Preset's editor is the universal fallback when no exact-name
-    // contribution exists; preset's glyph is the type-default icon.
+    // override exists; preset's glyph is the type-default icon.
     Editor: ui?.Editor ?? preset?.Editor,
-    Renderer: ui?.Renderer,
     Glyph: ui?.Glyph ?? preset?.Glyph,
     rowLabel: ui?.label ?? schema.name,
     hidden: ui?.hidden ?? false,
-    category: ui?.category,
     isKnown: known !== undefined,
   }
 }
@@ -201,33 +197,31 @@ Loss to flag: the predicate-based facet allowed weirder match shapes (e.g., "mat
 
 Conservative is the call — degraded fallback for un-presented codec types matches the rest of the design.
 
-#### 1-ui. `ValuePreset` vs. `PropertyUiContribution` — type-level vs. name-level
+#### 1-ui. `ValuePreset` vs. `PropertyEditorOverride` — type-level vs. name-level
 
-Both `ValuePreset` and `PropertyUiContribution` carry display concerns (Editor, Glyph, label) and the overlap could read as redundant. It isn't — they're at different scopes, and the layering is the design:
+Both `ValuePreset` and `PropertyEditorOverride` carry display concerns (Editor, Glyph, label) and the overlap could read as redundant. It isn't — they're at different scopes, and the layering is the design:
 
 - **`ValuePreset`** is keyed by codec `type` (`'ref'`, `'url'`, `'string'`). It declares defaults for *every* property whose codec was built by this preset. "How does the system render any URL property?"
-- **`PropertyUiContribution`** is keyed by property `name` (`'status'`, `'video:playerView'`). It declares specialization for one specific property. "How do we render the `status` property in particular, given its codec?"
+- **`PropertyEditorOverride`** is keyed by property `name` (`'status'`, `'video:playerView'`). It declares specialization for one specific property. "How do we render the `status` property in particular, given its codec?"
 
 Per-field resolution at the property panel:
 
-| Concern | `ValuePreset` (type) | `PropertyUiContribution` (name) | Resolution |
+| Concern | `ValuePreset` (type) | `PropertyEditorOverride` (name) | Resolution |
 |---|---|---|---|
 | Editor | required, type default | optional, per-name override | `ui?.Editor ?? preset?.Editor` |
-| Renderer | (none) | optional, per-name read-only renderer | `ui?.Renderer` |
 | Glyph | optional, type-level icon | optional, per-name override | `ui?.Glyph ?? preset?.Glyph` |
 | `label` | picker entry ("Reference") | per-row display name ("Assignee") | independent — different audiences |
 | `ConfigEditor` | optional, type-level config UI | (none) | preset only |
 | `defaultValue` / `build` | required (codec construction) | (none) | preset only |
 | `hidden` | (none) | per-name opt-out from panel | ui only |
-| `category` | (none) | per-name section grouping | ui only |
 
 The `label` row is the one that benefits from being explicit: preset's `label` is the picker entry shown in `AddPropertyForm` ("Plain text", "URL"); ui's `label` is the row display name in the property panel ("Status", "Due date"). Different audiences, no override relationship — both exist independently.
 
-`PropertyUiContribution` gains an optional `Glyph?: ComponentType<{className?: string}>` for symmetry with the per-name override pattern. Most contributions won't set it; the few that do (a `priority` property wanting a flag icon instead of the codec's default text glyph) get a one-line override path.
+`PropertyEditorOverride` gains an optional `Glyph?: ComponentType<{className?: string}>` for symmetry with the per-name override pattern. Most overrides won't set it; the few that do (a `priority` property wanting a flag icon instead of the codec's default text glyph) get a one-line override path.
 
-**Why not fold them into one thing.** Fields that should specialize per-property (label, hidden, category, optional Editor override) are decisively name-keyed. Fields that should default for a whole codec type (default Editor, default Glyph, picker entry, codec factory) are decisively type-keyed. Merging them would either force every property name to declare its codec-type defaults (impossible — many properties don't ship a UI contribution at all) or force every preset to enumerate the property names it covers (broken — the open codec-type → editor mapping is the whole point). The two registries with name-overrides-type semantics is the right shape.
+**Why not fold them into one thing.** Fields that should specialize per-property (label, hidden, optional Editor override) are decisively name-keyed. Fields that should default for a whole codec type (default Editor, default Glyph, picker entry, codec factory) are decisively type-keyed. Merging them would either force every property name to declare its codec-type defaults (impossible — most properties don't ship an override at all) or force every preset to enumerate the property names it covers (broken — the open codec-type → editor mapping is the whole point). The two registries with name-overrides-type semantics is the right shape.
 
-**`PropertyUiContribution.Editor`'s relationship to preset's Editor stays unchanged from §1-edit.** Exact-name editor wins first; preset's editor is the universal fallback. The above table just generalizes that pattern to glyph and renderer too.
+**`PropertyEditorOverride.Editor`'s relationship to preset's Editor stays unchanged from §1-edit.** Exact-name editor wins first; preset's editor is the universal fallback. The above table generalizes that pattern to glyph too.
 
 #### 1a. Codec carries a single open `type` discriminator
 
@@ -537,12 +531,12 @@ The rule is simpler than user-data-vs-direct source attribution: **any visible r
 ```ts
 const existing = repo.propertySchemas.get(name)
 if (!existing) return 'create-new'         // miss → addSchema with current preset
-const ui = repo.propertyUis.get(name)
+const ui = repo.propertyEditorOverrides.get(name)
 if (ui?.hidden) return 'refused-reserved'  // kernel-internal slot (editorFocusRequest, etc.)
 return 'adopt'                             // shared vocabulary or user's own — same path
 ```
 
-`PropertyUiContribution.hidden` (or `PropertyEditorOverride.hidden` after the rename — see the spawned cleanup task) is the existing flag the kernel uses on its ~13 internal state schemas. The form reads it for the refusal case; no schema-source-provenance metadata is threaded through the merged map. The merged-map shape stays `ReadonlyMap<string, AnyPropertySchema>` with no provenance value.
+`PropertyEditorOverride.hidden` is the existing flag the kernel uses on its ~13 internal state schemas. The form reads it for the refusal case; no schema-source-provenance metadata is threaded through the merged map. The merged-map shape stays `ReadonlyMap<string, AnyPropertySchema>` with no provenance value.
 
 This drops the prior "user-data → adopt; kernel/plugin → refuse" distinction. Adopting `status` from a kernel/plugin source is exactly what the §3 hybrid rule wants. The only refusal case is "this name is a reserved slot, not a property" — which the hidden flag already encodes.
 
@@ -671,7 +665,7 @@ No user-visible change yet. This is pure infrastructure.
 1. Add `ValuePreset` type and `valuePresetsFacet` ([src/data/api/valuePresets.ts](src/data/api/valuePresets.ts) new).
 2. Register kernel presets (string, number, boolean, list, date, url, ref, refList).
 3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Drop the `CodecShape` type and `isStringCodec` / `isListCodec` / etc. shape-keyed predicates; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check against a `whereAllowedTypesFacet`-resolved kernel set instead of `SCALAR_WHERE_SHAPES` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case.
-4. Drop `propertyEditorFallbackFacet` (per §1-edit). Move every editor onto its preset's `Editor` field. Update `resolvePropertyDisplay` to look up `valuePresets.get(codec.type)?.Editor` for the fallback editor; `PropertyUiContribution.Editor` exact-name path stays unchanged.
+4. Drop `propertyEditorFallbackFacet` (per §1-edit). Move every editor onto its preset's `Editor` field. Update `resolvePropertyDisplay` to look up `valuePresets.get(codec.type)?.Editor` for the fallback editor; `PropertyEditorOverride.Editor` exact-name path stays unchanged.
 5. Add `urlCodec` with `type: 'url'` and a `'url'` preset wrapping `(urlCodec, UrlPropertyEditor, '', LinkIcon)`.
 4. Replace `AddablePropertyShape` in `AddPropertyForm` and `FieldConfigSheet` with preset selection. Form's default preset is `ref`.
 5. Extend `FieldConfigSheet` to render a preset's optional `ConfigEditor`.
@@ -681,7 +675,7 @@ After this phase, the form lets users pick rich presets but still synthesizes in
 
 ### Phase 3 — property-schema as block + `UserSchemasService`
 
-1. Add `'property-schema'` type contribution and the three kernel schemas (`propertyNameProp`, `presetIdProp`, `presetConfigProp`). `presetConfigProp` is hidden via `PropertyUiContribution.hidden = true`.
+1. Add `'property-schema'` type contribution and the three kernel schemas (`propertyNameProp`, `presetIdProp`, `presetConfigProp`). `presetConfigProp` is hidden via `PropertyEditorOverride.hidden = true`.
 2. Workspace bootstrap creates the Properties page if it doesn't exist (deterministic id, idempotent).
 3. Register a `blockRenderersFacet` contribution for blocks of type `'property-schema'` per §4a — preset picker + dispatched `ConfigEditor`. Reuses the same `preset.ConfigEditor` component the AddPropertyForm renders inside `FieldConfigSheet`.
 4. Implement `UserSchemasService` with the `subscribeBlocks` subscription **and** the synchronous `appendUserSchema` slot-update path used by `addSchema` (per §7). (Requires [type-system.md §8](type-system.md)'s typed-query primitive — phase order this one after.)
