@@ -226,6 +226,36 @@ describe('groupedBacklinksDataExtension query', () => {
     }])
   })
 
+  it('orders source-field groups by normal priority while keeping singleton groups', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'project', content: 'Project'})
+    await create({
+      id: 'src-field',
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    })
+    await create({
+      id: 'src-project-1',
+      references: [{id: 'target', alias: 'T'}, {id: 'project', alias: 'Project'}],
+    })
+    await create({
+      id: 'src-project-2',
+      references: [{id: 'target', alias: 'T'}, {id: 'project', alias: 'Project'}],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    }).load()
+
+    expect(out.groups.map(group => group.label)).toEqual(['Project', 'reviewer'])
+    expect(out.groups.find(group => group.label === 'reviewer')).toEqual({
+      groupId: 'field:reviewer',
+      label: 'reviewer',
+      sourceIds: ['src-field'],
+      fallback: false,
+    })
+  })
+
   it('keeps two source fields from the same source to the same target distinct', async () => {
     await create({id: 'target', content: 'Target'})
     await create({

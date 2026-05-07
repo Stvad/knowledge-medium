@@ -65,7 +65,6 @@ const classify = (
   candidate: GroupedBacklinkCandidate,
   matcher: GroupingMatcher,
 ): GroupPriority => {
-  if (candidate.kind === 'field') return 'high'
   if (matcher.highPriorityTags.has(candidate.groupLabel)) return 'high'
   if (candidate.kind === 'root' || matcher.lowPriorityTags.has(candidate.groupLabel)) {
     return 'low'
@@ -154,22 +153,18 @@ export const buildGroupedBacklinks = ({
   const consumed = new Set<string>()
   const result: GroupedBacklinkGroup[] = []
 
-  const fieldConsumed = new Set<string>()
+  const fieldGroupsByPriority = new Map<GroupPriority, CandidateGroup[]>()
   const fieldGroups = Array.from(groups.values())
     .filter(group => group.kind === 'field')
     .sort((a, b) => a.label.localeCompare(b.label))
   for (const group of fieldGroups) {
     const members = orderedMembers(group, sourceOrder, new Set())
     if (members.length === 0) continue
-    result.push({
-      groupId: group.groupId,
-      label: group.label,
-      sourceIds: members,
-      fallback: false,
-    })
-    for (const id of members) fieldConsumed.add(id)
+    const priorityGroups = fieldGroupsByPriority.get(group.priority) ?? []
+    priorityGroups.push(group)
+    fieldGroupsByPriority.set(group.priority, priorityGroups)
+    for (const id of members) consumed.add(id)
   }
-  for (const id of fieldConsumed) consumed.add(id)
 
   const consumePriority = (priority: GroupPriority) => {
     const priorityGroups = Array.from(groups.values())
@@ -189,9 +184,22 @@ export const buildGroupedBacklinks = ({
     }
   }
 
-  consumePriority('high')
-  consumePriority('default')
-  consumePriority('low')
+  const emitFieldGroups = (priority: GroupPriority) => {
+    for (const group of fieldGroupsByPriority.get(priority) ?? []) {
+      const members = orderedMembers(group, sourceOrder, new Set())
+      result.push({
+        groupId: group.groupId,
+        label: group.label,
+        sourceIds: members,
+        fallback: false,
+      })
+    }
+  }
+
+  for (const priority of ['high', 'default', 'low'] as const) {
+    consumePriority(priority)
+    emitFieldGroups(priority)
+  }
 
   const fallbackIds = sourceOrder.filter(id => !consumed.has(id))
   if (fallbackIds.length > 0) {
