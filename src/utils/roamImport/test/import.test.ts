@@ -614,7 +614,7 @@ describe('importRoam', () => {
     expect(leaf?.parent_id).toBe(roamBlockId(WORKSPACE, 'chainMid'))
   })
 
-  it('writes a post-import log block on today\'s daily-note with diagnostics as sub-bullets', async () => {
+  it('writes a grouped post-import log block on today\'s daily-note', async () => {
     // Export with two URL siblings (case 2 → list) and a deeply
     // nested attribute that triggers the "depth > 2" diagnostic.
     const noisyExport: RoamExport = [
@@ -660,15 +660,31 @@ describe('importRoam', () => {
     expect(header).toBeDefined()
     expect(header!.content).toContain(`${summary.diagnostics.length} notes`)
 
-    // Sub-bullets — one per diagnostic, in source order.
-    const subs = await env.h.db.getAll<{content: string}>(
-      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+    const sections = await env.h.db.getAll<{id: string, content: string}>(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
       [header!.id],
     )
-    expect(subs.length).toBe(summary.diagnostics.length)
-    for (let i = 0; i < summary.diagnostics.length; i++) {
-      expect(subs[i].content).toBe(summary.diagnostics[i])
-    }
+    const summarySection = sections.find(c => c.content === 'Summary')
+    expect(summarySection).toBeDefined()
+    const summaryLines = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [summarySection!.id],
+    )
+    expect(summaryLines.map(line => line.content)).toContain('Pages: 1 new, 0 merged, 0 daily')
+
+    const notesSection = sections.find(c => c.content === `Notes (${summary.diagnostics.length})`)
+    expect(notesSection).toBeDefined()
+    const noteGroups = await env.h.db.getAll<{id: string, content: string}>(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [notesSection!.id],
+    )
+    const propertyGroup = noteGroups.find(c => c.content.startsWith('Properties and schemas '))
+    expect(propertyGroup).toBeDefined()
+    const groupedNotes = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [propertyGroup!.id],
+    )
+    expect(groupedNotes.map(line => line.content)).toEqual(summary.diagnostics)
   })
 
   it('posts isa type candidates to the import report block', async () => {

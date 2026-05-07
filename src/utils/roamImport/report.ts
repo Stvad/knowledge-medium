@@ -1,4 +1,4 @@
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type Tx } from '@/data/api'
 import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
 import { keyAtEnd, keysBetween } from '@/data/orderKey'
 import type { Repo } from '@/data/repo'
@@ -21,6 +21,11 @@ interface ImportLogStats {
   diagnostics: ReadonlyArray<string>
 }
 
+interface ReportNode {
+  content: string
+  children?: ReadonlyArray<ReportNode>
+}
+
 const formatRoamMemoReport = (
   summary: RoamMemoImportPlanSummary,
 ): string[] => {
@@ -41,10 +46,132 @@ const formatRoamMemoReport = (
   return lines
 }
 
+const formatDuration = (durationMs: number): string =>
+  `${(durationMs / 1000).toFixed(1)}s`
+
+const formatSummaryReport = (stats: ImportLogStats): string[] => [
+  `Pages: ${stats.pagesCreated} new, ${stats.pagesMerged} merged, ${stats.pagesDaily} daily`,
+  `Blocks: ${stats.blocksWritten} imported`,
+  `Support rows: ${stats.placeholdersCreated} placeholders, ${stats.aliasBlocksCreated} alias seats`,
+  `Notes: ${stats.diagnostics.length}`,
+  `Duration: ${formatDuration(stats.durationMs)}`,
+]
+
+const OTHER_DIAGNOSTIC_GROUP = 'Other notes'
+
+const DIAGNOSTIC_GROUPS: ReadonlyArray<{
+  title: string
+  matches: (line: string) => boolean
+}> = [
+  {
+    title: 'Duplicate uids',
+    matches: line => line.includes('Duplicate Roam uid'),
+  },
+  {
+    title: 'Page titles',
+    matches: line => line.includes('Roam page title weirdness'),
+  },
+  {
+    title: 'Page aliases',
+    matches: line =>
+      line.includes('page_alias') ||
+      line.includes('Page alias') ||
+      line.includes('alias rule'),
+  },
+  {
+    title: 'Roam commands',
+    matches: line =>
+      line.includes('Roam command follow-up') ||
+      line.includes('Unknown Roam command follow-up'),
+  },
+  {
+    title: 'SRS and roam/memo',
+    matches: line =>
+      line.includes('SRS') ||
+      line.includes('roam/memo') ||
+      line.includes('SPACED_INTERVAL'),
+  },
+  {
+    title: 'References and placeholders',
+    matches: line =>
+      line.includes('placeholder') ||
+      line.includes('block-ref') ||
+      line.includes('unresolved aliases') ||
+      line.includes('ref property') ||
+      line.includes('daily note') ||
+      line.includes('Daily page') ||
+      line.startsWith('Alias "'),
+  },
+  {
+    title: 'Properties and schemas',
+    matches: line =>
+      line.includes('Attribute "') ||
+      line.includes('property') ||
+      line.includes('schema') ||
+      line.includes('Readwise'),
+  },
+]
+
+const diagnosticGroupTitle = (line: string): string =>
+  DIAGNOSTIC_GROUPS.find(group => group.matches(line))?.title ?? OTHER_DIAGNOSTIC_GROUP
+
+const formatDiagnosticReport = (
+  diagnostics: ReadonlyArray<string>,
+): ReportNode[] => {
+  if (diagnostics.length === 0) return []
+
+  const grouped = new Map<string, string[]>()
+  for (const line of diagnostics) {
+    const title = diagnosticGroupTitle(line)
+    const lines = grouped.get(title) ?? []
+    lines.push(line)
+    grouped.set(title, lines)
+  }
+
+  const sections = [
+    ...DIAGNOSTIC_GROUPS.map(group => group.title),
+    OTHER_DIAGNOSTIC_GROUP,
+  ].flatMap(title => {
+    const lines = grouped.get(title)
+    if (!lines || lines.length === 0) return []
+    return [{
+      content: `${title} (${lines.length})`,
+      children: lines.map(content => ({content})),
+    }]
+  })
+
+  return [{
+    content: `Notes (${diagnostics.length})`,
+    children: sections,
+  }]
+}
+
+const createReportNodes = async (
+  tx: Tx,
+  workspaceId: string,
+  parentId: string,
+  nodes: ReadonlyArray<ReportNode>,
+): Promise<void> => {
+  if (nodes.length === 0) return
+  const keys = keysBetween(null, null, nodes.length)
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i]
+    const id = await tx.create({
+      workspaceId,
+      parentId,
+      orderKey: keys[i],
+      content: node.content,
+    })
+    if (node.children && node.children.length > 0) {
+      await createReportNodes(tx, workspaceId, id, node.children)
+    }
+  }
+}
+
 /**
  * Append a one-parent + N-children block to today's daily-note that
- * records the just-finished import. Header summarises counts; each
- * diagnostic becomes a sub-bullet.
+ * records the just-finished import. Header summarises counts; children
+ * group summary, diagnostics, and follow-up sections for scanning.
  */
 export const writeImportLog = async (
   repo: Repo,
@@ -73,7 +200,27 @@ export const writeImportLog = async (
     `(${stats.placeholdersCreated} placeholders, ` +
     `${stats.aliasBlocksCreated} alias seats, ` +
     `${stats.diagnostics.length} notes${typeCandidateSummary}${roamMemoSummary}, ` +
-    `${(stats.durationMs / 1000).toFixed(1)}s)`
+    `${formatDuration(stats.durationMs)})`
+
+  const reportNodes: ReportNode[] = [
+    {
+      content: 'Summary',
+      children: formatSummaryReport(stats).map(content => ({content})),
+    },
+    ...formatDiagnosticReport(stats.diagnostics),
+  ]
+  if (roamMemoLines.length > 0) {
+    reportNodes.push({
+      content: 'Roam Memo SRS',
+      children: roamMemoLines.map(content => ({content})),
+    })
+  }
+  if (typeCandidateLines.length > 0) {
+    reportNodes.push({
+      content: 'Type candidates from isa::',
+      children: typeCandidateLines.map(content => ({content})),
+    })
+  }
 
   await repo.tx(async tx => {
     const existing = await tx.childrenOf(dailyId, workspaceId)
@@ -89,54 +236,6 @@ export const writeImportLog = async (
       content: headerContent,
     })
 
-    const childCount =
-      stats.diagnostics.length +
-      (roamMemoLines.length > 0 ? 1 : 0) +
-      (typeCandidateLines.length > 0 ? 1 : 0)
-    if (childCount === 0) return
-    const childKeys = keysBetween(null, null, childCount)
-    let childIndex = 0
-    for (let i = 0; i < stats.diagnostics.length; i++) {
-      await tx.create({
-        workspaceId,
-        parentId: headerId,
-        orderKey: childKeys[childIndex++],
-        content: stats.diagnostics[i],
-      })
-    }
-    if (roamMemoLines.length > 0) {
-      const sectionId = await tx.create({
-        workspaceId,
-        parentId: headerId,
-        orderKey: childKeys[childIndex++],
-        content: 'Roam Memo SRS',
-      })
-      const sectionKeys = keysBetween(null, null, roamMemoLines.length)
-      for (let i = 0; i < roamMemoLines.length; i++) {
-        await tx.create({
-          workspaceId,
-          parentId: sectionId,
-          orderKey: sectionKeys[i],
-          content: roamMemoLines[i],
-        })
-      }
-    }
-    if (typeCandidateLines.length > 0) {
-      const sectionId = await tx.create({
-        workspaceId,
-        parentId: headerId,
-        orderKey: childKeys[childIndex],
-        content: 'Type candidates from isa::',
-      })
-      const sectionKeys = keysBetween(null, null, typeCandidateLines.length)
-      for (let i = 0; i < typeCandidateLines.length; i++) {
-        await tx.create({
-          workspaceId,
-          parentId: sectionId,
-          orderKey: sectionKeys[i],
-          content: typeCandidateLines[i],
-        })
-      }
-    }
+    await createReportNodes(tx, workspaceId, headerId, reportNodes)
   }, {scope: ChangeScope.BlockDefault, description: 'roam import: log'})
 }
