@@ -231,8 +231,14 @@ Replace both with a **single open `type: string`** on every codec (matching the 
 
 ```ts
 // src/data/api/codecs.ts
-/** Scalar value compatible with `json_extract(...) = ?` parameter binding. */
-export type WhereValue = string | number | null
+/** Scalar value compatible with `json_extract(...) = ?` parameter binding.
+ *  Deliberately excludes null: typed-query callers signal "match unset"
+ *  by passing `null` as the where value, and the compiler short-circuits
+ *  that to `IS NULL` *before* calling `where.encode` (see
+ *  compileWhereFilter below). A codec returning null from `where.encode`
+ *  would compare-equal to SQL NULL and match no rows; narrowing the
+ *  return type to `string | number` makes that mistake unrepresentable. */
+export type WhereValue = string | number
 
 export interface Codec<T> {
   readonly type: string            // stable preset id; e.g. 'string', 'ref', 'url'
@@ -321,37 +327,53 @@ export const isUrlCodec     = (c: AnyCodec): c is Codec<string> => c.type === 'u
 `compileWhereFilter` ([typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts)) becomes:
 
 ```ts
-if (!schema.codec.where) {
-  throw new Error(`[queryBlocks] where.${name} is not where-queryable; ` +
-    `codec type ${schema.codec.type} doesn't support equality predicates ` +
-    `(use referencedBy for refs, dedicated query for collections)`)
-}
-
-// `null` is the typed-query "match unset / explicitly-null" sentinel
-// per [type-system.md §8](type-system.md). SQLite `=` against NULL
-// never matches, so compile to `IS NULL` and skip where.encode
-// entirely — the codec doesn't need to encode NULL because we don't
-// bind it as a value. (Existing kernel codec where.encode validators
-// would reject null via `typeof !== T`; routing around them is
-// correct, not a bypass.)
-if (value === null) {
-  return {
-    sql: 'json_extract(b.properties_json, ?) IS NULL',
-    params: [path],
+const compileWhereFilter = (
+  name: string,
+  value: unknown,
+  schema: AnyPropertySchema | undefined,
+): {sql: string; params: unknown[]} => {
+  if (value === undefined) {
+    throw new Error(`[queryBlocks] where.${name} is undefined; pass null to match unset values`)
   }
-}
+  if (schema === undefined) {
+    throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
+  }
+  if (!schema.codec.where) {
+    throw new Error(`[queryBlocks] where.${name} is not where-queryable; ` +
+      `codec type ${schema.codec.type} doesn't support equality predicates ` +
+      `(use referencedBy for refs, dedicated query for collections)`)
+  }
 
-// where.encode is the validation boundary — it throws on non-T
-// inputs. The compiler doesn't pre-validate; the codec does.
-let sqlValue: WhereValue
-try {
-  sqlValue = schema.codec.where.encode(value)
-} catch (err) {
-  throw new Error(`[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`)
-}
-return {
-  sql: 'json_extract(b.properties_json, ?) = ?',
-  params: [path, sqlValue],
+  const path = jsonPathForProperty(name)
+
+  // `null` is the typed-query "match unset / explicitly-null" sentinel
+  // per [type-system.md §8](type-system.md). SQLite `=` against NULL
+  // never matches, so compile to `IS NULL` and skip where.encode
+  // entirely — the codec doesn't need to encode NULL because we don't
+  // bind it as a value. (Existing kernel codec where.encode validators
+  // would reject null via `typeof !== T`; routing around them is
+  // correct, not a bypass. WhereValue is narrowed to string | number
+  // so codec authors can't return null from where.encode and trip the
+  // same SQLite gotcha.)
+  if (value === null) {
+    return {
+      sql: 'json_extract(b.properties_json, ?) IS NULL',
+      params: [path],
+    }
+  }
+
+  // where.encode is the validation boundary — it throws on non-T
+  // inputs. The compiler doesn't pre-validate; the codec does.
+  let sqlValue: WhereValue
+  try {
+    sqlValue = schema.codec.where.encode(value)
+  } catch (err) {
+    throw new Error(`[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`)
+  }
+  return {
+    sql: 'json_extract(b.properties_json, ?) = ?',
+    params: [path, sqlValue],
+  }
 }
 ```
 
@@ -817,7 +839,20 @@ Schemaless properties go away as a steady-state design. Every imported `key:: va
 
    If durability of the block writes can't be guaranteed atomically with `appendUserSchema` (it usually can't — they're separate operations), the **failure-recovery rule** is: if step 1 fails for a planned schema, do NOT call step 2 for that schema. If step 2 fires and step 3 fails, the runtime registration stays (it's idempotent with the persisted block), the importer can retry content writes. If step 1 succeeds and step 2 throws (shouldn't happen — it's pure in-memory), the next subscription tick reconciles from the disk state.
 
-7. **Normalize ref values to ids before writing.** A Roam `Status:: [[Project]]` parsed value is the *token* `[[Project]]`, not a block id — but the `refList` codec decodes string arrays of *ids*, not tokens. The importer's existing reference-resolution layer (the same code that resolves `[[Project]]` in block content to a target block id) must run on attribute values before they're written to a refList property; otherwise decode throws and `references_json` projection emits bogus target ids. Concretely: when classifying a property value as `refList`, transform the parsed value through the existing token→id resolver, write the array of resolved ids to the property, and only then commit. Ambiguous tokens (page that doesn't exist in the dump, multiple matches, etc.) follow the importer's existing not-found policy — typically create the target page if it's a `[[…]]` reference, or fall back to a string preset for that property if resolution is ambiguous across the dump.
+7. **Normalize ref values to ids before writing — for any ref/refList schema, classified or adopted.** A Roam `Status:: [[Project]]` parsed value is the *token* `[[Project]]`, not a block id — but `ref` / `refList` codecs decode arrays of *ids*. Without normalization, encode would fail or `references_json` projection would emit bogus target ids. The normalization step must key off the *resolved* schema's codec, not just the newly-classified preset:
+
+   ```ts
+   // For each property write, after schema resolution:
+   if (isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
+     value = resolveRoamTokensToIds(value, schema.codec)  // single id for ref, array for refList
+   }
+   ```
+
+   This catches both cases:
+   - **Newly-classified `refList` schemas** (the common Roam-attribute case) — the plan picked `refList` because all values were `[[…]]` tokens.
+   - **Adopted ref/refList schemas** — a kernel/plugin/pre-existing user schema named `assignee` with `codec: codecs.ref({targetTypes: ['person']})` could match an imported attribute. Without keying off the codec, the importer would skip normalization for these and write raw tokens straight through.
+
+   Resolver invocation: `resolveRoamTokensToIds(value, codec)` runs the importer's existing `[[Page]]` → block-id layer on each token; for `ref` it expects a single token (multiple tokens → error or string-preset fallback per the dump-wide ambiguity policy), for `refList` it produces an array. Ambiguous tokens (page that doesn't exist in the dump, multiple matches) follow the importer's existing not-found policy — typically create the target page if it's a `[[…]]` reference, or fall back to a string preset for that property if resolution is ambiguous across the dump.
 
 #### Why plan-time schema objects matter
 
