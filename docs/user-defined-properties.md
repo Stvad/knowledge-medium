@@ -277,16 +277,21 @@ export interface WhereCapability<T> {
   encode(value: T): WhereValue
 }
 
-export interface RefCodec extends Codec<string> {
+export interface RefCodec extends Codec<string | undefined> {
   readonly type: 'ref'             // replaces refKind
   readonly targetTypes: readonly string[]
   // No `where` — refs route via referencedBy.
+  // Value type is `string | undefined` to account for optional-wrapped
+  // refs: a bare codecs.ref(...) decodes to string at runtime, but
+  // optional(codecs.ref(...)) decodes to string | undefined and the
+  // type predicate `isRefCodec` accepts both. See "Three properties"
+  // under the optional contract below.
 }
 
-export interface RefListCodec extends Codec<readonly string[]> {
+export interface RefListCodec extends Codec<readonly string[] | undefined> {
   readonly type: 'refList'
   readonly targetTypes: readonly string[]
-  // No `where`.
+  // No `where`. Same widening rationale as RefCodec.
 }
 
 // Kernel codecs — `where.encode` validates input first, then encodes.
@@ -392,57 +397,54 @@ The `where` namespace is intentionally a sub-object rather than a flat `whereEnc
 `codecs.optional` is a kernel codec wrapper used by the `'date'` preset (`build: () => codecs.optional(codecs.date)` so unset dates surface as `undefined` rather than crashing on encode). After dropping `shape`, the wrapper's contract has to be explicit:
 
 ```ts
-const REF_LIKE_TYPES = new Set(['ref', 'refList'])
-
-const optional = <T>(inner: Codec<T>): Codec<T | undefined> => {
-  // Refuse ref/refList wrapping. After the metadata-spread below,
-  // optional(codecs.ref(...)) would pass `isRefCodec(c)` (type === 'ref'
-  // matches) and TypeScript would narrow to RefCodec extends Codec<string> —
-  // but the wrapper's decode actually returns `string | undefined`. The
-  // ref projector and ref editors would receive an undefined where they
-  // expect a string id, with no static signal that this can happen.
-  // Refs already carry their own "no value" semantics via the unset
-  // property path (block.get returns the schema's defaultValue when
-  // properties_json doesn't contain the key); wrapping in optional adds
-  // a redundant slot that costs type safety. Future ref-supporting
-  // optional behaviour, if needed, gets a dedicated `optionalRef`
-  // wrapper with its own predicate and its own narrower handling.
-  if (REF_LIKE_TYPES.has(inner.type)) {
-    throw new Error(`[codecs.optional] cannot wrap ref/refList codecs; ` +
-      `refs use unset-property / defaultValue for "no value" instead`)
-  }
-
-  return {
-    // Spread inner first so any subtype metadata (future codec fields)
-    // carries through transparently. With ref/refList already refused
-    // above, this spread doesn't tickle the isRefCodec narrowing trap.
-    ...inner,
-    // Override encode/decode for null-on-undefined behaviour.
-    encode: v => v === undefined ? null : inner.encode(v),
-    decode: j => j === null || j === undefined ? undefined : inner.decode(j),
-    // Override `where` to reject undefined; delegate to inner otherwise.
-    where: inner.where && {
-      encode: v => {
-        // Per §8: typed-query callers use `null` (not `undefined`) for
-        // unset matching, and the compiler short-circuits null to
-        // `IS NULL` before this point. `undefined` reaching
-        // where.encode is therefore a caller bug; reject loudly.
-        if (v === undefined) throw new CodecError(`${inner.type} (use null for unset)`, v)
-        return inner.where!.encode(v)
-      },
+const optional = <T>(inner: Codec<T>): Codec<T | undefined> => ({
+  // Spread inner first so any subtype metadata (RefCodec.targetTypes,
+  // future codec fields) carries through transparently. Ref/refList
+  // are wrappable; the price is that isRefCodec/isRefListCodec
+  // predicates widen their value type to include `undefined`, and
+  // ref-aware consumers (projector, editor) explicitly handle the
+  // unset case — see the predicate definitions below.
+  ...inner,
+  // Override encode/decode for null-on-undefined behaviour.
+  encode: v => v === undefined ? null : inner.encode(v),
+  decode: j => j === null || j === undefined ? undefined : inner.decode(j),
+  // Override `where` to reject undefined; delegate to inner otherwise.
+  where: inner.where && {
+    encode: v => {
+      // Per §8: typed-query callers use `null` (not `undefined`) for
+      // unset matching, and the compiler short-circuits null to
+      // `IS NULL` before this point. `undefined` reaching
+      // where.encode is therefore a caller bug; reject loudly.
+      if (v === undefined) throw new CodecError(`${inner.type} (use null for unset)`, v)
+      return inner.where!.encode(v)
     },
-  }
-}
+  },
+})
 ```
 
 Three properties:
 
-- **Subtype metadata is preserved for non-ref codecs.** A future semantic codec like `'duration'` can carry extra fields (e.g. precision metadata) and `optional(codecs.duration({...}))` will preserve them. The spread does this transparently. `optional(codecs.date).type === 'date'` and editor lookup still resolves to the date preset.
-- **Refs are explicitly excluded.** `optional(codecs.ref(...))` throws at construction time. The reason is type safety: `isRefCodec(c) => c.type === 'ref'` narrows to `Codec<string>`, but an `optional`-wrapped ref's `decode` can return `undefined` — the type predicate would lie. Refs already represent "no value" via the unset-property path (the property simply isn't in `properties_json`; `block.get` returns the schema's `defaultValue`, typically `''`); the optional wrapper would add a parallel "explicitly null in storage" representation with no real-world payoff. If a future case genuinely needs a settable-and-clearable ref distinct from unset, it gets a dedicated `optionalRef` wrapper with its own predicate (`isOptionalRefCodec`) and explicit consumer handling.
-- **`where` delegates to inner when present.** A non-`undefined` value passes through `inner.where.encode` (which validates and encodes per the §1a contract). `optional(codecs.date)` is queryable; `optional(codecs.list(...))` is not (inner has no `where`).
+- **All subtype metadata is preserved.** `optional(codecs.ref({targetTypes: ['task']})).targetTypes === ['task']`. The spread carries every field the inner had; the wrapper only overrides encode / decode / where. `optional(codecs.date).type === 'date'`, editor lookup still resolves to the date preset, and ref's targetTypes survive an optional wrap.
+- **Ref/refList predicates widen to account for optional wrapping.** Now that `optional(codecs.ref(...))` is allowed, narrowing predicates can't claim `decode` returns `string` — a wrapped instance returns `string | undefined`. The predicates and the value-type contract widen accordingly:
+  ```ts
+  // Before: RefCodec extends Codec<string>
+  // After: ref values are `string | undefined`; isRefCodec accepts both
+  //        the bare ref codec and an optional-wrapped one.
+  export interface RefCodec extends Codec<string | undefined> {
+    readonly type: 'ref'
+    readonly targetTypes: readonly string[]
+  }
+  export const isRefCodec = (c: AnyCodec): c is RefCodec => c.type === 'ref'
+  // Bare codecs.ref(...) still decodes to string at runtime — undefined
+  // only arises through the optional wrapper. The predicate/type widens
+  // to make consumers handle the ambiguity once at narrowing time
+  // rather than catching it as an unhandled undefined later.
+  ```
+  Same shape for `RefListCodec` and `isRefListCodec` (`readonly string[] | undefined`). Ref consumers — the §7 projector, the ref/refList editors, the picker UI — explicitly handle the undefined case as "no ref selected" (skip projection / render empty state / etc.). This replaces the implicit empty-string sentinel pattern: today consumers treat `''` as "no value"; after this change, undefined is the explicit unset, and `''` either becomes a normal string (a literal empty id, never matches a real block) or stays as a redundant secondary sentinel that consumers can phase out.
+- **`where` delegates to inner when present.** A non-`undefined` value passes through `inner.where.encode` (which validates and encodes per the §1a contract). `optional(codecs.date)` is queryable; `optional(codecs.list(...))` is not (inner has no `where`); `optional(codecs.ref(...))` follows the same rule as `codecs.ref(...)` (no `where`, route via `referencedBy`).
 - **`undefined` is rejected at the where boundary.** Typed-query's outer layer already rejects `where.foo = undefined` (caller passes `null` for unset matching per [type-system.md §8](type-system.md)), but the codec defends against it too. `null` itself is handled at the typed-query compiler level (compiles to `IS NULL`) and never reaches `where.encode`.
 
-The TypeScript return type is `Codec<T | undefined>` rather than the inner's narrower subtype — static narrowing through `optional` wrappers isn't preserved at the type level. Runtime narrowing via `c.type === 'foo'` still works because the spread carries `type` and the metadata. With ref-wrapping refused, the dangerous case of "narrow to a subtype with the wrong value-type expectation" doesn't arise.
+The TypeScript return type is `Codec<T | undefined>` rather than the inner's narrower subtype — static narrowing through `optional` wrappers isn't preserved at the value-type level. Runtime narrowing via `c.type === 'foo'` still works because the spread carries `type` and the metadata. With ref predicates widened, consumers handle the undefined branch once at the narrowing site instead of being silently surprised by it.
 
 What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. The where-clause check no longer needs it — `codec.where` answers queryability directly. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
 
