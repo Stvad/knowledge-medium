@@ -109,41 +109,54 @@ Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {sourc
 
 The pre-this-design `propertyEditorFallbackFacet` ([typesPropertyUi.ts:68](src/components/propertyEditors/typesPropertyUi.ts:68)) is a parallel registry of `(predicate, Editor, priority)` triples that the panel walks to find an editor matching a schema's codec. With every codec now carrying `type: string` and every preset carrying its own `Editor`, the predicate-and-priority machinery is redundant: the codec's `type` is exactly the preset's `id`, the preset's `Editor` is exactly the editor to use. **Drop `propertyEditorFallbackFacet` entirely.**
 
-`resolvePropertyDisplay` ([defaults.tsx:281](src/components/propertyEditors/defaults.tsx:281)) becomes:
+`resolvePropertyDisplay` ([defaults.tsx:281](src/components/propertyEditors/defaults.tsx:281)) is the **single point** at which `ValuePreset` and `PropertyUiContribution` are merged. Every consumer (panel rows, autocomplete, `BlockProperties` model builder) goes through it; nowhere should inline the `ui?.X ?? preset?.X` pattern. This is the load-bearing reuse — neither a shared base interface nor a merged facet — between the two registries:
 
 ```ts
+export interface ResolvedPropertyDisplay {
+  schema: AnyPropertySchema
+  type: string                    // codec.type
+  Editor?: PropertyEditor<unknown>
+  Renderer?: PropertyRenderer<unknown>
+  Glyph?: ComponentType<{className?: string}>
+  /** Row display name in the property panel. Comes from
+   *  PropertyUiContribution.label, falls back to schema.name. NOT
+   *  the preset's label (that one is the picker entry, only used
+   *  in AddPropertyForm). */
+  rowLabel: string
+  hidden: boolean
+  category?: string
+  isKnown: boolean
+}
+
 export const resolvePropertyDisplay = (args: {
   name: string
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyUiContribution>
   presets: ReadonlyMap<string, AnyValuePreset>
-}): PropertyDisplayInfo => {
+}): ResolvedPropertyDisplay => {
   const known = args.schemas.get(args.name)
-  if (known) {
-    const ui = args.uis.get(args.name)
-    const preset = args.presets.get(known.codec.type)
-    return {
-      schema: known,
-      type: known.codec.type,
-      // Exact-name UI contribution wins first (unchanged); preset's
-      // editor is the universal fallback for any registered schema.
-      Editor: ui?.Editor ?? preset?.Editor,
-      isKnown: true,
-    }
-  }
-  // Unknown-schema fallback: infer a primitive type from JSON, build
-  // an adhoc schema with that type, look up its preset's editor.
-  const type = inferTypeFromValue(args.encodedValue)
-  const schema = adhocSchema(args.name, type)
+  const schema = known ?? adhocSchema(args.name, inferTypeFromValue(args.encodedValue))
+  const ui = args.uis.get(args.name)
+  const preset = args.presets.get(schema.codec.type)
   return {
     schema,
-    type,
-    Editor: args.presets.get(type)?.Editor,
-    isKnown: false,
+    type: schema.codec.type,
+    // Per §1-ui: name overrides type for Editor / Renderer / Glyph.
+    // Preset's editor is the universal fallback when no exact-name
+    // contribution exists; preset's glyph is the type-default icon.
+    Editor: ui?.Editor ?? preset?.Editor,
+    Renderer: ui?.Renderer,
+    Glyph: ui?.Glyph ?? preset?.Glyph,
+    rowLabel: ui?.label ?? schema.name,
+    hidden: ui?.hidden ?? false,
+    category: ui?.category,
+    isKnown: known !== undefined,
   }
 }
 ```
+
+Two registries, one resolver. Adding a new shared field (e.g., a per-property tooltip later) means one signature change in `ResolvedPropertyDisplay` plus one new line in the resolver. Type-level "extract a shared base interface" looks tempting but doesn't add to that — the override merge is the place inconsistency would arise, and that's already a function.
 
 Three properties this gives:
 
