@@ -274,13 +274,13 @@ const summarizePageAliasDiagnostics = (
   if (nonStandard.length > 0) {
     nodes.push({
       content: `Non-standard page_alias values (${nonStandard.length})`,
-      children: sampleNodes(nonStandard),
+      children: nonStandard.map(content => ({content})),
     })
   }
   if (aliasMerges.length > 0) {
     nodes.push({
       content: `Alias-rule page merges (${aliasMerges.length})`,
-      children: sampleNodes(aliasMerges),
+      children: aliasMerges.map(content => ({content})),
     })
   }
   return {nodes, remaining}

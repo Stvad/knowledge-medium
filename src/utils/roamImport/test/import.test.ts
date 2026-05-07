@@ -130,6 +130,12 @@ const readBlock = (id: string) =>
     deleted: 0 | 1
   }>('SELECT id, parent_id, content, properties_json, references_json, deleted FROM blocks WHERE id = ?', [id])
 
+const readChildren = (parentId: string) =>
+  env.h.db.getAll<{id: string, content: string}>(
+    'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+    [parentId],
+  )
+
 describe('importRoam', () => {
   it('writes pages and descendants to the repo with planned ids', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
@@ -845,6 +851,76 @@ describe('importRoam', () => {
     const aliasBlock = await readBlock(roamBlockId(WORKSPACE, 'aliasXY'))
     expect(aliasBlock?.parent_id).toBe(canonicalId)
     expect(aliasBlock?.content).toBe('page_alias::[[page y]]')
+  })
+
+  it('lists all non-standard page aliases and alias merges in the import report', async () => {
+    const nonStandardPages: RoamExport = Array.from({length: 10}, (_, i) => ({
+      title: `non-standard aliases ${i}`,
+      uid: `nonStdPage${i}`,
+      children: [
+        {string: `page_alias::plain alias ${i}`, uid: `nonStdAlias${i}`},
+      ],
+    }))
+    const mergePages: RoamExport = Array.from({length: 10}, (_, i) => [
+      {
+        title: `merge target ${i}`,
+        uid: `mergeTarget${i}`,
+        children: [
+          {string: `page_alias::[[merge source ${i}]]`, uid: `mergeAlias${i}`},
+        ],
+      },
+      {
+        title: `merge source ${i}`,
+        uid: `mergeSource${i}`,
+        children: [
+          {string: `source child ${i}`, uid: `mergeSourceChild${i}`},
+        ],
+      },
+    ]).flat()
+
+    const summary = await importRoam([...nonStandardPages, ...mergePages], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.diagnostics.filter(line => line.startsWith('Non-standard page_alias')))
+      .toHaveLength(10)
+    expect(summary.diagnostics.filter(line => line.includes('merged in bc of the alias rule')))
+      .toHaveLength(10)
+
+    const dailyChildren = await readChildren(dailyNoteBlockId(WORKSPACE, todayIso()))
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+
+    const sections = await readChildren(header!.id)
+    const notesSection = sections.find(c => c.content === `Notes (${summary.diagnostics.length})`)
+    expect(notesSection).toBeDefined()
+
+    const noteGroups = await readChildren(notesSection!.id)
+    const pageAliasGroup = noteGroups.find(c => c.content.startsWith('Page aliases '))
+    expect(pageAliasGroup).toBeDefined()
+
+    const pageAliasSections = await readChildren(pageAliasGroup!.id)
+    const nonStandardSection = pageAliasSections.find(c =>
+      c.content === 'Non-standard page_alias values (10)')
+    expect(nonStandardSection).toBeDefined()
+    const nonStandardLines = await readChildren(nonStandardSection!.id)
+    expect(nonStandardLines).toHaveLength(10)
+    expect(nonStandardLines.map(line => line.content)).toContain(
+      'Non-standard page_alias on [[non-standard aliases 9]] (uid nonStdPage9) was not used for alias-rule merging: "plain alias 9"',
+    )
+    expect(nonStandardLines.some(line => line.content.includes('omitted from this report section')))
+      .toBe(false)
+
+    const mergeSection = pageAliasSections.find(c => c.content === 'Alias-rule page merges (10)')
+    expect(mergeSection).toBeDefined()
+    const mergeLines = await readChildren(mergeSection!.id)
+    expect(mergeLines).toHaveLength(10)
+    expect(mergeLines.map(line => line.content)).toContain(
+      "[[merge target 9]] also had 'merge source 9' merged in bc of the alias rule",
+    )
+    expect(mergeLines.some(line => line.content.includes('omitted from this report section')))
+      .toBe(false)
   })
 
   it('does not merge daily pages through page_alias properties', async () => {
