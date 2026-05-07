@@ -692,10 +692,25 @@ const buildPageAliasRulePlan = (
   const directOwnerByAlias = new Map<string, string>()
   const diagnostics: string[] = []
   const pageOrder = new Map(preparedPages.map((page, index) => [page.title, index]))
+  const pageByTitle = new Map(preparedPages.map(page => [page.title, page]))
+  let dailyAliasMergeSkips = 0
+  const dailyAliasMergeSamples: string[] = []
+
+  const skipDailyAliasMerge = (page: PreparedPage, alias: string): boolean => {
+    const aliasPage = pageByTitle.get(alias)
+    const skip = page.isDaily || aliasPage?.isDaily === true || parseLiteralDailyPageTitle(alias) !== null
+    if (!skip) return false
+    dailyAliasMergeSkips += 1
+    if (dailyAliasMergeSamples.length < 8) {
+      dailyAliasMergeSamples.push(`[[${page.title}]] -> [[${alias}]]`)
+    }
+    return true
+  }
 
   for (const page of preparedPages) {
     for (const alias of uniqueStrings(page.pageAliases)) {
       if (alias === page.title) continue
+      if (skipDailyAliasMerge(page, alias)) continue
       const existingOwner = directOwnerByAlias.get(alias)
       if (existingOwner && existingOwner !== page.title) {
         diagnostics.push(
@@ -706,6 +721,12 @@ const buildPageAliasRulePlan = (
       }
       directOwnerByAlias.set(alias, page.title)
     }
+  }
+  if (dailyAliasMergeSkips > 0) {
+    diagnostics.push(
+      `Skipped ${dailyAliasMergeSkips} daily-shaped page_alias merge(s) to avoid merging daily notes ` +
+      `into regular pages; samples: ${dailyAliasMergeSamples.join(', ')}.`,
+    )
   }
 
   const rootCache = new Map<string, string>()
@@ -759,7 +780,6 @@ const buildPageAliasRulePlan = (
   }
 
   const rootByTitle = new Map<string, string>()
-  const pageByTitle = new Map(preparedPages.map(page => [page.title, page]))
   for (const page of preparedPages) {
     rootByTitle.set(page.title, rootFor(page.title))
   }

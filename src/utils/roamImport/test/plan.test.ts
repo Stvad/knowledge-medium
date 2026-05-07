@@ -951,6 +951,26 @@ describe('planImport', () => {
     expect(plan.aliasesUsed.has('defensive [[driving')).toBe(false)
   })
 
+  it('does not use mixed page_alias text as alias-rule merge input', () => {
+    const plan = planImport([{
+      title: 'writing idea',
+      uid: 'pUid',
+      children: [
+        {
+          string: 'page_alias::[[June 19th, 2026]] unify things? [[[[interval]]:241.0]] [[[[factor]]:1.30]]',
+          uid: 'aliasUid',
+        },
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].pageAliases).toEqual([])
+    expect(plan.aliasesUsed.has('June 19th, 2026')).toBe(true)
+    expect(plan.diagnostics.some(d =>
+      d.includes('Non-standard page_alias') &&
+      d.includes('June 19th, 2026'),
+    )).toBe(true)
+  })
+
   it('reports page title and Roam command weirdness summaries', () => {
     const plan = planImport([{
       title: ' odd\npage ',

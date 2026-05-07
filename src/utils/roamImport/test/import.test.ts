@@ -680,11 +680,18 @@ describe('importRoam', () => {
     )
     const propertyGroup = noteGroups.find(c => c.content.startsWith('Properties and schemas '))
     expect(propertyGroup).toBeDefined()
-    const groupedNotes = await env.h.db.getAll<{content: string}>(
-      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+    const propertyNotes = await env.h.db.getAll<{id: string, content: string}>(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
       [propertyGroup!.id],
     )
-    expect(groupedNotes.map(line => line.content)).toEqual(summary.diagnostics)
+    const deepHoists = propertyNotes.find(line => line.content.startsWith('Deep attribute hoists '))
+    expect(deepHoists).toBeDefined()
+    const deepHoistChildren = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [deepHoists!.id],
+    )
+    expect(deepHoistChildren.map(line => line.content)).toContain('C depth 3: 1')
+    expect(deepHoistChildren.map(line => line.content)).toContain('Samples')
   })
 
   it('posts isa type candidates to the import report block', async () => {
@@ -713,6 +720,13 @@ describe('importRoam', () => {
         children: [
           {string: 'isa::[[import-test-book]]', uid: 'bookIsa'},
           {string: 'author::[[Some Author]]', uid: 'bookAuthor'},
+        ],
+      },
+      {
+        title: 'Mixed SRS marker',
+        uid: 'mixedSrsPage',
+        children: [
+          {string: 'isa::[[[[interval]]:241.0]] [[[[factor]]:1.30]]', uid: 'mixedSrsIsa'},
         ],
       },
     ]
@@ -751,12 +765,27 @@ describe('importRoam', () => {
     const section = reportChildren.find(c => c.content === 'Type candidates from isa::')
     expect(section).toBeDefined()
 
-    const candidateLines = await env.h.db.getAll<{content: string}>(
-      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+    const confidenceSections = await env.h.db.getAll<{id: string, content: string}>(
+      'SELECT id, content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
       [section!.id],
     )
-    expect(candidateLines.map(line => line.content)).toEqual([
+    const highConfidence = confidenceSections.find(c => c.content === 'High-confidence (1)')
+    expect(highConfidence).toBeDefined()
+    const highConfidenceLines = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [highConfidence!.id],
+    )
+    expect(highConfidenceLines.map(line => line.content)).toEqual([
       '[[import-test-person]] -> type "import-test-person" (2 nodes); common props: roam:twitter 2/2 (100%)',
+    ])
+
+    const lowerConfidence = confidenceSections.find(c => c.content === 'Lower-confidence / needs review (1)')
+    expect(lowerConfidence).toBeDefined()
+    const lowerConfidenceLines = await env.h.db.getAll<{content: string}>(
+      'SELECT content FROM blocks WHERE parent_id = ? AND deleted = 0 ORDER BY order_key, id',
+      [lowerConfidence!.id],
+    )
+    expect(lowerConfidenceLines.map(line => line.content)).toEqual([
       '[[import-test-book]] -> type "import-test-book" (1 node); common props: roam:author 1/1 (100%)',
     ])
   })
@@ -816,6 +845,42 @@ describe('importRoam', () => {
     const aliasBlock = await readBlock(roamBlockId(WORKSPACE, 'aliasXY'))
     expect(aliasBlock?.parent_id).toBe(canonicalId)
     expect(aliasBlock?.content).toBe('page_alias::[[page y]]')
+  })
+
+  it('does not merge daily pages through page_alias properties', async () => {
+    const aliasExport: RoamExport = [
+      {
+        title: 'Sunday',
+        uid: 'sundayPage',
+        children: [
+          {string: 'page_alias::[[March 8th, 2020]]', uid: 'sundayAlias'},
+        ],
+      },
+      {
+        title: 'March 8th, 2020',
+        uid: '03-08-2020',
+        children: [
+          {string: 'daily child', uid: 'dailyChildForAlias'},
+        ],
+      },
+    ]
+
+    const summary = await importRoam(aliasExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.pagesCreated).toBe(1)
+    expect(summary.pagesDaily).toBe(1)
+    expect(summary.pagesMerged).toBe(0)
+    expect(summary.diagnostics.some(d =>
+      d.includes('Skipped 1 daily-shaped page_alias merge') &&
+      d.includes('[[Sunday]] -> [[March 8th, 2020]]'),
+    )).toBe(true)
+
+    const sunday = await readBlock(roamBlockId(WORKSPACE, 'sundayPage'))
+    expect(JSON.parse(sunday!.properties_json)[aliasesProp.name]).toEqual(['Sunday'])
+    expect(await readBlock(dailyNoteBlockId(WORKSPACE, '2020-03-08'))).not.toBeNull()
   })
 
   it('imports Roam SRS SM-2.5 markers as typed parent metadata', async () => {

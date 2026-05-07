@@ -1,7 +1,12 @@
 import { aliasesProp, typesProp } from '@/data/properties'
 import type { RoamImportPlan } from './plan'
 import { parseRoamImportReferences } from './references'
-import { ROAM_ISA_PROP, ROAM_PAGE_ALIAS_PROP } from './properties'
+import {
+  PAGE_TOKEN_RE,
+  ROAM_ISA_PROP,
+  ROAM_PAGE_ALIAS_PROP,
+  explodePageTokens,
+} from './properties'
 
 export interface RoamTypeCandidateProperty {
   name: string
@@ -14,6 +19,11 @@ export interface RoamTypeCandidate {
   typeId: string
   count: number
   commonProperties: RoamTypeCandidateProperty[]
+}
+
+export interface RoamTypeCandidateReportSection {
+  title: string
+  lines: string[]
 }
 
 interface TypeCandidateAccumulator {
@@ -31,7 +41,17 @@ const TYPE_CANDIDATE_EXCLUDED_PROPERTIES = new Set([
 ])
 
 const MAX_TYPE_CANDIDATES_IN_REPORT = 20
+const MAX_LOW_CONFIDENCE_TYPE_CANDIDATES_IN_REPORT = 10
 const MAX_COMMON_PROPS_IN_REPORT = 5
+
+const isPureTokenString = (value: string): boolean => {
+  if (explodePageTokens(value) !== null) return true
+  const trimmed = value.trim()
+  if (!trimmed.startsWith('[[') || !trimmed.endsWith(']]')) return false
+  PAGE_TOKEN_RE.lastIndex = 0
+  const match = PAGE_TOKEN_RE.exec(trimmed)
+  return match !== null && match.index === 0 && match[0].length === trimmed.length
+}
 
 const typeIdFromIsaAlias = (alias: string): string => {
   const slug = alias
@@ -63,11 +83,15 @@ const collectIsaAliases = (value: unknown): string[] => {
   const trimmed = value.trim()
   if (trimmed.length === 0) return []
 
-  const parsed = parseRoamImportReferences(trimmed).map(ref => ref.alias)
-  if (parsed.length > 0) return uniqueNonEmpty(parsed)
+  if (isPureTokenString(trimmed)) {
+    return uniqueNonEmpty(parseRoamImportReferences(trimmed).map(ref => ref.alias))
+  }
 
-  const unwrapped = /^\[\[(.+)\]\]$/.exec(trimmed)?.[1]?.trim()
-  return [unwrapped ?? trimmed]
+  // Plain-string `isa::person` is a legitimate Roam spelling and is
+  // imported as a semantic ref-list value. Mixed prose/SRS marker text
+  // that merely contains `[[...]]` is not a type declaration; letting
+  // those references through created bogus candidates like interval/factor.
+  return parseRoamImportReferences(trimmed).length === 0 ? [trimmed] : []
 }
 
 const reportablePropertyNames = (properties: Record<string, unknown>): string[] =>
@@ -140,24 +164,56 @@ export const collectTypeCandidates = (
     .sort((a, b) => b.count - a.count || a.alias.localeCompare(b.alias))
 }
 
-export const formatTypeCandidateReport = (
-  candidates: ReadonlyArray<RoamTypeCandidate>,
-): string[] => {
-  const lines = candidates.slice(0, MAX_TYPE_CANDIDATES_IN_REPORT).map(candidate => {
-    const nodeLabel = candidate.count === 1
-      ? '1 node'
-      : `${candidate.count} nodes`
-    const props = candidate.commonProperties.length > 0
-      ? candidate.commonProperties
-        .map(prop => `${prop.name} ${prop.count}/${candidate.count} (${prop.percent}%)`)
-        .join(', ')
-      : 'no recurring props'
-    return `[[${candidate.alias}]] -> type "${candidate.typeId}" (${nodeLabel}); common props: ${props}`
-  })
+const typeCandidateLine = (candidate: RoamTypeCandidate): string => {
+  const nodeLabel = candidate.count === 1
+    ? '1 node'
+    : `${candidate.count} nodes`
+  const props = candidate.commonProperties.length > 0
+    ? candidate.commonProperties
+      .map(prop => `${prop.name} ${prop.count}/${candidate.count} (${prop.percent}%)`)
+      .join(', ')
+    : 'no recurring props'
+  return `[[${candidate.alias}]] -> type "${candidate.typeId}" (${nodeLabel}); common props: ${props}`
+}
 
-  if (candidates.length > MAX_TYPE_CANDIDATES_IN_REPORT) {
-    lines.push(`${candidates.length - MAX_TYPE_CANDIDATES_IN_REPORT} more isa:: candidates omitted from this report.`)
+const highConfidenceTypeCandidate = (candidate: RoamTypeCandidate): boolean =>
+  candidate.count >= 2 && (candidate.count >= 5 || candidate.commonProperties.length > 0)
+
+const formatTypeCandidateLines = (
+  candidates: ReadonlyArray<RoamTypeCandidate>,
+  max: number,
+): string[] => {
+  const lines = candidates.slice(0, max).map(typeCandidateLine)
+
+  if (candidates.length > max) {
+    lines.push(`${candidates.length - max} more isa:: candidates omitted from this report section.`)
   }
 
   return lines
+}
+
+export const formatTypeCandidateReport = (
+  candidates: ReadonlyArray<RoamTypeCandidate>,
+): RoamTypeCandidateReportSection[] => {
+  const highConfidence = candidates.filter(highConfidenceTypeCandidate)
+  const lowerConfidence = candidates.filter(candidate => !highConfidenceTypeCandidate(candidate))
+  const sections: RoamTypeCandidateReportSection[] = []
+
+  if (highConfidence.length > 0) {
+    sections.push({
+      title: `High-confidence (${highConfidence.length})`,
+      lines: formatTypeCandidateLines(highConfidence, MAX_TYPE_CANDIDATES_IN_REPORT),
+    })
+  }
+  if (lowerConfidence.length > 0) {
+    sections.push({
+      title: `Lower-confidence / needs review (${lowerConfidence.length})`,
+      lines: formatTypeCandidateLines(
+        lowerConfidence,
+        MAX_LOW_CONFIDENCE_TYPE_CANDIDATES_IN_REPORT,
+      ),
+    })
+  }
+
+  return sections
 }

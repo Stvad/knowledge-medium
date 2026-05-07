@@ -232,10 +232,22 @@ export const propertiesFromRoam = (
   return out
 }
 
+const collectStandardPageAliasValues = (value: unknown): string[] => {
+  const values = Array.isArray(value) ? value : [value]
+  const out: string[] = []
+  for (const item of values) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (!trimmed) continue
+    const tokens = parseOuterPageTokens(trimmed)
+    if (!isPageTokenListValue(trimmed, tokens)) continue
+    out.push(...tokens.map(token => token.alias))
+  }
+  return out
+}
+
 export const collectPageAliases = (properties: Record<string, unknown>): string[] =>
-  uniqueStrings(collectAliasesFromPropertyValues({
-    [ROAM_PAGE_ALIAS_PROP]: properties[ROAM_PAGE_ALIAS_PROP],
-  }))
+  uniqueStrings(collectStandardPageAliasValues(properties[ROAM_PAGE_ALIAS_PROP]))
 
 export const nonStandardPageAliasValues = (
   properties: Record<string, unknown>,
