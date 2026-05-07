@@ -74,7 +74,7 @@ export interface ValuePresetConfigEditorProps<TConfig> {
   onChange: (next: TConfig) => void
 }
 
-export const definePreset = <TValue, TConfig>(
+export const definePreset = <TValue = unknown, TConfig = void>(
   preset: ValuePreset<TValue, TConfig>,
 ): ValuePreset<TValue, TConfig> => preset
 ```
@@ -469,13 +469,6 @@ export class UserSchemasService {
     }
   }
 
-  has(name: string): boolean {
-    // Used by AddPropertyForm's collision preflight. Reads the most
-    // recently emitted contribution list (kept on the service in the
-    // implementation; omitted from this sketch for brevity).
-    return this.contributions.some(s => s.name === name)
-  }
-
   appendUserSchema(schema: AnyPropertySchema): void {
     // Synchronous slot-update primitive used by addSchema (§7).
     this.contributions = [...this.contributions.filter(s => s.name !== schema.name), schema]
@@ -547,19 +540,48 @@ This drops the prior "user-data → adopt; kernel/plugin → refuse" distinction
 async addSchema(args: {
   name: string
   presetId: string
+  /** Caller-supplied config. Runs through preset.configCodec.decode
+   *  for validation; pass undefined to start from preset.defaultConfig. */
   config?: unknown
 }): Promise<AnyPropertySchema> {
   const presets = this.repo.read(valuePresetsFacet)
   const preset = presets.get(args.presetId)
   if (!preset) throw new Error(`[addSchema] no preset registered for id ${args.presetId}`)
 
+  // Run caller config through the same validation boundary the
+  // subscription uses (preset.configCodec.decode). Without this, the
+  // synchronous addSchema path would build from raw caller input while
+  // the later subscription-rebuilt schema goes through configCodec —
+  // two different codecs for the same "registered" schema until the
+  // tick. Use defaultConfig when caller didn't pass one (or when
+  // configCodec is absent for void presets).
+  let parsedConfig: unknown
+  if (preset.configCodec) {
+    const raw = args.config ?? preset.defaultConfig ?? {}
+    try {
+      parsedConfig = preset.configCodec.decode(raw)
+    } catch (err) {
+      throw new Error(`[addSchema] invalid config for preset "${args.presetId}": ${(err as Error).message}`)
+    }
+  } else {
+    parsedConfig = undefined  // void TConfig
+  }
+
   // Build the schema up-front so it's ready to register synchronously.
   const newSchema: AnyPropertySchema = {
     name: args.name,
-    codec: preset.build(args.config),
+    codec: preset.build(parsedConfig as never),
     defaultValue: preset.defaultValue,
     changeScope: ChangeScope.BlockDefault,
   }
+
+  // Persist the *re-encoded* parsed config — round-tripping through
+  // configCodec ensures the stored JSON normalizes to whatever shape
+  // the codec considers canonical, and that the subscription's later
+  // decode will reproduce parsedConfig exactly.
+  const persistConfig = preset.configCodec
+    ? preset.configCodec.encode(parsedConfig as never)
+    : {}
 
   const propertiesPageId = this.repo.propertiesPageId
   await this.repo.tx(async tx => {
@@ -569,15 +591,16 @@ async addSchema(args: {
         [typesProp.name]: typesProp.codec.encode(['property-schema']),
         [propertyNameProp.name]: propertyNameProp.codec.encode(args.name),
         [presetIdProp.name]: presetIdProp.codec.encode(args.presetId),
-        [presetConfigProp.name]: presetConfigProp.codec.encode(args.config ?? {}),
+        [presetConfigProp.name]: presetConfigProp.codec.encode(persistConfig),
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: `addSchema ${args.name}`})
 
   // Register the schema synchronously, before returning. The
   // subscription will fire later (the block write triggers it) but
-  // arrive at an idempotent state — same name, same preset, same
-  // config decoded back into the same codec.
+  // arrives at an idempotent state — same name, same preset, same
+  // configCodec.decode(persistConfig) === parsedConfig, same build
+  // output → structurally-equivalent schema.
   this.appendUserSchema(newSchema)
   return newSchema
 }
@@ -679,7 +702,7 @@ After this phase, the form lets users pick rich presets but still synthesizes in
 2. Workspace bootstrap creates the Properties page if it doesn't exist (deterministic id, idempotent).
 3. Register a `blockRenderersFacet` contribution for blocks of type `'property-schema'` per §4a — preset picker + dispatched `ConfigEditor`. Reuses the same `preset.ConfigEditor` component the AddPropertyForm renders inside `FieldConfigSheet`.
 4. Implement `UserSchemasService` with the `subscribeBlocks` subscription **and** the synchronous `appendUserSchema` slot-update path used by `addSchema` (per §7). (Requires [type-system.md §8](type-system.md)'s typed-query primitive — phase order this one after.)
-5. Wire `AddPropertyForm`'s submit path: collision preflight via `userSchemasService.has(name)` → either adopt existing schema or `await userSchemasService.addSchema(...)` and only then write the property's initial value.
+5. Wire `AddPropertyForm`'s submit path: collision preflight per §6 (read `repo.propertySchemas.get(name)` and `repo.propertyEditorOverrides.get(name)?.hidden` — covers kernel/plugin/type-lifted/user-data uniformly, refuses on `hidden: true`) → either adopt existing schema or `await userSchemasService.addSchema(...)` and only then write the property's initial value.
 6. Add name autocomplete to `AddPropertyForm` keyed off `repo.propertySchemas`.
 7. Tests: creating a schema via the form persists as a block, survives reload, fires the subscription, updates the merged map, makes the schema visible to `BlockProperties` synchronously after `addSchema` resolves (no race with subscription tick). Edit + delete of schema blocks reactively updates.
 
