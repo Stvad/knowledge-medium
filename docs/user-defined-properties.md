@@ -10,9 +10,9 @@ The first downstream consumer is the Roam importer: every imported `key:: value`
 
 Load-bearing pieces this design composes:
 
-- **`PropertySchema<T>`** ([src/data/api/propertySchema.ts:8](src/data/api/propertySchema.ts:8)) — name + codec + defaultValue + changeScope. The codec is the single source of truth for value semantics after the [db2a987](https://github.com/) refactor (`kind` removed; editor selection derives from codec via `propertyEditorFallbackFacet`).
+- **`PropertySchema<T>`** ([src/data/api/propertySchema.ts:8](src/data/api/propertySchema.ts:8)) — name + codec + defaultValue + changeScope. The codec is the single source of truth for value semantics after the [db2a987](https://github.com/) refactor (`kind` removed; editor selection derives from codec via `propertyEditorFallbackFacet`, which this design replaces with editor-on-preset — see §1-edit).
 - **`Codec<T>`** ([src/data/api/codecs.ts:9](src/data/api/codecs.ts:9)) — primitive encode/decode contract running at four boundary call sites. After this design lands, codec carries a single open-string `type: string` discriminator matching its preset id (see §1a — replaces both the closed `shape: CodecShape` enum and the ad-hoc `RefCodec.refKind` field).
-- **`propertySchemasFacet` / `propertyUiFacet` / `propertyEditorFallbackFacet`** ([src/data/facets.ts](src/data/facets.ts)) — facet-resolved registries; today read once at `setFacetRuntime` and merged per [type-system.md §1a](type-system.md) into `repo.propertySchemas`.
+- **`propertySchemasFacet` / `propertyUiFacet`** ([src/data/facets.ts](src/data/facets.ts)) — facet-resolved registries; today read once at `setFacetRuntime` and merged per [type-system.md §1a](type-system.md) into `repo.propertySchemas`. (`propertyEditorFallbackFacet` exists today but goes away under §1-edit — editor lookup folds into `valuePresetsFacet`.)
 - **`AddPropertyForm`** ([src/components/propertyPanel/AddPropertyForm.tsx](src/components/propertyPanel/AddPropertyForm.tsx)) — the panel's "add field" UI. Currently picks an `AddablePropertyShape` (subset of `CodecShape`, excludes `date` and refs) and synthesizes an in-memory `adhocSchema`.
 - **`adhocSchema` / `inferShapeFromValue`** ([src/components/propertyEditors/defaults.tsx:220](src/components/propertyEditors/defaults.tsx:220)) — the unknown-schema fallback path. Lossy by design: a stored ref looks like a string on read.
 - **`subscribeBlocks`** (deferred — [type-system.md §8](type-system.md)) — typed-query primitive backing reactive subscriptions on type-tagged blocks.
@@ -27,23 +27,37 @@ The codec refactor itself was the right move and stays. What's missing is the us
 
 ```ts
 // src/data/api/valuePresets.ts (new)
-export interface ValuePreset<TConfig = void> {
-  /** Stable id; persisted alongside user-defined schema rows. */
+export interface ValuePreset<TValue = unknown, TConfig = void> {
+  /** Stable id; matches the codec's `type` for codecs built by this
+   *  preset. Persisted on user-defined schema blocks. */
   readonly id: string
   /** Human label for the picker. */
   readonly label: string
-  /** Glyph for the property-row button and config sheet. */
-  readonly Glyph: ComponentType<{className?: string}>
   /** Build the codec from preset-specific config. Called at schema
    *  registration time and on runtime rebuild — must be deterministic
    *  in `config`. */
-  readonly build: (config: TConfig) => AnyCodec
+  readonly build: (config: TConfig) => Codec<TValue>
   /** Default value used when the schema is registered and the property
    *  is first materialised. Lives on the resulting `PropertySchema`. */
-  readonly defaultValue: unknown
+  readonly defaultValue: TValue
+  /** Editor used for any property whose codec's `type` matches this
+   *  preset's `id`. Required — every preset ships its own editor;
+   *  there's no separate fallback facet. Exact-name
+   *  `PropertyUiContribution.Editor` contributions still win first
+   *  (per [defaults.tsx:294](src/components/propertyEditors/defaults.tsx:294)). */
+  readonly Editor: PropertyEditor<TValue>
+  /** Optional glyph for the property-row button, config sheet, and
+   *  picker. Plugins without designed icons can omit; falls back to a
+   *  generic icon (or text-styled label). */
+  readonly Glyph?: ComponentType<{className?: string}>
   /** Optional config UI rendered inside `FieldConfigSheet`. Only
    *  presets with non-trivial config (refs, future enums) ship one. */
   readonly ConfigEditor?: ComponentType<ValuePresetConfigEditorProps<TConfig>>
+  /** Whether to surface this preset in `AddPropertyForm`'s picker.
+   *  Defaults to `true`. Set `false` for system-only presets that exist
+   *  purely to bind editors to codec types not meant to be user-pickable
+   *  (e.g. `'object'` — the unsafeIdentity catch-all). */
+  readonly pickable?: boolean
 }
 
 export interface ValuePresetConfigEditorProps<TConfig> {
@@ -51,37 +65,95 @@ export interface ValuePresetConfigEditorProps<TConfig> {
   onChange: (next: TConfig) => void
 }
 
-export const definePreset = <TConfig>(
-  preset: ValuePreset<TConfig>,
-): ValuePreset<TConfig> => preset
+export const definePreset = <TValue, TConfig>(
+  preset: ValuePreset<TValue, TConfig>,
+): ValuePreset<TValue, TConfig> => preset
 ```
 
 Kernel preset set, registered via a new `valuePresetsFacet`:
 
 ```ts
 const kernelValuePresets: readonly AnyValuePreset[] = [
-  definePreset({id: 'string',  label: 'Plain text', Glyph: TypeIcon,    build: () => codecs.string,             defaultValue: ''}),
-  definePreset({id: 'number',  label: 'Number',     Glyph: Hash,        build: () => codecs.number,             defaultValue: 0}),
-  definePreset({id: 'boolean', label: 'Checkbox',   Glyph: CheckSquare, build: () => codecs.boolean,            defaultValue: false}),
-  definePreset({id: 'list',    label: 'Options',    Glyph: List,        build: () => codecs.list(codecs.string), defaultValue: []}),
-  definePreset({id: 'date',    label: 'Date',       Glyph: Calendar,    build: () => codecs.date,               defaultValue: undefined}),
-  definePreset({id: 'url',     label: 'URL',        Glyph: LinkIcon,    build: () => urlCodec,                  defaultValue: ''}),
-  definePreset<RefCodecOptions>({
+  definePreset({id: 'string',  label: 'Plain text', Glyph: TypeIcon,    build: () => codecs.string,             defaultValue: '',         Editor: StringPropertyEditor}),
+  definePreset({id: 'number',  label: 'Number',     Glyph: Hash,        build: () => codecs.number,             defaultValue: 0,          Editor: NumberPropertyEditor}),
+  definePreset({id: 'boolean', label: 'Checkbox',   Glyph: CheckSquare, build: () => codecs.boolean,            defaultValue: false,      Editor: BooleanPropertyEditor}),
+  definePreset({id: 'list',    label: 'Options',    Glyph: List,        build: () => codecs.list(codecs.string), defaultValue: [],         Editor: ListPropertyEditor}),
+  definePreset({id: 'date',    label: 'Date',       Glyph: Calendar,    build: () => codecs.date,               defaultValue: undefined,  Editor: DatePropertyEditor}),
+  definePreset({id: 'url',     label: 'URL',        Glyph: LinkIcon,    build: () => urlCodec,                  defaultValue: '',         Editor: UrlPropertyEditor}),
+  definePreset<string, RefCodecOptions>({
     id: 'ref',     label: 'Reference',  Glyph: AtSign,
     build: cfg => codecs.ref(cfg),
     defaultValue: '',
+    Editor: RefPropertyEditor,
     ConfigEditor: RefTargetTypePicker,
   }),
-  definePreset<RefCodecOptions>({
+  definePreset<readonly string[], RefCodecOptions>({
     id: 'refList', label: 'References', Glyph: AtSignList,
     build: cfg => codecs.refList(cfg),
     defaultValue: [],
+    Editor: RefListPropertyEditor,
     ConfigEditor: RefTargetTypePicker,
   }),
+  // Internal-only — bound to the unsafeIdentity catch-all codec; not
+  // exposed in the AddPropertyForm picker.
+  definePreset({id: 'object', label: 'Object', build: () => codecs.unsafeIdentity('object'), defaultValue: {}, Editor: ObjectPropertyEditor, pickable: false}),
 ]
 ```
 
 Plugins contribute presets the same way — `valuePresetsFacet.of(preset, {source: 'plugin'})`. No imperative API.
+
+#### 1-edit. Editor lookup goes through the preset, not a fallback facet
+
+The pre-this-design `propertyEditorFallbackFacet` ([typesPropertyUi.ts:68](src/components/propertyEditors/typesPropertyUi.ts:68)) is a parallel registry of `(predicate, Editor, priority)` triples that the panel walks to find an editor matching a schema's codec. With every codec now carrying `type: string` and every preset carrying its own `Editor`, the predicate-and-priority machinery is redundant: the codec's `type` is exactly the preset's `id`, the preset's `Editor` is exactly the editor to use. **Drop `propertyEditorFallbackFacet` entirely.**
+
+`resolvePropertyDisplay` ([defaults.tsx:281](src/components/propertyEditors/defaults.tsx:281)) becomes:
+
+```ts
+export const resolvePropertyDisplay = (args: {
+  name: string
+  encodedValue: unknown
+  schemas: ReadonlyMap<string, AnyPropertySchema>
+  uis: ReadonlyMap<string, AnyPropertyUiContribution>
+  presets: ReadonlyMap<string, AnyValuePreset>
+}): PropertyDisplayInfo => {
+  const known = args.schemas.get(args.name)
+  if (known) {
+    const ui = args.uis.get(args.name)
+    const preset = args.presets.get(known.codec.type)
+    return {
+      schema: known,
+      type: known.codec.type,
+      // Exact-name UI contribution wins first (unchanged); preset's
+      // editor is the universal fallback for any registered schema.
+      Editor: ui?.Editor ?? preset?.Editor,
+      isKnown: true,
+    }
+  }
+  // Unknown-schema fallback: infer a primitive type from JSON, build
+  // an adhoc schema with that type, look up its preset's editor.
+  const type = inferTypeFromValue(args.encodedValue)
+  const schema = adhocSchema(args.name, type)
+  return {
+    schema,
+    type,
+    Editor: args.presets.get(type)?.Editor,
+    isKnown: false,
+  }
+}
+```
+
+Three properties this gives:
+
+- **Editor + codec + preset travel together.** Adding an `email` preset means shipping the codec factory, default, and editor as one unit in one facet contribution — not a preset *and* a separate fallback editor in a parallel facet.
+- **No priority concept.** Today's `priority: 100` for `kernel.ref` (so it beats `kernel.string` despite both technically matching a string-shaped ref codec) only existed because shape conflated storage primitive with semantic flavor. With open `type`, a codec has exactly one type and exactly one matching preset — no overlap, no ordering.
+- **Override path stays uniform.** A plugin overrides the kernel's `'ref'` editor by contributing a preset with the same `id`; `valuePresetsFacet`'s last-wins-on-source convention picks the plugin's. Same mechanism as kernel-vs-user-data resolution for schemas.
+
+Loss to flag: the predicate-based facet allowed weirder match shapes (e.g., "match any string-shaped codec including unrecognized plugin types"). Open `type` doesn't have a wildcard; an unknown plugin codec type with no registered preset has no editor. Two ways out:
+
+- **Conservative.** Accept that schemas whose codec type has no registered preset render via the unknown-schema fallback path (whose primitive type comes from JSON inference, not from `codec.type`). This is the same degraded path used for sync-race / plugin-not-loaded cases.
+- **Permissive.** A `pickable: false` "default" preset registered against a wildcard / known-primitive type list, picked when the codec type doesn't match any registered preset id. Ugly; not worth it.
+
+Conservative is the call — degraded fallback for un-presented codec types matches the rest of the design.
 
 #### 1a. Codec carries a single open `type` discriminator
 
@@ -127,13 +199,13 @@ export const isRefListCodec = (c: AnyCodec): c is RefListCodec => c.type === 're
 export const isUrlCodec     = (c: AnyCodec): c is Codec<string> => c.type === 'url'
 ```
 
-`propertyEditorFallbackFacet` matchers shift to `codec.type ===` checks; the existing predicate-based facet stays — predicates are now trivial. A new semantic codec only requires picking a `type` string + adding a fallback contribution.
+A new semantic codec is a `type` string plus a preset (carrying `Editor` and codec factory together; see §1-edit) plus optional `whereAllowedTypesFacet` opt-in.
 
 Three properties this gives:
 
-- **One vocabulary, three uses.** Preset id, codec type, and editor-fallback match key are all the same string. A `'ref'` preset's `build()` returns a codec with `type: 'ref'`; the `kernel.ref` fallback editor matches `codec.type === 'ref'`. No translation layer.
+- **One vocabulary, two uses.** Preset id and codec type are the same string. A `'ref'` preset's `build()` returns a codec with `type: 'ref'`; the panel looks up the preset by `codec.type` and uses its `Editor`. No predicate matching, no translation layer.
 - **The `where`-clause check becomes one read.** Today's [typedBlockQuery.ts:40](src/data/internals/typedBlockQuery.ts:40) is `SCALAR_WHERE_SHAPES.has(shape) && !isRefCodec && !isRefListCodec` — shape conflates JSON storage primitive with semantic flavor, so refs (string-shaped but semantically reference) need a special-case exclusion. With open `type`, ref is its own value, naturally excluded by curation: `WHERE_ALLOWED_TYPES = new Set(['string', 'number', 'boolean', 'date', 'url'])` and the check is just `!WHERE_ALLOWED_TYPES.has(codec.type)`. Refs → `referencedBy` (indexed via `block_references`), not where-clause; lists/objects → JSON-text `=`-comparison is unreliable; both excluded by not being in the kernel-curated set. The set is itself a facet (`whereAllowedTypesFacet`) so plugin codecs can opt in.
-- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, adds a fallback editor matching `codec.type === 'email'`, contributes `'email'` to `whereAllowedTypesFacet` if it should be query-able. No new ad-hoc fields per codec subtype.
+- **Plugin-defined codecs participate without core changes.** A plugin shipping an `email` preset picks `type: 'email'`, registers `(codec factory, Editor, defaultValue, glyph?, configEditor?)` in one preset contribution, and contributes `'email'` to `whereAllowedTypesFacet` if it should be query-able. No new ad-hoc fields per codec subtype, no parallel fallback-facet registration.
 
 What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. Today's only data-layer consumer of that information is the where-clause check, which becomes the kernel-curated allowed-set. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
 
@@ -405,7 +477,9 @@ No user-visible change yet. This is pure infrastructure.
 
 1. Add `ValuePreset` type and `valuePresetsFacet` ([src/data/api/valuePresets.ts](src/data/api/valuePresets.ts) new).
 2. Register kernel presets (string, number, boolean, list, date, url, ref, refList).
-3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Drop the `CodecShape` type and `isStringCodec` / `isListCodec` / etc. shape-keyed predicates; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check against a `whereAllowedTypesFacet`-resolved kernel set instead of `SCALAR_WHERE_SHAPES` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case. Add `urlCodec` with `type: 'url'` and a `kernel.url` fallback editor matching `codec.type === 'url'` above `kernel.string`.
+3. Replace `Codec.shape: CodecShape` and `RefCodec.refKind` with a single open-string `Codec.type` on every codec (per §1a). Drop the `CodecShape` type and `isStringCodec` / `isListCodec` / etc. shape-keyed predicates; replace `RefCodec` predicates with `c.type === 'ref'`. Update [typedBlockQuery.ts](src/data/internals/typedBlockQuery.ts) to check against a `whereAllowedTypesFacet`-resolved kernel set instead of `SCALAR_WHERE_SHAPES` plus ref special-case. Update UI display sites (`propertyShapeLabel`, `PropertyShapeGlyph`, `inferShapeFromValue`) to switch on `type` with a default case.
+4. Drop `propertyEditorFallbackFacet` (per §1-edit). Move every editor onto its preset's `Editor` field. Update `resolvePropertyDisplay` to look up `valuePresets.get(codec.type)?.Editor` for the fallback editor; `PropertyUiContribution.Editor` exact-name path stays unchanged.
+5. Add `urlCodec` with `type: 'url'` and a `'url'` preset wrapping `(urlCodec, UrlPropertyEditor, '', LinkIcon)`.
 4. Replace `AddablePropertyShape` in `AddPropertyForm` and `FieldConfigSheet` with preset selection. Form's default preset is `ref`.
 5. Extend `FieldConfigSheet` to render a preset's optional `ConfigEditor`.
 6. Tests: preset list resolves, configEditor renders for ref, glyph + label propagate.
