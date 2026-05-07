@@ -11,7 +11,7 @@ import { useChildIds, useHandle } from '@/hooks/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
-import { propertyEditorFallbackFacet, propertyEditorOverridesFacet, typesFacet } from '../data/facets.ts'
+import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
 import {
   editorSelection,
   requestEditorFocus,
@@ -34,7 +34,7 @@ import { FieldConfigSheet, type FieldConfig } from './propertyPanel/FieldConfigS
 import {
   ADDABLE_PROPERTY_SHAPES,
   isAddablePropertyShape,
-} from './propertyPanel/shapes'
+} from './propertyPanel/shapes.ts'
 import {
   buildPropertyPanelModel,
   type PropertyPanelModel,
@@ -100,7 +100,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   // across renders for the same runtime.
   const schemas = usePropertySchemas()
   const uis = runtime.read(propertyEditorOverridesFacet)
-  const editorFallbacks = runtime.read(propertyEditorFallbackFacet)
+  const presets = runtime.read(valuePresetsFacet)
   const typesRegistry = runtime.read(typesFacet)
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
@@ -113,11 +113,11 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       properties,
       schemas,
       uis,
-      editorFallbacks,
+      presets,
       typesRegistry,
     })
     : null,
-  [blockData, editorFallbacks, properties, schemas, typesRegistry, uis])
+  [blockData, presets, properties, schemas, typesRegistry, uis])
 
   const activeConfigRow = useMemo(() => {
     if (!model || !activeConfigRowName) return null

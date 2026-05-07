@@ -1,7 +1,8 @@
 import {
-  type AnyPropertyEditorFallbackContribution,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
+  type AnyValuePreset,
+  type PropertyEditor,
   type TypeContribution,
 } from '@/data/api'
 import { getBlockTypes, typesProp } from '@/data/properties.ts'
@@ -31,7 +32,8 @@ export interface PropertyPanelModelRow {
   readonly schemaUnknown: boolean
   readonly decodeFailed: boolean
   readonly value: unknown
-  readonly Editor?: AnyPropertyEditorFallbackContribution['Editor']
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  readonly Editor?: PropertyEditor<any>
   readonly canRename: boolean
   readonly canDelete: boolean
   readonly canChangeShape: boolean
@@ -98,7 +100,7 @@ const resolveModelRow = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-    editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
+    presets: ReadonlyMap<string, AnyValuePreset>
     hidden: boolean
   },
 ): PropertyPanelModelRow | null => {
@@ -107,7 +109,7 @@ const resolveModelRow = (
     encodedValue: row.isSet ? row.encodedValue : undefined,
     schemas: args.schemas,
     uis: args.uis,
-    editorFallbacks: args.editorFallbacks,
+    presets: args.presets,
   })
 
   if (!row.isSet && !display.isKnown) return null
@@ -144,7 +146,7 @@ const resolveSection = (
   args: {
     schemas: ReadonlyMap<string, AnyPropertySchema>
     uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-    editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
+    presets: ReadonlyMap<string, AnyValuePreset>
     hidden: boolean
   },
 ): PropertyPanelModelSection | null => {
@@ -169,7 +171,7 @@ export const buildPropertyPanelModel = (args: {
   properties: Record<string, unknown>
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
+  presets: ReadonlyMap<string, AnyValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
 }): PropertyPanelModel => {
   const blockTypes = readBlockTypes(args.properties)
@@ -194,7 +196,7 @@ export const buildPropertyPanelModel = (args: {
     .map(section => resolveSection(section, {
       schemas: args.schemas,
       uis: args.uis,
-      editorFallbacks: args.editorFallbacks,
+      presets: args.presets,
       hidden: false,
     }))
     .filter((section): section is PropertyPanelModelSection => section !== null)
@@ -210,7 +212,7 @@ export const buildPropertyPanelModel = (args: {
   }, {
     schemas: args.schemas,
     uis: args.uis,
-    editorFallbacks: args.editorFallbacks,
+    presets: args.presets,
     hidden: true,
   }) ?? {...HIDDEN_SECTION, rows: []}
 

@@ -57,18 +57,6 @@ export interface PropertyEditorProps<T> {
 
 export type PropertyEditor<T> = (props: PropertyEditorProps<T>) => JSX.Element
 
-/** Fallback editor contribution selected by inspecting a registered schema.
- *  Exact `PropertyEditorOverride.Editor`s win first; these are for shape
- *  or codec-metadata editors such as booleans, references, and reference
- *  lists. */
-export interface PropertyEditorFallbackContribution {
-  readonly id: string
-  readonly priority?: number
-  readonly matches: (schema: AnyPropertySchema) => boolean
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  readonly Editor: PropertyEditor<any>
-}
-
 /** Plugin-augmentable type registry for property schemas — mirrors
  *  `MutatorRegistry` and `QueryRegistry`. Static plugins augment via
  *  `declare module '@/data/api'`; dynamic plugins use string-keyed access. */
@@ -109,5 +97,3 @@ export type AnyPropertySchema = PropertySchema<any>
  *  `any`-escape pattern. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnyPropertyEditorOverride = PropertyEditorOverride<any>
-
-export type AnyPropertyEditorFallbackContribution = PropertyEditorFallbackContribution

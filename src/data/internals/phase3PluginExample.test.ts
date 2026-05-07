@@ -44,12 +44,13 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
-  propertyEditorFallbackFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
+  valuePresetsFacet,
 } from '../facets'
 import { DatePropertyEditor, resolvePropertyDisplay } from '@/components/propertyEditors/defaults'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { Repo } from '../repo'
 
 // ──── §12.1 plugin contributions ────
@@ -184,19 +185,24 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
   })
 
   it('propertyEditorOverridesFacet exposes the plugin override and resolvePropertyDisplay returns it', () => {
-    const runtime = resolveFacetRuntimeSync([kernelDataExtension, kernelPropertyUiExtension, ...tasksPluginExtension])
+    const runtime = resolveFacetRuntimeSync([
+      kernelDataExtension,
+      kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
+      ...tasksPluginExtension,
+    ])
     const schemas = runtime.read(propertySchemasFacet)
     const uis = runtime.read(propertyEditorOverridesFacet)
     expect(uis.get('tasks:due-date')).toBe(dueDateUi)
 
-    // §5.6.1 lookup chain: resolves to the override Editor (not a default).
+    // Per-name override beats the codec-type-keyed preset fallback.
     const display = resolvePropertyDisplay({
       name: 'tasks:due-date',
       // Encoded shape — date codec stores ISO strings.
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas,
       uis,
-      editorFallbacks: runtime.read(propertyEditorFallbackFacet),
+      presets: runtime.read(valuePresetsFacet),
     })
     expect(display.isKnown).toBe(true)
     expect(display.shape).toBe('date')
@@ -204,12 +210,14 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
     expect(display.schema).toBe(dueDateProp)
   })
 
-  it('plugin ships schema without UI contribution → resolver falls through to fallback editor', () => {
-    // §12.1 explicitly notes: a plugin happy with the kernel default
-    // editor for its codec shape can skip propertyEditorOverridesFacet.of.
+  it('plugin ships schema without UI contribution → resolver falls through to preset editor', () => {
+    // A plugin happy with the kernel default editor for its codec type
+    // can skip propertyEditorOverridesFacet.of — the preset's Editor
+    // is used.
     const runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
       mutatorsFacet.of(setDueDate, {source: 'tasks'}),
       propertySchemasFacet.of(dueDateProp, {source: 'tasks'}),
       // no propertyEditorOverridesFacet.of(dueDateUi)
@@ -219,7 +227,7 @@ describe('§12.1 plugin example — typed mutator + schema + UI', () => {
       encodedValue: '2026-06-01T00:00:00.000Z',
       schemas: runtime.read(propertySchemasFacet),
       uis: runtime.read(propertyEditorOverridesFacet),
-      editorFallbacks: runtime.read(propertyEditorFallbackFacet),
+      presets: runtime.read(valuePresetsFacet),
     })
     expect(display.isKnown).toBe(true)
     expect(display.shape).toBe('date')

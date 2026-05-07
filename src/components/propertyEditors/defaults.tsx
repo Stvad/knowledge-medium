@@ -16,9 +16,10 @@ import { Plus, X } from 'lucide-react'
 import {
   ChangeScope,
   codecs,
-  type AnyPropertyEditorFallbackContribution,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
+  type AnyValuePreset,
+  type PropertyEditor,
   type PropertyEditorProps,
   type PropertySchema,
 } from '@/data/api'
@@ -264,69 +265,62 @@ export const adhocSchema = (name: string, type: string): PropertySchema<unknown>
 })
 
 /** Result of resolving a property's display: which schema (registered
- *  or ad-hoc), which primitive shape, and which UI Editor to render with. The
- *  `isKnown` flag drives the "schema not registered" UI hint per
- *  §5.6.1.
+ *  or ad-hoc), which codec type, and which UI Editor to render with.
+ *  The `isKnown` flag drives the "schema not registered" UI hint.
  *
- *  Schema/Editor types use the variance-erased `Any*` aliases so
- *  contributions typed as `PropertySchema<Date | undefined>` etc. can
- *  flow through the registry without widening to `<unknown>` (which
- *  would fail under `strictFunctionTypes` for the same reason
- *  `AnyMutator` exists). */
+ *  Editor lookup goes through the matching ValuePreset by codec type
+ *  (per user-defined-properties.md §1-edit), with per-name overrides
+ *  winning first. */
 export interface PropertyDisplayInfo {
   schema: AnyPropertySchema
   /** Codec type (open string). */
   shape: string
-  /** Editor selected by the resolver. Usually this comes from the
-   *  schema/codec fallback chain; a registered
-   *  `PropertyEditorOverride.Editor` wins when present. Undefined means
-   *  no fallback contribution was registered for the schema. */
-  Editor?: AnyPropertyEditorFallbackContribution['Editor']
+  /** Editor selected by the resolver. Comes from the per-name
+   *  `PropertyEditorOverride.Editor` if present, else the matching
+   *  `ValuePreset.Editor`. Undefined when no preset is registered for
+   *  the codec type — the unknown-schema fallback path renders nothing. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  Editor?: PropertyEditor<any>
   /** True iff a real `PropertySchema` was found in the registry; false
    *  when we synthesised an ad-hoc schema from `inferShapeFromValue`. */
   isKnown: boolean
 }
 
-const fallbackEditorForSchema = (
-  schema: AnyPropertySchema,
-  fallbacks: readonly AnyPropertyEditorFallbackContribution[],
-): AnyPropertyEditorFallbackContribution['Editor'] | undefined =>
-  fallbacks.find(fallback => fallback.matches(schema))?.Editor
-
-/** Implements the §5.6.1 lookup chain:
+/** Resolution chain (per user-defined-properties §1-edit):
  *
- *    1. Look up the schema in `propertySchemasFacet`'s registry by `name`.
- *    2. Look up any per-name override in `propertyEditorOverridesFacet`.
+ *    1. Look up the schema in `repo.propertySchemas` by `name`.
+ *    2. Look up any per-name override in `repo.propertyEditorOverrides`.
  *    3. If schema is known → use the override `Editor` if any, else
- *       any matching fallback editor contribution.
- *    4. If schema is unknown → infer a shape from the JSON value, build
- *       an ad-hoc schema, and run the same fallback editor chain.
- *
- *  Returns enough information for the caller to render and to wire
- *  `block.set` via `schema` (codec encodes to storage). */
+ *       the `ValuePreset.Editor` matching `codec.type`.
+ *    4. If schema is unknown → infer a primitive type from the JSON
+ *       value, build an ad-hoc schema, and use the matching preset's
+ *       editor (or fall through to undefined if no preset matches).
+ */
 export const resolvePropertyDisplay = (args: {
   name: string
   encodedValue: unknown
   schemas: ReadonlyMap<string, AnyPropertySchema>
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
-  editorFallbacks: readonly AnyPropertyEditorFallbackContribution[]
+  presets: ReadonlyMap<string, AnyValuePreset>
 }): PropertyDisplayInfo => {
   const known = args.schemas.get(args.name)
   if (known) {
     const ui = args.uis.get(args.name)
+    const preset = args.presets.get(known.codec.type)
     return {
       schema: known,
       shape: known.codec.type,
-      Editor: ui?.Editor ?? fallbackEditorForSchema(known, args.editorFallbacks),
+      Editor: ui?.Editor ?? preset?.Editor,
       isKnown: true,
     }
   }
   const shape = inferShapeFromValue(args.encodedValue)
   const schema = adhocSchema(args.name, shape)
+  const preset = args.presets.get(schema.codec.type)
   return {
     schema,
     shape,
-    Editor: fallbackEditorForSchema(schema, args.editorFallbacks),
+    Editor: preset?.Editor,
     isKnown: false,
   }
 }

@@ -20,6 +20,7 @@ import { BlockProperties } from './BlockProperties'
 import { adhocSchema } from './propertyEditors/defaults'
 import { requestPropertyCreate } from '@/utils/propertyNavigation'
 import { kernelPropertyUiExtension } from './propertyEditors/typesPropertyUi'
+import { kernelValuePresetsExtension } from './propertyEditors/kernelValuePresets'
 import type { Block } from '@/data/block'
 import { aliasesProp, showPropertiesProp } from '@/data/properties'
 import { useContent } from '@/hooks/block'
@@ -109,6 +110,7 @@ describe('BlockProperties component', () => {
     runtime = resolveFacetRuntimeSync([
       kernelDataExtension,
       kernelPropertyUiExtension,
+      kernelValuePresetsExtension,
       blockRenderersFacet.of({id: 'default', renderer: TestBlockRenderer}, {source: 'test'}),
       typesFacet.of(reviewType, {source: 'test'}),
       typesFacet.of(assignmentType, {source: 'test'}),

@@ -1,10 +1,12 @@
 // @vitest-environment node
 /**
- * Pure-function tests for the §5.6.1 lookup chain. Cover the three
- * paths that drive `BlockProperties`'s rendering decision:
+ * Pure-function tests for the property-display lookup chain. Cover the
+ * three paths that drive `BlockProperties`'s rendering decision:
  *   1. Schema known + per-name editor override → use the override.
- *   2. Schema known + no override → fall back via schema/codec match.
- *   3. Schema unknown → infer shape from the value, ad-hoc schema, fallback match.
+ *   2. Schema known + no override → use the matching ValuePreset.Editor
+ *      (keyed by codec.type).
+ *   3. Schema unknown → infer a primitive type from the value, build an
+ *      ad-hoc schema, use the matching preset's editor.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -12,13 +14,13 @@ import { createElement, type JSX } from 'react'
 import {
   ChangeScope,
   codecs,
+  definePreset,
   defineProperty,
   definePropertyEditorOverride,
-  isRefCodec,
-  isRefListCodec,
-  type AnyPropertyEditorFallbackContribution,
   type AnyPropertyEditorOverride,
   type AnyPropertySchema,
+  type AnyValuePreset,
+  type PropertyEditor,
 } from '@/data/api'
 import {
   adhocSchema,
@@ -37,45 +39,57 @@ const schemasMap = (entries: AnyPropertySchema[]): ReadonlyMap<string, AnyProper
 const uisMap = (entries: AnyPropertyEditorOverride[]): ReadonlyMap<string, AnyPropertyEditorOverride> =>
   new Map(entries.map(u => [u.name, u]))
 
+const presetsMap = (entries: readonly AnyValuePreset[]): ReadonlyMap<string, AnyValuePreset> =>
+  new Map(entries.map(p => [p.id, p]))
+
 /** Test-only Editor that returns a real fragment element so it satisfies
  *  `PropertyEditor<T>`'s `JSX.Element` return contract. */
 const noopEditor = (): JSX.Element => createElement('span', null, null)
 
-const editorFallbacks: readonly AnyPropertyEditorFallbackContribution[] = [
-  {
-    id: 'test.ref',
-    priority: 100,
-    matches: schema => isRefCodec(schema.codec),
-    Editor: RefPropertyEditor,
-  },
-  {
-    id: 'test.refList',
-    priority: 100,
-    matches: schema => isRefListCodec(schema.codec),
-    Editor: RefListPropertyEditor,
-  },
-  {
-    id: 'test.list',
-    priority: 0,
-    matches: schema => schema.codec.type === 'list',
-    Editor: ListPropertyEditor,
-  },
-  {
-    id: 'test.number',
-    priority: 0,
-    matches: schema => schema.codec.type === 'number',
-    Editor: NumberPropertyEditor,
-  },
-  {
-    id: 'test.string',
-    priority: 0,
-    matches: schema => schema.codec.type === 'string',
-    Editor: StringPropertyEditor,
-  },
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const asEditor = <T>(editor: PropertyEditor<any>): PropertyEditor<T> =>
+  editor as unknown as PropertyEditor<T>
+
+const presets: readonly AnyValuePreset[] = [
+  definePreset<string>({
+    id: 'string',
+    label: 'Plain text',
+    build: () => codecs.string,
+    defaultValue: '',
+    Editor: asEditor<string>(StringPropertyEditor),
+  }),
+  definePreset<number>({
+    id: 'number',
+    label: 'Number',
+    build: () => codecs.number,
+    defaultValue: 0,
+    Editor: asEditor<number>(NumberPropertyEditor),
+  }),
+  definePreset<unknown[]>({
+    id: 'list',
+    label: 'Options',
+    build: () => codecs.list(codecs.unsafeIdentity()),
+    defaultValue: [],
+    Editor: asEditor<unknown[]>(ListPropertyEditor),
+  }),
+  definePreset<string>({
+    id: 'ref',
+    label: 'Reference',
+    build: () => codecs.ref(),
+    defaultValue: '',
+    Editor: asEditor<string>(RefPropertyEditor),
+  }),
+  definePreset<readonly string[]>({
+    id: 'refList',
+    label: 'References',
+    build: () => codecs.refList(),
+    defaultValue: [],
+    Editor: asEditor<readonly string[]>(RefListPropertyEditor),
+  }),
 ]
 
 describe('inferShapeFromValue', () => {
-  it('returns the right shape for each JSON shape', () => {
+  it('returns the right type for each JSON shape', () => {
     expect(inferShapeFromValue('hi')).toBe('string')
     expect(inferShapeFromValue(42)).toBe('number')
     expect(inferShapeFromValue(true)).toBe('boolean')
@@ -89,7 +103,7 @@ describe('inferShapeFromValue', () => {
 })
 
 describe('defaultValueForShape', () => {
-  it('returns the right starting value per shape', () => {
+  it('returns the right starting value per type', () => {
     expect(defaultValueForShape('string')).toBe('')
     expect(defaultValueForShape('number')).toBe(0)
     expect(defaultValueForShape('boolean')).toBe(false)
@@ -100,7 +114,7 @@ describe('defaultValueForShape', () => {
 })
 
 describe('adhocSchema', () => {
-  it('builds a PropertySchema with the requested shape and BlockDefault scope', () => {
+  it('builds a PropertySchema with the requested type and BlockDefault scope', () => {
     const schema = adhocSchema('rogue', 'number')
     expect(schema.name).toBe('rogue')
     expect(schema.codec.type).toBe('number')
@@ -118,7 +132,7 @@ describe('adhocSchema', () => {
   })
 })
 
-describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
+describe('resolvePropertyDisplay (preset-driven lookup chain)', () => {
   const titleSchema = defineProperty<string>('title', {
     codec: codecs.string,
     defaultValue: '',
@@ -138,7 +152,7 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
       uis: uisMap([titleUi]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(true)
     expect(display.schema).toBe(titleSchema)
@@ -146,20 +160,20 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     expect(display.Editor).toBe(exactEditor)
   })
 
-  it('schema known + no editor override → uses the matching fallback editor', () => {
+  it('schema known + no editor override → uses the matching preset editor', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
       uis: uisMap([]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(true)
     expect(display.schema).toBe(titleSchema)
     expect(display.Editor).toBe(StringPropertyEditor)
   })
 
-  it('schema known + ref codec → uses the higher-priority ref editor fallback', () => {
+  it('schema known + ref codec → uses the ref preset editor', () => {
     const refSchema = defineProperty<string>('reviewer', {
       codec: codecs.ref(),
       defaultValue: '',
@@ -170,13 +184,13 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       encodedValue: 'target-1',
       schemas: schemasMap([refSchema]),
       uis: uisMap([]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.shape).toBe('ref')
     expect(display.Editor).toBe(RefPropertyEditor)
   })
 
-  it('schema known + refList codec → uses the higher-priority ref-list editor fallback', () => {
+  it('schema known + refList codec → uses the refList preset editor', () => {
     const refListSchema = defineProperty<readonly string[]>('related', {
       codec: codecs.refList(),
       defaultValue: [],
@@ -187,19 +201,19 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       encodedValue: ['target-1'],
       schemas: schemasMap([refListSchema]),
       uis: uisMap([]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.shape).toBe('refList')
     expect(display.Editor).toBe(RefListPropertyEditor)
   })
 
-  it('schema unknown → infers shape from value, returns an ad-hoc schema, uses fallback editor', () => {
+  it('schema unknown → infers type from value, builds ad-hoc schema, uses preset editor', () => {
     const display = resolvePropertyDisplay({
       name: 'newish-prop',
       encodedValue: [1, 2, 3],
       schemas: schemasMap([]),
       uis: uisMap([]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(false)
     expect(display.schema.name).toBe('newish-prop')
@@ -208,17 +222,17 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
     expect(display.Editor).toBe(ListPropertyEditor)
   })
 
-  it('schema unknown + editor override registered → ignores orphan override and uses fallback', () => {
+  it('schema unknown + editor override registered → ignores orphan override and uses preset', () => {
     // An override without a matching schema is ignored — the
     // facet join key is the schema name. Only-override registrations
     // from an inattentive plugin author shouldn't accidentally apply to
-    // every unknown property; the panel infers + uses fallback editors.
+    // every unknown property; the panel infers + uses preset editors.
     const display = resolvePropertyDisplay({
       name: 'orphan-prop',
       encodedValue: 'x',
       schemas: schemasMap([]),
       uis: uisMap([titleUi]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.isKnown).toBe(false)
     expect(display.Editor).toBe(StringPropertyEditor)
@@ -235,20 +249,20 @@ describe('resolvePropertyDisplay (§5.6.1 lookup chain)', () => {
       encodedValue: 7,
       schemas: schemasMap([titleSchema, otherSchema]),
       uis: uisMap([titleUi]),
-      editorFallbacks,
+      presets: presetsMap(presets),
     })
     expect(display.schema).toBe(otherSchema)
     expect(display.shape).toBe('number')
     expect(display.Editor).toBe(NumberPropertyEditor)
   })
 
-  it('returns undefined Editor when no override or fallback contribution matches', () => {
+  it('returns undefined Editor when no override or preset matches', () => {
     const display = resolvePropertyDisplay({
       name: 'title',
       encodedValue: 'Hello',
       schemas: schemasMap([titleSchema]),
       uis: uisMap([]),
-      editorFallbacks: [],
+      presets: presetsMap([]),
     })
     expect(display.Editor).toBeUndefined()
   })

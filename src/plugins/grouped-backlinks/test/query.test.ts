@@ -8,10 +8,10 @@ import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.t
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import {
   invalidationRulesFacet,
-  propertyEditorFallbackFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
+  valuePresetsFacet,
 } from '@/data/facets.ts'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.ts'
@@ -116,7 +116,7 @@ describe('groupedBacklinksDataExtension query', () => {
       encodedValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
       schemas,
       uis,
-      editorFallbacks: runtime.read(propertyEditorFallbackFacet),
+      presets: runtime.read(valuePresetsFacet),
     }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
   })
 

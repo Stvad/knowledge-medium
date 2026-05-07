@@ -22,6 +22,7 @@ import {
   codecs,
   defineBlockType,
   defineMutator,
+  definePreset,
   defineProperty,
   definePropertyEditorOverride,
   defineQuery,
@@ -32,11 +33,11 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '../kernelDataExtension'
 import {
   mutatorsFacet,
-  propertyEditorFallbackFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
   typesFacet,
+  valuePresetsFacet,
 } from '../facets'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
@@ -294,28 +295,28 @@ describe('typesFacet + schema lift', () => {
   })
 })
 
-describe('propertyEditorFallbackFacet', () => {
-  it('orders fallback editors by descending priority', () => {
-    const low = {
-      id: 'test.low',
-      priority: 0,
-      matches: () => true,
-      Editor: (): JSX.Element => createElement('span', null, null),
-    }
-    const high = {
-      id: 'test.high',
-      priority: 100,
-      matches: () => true,
-      Editor: (): JSX.Element => createElement('span', null, null),
-    }
-
+describe('valuePresetsFacet', () => {
+  it('keys presets by id and last-wins on collision', () => {
+    const Editor = (): JSX.Element => createElement('span', null, null)
+    const first = definePreset<string>({
+      id: 'string',
+      label: 'First',
+      build: () => codecs.string,
+      defaultValue: '',
+      Editor,
+    })
+    const second = definePreset<string>({
+      id: 'string',
+      label: 'Second',
+      build: () => codecs.string,
+      defaultValue: '',
+      Editor,
+    })
     const runtime = resolveFacetRuntimeSync([
-      propertyEditorFallbackFacet.of(low, {source: 'test'}),
-      propertyEditorFallbackFacet.of(high, {source: 'test'}),
+      valuePresetsFacet.of(first, {source: 'test'}),
+      valuePresetsFacet.of(second, {source: 'test'}),
     ])
-
-    expect(runtime.read(propertyEditorFallbackFacet).map(fallback => fallback.id))
-      .toEqual(['test.high', 'test.low'])
+    expect(runtime.read(valuePresetsFacet).get('string')?.label).toBe('Second')
   })
 })
 

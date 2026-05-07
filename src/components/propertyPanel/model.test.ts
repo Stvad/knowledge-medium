@@ -46,7 +46,7 @@ describe('buildPropertyPanelModel', () => {
           hidden: true,
         }),
       ]),
-      editorFallbacks: [],
+      presets: new Map(),
       typesRegistry: new Map(),
     })
 
@@ -92,7 +92,7 @@ describe('buildPropertyPanelModel', () => {
       },
       schemas: schemasMap([uiStateProp, systemProp]),
       uis: uisMap([]),
-      editorFallbacks: [],
+      presets: new Map(),
       typesRegistry: new Map(),
     })
 
