@@ -12,7 +12,7 @@ import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
-  normalizeRefListPropertyValues,
+  normalizeRefPropertyValues,
 } from '../schemaReconciliation'
 
 const WS = 'ws-roam'
@@ -118,6 +118,24 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:notes', presetId: 'string'}])
   })
 
+  it('classifies pure plain-string arrays as the list preset', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:highlights': ['first', 'second']}),
+      block('b', {'roam:highlights': ['third']}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:highlights', presetId: 'list'}])
+  })
+
+  it('mixed page-token and plain-string arrays fall back to string', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:mixed': ['[[A]]', '[[B]]']}),    // page-token array
+      block('b', {'roam:mixed': ['plain', 'words']}),    // plain-string array
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:mixed', presetId: 'string'}])
+  })
+
   it('skips names already registered (kernel/plugin/user-data)', () => {
     const blocks: BlockData[] = [
       block('a', {types: ['page']}),  // kernel-registered
@@ -170,8 +188,8 @@ describe('applySchemaReconciliation', () => {
   })
 })
 
-describe('normalizeRefListPropertyValues', () => {
-  it('replaces page-token strings with id arrays via aliasIdMap', () => {
+describe('normalizeRefPropertyValues', () => {
+  it('refList: replaces page-token strings with id arrays via aliasIdMap', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:topics': '[[A]] [[B]]'}),
       block('b', {'roam:topics': '[[C]]'}),
@@ -181,30 +199,71 @@ describe('normalizeRefListPropertyValues', () => {
       ['A', 'id-a'], ['B', 'id-b'], ['C', 'id-c'], ['D', 'id-d'], ['E', 'id-e'],
     ])
     const diagnostics: string[] = []
-    normalizeRefListPropertyValues(blocks, new Set(['roam:topics']), aliasIdMap, diagnostics)
+    normalizeRefPropertyValues(blocks, new Map([['roam:topics', 'refList']]), aliasIdMap, diagnostics)
     expect(blocks[0].properties['roam:topics']).toEqual(['id-a', 'id-b'])
     expect(blocks[1].properties['roam:topics']).toEqual(['id-c'])
     expect(blocks[2].properties['roam:topics']).toEqual(['id-d', 'id-e'])
     expect(diagnostics).toEqual([])
   })
 
-  it('reports unresolved aliases as diagnostics and drops them from the value', () => {
+  it('refList: reports unresolved aliases as diagnostics and drops them from the value', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:topics': '[[Known]] [[Missing]]'}),
     ]
     const aliasIdMap = new Map([['Known', 'id-known']])
     const diagnostics: string[] = []
-    normalizeRefListPropertyValues(blocks, new Set(['roam:topics']), aliasIdMap, diagnostics)
+    normalizeRefPropertyValues(blocks, new Map([['roam:topics', 'refList']]), aliasIdMap, diagnostics)
     expect(blocks[0].properties['roam:topics']).toEqual(['id-known'])
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]).toMatch(/unresolved aliases: Missing/)
+  })
+
+  it('ref: writes a single resolved id (string), not an array', () => {
+    const blocks: BlockData[] = [
+      block('a', {assignee: '[[Alice]]'}),
+    ]
+    const diagnostics: string[] = []
+    normalizeRefPropertyValues(
+      blocks,
+      new Map([['assignee', 'ref']]),
+      new Map([['Alice', 'alice-id']]),
+      diagnostics,
+    )
+    expect(blocks[0].properties.assignee).toBe('alice-id')
+    expect(diagnostics).toEqual([])
+  })
+
+  it('ref: empty string when no alias resolves; diagnostic for the dangling token', () => {
+    const blocks: BlockData[] = [
+      block('a', {assignee: '[[Bob]]'}),
+    ]
+    const diagnostics: string[] = []
+    normalizeRefPropertyValues(blocks, new Map([['assignee', 'ref']]), new Map(), diagnostics)
+    expect(blocks[0].properties.assignee).toBe('')
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toMatch(/unresolved aliases: Bob/)
+  })
+
+  it('ref: keeps the first id and reports a diagnostic when a value carries multiple aliases', () => {
+    const blocks: BlockData[] = [
+      block('a', {assignee: '[[Alice]] [[Bob]]'}),
+    ]
+    const diagnostics: string[] = []
+    normalizeRefPropertyValues(
+      blocks,
+      new Map([['assignee', 'ref']]),
+      new Map([['Alice', 'alice-id'], ['Bob', 'bob-id']]),
+      diagnostics,
+    )
+    expect(blocks[0].properties.assignee).toBe('alice-id')
+    expect(diagnostics.some(d => /had 2 aliases/.test(d))).toBe(true)
   })
 
   it('leaves non-token values alone (defensive — classification should already prevent this)', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:plain': 'just a string'}),
     ]
-    normalizeRefListPropertyValues(blocks, new Set(['roam:plain']), new Map(), [])
+    normalizeRefPropertyValues(blocks, new Map([['roam:plain', 'refList']]), new Map(), [])
     expect(blocks[0].properties['roam:plain']).toBe('just a string')
   })
 })

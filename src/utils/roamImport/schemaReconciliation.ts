@@ -8,7 +8,7 @@
  *    - all values are true/false                   → 'boolean' preset
  *    - otherwise                                   → 'string' preset
  *
- *  refList classification is paired with `normalizeRefListPropertyValues`
+ *  refList classification is paired with `normalizeRefPropertyValues`
  *  which walks every planned block and converts `[[X]]` token strings
  *  into id arrays (resolved via the importer's aliasIdMap). Without
  *  this normalization, the refList codec's `decode(string[])` would
@@ -22,7 +22,7 @@ import {
   explodePageTokens,
 } from './properties'
 
-type ClassifiedPresetId = 'string' | 'number' | 'boolean' | 'refList'
+type ClassifiedPresetId = 'string' | 'number' | 'boolean' | 'list' | 'refList'
 
 interface SampledNameStats {
   totalValues: number
@@ -34,6 +34,10 @@ interface SampledNameStats {
   /** Array values that contain only page-token strings (the explosion
    *  path in `propertiesFromRoam` already produces these). */
   pageTokenArrays: number
+  /** Array values whose items are plain strings (no `[[X]]` wrapping).
+   *  These map to the `list` preset, not `refList`, since the strings
+   *  aren't aliases to resolve — we keep them as-is in the value. */
+  plainStringArrays: number
 }
 
 const isPureTokenString = (value: string): boolean => {
@@ -63,8 +67,12 @@ const recordSample = (stats: SampledNameStats, value: unknown): void => {
     stats.pageTokenStrings += 1
     return
   }
-  if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string' && isPureTokenString(item))) {
-    stats.pageTokenArrays += 1
+  if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string')) {
+    if (value.every(item => isPureTokenString(item as string))) {
+      stats.pageTokenArrays += 1
+    } else {
+      stats.plainStringArrays += 1
+    }
     return
   }
 }
@@ -74,6 +82,11 @@ const classify = (stats: SampledNameStats): ClassifiedPresetId => {
   if (stats.numbers === stats.totalValues) return 'number'
   if (stats.booleans === stats.totalValues) return 'boolean'
   if (stats.pageTokenStrings + stats.pageTokenArrays === stats.totalValues) return 'refList'
+  // Mixed plain-string arrays + scalar strings still degrade to 'string'
+  // (the importer would have to stringify the arrays — out of scope).
+  // Pure plain-string arrays land in the 'list' preset so the registered
+  // codec can decode them.
+  if (stats.plainStringArrays === stats.totalValues) return 'list'
   return 'string'
 }
 
@@ -100,6 +113,7 @@ export const collectSchemaReconciliationPlan = (
         booleans: 0,
         pageTokenStrings: 0,
         pageTokenArrays: 0,
+        plainStringArrays: 0,
       }
       recordSample(stats, value)
       sampler.set(name, stats)
@@ -152,27 +166,28 @@ export const applySchemaReconciliation = async (
   }
 }
 
-/** Token-→-id normalization for refList-typed properties. Walks every
- *  planned block and, for each property whose name is in
- *  `refListPropertyNames`, converts `[[X]]` token strings/arrays into
- *  id arrays via `aliasIdMap`. Tokens with no resolved id are dropped
- *  silently — the importer's existing alias-resolution path either
- *  resolves them upstream or queues a seat creation; either way we
- *  don't want a refList property carrying an unresolvable token
- *  string and breaking the codec on first read.
+/** Token-→-id normalization for ref/refList-typed properties. Walks
+ *  every planned block and, for each property whose name is in
+ *  `refPropertyKinds`, converts `[[X]]` token strings/arrays into the
+ *  shape the codec expects:
+ *    - `'ref'`     → first resolved id (single string), or empty
+ *                    string when nothing resolves.
+ *    - `'refList'` → array of resolved ids (any order, drops
+ *                    unresolved ones).
  *
- *  Tokens we can't resolve are reported through `diagnostics` so the
- *  user can fix dangling references later. */
-export const normalizeRefListPropertyValues = (
+ *  Without this pass the codec's `decode` would reject the raw token
+ *  shape on first read. Tokens we can't resolve are reported through
+ *  `diagnostics` so the user can fix dangling references later. */
+export const normalizeRefPropertyValues = (
   blocks: ReadonlyArray<BlockData>,
-  refListPropertyNames: ReadonlySet<string>,
+  refPropertyKinds: ReadonlyMap<string, 'ref' | 'refList'>,
   aliasIdMap: ReadonlyMap<string, string>,
   diagnostics: string[],
 ): void => {
-  if (refListPropertyNames.size === 0) return
+  if (refPropertyKinds.size === 0) return
   for (const block of blocks) {
     if (!block.properties) continue
-    for (const name of refListPropertyNames) {
+    for (const [name, kind] of refPropertyKinds) {
       if (!(name in block.properties)) continue
       const raw = block.properties[name]
       const tokens = collectTokens(raw)
@@ -187,10 +202,23 @@ export const normalizeRefListPropertyValues = (
       }
       if (dangling.length > 0) {
         diagnostics.push(
-          `Block ${block.id}: refList property "${name}" has unresolved aliases: ${dangling.join(', ')}`,
+          `Block ${block.id}: ${kind} property "${name}" has unresolved aliases: ${dangling.join(', ')}`,
         )
       }
-      block.properties[name] = ids
+      if (kind === 'ref') {
+        // Roam refs typically carry one alias; if a value happens to
+        // hold multiple, take the first and report the rest. The
+        // ref codec stores a single id; defaultValue '' represents
+        // "no ref resolved".
+        if (ids.length > 1) {
+          diagnostics.push(
+            `Block ${block.id}: ref property "${name}" had ${ids.length} aliases; keeping the first`,
+          )
+        }
+        block.properties[name] = ids[0] ?? ''
+      } else {
+        block.properties[name] = ids
+      }
     }
   }
 }

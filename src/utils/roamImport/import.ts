@@ -57,7 +57,7 @@ import type { RoamMemoImportPlanSummary } from './roamMemo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
-  normalizeRefListPropertyValues,
+  normalizeRefPropertyValues,
 } from './schemaReconciliation'
 
 type AliasIdMap = ReadonlyMap<string, string>
@@ -251,24 +251,24 @@ export const importRoam = async (
   // as refList here AND for any pre-existing ref/refList schema the
   // dump's values land on, walk planned blocks and replace `[[X]]`
   // token strings with the corresponding alias-resolved ids. Without
-  // this pass the refList codec's `decode(string[])` would reject the
-  // raw token strings on first read.
-  const refListPropertyNames = new Set<string>()
+  // this pass the codec's `decode` would reject the raw token shape
+  // on first read. ref vs refList kinds get different write shapes
+  // (single id vs array) — see normalizeRefPropertyValues.
+  const refPropertyKinds = new Map<string, 'ref' | 'refList'>()
   for (const r of reconciliation.toRegister) {
-    if (r.presetId === 'refList') refListPropertyNames.add(r.name)
+    if (r.presetId === 'refList') refPropertyKinds.set(r.name, 'refList')
   }
   // Also normalize for already-registered ref/refList schemas — a
-  // kernel/plugin schema named `assignee` with codec.type ===
-  // 'refList' should still get its imported values normalized.
+  // kernel/plugin schema named `assignee` with codec.type === 'ref'
+  // gets its imported values written as a single id, not an array.
   for (const [name, schema] of repo.propertySchemas) {
-    if (schema.codec.type === 'refList' || schema.codec.type === 'ref') {
-      refListPropertyNames.add(name)
-    }
+    if (schema.codec.type === 'refList') refPropertyKinds.set(name, 'refList')
+    else if (schema.codec.type === 'ref') refPropertyKinds.set(name, 'ref')
   }
-  if (refListPropertyNames.size > 0) {
-    normalizeRefListPropertyValues(
+  if (refPropertyKinds.size > 0) {
+    normalizeRefPropertyValues(
       allPlannedBlocks,
-      refListPropertyNames,
+      refPropertyKinds,
       aliasResolution.aliasIdMap,
       plan.diagnostics,
     )
