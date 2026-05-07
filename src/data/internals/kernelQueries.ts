@@ -305,6 +305,17 @@ export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]
     if (!query.workspaceId) return []
     const normalized = normalizeTypedBlockQuery(query)
     ctx.depend({kind: 'workspace', workspaceId: normalized.workspaceId})
+    const types = normalized.types ?? []
+    if (
+      types.length === 1 &&
+      normalized.where === undefined &&
+      normalized.referencedBy === undefined
+    ) {
+      const rows = await ctx.db.getAll<BlockRow>(
+        SELECT_BLOCKS_BY_TYPE_SQL, [normalized.workspaceId, types[0]],
+      )
+      return ctx.hydrateBlocks(asBlockRows(rows))
+    }
     const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
     const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
     return ctx.hydrateBlocks(asBlockRows(rows))
