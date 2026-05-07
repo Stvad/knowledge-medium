@@ -392,39 +392,57 @@ The `where` namespace is intentionally a sub-object rather than a flat `whereEnc
 `codecs.optional` is a kernel codec wrapper used by the `'date'` preset (`build: () => codecs.optional(codecs.date)` so unset dates surface as `undefined` rather than crashing on encode). After dropping `shape`, the wrapper's contract has to be explicit:
 
 ```ts
-const optional = <T>(inner: Codec<T>): Codec<T | undefined> => ({
-  // Spread inner first so any subtype metadata (RefCodec.targetTypes,
-  // future codec fields) carries through transparently. Without the
-  // spread, optional(codecs.ref({targetTypes: ['task']})) would have
-  // type === 'ref' (matching isRefCodec) but no targetTypes — picker
-  // UIs and the ref projector would silently lose the constraint.
-  ...inner,
-  // Override encode/decode for null-on-undefined behaviour.
-  encode: v => v === undefined ? null : inner.encode(v),
-  decode: j => j === null || j === undefined ? undefined : inner.decode(j),
-  // Override `where` to reject undefined; delegate to inner otherwise.
-  // (Spread copied inner.where as-is, which would accept the inner's
-  // value type — fine until a caller passes undefined here.)
-  where: inner.where && {
-    encode: v => {
-      // Per §8: typed-query callers use `null` (not `undefined`) for
-      // unset matching, and the compiler short-circuits null to
-      // `IS NULL` before this point. `undefined` reaching
-      // where.encode is therefore a caller bug; reject loudly.
-      if (v === undefined) throw new CodecError(`${inner.type} (use null for unset)`, v)
-      return inner.where!.encode(v)
+const REF_LIKE_TYPES = new Set(['ref', 'refList'])
+
+const optional = <T>(inner: Codec<T>): Codec<T | undefined> => {
+  // Refuse ref/refList wrapping. After the metadata-spread below,
+  // optional(codecs.ref(...)) would pass `isRefCodec(c)` (type === 'ref'
+  // matches) and TypeScript would narrow to RefCodec extends Codec<string> —
+  // but the wrapper's decode actually returns `string | undefined`. The
+  // ref projector and ref editors would receive an undefined where they
+  // expect a string id, with no static signal that this can happen.
+  // Refs already carry their own "no value" semantics via the unset
+  // property path (block.get returns the schema's defaultValue when
+  // properties_json doesn't contain the key); wrapping in optional adds
+  // a redundant slot that costs type safety. Future ref-supporting
+  // optional behaviour, if needed, gets a dedicated `optionalRef`
+  // wrapper with its own predicate and its own narrower handling.
+  if (REF_LIKE_TYPES.has(inner.type)) {
+    throw new Error(`[codecs.optional] cannot wrap ref/refList codecs; ` +
+      `refs use unset-property / defaultValue for "no value" instead`)
+  }
+
+  return {
+    // Spread inner first so any subtype metadata (future codec fields)
+    // carries through transparently. With ref/refList already refused
+    // above, this spread doesn't tickle the isRefCodec narrowing trap.
+    ...inner,
+    // Override encode/decode for null-on-undefined behaviour.
+    encode: v => v === undefined ? null : inner.encode(v),
+    decode: j => j === null || j === undefined ? undefined : inner.decode(j),
+    // Override `where` to reject undefined; delegate to inner otherwise.
+    where: inner.where && {
+      encode: v => {
+        // Per §8: typed-query callers use `null` (not `undefined`) for
+        // unset matching, and the compiler short-circuits null to
+        // `IS NULL` before this point. `undefined` reaching
+        // where.encode is therefore a caller bug; reject loudly.
+        if (v === undefined) throw new CodecError(`${inner.type} (use null for unset)`, v)
+        return inner.where!.encode(v)
+      },
     },
-  },
-})
+  }
+}
 ```
 
 Three properties:
 
-- **All metadata is preserved.** `optional(codecs.ref({targetTypes: ['task']})).targetTypes === ['task']`. The wrapper is transparent except for the encode/decode/where shims; subtype-narrowing predicates and downstream consumers (`isRefCodec`, ref projector, picker UIs) see the same metadata they'd see on the unwrapped codec. `optional(codecs.date).type === 'date'` and editor lookup still resolves to the date preset.
-- **`where` delegates to inner when present.** A non-`undefined` value passes through `inner.where.encode` (which validates and encodes per the §1a contract). `optional(codecs.date)` is queryable; `optional(codecs.list(...))` is not (inner has no `where`); `optional(codecs.ref(...))` follows the same rule as `codecs.ref(...)` (no `where`, route via `referencedBy`).
+- **Subtype metadata is preserved for non-ref codecs.** A future semantic codec like `'duration'` can carry extra fields (e.g. precision metadata) and `optional(codecs.duration({...}))` will preserve them. The spread does this transparently. `optional(codecs.date).type === 'date'` and editor lookup still resolves to the date preset.
+- **Refs are explicitly excluded.** `optional(codecs.ref(...))` throws at construction time. The reason is type safety: `isRefCodec(c) => c.type === 'ref'` narrows to `Codec<string>`, but an `optional`-wrapped ref's `decode` can return `undefined` — the type predicate would lie. Refs already represent "no value" via the unset-property path (the property simply isn't in `properties_json`; `block.get` returns the schema's `defaultValue`, typically `''`); the optional wrapper would add a parallel "explicitly null in storage" representation with no real-world payoff. If a future case genuinely needs a settable-and-clearable ref distinct from unset, it gets a dedicated `optionalRef` wrapper with its own predicate (`isOptionalRefCodec`) and explicit consumer handling.
+- **`where` delegates to inner when present.** A non-`undefined` value passes through `inner.where.encode` (which validates and encodes per the §1a contract). `optional(codecs.date)` is queryable; `optional(codecs.list(...))` is not (inner has no `where`).
 - **`undefined` is rejected at the where boundary.** Typed-query's outer layer already rejects `where.foo = undefined` (caller passes `null` for unset matching per [type-system.md §8](type-system.md)), but the codec defends against it too. `null` itself is handled at the typed-query compiler level (compiles to `IS NULL`) and never reaches `where.encode`.
 
-The TypeScript return type is `Codec<T | undefined>` rather than the inner's narrower subtype (`RefCodec`, etc.) — static narrowing through `optional` wrappers isn't preserved at the type level. Runtime narrowing via `isRefCodec(c) => c.type === 'ref'` still works because the spread carries `type` and the metadata. Callers that need the narrower static type use the unwrapped codec directly; for the wrapped form, downstream code that needs subtype metadata uses the runtime predicates the same way it would for any other ref codec instance.
+The TypeScript return type is `Codec<T | undefined>` rather than the inner's narrower subtype — static narrowing through `optional` wrappers isn't preserved at the type level. Runtime narrowing via `c.type === 'foo'` still works because the spread carries `type` and the metadata. With ref-wrapping refused, the dangerous case of "narrow to a subtype with the wrong value-type expectation" doesn't arise.
 
 What we lose by dropping `shape`: the closed-enum reading of "this codec encodes to JSON shape X" goes away. The where-clause check no longer needs it — `codec.where` answers queryability directly. UI display (labels, glyphs, the `inferShapeFromValue` JSON-shape inference for the unknown-schema fallback) all switch onto `type` — same values as before for primitive codecs (`'string'`, `'list'`, …), open string for plugin-contributed types with a default-case fallback. If a future consumer needs to know "what JSON primitive does this encode to" separately from "what semantic flavor is it," we'd add that information back as either a metadata field or a kernel registry. Currently no such consumer exists.
 
