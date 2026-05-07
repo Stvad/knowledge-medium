@@ -149,6 +149,34 @@ Loss to flag: the predicate-based facet allowed weirder match shapes (e.g., "mat
 
 Conservative is the call — degraded fallback for un-presented codec types matches the rest of the design.
 
+#### 1-ui. `ValuePreset` vs. `PropertyUiContribution` — type-level vs. name-level
+
+Both `ValuePreset` and `PropertyUiContribution` carry display concerns (Editor, Glyph, label) and the overlap could read as redundant. It isn't — they're at different scopes, and the layering is the design:
+
+- **`ValuePreset`** is keyed by codec `type` (`'ref'`, `'url'`, `'string'`). It declares defaults for *every* property whose codec was built by this preset. "How does the system render any URL property?"
+- **`PropertyUiContribution`** is keyed by property `name` (`'status'`, `'video:playerView'`). It declares specialization for one specific property. "How do we render the `status` property in particular, given its codec?"
+
+Per-field resolution at the property panel:
+
+| Concern | `ValuePreset` (type) | `PropertyUiContribution` (name) | Resolution |
+|---|---|---|---|
+| Editor | required, type default | optional, per-name override | `ui?.Editor ?? preset?.Editor` |
+| Renderer | (none) | optional, per-name read-only renderer | `ui?.Renderer` |
+| Glyph | optional, type-level icon | optional, per-name override | `ui?.Glyph ?? preset?.Glyph` |
+| `label` | picker entry ("Reference") | per-row display name ("Assignee") | independent — different audiences |
+| `ConfigEditor` | optional, type-level config UI | (none) | preset only |
+| `defaultValue` / `build` | required (codec construction) | (none) | preset only |
+| `hidden` | (none) | per-name opt-out from panel | ui only |
+| `category` | (none) | per-name section grouping | ui only |
+
+The `label` row is the one that benefits from being explicit: preset's `label` is the picker entry shown in `AddPropertyForm` ("Plain text", "URL"); ui's `label` is the row display name in the property panel ("Status", "Due date"). Different audiences, no override relationship — both exist independently.
+
+`PropertyUiContribution` gains an optional `Glyph?: ComponentType<{className?: string}>` for symmetry with the per-name override pattern. Most contributions won't set it; the few that do (a `priority` property wanting a flag icon instead of the codec's default text glyph) get a one-line override path.
+
+**Why not fold them into one thing.** Fields that should specialize per-property (label, hidden, category, optional Editor override) are decisively name-keyed. Fields that should default for a whole codec type (default Editor, default Glyph, picker entry, codec factory) are decisively type-keyed. Merging them would either force every property name to declare its codec-type defaults (impossible — many properties don't ship a UI contribution at all) or force every preset to enumerate the property names it covers (broken — the open codec-type → editor mapping is the whole point). The two registries with name-overrides-type semantics is the right shape.
+
+**`PropertyUiContribution.Editor`'s relationship to preset's Editor stays unchanged from §1-edit.** Exact-name editor wins first; preset's editor is the universal fallback. The above table just generalizes that pattern to glyph and renderer too.
+
 #### 1a. Codec carries a single open `type` discriminator
 
 Pre-this-design `Codec` carries two fields: `shape: CodecShape` (closed JSON-primitive enum) and — on `RefCodec` only — `refKind: 'ref' | 'refList'` (an ad-hoc discriminator). Every new semantic codec would either invent its own `refKind`-style field (`format: 'url'`, …) or sit awkwardly under the existing `shape` while needing predicate-based exclusion (the way `isRefCodec` is special-cased outside the shape check in [typedBlockQuery.ts:40](src/data/internals/typedBlockQuery.ts:40)).
