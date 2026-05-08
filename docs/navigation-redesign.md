@@ -85,10 +85,13 @@ URL ↔ DB reconciliation on hashchange: LCS diff matches URL block list to exis
 
 ### Browser history strategy
 
-- **Push** on open-panel and close-panel — browser back closes the most-recently-opened panel.
-- **replaceState** on intra-panel navigation — within-panel hops don't pollute browser back-stack; the per-panel back chevron handles those via the in-memory stack.
+**Push on every navigation that changes the URL.** Open-panel, close-panel, reorder, intra-panel nav (link clicks inside a panel), per-panel back/forward chevron clicks. Browser back is the universal undo: it undoes whatever the most recent navigation was, regardless of level.
 
-This gives clean separation: browser back operates over panel layout; per-panel back operates over within-panel block history.
+Earlier drafts of this doc kept replaceState for intra-panel nav as a "clean separation of concerns" (browser back = panel-level, chevrons = block-level). In practice users expect browser back to undo their last navigation, period — including link clicks inside a panel. The clean-separation framing fights that expectation, and the data-shape classifier doesn't have to enforce it.
+
+`replaceState` is still used in one narrow case: **bootstrap-landing fillin** (see "Workspace switch + default landing"). The landing layer writes URL via `replaceState` *before* writing the row, so the observer's idempotency rule kicks in and no extra history entry is added. This is the one path that wants the URL to change without a back-button affordance.
+
+**Per-panel back chevrons** stay useful as a panel-scoped undo. They push too — clicking the back chevron in panel 1 pushes a new history entry where panel 1 is at its previous block. Symmetric with link clicks. Means browser back can undo a chevron click (one slight conceptual oddity, but predictable). Alternative we considered and rejected: chevrons walking `history.go(-1)` until they find an entry where this panel's block differs — requires `history.state` per-panel snapshots to be inspectable; punt as a follow-up if option-as-shipped is annoying.
 
 #### Event mechanics (the part that bites)
 
@@ -117,11 +120,17 @@ Already partially shipped in step 3 as in-memory snapshots on panel-history entr
 
 Reload-survival of focus + scroll is now free, since DB rows persist and `tabId` scopes them per-tab.
 
-### Per-panel back/forward block history — keep in-memory
+### Per-panel back/forward block history — keep in-memory, reconcile on popstate
 
-`panelHistory` (back/forward stacks of `{blockId, VisitState}` per panel) stays in-memory for now. Matches browser tab back-stack semantics: dies with the session. Promoting it to DB rows is doable later (UiState scope, written on every nav) but adds row churn for a feature that's session-scoped in user expectation.
+`panelHistory` (back/forward stacks of `{blockId, VisitState}` per panel) stays in-memory. Matches browser tab back-stack semantics: dies with the session.
 
-The snapshotter pattern remains as the bridge between PanelRenderer and the in-memory stack; the data it captures (focused, scroll) is the same data we now persist as UiState properties.
+Interaction with browser history (now that intra-panel nav pushes too):
+
+- Click chevron back in panel 1: pop from panel 1's local back stack, push to its forward stack. Updates `topLevelBlockIdProp` on the panel row → observer pushes URL entry. Symmetric with link clicks.
+- Browser back after a chevron click: undoes the chevron click via the URL → applyCurrentUrl → row revert. Local stack would now be out of sync with actual panel state.
+- Reconciliation on popstate: on inbound URL apply, compare each panel's new `topLevelBlockId` to its local stack. If new block matches the top of back stack, pop it (we went back); if it matches top of forward, pop forward and push to back (we went forward); else, the local stack got out of sync (e.g., user opened a new history entry from elsewhere) — drop the stack and start fresh from current.
+
+This keeps the affordance useful within a session while making it tolerant of browser back/forward interleaving. Promoting the stack to DB rows for cross-reload survival: deferred, same trade-off as before (matches browser tab behavior).
 
 ### Workspace switch + default landing
 
@@ -162,16 +171,15 @@ No behavior change yet — the parser/tabId infrastructure exists but nothing re
 
 Panel rows are the source of truth; URL is a derived view. The projection is the single place that translates between them — narrow and centralized in implementation, but it does *not* require callers to declare intent. Any path that writes panel rows via `repo.tx` gets the URL update for free, including paths we haven't written yet. This preserves the property that DB rows drive everything.
 
-The reviewer's worry — "observer can't tell open-panel from reorder, or close from workspace-switch fallout" — is answered by classifying the **diff between row states**, not the caller's intent:
+The reviewer's worry — "observer can't tell open-panel from reorder, or close from workspace-switch fallout" — is answered by classifying the **diff between row states**, not the caller's intent. With "push on every URL change" the rule is simple:
 
 | Diff (prev rows → next rows) for `(workspaceId, tabId)` | History mode |
 |---|---|
-| ordered list of rowIds differs (insert / delete / reorder) | `pushState` |
-| same rowIds, but some row's `topLevelBlockId` changed | `replaceState` (intra-panel nav) |
+| any row data that affects URL changed (rowIds, order, `topLevelBlockId`) | `pushState` |
 | only other props changed (`scrollTop`, `focusedBlockId`, …) | no URL write |
 | computed URL already matches `location.hash` | no-op (idempotent) |
 
-Idempotency is what handles the bootstrap-landing edge case: bootstrap `history.replaceState`s the URL to `#<wsId>/<dailyNoteId>` *before* writing the row, then writes the row in a UiState tx — the observer fires, builds the same URL, and skips.
+Idempotency is what handles the bootstrap-landing edge case: bootstrap `history.replaceState`s the URL to `#<wsId>/<dailyNoteId>` *before* writing the row, then writes the row in a UiState tx — the observer fires, builds the same URL, and skips. This is the only path that gets `replaceState` in step 4.
 
 `panelLayoutProjection.ts` shape:
 
@@ -211,7 +219,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 
 - `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
 - `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
-- `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as same-rowIds-different-blockId → replace.
+- `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
 - Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) reconciles rows for the new `(tabId, newWsId)`; landing layer fills in the daily note (see below).
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
