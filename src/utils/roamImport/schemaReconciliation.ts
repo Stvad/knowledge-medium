@@ -46,6 +46,40 @@ interface SampledNameStats {
    *  appear alongside plainStringArrays, the field is a string-list
    *  property whose scalar cases need one-item-array normalization. */
   plainStrings: number
+  nonRefListSamples: Array<{block: string; value: string}>
+}
+
+const SCHEMA_NEAR_MISS_THRESHOLD = 0.9
+const SCHEMA_NEAR_MISS_MIN_VALUES = 10
+const MAX_SCHEMA_NEAR_MISS_SAMPLES = 3
+
+const formatSampleValue = (value: unknown): string => {
+  let formatted: string
+  try {
+    const json = JSON.stringify(value)
+    formatted = json === undefined ? String(value) : json
+  } catch {
+    formatted = String(value)
+  }
+  const normalized = formatted.replace(/\s+/g, ' ').trim()
+  return normalized.length > 120 ? `${normalized.slice(0, 117)}...` : normalized
+}
+
+const rememberNonRefListSample = (
+  stats: SampledNameStats,
+  block: string,
+  value: unknown,
+): void => {
+  if (stats.nonRefListSamples.length >= MAX_SCHEMA_NEAR_MISS_SAMPLES) return
+  stats.nonRefListSamples.push({block, value: formatSampleValue(value)})
+}
+
+const sampleBlockLabel = (block: BlockData): string => {
+  const normalizedContent = block.content.replace(/\s+/g, ' ').trim()
+  const content = normalizedContent.length > 80
+    ? `${normalizedContent.slice(0, 77)}...`
+    : normalizedContent
+  return content || block.id
 }
 
 const isPureTokenString = (value: string): boolean => {
@@ -61,14 +95,16 @@ const isPureTokenString = (value: string): boolean => {
   return match !== null && match.index === 0 && match[0].length === trimmed.length
 }
 
-const recordSample = (stats: SampledNameStats, value: unknown): void => {
+const recordSample = (stats: SampledNameStats, block: string, value: unknown): void => {
   stats.totalValues += 1
   if (typeof value === 'number' && Number.isFinite(value)) {
     stats.numbers += 1
+    rememberNonRefListSample(stats, block, value)
     return
   }
   if (typeof value === 'boolean') {
     stats.booleans += 1
+    rememberNonRefListSample(stats, block, value)
     return
   }
   if (typeof value === 'string' && isPureTokenString(value)) {
@@ -77,6 +113,7 @@ const recordSample = (stats: SampledNameStats, value: unknown): void => {
   }
   if (typeof value === 'string') {
     stats.plainStrings += 1
+    rememberNonRefListSample(stats, block, value)
     return
   }
   if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string')) {
@@ -84,9 +121,11 @@ const recordSample = (stats: SampledNameStats, value: unknown): void => {
       stats.pageTokenArrays += 1
     } else {
       stats.plainStringArrays += 1
+      rememberNonRefListSample(stats, block, value)
     }
     return
   }
+  rememberNonRefListSample(stats, block, value)
 }
 
 const classify = (stats: SampledNameStats): ClassifiedPresetId => {
@@ -102,6 +141,37 @@ const classify = (stats: SampledNameStats): ClassifiedPresetId => {
   return 'string'
 }
 
+const schemaNearMissDiagnostic = (
+  name: string,
+  stats: SampledNameStats,
+  effectivePreset: string,
+  schemaSource: 'existing' | 'inferred',
+): string | null => {
+  if (stats.totalValues < SCHEMA_NEAR_MISS_MIN_VALUES) return null
+  if (effectivePreset !== 'string' && effectivePreset !== 'list') return null
+
+  const refListLike = stats.pageTokenStrings + stats.pageTokenArrays
+  if (refListLike === 0 || refListLike === stats.totalValues) return null
+  const ratio = refListLike / stats.totalValues
+  if (ratio < SCHEMA_NEAR_MISS_THRESHOLD) return null
+
+  const sourceLabel = schemaSource === 'existing'
+    ? `uses existing ${effectivePreset} schema`
+    : `inferred ${effectivePreset}`
+  const percent = Math.round(ratio * 100)
+  const nonRefListValues = stats.totalValues - refListLike
+  const samples = stats.nonRefListSamples.length > 0
+    ? ` Samples: ${stats.nonRefListSamples
+      .map(sample => `${sample.block}=${sample.value}`)
+      .join('; ')}.`
+    : ''
+  return (
+    `Schema inference near-miss: property "${name}" ${sourceLabel}, but ` +
+    `${refListLike}/${stats.totalValues} values (${percent}%) looked like refList; ` +
+    `${nonRefListValues} non-refList value(s) kept it from refList.${samples}`
+  )
+}
+
 /** Plan-time reconciliation: collect every property name appearing on
  *  any planned block, skip kernel/plugin/already-registered names and
  *  hidden reserved slots, classify the rest by sampling values across
@@ -113,6 +183,7 @@ export const collectSchemaReconciliationPlan = (
 ): {
   toRegister: ReadonlyArray<{name: string; presetId: ClassifiedPresetId}>
   skippedReserved: ReadonlyArray<string>
+  diagnostics: ReadonlyArray<string>
 } => {
   const sampler = new Map<string, SampledNameStats>()
 
@@ -127,23 +198,32 @@ export const collectSchemaReconciliationPlan = (
         pageTokenArrays: 0,
         plainStringArrays: 0,
         plainStrings: 0,
+        nonRefListSamples: [],
       }
-      recordSample(stats, value)
+      recordSample(stats, sampleBlockLabel(block), value)
       sampler.set(name, stats)
     }
   }
 
   const toRegister: Array<{name: string; presetId: ClassifiedPresetId}> = []
   const skippedReserved: string[] = []
+  const diagnostics: string[] = []
 
   const schemas = repo.propertySchemas
   const overrides = repo.propertyEditorOverrides
 
   for (const [name, stats] of sampler) {
+    const inferredPreset = isRoamSemanticRefListProperty(name) ? 'refList' : classify(stats)
+    const existingSchema = schemas.get(name)
+
     // Already registered — kernel, plugin, type-lifted, or pre-existing
     // user schema. The §3 hybrid rule wants vocabulary shared, so any
     // existing schema wins.
-    if (schemas.has(name)) continue
+    if (existingSchema) {
+      const diagnostic = schemaNearMissDiagnostic(name, stats, existingSchema.codec.type, 'existing')
+      if (diagnostic) diagnostics.push(diagnostic)
+      continue
+    }
 
     // Reserved kernel-internal slot (per §6 collision rule).
     if (overrides.get(name)?.hidden === true) {
@@ -151,13 +231,16 @@ export const collectSchemaReconciliationPlan = (
       continue
     }
 
+    const diagnostic = schemaNearMissDiagnostic(name, stats, inferredPreset, 'inferred')
+    if (diagnostic) diagnostics.push(diagnostic)
+
     toRegister.push({
       name,
-      presetId: isRoamSemanticRefListProperty(name) ? 'refList' : classify(stats),
+      presetId: inferredPreset,
     })
   }
 
-  return {toRegister, skippedReserved}
+  return {toRegister, skippedReserved, diagnostics}
 }
 
 /** Apply phase: register every classified schema synchronously through

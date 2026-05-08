@@ -159,6 +159,21 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:mixed', presetId: 'string'}])
   })
 
+  it('reports near-refList fields that fall back to string', () => {
+    const blocks: BlockData[] = [
+      ...Array.from({length: 9}, (_, i) => block(`ref-${i}`, {'roam:almost-ref': `[[Topic ${i}]]`})),
+      block('bad-ref', {'roam:almost-ref': 'plain text [[Topic 9]]'}),
+    ]
+
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+
+    expect(plan.toRegister).toEqual([{name: 'roam:almost-ref', presetId: 'string'}])
+    expect(plan.diagnostics).toEqual([
+      expect.stringContaining('property "roam:almost-ref" inferred string, but 9/10 values (90%) looked like refList'),
+    ])
+    expect(plan.diagnostics[0]).toContain('bad-ref="plain text [[Topic 9]]"')
+  })
+
   it('skips names already registered (kernel/plugin/user-data)', () => {
     const blocks: BlockData[] = [
       block('a', {types: ['page']}),  // kernel-registered

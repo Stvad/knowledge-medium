@@ -224,6 +224,25 @@ const summarizeReadwisePromotedConflicts = (
   }
 }
 
+const summarizeSchemaNearMisses = (
+  lines: readonly string[],
+): {nodes: ReportNode[], remaining: string[]} => {
+  const matched: string[] = []
+  const remaining: string[] = []
+  for (const line of lines) {
+    if (line.startsWith('Schema inference near-miss:')) matched.push(line)
+    else remaining.push(line)
+  }
+  if (matched.length === 0) return {nodes: [], remaining}
+  return {
+    nodes: [{
+      content: `Schema inference near-misses (${matched.length})`,
+      children: matched.map(content => ({content})),
+    }],
+    remaining,
+  }
+}
+
 const summarizeSrsDiagnostics = (
   lines: readonly string[],
 ): {nodes: ReportNode[], remaining: string[]} => {
@@ -249,7 +268,7 @@ const summarizeSrsDiagnostics = (
   if (multipleMarkers.length > 0) {
     nodes.push({
       content: `Multiple marker-only SRS children (${multipleMarkers.length})`,
-      children: sampleNodes(multipleMarkers),
+      children: multipleMarkers.map(content => ({content})),
     })
   }
   return {nodes, remaining}
@@ -301,6 +320,7 @@ const summarizeDiagnosticLines = (
   }
 
   if (title === 'Properties and schemas') {
+    run(summarizeSchemaNearMisses)
     run(summarizeAttributeHoists)
     run(summarizeReadwiseExtractions)
     run(summarizeReadwisePromotedConflicts)

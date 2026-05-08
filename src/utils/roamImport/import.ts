@@ -261,6 +261,7 @@ export const importRoam = async (
       `Skipped reserved names during schema reconciliation: ${reconciliation.skippedReserved.join(', ')}`,
     )
   }
+  plan.diagnostics.push(...reconciliation.diagnostics)
   if (reconciliation.toRegister.length > 0 && !options.dryRun) {
     log(`Registering ${reconciliation.toRegister.length} new property schemas…`)
     await applySchemaReconciliation(reconciliation.toRegister, repo, plan.diagnostics)

@@ -701,6 +701,93 @@ describe('importRoam', () => {
     expect(deepHoistChildren.map(line => line.content)).toContain('Samples')
   })
 
+  it('reports schema inference near-misses in the import log', async () => {
+    const nearMissExport: RoamExport = Array.from({length: 10}, (_, i) => ({
+      title: `near miss ${i}`,
+      uid: `nearMissPage${i}`,
+      children: [{
+        string: i === 9 ? 'related::plain text [[Topic 9]]' : `related::[[Topic ${i}]]`,
+        uid: `nearMissRelated${i}`,
+      }],
+    }))
+
+    const summary = await importRoam(nearMissExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.diagnostics).toEqual(expect.arrayContaining([
+      expect.stringContaining('property "roam:related" inferred string, but 9/10 values (90%) looked like refList'),
+    ]))
+
+    const dailyChildren = await readChildren(dailyNoteBlockId(WORKSPACE, todayIso()))
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+    const sections = await readChildren(header!.id)
+    const notesSection = sections.find(c => c.content === `Notes (${summary.diagnostics.length})`)
+    expect(notesSection).toBeDefined()
+    const noteGroups = await readChildren(notesSection!.id)
+    const propertyGroup = noteGroups.find(c => c.content.startsWith('Properties and schemas '))
+    expect(propertyGroup).toBeDefined()
+    const propertySections = await readChildren(propertyGroup!.id)
+    const nearMisses = propertySections.find(c => c.content === 'Schema inference near-misses (1)')
+    expect(nearMisses).toBeDefined()
+    const nearMissLines = await readChildren(nearMisses!.id)
+    expect(nearMissLines.map(line => line.content)).toEqual([
+      expect.stringContaining('near miss 9="plain text [[Topic 9]]"'),
+    ])
+  })
+
+  it('lists every multiple-marker SRS case in the import report', async () => {
+    const srsExport: RoamExport = [{
+      title: 'many duplicate srs markers',
+      uid: 'manyDuplicateSrsMarkersPage',
+      children: Array.from({length: 10}, (_, i) => ({
+        string: `parent ${i}`,
+        uid: `multiSrsParent${i}`,
+        children: [
+          {
+            string: '[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]]',
+            uid: `multiSrsFirst${i}`,
+          },
+          {
+            string: '[[[[interval]]:7]] [[[[factor]]:2.10]] [[June 8th, 2026]]',
+            uid: `multiSrsSecond${i}`,
+          },
+        ],
+      })),
+    }]
+
+    const summary = await importRoam(srsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.diagnostics.filter(line =>
+      line.startsWith('Multiple marker-only Roam SRS children'),
+    )).toHaveLength(10)
+
+    const dailyChildren = await readChildren(dailyNoteBlockId(WORKSPACE, todayIso()))
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+    const sections = await readChildren(header!.id)
+    const notesSection = sections.find(c => c.content === `Notes (${summary.diagnostics.length})`)
+    expect(notesSection).toBeDefined()
+    const noteGroups = await readChildren(notesSection!.id)
+    const srsGroup = noteGroups.find(c => c.content.startsWith('SRS and roam/memo '))
+    expect(srsGroup).toBeDefined()
+    const srsSections = await readChildren(srsGroup!.id)
+    const multipleMarkers = srsSections.find(c => c.content === 'Multiple marker-only SRS children (10)')
+    expect(multipleMarkers).toBeDefined()
+    const markerLines = await readChildren(multipleMarkers!.id)
+    expect(markerLines).toHaveLength(10)
+    expect(markerLines.map(line => line.content)).toContain(
+      'Multiple marker-only Roam SRS children under uid multiSrsParent9; promoted the first (multiSrsFirst9) and preserved 1 additional marker block(s) literally.',
+    )
+    expect(markerLines.some(line => line.content.includes('omitted from this report section')))
+      .toBe(false)
+  })
+
   it('posts isa type candidates to the import report block', async () => {
     const typedExport: RoamExport = [
       {
