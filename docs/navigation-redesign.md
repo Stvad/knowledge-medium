@@ -106,7 +106,7 @@ Browser hash/history APIs each fire a different subset of events. Spelling it ou
 
 Implications:
 
-- We can't use `location.hash = X` for the replace-state case (intra-panel nav) — it always pushes. Must use `replaceState`.
+- The only replace-state case in step 4 is bootstrap-landing fillin, which uses `history.replaceState` directly. Outbound observer writes (every other URL change) all push, so `location.hash =` would also work for those — using `pushState` is just to avoid scattering URL-write mechanisms.
 - `pushState` / `replaceState` notify *no one*. The projection has to call its own subscribers after writing.
 - For external URL changes (back/forward, user typing in URL bar, other tabs writing the hash via `BroadcastChannel`-like mechanisms), we need to listen to **both** `hashchange` and `popstate` — `hashchange` alone misses pushState-based history entries when both endpoints have the same hash (rare for us but possible), and `popstate` alone misses external `location.hash` writes.
 - Existing `useHash` (`hashchange` only) is enough for today's `writeAppHash` (which uses `location.hash =`). After step 4, components stop subscribing to `hashchange` directly and instead subscribe to the projection — which internally listens to both events and emits a single normalized change.
