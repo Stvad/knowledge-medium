@@ -27,11 +27,6 @@ export const buildPropertyPanelSections = (args: {
   const assigned = new Set<string>()
   const sections: PropertyPanelSection[] = []
 
-  const setRowsFirst = (rows: PropertyPanelRow[]): PropertyPanelRow[] => [
-    ...rows.filter(row => row.isSet),
-    ...rows.filter(row => !row.isSet),
-  ]
-
   const seenTypeIds = new Set<string>()
   for (const typeId of args.blockTypes) {
     if (seenTypeIds.has(typeId)) continue
@@ -61,7 +56,7 @@ export const buildPropertyPanelSections = (args: {
         id: `type:${typeId}`,
         label: contribution.label ?? typeId,
         description: contribution.description,
-        rows: setRowsFirst(rows),
+        rows,
       })
     }
   }

@@ -42,7 +42,7 @@ const typesMap = (types: readonly TypeContribution[]) =>
   new Map(types.map(type => [type.id, type]))
 
 describe('buildPropertyPanelSections', () => {
-  it('surfaces unset type-contributed slots and orders set rows before unset rows', () => {
+  it('surfaces unset type-contributed slots in type-declared order', () => {
     const taskType = defineBlockType({
       id: 'task',
       label: 'Task',
@@ -59,8 +59,8 @@ describe('buildPropertyPanelSections', () => {
     expect(sections).toHaveLength(1)
     expect(sections[0]).toMatchObject({id: 'type:task', label: 'Task'})
     expect(sections[0].rows.map(row => [row.name, row.isSet])).toEqual([
-      ['status', true],
       ['due', false],
+      ['status', true],
     ])
   })
 
