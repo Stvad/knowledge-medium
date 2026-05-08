@@ -8,15 +8,6 @@ import { RepoProvider } from '@/context/repo.tsx'
 import { Login } from '@/components/Login.tsx'
 import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { BootstrapErrorFallback } from '@/components/util/error.tsx'
-import { preWarmPowerSync } from '@/data/preWarm.ts'
-
-// Kick off PowerSync init in parallel with React's first render. Reads
-// the user id synchronously from localStorage; the resulting init
-// promise is memoized inside `ensurePowerSyncReady`, so the eventual
-// `RepoProvider` await picks it up. Best-effort — if there's no logged
-// in user yet (or localStorage is unavailable), the regular React-
-// driven path takes over unchanged.
-preWarmPowerSync()
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
@@ -27,11 +18,11 @@ window.ReactDOM = ReactDOM
 // rendered as a recoverable UI instead of a blank screen.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Suspense fallback={<SuspenseFallback name="outer-bootstrap"/>}>
+    <Suspense fallback={<SuspenseFallback/>}>
       <Login>
         <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
           <RepoProvider>
-            <Suspense fallback={<SuspenseFallback name="app-init"/>}>
+            <Suspense fallback={<SuspenseFallback/>}>
               <App/>
             </Suspense>
           </RepoProvider>

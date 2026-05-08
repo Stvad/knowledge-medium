@@ -54,7 +54,6 @@ import {
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.ts'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
-import { traceSuspensePhase, isSuspenseDebugEnabled } from '@/utils/suspenseDebug.ts'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({
@@ -115,107 +114,17 @@ const assertOpfsAvailable = (): Promise<void> => {
 // an explicit `WASQLiteOpenFactory` instead of plain settings because
 // the `vfs` option lives on the factory's option type, not on the
 // generic `SQLOpenOptions` accepted by `database: {…}`.
-/** Wrap `db.database.{execute,get,getAll,getOptional}` so each
- *  PowerSync-internal SQL call during init is logged with its
- *  duration. Disengages once `db.waitForReady()` resolves. Kept gated
- *  on `__suspenseDebug` (window flag, defaults to dev). The PowerSync
- *  init path is sequential awaits, so the per-call timings add up to
- *  the total `powersync.init` phase time we already measure. */
-const installInitTimingProbe = (db: PowerSyncDatabase): void => {
-  if (!isSuspenseDebugEnabled()) return
-
-  const inner = db.database as unknown as {
-    execute: (sql: string, params?: unknown[]) => Promise<unknown>
-    executeRaw?: (sql: string, params?: unknown[]) => Promise<unknown>
-    get?: (sql: string, params?: unknown[]) => Promise<unknown>
-    getAll?: (sql: string, params?: unknown[]) => Promise<unknown>
-    getOptional?: (sql: string, params?: unknown[]) => Promise<unknown>
-    init?: () => Promise<unknown>
-    refreshSchema?: () => Promise<unknown>
-  }
-
-  let active = true
-  const wrapSql = <Args extends unknown[], R>(name: string, fn: (...args: Args) => Promise<R>) =>
-    async (...args: Args): Promise<R> => {
-      if (!active) return fn(...args)
-      const sql = typeof args[0] === 'string' ? args[0] : ''
-      const t0 = performance.now()
-      try {
-        return await fn(...args)
-      } finally {
-        const dt = Math.round(performance.now() - t0)
-        // Threshold lowered to 1ms — we want full visibility into the
-        // sub-second init window, even calls that look cheap.
-        if (dt >= 1) {
-          console.log(`[suspense] powersync.init.sql (${dt}ms) ${name}: ${sql.slice(0, 100)}`)
-        }
-      }
-    }
-
-  const wrapPhase = <Args extends unknown[], R>(name: string, fn: (...args: Args) => Promise<R>) =>
-    async (...args: Args): Promise<R> => {
-      if (!active) return fn(...args)
-      const t0 = performance.now()
-      try {
-        return await fn(...args)
-      } finally {
-        const dt = Math.round(performance.now() - t0)
-        console.log(`[suspense] powersync.init.${name} (${dt}ms)`)
-      }
-    }
-
-  inner.execute = wrapSql('execute', inner.execute.bind(inner))
-  if (inner.executeRaw) inner.executeRaw = wrapSql('executeRaw', inner.executeRaw.bind(inner))
-  if (inner.get) inner.get = wrapSql('get', inner.get.bind(inner))
-  if (inner.getAll) inner.getAll = wrapSql('getAll', inner.getAll.bind(inner))
-  if (inner.getOptional) inner.getOptional = wrapSql('getOptional', inner.getOptional.bind(inner))
-  if (inner.init) inner.init = wrapPhase('database.init', inner.init.bind(inner))
-  if (inner.refreshSchema) inner.refreshSchema = wrapPhase('database.refreshSchema', inner.refreshSchema.bind(inner))
-
-  void db.waitForReady().finally(() => { active = false })
-}
-
-// VFS override (cold-start profiling): set
-// `localStorage.powersyncVfs = 'AccessHandlePoolVFS'` (or
-// `IDBBatchAtomicVFS` / `OPFSCoopSyncVFS`) and reload. Each VFS uses a
-// different on-disk layout — switching means the existing DB file
-// isn't read; the original file stays on OPFS untouched, so reverting
-// the flag restores access. No data is destroyed by the swap, but the
-// new VFS starts empty, so swap on a sync-backed account (or expect
-// to re-import) if you care about the contents during the test.
-const resolveVfs = (): WASQLiteVFS => {
-  if (typeof window === 'undefined') return WASQLiteVFS.OPFSCoopSyncVFS
-  try {
-    const flag = window.localStorage.getItem('powersyncVfs')
-    if (flag === 'AccessHandlePoolVFS') return WASQLiteVFS.AccessHandlePoolVFS
-    if (flag === 'IDBBatchAtomicVFS') return WASQLiteVFS.IDBBatchAtomicVFS
-    if (flag === 'OPFSCoopSyncVFS') return WASQLiteVFS.OPFSCoopSyncVFS
-  } catch {
-    // localStorage may be denied (3p-cookie blockers, sandboxed
-    // contexts) — fall through to the default below.
-  }
-  return WASQLiteVFS.OPFSCoopSyncVFS
-}
-
-const buildPowerSyncDb = (userId: string) => {
-  const vfs = resolveVfs()
-  if (isSuspenseDebugEnabled() && vfs !== WASQLiteVFS.OPFSCoopSyncVFS) {
-    console.log(`[suspense] powersync.vfs override: ${vfs}`)
-  }
-  const db = new PowerSyncDatabase({
-    schema: appSchema,
-    database: new WASQLiteOpenFactory({
-      dbFilename: dbFilenameForUser(userId),
-      vfs,
-    }),
-    flags: {
-      enableMultiTabs: false,
-      useWebWorker: true,
-    },
-  })
-  installInitTimingProbe(db)
-  return db
-}
+const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
+  schema: appSchema,
+  database: new WASQLiteOpenFactory({
+    dbFilename: dbFilenameForUser(userId),
+    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
+  }),
+  flags: {
+    enableMultiTabs: false,
+    useWebWorker: true,
+  },
+})
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
@@ -274,7 +183,7 @@ export const ensurePowerSyncReady = async (
 }
 
 const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
-  await traceSuspensePhase('powersync.init', () => powerSyncDb.init())
+  await powerSyncDb.init()
 
   // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
   // VFSes implement xShmMap (the wal-index shared-memory primitive
@@ -302,34 +211,28 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // recursive CTEs) off OPFS — they're transient and don't need to
   // survive a crash, and the OPFS VFS doesn't perform well as a temp
   // store anyway.
-  await traceSuspensePhase('powersync.pragmas', async () => {
-    await powerSyncDb.execute('PRAGMA cache_size = -262144')
-    await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
-  })
+  await powerSyncDb.execute('PRAGMA cache_size = -262144')
+  await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
 
-  await traceSuspensePhase('powersync.ddl-blocks-workspaces', async () => {
-    // ── blocks + its indexes ──
-    await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
-    await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-    await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  // ── blocks + its indexes ──
+  await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
-    // ── workspaces + workspace_members ──
-    await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
-    await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
-    await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
-  })
+  // ── workspaces + workspace_members ──
+  await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
+  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
-  await traceSuspensePhase('powersync.ddl-client-schema', async () => {
-    // ── tx_context, row_events, command_events, block_aliases + core
-    // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
-    // Statements include
-    // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
-    // TRIGGER IF NOT EXISTS so re-running is a no-op against an
-    // already-bootstrapped dev database.
-    for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
-      await powerSyncDb.execute(stmt)
-    }
-  })
+  // ── tx_context, row_events, command_events, block_aliases + core
+  // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
+  // Statements include
+  // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
+  // TRIGGER IF NOT EXISTS so re-running is a no-op against an
+  // already-bootstrapped dev database.
+  for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
+    await powerSyncDb.execute(stmt)
+  }
 
   // One-shot side-index backfills for users upgrading from a
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
@@ -341,13 +244,10 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
       return row ?? null
     },
   }
-  await traceSuspensePhase('powersync.backfill-aliases', () =>
-    backfillBlockAliasesIfEmpty(backfillDb))
-  await traceSuspensePhase('powersync.backfill-types', () =>
-    backfillBlockTypesIfEmpty(backfillDb))
-  await traceSuspensePhase('powersync.apply-local-schema', () =>
-    applyLocalSchemaContributions(
-      backfillDb,
-      resolveLocalSchemaContributions(staticDataExtensions),
-    ))
+  await backfillBlockAliasesIfEmpty(backfillDb)
+  await backfillBlockTypesIfEmpty(backfillDb)
+  await applyLocalSchemaContributions(
+    backfillDb,
+    resolveLocalSchemaContributions(staticDataExtensions),
+  )
 }

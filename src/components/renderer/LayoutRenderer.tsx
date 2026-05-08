@@ -12,7 +12,6 @@ import { v5 as uuidv5 } from 'uuid'
 import { focusedBlockIdProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.ts'
 import { PANEL_TYPE } from '@/data/blockTypes'
 import { useChildren } from '@/hooks/block.ts'
-import { traceSuspense } from '@/utils/suspenseDebug.ts'
 
 // Mirrors UI_CHILD_NS in globalState.ts. Used to derive a deterministic
 // child-id for the main panel under panelsBlock so two clients booting
@@ -57,8 +56,8 @@ const getMainPanelBlock = memoize(
 
 export function LayoutRenderer({block}: BlockRendererProps) {
   const uiBlock = useUIStateBlock()
-  const panelBlock = use(traceSuspense('panels-block', getPanelsBlock(uiBlock)))
-  const mainPanelBlock = use(traceSuspense('main-panel-block', getMainPanelBlock(panelBlock)))
+  const panelBlock = use(getPanelsBlock(uiBlock))
+  const mainPanelBlock = use(getMainPanelBlock(panelBlock))
   const repo = useRepo()
   const isMobile = useIsMobile()
 
