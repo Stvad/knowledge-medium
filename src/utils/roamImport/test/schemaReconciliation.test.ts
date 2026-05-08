@@ -12,6 +12,7 @@ import { Repo } from '@/data/repo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
+  normalizeListPropertyValues,
   normalizeRefPropertyValues,
   normalizeStringPropertyValues,
 } from '../schemaReconciliation'
@@ -140,6 +141,15 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:highlights', presetId: 'list'}])
   })
 
+  it('classifies mixed scalar strings and plain-string arrays as the list preset', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:email': 'gliderok@gmail.com'}),
+      block('b', {'roam:email': ['gliderok@gmail.com', 'aix123@yandex.ru']}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:email', presetId: 'list'}])
+  })
+
   it('mixed page-token and plain-string arrays fall back to string', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:mixed': ['[[A]]', '[[B]]']}),    // page-token array
@@ -221,6 +231,28 @@ describe('normalizeStringPropertyValues', () => {
       undefined,
     ])
     expect(blocks[4].properties['roam:other']).toEqual(['untouched'])
+  })
+})
+
+describe('normalizeListPropertyValues', () => {
+  it('wraps scalar values and leaves array values untouched for list-classified properties', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:email': 'gliderok@gmail.com'}),
+      block('b', {'roam:email': ['gliderok@gmail.com', 'aix123@yandex.ru']}),
+      block('c', {'roam:rank-list': 1}),
+      block('d', {'roam:other': 'untouched'}),
+    ]
+
+    normalizeListPropertyValues(blocks, new Set(['roam:email', 'roam:rank-list']))
+
+    expect(blocks.map(b => b.properties['roam:email'])).toEqual([
+      ['gliderok@gmail.com'],
+      ['gliderok@gmail.com', 'aix123@yandex.ru'],
+      undefined,
+      undefined,
+    ])
+    expect(blocks[2].properties['roam:rank-list']).toEqual([1])
+    expect(blocks[3].properties['roam:other']).toBe('untouched')
   })
 })
 

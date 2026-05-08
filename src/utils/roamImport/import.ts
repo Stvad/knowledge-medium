@@ -57,6 +57,7 @@ import type { RoamMemoImportPlanSummary } from './roamMemo'
 import {
   applySchemaReconciliation,
   collectSchemaReconciliationPlan,
+  normalizeListPropertyValues,
   normalizeRefPropertyValues,
   normalizeStringPropertyValues,
 } from './schemaReconciliation'
@@ -277,6 +278,18 @@ export const importRoam = async (
     if (schema.codec.type === 'string' && isRoamSourceField(name)) stringPropertyNames.add(name)
   }
   normalizeStringPropertyValues(allPlannedBlocks, stringPropertyNames)
+
+  // List-schema normalization. Mixed scalar/list Roam attributes now
+  // classify as list properties; wrap scalar occurrences so the stored
+  // shape consistently matches the registered list codec.
+  const listPropertyNames = new Set<string>()
+  for (const r of reconciliation.toRegister) {
+    if (r.presetId === 'list' && isRoamSourceField(r.name)) listPropertyNames.add(r.name)
+  }
+  for (const [name, schema] of repo.propertySchemas) {
+    if (schema.codec.type === 'list' && isRoamSourceField(name)) listPropertyNames.add(name)
+  }
+  normalizeListPropertyValues(allPlannedBlocks, listPropertyNames)
 
   // §8.7 ref-token-→-id normalization. For every property classified
   // as refList here AND for any pre-existing ref/refList schema the

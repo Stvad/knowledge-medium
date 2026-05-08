@@ -965,6 +965,59 @@ describe('importRoam', () => {
     expect(katerina?.parent_id).toBeNull()
   })
 
+  it('stores mixed scalar and multi-value Roam attributes as arrays', async () => {
+    const contactsExport: RoamExport = [
+      {
+        title: 'single contact fields',
+        uid: 'singleContact',
+        children: [
+          {string: 'email::gliderok@gmail.com', uid: 'singleEmail'},
+          {string: 'Twitter::https://twitter.com/anthosewolves', uid: 'singleTwitter'},
+        ],
+      },
+      {
+        title: 'multi contact fields',
+        uid: 'multiContact',
+        children: [
+          {
+            string: 'email::',
+            uid: 'multiEmail',
+            children: [
+              {string: 'gliderok@gmail.com', uid: 'multiEmailA'},
+              {string: 'aix123@yandex.ru', uid: 'multiEmailB'},
+            ],
+          },
+          {
+            string: 'Twitter::',
+            uid: 'multiTwitter',
+            children: [
+              {string: 'https://twitter.com/anthosewolves', uid: 'multiTwitterA'},
+              {string: 'https://twitter.com/spolakh', uid: 'multiTwitterB'},
+            ],
+          },
+        ],
+      },
+    ]
+
+    await importRoam(contactsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const single = await readBlock(roamBlockId(WORKSPACE, 'singleContact'))
+    const singleProps = JSON.parse(single!.properties_json) as Record<string, unknown>
+    expect(singleProps['roam:email']).toEqual(['gliderok@gmail.com'])
+    expect(singleProps['roam:Twitter']).toEqual(['https://twitter.com/anthosewolves'])
+
+    const multi = await readBlock(roamBlockId(WORKSPACE, 'multiContact'))
+    const multiProps = JSON.parse(multi!.properties_json) as Record<string, unknown>
+    expect(multiProps['roam:email']).toEqual(['gliderok@gmail.com', 'aix123@yandex.ru'])
+    expect(multiProps['roam:Twitter']).toEqual([
+      'https://twitter.com/anthosewolves',
+      'https://twitter.com/spolakh',
+    ])
+  })
+
   it('does not merge daily pages through page_alias properties', async () => {
     const aliasExport: RoamExport = [
       {

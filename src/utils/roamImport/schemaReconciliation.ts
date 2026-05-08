@@ -6,6 +6,7 @@
  *    - all values are `[[…]]` page tokens          → 'refList' preset
  *    - all values are finite numbers               → 'number' preset
  *    - all values are true/false                   → 'boolean' preset
+ *    - mixed string scalars + string arrays         → 'list' preset
  *    - otherwise                                   → 'string' preset
  *
  *  refList classification is paired with `normalizeRefPropertyValues`
@@ -41,6 +42,10 @@ interface SampledNameStats {
    *  These map to the `list` preset, not `refList`, since the strings
    *  aren't aliases to resolve — we keep them as-is in the value. */
   plainStringArrays: number
+  /** Scalar strings that are not pure `[[X]]` token lists. If these
+   *  appear alongside plainStringArrays, the field is a string-list
+   *  property whose scalar cases need one-item-array normalization. */
+  plainStrings: number
 }
 
 const isPureTokenString = (value: string): boolean => {
@@ -70,6 +75,10 @@ const recordSample = (stats: SampledNameStats, value: unknown): void => {
     stats.pageTokenStrings += 1
     return
   }
+  if (typeof value === 'string') {
+    stats.plainStrings += 1
+    return
+  }
   if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string')) {
     if (value.every(item => isPureTokenString(item as string))) {
       stats.pageTokenArrays += 1
@@ -85,11 +94,11 @@ const classify = (stats: SampledNameStats): ClassifiedPresetId => {
   if (stats.numbers === stats.totalValues) return 'number'
   if (stats.booleans === stats.totalValues) return 'boolean'
   if (stats.pageTokenStrings + stats.pageTokenArrays === stats.totalValues) return 'refList'
-  // Mixed plain-string arrays + scalar strings still degrade to 'string'
-  // (the importer would have to stringify the arrays — out of scope).
-  // Pure plain-string arrays land in the 'list' preset so the registered
-  // codec can decode them.
-  if (stats.plainStringArrays === stats.totalValues) return 'list'
+  // Pure scalar strings remain 'string'. Once any value is a plain
+  // string-array, though, the property is structurally a list; scalar
+  // string cases are normalized to one-item arrays before writing.
+  const plainTextValues = stats.plainStrings + stats.plainStringArrays
+  if (stats.plainStringArrays > 0 && plainTextValues === stats.totalValues) return 'list'
   return 'string'
 }
 
@@ -117,6 +126,7 @@ export const collectSchemaReconciliationPlan = (
         pageTokenStrings: 0,
         pageTokenArrays: 0,
         plainStringArrays: 0,
+        plainStrings: 0,
       }
       recordSample(stats, value)
       sampler.set(name, stats)
@@ -199,6 +209,27 @@ export const normalizeStringPropertyValues = (
       const raw = block.properties[name]
       if (typeof raw === 'string') continue
       block.properties[name] = jsonStringify(raw)
+    }
+  }
+}
+
+/** List-schema normalization for Roam attributes. Promotion emits a
+ *  scalar for single `key:: value` occurrences and an array for
+ *  repeated/child-list occurrences. When schema reconciliation picks
+ *  the list preset, wrap the scalar cases so every stored value matches
+ *  the list codec shape instead of being rejected on decode. */
+export const normalizeListPropertyValues = (
+  blocks: ReadonlyArray<BlockData>,
+  listPropertyNames: ReadonlySet<string>,
+): void => {
+  if (listPropertyNames.size === 0) return
+  for (const block of blocks) {
+    if (!block.properties) continue
+    for (const name of listPropertyNames) {
+      if (!(name in block.properties)) continue
+      const raw = block.properties[name]
+      if (Array.isArray(raw)) continue
+      block.properties[name] = [raw]
     }
   }
 }
