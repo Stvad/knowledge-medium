@@ -189,7 +189,7 @@ The "first child = main" rule fits the URL semantic ("leftmost = focused/main pa
 
 ### Mobile
 
-Render only the last (focused) panel for the current tab. Close button = browser back, which pops the URL → previous block becomes current. Pure renderer change; data model unchanged.
+Render only the last (focused) panel for the current tab. **Close button does a proper close** — deletes the visible panel's row through the same path desktop's `handleClose` uses (UiState delete; observer pushes URL update). Earlier draft of this section said "close button = browser back" which doesn't hold under "push on every URL change" — browser back could undo an intra-panel link click or chevron click instead of closing the visible panel, which is the wrong affordance for a control that visually says "close." Pure renderer change; data model unchanged.
 
 ### Legacy panel-block rows in existing user DBs
 
@@ -276,8 +276,15 @@ panelLayoutProjection = {
   // No public method — wired up at construction.
 
   // For components that previously subscribed to hashchange. Fires on any
-  // change the projection is aware of (inbound URL change applied to rows,
-  // or outbound URL change after row commit).
+  // change the projection is aware of:
+  //   1. Inbound URL change applied to rows (hashchange/popstate → applyCurrentUrl
+  //      writes rows).
+  //   2. Inbound URL normalization that writes URL but not rows (bare #<wsId>
+  //      with existing rows → replaceState to the full layout, no row write).
+  //   3. Outbound URL change after a row commit (observer writes pushState).
+  // Cases 1 and 3 cover row-shape changes; case 2 is URL-shape-only but still
+  // a state change components may care about (e.g., URL bar / share-link
+  // displays would be stale otherwise).
   subscribe(listener): unsubscribe
 }
 ```
@@ -291,7 +298,7 @@ Operational details:
 - **No "intent hints" channel.** Callers don't pass `{kind: 'open-panel'}` or similar. They just write rows.
 - **`LayoutRenderer` reads through `useChildren(perTabBlock)`** where `perTabBlock = ui-state/tabs/{currentTabId}` (resolved via the existing `ensureUiChild` pattern, see "Per-tab scoping" above). No filter — children of the right parent are already the right rows. Order-key ordering is per-parent so each tab's panel order is independent. Considered shared-parent + `tabIdProp` filter and rejected: requires a filter on every render, and GC becomes a per-row scan/delete instead of one cascading subtree delete per stale tab.
 - **`navigate()`** continues to insert a panel row via `repo.tx` (UiState scope); URL update happens through the observer.
-- **Tests:** classification rule covers each diff shape (insert/delete/reorder/intra-panel/property-only/no-op); `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; duplicate-block round-trips get fresh identity (documented best-effort); two simulated tabIds don't see each other; subscribers fire after both inbound and outbound passes; rapid open/close calls converge correctly under serialization.
+- **Tests:** classification rule covers each diff shape (insert/delete/reorder/intra-panel/property-only/no-op); `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; duplicate-block round-trips get fresh identity (documented best-effort); two simulated tabIds don't see each other; subscribers fire after each of (a) inbound URL→rows, (b) inbound URL-only normalization (bare `#<wsId>` with existing rows → replaceState to full layout), (c) outbound rows→URL; rapid open/close calls converge correctly under serialization.
 
 ### 4c. Wire `navigate()` and close through panel-row writes
 
