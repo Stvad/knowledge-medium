@@ -24,6 +24,7 @@ import {
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.ts'
+import { navigate, useNavigate } from '@/utils/navigation.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -88,7 +89,7 @@ const copyBlockEmbed = (block: Block) => {
 
 const zoomIn = (block: Block, workspaceId: string) => {
   if (typeof window !== 'undefined') {
-    window.location.hash = buildAppHash(workspaceId, block.id)
+    navigate(block.repo, {blockId: block.id, workspaceId, target: 'focused'})
   }
 }
 
@@ -110,6 +111,7 @@ const BlockBullet = ({block}: { block: Block }) => {
 
   const {panelId} = useBlockContext()
   const hasChildren = useHasChildren(block)
+  const navigate = useNavigate()
 
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
@@ -123,15 +125,14 @@ const BlockBullet = ({block}: { block: Block }) => {
           className="bullet-link flex items-center justify-center h-6 w-5"
           onClick={(e) => {
             e.stopPropagation()
-            // todo this should work for any link, so it again calls for a more general navigation handler
             if (e.shiftKey) {
               e.preventDefault()
-              window.dispatchEvent(new CustomEvent('open-panel', {
-                detail: {
-                  blockId: block.id,
-                  sourcePanelId: panelId,
-                },
-              }))
+              navigate({
+                blockId: block.id,
+                workspaceId,
+                target: 'new-panel',
+                sourcePanelId: panelId,
+              })
             }
           }}
         >

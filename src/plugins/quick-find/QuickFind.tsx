@@ -20,7 +20,7 @@ import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties.ts'
 import { PAGE_TYPE } from '@/data/blockTypes.ts'
 import { v4 as uuidv4 } from 'uuid'
-import { writeAppHash } from '@/utils/routing.ts'
+import { useNavigate } from '@/utils/navigation.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
@@ -46,6 +46,7 @@ const truncate = (text: string, max = 80) =>
 export function QuickFind() {
   const repo = useRepo()
   const userPrefsBlock = useUserPrefsBlock()
+  const navigate = useNavigate()
   const [recentIds] = useUserPrefsProperty(recentBlockIdsProp)
 
   const [open, setOpen] = useState(false)
@@ -124,16 +125,15 @@ export function QuickFind() {
   }, [open, recentIds, repo])
 
   const jumpToBlock = (blockId: string) => {
-    const workspaceId = repo.activeWorkspaceId
-    if (!workspaceId) return
+    if (!repo.activeWorkspaceId) return
     pushRecentBlockId(userPrefsBlock, blockId)
-    writeAppHash(workspaceId, blockId)
+    navigate({blockId, target: 'focused'})
     setOpen(false)
   }
 
   const openInNewPanel = (blockId: string) => {
     pushRecentBlockId(userPrefsBlock, blockId)
-    window.dispatchEvent(new CustomEvent('open-panel', {detail: {blockId}}))
+    navigate({blockId, target: 'new-panel'})
     setOpen(false)
   }
 

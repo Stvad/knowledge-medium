@@ -23,6 +23,7 @@ import {
 import { Button } from './ui/button'
 import { nextVisibleBlock } from '@/utils/selection.ts'
 import { focusAdjacentPropertyRow } from '@/utils/propertyNavigation.ts'
+import { useNavigate } from '@/utils/navigation.ts'
 import { AddPropertyForm } from './propertyPanel/AddPropertyForm'
 import {
   addProperty,
@@ -58,6 +59,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
   const {panelId} = useBlockContext()
+  const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
   // Name of the property whose row was just materialised through the
   // optimistic-create path; cleared after a few seconds. The row renders
@@ -150,9 +152,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   }
 
   const openSchemaPanel = (schemaBlockId: string) => {
-    window.dispatchEvent(new CustomEvent('open-panel', {
-      detail: {blockId: schemaBlockId, sourcePanelId: panelId},
-    }))
+    navigate({blockId: schemaBlockId, target: 'new-panel', sourcePanelId: panelId})
   }
 
   const handleConfigure = async (row: PropertyPanelModelRow) => {

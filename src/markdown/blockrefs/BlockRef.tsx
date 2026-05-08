@@ -7,6 +7,7 @@ import { useBlockExists, useContent, useWorkspaceId } from '@/hooks/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
+import { useNavigate } from '@/utils/navigation'
 import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
 
 // Force the inner Markdown render to stay inline — block-level elements
@@ -33,6 +34,7 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
   const content = useContent(target)
   const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
   const runtime = useAppRuntime()
+  const navigate = useNavigate()
   const display = hasDisplayChildren(children) ? children : null
 
   if (!targetExists) {
@@ -57,9 +59,7 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
     e.stopPropagation()
     if (e.shiftKey) {
       e.preventDefault()
-      window.dispatchEvent(new CustomEvent('open-panel', {
-        detail: {blockId, sourcePanelId: panelId},
-      }))
+      navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
     }
   }
 

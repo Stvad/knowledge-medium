@@ -51,7 +51,8 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { buildAppHash, parseAppHash, writeAppHash } from '@/utils/routing.ts'
+import { parseAppHash } from '@/utils/routing.ts'
+import { navigate } from '@/utils/navigation.ts'
 import { isMainPanel } from '@/data/globalState.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
@@ -160,9 +161,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Zoom into focused block',
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
       if (isMainPanel(uiStateBlock)) {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) return
-        writeAppHash(workspaceId, block.id)
+        navigate(repo, {blockId: block.id, target: 'focused'})
       } else {
         await uiStateBlock.set(topLevelBlockIdProp, block.id)
       }
@@ -184,9 +183,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       if (!parent) return
 
       if (isMainPanel(uiStateBlock)) {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) return
-        writeAppHash(workspaceId, parent.id)
+        navigate(repo, {blockId: parent.id, target: 'focused'})
       } else {
         await uiStateBlock.set(topLevelBlockIdProp, parent.id)
       }
@@ -200,9 +197,11 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     id: 'open_focused_in_panel',
     description: 'Open focused block in a side panel',
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      window.dispatchEvent(new CustomEvent('open-panel', {
-        detail: {blockId: block.id, sourcePanelId: uiStateBlock.id},
-      }))
+      navigate(repo, {
+        blockId: block.id,
+        target: 'new-panel',
+        sourcePanelId: uiStateBlock.id,
+      })
     },
     defaultBinding: {
       keys: ['cmd+shift+.', 'ctrl+shift+.'],
@@ -248,7 +247,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       : null
     const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
     const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
-    writeAppHash(workspaceId, note.id)
+    navigate(repo, {blockId: note.id, workspaceId, target: 'focused'})
   }
 
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
@@ -260,7 +259,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const workspaceId = repo.activeWorkspaceId
         if (!workspaceId) return
         const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-        document.location.hash = buildAppHash(workspaceId, note.id)
+        navigate(repo, {blockId: note.id, workspaceId, target: 'focused'})
       },
       defaultBinding: {
         keys: ['cmd+shift+`', 'ctrl+shift+`'],
@@ -363,7 +362,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
                 // repo.create, so the freshly-imported root lives in the
                 // current workspace. Import is gated by an open workspace,
                 // so activeWorkspaceId is set here.
-                document.location.hash = buildAppHash(repo.activeWorkspaceId!, block.id)
+                navigate(repo, {blockId: block.id, target: 'focused'})
               }
             } catch (err) {
               console.error('Failed to import document:', err)

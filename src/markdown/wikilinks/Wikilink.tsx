@@ -1,6 +1,7 @@
 import { MouseEvent, ReactNode } from 'react'
 import { useBlockContext } from '@/context/block'
 import { buildAppHash } from '@/utils/routing'
+import { useNavigate } from '@/utils/navigation'
 
 export function Wikilink({alias, blockId, workspaceId, children}: {
   alias: string
@@ -9,6 +10,7 @@ export function Wikilink({alias, blockId, workspaceId, children}: {
   children: ReactNode
 }) {
   const {panelId} = useBlockContext()
+  const navigate = useNavigate()
 
   // Reference resolution is an invariant maintained by parseAndUpdateReferences
   // on every block.change(). If we ever land here without a blockId it's a
@@ -22,9 +24,7 @@ export function Wikilink({alias, blockId, workspaceId, children}: {
     e.stopPropagation()
     if (e.shiftKey) {
       e.preventDefault()
-      window.dispatchEvent(new CustomEvent('open-panel', {
-        detail: {blockId, sourcePanelId: panelId},
-      }))
+      navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
     }
   }
 
