@@ -42,6 +42,7 @@ Built from the existing `ensureUiChild` pattern in `globalState.ts` — `ensureU
 
 - **`tabId` lives in `sessionStorage`** (per-tab natively, persists across reload of the same tab, dies on tab close).
 - On first load: read `sessionStorage['ws-nav.tabId']`; if missing, generate a UUID and store it. (Browsers don't expose a native tab id — `window.name` is the closest but unsafe to share with frames/scripts; Service Worker client ids are per-document and only visible inside the SW. Storing a UUID in `sessionStorage` is the canonical pattern.)
+- **Caveat (accepted for alpha):** "duplicate tab" / "open in new tab" flows can clone the initial `sessionStorage`, so the new tab starts with the same `tabId` and ends up sharing the per-tab block with its opener. We accept this — the failure mode is the same as having one extra browser tab effectively, and the workaround (lease/heartbeat to rotate `tabId` when another live tab claims it) is more machinery than the cost warrants right now. Note as a known limitation; revisit if it becomes a real issue.
 - Layout reads use `useChildren(perTabBlock)` directly — no filter. Order-key sorting is per-parent, so each tab's panel order is independent.
 - Reconciliation writes target the per-tab block's children.
 
@@ -162,11 +163,29 @@ Refactored landing flow (replaces the eager-daily-note rewrite):
 - On bare `#<wsId>` (initial load OR workspace switch), `applyCurrentUrl` looks up panel rows for `(tabId, newWsId)`:
   - **If rows exist** (user has visited this workspace in this tab before): build URL `#<newWsId>/<block1>/<block2>/...` from those rows and `replaceState` to it, no row writes. Net effect: bare `#<newWsId>` is treated as "go to this workspace, restore my last layout for it." `replaceState` (not push) collapses the bare URL into the full one without doubling the history entry.
   - **If no rows exist** (first time visiting in this tab): the **landing layer** sitting alongside the projection resolves today's daily note, does `history.replaceState(_, _, buildLayout(wsId, [dailyNoteId]))`, then `repo.tx(UiState, tx => insertPanelRow(dailyNoteId))`. The replaceState lands first so the projection's idempotency rule kicks in: row write fires the observer, observer builds the same URL, no-ops. One history entry, URL `#<wsId>/<dailyNoteId>`, no ping-pong on browser back.
-- `getInitialBlock` in App.tsx loses its daily-note resolution; that logic moves into the landing layer. The Suspense boundary keeps working — the landing layer awaits `applyCurrentUrl` + (if needed) daily-note resolution + insert before resolving its promise, so React doesn't paint a half-resolved state.
+- **App/Suspense handoff.** `getInitialBlock` no longer resolves a single "landing block." Its replacement returns `{workspaceId, perTabBlock}` once URL + per-tab rows are normalized, and *that's* what App passes to the layout host. Concretely:
+  - `getInitialBlock` (or its renamed successor): resolves the workspace, ensures the per-tab block exists, runs `applyCurrentUrl`, then if the per-tab block still has no children defers to the landing layer (replaceState `#<wsId>/<dailyNoteId>` + insert row); awaits all of the above before resolving. Returns `{workspaceId, perTabBlock}`.
+  - `LayoutRenderer` (or whatever the top-level layout host is) takes `perTabBlock` as its prop instead of a single landing block, and reads `useChildren(perTabBlock)` for the panel list. No "give me one block to render" handoff; the layout host always works from the per-tab block.
+  - Net effect: TopLevelRenderer never receives a "main block" id from bootstrap; the entry block is whatever ends up at `perTabBlock.children[0]?.topLevelBlockIdProp`. Avoids accidentally keeping a vestigial daily-note bootstrap path just to satisfy a rendering contract that no longer applies.
+- The Suspense boundary keeps working — the resolved promise gates first paint, just resolves to the per-tab block now instead of a single landing block.
 - **Workspace switch path:** caller writes `#<newWsId>` to URL (`writeAppHash` is fine). Same flow as above runs.
 - Per-(tabId, wsId) row persistence means each tab maintains its own per-workspace layout history. Switching back and forth between two workspaces in one tab restores each side's layout. Other tabs' rows are unaffected.
 
 Keeps the "always land on something" UX, keeps the parser dumb, keeps the projection narrow, and keeps the "DB row write drives URL" property — bootstrap is the one place that pre-writes the URL because it explicitly wants replace-not-push semantics for what would otherwise look like an insert.
+
+### Main panel = first ordered child of per-tab block
+
+Today the "main" panel is identified by `panel.content === MAIN_PANEL_NAME` ('main'), a sentinel value written by `ensureMainPanel`. With the per-tab parent layout, this stops being meaningful: there's no need for a sentinel-content row, and the leftmost panel can naturally change identity (close-of-leftmost, drag-reorder).
+
+New semantics: **main panel = first child of the per-tab block by order key.** Positional, no special content. Implications across the codebase:
+
+- **`ensureMainPanel`** (LayoutRenderer): deleted. The landing layer's row insert (or any user nav that produces the first row) creates whatever block becomes "main" for that `(tabId, wsId)`. No sentinel row.
+- **`MAIN_PANEL_NAME` + `isMainPanel(block)` content check** (globalState, PanelRenderer, navigation, defaultShortcuts, tests): replaced with a positional helper, e.g. `isMainPanel(block, perTabBlock) → block.id === perTabBlock.children[0]?.id`. Memoized at the appropriate scope.
+- **PanelRenderer's chrome-hiding** (close button, back/forward chevrons currently hidden on main): now driven by the positional check. If user reorders panels so a different one becomes leftmost, chrome hides on the new leftmost.
+- **`target: 'main'`** in `NavigateInput` (alt-click): updates `topLevelBlockIdProp` on the first child of the per-tab block, regardless of which panel the click came from.
+- **Default shortcuts** that branch on `isMainPanel(uiStateBlock)`: same swap to positional check.
+
+The "first child = main" rule fits the URL semantic ("leftmost = focused/main panel"). Drag-reorder and close-of-leftmost both shift the main role to whatever ends up first; mental model matches.
 
 ### Mobile
 
@@ -297,7 +316,9 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 ### 4e. Cleanup
 
 - Delete `'open-panel'` CustomEvent (event name + dispatcher + listener).
-- Audit `ensureMainPanel`: keep as the projection's "ensure rows match URL on workspace switch" helper (renamed if its scope shifts).
+- **Delete `ensureMainPanel`, `MAIN_PANEL_NAME`, and the content-based `isMainPanel`.** Replace `isMainPanel` with a positional helper (first child of per-tab block); update PanelRenderer chrome-hiding, default shortcut branches, and navigation routing call sites accordingly. See "Main panel = first ordered child of per-tab block" above.
+- Update tests that reference `MAIN_PANEL_NAME` / panel-content-as-sentinel to use positional setup instead.
+- Delete the legacy `getPanelsBlock` / `PANELS_PATH_PART` indirection if nothing reads from `ui-state/panels` anymore.
 - Confirm no panel-row writes use a non-UiState scope outside the projection.
 
 ## Post-step-4: emacs-grade extensibility (separate work)
