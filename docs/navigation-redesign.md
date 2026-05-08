@@ -30,20 +30,33 @@ The flat-list URL is a degenerate case of the durable data model — a **slot tr
 
 ```ts
 type Slot =
-  | {kind: 'leaf';   block: BlockId}
-  | {kind: 'tabs';   children: Slot[]; active: number}
-  | {kind: 'split';  orient: 'h'|'v'; ratios: number[]; children: Slot[]}
+  | {kind: 'leaf';   block: BlockId}                                       // terminal content node — a block in a position
+  | {kind: 'tabs';   children: Slot[]; active: number}                     // arrangement: pick one of N
+  | {kind: 'split';  orient: 'h'|'v'; ratios: number[]; children: Slot[]}  // arrangement: lay out N side-by-side
 ```
 
-(Same shape IDEs / Emacs use for window layout.) Step 4 implements the linear-tabs case; the model can grow into splits/named tabs without re-architecting.
+Same shape IDEs / Emacs use for window layout. `tabs` and `split` are arrangement containers; `leaf` is the actual rendered block (the recursion has to bottom out somewhere). Step 4 implements the all-leaves-in-one-tabs case; the model can grow into splits / nested tabs / etc. without re-architecting.
 
-Transport options when we need richer layouts:
+**URL transport: inline grammar, current flat list is a strict subset.** Block ids are alnum+`-_`, so `,` `|` `:` `(` `)` are free as structural chars:
 
-- **URL = flat list** (current step-4 plan): structure is implicit, all slots are leaves in one tabs container. Cheap, shareable.
-- **URL = layout-id** (`#wsId/L7`): URL carries an opaque pointer; the tree lives in IndexedDB / a saved-layouts table. Clean URL, not shareable across devices unless we also sync the layout def.
-- **URL = inlined tree** (`#wsId/share=<base64>`): expand on demand for "share this layout" — heavy, but bounded and self-contained.
+| What | Syntax | Example |
+|---|---|---|
+| leaf | bare id | `b1` |
+| tabs | comma in parens | `(b1,b2,b3)` — active = first; `(b1,b2,b3:1)` to pin active |
+| h-split | `h:` prefix | `(h:b1,b2)` |
+| v-split | `v:` prefix | `(v:b1,b2)` |
+| top level | `/`-separated slots (implicit outer tabs container) | `b1/b2/b3` |
 
-Decision punt: pick whichever transport when the first non-linear layout actually lands. Right now the data model is a tabs-of-leaves and the URL is a flat list, no need to commit further.
+Examples across complexity:
+
+```
+current Roam sidebar   #wsId/b1/b2/b3
+tabs in second slot    #wsId/b1/(b2,b3)/b4
+horizontal split       #wsId/(h:b1,b2)
+nested                 #wsId/b1/(h:(v:b2,b3),b4)
+```
+
+Step 4 only ships the bare-id + `/`-separated case. Adding `()` groups later is a parser extension, not a breaking change — every URL that worked before keeps working. Layout-id (`#wsId/L7` pointing at a stored layout) stays available as an opt-in for *named* saved layouts; not the default transport.
 
 ### Slot identity
 
@@ -141,5 +154,5 @@ The current navigation code grew before facet was the dominant idiom; once step 
 
 - No back-compat for the old `#wsId/blockId?panels=...` shape we never shipped. Old `#wsId/blockId` is a special case of the new shape, so it parses fine.
 - Reload-survival of slot identity / per-visit state: not in step 4. Bolt on via sessionStorage if/when needed.
-- Persistent named layouts: not in step 4. A future feature; URL would carry `?layout=id` and the structure would live in DB.
+- Persistent named layouts: not in step 4. A future feature; URL would carry an opaque layout id (`#wsId/L7`) and the structure would live in a saved-layouts store. Coexists with the inline grammar — opt-in only when the user explicitly names a layout.
 - Cross-device sync of any panel layout: explicitly NOT a goal — that's the whole reason for the move out of DB.
