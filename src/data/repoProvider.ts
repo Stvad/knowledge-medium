@@ -129,13 +129,16 @@ const installInitTimingProbe = (db: PowerSyncDatabase): void => {
 
   const inner = db.database as unknown as {
     execute: (sql: string, params?: unknown[]) => Promise<unknown>
+    executeRaw?: (sql: string, params?: unknown[]) => Promise<unknown>
     get?: (sql: string, params?: unknown[]) => Promise<unknown>
     getAll?: (sql: string, params?: unknown[]) => Promise<unknown>
     getOptional?: (sql: string, params?: unknown[]) => Promise<unknown>
+    init?: () => Promise<unknown>
+    refreshSchema?: () => Promise<unknown>
   }
 
   let active = true
-  const wrap = <Args extends unknown[], R>(name: string, fn: (...args: Args) => Promise<R>) =>
+  const wrapSql = <Args extends unknown[], R>(name: string, fn: (...args: Args) => Promise<R>) =>
     async (...args: Args): Promise<R> => {
       if (!active) return fn(...args)
       const sql = typeof args[0] === 'string' ? args[0] : ''
@@ -144,19 +147,33 @@ const installInitTimingProbe = (db: PowerSyncDatabase): void => {
         return await fn(...args)
       } finally {
         const dt = Math.round(performance.now() - t0)
-        // Skip noise — under 5ms is rarely interesting and there are
-        // many sub-millisecond hits.
-        if (dt >= 5) {
+        // Threshold lowered to 1ms — we want full visibility into the
+        // sub-second init window, even calls that look cheap.
+        if (dt >= 1) {
           console.log(`[suspense] powersync.init.sql (${dt}ms) ${name}: ${sql.slice(0, 100)}`)
         }
       }
     }
 
-  const origExecute = inner.execute.bind(inner)
-  inner.execute = wrap('execute', origExecute)
-  if (inner.get) inner.get = wrap('get', inner.get.bind(inner))
-  if (inner.getAll) inner.getAll = wrap('getAll', inner.getAll.bind(inner))
-  if (inner.getOptional) inner.getOptional = wrap('getOptional', inner.getOptional.bind(inner))
+  const wrapPhase = <Args extends unknown[], R>(name: string, fn: (...args: Args) => Promise<R>) =>
+    async (...args: Args): Promise<R> => {
+      if (!active) return fn(...args)
+      const t0 = performance.now()
+      try {
+        return await fn(...args)
+      } finally {
+        const dt = Math.round(performance.now() - t0)
+        console.log(`[suspense] powersync.init.${name} (${dt}ms)`)
+      }
+    }
+
+  inner.execute = wrapSql('execute', inner.execute.bind(inner))
+  if (inner.executeRaw) inner.executeRaw = wrapSql('executeRaw', inner.executeRaw.bind(inner))
+  if (inner.get) inner.get = wrapSql('get', inner.get.bind(inner))
+  if (inner.getAll) inner.getAll = wrapSql('getAll', inner.getAll.bind(inner))
+  if (inner.getOptional) inner.getOptional = wrapSql('getOptional', inner.getOptional.bind(inner))
+  if (inner.init) inner.init = wrapPhase('database.init', inner.init.bind(inner))
+  if (inner.refreshSchema) inner.refreshSchema = wrapPhase('database.refreshSchema', inner.refreshSchema.bind(inner))
 
   void db.waitForReady().finally(() => { active = false })
 }
