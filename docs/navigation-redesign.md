@@ -22,7 +22,28 @@ Open-panels list moves from the workspace UI-state DB into the URL. Driving chan
 
 Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) = no panels rendered (workspace landing). Compact, shareable, human-readable.
 
-If layouts beyond Roam-sidebar arrive (splits, tabs), switch to layout-by-id (`?layout=L7`) — URL just carries a short id, structure stored locally as a saved layout.
+Sticking with hash (vs query string / pathname): hash works on any static host with no SPA-fallback config, and block ids never leak into HTTP request lines, server logs, or `Referer` headers. No SEO/SSR target makes the usual reasons to prefer pathname routing moot. Query params remain available for orthogonal config (`?debug=1#wsId/b1/b2`).
+
+#### Beyond a flat list
+
+The flat-list URL is a degenerate case of the durable data model — a **slot tree**:
+
+```ts
+type Slot =
+  | {kind: 'leaf';   block: BlockId}
+  | {kind: 'tabs';   children: Slot[]; active: number}
+  | {kind: 'split';  orient: 'h'|'v'; ratios: number[]; children: Slot[]}
+```
+
+(Same shape IDEs / Emacs use for window layout.) Step 4 implements the linear-tabs case; the model can grow into splits/named tabs without re-architecting.
+
+Transport options when we need richer layouts:
+
+- **URL = flat list** (current step-4 plan): structure is implicit, all slots are leaves in one tabs container. Cheap, shareable.
+- **URL = layout-id** (`#wsId/L7`): URL carries an opaque pointer; the tree lives in IndexedDB / a saved-layouts table. Clean URL, not shareable across devices unless we also sync the layout def.
+- **URL = inlined tree** (`#wsId/share=<base64>`): expand on demand for "share this layout" — heavy, but bounded and self-contained.
+
+Decision punt: pick whichever transport when the first non-linear layout actually lands. Right now the data model is a tabs-of-leaves and the URL is a flat list, no need to commit further.
 
 ### Slot identity
 
@@ -49,7 +70,7 @@ Reload survival not implemented; could be bolted on later via sessionStorage key
 
 ### Workspace switch
 
-Clear `?panels` — URL becomes `#<new-wsId>` (no panels). A block from workspace A makes no sense in workspace B.
+URL becomes `#<new-wsId>` — just the workspace id, empty block list. A block from workspace A makes no sense in workspace B, so we don't try to carry the panel list across.
 
 ### Mobile
 
