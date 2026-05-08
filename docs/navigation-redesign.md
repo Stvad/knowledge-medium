@@ -90,6 +90,24 @@ URL ↔ DB reconciliation on hashchange: LCS diff matches URL block list to exis
 
 This gives clean separation: browser back operates over panel layout; per-panel back operates over within-panel block history.
 
+#### Event mechanics (the part that bites)
+
+Browser hash/history APIs each fire a different subset of events. Spelling it out so the projection handles all three cases:
+
+| Action | Fires `hashchange`? | Fires `popstate`? | History? |
+|---|---|---|---|
+| `location.hash = X` | yes | no | always pushes |
+| `history.pushState(_, _, '#X')` | no | no | pushes |
+| `history.replaceState(_, _, '#X')` | no | no | replaces current entry |
+| User clicks back/forward (same doc) | yes if hash changed | yes | navigates |
+
+Implications:
+
+- We can't use `location.hash = X` for the replace-state case (intra-panel nav) — it always pushes. Must use `replaceState`.
+- `pushState` / `replaceState` notify *no one*. The projection has to call its own subscribers after writing.
+- For external URL changes (back/forward, user typing in URL bar, other tabs writing the hash via `BroadcastChannel`-like mechanisms), we need to listen to **both** `hashchange` and `popstate` — `hashchange` alone misses pushState-based history entries when both endpoints have the same hash (rare for us but possible), and `popstate` alone misses external `location.hash` writes.
+- Existing `useHash` (`hashchange` only) is enough for today's `writeAppHash` (which uses `location.hash =`). After step 4, components stop subscribing to `hashchange` directly and instead subscribe to the projection — which internally listens to both events and emits a single normalized change.
+
 ### Visit state (focused block, scroll) — persist via UiState properties
 
 Already partially shipped in step 3 as in-memory snapshots on panel-history entries. Promote to DB-backed:
@@ -105,9 +123,15 @@ Reload-survival of focus + scroll is now free, since DB rows persist and `tabId`
 
 The snapshotter pattern remains as the bridge between PanelRenderer and the in-memory stack; the data it captures (focused, scroll) is the same data we now persist as UiState properties.
 
-### Workspace switch
+### Workspace switch + default landing
 
-URL becomes `#<new-wsId>` — just the workspace id, empty block list. The projection clears panel rows for the current `tabId` and the new workspace renders blank. Other tabs' panel rows are unaffected.
+URL `#<wsId>` (no block list) doesn't mean "render blank" — current bootstrap (App.tsx ~line 181, `getInitialBlock`) treats missing block id as "land on today's daily note" and writes the full hash back via `writeAppHash`. We keep that behavior. Resolution:
+
+- The **parser** is still pure: `parseLayout('#<wsId>')` → `{workspaceId, blockIds: []}`. It doesn't know about defaults.
+- The **landing layer** (existing bootstrap, post-step-4 sitting just above the projection) detects `blockIds: []` and calls `panelLayoutProjection.openPanel(dailyNoteId, {replace: true})` — replace mode because we're fixing up the URL, not navigating. The user sees `#<wsId>/<dailyNoteId>` after one synchronous projection pass.
+- Workspace switch path: caller invokes `setWorkspace(newWsId)`, projection writes `#<newWsId>` and clears panel rows for current tab; the landing layer then fills in the daily note for the new workspace. Other tabs' rows are unaffected.
+
+Keeps the "always land on something" UX, keeps the parser dumb, keeps the projection narrow. Defaults live in one explicit place above the projection rather than smuggled into the parser.
 
 ### Mobile
 
@@ -134,14 +158,37 @@ Per-panel back/forward stays bound to the chevrons in panel chrome.
 
 No behavior change yet — the parser/tabId infrastructure exists but nothing reads the URL or writes the tabId.
 
-### 4b. URL ↔ panel-row projection
+### 4b. URL ↔ panel-row projection (narrow, centralized API)
 
-- New `panelLayoutProjection.ts` (or fold into `routing.ts`):
-  - On `hashchange`: parse → LCS reconcile against panel rows for `(currentWorkspaceId, currentTabId)` → write rows in a single UiState tx (insert/delete to match URL block list, preserve existing rows on identity match).
-  - On panel-row mutation in current tab: build URL, write hash via `pushState` (open/close) or `replaceState` (intra-panel nav).
-  - Loop guard: tag programmatic URL writes so the resulting `hashchange` is a no-op for that pass.
-- Existing `LayoutRenderer` keeps reading `panelBlock.children`, but now those children are kept in sync with URL.
-- Tests: open-panel writes URL; close-panel writes URL; browser back replays panel rows; reload restores layout; reorder preserves rowId; two simulated tabIds don't see each other.
+The projection is the *single* place that classifies user intent and translates it into URL writes + row writes. It does **not** observe arbitrary row mutations and try to infer intent — that path leads to fragility (was this insert an open-panel or a reorder? was this delete user-initiated or workspace-switch fallout?). All callers go through explicit methods; the projection knows exactly what's happening.
+
+New `panelLayoutProjection.ts` shape:
+
+```ts
+panelLayoutProjection = {
+  // Inbound: external URL change (back/forward, user typed URL, etc.).
+  // Listens internally to hashchange + popstate.
+  applyCurrentUrl(): void
+
+  // Outbound: explicit user-intent methods. Each one writes panel rows
+  // (UiState scope) AND writes URL with the right history mode.
+  openPanel(blockId, opts?: {sourceRowId?: string; replace?: boolean}): void
+                                                            // default pushState; replace=true for bootstrap landing
+  closePanel(rowId): void                                   // pushState
+  navigateInPanel(rowId, blockId): void                     // replaceState
+  setWorkspace(workspaceId): void                           // pushState, clears panel rows for this tab
+
+  // Subscriber API for components that previously subscribed to hashchange.
+  subscribe(listener): unsubscribe
+}
+```
+
+- `applyCurrentUrl`: parse → LCS reconcile against panel rows for `(currentWorkspaceId, currentTabId)` → write rows in a single UiState tx (insert/delete to match URL block list, preserve existing rows on identity match).
+- Each outbound method: writes rows in a UiState tx, then writes URL via `pushState` or `replaceState`, then notifies subscribers (since pushState/replaceState fire no events themselves).
+- Loop guard: a re-entrancy flag set during the projection's own URL writes; if `applyCurrentUrl` fires while that flag is set, it's a no-op for that pass.
+- Existing `LayoutRenderer` keeps reading `panelBlock.children`, but those children are now kept in sync with URL via the projection.
+- `navigate()` and `handleClose` call the projection's methods directly; no observer indirection.
+- Tests: each method writes the right URL with the right history mode; `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; two simulated tabIds don't see each other; subscribers fire on outbound writes.
 
 ### 4c. Wire `navigate()` and close through the projection
 
