@@ -12,6 +12,12 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && exec yarn agent:server"],
       "port": 8787
+    },
+    {
+      "name": "prod-preview",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-lc", "source $HOME/.nvm/nvm.sh && nvm use 24 >/dev/null && yarn build && exec yarn preview --port 4173"],
+      "port": 4173
     }
   ]
 }
