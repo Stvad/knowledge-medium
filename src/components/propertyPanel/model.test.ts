@@ -98,6 +98,39 @@ describe('buildPropertyPanelModel', () => {
     }])
   })
 
+  it('renders synthetic known rows as unset values without storing defaults', () => {
+    const dateProp = defineProperty<Date | undefined>('due', {
+      codec: codecs.date,
+      defaultValue: undefined,
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+    const model = buildPropertyPanelModel({
+      blockId: 'block-1',
+      updatedAt: 1700_000_000_000,
+      updatedBy: 'user-1',
+      properties: {},
+      schemas: schemasMap([dateProp]),
+      uis: uisMap([]),
+      presets: new Map(),
+      typesRegistry: new Map(),
+      syntheticRows: [{
+        name: dateProp.name,
+        encodedValue: undefined,
+        isSet: false,
+      }],
+    })
+
+    const row = model.sections.flatMap(section => section.rows)
+      .find(candidate => candidate.name === dateProp.name)
+    expect(row).toMatchObject({
+      name: dateProp.name,
+      isSet: false,
+      decodeFailed: false,
+      value: undefined,
+    })
+  })
+
   it('falls back to scope and system-name hiding without UI metadata', () => {
     const uiStateProp = defineProperty<string>('plugin:selection', {
       codec: codecs.string,

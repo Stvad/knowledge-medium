@@ -44,6 +44,14 @@ interface BlockPropertiesProps {
 
 const EMPTY_PROPERTIES: Record<string, unknown> = {}
 
+const hasOwn = (properties: Record<string, unknown>, name: string): boolean =>
+  Object.prototype.hasOwnProperty.call(properties, name)
+
+interface SyntheticPropertyRef {
+  readonly blockId: string
+  readonly name: string
+}
+
 export function BlockProperties({block}: BlockPropertiesProps) {
   const blockData = useHandle(block, {
     selector: data => data
@@ -61,6 +69,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const {panelId} = useBlockContext()
   const navigate = useNavigate()
   const [showHiddenFields, setShowHiddenFields] = useState(false)
+  const [syntheticProperties, setSyntheticProperties] = useState<readonly SyntheticPropertyRef[]>([])
   // Name of the property whose row was just materialised through the
   // optimistic-create path; cleared after a few seconds. The row renders
   // a "New schema" pill while the name is here, so the user notices that
@@ -87,6 +96,20 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const typesRegistry = runtime.read(typesFacet)
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
+  const syntheticRows = useMemo(
+    () => syntheticProperties
+      .filter(ref =>
+        ref.blockId === block.id
+        && !hasOwn(properties, ref.name)
+        && schemas.has(ref.name),
+      )
+      .map(ref => ({
+        name: ref.name,
+        encodedValue: undefined,
+        isSet: false,
+      })),
+    [block.id, properties, schemas, syntheticProperties],
+  )
 
   const model = useMemo(() => blockData
     ? buildPropertyPanelModel({
@@ -98,9 +121,10 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       uis,
       presets,
       typesRegistry,
+      syntheticRows,
     })
     : null,
-  [blockData, presets, properties, schemas, typesRegistry, uis])
+  [blockData, presets, properties, schemas, syntheticRows, typesRegistry, uis])
 
   if (!blockData || !model) return null
 
@@ -199,7 +223,13 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         recentlyMaterialized={recentlyMaterializedName === row.name}
         onNavigate={handlePropertyRowKeyDown}
         onConfigure={() => void handleConfigure(row)}
-        onChange={(next) => writeProperty(block, row.schema, next)}
+        onChange={(next) => {
+          void writeProperty(block, row.schema, next).then(() => {
+            setSyntheticProperties(refs =>
+              refs.filter(ref => ref.blockId !== block.id || ref.name !== row.name),
+            )
+          })
+        }}
         onRename={(newName) => void renameProperty({
           block,
           properties,
@@ -248,7 +278,15 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         <AddPropertyForm
           key={block.id}
           blockId={block.id}
-          onAdd={(args) => addProperty(block, schemas, uis, args)}
+          onAdd={async (args) => {
+            const schema = await addProperty(block, schemas, uis, args)
+            if (!schema) return
+            setSyntheticProperties(refs =>
+              refs.some(ref => ref.blockId === block.id && ref.name === schema.name)
+                ? refs
+                : [...refs, {blockId: block.id, name: schema.name}],
+            )
+          }}
           onConfigureNewSchema={async ({name, presetId}) => {
             const trimmed = name.trim()
             if (!trimmed) return undefined

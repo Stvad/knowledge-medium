@@ -1,8 +1,8 @@
 /** AddPropertyForm — the panel's "add a field" entry point. The form
  *  autocompletes the name input from registered schemas; on submit it
  *  either adopts an existing schema or asks UserSchemasService.addSchema
- *  to create a new one (default preset: 'ref') before the property's
- *  initial value is written. The glyph button materializes a schema
+ *  to create a new one (default preset: 'ref') before the caller shows
+ *  an unset row for the property. The glyph button materializes a schema
  *  early and opens it in a side panel for preset/config editing —
  *  the same path as configuring an unregistered row in the panel. */
 
@@ -173,9 +173,8 @@ export function AddPropertyForm({
     const schema = await onConfigureNewSchema({name, presetId})
     if (!schema) return
     // The user confirmed creation by clicking the glyph; treat it as a
-    // submit so the row materialises in the panel and the form closes.
-    // Side-panel for further config has already opened via the
-    // callback.
+    // submit so the unset row appears in the panel and the form closes.
+    // Side-panel for further config has already opened via the callback.
     void submit(schema)
   }, [focusNameInput, onConfigureNewSchema, presetId, propertyName, submit, submitting])
 

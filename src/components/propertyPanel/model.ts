@@ -183,6 +183,7 @@ export const buildPropertyPanelModel = (args: {
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>
   presets: ReadonlyMap<string, AnyValuePreset>
   typesRegistry: ReadonlyMap<string, TypeContribution>
+  syntheticRows?: readonly PropertyPanelRow[]
 }): PropertyPanelModel => {
   const blockTypes = readBlockTypes(args.properties)
   const {visibleProperties, hiddenProperties} = partitionProperties(
@@ -214,6 +215,7 @@ export const buildPropertyPanelModel = (args: {
     blockTypes,
     typesRegistry: args.typesRegistry,
     schemas: args.schemas,
+    syntheticRows: args.syntheticRows,
   })
 
   const sections = rawSections

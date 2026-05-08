@@ -20,22 +20,21 @@ export const writeProperty = (
 
 /** AddPropertyForm submit handler: adopt a registered schema if the
  *  user picked one, or have UserSchemasService.addSchema register a
- *  new one synchronously. Either way, write the schema's defaultValue
- *  on the target block as the property's initial value. Refuses
+ *  new one synchronously. The returned schema lets the caller render an
+ *  unset row without writing the schema default as stored data. Refuses
  *  hidden / reserved names. */
 export const addProperty = async (
   block: Block,
   schemas: ReadonlyMap<string, AnyPropertySchema>,
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
   args: AddPropertyArgs,
-): Promise<void> => {
+): Promise<AnyPropertySchema | undefined> => {
   const name = args.name.trim()
-  if (!name) return
-  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return
+  if (!name) return undefined
+  if (isPropertyPanelHiddenProperty(name, schemas, uis)) return undefined
 
   if (args.adopted) {
-    await writeProperty(block, args.adopted, args.adopted.defaultValue)
-    return
+    return args.adopted
   }
 
   // Existing registered schema with the same name → adopt it instead
@@ -43,18 +42,17 @@ export const addProperty = async (
   // suggestion; this is the fallback for non-autocomplete submits).
   const existing = schemas.get(name)
   if (existing) {
-    await writeProperty(block, existing, existing.defaultValue)
-    return
+    return existing
   }
 
   try {
-    const schema = await block.repo.userSchemas.addSchema({
+    return await block.repo.userSchemas.addSchema({
       name,
       presetId: args.presetId,
     })
-    await writeProperty(block, schema, schema.defaultValue)
   } catch (err) {
     console.error(`[addProperty] failed to register schema for "${name}":`, err)
+    return undefined
   }
 }
 

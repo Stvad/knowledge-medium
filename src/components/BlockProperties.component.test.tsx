@@ -408,7 +408,7 @@ describe('BlockProperties component', () => {
     expect(screen.getByText('phase2:reviewer')).toBeTruthy()
   })
 
-  it('AddPropertyForm: glyph click materialises a schema, opens its panel, and confirms creation', async () => {
+  it('AddPropertyForm: glyph click registers a schema, opens its panel, and shows an unset row', async () => {
     const block = repo.block('block-1')
 
     const openPanelEvents: Array<{blockId: string}> = []
@@ -444,7 +444,10 @@ describe('BlockProperties component', () => {
         expect(openPanelEvents).toEqual([{blockId: newId}])
       })
       await waitFor(() => {
-        expect('priority' in block.data.properties).toBe(true)
+        expect('priority' in block.data.properties).toBe(false)
+      })
+      await waitFor(() => {
+        expect(propertyRow('priority')).toBeTruthy()
       })
       // Form has closed — the placeholder input is gone, replaced by the
       // "Field" trigger button.
@@ -476,7 +479,10 @@ describe('BlockProperties component', () => {
     })
 
     await waitFor(() => {
-      expect(block.data.properties.mood).toBe('')
+      expect('mood' in block.data.properties).toBe(false)
+    })
+    await waitFor(() => {
+      expect(propertyRow('mood')).toBeTruthy()
     })
     await waitFor(() => {
       const moodInput = document.querySelector<HTMLInputElement>(
