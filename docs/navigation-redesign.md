@@ -27,7 +27,7 @@ The only deviation we considered (a fresh in-memory `panelLayoutStore`) was redu
 Without tab scoping, two browser tabs on the same workspace would share panel rows (and clobber each other's URL state). Add a `tabId` property on panel rows:
 
 - `tabId` lives in `sessionStorage` (per-tab natively, persists across reload of the same tab, dies on tab close).
-- On first load: read `sessionStorage['ws-nav.tabId']`; if missing, generate a UUID and store it.
+- On first load: read `sessionStorage['ws-nav.tabId']`; if missing, generate a UUID and store it. (Browsers don't expose a native tab id — `window.name` is the closest but unsafe to share with frames/scripts; Service Worker client ids are per-document and only visible inside the SW. Storing a UUID in `sessionStorage` is the canonical pattern.)
 - Layout query filters panel rows to `(workspaceId, tabId)`. Each tab renders its own slice.
 - Reconciliation writes are scoped to current `tabId`.
 
