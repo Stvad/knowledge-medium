@@ -18,11 +18,11 @@ window.ReactDOM = ReactDOM
 // rendered as a recoverable UI instead of a blank screen.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <Suspense fallback={<SuspenseFallback/>}>
+    <Suspense fallback={<SuspenseFallback name="outer-bootstrap"/>}>
       <Login>
         <ErrorBoundary FallbackComponent={BootstrapErrorFallback}>
           <RepoProvider>
-            <Suspense fallback={<SuspenseFallback/>}>
+            <Suspense fallback={<SuspenseFallback name="app-init"/>}>
               <App/>
             </Suspense>
           </RepoProvider>

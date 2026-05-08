@@ -42,6 +42,7 @@ import {
   isEditingProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle } from '@/hooks/block'
+import { traceSuspense } from '@/utils/suspenseDebug.ts'
 
 /**
  * One of core principles of the system is to store all state within the system.
@@ -253,7 +254,8 @@ export function useUIStateBlock(): Block {
   const user = useUser()
   const workspaceId = requireWorkspaceId(repo, 'useUIStateBlock')
 
-  return use(getUIStateBlock(repo, workspaceId, user, context))
+  const label = context.panelId ? `ui-state-block:panel(${context.panelId})` : 'ui-state-block:root'
+  return use(traceSuspense(label, getUIStateBlock(repo, workspaceId, user, context)))
 }
 
 /** Root app-shell UI state, independent of the current panel context. */
@@ -262,7 +264,7 @@ export function useRootUIStateBlock(): Block {
   const user = useUser()
   const workspaceId = requireWorkspaceId(repo, 'useRootUIStateBlock')
 
-  return use(getUIStateBlock(repo, workspaceId, user, {}))
+  return use(traceSuspense('ui-state-block:root', getUIStateBlock(repo, workspaceId, user, {})))
 }
 
 export function useUserBlock(): Block {
@@ -270,7 +272,7 @@ export function useUserBlock(): Block {
   const user = useUser()
   const workspaceId = requireWorkspaceId(repo, 'useUserBlock')
 
-  return use(getUserBlock(repo, workspaceId, user))
+  return use(traceSuspense('user-block', getUserBlock(repo, workspaceId, user)))
 }
 
 export function useUserPrefsBlock(): Block {
@@ -278,7 +280,7 @@ export function useUserPrefsBlock(): Block {
   const user = useUser()
   const workspaceId = requireWorkspaceId(repo, 'useUserPrefsBlock')
 
-  return use(getUserPrefsBlock(repo, workspaceId, user))
+  return use(traceSuspense('user-prefs-block', getUserPrefsBlock(repo, workspaceId, user)))
 }
 
 /** Hook to access and modify a UI-state property on the active UI-state

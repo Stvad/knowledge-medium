@@ -54,6 +54,7 @@ import {
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.ts'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+import { traceSuspensePhase } from '@/utils/suspenseDebug.ts'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({
@@ -183,7 +184,7 @@ export const ensurePowerSyncReady = async (
 }
 
 const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
-  await powerSyncDb.init()
+  await traceSuspensePhase('powersync.init', () => powerSyncDb.init())
 
   // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
   // VFSes implement xShmMap (the wal-index shared-memory primitive
@@ -211,28 +212,34 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
   // recursive CTEs) off OPFS — they're transient and don't need to
   // survive a crash, and the OPFS VFS doesn't perform well as a temp
   // store anyway.
-  await powerSyncDb.execute('PRAGMA cache_size = -262144')
-  await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
+  await traceSuspensePhase('powersync.pragmas', async () => {
+    await powerSyncDb.execute('PRAGMA cache_size = -262144')
+    await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
+  })
 
-  // ── blocks + its indexes ──
-  await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
-  await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await traceSuspensePhase('powersync.ddl-blocks-workspaces', async () => {
+    // ── blocks + its indexes ──
+    await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
+    await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+    await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
-  // ── workspaces + workspace_members ──
-  await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
-  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
-  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
+    // ── workspaces + workspace_members ──
+    await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
+    await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+    await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
+  })
 
-  // ── tx_context, row_events, command_events, block_aliases + core
-  // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
-  // Statements include
-  // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
-  // TRIGGER IF NOT EXISTS so re-running is a no-op against an
-  // already-bootstrapped dev database.
-  for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
-    await powerSyncDb.execute(stmt)
-  }
+  await traceSuspensePhase('powersync.ddl-client-schema', async () => {
+    // ── tx_context, row_events, command_events, block_aliases + core
+    // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
+    // Statements include
+    // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
+    // TRIGGER IF NOT EXISTS so re-running is a no-op against an
+    // already-bootstrapped dev database.
+    for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
+      await powerSyncDb.execute(stmt)
+    }
+  })
 
   // One-shot side-index backfills for users upgrading from a
   // pre-index schema. Steady-state startups noop on a single LIMIT 1
@@ -244,10 +251,13 @@ const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
       return row ?? null
     },
   }
-  await backfillBlockAliasesIfEmpty(backfillDb)
-  await backfillBlockTypesIfEmpty(backfillDb)
-  await applyLocalSchemaContributions(
-    backfillDb,
-    resolveLocalSchemaContributions(staticDataExtensions),
-  )
+  await traceSuspensePhase('powersync.backfill-aliases', () =>
+    backfillBlockAliasesIfEmpty(backfillDb))
+  await traceSuspensePhase('powersync.backfill-types', () =>
+    backfillBlockTypesIfEmpty(backfillDb))
+  await traceSuspensePhase('powersync.apply-local-schema', () =>
+    applyLocalSchemaContributions(
+      backfillDb,
+      resolveLocalSchemaContributions(staticDataExtensions),
+    ))
 }

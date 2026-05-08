@@ -24,6 +24,7 @@ import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
+import { traceSuspense, traceSuspensePhase } from '@/utils/suspenseDebug.ts'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;
@@ -116,10 +117,9 @@ const getInitialBlock = memoize(
     requestedBlockId: string | undefined,
     useRemoteSync: boolean,
   ): Promise<{workspaceId: string, block: Block}> => {
-    const {id: workspaceId, freshlyCreated} = await resolveWorkspace(
-      repo,
-      requestedWorkspaceId,
-      useRemoteSync,
+    const {id: workspaceId, freshlyCreated} = await traceSuspensePhase(
+      'initial-block.resolveWorkspace',
+      () => resolveWorkspace(repo, requestedWorkspaceId, useRemoteSync),
     )
     repo.setActiveWorkspaceId(workspaceId)
 
@@ -130,13 +130,19 @@ const getInitialBlock = memoize(
     // is actually 'viewer', the very next sync tick flips us — and any
     // edits attempted in the meantime would be RLS-rejected server-side
     // anyway.
-    const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
+    const role = await traceSuspensePhase(
+      'initial-block.getLocalMemberRole',
+      () => getLocalMemberRole(repo, workspaceId, repo.user.id),
+    )
     repo.setReadOnly(role === 'viewer')
 
     rememberWorkspace(workspaceId)
 
     if (requestedBlockId && await repo.exists(requestedBlockId)) {
-      const data = await repo.load(requestedBlockId)
+      const data = await traceSuspensePhase(
+        'initial-block.loadRequestedBlock',
+        () => repo.load(requestedBlockId),
+      )
       if (data && data.workspaceId === workspaceId) {
         writeAppHash(workspaceId, requestedBlockId)
         return {workspaceId, block: repo.block(requestedBlockId)}
@@ -152,19 +158,28 @@ const getInitialBlock = memoize(
     // creates a fresh empty alias target for "Tutorial" and the
     // bullet points at that orphan instead of the real seeded page.
     if (freshlyCreated) {
-      await seedTutorial(repo, workspaceId)
+      await traceSuspensePhase(
+        'initial-block.seedTutorial',
+        () => seedTutorial(repo, workspaceId),
+      )
     }
 
     // Ensure the Properties page exists (idempotent, deterministic id).
     // User-defined property-schema blocks live under it.
-    await getOrCreatePropertiesPage(repo, workspaceId)
+    await traceSuspensePhase(
+      'initial-block.getOrCreatePropertiesPage',
+      () => getOrCreatePropertiesPage(repo, workspaceId),
+    )
 
     // Land on today's daily note. getOrCreateDailyNote is idempotent
     // under deterministic UUIDs: two clients booting offline converge
     // on the same row when they later sync. We don't wait for sync to
     // deliver any pre-existing blocks — today's note is fine to create
     // locally even on a fresh client.
-    const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+    const dailyNote = await traceSuspensePhase(
+      'initial-block.getOrCreateDailyNote',
+      () => getOrCreateDailyNote(repo, workspaceId, todayIso()),
+    )
 
     // First-run discoverability: prepend a [[Tutorial]] bullet on the
     // freshly-created daily note so the welcome content is one click
@@ -203,7 +218,10 @@ const App = () => {
 
   const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(hash)
   const {workspaceId: activeWorkspaceId, block: landingBlock} = use(
-    getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, useRemoteSync),
+    traceSuspense(
+      'initial-block',
+      getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, useRemoteSync),
+    ),
   )
 
   // Reactive role tracking. The imperative setReadOnly inside

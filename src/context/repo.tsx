@@ -9,6 +9,7 @@ import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+import { traceSuspense } from '@/utils/suspenseDebug.ts'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -40,7 +41,7 @@ export function RepoProvider({children}: { children: ReactNode }) {
     throw new Error('User must be set before creating Repo')
   }
 
-  const repoInstance = use(initRepo(user, !localOnly))
+  const repoInstance = use(traceSuspense('repo-init', initRepo(user, !localOnly)))
 
   return (
     <RepoContext value={repoInstance}>
