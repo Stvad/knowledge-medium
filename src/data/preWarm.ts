@@ -20,6 +20,7 @@
 import { ensurePowerSyncReady } from './repoProvider.ts'
 import { hasSupabaseAuthConfig } from '@/services/supabase.ts'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { isSuspenseDebugEnabled } from '@/utils/suspenseDebug.ts'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL?.trim()
 
@@ -101,10 +102,10 @@ export const preWarmPowerSync = (): void => {
 
   const target = resolvePreWarmTarget()
   if (!target) {
-    if (import.meta.env.DEV) console.log('[suspense] pre-warm: no user id in localStorage; skipped')
+    if (isSuspenseDebugEnabled()) console.log('[suspense] pre-warm: no user id in localStorage; skipped')
     return
   }
-  if (import.meta.env.DEV) console.log(`[suspense] pre-warm: starting PowerSync init (useRemoteSync=${target.useRemoteSync})`)
+  if (isSuspenseDebugEnabled()) console.log(`[suspense] pre-warm: starting PowerSync init (useRemoteSync=${target.useRemoteSync})`)
 
   void ensurePowerSyncReady(target.userId, target.useRemoteSync).catch((error) => {
     // Pre-warm errors are best-effort. The same `ensurePowerSyncReady`

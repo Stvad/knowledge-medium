@@ -54,7 +54,7 @@ import {
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.ts'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
-import { traceSuspensePhase } from '@/utils/suspenseDebug.ts'
+import { traceSuspensePhase, isSuspenseDebugEnabled } from '@/utils/suspenseDebug.ts'
 
 const appSchema = new Schema({})
 appSchema.withRawTables({
@@ -122,10 +122,7 @@ const assertOpfsAvailable = (): Promise<void> => {
  *  init path is sequential awaits, so the per-call timings add up to
  *  the total `powersync.init` phase time we already measure. */
 const installInitTimingProbe = (db: PowerSyncDatabase): void => {
-  if (typeof window === 'undefined') return
-  const w = window as { __suspenseDebug?: boolean }
-  const enabled = typeof w.__suspenseDebug === 'boolean' ? w.__suspenseDebug : Boolean(import.meta.env.DEV)
-  if (!enabled) return
+  if (!isSuspenseDebugEnabled()) return
 
   const inner = db.database as unknown as {
     execute: (sql: string, params?: unknown[]) => Promise<unknown>

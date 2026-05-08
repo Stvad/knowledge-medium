@@ -8,19 +8,29 @@
  *      effect; the returned `hide` runs on unmount. Lets us see which
  *      Suspense boundary's fallback is on screen when.
  *
- *  Enabled by default in dev (`import.meta.env.DEV`); can be toggled
- *  at runtime with `window.__suspenseDebug = true|false`.
+ *  Three ways to enable, checked in order:
+ *    1. `window.__suspenseDebug = true|false` — runtime override (does
+ *       not survive reloads)
+ *    2. `localStorage.suspenseDebug = '1'` — survives reloads, works
+ *       in prod builds. Set once for a profiling session.
+ *    3. Default: on in `vite serve` (dev), off in `vite build`. Note
+ *       `vite build --mode development` still leaves `DEV=false`.
  */
 
-const enabled = (): boolean => {
+export const isSuspenseDebugEnabled = (): boolean => {
   if (typeof window === 'undefined') return false
   const w = window as { __suspenseDebug?: boolean }
   if (typeof w.__suspenseDebug === 'boolean') return w.__suspenseDebug
-  // Cheap dev default — no-op gate is one boolean read per call site
-  // when disabled, and the trace itself is one console.log per
-  // suspending-promise transition (a handful per cold start).
+  try {
+    if (window.localStorage.getItem('suspenseDebug') === '1') return true
+  } catch {
+    // localStorage may be denied (3p-cookie blockers, sandboxed
+    // contexts) — fall through to the build-default.
+  }
   return Boolean(import.meta.env.DEV)
 }
+
+const enabled = isSuspenseDebugEnabled
 
 const bootT0 = (typeof performance !== 'undefined' ? performance.now() : 0)
 const sinceBoot = (): number => Math.round(performance.now() - bootT0)
