@@ -10,9 +10,28 @@ Captures the design discussion from the navigation refactor up through step 3 (s
 
 ## Step 4 goal
 
-Open-panels list moves from the workspace UI-state DB into the URL. Driving change: panel layout is per-tab view state, not workspace content — opening a workspace on a different device shouldn't inherit this device's panels.
+Make the URL a first-class projection of panel layout: open/close/reorder operations show up in the URL, browser back operates over panel layout, links share their layout. **Substrate stays in the workspace DB** — panel rows already use `ChangeScope.UiState` (not synced, not undoable). The URL is a bidirectional projection of those rows, not a replacement substrate.
+
+This honors Riffle's prelude (one reactive store; scope-as-metadata) while still getting URL-as-address-bar for the things that genuinely need it (browser interop, sharing, deep-linking).
 
 ## Decisions resolved
+
+### Substrate: workspace DB rows, UiState scope
+
+Panel rows stay in the workspace DB. UiState scope already gives "don't sync across devices, don't enter undo stack." Components keep using existing reactive hooks (`usePropertyValue`, `useChildren`, etc.) — no parallel store.
+
+The only deviation we considered (a fresh in-memory `panelLayoutStore`) was redundant with what UiState scope already provides, and would have fragmented the substrate for no win.
+
+### Per-tab scoping via `tabId`
+
+Without tab scoping, two browser tabs on the same workspace would share panel rows (and clobber each other's URL state). Add a `tabId` property on panel rows:
+
+- `tabId` lives in `sessionStorage` (per-tab natively, persists across reload of the same tab, dies on tab close).
+- On first load: read `sessionStorage['ws-nav.tabId']`; if missing, generate a UUID and store it.
+- Layout query filters panel rows to `(workspaceId, tabId)`. Each tab renders its own slice.
+- Reconciliation writes are scoped to current `tabId`.
+
+GC of orphan rows (tab closed → its rows linger): punt for alpha. Can add a localStorage-heartbeat-based sweep later. Worst case: rows accumulate; they're tiny and UiState-scoped, so no sync impact.
 
 ### URL shape (no back-compat constraint — old shape can break)
 
@@ -58,15 +77,11 @@ nested                 #wsId/b1/(h:(v:b2,b3),b4)
 
 Step 4 only ships the bare-id + `/`-separated case. Adding `()` groups later is a parser extension, not a breaking change — every URL that worked before keeps working. Layout-id (`#wsId/L7` pointing at a stored layout) stays available as an opt-in for *named* saved layouts; not the default transport.
 
-### Slot identity
+### Slot identity = panel rowId
 
-**Stable in-memory UUIDs assigned at slot creation, never in the URL.** URL is just the positional block list.
+Panel rows are the source of truth; their rowId is the slot identity. Survives reload (DB persists), survives intra-panel navigation, naturally extends to splits/tabs (those would just be additional row types).
 
-On URL change (browser back/forward, external setHash): reconcile current in-memory slots against new URL via **longest-common-subsequence diff**. Slots that survive in the new URL keep their UUID + history; new blocks become new slots; missing blocks get their slot data dropped.
-
-Why: positional indexing breaks insert-in-middle (history shifts to wrong panel); blockId-derived breaks "same panel, different blocks over time"; embedding UUIDs in URL is noisy. LCS reconciliation gives the right behavior for all of: append, close, intra-panel nav, insert-in-middle.
-
-Trade-off accepted: page reload loses slot identity (URL has only blocks, not slot UUIDs), so all per-slot history + ephemeral state resets. Same trade-off browsers make for tabs — URL survives reload, scroll/cursor don't.
+URL ↔ DB reconciliation on hashchange: LCS diff matches URL block list to existing panel rows for `(workspaceId, tabId)`, preserving per-row state where blocks survive. Insert-in-middle, append, close, intra-panel nav all work; the LCS does the same job it did in the in-memory-store version, just over DB rows.
 
 ### Browser history strategy
 
@@ -75,70 +90,81 @@ Trade-off accepted: page reload loses slot identity (URL has only blocks, not sl
 
 This gives clean separation: browser back operates over panel layout; per-panel back operates over within-panel block history.
 
-### State preservation across navigation (already shipped in step 3, will migrate)
+### Visit state (focused block, scroll) — persist via UiState properties
 
-`VisitState` snapshot per history entry: focused block, scroll position, room to grow (selection, editor state). In-memory only. Captured by a snapshotter the PanelRenderer registers; restored on back/forward.
+Already partially shipped in step 3 as in-memory snapshots on panel-history entries. Promote to DB-backed:
 
-Reload survival not implemented; could be bolted on later via sessionStorage keyed by URL block list.
+- `focusedBlockIdProp` — already a UiState property on panel rows. Keep.
+- `scrollTopProp` — new. UiState property on panel rows. Written debounced on scroll (after scroll-stop, ~200ms) and on `visibilitychange`. Read on mount, applied to scroll ref after layout.
+
+Reload-survival of focus + scroll is now free, since DB rows persist and `tabId` scopes them per-tab.
+
+### Per-panel back/forward block history — keep in-memory
+
+`panelHistory` (back/forward stacks of `{blockId, VisitState}` per panel) stays in-memory for now. Matches browser tab back-stack semantics: dies with the session. Promoting it to DB rows is doable later (UiState scope, written on every nav) but adds row churn for a feature that's session-scoped in user expectation.
+
+The snapshotter pattern remains as the bridge between PanelRenderer and the in-memory stack; the data it captures (focused, scroll) is the same data we now persist as UiState properties.
 
 ### Workspace switch
 
-URL becomes `#<new-wsId>` — just the workspace id, empty block list. A block from workspace A makes no sense in workspace B, so we don't try to carry the panel list across.
+URL becomes `#<new-wsId>` — just the workspace id, empty block list. The projection clears panel rows for the current `tabId` and the new workspace renders blank. Other tabs' panel rows are unaffected.
 
 ### Mobile
 
-Render only the last (focused) slot. Close button = browser back, which pops the URL → previous slot becomes current. Same data model as desktop, single-slot viewport. Tiny change once slot infra is in place.
+Render only the last (focused) panel for the current tab. Close button = browser back, which pops the URL → previous block becomes current. Pure renderer change; data model unchanged.
 
 ### Legacy panel-block rows in existing user DBs
 
-Ignore (this is alpha). Optional one-shot cleanup migration if cruft becomes an issue later.
+Ignore (alpha). Rows from before the `tabId` migration won't have the property and will be invisible to the filtered query — effectively orphaned. Optional one-shot cleanup if cruft becomes an issue.
 
 ### Cmd+[/], forward/back mouse buttons
 
-Currently use `window.history.back()` / `forward()` which operates on browser history (mostly tracking main-panel URL changes). Punt fix to step 4: browser history will only push on panel-layout changes, so cmd-[/] naturally becomes "close the most-recently-opened panel" or similar — and per-panel keys (some other binding) will operate on the focused slot's in-memory stack.
+Currently use `window.history.back()` / `forward()` against browser history (which mostly tracks main-panel URL changes today). After step 4, browser history pushes on panel-layout changes only, so these natively become "close most recently opened panel / reopen it" — the user-facing meaning matches the keys' name.
+
+Per-panel back/forward stays bound to the chevrons in panel chrome.
 
 ## Step 4 execution plan
 
-### 4a. Foundation, no behavior change
+### 4a. URL parser/builder + tabId infrastructure
 
-- Extend `routing.ts` with parser/builder for the new path-list format. `parseLayout(hash) → {workspaceId, blockIds: string[]}`, `buildLayout(workspaceId, blockIds) → hash`.
-- New `panelLayoutStore.ts`: in-memory `{slots: Map<slotId, {blockId, history, ephemeralState}>, slotOrder: slotId[]}` + LCS reconciliation function `reconcile(current, urlBlockIds) → {slotOrder, slots}`.
-- Subscribe to `hashchange`; reconcile and update store.
-- Run in parallel with existing DB-driven LayoutRenderer — store is just observing, no UI uses it yet.
-- Tests: URL parse/build round-trips; LCS reconciliation across append, close, intra-panel update, insert-in-middle, full replace.
+- Extend `routing.ts`: `parseLayout(hash) → {workspaceId, blockIds: string[]}`, `buildLayout(workspaceId, blockIds) → hash`. Bare-id + `/`-separated only; structure to allow extending to `()` groups without breaking the API.
+- New `tabId.ts`: `getTabId()` reads/generates UUID in `sessionStorage['ws-nav.tabId']`, memoized.
+- Add `tabId` UiState property to panel block schema.
+- Tests: parser round-trips (including empty-list, single-block, multi-block); tabId persistence across the same module's lifetime; tabId differs across simulated tabs.
 
-### 4b. Migrate ephemeral state to slot store
+No behavior change yet — the parser/tabId infrastructure exists but nothing reads the URL or writes the tabId.
 
-Big diff. Currently lives on panel block as DB properties:
-- `focusedBlockIdProp`
-- `selectionStateProp` (multi-select)
-- `editorSelection`
-- `requestEditorFocus`
-- (others — full inventory needed before starting)
+### 4b. URL ↔ panel-row projection
 
-Move each to slot-keyed in-memory state. ~15–25 call sites read these via `block.peekProperty(...)` / `block.set(...)`. Update each to read/write through the slot store via a hook (`useSlotEphemeral(slotId, key)` or property-shaped facade).
+- New `panelLayoutProjection.ts` (or fold into `routing.ts`):
+  - On `hashchange`: parse → LCS reconcile against panel rows for `(currentWorkspaceId, currentTabId)` → write rows in a single UiState tx (insert/delete to match URL block list, preserve existing rows on identity match).
+  - On panel-row mutation in current tab: build URL, write hash via `pushState` (open/close) or `replaceState` (intra-panel nav).
+  - Loop guard: tag programmatic URL writes so the resulting `hashchange` is a no-op for that pass.
+- Existing `LayoutRenderer` keeps reading `panelBlock.children`, but now those children are kept in sync with URL.
+- Tests: open-panel writes URL; close-panel writes URL; browser back replays panel rows; reload restores layout; reorder preserves rowId; two simulated tabIds don't see each other.
 
-Decision deferred to implementation: direct call-site rewrite vs. Block-shaped facade. Lean toward direct — facade hides the architectural shift and risks subtle bugs at the seam.
+### 4c. Wire `navigate()` and close through the projection
 
-Tests: keep DB-driven layout still rendering, prove store feeds the same data.
+- `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
+- `handleClose` in `PanelRenderer`: stays as-is (already a UiState delete) — projection picks up the row deletion and updates URL.
+- Workspace switch: existing path writes `#<new-wsId>` to URL; projection clears panel rows.
+- Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
-### 4c. Cut over rendering
+### 4d. Visit state persistence (scroll)
 
-- `LayoutRenderer`: reads slot list from store/URL instead of `panelBlock.children`. No more `ensureMainPanel`, no more `'open-panel'` event listener.
-- `PanelRenderer`: takes `{slotId, blockId}` props instead of a `panelBlock`. Continues to register snapshotter (now keyed by slotId).
-- `navigate({target: 'new-panel', sourcePanelId})`: looks up source slot's index, inserts new block at `index + 1` in URL, pushes browser history.
-- Close button: removes slot's block from URL, pushes browser history.
-- Intra-panel nav: replaceState (no history pollution).
-- Mobile: render `slots.at(-1)` (or focused slot specifically); close = `history.back()`.
-- Workspace switch: write `#<wsId>` to URL, push.
-- Cmd-[/], forward/back mouse: rebind to "navigate focused slot" via the in-memory stack.
+- Add `scrollTopProp` (UiState, number-or-null) to panel block schema.
+- `PanelRenderer`:
+  - On scroll: debounced write of `scrollRef.current.scrollTop` to row.
+  - On `visibilitychange` to hidden: flush pending write.
+  - On mount + `topLevelBlockId` change: read `scrollTopProp` from row and apply to scrollRef in a post-layout effect (same pattern as the existing `consumeRestore`).
+- Existing in-memory snapshotter / restore queue stays — it's still the right substrate for *intra-session* per-panel back/forward, where we don't want every nav writing to DB.
+- Tests: scroll persists across reload; doesn't sync across devices (UiState); doesn't pollute the other tab's row.
 
-### 4d. Cleanup
+### 4e. Cleanup
 
-- Delete `ensureMainPanel`, panels block infrastructure, panel-block creation paths.
-- Delete `'open-panel'` CustomEvent.
-- Drop `ChangeScope.UiState` panel writes (panels aren't DB-driven anymore).
-- Optional: one-shot migration to clean up existing panel rows.
+- Delete `'open-panel'` CustomEvent (event name + dispatcher + listener).
+- Audit `ensureMainPanel`: keep as the projection's "ensure rows match URL on workspace switch" helper (renamed if its scope shifts).
+- Confirm no panel-row writes use a non-UiState scope outside the projection.
 
 ## Post-step-4: emacs-grade extensibility (separate work)
 
@@ -153,6 +179,11 @@ The current navigation code grew before facet was the dominant idiom; once step 
 ## Constraints / non-goals
 
 - No back-compat for the old `#wsId/blockId?panels=...` shape we never shipped. Old `#wsId/blockId` is a special case of the new shape, so it parses fine.
-- Reload-survival of slot identity / per-visit state: not in step 4. Bolt on via sessionStorage if/when needed.
+- Per-panel back/forward block history surviving reload: not in step 4. Punt to a follow-up — promoting `panelHistory` stacks to UiState rows is straightforward but adds row churn we don't need yet.
 - Persistent named layouts: not in step 4. A future feature; URL would carry an opaque layout id (`#wsId/L7`) and the structure would live in a saved-layouts store. Coexists with the inline grammar — opt-in only when the user explicitly names a layout.
-- Cross-device sync of any panel layout: explicitly NOT a goal — that's the whole reason for the move out of DB.
+- Cross-device sync of any panel layout: explicitly NOT a goal. UiState scope keeps panel rows out of PowerSync.
+- GC of orphan panel rows from closed tabs: not in step 4. Add a heartbeat-based sweep if/when this becomes a real issue.
+
+## Relation to Riffle's prelude
+
+The previous draft of this plan introduced a parallel in-memory `panelLayoutStore`. That deviated from Riffle's substrate-uniformity principle for no real gain — `ChangeScope.UiState` already provides the "ephemeral, not synced, not undoable" scope Riffle's essay describes as the right way to handle this kind of state. The current plan stays inside the existing reactive substrate; URL and `sessionStorage` are projections, not separate state authorities.
