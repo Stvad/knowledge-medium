@@ -19,6 +19,7 @@ interface ImportLogStats {
   roamMemo: RoamMemoImportPlanSummary
   durationMs: number
   diagnostics: ReadonlyArray<string>
+  uidMap: ReadonlyMap<string, string>
 }
 
 interface ReportNode {
@@ -365,6 +366,42 @@ const formatDiagnosticReport = (
   }]
 }
 
+const blockRefForUid = (
+  uid: string,
+  uidMap: ReadonlyMap<string, string>,
+): string | null => {
+  const id = uidMap.get(uid)
+  return id ? `((${id}))` : null
+}
+
+export const linkRoamUidMentions = (
+  content: string,
+  uidMap: ReadonlyMap<string, string>,
+): string => {
+  if (uidMap.size === 0) return content
+
+  let out = content.replace(/\(([A-Za-z0-9_-]{4,})\)/g, (match, uid: string) =>
+    blockRefForUid(uid, uidMap) ?? match)
+
+  out = out.replace(/\(uid ([A-Za-z0-9_-]+)\)/g, (match, uid: string) =>
+    blockRefForUid(uid, uidMap) ?? match)
+
+  out = out.replace(/\buid ([A-Za-z0-9_-]+)\b/g, (match, uid: string) => {
+    const ref = blockRefForUid(uid, uidMap)
+    return ref ? `block ${ref}` : match
+  })
+
+  return out
+}
+
+const linkDiagnosticReportNode = (
+  node: ReportNode,
+  uidMap: ReadonlyMap<string, string>,
+): ReportNode => ({
+  content: linkRoamUidMentions(node.content, uidMap),
+  children: node.children?.map(child => linkDiagnosticReportNode(child, uidMap)),
+})
+
 const createReportNodes = async (
   tx: Tx,
   workspaceId: string,
@@ -458,6 +495,11 @@ export const writeImportLog = async (
       content: headerContent,
     })
 
-    await createReportNodes(tx, workspaceId, headerId, reportNodes)
+    await createReportNodes(
+      tx,
+      workspaceId,
+      headerId,
+      reportNodes.map(node => linkDiagnosticReportNode(node, stats.uidMap)),
+    )
   }, {scope: ChangeScope.BlockDefault, description: 'roam import: log'})
 }

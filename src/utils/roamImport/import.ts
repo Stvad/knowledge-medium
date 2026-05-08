@@ -542,6 +542,7 @@ export const importRoam = async (
       roamMemo: plan.roamMemo,
       durationMs: Date.now() - start,
       diagnostics: plan.diagnostics,
+      uidMap: plan.uidMap,
     })
     log(`Wrote import-log block to today's daily (${sinceLastPhase()})`)
   } catch (err) {

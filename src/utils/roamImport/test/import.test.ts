@@ -782,10 +782,46 @@ describe('importRoam', () => {
     const markerLines = await readChildren(multipleMarkers!.id)
     expect(markerLines).toHaveLength(10)
     expect(markerLines.map(line => line.content)).toContain(
-      'Multiple marker-only Roam SRS children under uid multiSrsParent9; promoted the first (multiSrsFirst9) and preserved 1 additional marker block(s) literally.',
+      `Multiple marker-only Roam SRS children under block ((${roamBlockId(WORKSPACE, 'multiSrsParent9')})); promoted the first ((${roamBlockId(WORKSPACE, 'multiSrsFirst9')})) and preserved 1 additional marker block(s) literally.`,
     )
     expect(markerLines.some(line => line.content.includes('omitted from this report section')))
       .toBe(false)
+  })
+
+  it('links Roam uid diagnostics in the import report to imported blocks', async () => {
+    const srsExport: RoamExport = [{
+      title: 'bad srs report link',
+      uid: 'badSrsReportPage',
+      children: [{
+        string: '[[[[interval]]:615.9]] [[[[factor]]:1.60]] [[January 29th, 202 6]] *',
+        uid: 'badSrsUid',
+      }],
+    }]
+
+    const summary = await importRoam(srsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.diagnostics.some(line => line.includes('uid badSrsUid'))).toBe(true)
+
+    const dailyChildren = await readChildren(dailyNoteBlockId(WORKSPACE, todayIso()))
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+    const sections = await readChildren(header!.id)
+    const notesSection = sections.find(c => c.content === `Notes (${summary.diagnostics.length})`)
+    expect(notesSection).toBeDefined()
+    const noteGroups = await readChildren(notesSection!.id)
+    const srsGroup = noteGroups.find(c => c.content.startsWith('SRS and roam/memo '))
+    expect(srsGroup).toBeDefined()
+    const srsSections = await readChildren(srsGroup!.id)
+    const missingDates = srsSections.find(c => c.content === 'SRS markers missing review dates (1)')
+    expect(missingDates).toBeDefined()
+    const missingDateLines = await readChildren(missingDates!.id)
+    expect(missingDateLines.map(line => line.content)).toEqual([
+      `Roam SRS marker on block ((${roamBlockId(WORKSPACE, 'badSrsUid')})) has interval/factor but no parseable daily review date; preserved literally without SRS properties.`,
+    ])
+    expect(missingDateLines[0].content).not.toContain('badSrsUid')
   })
 
   it('posts isa type candidates to the import report block', async () => {
@@ -995,7 +1031,7 @@ describe('importRoam', () => {
     const nonStandardLines = await readChildren(nonStandardSection!.id)
     expect(nonStandardLines).toHaveLength(10)
     expect(nonStandardLines.map(line => line.content)).toContain(
-      'Non-standard page_alias on [[non-standard aliases 9]] (uid nonStdPage9) was not used for alias-rule merging: "plain alias 9"',
+      `Non-standard page_alias on [[non-standard aliases 9]] ((${roamBlockId(WORKSPACE, 'nonStdPage9')})) was not used for alias-rule merging: "plain alias 9"`,
     )
     expect(nonStandardLines.some(line => line.content.includes('omitted from this report section')))
       .toBe(false)
