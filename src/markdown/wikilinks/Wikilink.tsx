@@ -25,7 +25,15 @@ export function Wikilink({alias, blockId, workspaceId, children}: {
     if (e.shiftKey) {
       e.preventDefault()
       navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
+      return
     }
+    // Plain click. Let modifier/non-primary clicks fall through to the
+    // browser (cmd-click for new tab, middle-click, etc.). Otherwise route
+    // through navigate() so a click inside a side panel stays in that
+    // panel; navigate() decides whether to write the URL or the panel.
+    if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
+    e.preventDefault()
+    navigate({blockId, workspaceId, target: 'focused', panelId})
   }
 
   return (

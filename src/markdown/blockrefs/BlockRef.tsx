@@ -60,7 +60,11 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
     if (e.shiftKey) {
       e.preventDefault()
       navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
+      return
     }
+    if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
+    e.preventDefault()
+    navigate({blockId, workspaceId, target: 'focused', panelId})
   }
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)

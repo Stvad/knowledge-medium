@@ -1,9 +1,61 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { navigate } from '@/utils/navigation'
+import { panelHistory } from '@/utils/panelHistory'
+import { topLevelBlockIdProp } from '@/data/properties'
+import { MAIN_PANEL_NAME } from '@/data/globalState'
 import type { Repo } from '@/data/repo'
+import type { Block } from '@/data/block'
+
+interface FakePanel {
+  id: string
+  content: string
+  topLevelBlockId: string | null
+}
+
+const makeRepo = (opts: {
+  workspaceId?: string | null
+  panels?: FakePanel[]
+} = {}): {repo: Repo; setCalls: Array<{id: string; blockId: string}>} => {
+  const setCalls: Array<{id: string; blockId: string}> = []
+  const panels = new Map<string, FakePanel>()
+  for (const p of opts.panels ?? []) panels.set(p.id, {...p})
+
+  const block = (id: string): Block => {
+    const peek = () => {
+      const p = panels.get(id)
+      if (!p) return undefined
+      return {properties: {[topLevelBlockIdProp.name]: p.topLevelBlockId}, content: p.content}
+    }
+    return {
+      id,
+      peek,
+      peekProperty: <T,>(schema: {name: string}) => {
+        const p = panels.get(id)
+        if (!p) return undefined
+        if (schema.name === topLevelBlockIdProp.name) return p.topLevelBlockId as T
+        return undefined
+      },
+      set: async (schema: {name: string}, value: unknown) => {
+        if (schema.name === topLevelBlockIdProp.name) {
+          const p = panels.get(id)
+          if (p) p.topLevelBlockId = value as string
+          setCalls.push({id, blockId: value as string})
+        }
+      },
+    } as unknown as Block
+  }
+
+  return {
+    repo: {
+      activeWorkspaceId: opts.workspaceId ?? null,
+      block,
+    } as unknown as Repo,
+    setCalls,
+  }
+}
 
 const fakeRepo = (workspaceId: string | null = null): Repo =>
-  ({activeWorkspaceId: workspaceId} as unknown as Repo)
+  makeRepo({workspaceId}).repo
 
 const captureOpenPanel = (run: () => void): CustomEvent[] => {
   const events: CustomEvent[] = []
@@ -89,6 +141,55 @@ describe('navigate', () => {
         navigate(fakeRepo(null), {blockId: 'b1', target: 'new-panel'})
       })
       expect(events).toHaveLength(0)
+    })
+  })
+
+  describe("target: 'focused' with panelId routing", () => {
+    beforeEach(() => {
+      panelHistory.clear('side-panel-1')
+      panelHistory.clear('main-panel-1')
+    })
+
+    it('writes the URL hash when panelId points at the main panel', () => {
+      const {repo, setCalls} = makeRepo({
+        workspaceId: 'w-active',
+        panels: [{id: 'main-panel-1', content: MAIN_PANEL_NAME, topLevelBlockId: 'b-current'}],
+      })
+      navigate(repo, {blockId: 'b1', target: 'focused', panelId: 'main-panel-1'})
+      expect(window.location.hash).toBe('#w-active/b1')
+      // Main panel routes to URL — must NOT mutate topLevelBlockIdProp.
+      expect(setCalls).toHaveLength(0)
+    })
+
+    it('routes through navigateInPanel when panelId points at a side panel', async () => {
+      const {repo, setCalls} = makeRepo({
+        workspaceId: 'w-active',
+        panels: [{id: 'side-panel-1', content: 'side', topLevelBlockId: 'b-prev'}],
+      })
+      const before = window.location.hash
+      navigate(repo, {blockId: 'b-next', target: 'focused', panelId: 'side-panel-1'})
+      // navigateInPanel is async; await microtasks.
+      await vi.waitFor(() => expect(setCalls).toHaveLength(1))
+      expect(setCalls[0]).toEqual({id: 'side-panel-1', blockId: 'b-next'})
+      expect(window.location.hash).toBe(before) // URL untouched for side-panel nav
+      expect(panelHistory.getSnapshot('side-panel-1').back).toEqual(['b-prev'])
+    })
+
+    it('falls back to URL hash when panelId is provided but the panel is not loaded', () => {
+      // peek() returns undefined for unloaded blocks; treat as "no panel
+      // context available" and route through URL rather than no-op.
+      const {repo, setCalls} = makeRepo({
+        workspaceId: 'w-active',
+        panels: [], // panel not registered → peek() returns undefined
+      })
+      navigate(repo, {blockId: 'b1', target: 'focused', panelId: 'unknown-panel'})
+      expect(window.location.hash).toBe('#w-active/b1')
+      expect(setCalls).toHaveLength(0)
+    })
+
+    it('without panelId, falls back to URL hash (legacy callers)', () => {
+      navigate(fakeRepo('w'), {blockId: 'b1', target: 'focused'})
+      expect(window.location.hash).toBe('#w/b1')
     })
   })
 })

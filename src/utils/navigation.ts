@@ -14,6 +14,8 @@
 import { useCallback } from 'react'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo'
+import { isMainPanel } from '@/data/globalState'
+import { navigateInPanel } from './panelHistory'
 import { writeAppHash } from './routing'
 
 export type NavigationTarget = 'focused' | 'new-panel'
@@ -24,7 +26,14 @@ export interface NavigateInput {
   workspaceId?: string
   target: NavigationTarget
   /** When target='new-panel', the panel that initiated this so the panel
-   *  manager can position the new panel adjacent to it. Ignored otherwise. */
+   *  manager can position the new panel adjacent to it.
+   *  When target='focused', the panel the click came from — main panel
+   *  navigation goes to the URL hash, side-panel navigation stays inside
+   *  that panel via panelHistory. Omit to fall back to URL hash navigation
+   *  (e.g. global QuickFind, where there's no source panel). */
+  panelId?: string
+  /** Alias for panelId on the new-panel path; kept distinct for clarity at
+   *  call sites. Ignored on other targets. */
   sourcePanelId?: string
 }
 
@@ -42,11 +51,22 @@ export const navigate = (repo: Repo, input: NavigateInput): void => {
     return
   }
 
-  // target === 'focused'. Until focused-panel navigation lands (step 3 of
-  // the nav refactor), 'focused' = main panel = URL hash. Side-panel
-  // zoom-in still bypasses navigate() and writes a panel-local property
-  // directly; that asymmetry is the bug we'll fix when this branch starts
-  // dispatching to the focused panel instead of the URL.
+  // target === 'focused'. Three cases:
+  //   1. No panelId — caller has no panel context (global QuickFind, etc.).
+  //      Fall through to URL hash, which the main panel reads.
+  //   2. panelId points at the main panel — same as (1); the main panel's
+  //      displayed block is URL-driven, so writing topLevelBlockIdProp
+  //      directly wouldn't change the view.
+  //   3. panelId points at a side panel — write the panel-local top-level
+  //      property via navigateInPanel so the side panel actually moves and
+  //      its back/forward stack records the prior block.
+  if (input.panelId) {
+    const panelBlock = repo.block(input.panelId)
+    if (panelBlock.peek() && !isMainPanel(panelBlock)) {
+      void navigateInPanel(panelBlock, input.blockId)
+      return
+    }
+  }
   writeAppHash(workspaceId, input.blockId)
 }
 

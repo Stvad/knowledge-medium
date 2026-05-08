@@ -68,12 +68,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
   return (
     <div className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
       {!isMainPanel && (
-        <>
-          <div className="absolute top-1 left-0.5 z-10 flex gap-0.5">
+        <div className="flex items-center justify-between h-7 shrink-0 px-0.5 border-b border-border/40">
+          <div className="flex gap-0.5">
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              className="h-6 w-6 text-foreground hover:bg-accent disabled:text-foreground/25 disabled:hover:bg-transparent"
               onClick={() => { void goBackInPanel(block) }}
               disabled={!canBack}
               aria-label="Back"
@@ -84,7 +84,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
             <Button
               variant="ghost"
               size="icon"
-              className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              className="h-6 w-6 text-foreground hover:bg-accent disabled:text-foreground/25 disabled:hover:bg-transparent"
               onClick={() => { void goForwardInPanel(block) }}
               disabled={!canForward}
               aria-label="Forward"
@@ -96,13 +96,13 @@ export function PanelRenderer({block}: BlockRendererProps) {
           <Button
             variant="ghost"
             size="icon"
-            className="absolute top-1 right-0.5 h-6 w-6 z-10 text-muted-foreground hover:text-foreground"
+            className="h-6 w-6 text-muted-foreground hover:text-foreground"
             onClick={handleClose}
             aria-label="Close panel"
           >
             <X className="h-4 w-4" />
           </Button>
-        </>
+        </div>
       )}
       <div className="flex-grow overflow-y-auto scrollbar-none">
         <NestedBlockContextProvider overrides={{topLevel: false}}>

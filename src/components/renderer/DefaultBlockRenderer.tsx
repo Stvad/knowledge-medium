@@ -133,7 +133,11 @@ const BlockBullet = ({block}: { block: Block }) => {
                 target: 'new-panel',
                 sourcePanelId: panelId,
               })
+              return
             }
+            if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
+            e.preventDefault()
+            navigate({blockId: block.id, workspaceId, target: 'focused', panelId})
           }}
         >
           <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
