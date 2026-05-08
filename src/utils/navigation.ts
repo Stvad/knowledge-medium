@@ -11,9 +11,10 @@
 // `runtime.read(...)` before falling through to the default URL / event
 // implementation. Keeping the API a plain function for now lets that hook
 // be added without re-plumbing call sites.
-import { useCallback } from 'react'
+import { useCallback, type MouseEvent } from 'react'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo'
+import { useBlockContext } from '@/context/block'
 import { isMainPanel } from '@/data/globalState'
 import { navigateInPanel } from './panelHistory'
 import { writeAppHash } from './routing'
@@ -73,4 +74,45 @@ export const navigate = (repo: Repo, input: NavigateInput): void => {
 export const useNavigate = () => {
   const repo = useRepo()
   return useCallback((input: NavigateInput) => navigate(repo, input), [repo])
+}
+
+export interface BlockLinkClickContext {
+  blockId: string
+  workspaceId: string
+}
+
+/** Standard click handler for in-document block links — wikilinks, block
+ *  refs, bullets, and other anchors whose href encodes a block target.
+ *  Centralises the modifier-key policy so individual components don't
+ *  re-implement it (and drift apart):
+ *    - shift+click: open in a new side panel
+ *    - plain primary click: navigate the panel the click came from
+ *      (main panel → URL hash; side panel → topLevelBlockIdProp)
+ *    - cmd / ctrl / alt / non-primary: fall through to the href so the
+ *      browser handles new-tab and middle-click as usual
+ *  Always stops propagation so a surrounding click handler doesn't swallow
+ *  the navigation. */
+export const handleBlockLinkClick = (
+  e: MouseEvent,
+  navigate: (input: NavigateInput) => void,
+  panelId: string | undefined,
+  {blockId, workspaceId}: BlockLinkClickContext,
+): void => {
+  e.stopPropagation()
+  if (e.shiftKey) {
+    e.preventDefault()
+    navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
+    return
+  }
+  if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
+  e.preventDefault()
+  navigate({blockId, workspaceId, target: 'focused', panelId})
+}
+
+export const useBlockLinkClick = ({blockId, workspaceId}: BlockLinkClickContext) => {
+  const navigate = useNavigate()
+  const {panelId} = useBlockContext()
+  return useCallback((e: MouseEvent) => {
+    handleBlockLinkClick(e, navigate, panelId, {blockId, workspaceId})
+  }, [navigate, panelId, blockId, workspaceId])
 }

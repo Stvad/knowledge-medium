@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { navigate } from '@/utils/navigation'
+import type { MouseEvent } from 'react'
+import { handleBlockLinkClick, navigate, type NavigateInput } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
 import { topLevelBlockIdProp } from '@/data/properties'
 import { MAIN_PANEL_NAME } from '@/data/globalState'
@@ -191,5 +192,76 @@ describe('navigate', () => {
       navigate(fakeRepo('w'), {blockId: 'b1', target: 'focused'})
       expect(window.location.hash).toBe('#w/b1')
     })
+  })
+})
+
+describe('handleBlockLinkClick', () => {
+  const ctx = {blockId: 'b-target', workspaceId: 'w-1'}
+
+  const makeEvent = (overrides: Partial<MouseEvent> = {}): MouseEvent => {
+    const calls = {stopProp: 0, preventDefault: 0}
+    const e = {
+      shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, button: 0,
+      stopPropagation: () => { calls.stopProp += 1 },
+      preventDefault: () => { calls.preventDefault += 1 },
+      ...overrides,
+    } as unknown as MouseEvent
+    ;(e as unknown as {calls: typeof calls}).calls = calls
+    return e
+  }
+
+  const callsOf = (e: MouseEvent) => (e as unknown as {calls: {stopProp: number; preventDefault: number}}).calls
+
+  it('shift-click navigates new-panel with sourcePanelId', () => {
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent({shiftKey: true})
+    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
+    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
+  })
+
+  it('plain primary click navigates focused with panelId', () => {
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent()
+    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'focused', panelId: 'panel-a'})
+    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
+  })
+
+  it('plain primary click without panelId still navigates focused (no panelId in input)', () => {
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent()
+    handleBlockLinkClick(e, navigate, undefined, ctx)
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'focused', panelId: undefined})
+  })
+
+  it.each([
+    ['metaKey', {metaKey: true}],
+    ['ctrlKey', {ctrlKey: true}],
+    ['altKey', {altKey: true}],
+    ['middle-button', {button: 1}],
+    ['right-button', {button: 2}],
+  ])('falls through to href on %s (no navigate, no preventDefault)', (_name, override) => {
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent(override as Partial<MouseEvent>)
+    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
+    expect(navigate).not.toHaveBeenCalled()
+    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
+  })
+
+  it('shift+modifier still routes to new-panel (shift wins)', () => {
+    // Documented behaviour: shift takes precedence over cmd/ctrl. Users who
+    // shift-cmd-click expect the panel-open intent, not a new browser tab.
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent({shiftKey: true, metaKey: true})
+    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
+  })
+
+  it('always stops propagation, even on fall-through', () => {
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent({metaKey: true})
+    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
+    expect(callsOf(e).stopProp).toBe(1)
   })
 })

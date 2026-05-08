@@ -24,7 +24,7 @@ import {
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { buildAppHash } from '@/utils/routing.ts'
-import { navigate, useNavigate } from '@/utils/navigation.ts'
+import { navigate, useBlockLinkClick } from '@/utils/navigation.ts'
 import { pasteMultilineText } from '@/utils/paste.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { ErrorBoundary } from 'react-error-boundary'
@@ -109,13 +109,12 @@ const BlockBullet = ({block}: { block: Block }) => {
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
-  const {panelId} = useBlockContext()
   const hasChildren = useHasChildren(block)
-  const navigate = useNavigate()
 
   // App.tsx's bootstrap sets activeWorkspaceId before any block renders, so
   // the non-null assertion is the contract — not a defensive fallback.
   const workspaceId = repo.activeWorkspaceId!
+  const onClick = useBlockLinkClick({blockId: block.id, workspaceId})
 
   return (
     <ContextMenu>
@@ -123,22 +122,7 @@ const BlockBullet = ({block}: { block: Block }) => {
         <a
           href={buildAppHash(workspaceId, block.id)}
           className="bullet-link flex items-center justify-center h-6 w-5"
-          onClick={(e) => {
-            e.stopPropagation()
-            if (e.shiftKey) {
-              e.preventDefault()
-              navigate({
-                blockId: block.id,
-                workspaceId,
-                target: 'new-panel',
-                sourcePanelId: panelId,
-              })
-              return
-            }
-            if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
-            e.preventDefault()
-            navigate({blockId: block.id, workspaceId, target: 'focused', panelId})
-          }}
+          onClick={onClick}
         >
           <BulletDot withChildrenIndicator={hasChildren && isCollapsed}/>
         </a>

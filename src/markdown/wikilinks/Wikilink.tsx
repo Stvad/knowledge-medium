@@ -1,7 +1,6 @@
-import { MouseEvent, ReactNode } from 'react'
-import { useBlockContext } from '@/context/block'
+import { ReactNode } from 'react'
 import { buildAppHash } from '@/utils/routing'
-import { useNavigate } from '@/utils/navigation'
+import { useBlockLinkClick } from '@/utils/navigation'
 
 export function Wikilink({alias, blockId, workspaceId, children}: {
   alias: string
@@ -9,8 +8,11 @@ export function Wikilink({alias, blockId, workspaceId, children}: {
   workspaceId: string
   children: ReactNode
 }) {
-  const {panelId} = useBlockContext()
-  const navigate = useNavigate()
+  // Hooks must run before any early return so the caller's hook order
+  // stays stable across renders. blockId may be empty during a transient
+  // reference-resolution miss; the hook still binds to ('', workspaceId)
+  // safely — it's never invoked in that branch since we render plain text.
+  const onClick = useBlockLinkClick({blockId, workspaceId})
 
   // Reference resolution is an invariant maintained by parseAndUpdateReferences
   // on every block.change(). If we ever land here without a blockId it's a
@@ -18,26 +20,8 @@ export function Wikilink({alias, blockId, workspaceId, children}: {
   // next edit reconcile it, rather than inventing a "broken link" UI state.
   if (!blockId) return <span>{children}</span>
 
-  const href = buildAppHash(workspaceId, blockId)
-
-  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
-    e.stopPropagation()
-    if (e.shiftKey) {
-      e.preventDefault()
-      navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
-      return
-    }
-    // Plain click. Let modifier/non-primary clicks fall through to the
-    // browser (cmd-click for new tab, middle-click, etc.). Otherwise route
-    // through navigate() so a click inside a side panel stays in that
-    // panel; navigate() decides whether to write the URL or the panel.
-    if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
-    e.preventDefault()
-    navigate({blockId, workspaceId, target: 'focused', panelId})
-  }
-
   return (
-    <a href={href} className="wikilink" data-alias={alias} onClick={onClick}>
+    <a href={buildAppHash(workspaceId, blockId)} className="wikilink" data-alias={alias} onClick={onClick}>
       {children}
     </a>
   )

@@ -1,4 +1,4 @@
-import { Fragment, MouseEvent, ReactNode } from 'react'
+import { Fragment, ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import { useRepo } from '@/context/repo'
@@ -7,7 +7,7 @@ import { useBlockExists, useContent, useWorkspaceId } from '@/hooks/block'
 import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
-import { useNavigate } from '@/utils/navigation'
+import { useBlockLinkClick } from '@/utils/navigation'
 import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
 
 // Force the inner Markdown render to stay inline — block-level elements
@@ -34,7 +34,7 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
   const content = useContent(target)
   const workspaceId = useWorkspaceId(target, repo.activeWorkspaceId ?? '')
   const runtime = useAppRuntime()
-  const navigate = useNavigate()
+  const onClick = useBlockLinkClick({blockId, workspaceId})
   const display = hasDisplayChildren(children) ? children : null
 
   if (!targetExists) {
@@ -54,18 +54,6 @@ export function BlockRef({blockId, children}: {blockId: string; children?: React
   }
 
   const href = buildAppHash(workspaceId, blockId)
-
-  const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
-    e.stopPropagation()
-    if (e.shiftKey) {
-      e.preventDefault()
-      navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
-      return
-    }
-    if (e.metaKey || e.ctrlKey || e.altKey || e.button !== 0) return
-    e.preventDefault()
-    navigate({blockId, workspaceId, target: 'focused', panelId})
-  }
 
   const resolveMarkdownConfig = runtime.read(markdownExtensionsFacet)
   const baseConfig = resolveMarkdownConfig({block: target, blockContext: {panelId}})
