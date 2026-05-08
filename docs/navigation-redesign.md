@@ -39,7 +39,7 @@ GC of orphan rows (tab closed → its rows linger): punt for alpha. Can add a lo
 #<wsId>/<blockId1>(/<blockId2>(/<blockId3>...))*
 ```
 
-Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) = no panels rendered (workspace landing). Compact, shareable, human-readable.
+Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) is a transient state — bootstrap fills in today's daily note on workspace landing (see "Workspace switch + default landing" below). Compact, shareable, human-readable.
 
 Sticking with hash (vs query string / pathname): hash works on any static host with no SPA-fallback config, and block ids never leak into HTTP request lines, server logs, or `Referer` headers. No SEO/SSR target makes the usual reasons to prefer pathname routing moot. Query params remain available for orthogonal config (`?debug=1#wsId/b1/b2`).
 
@@ -128,10 +128,10 @@ The snapshotter pattern remains as the bridge between PanelRenderer and the in-m
 URL `#<wsId>` (no block list) doesn't mean "render blank" — current bootstrap (App.tsx ~line 181, `getInitialBlock`) treats missing block id as "land on today's daily note" and writes the full hash back via `writeAppHash`. We keep that behavior. Resolution:
 
 - The **parser** is still pure: `parseLayout('#<wsId>')` → `{workspaceId, blockIds: []}`. It doesn't know about defaults.
-- The **landing layer** (existing bootstrap, post-step-4 sitting just above the projection) detects `blockIds: []` and calls `panelLayoutProjection.openPanel(dailyNoteId, {replace: true})` — replace mode because we're fixing up the URL, not navigating. The user sees `#<wsId>/<dailyNoteId>` after one synchronous projection pass.
-- Workspace switch path: caller invokes `setWorkspace(newWsId)`, projection writes `#<newWsId>` and clears panel rows for current tab; the landing layer then fills in the daily note for the new workspace. Other tabs' rows are unaffected.
+- The **landing layer** (existing bootstrap, sits above the projection) detects `blockIds: []` after `applyCurrentUrl` settles and resolves today's daily note. It then does both: `history.replaceState(_, _, buildLayout(wsId, [dailyNoteId]))`, then `repo.tx(UiState, tx => insertPanelRow(dailyNoteId))`. The replaceState lands first so the projection's idempotency rule kicks in: row write fires the observer, observer builds the same URL, no-ops. Net effect: one history entry, URL `#<wsId>/<dailyNoteId>`, no ping-pong on browser back.
+- **Workspace switch path:** caller writes `#<newWsId>` to URL (existing `writeAppHash` is fine). The inbound `applyCurrentUrl` reconciles rows for `(tabId, newWsId)`, finds none, the landing layer detects empty and does the replaceState+insert dance for the new workspace's daily note. Other tabs' rows are unaffected.
 
-Keeps the "always land on something" UX, keeps the parser dumb, keeps the projection narrow. Defaults live in one explicit place above the projection rather than smuggled into the parser.
+Keeps the "always land on something" UX, keeps the parser dumb, keeps the projection narrow, and keeps the "DB row write drives URL" property — bootstrap is the one place that pre-writes the URL because it explicitly wants replace-not-push semantics for what would otherwise look like an insert.
 
 ### Mobile
 
@@ -158,43 +158,61 @@ Per-panel back/forward stays bound to the chevrons in panel chrome.
 
 No behavior change yet — the parser/tabId infrastructure exists but nothing reads the URL or writes the tabId.
 
-### 4b. URL ↔ panel-row projection (narrow, centralized API)
+### 4b. URL ↔ panel-row projection (observer-shaped, two directions)
 
-The projection is the *single* place that classifies user intent and translates it into URL writes + row writes. It does **not** observe arbitrary row mutations and try to infer intent — that path leads to fragility (was this insert an open-panel or a reorder? was this delete user-initiated or workspace-switch fallout?). All callers go through explicit methods; the projection knows exactly what's happening.
+Panel rows are the source of truth; URL is a derived view. The projection is the single place that translates between them — narrow and centralized in implementation, but it does *not* require callers to declare intent. Any path that writes panel rows via `repo.tx` gets the URL update for free, including paths we haven't written yet. This preserves the property that DB rows drive everything.
 
-New `panelLayoutProjection.ts` shape:
+The reviewer's worry — "observer can't tell open-panel from reorder, or close from workspace-switch fallout" — is answered by classifying the **diff between row states**, not the caller's intent:
+
+| Diff (prev rows → next rows) for `(workspaceId, tabId)` | History mode |
+|---|---|
+| ordered list of rowIds differs (insert / delete / reorder) | `pushState` |
+| same rowIds, but some row's `topLevelBlockId` changed | `replaceState` (intra-panel nav) |
+| only other props changed (`scrollTop`, `focusedBlockId`, …) | no URL write |
+| computed URL already matches `location.hash` | no-op (idempotent) |
+
+Idempotency is what handles the bootstrap-landing edge case: bootstrap `history.replaceState`s the URL to `#<wsId>/<dailyNoteId>` *before* writing the row, then writes the row in a UiState tx — the observer fires, builds the same URL, and skips.
+
+`panelLayoutProjection.ts` shape:
 
 ```ts
 panelLayoutProjection = {
-  // Inbound: external URL change (back/forward, user typed URL, etc.).
-  // Listens internally to hashchange + popstate.
-  applyCurrentUrl(): void
+  // Inbound: external URL change (back/forward, user typed URL, programmatic
+  // location.hash assignment). Internally listens to hashchange + popstate
+  // because pushState/replaceState fire neither.
+  applyCurrentUrl(): Promise<void>
 
-  // Outbound: explicit user-intent methods. Each one writes panel rows
-  // (UiState scope) AND writes URL with the right history mode.
-  openPanel(blockId, opts?: {sourceRowId?: string; replace?: boolean}): void
-                                                            // default pushState; replace=true for bootstrap landing
-  closePanel(rowId): void                                   // pushState
-  navigateInPanel(rowId, blockId): void                     // replaceState
-  setWorkspace(workspaceId): void                           // pushState, clears panel rows for this tab
+  // Outbound: subscribed to panel-row commits for (currentWorkspaceId,
+  // currentTabId). On each commit, diffs prev vs next, picks history mode,
+  // writes URL via pushState/replaceState, then notifies subscribers.
+  // No public method — wired up at construction.
 
-  // Subscriber API for components that previously subscribed to hashchange.
+  // For components that previously subscribed to hashchange. Fires on any
+  // change the projection is aware of (inbound URL change applied to rows,
+  // or outbound URL change after row commit).
   subscribe(listener): unsubscribe
 }
 ```
 
-- `applyCurrentUrl`: parse → LCS reconcile against panel rows for `(currentWorkspaceId, currentTabId)` → write rows in a single UiState tx (insert/delete to match URL block list, preserve existing rows on identity match).
-- Each outbound method: writes rows in a UiState tx, then writes URL via `pushState` or `replaceState`, then notifies subscribers (since pushState/replaceState fire no events themselves).
-- Loop guard: a re-entrancy flag set during the projection's own URL writes; if `applyCurrentUrl` fires while that flag is set, it's a no-op for that pass.
-- Existing `LayoutRenderer` keeps reading `panelBlock.children`, but those children are now kept in sync with URL via the projection.
-- `navigate()` and `handleClose` call the projection's methods directly; no observer indirection.
-- Tests: each method writes the right URL with the right history mode; `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; two simulated tabIds don't see each other; subscribers fire on outbound writes.
+Operational details:
 
-### 4c. Wire `navigate()` and close through the projection
+- **Async / serialization.** `applyCurrentUrl` returns `Promise<void>` (it does a `repo.tx` internally). The projection serializes inbound passes via an internal chained promise — multiple `hashchange` events while one is in flight queue rather than racing. Outbound (row → URL) runs synchronously after a tx commit, no race with itself.
+- **Loop guard.** A re-entrancy flag wraps both directions: outbound URL write sets the flag, the resulting `hashchange` (if any) sees the flag and skips `applyCurrentUrl`. Inbound `applyCurrentUrl`'s row writes set the flag too, so the outbound observer skips when it sees its own writes.
+- **Per-tx granularity.** The outbound observer subscribes at the *tx-commit* level (single notification per `repo.tx`), not per-property-update — multiple writes in one tx produce one URL update.
+- **LCS over block ids has duplicate-block ambiguity.** If the URL contains `b1` twice (`#wsId/b1/b2/b1`), and a close removes one of them, browser-back can't unambiguously restore which prior rowId was at which position. **Decision: best-effort.** Duplicates that survive a round-trip get fresh rowId (and lose per-row visit state on that round-trip). Upgrade path if this bites: write `{rowOrder: rowId[]}` into `history.state` on each push so popstate has unambiguous identity recovery — `history.state` survives reload and is per-entry. Not in step 4.
+- **No "intent hints" channel.** Callers don't pass `{kind: 'open-panel'}` or similar. They just write rows.
+- **Existing `LayoutRenderer`** keeps reading `panelBlock.children`; those children are kept in sync with URL via the projection.
+- **`navigate()`** continues to insert a panel row via `repo.tx` (UiState scope); URL update happens through the observer.
+- **Tests:** classification rule covers each diff shape (insert/delete/reorder/intra-panel/property-only/no-op); `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; duplicate-block round-trips get fresh identity (documented best-effort); two simulated tabIds don't see each other; subscribers fire after both inbound and outbound passes; rapid open/close calls converge correctly under serialization.
 
-- `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
-- `handleClose` in `PanelRenderer`: stays as-is (already a UiState delete) — projection picks up the row deletion and updates URL.
-- Workspace switch: existing path writes `#<new-wsId>` to URL; projection clears panel rows.
+### 4c. Wire `navigate()` and close through panel-row writes
+
+Callers don't talk to the projection directly — they write panel rows. The projection's row→URL observer takes care of the URL. This keeps the "DB row write triggers URL update" property and means future code paths that mutate panel rows get URL updates automatically.
+
+- `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
+- `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
+- `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as same-rowIds-different-blockId → replace.
+- Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) reconciles rows for the new `(tabId, newWsId)`; landing layer fills in the daily note (see below).
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
 ### 4d. Visit state persistence (scroll)
