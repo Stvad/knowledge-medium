@@ -12,6 +12,7 @@ import { v5 as uuidv5 } from 'uuid'
 import { focusedBlockIdProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.ts'
 import { PANEL_TYPE } from '@/data/blockTypes'
 import { useChildren } from '@/hooks/block.ts'
+import { panelHistory } from '@/utils/panelHistory.ts'
 
 // Mirrors UI_CHILD_NS in globalState.ts. Used to derive a deterministic
 // child-id for the main panel under panelsBlock so two clients booting
@@ -118,6 +119,12 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         if (existing && !existing.deleted) {
           // Existing panel — re-stamp both the displayed block and
           // panel-local focus so navigation keys are immediately active.
+          // Capture the prior top-level into the panel's back stack so
+          // the user can return to where the panel was before this jump.
+          const prevTopLevel = existing.properties[topLevelBlockIdProp.name]
+          if (typeof prevTopLevel === 'string' && prevTopLevel !== blockToOpenId) {
+            panelHistory.push(panelId, prevTopLevel)
+          }
           await tx.setProperty(panelId, topLevelBlockIdProp, blockToOpenId)
           await tx.setProperty(panelId, focusedBlockIdProp, blockToOpenId)
           return

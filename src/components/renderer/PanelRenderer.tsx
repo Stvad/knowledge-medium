@@ -2,7 +2,7 @@ import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { Button } from '@/components/ui/button.tsx'
-import { X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
 import { useSelectionState, MAIN_PANEL_NAME } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
@@ -11,6 +11,12 @@ import { ActionContextTypes } from '@/shortcuts/types'
 import { useMemo } from 'react'
 import { usePropertyValue, useContent } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
+import {
+  goBackInPanel,
+  goForwardInPanel,
+  panelHistory,
+  usePanelHistory,
+} from '@/utils/panelHistory.ts'
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -38,6 +44,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
     !!multiSelectDeps
   );
 
+  const {canBack, canForward} = usePanelHistory(block.id)
+
   const handleClose = () => {
     // Panels are UI-state rows — their lifecycle (open/close) is local
     // ephemeral state, not user content. block.delete() routes through
@@ -46,6 +54,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
     // throw a ReadOnlyError. Open an explicit UiState tx instead so
     // the close lands as local-ephemeral and stays out of content
     // sync / undo.
+    panelHistory.clear(block.id)
     void repo.tx(async tx => {
       await tx.delete(block.id)
     }, {scope: ChangeScope.UiState, description: 'close panel'})
@@ -59,15 +68,41 @@ export function PanelRenderer({block}: BlockRendererProps) {
   return (
     <div className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
       {!isMainPanel && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="absolute top-1 right-0.5 h-6 w-6 z-10 text-muted-foreground hover:text-foreground"
-          onClick={handleClose}
-          aria-label="Close panel"
-        >
-          <X className="h-4 w-4" />
-        </Button>
+        <>
+          <div className="absolute top-1 left-0.5 z-10 flex gap-0.5">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              onClick={() => { void goBackInPanel(block) }}
+              disabled={!canBack}
+              aria-label="Back"
+              title="Back"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              onClick={() => { void goForwardInPanel(block) }}
+              disabled={!canForward}
+              aria-label="Forward"
+              title="Forward"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute top-1 right-0.5 h-6 w-6 z-10 text-muted-foreground hover:text-foreground"
+            onClick={handleClose}
+            aria-label="Close panel"
+          >
+            <X className="h-4 w-4" />
+          </Button>
+        </>
       )}
       <div className="flex-grow overflow-y-auto scrollbar-none">
         <NestedBlockContextProvider overrides={{topLevel: false}}>

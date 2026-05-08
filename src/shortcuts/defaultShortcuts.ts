@@ -53,6 +53,7 @@ import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import { navigate } from '@/utils/navigation.ts'
+import { navigateInPanel } from '@/utils/panelHistory.ts'
 import { isMainPanel } from '@/data/globalState.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
@@ -163,7 +164,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       if (isMainPanel(uiStateBlock)) {
         navigate(repo, {blockId: block.id, target: 'focused'})
       } else {
-        await uiStateBlock.set(topLevelBlockIdProp, block.id)
+        await navigateInPanel(uiStateBlock, block.id)
       }
     },
     defaultBinding: {
@@ -185,7 +186,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       if (isMainPanel(uiStateBlock)) {
         navigate(repo, {blockId: parent.id, target: 'focused'})
       } else {
-        await uiStateBlock.set(topLevelBlockIdProp, parent.id)
+        await navigateInPanel(uiStateBlock, parent.id)
       }
     },
     defaultBinding: {
