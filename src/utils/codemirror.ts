@@ -1,7 +1,94 @@
-import { Extension } from '@codemirror/state'
-import { EditorView } from '@codemirror/view'
+import { EditorSelection, type Extension, type StateCommand } from '@codemirror/state'
+import { EditorView, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
+
+const markdownInlineFormatCommand = (open: string, close = open): StateCommand =>
+  ({state, dispatch}) => {
+    const transaction = state.changeByRange(range => {
+      const selectedText = state.sliceDoc(range.from, range.to)
+
+      if (range.empty) {
+        const isBetweenMarkers =
+          range.from >= open.length &&
+          range.to + close.length <= state.doc.length &&
+          state.sliceDoc(range.from - open.length, range.from) === open &&
+          state.sliceDoc(range.to, range.to + close.length) === close
+
+        if (isBetweenMarkers) {
+          return {
+            changes: [
+              {from: range.from - open.length, to: range.from},
+              {from: range.to, to: range.to + close.length},
+            ],
+            range: EditorSelection.cursor(range.from - open.length),
+          }
+        }
+
+        return {
+          changes: {from: range.from, insert: `${open}${close}`},
+          range: EditorSelection.cursor(range.from + open.length),
+        }
+      }
+
+      const isWrappedSelection =
+        selectedText.startsWith(open) &&
+        selectedText.endsWith(close) &&
+        selectedText.length >= open.length + close.length
+
+      if (isWrappedSelection) {
+        const unwrappedText = selectedText.slice(open.length, selectedText.length - close.length)
+        return {
+          changes: {from: range.from, to: range.to, insert: unwrappedText},
+          range: EditorSelection.range(range.from, range.from + unwrappedText.length),
+        }
+      }
+
+      const beforeSelection = range.from - open.length
+      const afterSelection = range.to + close.length
+      const isSurroundedByMarkers =
+        beforeSelection >= 0 &&
+        afterSelection <= state.doc.length &&
+        state.sliceDoc(beforeSelection, range.from) === open &&
+        state.sliceDoc(range.to, afterSelection) === close
+
+      if (isSurroundedByMarkers) {
+        return {
+          changes: [
+            {from: beforeSelection, to: range.from},
+            {from: range.to, to: afterSelection},
+          ],
+          range: EditorSelection.range(beforeSelection, range.to - open.length),
+        }
+      }
+
+      return {
+        changes: {from: range.from, to: range.to, insert: `${open}${selectedText}${close}`},
+        range: EditorSelection.range(range.from + open.length, range.to + open.length),
+      }
+    })
+
+    dispatch(state.update(transaction))
+    return true
+  }
+
+export const toggleMarkdownBold = markdownInlineFormatCommand('**')
+export const toggleMarkdownItalic = markdownInlineFormatCommand('*')
+export const toggleMarkdownInlineCode = markdownInlineFormatCommand('`')
+export const toggleMarkdownStrikethrough = markdownInlineFormatCommand('~~')
+
+const markdownFormattingBinding = (key: string, run: StateCommand): KeyBinding => ({
+  key,
+  run,
+  stopPropagation: true,
+})
+
+export const markdownFormattingKeymap: readonly KeyBinding[] = [
+  markdownFormattingBinding('Mod-b', toggleMarkdownBold),
+  markdownFormattingBinding('Mod-i', toggleMarkdownItalic),
+  markdownFormattingBinding('Mod-e', toggleMarkdownInlineCode),
+  markdownFormattingBinding('Mod-Shift-x', toggleMarkdownStrikethrough),
+]
 
 const mdNoQuoteClose = markdownLanguage.data.of({
   closeBrackets: {
@@ -15,6 +102,7 @@ export const createMinimalMarkdownConfig = (
 ): Extension[] => {
   const extensions = [
     markdown({addKeymap: false, base: markdownLanguage}),
+    keymap.of(markdownFormattingKeymap),
     mdNoQuoteClose,
     EditorView.theme({
       '&': {
