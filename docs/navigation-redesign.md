@@ -81,7 +81,7 @@ Step 4 only ships the bare-id + `/`-separated case. Adding `()` groups later is 
 
 Panel rows are the source of truth; their rowId is the slot identity. Survives reload (DB persists), survives intra-panel navigation, naturally extends to splits/tabs (those would just be additional row types).
 
-URL ↔ DB reconciliation on hashchange: LCS diff matches URL block list to existing panel rows for `(workspaceId, tabId)`, preserving per-row state where blocks survive. Insert-in-middle, append, close, intra-panel nav all work; the LCS does the same job it did in the in-memory-store version, just over DB rows.
+URL ↔ DB reconciliation on hashchange: for a non-empty block list, LCS diff matches URL block list to existing panel rows for `(workspaceId, tabId)`, preserving per-row state where blocks survive. Insert-in-middle, append, close, intra-panel nav all work; the LCS does the same job it did in the in-memory-store version, just over DB rows. Empty block list (`#<wsId>`) is the special case handled by the workspace-landing path below — it means "restore prior layout for `(tabId, wsId)` if any, else fill in daily note," not "reconcile to zero rows."
 
 ### Browser history strategy
 
@@ -138,13 +138,16 @@ This keeps step 3's "focused block + scroll restore on back" guarantee intact fo
 
 ### Workspace switch + default landing
 
-URL `#<wsId>` (no block list) doesn't mean "render blank" — current bootstrap (App.tsx ~line 181, `getInitialBlock`) treats missing block id as "land on today's daily note" and writes the full hash back via `writeAppHash`. We keep that behavior. Resolution:
+URL `#<wsId>` (no block list) doesn't mean "render blank." Current bootstrap (App.tsx ~line 181, `getInitialBlock`) eagerly resolves missing block id to today's daily note and writes `#<wsId>/<dailyNoteId>` via `writeAppHash`. **That eager rewrite has to be removed in step 4** — it would race the projection's "restore prior layout" path and clobber it before `applyCurrentUrl` gets a look in.
 
-- The **parser** is still pure: `parseLayout('#<wsId>')` → `{workspaceId, blockIds: []}`. It doesn't know about defaults.
-- The **landing layer** (existing bootstrap, sits above the projection) detects `blockIds: []` after `applyCurrentUrl` settles and resolves today's daily note. It then does both: `history.replaceState(_, _, buildLayout(wsId, [dailyNoteId]))`, then `repo.tx(UiState, tx => insertPanelRow(dailyNoteId))`. The replaceState lands first so the projection's idempotency rule kicks in: row write fires the observer, observer builds the same URL, no-ops. Net effect: one history entry, URL `#<wsId>/<dailyNoteId>`, no ping-pong on browser back.
-- **Workspace switch path:** caller writes `#<newWsId>` to URL (existing `writeAppHash` is fine). The inbound `applyCurrentUrl` looks up panel rows for `(tabId, newWsId)`:
-  - **If rows exist** (user has visited this workspace in this tab before): build URL `#<newWsId>/<block1>/<block2>/...` from those rows and `replaceState` to it, no row writes. Net effect: bare `#<newWsId>` is treated as "go to this workspace, restore my last layout for it." The replaceState (rather than push) collapses the bare URL into the full one without doubling the history entry.
-  - **If no rows exist** (first time visiting in this tab): landing layer kicks in, `replaceState` to `#<newWsId>/<dailyNoteId>` + insert row.
+Refactored landing flow (replaces the eager-daily-note rewrite):
+
+- The **parser** stays pure: `parseLayout('#<wsId>')` → `{workspaceId, blockIds: []}`. It doesn't know about defaults.
+- On bare `#<wsId>` (initial load OR workspace switch), `applyCurrentUrl` looks up panel rows for `(tabId, newWsId)`:
+  - **If rows exist** (user has visited this workspace in this tab before): build URL `#<newWsId>/<block1>/<block2>/...` from those rows and `replaceState` to it, no row writes. Net effect: bare `#<newWsId>` is treated as "go to this workspace, restore my last layout for it." `replaceState` (not push) collapses the bare URL into the full one without doubling the history entry.
+  - **If no rows exist** (first time visiting in this tab): the **landing layer** sitting alongside the projection resolves today's daily note, does `history.replaceState(_, _, buildLayout(wsId, [dailyNoteId]))`, then `repo.tx(UiState, tx => insertPanelRow(dailyNoteId))`. The replaceState lands first so the projection's idempotency rule kicks in: row write fires the observer, observer builds the same URL, no-ops. One history entry, URL `#<wsId>/<dailyNoteId>`, no ping-pong on browser back.
+- `getInitialBlock` in App.tsx loses its daily-note resolution; that logic moves into the landing layer. The Suspense boundary keeps working — the landing layer awaits `applyCurrentUrl` + (if needed) daily-note resolution + insert before resolving its promise, so React doesn't paint a half-resolved state.
+- **Workspace switch path:** caller writes `#<newWsId>` to URL (`writeAppHash` is fine). Same flow as above runs.
 - Per-(tabId, wsId) row persistence means each tab maintains its own per-workspace layout history. Switching back and forth between two workspaces in one tab restores each side's layout. Other tabs' rows are unaffected.
 
 Keeps the "always land on something" UX, keeps the parser dumb, keeps the projection narrow, and keeps the "DB row write drives URL" property — bootstrap is the one place that pre-writes the URL because it explicitly wants replace-not-push semantics for what would otherwise look like an insert.
@@ -261,7 +264,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 - `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
 - `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
 - `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
-- Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) reconciles rows for the new `(tabId, newWsId)`; landing layer fills in the daily note (see below).
+- Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) handles bare `#<wsId>` by either restoring prior `(tabId, wsId)` rows or, if none exist, deferring to the landing layer to fill in the daily note (see "Workspace switch + default landing" above). App.tsx's eager daily-note rewrite in `getInitialBlock` is removed in this step.
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
 ### 4d. Visit state persistence (scroll)
