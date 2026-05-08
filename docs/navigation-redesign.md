@@ -69,7 +69,7 @@ Same shape IDEs / Emacs use for window layout. `tabs` and `split` are arrangemen
 Examples across complexity:
 
 ```
-current Roam sidebar   #wsId/b1/b2/b3
+current panel stack    #wsId/b1/b2/b3
 tabs in second slot    #wsId/b1/(b2,b3)/b4
 horizontal split       #wsId/(h:b1,b2)
 nested                 #wsId/b1/(h:(v:b2,b3),b4)
