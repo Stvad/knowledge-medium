@@ -175,12 +175,38 @@ const installInitTimingProbe = (db: PowerSyncDatabase): void => {
   void db.waitForReady().finally(() => { active = false })
 }
 
+// VFS override (cold-start profiling): set
+// `localStorage.powersyncVfs = 'AccessHandlePoolVFS'` (or
+// `IDBBatchAtomicVFS` / `OPFSCoopSyncVFS`) and reload. Each VFS uses a
+// different on-disk layout — switching means the existing DB file
+// isn't read; the original file stays on OPFS untouched, so reverting
+// the flag restores access. No data is destroyed by the swap, but the
+// new VFS starts empty, so swap on a sync-backed account (or expect
+// to re-import) if you care about the contents during the test.
+const resolveVfs = (): WASQLiteVFS => {
+  if (typeof window === 'undefined') return WASQLiteVFS.OPFSCoopSyncVFS
+  try {
+    const flag = window.localStorage.getItem('powersyncVfs')
+    if (flag === 'AccessHandlePoolVFS') return WASQLiteVFS.AccessHandlePoolVFS
+    if (flag === 'IDBBatchAtomicVFS') return WASQLiteVFS.IDBBatchAtomicVFS
+    if (flag === 'OPFSCoopSyncVFS') return WASQLiteVFS.OPFSCoopSyncVFS
+  } catch {
+    // localStorage may be denied (3p-cookie blockers, sandboxed
+    // contexts) — fall through to the default below.
+  }
+  return WASQLiteVFS.OPFSCoopSyncVFS
+}
+
 const buildPowerSyncDb = (userId: string) => {
+  const vfs = resolveVfs()
+  if (isSuspenseDebugEnabled() && vfs !== WASQLiteVFS.OPFSCoopSyncVFS) {
+    console.log(`[suspense] powersync.vfs override: ${vfs}`)
+  }
   const db = new PowerSyncDatabase({
     schema: appSchema,
     database: new WASQLiteOpenFactory({
       dbFilename: dbFilenameForUser(userId),
-      vfs: WASQLiteVFS.OPFSCoopSyncVFS,
+      vfs,
     }),
     flags: {
       enableMultiTabs: false,
