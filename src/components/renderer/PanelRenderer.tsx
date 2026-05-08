@@ -3,12 +3,12 @@ import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
-import { topLevelBlockIdProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties.ts'
 import { useSelectionState, MAIN_PANEL_NAME } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { usePropertyValue, useContent } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
 import {
@@ -45,6 +45,31 @@ export function PanelRenderer({block}: BlockRendererProps) {
   );
 
   const {canBack, canForward} = usePanelHistory(block.id)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+
+  // Register a snapshotter so panelHistory can capture (focused block,
+  // scroll) before any navigation away from the current top-level. The
+  // panel block holds focusedBlockIdProp; scroll lives in the DOM and
+  // we read it from the ref.
+  useEffect(() => {
+    return panelHistory.registerSnapshotter(block.id, () => ({
+      focusedBlockId: block.peekProperty(focusedBlockIdProp),
+      scrollTop: scrollRef.current?.scrollTop,
+    }))
+  }, [block])
+
+  // Consume any pending restore queued by goBackInPanel /
+  // goForwardInPanel. focusedBlockIdProp was already restored
+  // synchronously by the helper (so the new render starts with the
+  // right cursor); scroll restoration has to wait for the new content
+  // to lay out, which is exactly what this post-effect window gives us.
+  useEffect(() => {
+    if (!topLevelBlockId) return
+    const restore = panelHistory.consumeRestore(block.id)
+    if (restore?.scrollTop != null && scrollRef.current) {
+      scrollRef.current.scrollTop = restore.scrollTop
+    }
+  }, [topLevelBlockId, block.id])
 
   const handleClose = () => {
     // Panels are UI-state rows — their lifecycle (open/close) is local
@@ -102,7 +127,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           </Button>
         </div>
       )}
-      <div className="flex-grow overflow-y-auto scrollbar-none">
+      <div ref={scrollRef} className="flex-grow overflow-y-auto scrollbar-none">
         <NestedBlockContextProvider overrides={{topLevel: false}}>
           <BlockComponent blockId={topLevelBlockId}/>
         </NestedBlockContextProvider>

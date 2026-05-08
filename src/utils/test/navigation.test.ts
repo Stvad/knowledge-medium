@@ -173,7 +173,7 @@ describe('navigate', () => {
       await vi.waitFor(() => expect(setCalls).toHaveLength(1))
       expect(setCalls[0]).toEqual({id: 'side-panel-1', blockId: 'b-next'})
       expect(window.location.hash).toBe(before) // URL untouched for side-panel nav
-      expect(panelHistory.getSnapshot('side-panel-1').back).toEqual(['b-prev'])
+      expect(panelHistory.getSnapshot('side-panel-1').back).toEqual([{blockId: 'b-prev'}])
     })
 
     it('falls back to URL hash when panelId is provided but the panel is not loaded', () => {

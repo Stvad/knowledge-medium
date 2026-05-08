@@ -121,9 +121,14 @@ export function LayoutRenderer({block}: BlockRendererProps) {
           // panel-local focus so navigation keys are immediately active.
           // Capture the prior top-level into the panel's back stack so
           // the user can return to where the panel was before this jump.
+          // Snapshot ephemeral state (focused block, scroll) so back
+          // restores the user's prior view, not just the prior block.
           const prevTopLevel = existing.properties[topLevelBlockIdProp.name]
           if (typeof prevTopLevel === 'string' && prevTopLevel !== blockToOpenId) {
-            panelHistory.push(panelId, prevTopLevel)
+            panelHistory.push(panelId, {
+              blockId: prevTopLevel,
+              state: panelHistory.snapshot(panelId),
+            })
           }
           await tx.setProperty(panelId, topLevelBlockIdProp, blockToOpenId)
           await tx.setProperty(panelId, focusedBlockIdProp, blockToOpenId)

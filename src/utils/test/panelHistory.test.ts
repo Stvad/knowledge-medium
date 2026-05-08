@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { PanelHistoryStore } from '@/utils/panelHistory'
+import { PanelHistoryStore, type HistoryEntry } from '@/utils/panelHistory'
+
+const e = (blockId: string, state?: HistoryEntry['state']): HistoryEntry =>
+  state ? {blockId, state} : {blockId}
 
 describe('PanelHistoryStore', () => {
   let store: PanelHistoryStore
@@ -13,65 +16,148 @@ describe('PanelHistoryStore', () => {
       const snap = store.getSnapshot('p1')
       expect(snap.back).toEqual([])
       expect(snap.forward).toEqual([])
-      expect(store.back('p1', 'b-current')).toBeNull()
-      expect(store.forward('p1', 'b-current')).toBeNull()
+      expect(store.back('p1', e('b-current'))).toBeNull()
+      expect(store.forward('p1', e('b-current'))).toBeNull()
     })
 
     it('pushes onto back and pops on back()', () => {
-      store.push('p1', 'b-prev')
-      expect(store.getSnapshot('p1').back).toEqual(['b-prev'])
-      const dest = store.back('p1', 'b-current')
-      expect(dest).toBe('b-prev')
-      // back stack drained, current pushed onto forward
-      expect(store.getSnapshot('p1')).toEqual({back: [], forward: ['b-current']})
+      store.push('p1', e('b-prev'))
+      expect(store.getSnapshot('p1').back).toEqual([e('b-prev')])
+      const dest = store.back('p1', e('b-current'))
+      expect(dest).toEqual(e('b-prev'))
+      expect(store.getSnapshot('p1')).toEqual({back: [], forward: [e('b-current')]})
     })
 
     it('forward returns to the popped entry and replays', () => {
-      store.push('p1', 'b-a')
-      store.back('p1', 'b-b') // back: [], forward: ['b-b']
-      const dest = store.forward('p1', 'b-a')
-      expect(dest).toBe('b-b')
-      expect(store.getSnapshot('p1')).toEqual({back: ['b-a'], forward: []})
+      store.push('p1', e('b-a'))
+      store.back('p1', e('b-b')) // back: [], forward: [e('b-b')]
+      const dest = store.forward('p1', e('b-a'))
+      expect(dest).toEqual(e('b-b'))
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: []})
     })
 
     it('push() clears the forward stack (browser-tab semantics)', () => {
-      store.push('p1', 'b-a')
-      store.back('p1', 'b-b') // back: [], forward: ['b-b']
-      store.push('p1', 'b-c') // a navigation away; forward should be wiped
-      expect(store.getSnapshot('p1')).toEqual({back: ['b-c'], forward: []})
+      store.push('p1', e('b-a'))
+      store.back('p1', e('b-b')) // forward: [e('b-b')]
+      store.push('p1', e('b-c'))
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-c')], forward: []})
     })
 
     it('coalesces consecutive identical pushes (no-op when last back === prev)', () => {
-      store.push('p1', 'b-a')
-      store.push('p1', 'b-a')
-      expect(store.getSnapshot('p1').back).toEqual(['b-a'])
+      store.push('p1', e('b-a'))
+      store.push('p1', e('b-a'))
+      expect(store.getSnapshot('p1').back).toEqual([e('b-a')])
     })
 
     it("doesn't coalesce when forward stack is non-empty", () => {
-      // Repeated push of the same id while forward is set has to land,
-      // because it represents a real navigation that should clear forward.
-      store.push('p1', 'b-a')
-      store.back('p1', 'b-b') // forward: ['b-b']
-      store.push('p1', 'b-a') // same id but forward must clear
-      expect(store.getSnapshot('p1')).toEqual({back: ['b-a'], forward: []})
+      store.push('p1', e('b-a'))
+      store.back('p1', e('b-b')) // forward: [e('b-b')]
+      store.push('p1', e('b-a'))
+      expect(store.getSnapshot('p1')).toEqual({back: [e('b-a')], forward: []})
     })
 
     it('isolates state per panel id', () => {
-      store.push('p1', 'b-a')
-      store.push('p2', 'b-x')
-      expect(store.getSnapshot('p1').back).toEqual(['b-a'])
-      expect(store.getSnapshot('p2').back).toEqual(['b-x'])
-      expect(store.back('p2', 'b-y')).toBe('b-x')
-      expect(store.getSnapshot('p1').back).toEqual(['b-a']) // unaffected
+      store.push('p1', e('b-a'))
+      store.push('p2', e('b-x'))
+      expect(store.getSnapshot('p1').back).toEqual([e('b-a')])
+      expect(store.getSnapshot('p2').back).toEqual([e('b-x')])
+      expect(store.back('p2', e('b-y'))).toEqual(e('b-x'))
+      expect(store.getSnapshot('p1').back).toEqual([e('b-a')])
+    })
+  })
+
+  describe('VisitState round-trips on history entries', () => {
+    it('preserves state attached to push() through back()/forward()', () => {
+      const stateA = {focusedBlockId: 'fa', scrollTop: 100}
+      const stateB = {focusedBlockId: 'fb', scrollTop: 200}
+      store.push('p1', e('b-a', stateA))
+      const back = store.back('p1', e('b-b', stateB))
+      expect(back).toEqual({blockId: 'b-a', state: stateA})
+      const forward = store.forward('p1', e('b-a', stateA))
+      expect(forward).toEqual({blockId: 'b-b', state: stateB})
+    })
+
+    it('coalesces by blockId regardless of state difference', () => {
+      // Pushing the same block twice with different snapshots — the
+      // second is treated as a no-op (we never moved away). Keeps the
+      // back stack from filling with redundant captures of the same
+      // block.
+      store.push('p1', e('b-a', {scrollTop: 10}))
+      store.push('p1', e('b-a', {scrollTop: 50}))
+      expect(store.getSnapshot('p1').back).toEqual([e('b-a', {scrollTop: 10})])
+    })
+  })
+
+  describe('snapshotter', () => {
+    it('snapshot() returns undefined when no snapshotter is registered', () => {
+      expect(store.snapshot('p1')).toBeUndefined()
+    })
+
+    it('snapshot() invokes the registered function and returns its result', () => {
+      const state = {focusedBlockId: 'foo', scrollTop: 42}
+      store.registerSnapshotter('p1', () => state)
+      expect(store.snapshot('p1')).toEqual(state)
+    })
+
+    it('unsubscribe removes the snapshotter', () => {
+      const fn = () => ({focusedBlockId: 'foo'})
+      const unsub = store.registerSnapshotter('p1', fn)
+      expect(store.snapshot('p1')).toEqual({focusedBlockId: 'foo'})
+      unsub()
+      expect(store.snapshot('p1')).toBeUndefined()
+    })
+
+    it('unsubscribe is a no-op if a remount has replaced the snapshotter', () => {
+      const fnA = () => ({focusedBlockId: 'a'})
+      const fnB = () => ({focusedBlockId: 'b'})
+      const unsubA = store.registerSnapshotter('p1', fnA)
+      store.registerSnapshotter('p1', fnB) // remount replaces fnA
+      unsubA() // should NOT clear fnB
+      expect(store.snapshot('p1')).toEqual({focusedBlockId: 'b'})
+    })
+
+    it('isolates snapshotters per panel id', () => {
+      store.registerSnapshotter('p1', () => ({focusedBlockId: 'p1-focus'}))
+      store.registerSnapshotter('p2', () => ({focusedBlockId: 'p2-focus'}))
+      expect(store.snapshot('p1')).toEqual({focusedBlockId: 'p1-focus'})
+      expect(store.snapshot('p2')).toEqual({focusedBlockId: 'p2-focus'})
+    })
+  })
+
+  describe('pending-restore queue', () => {
+    it('enqueueRestore + consumeRestore round-trips a state', () => {
+      const state = {focusedBlockId: 'foo', scrollTop: 99}
+      store.enqueueRestore('p1', state)
+      expect(store.consumeRestore('p1')).toEqual(state)
+    })
+
+    it('consumeRestore drains the queue (only fires once)', () => {
+      store.enqueueRestore('p1', {scrollTop: 10})
+      expect(store.consumeRestore('p1')).toEqual({scrollTop: 10})
+      expect(store.consumeRestore('p1')).toBeUndefined()
+    })
+
+    it('enqueueRestore(undefined) clears any pending restore', () => {
+      store.enqueueRestore('p1', {scrollTop: 10})
+      store.enqueueRestore('p1', undefined)
+      expect(store.consumeRestore('p1')).toBeUndefined()
+    })
+
+    it('per-panel isolation', () => {
+      store.enqueueRestore('p1', {scrollTop: 10})
+      expect(store.consumeRestore('p2')).toBeUndefined()
+      expect(store.consumeRestore('p1')).toEqual({scrollTop: 10})
     })
   })
 
   describe('clear', () => {
-    it('drops both stacks for the panel', () => {
-      store.push('p1', 'b-a')
-      store.back('p1', 'b-b') // forward populated
+    it('drops both stacks and any pending restore for the panel', () => {
+      store.push('p1', e('b-a'))
+      store.back('p1', e('b-b'))
+      store.enqueueRestore('p1', {scrollTop: 10})
       store.clear('p1')
       expect(store.getSnapshot('p1')).toEqual({back: [], forward: []})
+      expect(store.consumeRestore('p1')).toBeUndefined()
     })
 
     it('is a no-op for an unknown panel id', () => {
@@ -85,31 +171,31 @@ describe('PanelHistoryStore', () => {
     it('fires the listener on push / back / forward / clear', () => {
       let n = 0
       const unsub = store.subscribe('p1', () => { n += 1 })
-      store.push('p1', 'b-a')
+      store.push('p1', e('b-a'))
       expect(n).toBe(1)
-      store.back('p1', 'b-b')
+      store.back('p1', e('b-b'))
       expect(n).toBe(2)
-      store.forward('p1', 'b-a')
+      store.forward('p1', e('b-a'))
       expect(n).toBe(3)
       store.clear('p1')
       expect(n).toBe(4)
       unsub()
-      store.push('p1', 'b-c')
+      store.push('p1', e('b-c'))
       expect(n).toBe(4) // unsubscribed
     })
 
     it("doesn't notify listeners for unrelated panels", () => {
       let n = 0
       store.subscribe('p1', () => { n += 1 })
-      store.push('p2', 'b-a')
+      store.push('p2', e('b-a'))
       expect(n).toBe(0)
     })
 
     it('does not fire for a coalesced no-op push', () => {
-      store.push('p1', 'b-a')
+      store.push('p1', e('b-a'))
       let n = 0
       store.subscribe('p1', () => { n += 1 })
-      store.push('p1', 'b-a') // same id, forward empty → coalesces
+      store.push('p1', e('b-a'))
       expect(n).toBe(0)
     })
   })
