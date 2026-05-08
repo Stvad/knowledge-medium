@@ -3,7 +3,11 @@ import { ChangeScope } from '@/data/api'
 import type { Repo } from './data/repo'
 import { aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
-import { exampleExtensions, TUTORIAL_README } from '@/extensions/exampleExtensions.ts'
+import {
+  exampleExtensions,
+  getExampleExtensionInitialProperties,
+  TUTORIAL_README,
+} from '@/extensions/exampleExtensions.ts'
 
 /** Property name + encoded value for the hello-renderer example
  *  extension's gating prop (`user:hello = true`). The schema itself
@@ -75,13 +79,14 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
 
     // Each example extension block as a child of `extensionsParentId`.
     for (let i = 0; i < exampleExtensions.length; i++) {
-      const {source} = exampleExtensions[i]
+      const example = exampleExtensions[i]
       await tx.create({
         id: extensionIds[i],
         workspaceId,
         parentId: extensionsParentId,
         orderKey: `a${i}`,
-        content: source,
+        content: example.source,
+        properties: getExampleExtensionInitialProperties(example),
       })
       await repo.addTypeInTx(tx, extensionIds[i], EXTENSION_TYPE, {}, typeSnapshot)
     }

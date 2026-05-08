@@ -18,12 +18,15 @@ import type { Block } from '../data/block'
 import { ChangeScope } from '@/data/api'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { createChild } from '@/data/internals/kernelMutators'
+import { extensionDisabledProp } from '@/data/properties'
 
 export interface ExampleExtensionDefinition {
   /** Stable, kebab-case label used in commit history and source attribution. */
   id: string
   /** ESM module text. */
   source: string
+  /** Seed/insert this extension with `system:disabled = true`. */
+  disabledByDefault?: boolean
 }
 
 const HELLO_RENDERER_SOURCE = `import {
@@ -297,13 +300,97 @@ export default [
 ]
 `
 
+const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
+import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
+
+// Disabled by default because this replaces the app-wide renderer
+// registered under id 'layout'. Enable it to see how a dynamic
+// extension can wrap the host layout while preserving the original
+// LayoutRenderer's matching rules.
+
+const DemoLayoutRenderer = (props) => (
+  <div style={{
+    display: 'grid',
+    gridTemplateRows: 'auto minmax(0, 1fr)',
+    height: '100%',
+    minWidth: 0,
+  }}>
+    <div style={{
+      padding: '4px 8px',
+      borderBottom: '1px solid #444',
+      color: '#888',
+      fontSize: 12,
+    }}>
+      layout renderer override active
+    </div>
+    <LayoutRenderer {...props} />
+  </div>
+)
+
+DemoLayoutRenderer.canRender = LayoutRenderer.canRender
+DemoLayoutRenderer.priority = LayoutRenderer.priority
+
+export default blockRenderersFacet.of({
+  id: 'layout',
+  renderer: DemoLayoutRenderer,
+})
+`
+
+const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
+import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
+import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
+
+// Disabled by default because this replaces the fallback renderer
+// registered under id 'default'. Enable it to change one small
+// behavior for every ordinary block that falls through to the default:
+// empty blocks render a muted read-mode placeholder while edit mode,
+// children, properties, bullets, and selection chrome stay unchanged.
+
+const PlaceholderContent = ({ block }) => {
+  const content = block.peek()?.content ?? ''
+  if (content.trim().length === 0) {
+    return (
+      <div style={{ minHeight: '1.7em', color: '#888', fontStyle: 'italic' }}>
+        empty block
+      </div>
+    )
+  }
+
+  return <MarkdownContentRenderer block={block} />
+}
+
+const PlaceholderDefaultRenderer = (props) => (
+  <DefaultBlockRenderer {...props} ContentRenderer={PlaceholderContent} />
+)
+
+export default blockRenderersFacet.of({
+  id: 'default',
+  renderer: PlaceholderDefaultRenderer,
+})
+`
+
 export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
   {id: 'hello-renderer', source: HELLO_RENDERER_SOURCE},
   {id: 'fold-all-action', source: FOLD_ALL_ACTION_SOURCE},
   {id: 'emoji-react', source: EMOJI_REACT_SOURCE},
   {id: 'kudos-facet', source: KUDOS_FACET_SOURCE},
   {id: 'split-layout', source: SPLIT_LAYOUT_SOURCE},
+  {
+    id: 'layout-renderer-override',
+    source: LAYOUT_RENDERER_OVERRIDE_SOURCE,
+    disabledByDefault: true,
+  },
+  {
+    id: 'default-renderer-placeholder',
+    source: DEFAULT_RENDERER_OVERRIDE_SOURCE,
+    disabledByDefault: true,
+  },
 ]
+
+export const getExampleExtensionInitialProperties = (
+  example: ExampleExtensionDefinition,
+): Record<string, unknown> | undefined =>
+  example.disabledByDefault ? {[extensionDisabledProp.name]: true} : undefined
 
 export const TUTORIAL_README = `Welcome — this is a malleable thought medium.
 
@@ -314,6 +401,8 @@ Below are example **extension blocks** (\`types: ['extension']\`) that show the 
 - **emoji-react** — a multi-facet plugin (decorating content renderer + click handler + action).
 - **kudos-facet** — defines a brand-new facet and decorates the content with a banner.
 - **split-layout** — replaces the block layout for blocks tagged \`user:layout = split\`, placing content and children side by side.
+- **layout-renderer-override** — disabled by default; overrides the app-wide \`layout\` renderer id and wraps the normal panel layout with a custom frame.
+- **default-renderer-placeholder** — disabled by default; overrides the fallback \`default\` renderer id so ordinary empty blocks show a muted read-mode placeholder.
 
 To author your own:
 1. Create a block with property \`types = ['extension']\`.
@@ -323,7 +412,7 @@ To author your own:
 
 To re-insert these examples beside any block, run **Insert example extensions** from the command palette.
 
-To turn an extension off without deleting it, set its \`system:disabled\` property to true.`
+To turn an extension off without deleting it, set its \`system:disabled\` property to true. Some app-wide renderer override examples start disabled; set \`system:disabled\` to false and run "Reload extensions" to try them.`
 
 /**
  * Append the example-extension blocks under `parentBlock`. Used by the
@@ -341,6 +430,7 @@ export const insertExampleExtensionsUnder = async (
       const childId = await tx.run(createChild, {
         parentId: parentBlock.id,
         content: example.source,
+        properties: getExampleExtensionInitialProperties(example),
       })
       await repo.addTypeInTx(tx, childId, EXTENSION_TYPE, {}, typeSnapshot)
       return childId
