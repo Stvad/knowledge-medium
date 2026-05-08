@@ -79,7 +79,18 @@ const requireWorkspaceId = (repo: Repo, caller: string): string => {
  *  the child whose content equals `content` under `parent`. The id
  *  comes from `stateChildBlockId(parentId, content)` so repeat calls hit
  *  the same row deterministically. Restores soft-deleted rows in the
- *  same scope. */
+ *  same scope.
+ *
+ *  Cold-start fast path: if the child is already live in cache or in
+ *  SQL (the common case after the first launch), skip the
+ *  writeTransaction entirely. The bootstrap path through this helper
+ *  is called from at least four memoized parents (user-prefs,
+ *  ui-state, panels, plus per-plugin children); a no-op tx still
+ *  costs ~100 ms each because of trigger overhead, so amortizing
+ *  those across cold start has been a measurable cost. The slow
+ *  path is identical to before — `tx.get` re-checks under the lock
+ *  to handle the (rare) tombstone case that `repo.load` filters out
+ *  with its `deleted = 0` predicate. */
 const ensureStateChild = async (
   repo: Repo,
   parent: Block,
@@ -89,6 +100,11 @@ const ensureStateChild = async (
   const parentData = parent.peek() ?? await parent.load()
   if (!parentData) throw new Error(`ensureStateChild: parent ${parent.id} not loaded`)
   const childId = stateChildBlockId(parent.id, content)
+
+  const live = await repo.load(childId)
+  if (live && !live.deleted) {
+    return repo.block(childId)
+  }
 
   await repo.tx(async tx => {
     const existing = await tx.get(childId)
@@ -110,7 +126,7 @@ const ensureStateChild = async (
       orderKey: 'a0',
       content,
     })
-  }, {scope})
+  }, {scope, description: `ensureStateChild ${content}`})
 
   const child = repo.block(childId)
   await child.load()

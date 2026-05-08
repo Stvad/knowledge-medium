@@ -46,7 +46,26 @@ export const recordUpdateIndicatorLoadTime = async (
   return record
 }
 
+/** Schedule the load-time write off the cold-start critical path.
+ *  The indicator only needs to know "when did *the previous* load
+ *  finish" — it doesn't need to write *this* load's timestamp before
+ *  any rendering, just before the next reload. So pushing the SQL to
+ *  idle time is correctness-preserving and removes the writeTransaction
+ *  + its `getUserPrefsBlock` ensure-tx from the bootstrap window. */
+const scheduleAfterIdle = (run: () => void): void => {
+  const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
+  if (typeof idle === 'function') {
+    idle(run, {timeout: 2000})
+  } else {
+    setTimeout(run, 0)
+  }
+}
+
 export const updateIndicatorLoadTimeEffect: AppEffect = {
   id: 'update-indicator.load-time',
-  start: ({repo, workspaceId}) => recordUpdateIndicatorLoadTime(repo, workspaceId),
+  start: ({repo, workspaceId}) => {
+    scheduleAfterIdle(() => {
+      void recordUpdateIndicatorLoadTime(repo, workspaceId)
+    })
+  },
 }

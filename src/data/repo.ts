@@ -186,6 +186,11 @@ const mergeLiftedSchemas = (
 const KERNEL_TYPES = new Map(KERNEL_TYPE_CONTRIBUTIONS.map(t => [t.id, t]))
 const KERNEL_PROPERTY_SCHEMA_MAP = new Map(KERNEL_PROPERTY_SCHEMAS.map(s => [s.name, s]))
 
+/** Bounded ring of recent tx entries surfaced via `repo.metrics().txLog`.
+ *  Sized to comfortably cover a cold-start window (a few dozen txs) so
+ *  diagnostic dumps right after page load don't lose entries. */
+const TX_LOG_CAPACITY = 64
+
 type RefCodecKind = 'ref' | 'refList' | undefined
 
 const refCodecKind = (schema: AnyPropertySchema | undefined): RefCodecKind => {
@@ -426,6 +431,11 @@ export class Repo {
    *  cheap to maintain in the hot path. Surfaces through
    *  `repo.metrics().db.slowestTx`. */
   private slowestTx: {description: string | null; ms: number} = {description: null, ms: 0}
+  /** Bounded log of recent tx (description, ms) — used to attribute
+   *  cold-start `writeTransaction` totals to specific call sites. The
+   *  most recent `TX_LOG_CAPACITY` entries are retained; older drops
+   *  are silent. Surfaces through `repo.metrics().txLog`. */
+  private readonly txLog: Array<{description: string | null; ms: number}> = []
   /** Active row_events tail (spec §9.3 path 2). Lazy: created on first
    *  start, replaced on subsequent starts. Tests can `dispose()` and
    *  re-`start` for deterministic flushing. */
@@ -698,6 +708,12 @@ export class Repo {
      *  schema swap'). `description: null` means the slowest tx so far
      *  was opened without a description. */
     slowestTx: Readonly<{description: string | null; ms: number}>
+    /** Bounded list of recent (description, ms) entries — the most
+     *  recent `TX_LOG_CAPACITY` writeTransactions across the Repo's
+     *  lifetime since the last reset. Lets a cold-start metrics dump
+     *  attribute every observed writeTransaction sample to a concrete
+     *  call site. Order is oldest-to-newest. */
+    txLog: ReadonlyArray<Readonly<{description: string | null; ms: number}>>
     reprojection: Readonly<{
       calls: number
       schemasReprojected: number
@@ -713,6 +729,7 @@ export class Repo {
       queries: this.queryMetrics.snapshot(),
       db: this.dbMetrics.snapshot(),
       slowestTx: Object.freeze({...this.slowestTx}),
+      txLog: Object.freeze(this.txLog.map(entry => Object.freeze({...entry}))),
       reprojection: Object.freeze({...this.reprojectionMetrics}),
     })
   }
@@ -733,6 +750,7 @@ export class Repo {
     this.reprojectionMetrics.msTotal = 0
     this.reprojectionMetrics.skippedByMarker = 0
     this.slowestTx = {description: null, ms: 0}
+    this.txLog.length = 0
   }
 
   /** Get a `Block` facade for `id`. Sync — does NOT load. Read access
@@ -926,9 +944,16 @@ export class Repo {
     // 'reproject ref-typed properties after schema swap', mutator names).
     // Cheaper than recording every tx; only the high-water mark wins.
     const txMs = performance.now() - txT0
+    const description = opts.description ?? null
     if (txMs > this.slowestTx.ms) {
-      this.slowestTx = {description: opts.description ?? null, ms: txMs}
+      this.slowestTx = {description, ms: txMs}
     }
+    // Bounded log of recent tx (description, ms). Drops the oldest
+    // entry once `TX_LOG_CAPACITY` is reached. Lets a cold-start
+    // metrics dump attribute every writeTransaction sample to a
+    // call site, not just the slowest one.
+    this.txLog.push({description, ms: txMs})
+    if (this.txLog.length > TX_LOG_CAPACITY) this.txLog.shift()
     // TxEngine fast path (spec §9.3 path 1): post-commit, fan-out the
     // tx's snapshots diff to dep-matching collection handles. The
     // commit pipeline already updated the BlockCache (which fires

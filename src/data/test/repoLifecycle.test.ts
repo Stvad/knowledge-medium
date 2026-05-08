@@ -134,7 +134,7 @@ describe('repo.instanceId', () => {
 describe('repo.metrics() / resetMetrics()', () => {
   it('exposes all four subsections; all start empty / at zero', () => {
     const m = env.repo.metrics()
-    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'queries', 'reprojection', 'slowestTx'])
+    expect(Object.keys(m).sort()).toEqual(['blockCache', 'db', 'handleStore', 'queries', 'reprojection', 'slowestTx', 'txLog'])
     expect(Object.isFrozen(m)).toBe(true)
     expect(m.handleStore.invalidations).toBe(0)
     expect(m.blockCache.setSnapshotCalls).toBe(0)
