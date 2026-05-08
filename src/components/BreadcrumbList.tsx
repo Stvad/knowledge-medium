@@ -2,17 +2,19 @@ import { MouseEvent } from 'react'
 import { Block } from '../data/block'
 import { BlockContextType } from '@/types.ts'
 import { BlockComponent } from '@/components/BlockComponent.tsx'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
 import { buildAppHash } from '@/utils/routing.ts'
+import { useNavigate } from '@/utils/navigation.ts'
 import { cn } from '@/lib/utils.ts'
 
 interface BreadcrumbListProps {
   parents: readonly Block[]
   workspaceId: string
   overrides: Partial<BlockContextType>
-  // When provided, plain primary clicks call onSelect (e.g. inline unfurl).
-  // Modifier/middle/right clicks always fall through to the href so the user
-  // can navigate or open in a panel the way the rest of the app's links work.
+  // When provided, plain primary clicks call onSelect (e.g. inline unfurl)
+  // instead of routing through navigate(). Shift-click still opens in a new
+  // panel, and modifier/middle/right clicks fall through to the href so the
+  // user can cmd-click for a new tab the way the rest of the app's links work.
   onSelect?: (parent: Block) => void
   className?: string
   itemClassName?: string
@@ -31,6 +33,9 @@ export const BreadcrumbList = ({
   itemClassName,
   separatorClassName,
 }: BreadcrumbListProps) => {
+  const {panelId} = useBlockContext()
+  const navigate = useNavigate()
+
   if (parents.length === 0) return null
 
   return (
@@ -47,11 +52,27 @@ export const BreadcrumbList = ({
               // to a surrounding block's click handler, which preventDefaults
               // and swallows the browser navigation.
               event.stopPropagation()
-              if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+              if (event.shiftKey) {
+                event.preventDefault()
+                navigate({
+                  blockId: parent.id,
+                  workspaceId,
+                  target: 'new-panel',
+                  sourcePanelId: panelId,
+                })
+                return
+              }
+              if (event.metaKey || event.ctrlKey || event.altKey) return
               if (event.button !== 0) return
-              if (!onSelect) return
               event.preventDefault()
-              onSelect(parent)
+              if (onSelect) {
+                onSelect(parent)
+                return
+              }
+              // Plain primary click without an inline-unfurl callback —
+              // navigate the panel the click came from. Side panel stays
+              // local; main panel writes the URL hash.
+              navigate({blockId: parent.id, workspaceId, target: 'focused', panelId})
             }}
           >
             <span className={INNER_CLASS}>
