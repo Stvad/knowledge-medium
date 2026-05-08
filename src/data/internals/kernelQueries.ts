@@ -318,7 +318,7 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
       return rows.map(r => r.id)
     }
     const rows = await ctx.db.getAll<BlockRow>(CHILDREN_SQL, [id])
-    return ctx.hydrateBlocks(asBlockRows(rows)).map(d => d.id)
+    return ctx.primeBlocks(asBlockRows(rows)).map(d => d.id)
   },
 })
 

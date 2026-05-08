@@ -201,8 +201,10 @@ describe('repo.query.childIds', () => {
     await create({id: 'p'})
     await create({id: 'c1', parentId: 'p', orderKey: 'a0', content: 'hello'})
     env.cache.deleteSnapshot('c1')
-    await env.repo.query.childIds({id: 'p', hydrate: true}).load()
+    const handle = env.repo.query.childIds({id: 'p', hydrate: true})
+    await handle.load()
     expect(env.cache.getSnapshot('c1')?.content).toBe('hello')
+    expect(handle.__depsForTest()).toEqual([{kind: 'parent-edge', parentId: 'p'}])
   })
 
   it('hydrate=false leaves cache cold for unrelated rows', async () => {
@@ -487,14 +489,16 @@ describe('invalidation', () => {
     }
   })
 
-  it('childIds: row-content edit on a child does NOT invalidate (lean — no row dep)', async () => {
+  it.each([
+    ['lean', {id: 'p'}],
+    ['hydrating', {id: 'p', hydrate: true}],
+  ] as const)('childIds (%s): row-content edit on a child does NOT invalidate', async (_label, args) => {
     await create({id: 'p'})
     await create({id: 'c1', parentId: 'p'})
     await create({id: 'c2', parentId: 'p', orderKey: 'a1'})
-    // Lean variant: declares ONLY parent-edge on `id`; no per-row deps.
-    // (The hydrating variant `{hydrate: true}` calls `hydrateBlocks` and
-    // would declare row deps — that path is exercised by `children`.)
-    const handle = env.repo.query.childIds({id: 'p'})
+    // Both variants declare ONLY parent-edge on `id`; hydrate=true is a
+    // cache-priming side effect and must not add per-row deps.
+    const handle = env.repo.query.childIds(args)
     await handle.load()
 
     const fired: number[] = []

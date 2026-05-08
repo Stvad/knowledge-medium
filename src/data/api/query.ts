@@ -40,7 +40,13 @@ export interface QueryCtx {
    *  deliberate: `.execute()` / `.writeTransaction()` are absent. */
   db: QueryReadDb
   repo: Repo
+  /** Hydrate full block rows into the cache and declare row deps on
+   *  them. Use when the query result contains those row bodies. */
   hydrateBlocks(rows: ReadonlyArray<Record<string, unknown>>): BlockData[]
+  /** Prime block rows into the cache without declaring row deps. Use
+   *  when rows are fetched only as a cache-warming side effect, such as
+   *  id-list queries whose result depends only on parent edges. */
+  primeBlocks(rows: ReadonlyArray<Record<string, unknown>>): BlockData[]
   /** Declare a dependency; engine uses these to invalidate this handle. */
   depend(dep: Dependency): void
 }

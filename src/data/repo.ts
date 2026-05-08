@@ -449,16 +449,20 @@ export class Repo {
   readonly instanceId: number = Repo.nextInstanceId++
 
   /** Hydrate a list of `BlockRow`s into the cache + return parsed
-   *  BlockData[]. Internal helper for the kernel queries. When `ctx`
-   *  is supplied, also declares a per-row dep so handle invalidations
-   *  fire on row updates. Accepts readonly so it pairs cleanly with
-   *  the `QueryCtx.hydrateBlocks` plumbing in `dispatchQuery`. */
-  private hydrateRows(rows: ReadonlyArray<BlockRow>, ctx?: ResolveContext): BlockData[] {
+   *  BlockData[]. Internal helper for kernel queries. Callers choose
+   *  whether returned rows are part of the query result (`row` deps) or
+   *  only cache priming (`no row` deps). Accepts readonly so it pairs
+   *  cleanly with the QueryCtx plumbing in `dispatchQuery`. */
+  private hydrateRows(
+    rows: ReadonlyArray<BlockRow>,
+    opts: {ctx?: ResolveContext; declareRowDeps?: boolean} = {},
+  ): BlockData[] {
+    const {ctx, declareRowDeps = Boolean(ctx)} = opts
     const out: BlockData[] = []
     for (const r of rows) {
       const data = parseBlockRow(r)
       this.cache.applySyncSnapshot(data)
-      if (ctx) ctx.depend({kind: 'row', id: data.id})
+      if (ctx && declareRowDeps) ctx.depend({kind: 'row', id: data.id})
       out.push(data)
     }
     return out
@@ -505,7 +509,7 @@ export class Repo {
    *  — `BlockCache` doesn't track per-parent "loaded" state. */
   private async hydrateChildren(parentId: string, ctx?: ResolveContext): Promise<BlockData[]> {
     const rows = await this.db.getAll<BlockRow>(CHILDREN_SQL, [parentId])
-    return this.hydrateRows(rows, ctx)
+    return this.hydrateRows(rows, {ctx})
   }
 
   /** Typed-dispatch sugar. `repo.mutate.indent({id})` opens a 1-mutator
@@ -1688,7 +1692,14 @@ export class Repo {
             const raw = await q.resolve(validated, {
               db: this.db,
               repo: this,
-              hydrateBlocks: (rows) => this.hydrateRows(rows as unknown as ReadonlyArray<BlockRow>, ctx),
+              hydrateBlocks: (rows) => this.hydrateRows(
+                rows as unknown as ReadonlyArray<BlockRow>,
+                {ctx, declareRowDeps: true},
+              ),
+              primeBlocks: (rows) => this.hydrateRows(
+                rows as unknown as ReadonlyArray<BlockRow>,
+                {ctx, declareRowDeps: false},
+              ),
               depend: (dep) => ctx.depend(dep),
             })
             // Result-schema parse at the boundary — symmetry with argsSchema
