@@ -115,17 +115,67 @@ const assertOpfsAvailable = (): Promise<void> => {
 // an explicit `WASQLiteOpenFactory` instead of plain settings because
 // the `vfs` option lives on the factory's option type, not on the
 // generic `SQLOpenOptions` accepted by `database: {…}`.
-const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
-  schema: appSchema,
-  database: new WASQLiteOpenFactory({
-    dbFilename: dbFilenameForUser(userId),
-    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-  }),
-  flags: {
-    enableMultiTabs: false,
-    useWebWorker: true,
-  },
-})
+/** Wrap `db.database.{execute,get,getAll,getOptional}` so each
+ *  PowerSync-internal SQL call during init is logged with its
+ *  duration. Disengages once `db.waitForReady()` resolves. Kept gated
+ *  on `__suspenseDebug` (window flag, defaults to dev). The PowerSync
+ *  init path is sequential awaits, so the per-call timings add up to
+ *  the total `powersync.init` phase time we already measure. */
+const installInitTimingProbe = (db: PowerSyncDatabase): void => {
+  if (typeof window === 'undefined') return
+  const w = window as { __suspenseDebug?: boolean }
+  const enabled = typeof w.__suspenseDebug === 'boolean' ? w.__suspenseDebug : Boolean(import.meta.env.DEV)
+  if (!enabled) return
+
+  const inner = db.database as unknown as {
+    execute: (sql: string, params?: unknown[]) => Promise<unknown>
+    get?: (sql: string, params?: unknown[]) => Promise<unknown>
+    getAll?: (sql: string, params?: unknown[]) => Promise<unknown>
+    getOptional?: (sql: string, params?: unknown[]) => Promise<unknown>
+  }
+
+  let active = true
+  const wrap = <Args extends unknown[], R>(name: string, fn: (...args: Args) => Promise<R>) =>
+    async (...args: Args): Promise<R> => {
+      if (!active) return fn(...args)
+      const sql = typeof args[0] === 'string' ? args[0] : ''
+      const t0 = performance.now()
+      try {
+        return await fn(...args)
+      } finally {
+        const dt = Math.round(performance.now() - t0)
+        // Skip noise — under 5ms is rarely interesting and there are
+        // many sub-millisecond hits.
+        if (dt >= 5) {
+          console.log(`[suspense] powersync.init.sql (${dt}ms) ${name}: ${sql.slice(0, 100)}`)
+        }
+      }
+    }
+
+  const origExecute = inner.execute.bind(inner)
+  inner.execute = wrap('execute', origExecute)
+  if (inner.get) inner.get = wrap('get', inner.get.bind(inner))
+  if (inner.getAll) inner.getAll = wrap('getAll', inner.getAll.bind(inner))
+  if (inner.getOptional) inner.getOptional = wrap('getOptional', inner.getOptional.bind(inner))
+
+  void db.waitForReady().finally(() => { active = false })
+}
+
+const buildPowerSyncDb = (userId: string) => {
+  const db = new PowerSyncDatabase({
+    schema: appSchema,
+    database: new WASQLiteOpenFactory({
+      dbFilename: dbFilenameForUser(userId),
+      vfs: WASQLiteVFS.OPFSCoopSyncVFS,
+    }),
+    flags: {
+      enableMultiTabs: false,
+      useWebWorker: true,
+    },
+  })
+  installInitTimingProbe(db)
+  return db
+}
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
