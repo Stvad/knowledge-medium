@@ -6,6 +6,7 @@ import {
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.ts'
+import { scheduleIdle } from '@/utils/scheduleIdle.ts'
 
 export const previousLoadTimeProp = defineProperty<number | undefined>('previousLoadTime', {
   codec: codecs.optionalNumber,
@@ -52,19 +53,10 @@ export const recordUpdateIndicatorLoadTime = async (
  *  any rendering, just before the next reload. So pushing the SQL to
  *  idle time is correctness-preserving and removes the writeTransaction
  *  + its `getUserPrefsBlock` ensure-tx from the bootstrap window. */
-const scheduleAfterIdle = (run: () => void): void => {
-  const idle = (globalThis as {requestIdleCallback?: (cb: () => void, opts?: {timeout: number}) => void}).requestIdleCallback
-  if (typeof idle === 'function') {
-    idle(run, {timeout: 2000})
-  } else {
-    setTimeout(run, 0)
-  }
-}
-
 export const updateIndicatorLoadTimeEffect: AppEffect = {
   id: 'update-indicator.load-time',
   start: ({repo, workspaceId}) => {
-    scheduleAfterIdle(() => {
+    scheduleIdle(() => {
       void recordUpdateIndicatorLoadTime(repo, workspaceId)
     })
   },

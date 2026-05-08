@@ -9,7 +9,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
 import { memoize } from 'lodash'
 import { v5 as uuidv5 } from 'uuid'
-import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, getBlockTypes, topLevelBlockIdProp } from '@/data/properties.ts'
 import { PANEL_TYPE } from '@/data/blockTypes'
 import { useChildren } from '@/hooks/block.ts'
 
@@ -70,6 +70,22 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     // engine-routing-only and shouldn't reach the upload queue.
     // Routing through `repo.tx` directly (vs `block.set`) lets us
     // override scope while still using the schema's codec.
+    //
+    // Skip the writeTransaction when all three values are already
+    // set — strict-mode double-invocation in dev fires this effect
+    // twice at mount, and on every re-render where
+    // `block.id`/`mainPanelBlock` identity stays stable but React
+    // re-runs effects (e.g. fast refresh). The tx itself is
+    // idempotent, but each invocation costs ~40 ms of trigger
+    // overhead.
+    const data = mainPanelBlock.peek()
+    if (
+      data &&
+      getBlockTypes(data).includes(PANEL_TYPE) &&
+      data.properties[topLevelBlockIdProp.name] === block.id &&
+      data.properties[focusedBlockIdProp.name] === block.id
+    ) return
+
     void repo.tx(async tx => {
       await repo.addTypeInTx(tx, mainPanelBlock.id, PANEL_TYPE)
       await tx.setProperty(mainPanelBlock.id, topLevelBlockIdProp, block.id)

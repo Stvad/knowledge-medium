@@ -2,6 +2,7 @@ import { getUserPrefsBlock } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import type { AppEffect } from '@/extensions/core.ts'
+import { scheduleIdle } from '@/utils/scheduleIdle.ts'
 import { backlinksViewProp, DEFAULT_BACKLINKS_VIEW_ID } from './prop.ts'
 
 const initialized = new Map<string, Promise<void>>()
@@ -21,6 +22,11 @@ export const initializeBacklinksViewPreferences = async (
 
   const init = (async () => {
     const prefsBlock = await getUserPrefsBlock(repo, workspaceId, repo.user)
+    // Fast path: skip the writeTransaction when the preference is
+    // already set (every cold start after the first). The
+    // pre-existing inside-tx check returned no-op but had already
+    // paid the writeTransaction cost.
+    if (prefsBlock.peekProperty(backlinksViewProp) !== undefined) return
 
     await repo.tx(async tx => {
       const current = await tx.get(prefsBlock.id)
@@ -41,5 +47,11 @@ export const initializeBacklinksViewPreferences = async (
 
 export const backlinksViewPreferencesEffect: AppEffect = {
   id: 'backlinks-view.preferences',
-  start: ({repo, workspaceId}) => initializeBacklinksViewPreferences(repo, workspaceId),
+  // Defer off the cold-start critical path — see grouped-backlinks
+  // preferences for the rationale.
+  start: ({repo, workspaceId}) => {
+    scheduleIdle(() => {
+      void initializeBacklinksViewPreferences(repo, workspaceId)
+    })
+  },
 }
