@@ -30,19 +30,6 @@
  */
 
 import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
-// PowerSync ships a self-contained UMD worker bundle. We import its
-// URL so we can (a) emit a <link rel="preload" as="worker"> for it
-// from main.tsx (in parallel with React's boot) and (b) pass that
-// exact URL to WASQLiteOpenFactory so the preload-warmed cache hits.
-// Default behavior (no `worker` option) would have PowerSync construct
-// the worker from `new URL('./WASQLiteDB.worker.js', import.meta.url)`
-// — Vite would resolve that to a *different* URL that the preload
-// wouldn't match.
-import wasqliteWorkerUrl from '@powersync/web/umd/worker/db?url'
-
-/** Re-exported so `main.tsx` can emit a preload hint (HTTP cache warm)
- *  for the same URL the WASQLiteOpenFactory will fetch later. */
-export const WASQLITE_WORKER_URL = wasqliteWorkerUrl
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
 import {
   BLOCKS_RAW_TABLE,
@@ -197,12 +184,6 @@ const buildPowerSyncDb = (userId: string) => {
     database: new WASQLiteOpenFactory({
       dbFilename: dbFilenameForUser(userId),
       vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-      // Pass our explicit URL (matches the one we preload from
-      // main.tsx) so the browser's HTTP cache hit on `new Worker(url)`
-      // skips the bundle download. Without this, PowerSync would mint
-      // its own URL via `new URL('./WASQLiteDB.worker.js',
-      // import.meta.url)` and the preload would be wasted.
-      worker: wasqliteWorkerUrl,
     }),
     flags: {
       enableMultiTabs: false,
