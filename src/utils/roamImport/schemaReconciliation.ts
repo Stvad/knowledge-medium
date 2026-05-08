@@ -46,12 +46,11 @@ interface SampledNameStats {
    *  appear alongside plainStringArrays, the field is a string-list
    *  property whose scalar cases need one-item-array normalization. */
   plainStrings: number
-  nonRefListSamples: Array<{block: string; value: string}>
+  nonRefListSamples: Array<{blockRef: string; value: string}>
 }
 
-const SCHEMA_NEAR_MISS_THRESHOLD = 0.9
+const SCHEMA_NEAR_MISS_THRESHOLD = 0.85
 const SCHEMA_NEAR_MISS_MIN_VALUES = 10
-const MAX_SCHEMA_NEAR_MISS_SAMPLES = 3
 
 const formatSampleValue = (value: unknown): string => {
   let formatted: string
@@ -67,19 +66,10 @@ const formatSampleValue = (value: unknown): string => {
 
 const rememberNonRefListSample = (
   stats: SampledNameStats,
-  block: string,
+  blockId: string,
   value: unknown,
 ): void => {
-  if (stats.nonRefListSamples.length >= MAX_SCHEMA_NEAR_MISS_SAMPLES) return
-  stats.nonRefListSamples.push({block, value: formatSampleValue(value)})
-}
-
-const sampleBlockLabel = (block: BlockData): string => {
-  const normalizedContent = block.content.replace(/\s+/g, ' ').trim()
-  const content = normalizedContent.length > 80
-    ? `${normalizedContent.slice(0, 77)}...`
-    : normalizedContent
-  return content || block.id
+  stats.nonRefListSamples.push({blockRef: `((${blockId}))`, value: formatSampleValue(value)})
 }
 
 const isPureTokenString = (value: string): boolean => {
@@ -95,16 +85,16 @@ const isPureTokenString = (value: string): boolean => {
   return match !== null && match.index === 0 && match[0].length === trimmed.length
 }
 
-const recordSample = (stats: SampledNameStats, block: string, value: unknown): void => {
+const recordSample = (stats: SampledNameStats, blockId: string, value: unknown): void => {
   stats.totalValues += 1
   if (typeof value === 'number' && Number.isFinite(value)) {
     stats.numbers += 1
-    rememberNonRefListSample(stats, block, value)
+    rememberNonRefListSample(stats, blockId, value)
     return
   }
   if (typeof value === 'boolean') {
     stats.booleans += 1
-    rememberNonRefListSample(stats, block, value)
+    rememberNonRefListSample(stats, blockId, value)
     return
   }
   if (typeof value === 'string' && isPureTokenString(value)) {
@@ -113,7 +103,7 @@ const recordSample = (stats: SampledNameStats, block: string, value: unknown): v
   }
   if (typeof value === 'string') {
     stats.plainStrings += 1
-    rememberNonRefListSample(stats, block, value)
+    rememberNonRefListSample(stats, blockId, value)
     return
   }
   if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string')) {
@@ -121,11 +111,11 @@ const recordSample = (stats: SampledNameStats, block: string, value: unknown): v
       stats.pageTokenArrays += 1
     } else {
       stats.plainStringArrays += 1
-      rememberNonRefListSample(stats, block, value)
+      rememberNonRefListSample(stats, blockId, value)
     }
     return
   }
-  rememberNonRefListSample(stats, block, value)
+  rememberNonRefListSample(stats, blockId, value)
 }
 
 const classify = (stats: SampledNameStats): ClassifiedPresetId => {
@@ -161,8 +151,8 @@ const schemaNearMissDiagnostic = (
   const percent = Math.round(ratio * 100)
   const nonRefListValues = stats.totalValues - refListLike
   const samples = stats.nonRefListSamples.length > 0
-    ? ` Samples: ${stats.nonRefListSamples
-      .map(sample => `${sample.block}=${sample.value}`)
+    ? ` Misses: ${stats.nonRefListSamples
+      .map(sample => `${sample.blockRef}=${sample.value}`)
       .join('; ')}.`
     : ''
   return (
@@ -200,7 +190,7 @@ export const collectSchemaReconciliationPlan = (
         plainStrings: 0,
         nonRefListSamples: [],
       }
-      recordSample(stats, sampleBlockLabel(block), value)
+      recordSample(stats, block.id, value)
       sampler.set(name, stats)
     }
   }

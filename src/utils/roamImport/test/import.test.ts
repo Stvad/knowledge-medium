@@ -702,11 +702,11 @@ describe('importRoam', () => {
   })
 
   it('reports schema inference near-misses in the import log', async () => {
-    const nearMissExport: RoamExport = Array.from({length: 10}, (_, i) => ({
+    const nearMissExport: RoamExport = Array.from({length: 20}, (_, i) => ({
       title: `near miss ${i}`,
       uid: `nearMissPage${i}`,
       children: [{
-        string: i === 9 ? 'related::plain text [[Topic 9]]' : `related::[[Topic ${i}]]`,
+        string: i >= 17 ? `related::plain text [[Topic ${i}]]` : `related::[[Topic ${i}]]`,
         uid: `nearMissRelated${i}`,
       }],
     }))
@@ -717,7 +717,7 @@ describe('importRoam', () => {
     })
 
     expect(summary.diagnostics).toEqual(expect.arrayContaining([
-      expect.stringContaining('property "roam:related" inferred string, but 9/10 values (90%) looked like refList'),
+      expect.stringContaining('property "roam:related" inferred string, but 17/20 values (85%) looked like refList'),
     ]))
 
     const dailyChildren = await readChildren(dailyNoteBlockId(WORKSPACE, todayIso()))
@@ -733,8 +733,15 @@ describe('importRoam', () => {
     const nearMisses = propertySections.find(c => c.content === 'Schema inference near-misses (1)')
     expect(nearMisses).toBeDefined()
     const nearMissLines = await readChildren(nearMisses!.id)
-    expect(nearMissLines.map(line => line.content)).toEqual([
-      expect.stringContaining('near miss 9="plain text [[Topic 9]]"'),
+    expect(nearMissLines).toHaveLength(1)
+    expect(nearMissLines[0].content).toContain(
+      'property "roam:related" inferred string, but 17/20 values (85%) looked like refList',
+    )
+    const nearMissChildren = await readChildren(nearMissLines[0].id)
+    expect(nearMissChildren.map(line => line.content)).toEqual([
+      `((${roamBlockId(WORKSPACE, 'nearMissPage17')}))="plain text [[Topic 17]]"`,
+      `((${roamBlockId(WORKSPACE, 'nearMissPage18')}))="plain text [[Topic 18]]"`,
+      `((${roamBlockId(WORKSPACE, 'nearMissPage19')}))="plain text [[Topic 19]]"`,
     ])
   })
 

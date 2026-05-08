@@ -228,17 +228,33 @@ const summarizeReadwisePromotedConflicts = (
 const summarizeSchemaNearMisses = (
   lines: readonly string[],
 ): {nodes: ReportNode[], remaining: string[]} => {
-  const matched: string[] = []
+  const matched: ReportNode[] = []
   const remaining: string[] = []
   for (const line of lines) {
-    if (line.startsWith('Schema inference near-miss:')) matched.push(line)
-    else remaining.push(line)
+    if (!line.startsWith('Schema inference near-miss:')) {
+      remaining.push(line)
+      continue
+    }
+    const marker = ' Misses: '
+    const markerIndex = line.indexOf(marker)
+    if (markerIndex < 0) {
+      matched.push({content: line})
+      continue
+    }
+    const content = line.slice(0, markerIndex).replace(/\.$/, '')
+    const misses = line
+      .slice(markerIndex + marker.length)
+      .replace(/\.$/, '')
+      .split('; ')
+      .filter(Boolean)
+      .map(miss => ({content: miss}))
+    matched.push({content, children: misses})
   }
   if (matched.length === 0) return {nodes: [], remaining}
   return {
     nodes: [{
       content: `Schema inference near-misses (${matched.length})`,
-      children: matched.map(content => ({content})),
+      children: matched,
     }],
     remaining,
   }

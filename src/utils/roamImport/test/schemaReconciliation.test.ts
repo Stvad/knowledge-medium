@@ -161,17 +161,21 @@ describe('collectSchemaReconciliationPlan', () => {
 
   it('reports near-refList fields that fall back to string', () => {
     const blocks: BlockData[] = [
-      ...Array.from({length: 9}, (_, i) => block(`ref-${i}`, {'roam:almost-ref': `[[Topic ${i}]]`})),
-      block('bad-ref', {'roam:almost-ref': 'plain text [[Topic 9]]'}),
+      ...Array.from({length: 17}, (_, i) => block(`ref-${i}`, {'roam:almost-ref': `[[Topic ${i}]]`})),
+      block('bad-ref-1', {'roam:almost-ref': 'plain text [[Topic 17]]'}),
+      block('bad-ref-2', {'roam:almost-ref': 'plain text [[Topic 18]]'}),
+      block('bad-ref-3', {'roam:almost-ref': 'plain text [[Topic 19]]'}),
     ]
 
     const plan = collectSchemaReconciliationPlan(blocks, env.repo)
 
     expect(plan.toRegister).toEqual([{name: 'roam:almost-ref', presetId: 'string'}])
     expect(plan.diagnostics).toEqual([
-      expect.stringContaining('property "roam:almost-ref" inferred string, but 9/10 values (90%) looked like refList'),
+      expect.stringContaining('property "roam:almost-ref" inferred string, but 17/20 values (85%) looked like refList'),
     ])
-    expect(plan.diagnostics[0]).toContain('bad-ref="plain text [[Topic 9]]"')
+    expect(plan.diagnostics[0]).toContain('((bad-ref-1))="plain text [[Topic 17]]"')
+    expect(plan.diagnostics[0]).toContain('((bad-ref-2))="plain text [[Topic 18]]"')
+    expect(plan.diagnostics[0]).toContain('((bad-ref-3))="plain text [[Topic 19]]"')
   })
 
   it('skips names already registered (kernel/plugin/user-data)', () => {
