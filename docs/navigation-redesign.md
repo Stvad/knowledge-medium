@@ -39,7 +39,7 @@ GC of orphan rows (tab closed → its rows linger): punt for alpha. Can add a lo
 #<wsId>/<blockId1>(/<blockId2>(/<blockId3>...))*
 ```
 
-Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) is a transient state — bootstrap fills in today's daily note on workspace landing (see "Workspace switch + default landing" below). Compact, shareable, human-readable.
+Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) is a transient state — the projection restores prior `(tabId, wsId)` rows if any exist, else the landing layer fills in today's daily note (see "Workspace switch + default landing" below). Compact, shareable, human-readable.
 
 Sticking with hash (vs query string / pathname): hash works on any static host with no SPA-fallback config, and block ids never leak into HTTP request lines, server logs, or `Referer` headers. No SEO/SSR target makes the usual reasons to prefer pathname routing moot. Query params remain available for orthogonal config (`?debug=1#wsId/b1/b2`).
 
@@ -129,10 +129,10 @@ Interaction with browser history (now that intra-panel nav pushes too):
 - Click chevron back in panel 1: pop from panel 1's local back stack, push to its forward stack. Updates `topLevelBlockIdProp` on the panel row → observer pushes URL entry. Symmetric with link clicks.
 - Browser back after a chevron click: undoes the chevron click via the URL → applyCurrentUrl → row revert. Local stack would now be out of sync with actual panel state.
 - **Reconciliation on popstate: stacks AND VisitState.** On inbound URL apply, for each panel whose `topLevelBlockId` changed, walk its local back/forward stack:
-  - If new block matches top of back stack: pop back, push old to forward, **and** call `panelHistory.enqueueRestore(rowId, entry.state)` so the existing PanelRenderer `consumeRestore` effect restores `focusedBlockIdProp` + scroll for that history entry.
-  - If new block matches top of forward stack: pop forward, push old to back, enqueueRestore likewise.
+  - If new block matches top of back stack: pop back, push old to forward; the matched entry's `VisitState` drives the restore.
+  - If new block matches top of forward stack: pop forward, push old to back; same VisitState restore.
   - Else (stack diverged from URL — user jumped via external nav): drop the local stack, start fresh from current. VisitState for that panel is lost on this hop; not regression vs today.
-- The block change is set synchronously in `applyCurrentUrl`'s row write so PanelRenderer paints with the right block; the queued restore is consumed in PanelRenderer's post-effect once the new content has laid out. Same mechanism step 3 already uses for chevron back.
+- **VisitState restoration splits like step 3 does:** `focusedBlockIdProp` is written synchronously in the same `applyCurrentUrl` tx that sets `topLevelBlockIdProp`, so the new render starts with the right cursor (no mid-render flash). `scrollTop` is queued via `panelHistory.enqueueRestore(rowId, {scrollTop})` and consumed by PanelRenderer's existing post-layout `consumeRestore` effect — scroll has to wait for the new content to lay out. This is exactly the split `goBackInPanel` already uses for chevron clicks; we extend the same write pattern to the popstate path. (`consumeRestore` doesn't need to grow new responsibilities — it stays scroll-only.)
 
 This keeps step 3's "focused block + scroll restore on back" guarantee intact for the now-primary path (browser back over intra-panel nav). Promoting the stack to DB rows for cross-reload survival: deferred, same trade-off as before (matches browser tab behavior).
 
@@ -253,7 +253,10 @@ Operational details:
 - **Per-tx granularity.** The outbound observer subscribes at the *tx-commit* level (single notification per `repo.tx`), not per-property-update — multiple writes in one tx produce one URL update.
 - **LCS over block ids has duplicate-block ambiguity.** If the URL contains `b1` twice (`#wsId/b1/b2/b1`), and a close removes one of them, browser-back can't unambiguously restore which prior rowId was at which position. **Decision: best-effort.** Duplicates that survive a round-trip get fresh rowId (and lose per-row visit state on that round-trip). Upgrade path if this bites: write `{rowOrder: rowId[]}` into `history.state` on each push so popstate has unambiguous identity recovery — `history.state` survives reload and is per-entry. Not in step 4.
 - **No "intent hints" channel.** Callers don't pass `{kind: 'open-panel'}` or similar. They just write rows.
-- **Existing `LayoutRenderer`** keeps reading `panelBlock.children`; those children are kept in sync with URL via the projection.
+- **`LayoutRenderer` reads through a `(workspaceId, tabId)`-filtered hook**, not raw `useChildren(panelBlock)`. With tabId scoping, all tabs' panel rows are siblings under the same workspace's panels block — raw children would mix tabs. New hook `usePanelsForTab(panelsBlock, tabId)` does `useChildren(panelsBlock)` + a `tabIdProp` filter and returns the filtered array. Order is preserved under filter because order-keys live in a single sibling space and filtering doesn't reorder. Why this layout (one shared panels block, tabId as a property) over alternatives:
+  - **Per-tab parent block**: cleaner ordering scope but requires a parent block per `(wsId, tabId)`, plus cleanup-on-tab-close work, plus an extra lookup to find the right parent. More moving parts for no real win.
+  - **Flat list keyed by properties**: would need a query-by-properties API the repo doesn't have.
+  - **Shared parent + tabId filter**: minimal schema change (add one prop), order semantics preserved, GC story is the same orphan-rows story we already punted. Cheapest correct option.
 - **`navigate()`** continues to insert a panel row via `repo.tx` (UiState scope); URL update happens through the observer.
 - **Tests:** classification rule covers each diff shape (insert/delete/reorder/intra-panel/property-only/no-op); `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; duplicate-block round-trips get fresh identity (documented best-effort); two simulated tabIds don't see each other; subscribers fire after both inbound and outbound passes; rapid open/close calls converge correctly under serialization.
 
