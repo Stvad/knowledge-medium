@@ -57,7 +57,7 @@ export function WorkspaceSwitcher() {
     // re-resolve of getInitialBlock for the new workspace. The new
     // workspace's root block id isn't known here (it may not even be local
     // yet for a just-joined workspace), so we navigate without a block id
-    // and let App.tsx's bootstrap fill it in via writeAppHash once resolved.
+    // and let App.tsx's bootstrap fill it in once resolved.
     setHash(buildAppHash(workspace.id))
   }, [activeWorkspaceId, repo, setHash])
 

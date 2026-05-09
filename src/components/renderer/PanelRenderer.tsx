@@ -1,6 +1,6 @@
 import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
-import { NestedBlockContextProvider } from '@/context/block.tsx'
+import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
 import {
@@ -8,12 +8,12 @@ import {
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties.ts'
-import { useSelectionState, MAIN_PANEL_NAME } from '@/data/globalState'
+import { useSelectionState } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
-import { usePropertyValue, useContent } from '@/hooks/block.ts'
+import { usePropertyValue } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
 import {
   goBackInPanel,
@@ -27,8 +27,7 @@ const SCROLL_WRITE_DELAY_MS = 200
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [selectionState] = useSelectionState();
-  const blockContent = useContent(block)
-  const isMainPanel = blockContent === MAIN_PANEL_NAME
+  const isMainPanel = Boolean(useBlockContext().isMainPanel)
 
   const repo = useRepo();
 

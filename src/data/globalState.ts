@@ -234,13 +234,6 @@ export const getUIStateBlock = memoize(
     `${repoIdentity(repo)}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`,
 )
 
-const PANELS_PATH_PART = 'panels'
-export const getPanelsBlock = memoize(
-  async (uiStateBlock: Block): Promise<Block> =>
-    ensureUiChild(uiStateBlock.repo, uiStateBlock, PANELS_PATH_PART),
-  (uiBlock) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}`,
-)
-
 const TABS_PATH_PART = 'tabs'
 export const getPerTabBlock = memoize(
   async (uiStateBlock: Block, tabId: string): Promise<Block> => {
@@ -249,11 +242,6 @@ export const getPerTabBlock = memoize(
   },
   (uiBlock, tabId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${tabId}`,
 )
-
-export const MAIN_PANEL_NAME = 'main'
-
-export const isMainPanel = (panel: Block): boolean =>
-  panel.peek()?.content === MAIN_PANEL_NAME
 
 // ──── React hooks ────
 

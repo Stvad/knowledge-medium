@@ -46,10 +46,3 @@ export const parseAppHash = (hash: string | undefined | null): AppRoute => {
 
 export const buildAppHash = (workspaceId: string, blockId?: string): string =>
   buildLayout(workspaceId, blockId ? [blockId] : [])
-
-export const writeAppHash = (workspaceId: string, blockId?: string): void => {
-  const next = buildAppHash(workspaceId, blockId)
-  if (window.location.hash !== next) {
-    window.location.hash = next
-  }
-}

@@ -16,9 +16,7 @@
  *   - getUIStateBlock(repo, ws, user, ctx): with panelId → returns
  *     the panel block; without panelId → ensures a 'ui-state' child
  *     of the user page
- *   - getPanelsBlock: ensures a 'panels' child of the ui-state
  *   - getPerTabBlock: ensures ui-state/tabs/{tabId}
- *   - isMainPanel: content === 'main'
  *   - getSelectionStateSnapshot: returns peekProperty value, defaults
  *     to the schema default when absent
  *   - resetBlockSelection: no-op when already empty, clears when set
@@ -34,14 +32,11 @@ import {
   selectionStateProp,
 } from '@/data/properties'
 import {
-  MAIN_PANEL_NAME,
   getPerTabBlock,
-  getPanelsBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
   getUserBlock,
   getUserPrefsBlock,
-  isMainPanel,
   resetBlockSelection,
 } from '@/data/globalState'
 
@@ -203,23 +198,6 @@ describe('getUIStateBlock', () => {
   })
 })
 
-describe('getPanelsBlock', () => {
-  it('ensures a "panels" child under the ui-state block', async () => {
-    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const panels = await getPanelsBlock(uiState)
-
-    expect(panels.peek()?.parentId).toBe(uiState.id)
-    expect(panels.peek()?.content).toBe('panels')
-  })
-
-  it('is idempotent', async () => {
-    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const a = await getPanelsBlock(uiState)
-    const b = await getPanelsBlock(uiState)
-    expect(a).toBe(b)
-  })
-})
-
 describe('getPerTabBlock', () => {
   it('ensures a tab-specific child under ui-state/tabs', async () => {
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
@@ -248,24 +226,6 @@ describe('getPerTabBlock', () => {
     expect(a.peek()?.parentId).toBe(b.peek()?.parentId)
     expect(a.peek()?.content).toBe('tab-a')
     expect(b.peek()?.content).toBe('tab-b')
-  })
-})
-
-describe('isMainPanel', () => {
-  it('returns true for a block with content="main"', async () => {
-    await env.repo.tx(tx => tx.create({
-      id: 'p1', workspaceId: WS, parentId: null, orderKey: 'a0', content: MAIN_PANEL_NAME,
-    }), {scope: ChangeScope.BlockDefault})
-    await env.repo.load('p1')
-    expect(isMainPanel(env.repo.block('p1'))).toBe(true)
-  })
-
-  it('returns false for any other content', async () => {
-    await env.repo.tx(tx => tx.create({
-      id: 'p2', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'sidebar',
-    }), {scope: ChangeScope.BlockDefault})
-    await env.repo.load('p2')
-    expect(isMainPanel(env.repo.block('p2'))).toBe(false)
   })
 })
 

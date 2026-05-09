@@ -33,6 +33,9 @@ const repoRef = vi.hoisted(() => ({
 const uiStateBlockRef = vi.hoisted(() => ({
   current: undefined as Block | undefined,
 }))
+const navigateCallsRef = vi.hoisted(() => ({
+  current: [] as unknown[],
+}))
 
 vi.mock('@/context/repo.tsx', () => ({
   useRepo: () => {
@@ -45,6 +48,12 @@ vi.mock('@/data/globalState.ts', () => ({
   useUIStateBlock: () => {
     if (!uiStateBlockRef.current) throw new Error('test UI state block not initialised')
     return uiStateBlockRef.current
+  },
+}))
+
+vi.mock('@/utils/navigation.ts', () => ({
+  useNavigate: () => (input: unknown) => {
+    navigateCallsRef.current.push(input)
   },
 }))
 
@@ -119,6 +128,7 @@ describe('BlockProperties component', () => {
     repo.setFacetRuntime(runtime)
     repo.setActiveWorkspaceId('ws-1')
     repoRef.current = repo
+    navigateCallsRef.current = []
 
     await repo.tx(async tx => {
       await tx.create({
@@ -326,39 +336,32 @@ describe('BlockProperties component', () => {
     await block.set(degradedFallbackSchema('mood', 'string'), 'ok')
     expect(repo.userSchemas.getSchemaBlockId('mood')).toBeUndefined()
 
-    const openPanelEvents: Array<{blockId: string}> = []
-    const onOpen = (event: Event) => {
-      const detail = (event as CustomEvent<{blockId: string}>).detail
-      openPanelEvents.push({blockId: detail.blockId})
-    }
-    window.addEventListener('open-panel', onOpen)
-
     render(
       <AppRuntimeContextProvider value={runtime}>
         <BlockProperties block={block}/>
       </AppRuntimeContextProvider>,
     )
 
-    try {
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
-      })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /configure mood/i}))
+    })
 
-      await waitFor(() => {
-        expect(repo.userSchemas.getSchemaBlockId('mood')).toBeDefined()
-      })
-      const newId = repo.userSchemas.getSchemaBlockId('mood')!
-      await waitFor(() => {
-        expect(openPanelEvents).toEqual([{blockId: newId}])
-      })
-      // The user gets a transient "New schema" pill so the just-opened
-      // side panel doesn't feel like it appeared out of nowhere.
-      await waitFor(() => {
-        expect(screen.getByText('New schema')).toBeTruthy()
-      })
-    } finally {
-      window.removeEventListener('open-panel', onOpen)
-    }
+    await waitFor(() => {
+      expect(repo.userSchemas.getSchemaBlockId('mood')).toBeDefined()
+    })
+    const newId = repo.userSchemas.getSchemaBlockId('mood')!
+    await waitFor(() => {
+      expect(navigateCallsRef.current).toEqual([{
+        blockId: newId,
+        target: 'new-panel',
+        sourcePanelId: undefined,
+      }])
+    })
+    // The user gets a transient "New schema" pill so the just-opened
+    // side panel doesn't feel like it appeared out of nowhere.
+    await waitFor(() => {
+      expect(screen.getByText('New schema')).toBeTruthy()
+    })
   })
 
   it('moves between property values and labels without selecting row controls', async () => {
@@ -411,52 +414,45 @@ describe('BlockProperties component', () => {
   it('AddPropertyForm: glyph click registers a schema, opens its panel, and shows an unset row', async () => {
     const block = repo.block('block-1')
 
-    const openPanelEvents: Array<{blockId: string}> = []
-    const onOpen = (event: Event) => {
-      const detail = (event as CustomEvent<{blockId: string}>).detail
-      openPanelEvents.push({blockId: detail.blockId})
-    }
-    window.addEventListener('open-panel', onOpen)
-
     render(
       <AppRuntimeContextProvider value={runtime}>
         <BlockProperties block={block}/>
       </AppRuntimeContextProvider>,
     )
 
-    try {
-      await act(async () => {
-        requestPropertyCreate({blockId: block.id})
-      })
-      const fieldInput = screen.getByPlaceholderText('Field')
-      await act(async () => {
-        fireEvent.change(fieldInput, {target: {value: 'priority'}})
-      })
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button', {name: /configure new field/i}))
-      })
+    await act(async () => {
+      requestPropertyCreate({blockId: block.id})
+    })
+    const fieldInput = screen.getByPlaceholderText('Field')
+    await act(async () => {
+      fireEvent.change(fieldInput, {target: {value: 'priority'}})
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', {name: /configure new field/i}))
+    })
 
-      await waitFor(() => {
-        expect(repo.userSchemas.getSchemaBlockId('priority')).toBeDefined()
-      })
-      const newId = repo.userSchemas.getSchemaBlockId('priority')!
-      await waitFor(() => {
-        expect(openPanelEvents).toEqual([{blockId: newId}])
-      })
-      await waitFor(() => {
-        expect('priority' in block.data.properties).toBe(false)
-      })
-      await waitFor(() => {
-        expect(propertyRow('priority')).toBeTruthy()
-      })
-      // Form has closed — the placeholder input is gone, replaced by the
-      // "Field" trigger button.
-      await waitFor(() => {
-        expect(screen.queryByPlaceholderText('Field')).toBeNull()
-      })
-    } finally {
-      window.removeEventListener('open-panel', onOpen)
-    }
+    await waitFor(() => {
+      expect(repo.userSchemas.getSchemaBlockId('priority')).toBeDefined()
+    })
+    const newId = repo.userSchemas.getSchemaBlockId('priority')!
+    await waitFor(() => {
+      expect(navigateCallsRef.current).toEqual([{
+        blockId: newId,
+        target: 'new-panel',
+        sourcePanelId: undefined,
+      }])
+    })
+    await waitFor(() => {
+      expect('priority' in block.data.properties).toBe(false)
+    })
+    await waitFor(() => {
+      expect(propertyRow('priority')).toBeTruthy()
+    })
+    // Form has closed — the placeholder input is gone, replaced by the
+    // "Field" trigger button.
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('Field')).toBeNull()
+    })
   })
 
   it('opens property creation from a Tana-style request and tabs into the value row', async () => {

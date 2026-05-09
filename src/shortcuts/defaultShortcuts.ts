@@ -54,7 +54,6 @@ import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import { navigate } from '@/utils/navigation.ts'
 import { navigateInPanel } from '@/utils/panelHistory.ts'
-import { isMainPanel } from '@/data/globalState.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
@@ -161,11 +160,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     id: 'zoom_in',
     description: 'Zoom into focused block',
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
-      if (isMainPanel(uiStateBlock)) {
-        navigate(repo, {blockId: block.id, target: 'focused'})
-      } else {
-        await navigateInPanel(uiStateBlock, block.id)
-      }
+      await navigateInPanel(uiStateBlock, block.id)
     },
     defaultBinding: {
       keys: ['cmd+.', 'ctrl+.'],
@@ -183,11 +178,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       const parent = repo.block(topLevelBlockId).parent
       if (!parent) return
 
-      if (isMainPanel(uiStateBlock)) {
-        navigate(repo, {blockId: parent.id, target: 'focused'})
-      } else {
-        await navigateInPanel(uiStateBlock, parent.id)
-      }
+      await navigateInPanel(uiStateBlock, parent.id)
     },
     defaultBinding: {
       keys: ['cmd+,', 'ctrl+,'],
