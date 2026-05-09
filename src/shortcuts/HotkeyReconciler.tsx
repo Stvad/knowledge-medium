@@ -2,7 +2,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import hotkeys from 'hotkeys-js'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
+import {
+  useActiveContextsState,
+  ActiveContextsMap,
+} from '@/shortcuts/ActiveContexts.tsx'
+import { selectActiveDependencies } from '@/shortcuts/activeContextSelection.ts'
 import { setRunActionDispatcher } from '@/shortcuts/runAction.ts'
 import {
   ActionConfig,
@@ -96,7 +100,7 @@ export function HotkeyReconciler(): null {
       if (!action) {
         throw new Error(`[HotkeyReconciler] Action with ID "${actionId}" not found.`)
       }
-      const deps = activeRef.current.get(action.context)
+      const deps = selectActiveDependencies(activeRef.current, action.context, trigger)
       if (!deps) {
         throw new Error(
           `[HotkeyReconciler] Cannot run action "${actionId}". Context "${action.context}" is not active.`,
@@ -189,7 +193,7 @@ const makeHandler = (
   contextConfigsByTypeRef: { current: ReadonlyMap<ActionContextType, ActionContextConfig> },
 ): HotkeyHandler => {
   return (event: KeyboardEvent) => {
-    const deps = activeRef.current.get(action.context)
+    const deps = selectActiveDependencies(activeRef.current, action.context, event)
     // Context may have deactivated between the key event and this callback
     // (or another action shares this key in a different, inactive context).
     // Returning true lets the event propagate / default-handle.

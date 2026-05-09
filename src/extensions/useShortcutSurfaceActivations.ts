@@ -71,7 +71,13 @@ export function useShortcutSurfaceActivations(
       isSelected,
       ...options,
       surface,
-    }),
+    }).map(activation => ({
+      ...activation,
+      dependencies: {
+        uiStateBlock,
+        ...(activation.dependencies ?? {}),
+      },
+    })),
     [
       block,
       repo,

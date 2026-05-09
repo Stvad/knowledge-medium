@@ -132,7 +132,10 @@ export function PanelRenderer({block}: BlockRendererProps) {
   }
 
   return (
-    <div className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
+    <div
+      className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden"
+      data-panel-id={block.id}
+    >
       {!isMainPanel && (
         <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
           <Button

@@ -52,9 +52,10 @@ export function useCommandPaletteActions(): CommandPaletteActionsResult {
     )
 
     const activeContexts: ActiveContextInfo[] = Array.from(active.entries()).flatMap(
-      ([type, dependencies]) => {
+      ([type, entries]) => {
         const config = contextConfigsByType.get(type)
-        return config ? [{config, dependencies}] : []
+        const dependencies = entries.at(-1)?.dependencies
+        return config && dependencies ? [{config, dependencies}] : []
       },
     )
 
