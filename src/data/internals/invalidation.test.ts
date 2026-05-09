@@ -142,15 +142,18 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.workspaceIds!).sort()).toEqual(['w1', 'w2'])
   })
 
-  it('tables: emits ["blocks"] for any non-empty snapshot map (reviewer P2)', () => {
-    // Without this, query handles declaring `{kind:'table', table:'blocks'}`
-    // never re-resolve from the TxEngine fast path. Empty-result table-scan
-    // queries (no per-row deps captured) are the canonical case.
+  it('tables: NOT emitted on tx commit (no auto-emit; mechanism intact for direct invalidate)', () => {
+    // The fast path no longer auto-emits `tables: ['blocks']` — no
+    // production query depends on the coarse channel and walking it on
+    // every commit was dead weight. Plugins that genuinely need a
+    // coarse-table dep can still call `handleStore.invalidate({tables:
+    // [...]})` directly; the dep mechanism (handleStore.matchesDep)
+    // is unchanged.
     const map = new Map<string, ChangeSnapshot>([
       ['a', {before: null, after: {parentId: null, workspaceId: 'w'}}],
     ])
     const note = snapshotsToChangeNotification(map)
-    expect(Array.from(note.tables ?? [])).toEqual(['blocks'])
+    expect(note.tables).toBeUndefined()
   })
 
   it('tables: undefined for an empty snapshot map (no spurious table notification)', () => {
@@ -298,10 +301,12 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     expect(fired).toEqual([0])
   })
 
-  it('table-dep handle re-resolves on local repo.tx write (reviewer P2)', async () => {
-    // Mirror of the row_events tail test, but for the fast path. A
-    // table-only dep needs `tables: ['blocks']` in the fast-path
-    // notification or it never fires for local writes either.
+  it('table-dep handle does NOT auto-fire on local repo.tx write (no auto-tables emit)', async () => {
+    // The fast path no longer auto-emits `tables: ['blocks']` (production
+    // queries use narrow plugin channels). A table-only dep stays stale
+    // through a tx commit — the mechanism is intact (direct
+    // `store.invalidate({tables})` still fires it; see handleStore.test
+    // for that path), but transactional commits don't wake it.
     let v = 0
     const handle = env.repo.handleStore.getOrCreate('test:table-fast', () =>
       new LoaderHandle<number>({
@@ -318,14 +323,10 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await vi.waitFor(() => expect(fired.length).toBe(1))
 
     await create('table-fast-row')
-    // Exactly 2 — the matching-invalidate path no longer double-fires
-    // (reviewer P2 #3, fixed by reordering observeDuringLoad before
-    // invalidate in HandleStore).
-    await vi.waitFor(() => expect(fired.length).toBe(2))
-    // Settle to confirm no spurious extra reload arrives.
+    // Settle — assert no second fire arrives.
     await Promise.resolve()
     await Promise.resolve()
-    expect(fired.length).toBe(2)
+    expect(fired.length).toBe(1)
   })
 })
 
@@ -455,12 +456,13 @@ describe('row_events tail: sync-applied invalidation', () => {
     expect(await env.repo.query.childIds({id: 'p'}).load()).toEqual(['c1'])
   })
 
-  it('table-dep handle re-resolves on sync-applied write (reviewer P2)', async () => {
-    // A handle with ONLY a `{kind:'table', table:'blocks'}` dep — the
-    // canonical empty-result table-scan case (no per-row dep was ever
-    // captured). Without `tables: ['blocks']` on the tail's
-    // notification, the dep would never match and the handle would
-    // stay stale on sync writes.
+  it('table-dep handle does NOT auto-fire on sync-applied write (no auto-tables emit)', async () => {
+    // Symmetric with the fast-path test: the row_events tail no longer
+    // auto-emits `tables: ['blocks']`. A handle with ONLY a coarse
+    // `{kind:'table', table:'blocks'}` dep stays stale through a sync
+    // commit. The mechanism is still wired (a manual
+    // `store.invalidate({tables: [...]})` still works); we just don't
+    // burn it on every write since no production query uses it.
     let v = 0
     const handle = env.repo.handleStore.getOrCreate('test:table-dep', () =>
       new LoaderHandle<number>({
@@ -488,11 +490,9 @@ describe('row_events tail: sync-applied invalidation', () => {
       ['table-dep-row'],
     )
     await env.repo.flushRowEventsTail()
-    // Exactly 2 — see the fast-path test for the matching rationale.
-    await vi.waitFor(() => expect(fired.length).toBe(2))
     await Promise.resolve()
     await Promise.resolve()
-    expect(fired.length).toBe(2)
+    expect(fired.length).toBe(1)
   })
 
   it('high-watermark: only consumes new rows (id > lastId)', async () => {

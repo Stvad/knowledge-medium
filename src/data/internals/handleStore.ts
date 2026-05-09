@@ -781,13 +781,15 @@ export type { ChangeSnapshot } from '@/data/invalidation.ts'
  *       content / property edits don't fire parent-edge deps.
  *    - `workspaceIds`: every workspace_id touched (covers backlinks
  *       handles' coarse workspace dep).
- *    - `tables`: `['blocks']` whenever there's at least one snapshot
- *       (every snapshot here represents a `blocks` write — the engine
- *       only writes to that table). Required for query handles that
- *       declare `ctx.depend({kind:'table', table:'blocks'})` (the
- *       coarse fallback for table-scan resolvers, especially ones with
- *       empty results that have no per-row deps to invalidate against).
  *    - `plugin`: channel/key invalidations emitted by plugin rules.
+ *
+ *  Note: `tables` is intentionally NOT auto-emitted. The `kind:'table'`
+ *  dep mechanism is still wired through `handleStore.invalidate(...)`,
+ *  but no production query depends on it — auto-emitting `['blocks']`
+ *  on every commit walked the channel for nothing. A plugin that
+ *  genuinely needs a coarse-table fallback should call
+ *  `handleStore.invalidate({tables: [...]})` directly, or (better)
+ *  contribute an `InvalidationRule` that emits a narrow plugin channel.
  */
 export const snapshotsToChangeNotification = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
@@ -796,7 +798,6 @@ export const snapshotsToChangeNotification = (
   const rowIds = new Set<string>()
   const parentIds = new Set<string>()
   const workspaceIds = new Set<string>()
-  const tables = snapshots.size > 0 ? new Set<string>(['blocks']) : undefined
   for (const [id, entry] of snapshots) {
     rowIds.add(id)
     if (entry.before?.workspaceId) workspaceIds.add(entry.before.workspaceId)
@@ -831,7 +832,6 @@ export const snapshotsToChangeNotification = (
     rowIds,
     parentIds,
     workspaceIds,
-    tables,
     plugin: collectPluginInvalidationsFromSnapshots(invalidationRules, snapshots),
   }
 }

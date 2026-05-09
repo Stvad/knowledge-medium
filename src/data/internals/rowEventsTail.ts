@@ -270,15 +270,15 @@ export const startRowEventsTail = (args: {
     // triggers re-resolve on the matching handle. No cache-level
     // marker to clear (collection state lives on the handle).
     //
-    // `tables: ['blocks']` mirrors the fast path — query handles that
-    // declare a coarse `{kind:'table', table:'blocks'}` dep need this
-    // notification to re-run on sync-applied writes (without it, the
-    // table-coarse fallback never fires from the sync path; reviewer P2).
+    // No `tables: ['blocks']` here — see the matching note in
+    // `snapshotsToChangeNotification`. The fast path doesn't auto-emit
+    // it either; production queries use plugin channels for narrow
+    // invalidation, and direct `handleStore.invalidate({tables:[...]})`
+    // is still available if a future plugin needs the coarse fallback.
     const notification: ChangeNotification = {
       rowIds,
       parentIds,
       workspaceIds,
-      tables: new Set(['blocks']),
       plugin: pluginInvalidations.size > 0 ? pluginInvalidations : undefined,
     }
     handleStore.invalidate(notification)
