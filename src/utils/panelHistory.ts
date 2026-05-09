@@ -22,7 +22,11 @@
 import { useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties'
+import {
+  focusedBlockIdProp,
+  scrollTopProp,
+  topLevelBlockIdProp,
+} from '@/data/properties'
 
 /** Per-(panel, block-visit) ephemeral state captured at navigation time
  *  and replayed on back/forward. New fields can be added freely; consumers
@@ -214,6 +218,7 @@ export const navigateInPanel = async (
   await panelBlock.repo.tx(async tx => {
     await tx.setProperty(panelBlock.id, topLevelBlockIdProp, blockId)
     await tx.setProperty(panelBlock.id, focusedBlockIdProp, blockId)
+    await tx.setProperty(panelBlock.id, scrollTopProp, 0)
   }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
 }
 
@@ -236,6 +241,7 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   await panelBlock.repo.tx(async tx => {
     await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
     await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+    await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
   }, {scope: ChangeScope.UiState, description: 'panel history back'})
   return true
 }
@@ -252,6 +258,7 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   await panelBlock.repo.tx(async tx => {
     await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
     await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+    await tx.setProperty(panelBlock.id, scrollTopProp, dest.state?.scrollTop ?? 0)
   }, {scope: ChangeScope.UiState, description: 'panel history forward'})
   return true
 }

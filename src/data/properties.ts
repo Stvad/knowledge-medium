@@ -51,6 +51,12 @@ export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlo
   changeScope: ChangeScope.UiState,
 })
 
+export const scrollTopProp = defineProperty<number | undefined>('scrollTop', {
+  codec: codecs.optionalNumber,
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+})
+
 /** Editor-selection state for the active block. Object-typed; the
  *  `unsafeIdentity` codec is appropriate because the shape is engine-
  *  controlled and not exposed for plugin extension. The optional
@@ -234,6 +240,7 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockIdProp,
+  scrollTopProp,
   editorSelection,
   editorFocusRequestProp,
   selectionStateProp,

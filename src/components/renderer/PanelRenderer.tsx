@@ -3,12 +3,16 @@ import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { Button } from '@/components/ui/button.tsx'
 import { ChevronLeft, ChevronRight, X } from 'lucide-react'
-import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties.ts'
+import {
+  focusedBlockIdProp,
+  scrollTopProp,
+  topLevelBlockIdProp,
+} from '@/data/properties.ts'
 import { useSelectionState, MAIN_PANEL_NAME } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
 import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { usePropertyValue, useContent } from '@/hooks/block.ts'
 import { ChangeScope } from '@/data/api'
 import {
@@ -17,6 +21,8 @@ import {
   panelHistory,
   usePanelHistory,
 } from '@/utils/panelHistory.ts'
+
+const SCROLL_WRITE_DELAY_MS = 200
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -46,6 +52,28 @@ export function PanelRenderer({block}: BlockRendererProps) {
 
   const {canBack, canForward} = usePanelHistory(block.id)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const pendingScrollTopRef = useRef<number | undefined>(undefined)
+  const scrollWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const flushScrollTop = useCallback(() => {
+    if (scrollWriteTimerRef.current) {
+      clearTimeout(scrollWriteTimerRef.current)
+      scrollWriteTimerRef.current = null
+    }
+    const next = pendingScrollTopRef.current
+    pendingScrollTopRef.current = undefined
+    if (next === undefined) return
+    if (block.peekProperty(scrollTopProp) === next) return
+    void block.set(scrollTopProp, next)
+  }, [block])
+
+  const scheduleScrollTopWrite = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    pendingScrollTopRef.current = el.scrollTop
+    if (scrollWriteTimerRef.current) clearTimeout(scrollWriteTimerRef.current)
+    scrollWriteTimerRef.current = setTimeout(flushScrollTop, SCROLL_WRITE_DELAY_MS)
+  }, [flushScrollTop])
 
   // Register a snapshotter so panelHistory can capture (focused block,
   // scroll) before any navigation away from the current top-level. The
@@ -66,10 +94,24 @@ export function PanelRenderer({block}: BlockRendererProps) {
   useEffect(() => {
     if (!topLevelBlockId) return
     const restore = panelHistory.consumeRestore(block.id)
-    if (restore?.scrollTop != null && scrollRef.current) {
-      scrollRef.current.scrollTop = restore.scrollTop
+    const scrollTop = restore?.scrollTop ?? block.peekProperty(scrollTopProp)
+    if (scrollTop != null && scrollRef.current) {
+      scrollRef.current.scrollTop = scrollTop
     }
-  }, [topLevelBlockId, block.id])
+  }, [topLevelBlockId, block])
+
+  useEffect(() => flushScrollTop, [flushScrollTop])
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') flushScrollTop()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [flushScrollTop])
 
   const handleClose = () => {
     // Panels are UI-state rows — their lifecycle (open/close) is local
@@ -127,7 +169,11 @@ export function PanelRenderer({block}: BlockRendererProps) {
           </Button>
         </div>
       )}
-      <div ref={scrollRef} className="flex-grow overflow-y-auto scrollbar-none">
+      <div
+        ref={scrollRef}
+        className="flex-grow overflow-y-auto scrollbar-none"
+        onScroll={scheduleScrollTopWrite}
+      >
         <NestedBlockContextProvider overrides={{topLevel: false}}>
           <BlockComponent blockId={topLevelBlockId}/>
         </NestedBlockContextProvider>

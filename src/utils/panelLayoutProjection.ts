@@ -5,6 +5,7 @@ import { ChangeScope } from '@/data/api'
 import { PANEL_TYPE } from '@/data/blockTypes'
 import {
   focusedBlockIdProp,
+  scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
@@ -125,6 +126,7 @@ export const createPanelRowInTx = async (
     properties: {
       [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode(args.blockId),
       [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode(args.blockId),
+      [scrollTopProp.name]: scrollTopProp.codec.encode(0),
     },
   })
   await repo.addTypeInTx(tx, id, PANEL_TYPE)
@@ -207,6 +209,7 @@ export const reconcilePanelRows = async (
         panelHistory.enqueueRestore(slot.row.id, restored?.state)
         await tx.setProperty(slot.row.id, topLevelBlockIdProp, blockId)
         await tx.setProperty(slot.row.id, focusedBlockIdProp, restored?.state?.focusedBlockId ?? blockId)
+        await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
       }
     }
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
