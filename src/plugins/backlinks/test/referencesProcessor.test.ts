@@ -351,6 +351,83 @@ describe('parseReferences — schema-swap reprojection', () => {
     })
   })
 
+  it('does not let an older ref-typed reprojection re-add refs after schema removal', async () => {
+    const originalGetAll = env.h.db.getAll.bind(env.h.db)
+    const originalExecute = env.h.db.execute.bind(env.h.db)
+    let releaseScan: (() => void) | null = null
+    let intercepted = false
+    let released = false
+    let markerBeforeRelease = false
+    let markerAfterRelease = false
+    const getAllSpy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
+      sql: string,
+      params?: unknown[],
+    ): Promise<T[]> => {
+      if (!intercepted && sql.includes('json_each(b.properties_json) prop')) {
+        intercepted = true
+        const rows = await originalGetAll<T>(sql, params)
+        await new Promise<void>(resolve => { releaseScan = resolve })
+        return rows
+      }
+      return originalGetAll<T>(sql, params)
+    })
+    const executeSpy = vi.spyOn(env.h.db, 'execute').mockImplementation(async (
+      sql: string,
+      params?: unknown[],
+    ) => {
+      const result = await originalExecute(sql, params)
+      const isReviewerMarker = sql.includes('client_schema_state')
+        && params?.[0] === 'reproject_ref:reviewer'
+      if (isReviewerMarker) {
+        if (released) {
+          markerAfterRelease = true
+        } else {
+          markerBeforeRelease = true
+        }
+      }
+      return result
+    })
+
+    try {
+      env.repo.setFacetRuntime(runtimeWithReviewer())
+      await env.repo.tx(
+        tx => tx.create({
+          id: 'src',
+          workspaceId: WS,
+          parentId: null,
+          orderKey: 'a0',
+          content: 'see [[content-target]]',
+          properties: {reviewer: 'target-a'},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.awaitProcessors()
+
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.waitFor(() => { expect(intercepted).toBe(true) })
+
+      env.repo.setFacetRuntime(runtimeWithoutReviewer())
+      await vi.advanceTimersByTimeAsync(1)
+      await vi.waitFor(async () => {
+        expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+          {id: aliasId('content-target'), alias: 'content-target'},
+        ])
+      })
+      await vi.waitFor(() => { expect(markerBeforeRelease).toBe(true) })
+
+      released = true
+      releaseScan!()
+      await vi.waitFor(() => { expect(markerAfterRelease).toBe(true) })
+
+      expect(JSON.parse((await env.read('src'))!.references_json)).toEqual([
+        {id: aliasId('content-target'), alias: 'content-target'},
+      ])
+    } finally {
+      getAllSpy.mockRestore()
+      executeSpy.mockRestore()
+    }
+  })
+
   it('records markers when a follow-up setFacetRuntime swaps the merged map mid-scan', async () => {
     // Reproduces the AppRuntimeProvider double-setFacetRuntime cold-start
     // race: kernel+static plugins go in synchronously, then a second

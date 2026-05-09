@@ -253,6 +253,22 @@ const projectedRefsForField = (
   return refs
 }
 
+/** Reprojection scans can outlive a later schema swap. Keep the
+ *  scheduled schema when its ref-ness still matches the live registry;
+ *  otherwise project against the live registry so an old scan cannot
+ *  re-add refs for a field that is no longer ref-typed. */
+const latestRefProjectionSchema = (
+  scheduledSchemas: ReadonlyMap<string, AnyPropertySchema>,
+  currentSchemas: ReadonlyMap<string, AnyPropertySchema>,
+  name: string,
+): AnyPropertySchema | undefined => {
+  const scheduledSchema = scheduledSchemas.get(name)
+  const currentSchema = currentSchemas.get(name)
+  return refCodecKind(scheduledSchema) === refCodecKind(currentSchema)
+    ? scheduledSchema
+    : currentSchema
+}
+
 /** A named rebuild step. Declares which facets it reads via `inputs`
  *  so the runtime contribution path can run only the steps whose
  *  inputs changed. Outputs are written to Repo private fields by the
@@ -1276,7 +1292,11 @@ export class Repo {
               !ref.sourceField || !propertyNameSet.has(ref.sourceField)
             )
             const addedRefs = namesToScan.flatMap(name =>
-              projectedRefsForField(liveBlock, propertySchemas.get(name), name)
+              projectedRefsForField(
+                liveBlock,
+                latestRefProjectionSchema(propertySchemas, this._propertySchemas, name),
+                name,
+              )
             )
             const nextReferences = [...retainedRefs, ...addedRefs]
             if (JSON.stringify(liveBlock.references) === JSON.stringify(nextReferences)) continue
@@ -1296,7 +1316,8 @@ export class Repo {
       // names un-marked → next start retries them, which is the
       // conservative behavior we want.
       for (const name of namesToScan) {
-        const kind = refCodecKind(propertySchemas.get(name))
+        const schema = latestRefProjectionSchema(propertySchemas, this._propertySchemas, name)
+        const kind = refCodecKind(schema)
         if (kind === undefined) {
           await this.clearReprojectionMarker(name)
         } else {
