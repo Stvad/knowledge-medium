@@ -844,6 +844,52 @@ describe('invalidation', () => {
     }
   })
 
+  it('aliasMatches: creating a row with an empty-string alias invalidates (mirrors trigger)', async () => {
+    // The block_aliases trigger indexes any text-typed alias entry,
+    // including ''. The kernel.aliases rule has to mirror that — if it
+    // skipped '' on the liveness branch, the trigger would write a
+    // block_aliases row but the handle wouldn't wake.
+    const handle = env.repo.query.aliasMatches({workspaceId: WS, filter: ''})
+    expect(await handle.load()).toEqual([])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await create({id: 'a', aliases: ['']})
+      await vi.waitFor(() => {
+        expect(handle.peek()?.map(r => r.alias)).toEqual([''])
+      })
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('aliasMatches: a content edit on a currently-returned alias block invalidates', async () => {
+    // aliasMatches returns `{alias, blockId, content}` and bypasses
+    // hydrateBlocks, so it has to declare row deps explicitly — without
+    // them, kernel.aliases alone would let content edits slip past and
+    // the autocomplete preview would stay stale.
+    await create({id: 'a', aliases: ['greeting'], content: 'old'})
+    const handle = env.repo.query.aliasMatches({workspaceId: WS, filter: ''})
+    expect((await handle.load()).map(r => r.content)).toEqual(['old'])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('a', {content: 'new'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(handle.peek()?.map(r => r.content)).toEqual(['new'])
+      })
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
   it('aliasMatches: a non-alias property change on an unrelated block does NOT invalidate', async () => {
     await create({id: 'a', aliases: ['greeting']})
     await create({id: 'b'})

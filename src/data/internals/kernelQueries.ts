@@ -604,9 +604,19 @@ export const aliasMatchesQuery = defineQuery<
       channel: KERNEL_ALIASES_CHANNEL,
       key: kernelAliasesKey(workspaceId),
     })
-    return ctx.db.getAll<AliasMatch>(
+    const rows = await ctx.db.getAll<AliasMatch>(
       SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter, limit],
     )
+    // Per-row deps so content edits on a currently-returned alias block
+    // refresh the autocomplete preview. Sister kernel queries that
+    // return BlockData get this for free via `hydrateBlocks` (which
+    // calls `ctx.depend({kind:'row', id})` per hydrated row); this
+    // query returns a custom `{alias, blockId, content}` shape and
+    // bypasses hydration, so the deps have to be declared explicitly.
+    // Without them the kernel.aliases channel only catches alias-list
+    // changes — content edits to a returned row would slip past.
+    for (const row of rows) ctx.depend({kind: 'row', id: row.blockId})
+    return rows
   },
 })
 
