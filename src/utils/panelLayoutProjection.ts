@@ -7,7 +7,7 @@ import {
   focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { keysBetween } from '@/data/orderKey'
+import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
 import { buildLayout, parseLayout } from '@/utils/routing'
 import { panelHistory } from '@/utils/panelHistory'
 
@@ -130,6 +130,34 @@ export const createPanelRowInTx = async (
   await repo.addTypeInTx(tx, id, PANEL_TYPE)
   return id
 }
+
+export const insertPanelRow = async (
+  repo: Repo,
+  perTabBlock: Block,
+  blockId: string,
+  options: {afterPanelId?: string} = {},
+): Promise<string> =>
+  repo.tx(async tx => {
+    const parent = await tx.get(perTabBlock.id)
+    if (!parent) throw new Error(`insertPanelRow: per-tab block ${perTabBlock.id} not found`)
+
+    const siblings = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
+    const sourceIndex = options.afterPanelId
+      ? siblings.findIndex(row => row.id === options.afterPanelId)
+      : -1
+    const previous = sourceIndex >= 0 ? siblings[sourceIndex] : siblings.at(-1)
+    const next = sourceIndex >= 0 ? siblings[sourceIndex + 1] : undefined
+    const orderKey = sourceIndex >= 0
+      ? keyBetween(previous?.orderKey ?? null, next?.orderKey ?? null)
+      : keyAtEnd(previous?.orderKey ?? null)
+
+    return createPanelRowInTx(repo, tx, {
+      workspaceId: parent.workspaceId,
+      parentId: perTabBlock.id,
+      orderKey,
+      blockId,
+    })
+  }, {scope: ChangeScope.UiState, description: 'insert panel row'})
 
 export const reconcilePanelRows = async (
   repo: Repo,

@@ -1,7 +1,7 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
 import { use, useEffect } from 'react'
-import { Block } from './data/block'
+import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.tsx'
 import { useHash, useSearchParam } from 'react-use'
 import type { Repo } from './data/repo'
@@ -18,12 +18,21 @@ import {
   listLocalWorkspaces,
   primeLocalWorkspaceAndMember,
 } from '@/data/workspaces.ts'
-import { parseAppHash, writeAppHash } from '@/utils/routing.ts'
+import { buildLayout, parseLayout } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
+import { getPerTabBlock, getUIStateBlock } from '@/data/globalState.ts'
+import { getTabId } from '@/utils/tabId.ts'
+import {
+  PanelLayoutProjection,
+  applyCurrentLayoutUrl,
+  createPanelRowInTx,
+} from '@/utils/panelLayoutProjection.ts'
+import { keyAtEnd } from '@/data/orderKey.ts'
+import { ChangeScope } from '@/data/api'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;
@@ -56,7 +65,7 @@ const resolveWorkspace = async (
     if (useRemoteSync) {
       const access = await canAccessRemoteWorkspace(requestedWorkspaceId)
       if (access.kind === 'allowed') {
-        // Server confirms access; getInitialBlock will poll for the blocks
+        // Server confirms access; getInitialLayout will poll for the blocks
         // to land via sync.
         return {id: requestedWorkspaceId, freshlyCreated: false}
       }
@@ -79,7 +88,7 @@ const resolveWorkspace = async (
       )
     }
     // Confirmed-denied (or no remote sync) — fall through to default flow.
-    // The eventual writeAppHash will overwrite the bad hash.
+    // The eventual layout normalization will overwrite the bad hash.
   }
 
   const remembered = recallRememberedWorkspace()
@@ -109,16 +118,22 @@ const resolveWorkspace = async (
   return {id: local.workspace.id, freshlyCreated: local.inserted}
 }
 
-const getInitialBlock = memoize(
+const replaceHash = (hash: string): void => {
+  if (typeof window === 'undefined') return
+  if (window.location.hash === hash) return
+  window.history.replaceState(null, '', hash)
+}
+
+const getInitialLayout = memoize(
   async (
     repo: Repo,
-    requestedWorkspaceId: string | undefined,
-    requestedBlockId: string | undefined,
+    requestedHash: string,
     useRemoteSync: boolean,
-  ): Promise<{workspaceId: string, block: Block}> => {
+  ): Promise<{workspaceId: string, perTabBlock: Block}> => {
+    const route = parseLayout(requestedHash)
     const {id: workspaceId, freshlyCreated} = await resolveWorkspace(
       repo,
-      requestedWorkspaceId,
+      route.workspaceId,
       useRemoteSync,
     )
     repo.setActiveWorkspaceId(workspaceId)
@@ -134,14 +149,6 @@ const getInitialBlock = memoize(
     repo.setReadOnly(role === 'viewer')
 
     rememberWorkspace(workspaceId)
-
-    if (requestedBlockId && await repo.exists(requestedBlockId)) {
-      const data = await repo.load(requestedBlockId)
-      if (data && data.workspaceId === workspaceId) {
-        writeAppHash(workspaceId, requestedBlockId)
-        return {workspaceId, block: repo.block(requestedBlockId)}
-      }
-    }
 
     // Freshly inserted personal workspace: install the starter tutorial
     // as its own parent-less page. The [[Tutorial]] bullet on today's
@@ -159,30 +166,57 @@ const getInitialBlock = memoize(
     // User-defined property-schema blocks live under it.
     await getOrCreatePropertiesPage(repo, workspaceId)
 
-    // Land on today's daily note. getOrCreateDailyNote is idempotent
-    // under deterministic UUIDs: two clients booting offline converge
-    // on the same row when they later sync. We don't wait for sync to
-    // deliver any pre-existing blocks — today's note is fine to create
-    // locally even on a fresh client.
-    const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+    const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+    const perTabBlock = await getPerTabBlock(uiState, getTabId())
+    const hashForResolvedWorkspace = route.workspaceId && route.workspaceId !== workspaceId
+      ? buildLayout(workspaceId)
+      : requestedHash
 
-    // First-run discoverability: prepend a [[Tutorial]] bullet on the
-    // freshly-created daily note so the welcome content is one click
-    // away from the landing page. createChild with position={kind:'first'}
-    // computes an order_key that lands before any existing children.
-    if (freshlyCreated) {
-      await repo.mutate.createChild({
-        parentId: dailyNote.id,
-        content: '[[Tutorial]]',
-        position: {kind: 'first'},
-      })
+    const applyResult = await applyCurrentLayoutUrl({
+      repo,
+      workspaceId,
+      perTabBlock,
+      hash: hashForResolvedWorkspace,
+      replaceHash,
+    })
+
+    if (applyResult.kind === 'empty') {
+      // Land on today's daily note. getOrCreateDailyNote is idempotent
+      // under deterministic UUIDs: two clients booting offline converge
+      // on the same row when they later sync. We don't wait for sync to
+      // deliver any pre-existing blocks — today's note is fine to create
+      // locally even on a fresh client.
+      const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+
+      // First-run discoverability: prepend a [[Tutorial]] bullet on the
+      // freshly-created daily note so the welcome content is one click
+      // away from the landing page. createChild with position={kind:'first'}
+      // computes an order_key that lands before any existing children.
+      if (freshlyCreated) {
+        await repo.mutate.createChild({
+          parentId: dailyNote.id,
+          content: '[[Tutorial]]',
+          position: {kind: 'first'},
+        })
+      }
+
+      replaceHash(buildLayout(workspaceId, [dailyNote.id]))
+      await repo.tx(async tx => {
+        const parent = await tx.get(perTabBlock.id)
+        if (!parent) throw new Error(`getInitialLayout: per-tab block ${perTabBlock.id} not found`)
+        await createPanelRowInTx(repo, tx, {
+          workspaceId,
+          parentId: perTabBlock.id,
+          orderKey: keyAtEnd(null),
+          blockId: dailyNote.id,
+        })
+      }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
     }
 
-    writeAppHash(workspaceId, dailyNote.id)
-    return {workspaceId, block: dailyNote}
+    return {workspaceId, perTabBlock}
   },
-  (repo, workspaceId, blockId, useRemoteSync) =>
-    `${repo.instanceId}:${workspaceId ?? '__no_ws__'}:${blockId ?? '__no_block__'}:${useRemoteSync ? 'remote' : 'local'}`,
+  (repo, requestedHash, useRemoteSync) =>
+    `${repo.instanceId}:${requestedHash || '__empty_hash__'}:${useRemoteSync ? 'remote' : 'local'}`,
 )
 
 const App = () => {
@@ -192,7 +226,7 @@ const App = () => {
   // plain `window.location.hash = X` would not re-render this component —
   // historically the workspace switcher worked around that by hard-reloading
   // the page on every navigation. With useHash, switching workspaces just
-  // updates the hash and React re-resolves through getInitialBlock.
+  // updates the hash and React re-resolves through getInitialLayout.
   const [hash] = useHash()
   const safeMode = Boolean(useSearchParam('safeMode'))
   // hasRemoteSyncConfig is the build-time signal; localOnly is the runtime
@@ -201,10 +235,21 @@ const App = () => {
   const localOnly = useIsLocalOnly()
   const useRemoteSync = hasRemoteSyncConfig && !localOnly
 
-  const {workspaceId: requestedWorkspaceId, blockId: requestedBlockId} = parseAppHash(hash)
-  const {workspaceId: activeWorkspaceId, block: landingBlock} = use(
-    getInitialBlock(repo, requestedWorkspaceId, requestedBlockId, useRemoteSync),
+  const {workspaceId: activeWorkspaceId, perTabBlock} = use(
+    getInitialLayout(repo, hash, useRemoteSync),
   )
+
+  useEffect(() => {
+    const projection = new PanelLayoutProjection({
+      repo,
+      workspaceId: activeWorkspaceId,
+      perTabBlock,
+    })
+    void projection.start()
+    return () => {
+      projection.dispose()
+    }
+  }, [repo, activeWorkspaceId, perTabBlock])
 
   // Reactive role tracking. The imperative setReadOnly inside
   // resolveWorkspace handles the *initial* render (so the first paint
@@ -221,7 +266,7 @@ const App = () => {
   return (
     <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
       <AppRuntimeProvider safeMode={safeMode}>
-        <BlockComponent blockId={landingBlock.id}/>
+        <BlockComponent blockId={perTabBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>
   )

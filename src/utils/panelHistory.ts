@@ -21,6 +21,7 @@
 
 import { useSyncExternalStore } from 'react'
 import type { Block } from '@/data/block'
+import { ChangeScope } from '@/data/api'
 import { focusedBlockIdProp, topLevelBlockIdProp } from '@/data/properties'
 
 /** Per-(panel, block-visit) ephemeral state captured at navigation time
@@ -210,7 +211,10 @@ export const navigateInPanel = async (
       state: panelHistory.snapshot(panelBlock.id),
     })
   }
-  await panelBlock.set(topLevelBlockIdProp, blockId)
+  await panelBlock.repo.tx(async tx => {
+    await tx.setProperty(panelBlock.id, topLevelBlockIdProp, blockId)
+    await tx.setProperty(panelBlock.id, focusedBlockIdProp, blockId)
+  }, {scope: ChangeScope.UiState, description: 'navigate in panel'})
 }
 
 /** Step the panel one entry back. Captures the current visit's state
@@ -225,14 +229,14 @@ export const goBackInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  await panelBlock.set(topLevelBlockIdProp, dest.blockId)
-  // Focused block restores synchronously through panelBlock.set so the
+  // Focused block restores synchronously in the same UiState tx so the
   // first render of the new top-level already has the right cursor.
   // Scroll restore needs the new content to render first; that's the
   // renderer's responsibility via consumeRestore() in a post-render effect.
-  if (dest.state?.focusedBlockId) {
-    await panelBlock.set(focusedBlockIdProp, dest.state.focusedBlockId)
-  }
+  await panelBlock.repo.tx(async tx => {
+    await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
+    await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+  }, {scope: ChangeScope.UiState, description: 'panel history back'})
   return true
 }
 
@@ -245,10 +249,10 @@ export const goForwardInPanel = async (panelBlock: Block): Promise<boolean> => {
   })
   if (!dest) return false
   panelHistory.enqueueRestore(panelBlock.id, dest.state)
-  await panelBlock.set(topLevelBlockIdProp, dest.blockId)
-  if (dest.state?.focusedBlockId) {
-    await panelBlock.set(focusedBlockIdProp, dest.state.focusedBlockId)
-  }
+  await panelBlock.repo.tx(async tx => {
+    await tx.setProperty(panelBlock.id, topLevelBlockIdProp, dest.blockId)
+    await tx.setProperty(panelBlock.id, focusedBlockIdProp, dest.state?.focusedBlockId ?? dest.blockId)
+  }, {scope: ChangeScope.UiState, description: 'panel history forward'})
   return true
 }
 
