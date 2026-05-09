@@ -113,7 +113,13 @@ export class Block implements Handle<BlockData | null> {
    *  hasn't drained yet. */
   load(): Promise<BlockData | null> {
     const cached = this.repo.cache.getSnapshot(this.id)
-    if (cached !== undefined) return Promise.resolve(cached)
+    // Live snapshot only — fall through to SQL for tombstones so the
+    // existing `repo.load` contract (returns null for soft-deleted +
+    // markMissing as a side-effect) is preserved. Callers like
+    // `RefPropertyEditor.blockMatchesTargetTypes` rely on `!data` to
+    // mean "not a valid live row" and would otherwise treat a
+    // tombstone as a real match.
+    if (cached !== undefined && !cached.deleted) return Promise.resolve(cached)
     if (this.inflight) return this.inflight
     this.loadingCount++
     const p = this.repo.load(this.id)

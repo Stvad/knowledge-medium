@@ -169,29 +169,93 @@ describe('Block.load', () => {
     }
   })
 
-  it('confirmed-missing marker does NOT short-circuit — load re-verifies via SQL', async () => {
-    // The marker is a cached prior result; a caller invoking load()
-    // explicitly wants an authoritative re-check. A sync arrival could
-    // have created the row since the marker was set, and we'd miss it
-    // if we trusted the cache here. Mirror of the spec'd "load is ensure-
-    // loaded, not cache-read" semantics.
-    const b = new Block(env.repo, 'gone')
-    expect(await env.repo.load('gone')).toBeNull()  // primes the missing marker
-    expect(b.peek()).toBeNull()
+  // ──────────────────────────────────────────────────────────────────
+  // "Must load" semantics — pin the contract so future fast-path edits
+  // can't skip SQL on states where the cache is provably stale.
+  //
+  // load() is "ensure loaded with the latest authoritative state". The
+  // cache fast-path is only safe when the cache has data (live snapshot).
+  // Two cache states do NOT permit short-circuiting:
+  //
+  //   1. The confirmed-missing marker — it's a cached prior result.
+  //      A sync arrival could have created the row since; the row_events
+  //      tail clears the marker eventually, but a caller invoking load()
+  //      mid-window must not wait for that drain.
+  //
+  //   2. A tombstone snapshot (`deleted: true`) — the existing repo.load
+  //      contract returns null for soft-deleted (SQL filter on
+  //      `deleted = 0`) and side-effects markMissing. Callers that use
+  //      `!data` as "not a valid live row" (e.g. `RefPropertyEditor.
+  //      blockMatchesTargetTypes`) rely on this.
+  //
+  // Both tests below assert the SQL round-trip happens — they're the
+  // tripwires for an over-eager fast-path.
+  // ──────────────────────────────────────────────────────────────────
+  describe('load: must-load semantics (no cache-only shortcuts when stale)', () => {
+    it('with a missing marker set: load re-runs SQL and surfaces a row that arrived since', async () => {
+      // Get into the sticky state: marker present, but the row exists
+      // in SQL. A naive `if (cache.isMissing(id)) return null` would be
+      // wrong here — load() must hit SQL to find the row.
+      await env.repo.tx(
+        tx => tx.create({id: 'r1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'live'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      // Force the cache into "missing" without deleting the row from SQL.
+      // markMissing also clears any in-cache snapshot.
+      env.cache.markMissing('r1')
+      expect(env.cache.isMissing('r1')).toBe(true)
+      expect(env.cache.getSnapshot('r1')).toBeUndefined()
 
-    let getOptionalCalls = 0
-    const origGetOptional = env.h.db.getOptional.bind(env.h.db)
-    env.h.db.getOptional = (async (sql: string, params?: unknown[]) => {
-      getOptionalCalls += 1
-      return origGetOptional(sql, params)
-    }) as typeof env.h.db.getOptional
+      let getOptionalCalls = 0
+      const origGetOptional = env.h.db.getOptional.bind(env.h.db)
+      env.h.db.getOptional = (async (sql: string, params?: unknown[]) => {
+        getOptionalCalls += 1
+        return origGetOptional(sql, params)
+      }) as typeof env.h.db.getOptional
 
-    try {
-      expect(await b.load()).toBeNull()
-      expect(getOptionalCalls).toBeGreaterThanOrEqual(1)
-    } finally {
-      env.h.db.getOptional = origGetOptional
-    }
+      try {
+        const b = new Block(env.repo, 'r1')
+        const out = await b.load()
+        // Authoritative answer must reflect SQL truth, not the stale
+        // marker — anyone who skips SQL here breaks sync convergence.
+        expect(out?.id).toBe('r1')
+        expect(out?.content).toBe('live')
+        expect(getOptionalCalls).toBeGreaterThanOrEqual(1)
+      } finally {
+        env.h.db.getOptional = origGetOptional
+      }
+    })
+
+    it('with a tombstone snapshot in cache: load returns null and goes through SQL', async () => {
+      // Soft-deleted snapshot in cache, row still in SQL with deleted=1.
+      // The contract: load() filters the same way SQL does (`deleted=0`),
+      // so soft-deleted reads as "not a valid live row" → null.
+      await env.repo.tx(
+        tx => tx.create({id: 'r2', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.tx(tx => tx.delete('r2'), {scope: ChangeScope.BlockDefault})
+      const cached = env.cache.getSnapshot('r2')
+      expect(cached?.deleted).toBe(true)  // tombstone is in cache
+
+      let getOptionalCalls = 0
+      const origGetOptional = env.h.db.getOptional.bind(env.h.db)
+      env.h.db.getOptional = (async (sql: string, params?: unknown[]) => {
+        getOptionalCalls += 1
+        return origGetOptional(sql, params)
+      }) as typeof env.h.db.getOptional
+
+      try {
+        const b = new Block(env.repo, 'r2')
+        const out = await b.load()
+        // Returns null — `!data` callers must keep working on tombstones.
+        expect(out).toBeNull()
+        // And the SQL round-trip happened (markMissing side-effect ran).
+        expect(getOptionalCalls).toBeGreaterThanOrEqual(1)
+      } finally {
+        env.h.db.getOptional = origGetOptional
+      }
+    })
   })
 
   it('falls through to repo.load when the cache has no snapshot', async () => {
