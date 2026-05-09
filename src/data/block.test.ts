@@ -169,7 +169,12 @@ describe('Block.load', () => {
     }
   })
 
-  it('returns null synchronously when the row is confirmed-missing in cache', async () => {
+  it('confirmed-missing marker does NOT short-circuit — load re-verifies via SQL', async () => {
+    // The marker is a cached prior result; a caller invoking load()
+    // explicitly wants an authoritative re-check. A sync arrival could
+    // have created the row since the marker was set, and we'd miss it
+    // if we trusted the cache here. Mirror of the spec'd "load is ensure-
+    // loaded, not cache-read" semantics.
     const b = new Block(env.repo, 'gone')
     expect(await env.repo.load('gone')).toBeNull()  // primes the missing marker
     expect(b.peek()).toBeNull()
@@ -183,7 +188,7 @@ describe('Block.load', () => {
 
     try {
       expect(await b.load()).toBeNull()
-      expect(getOptionalCalls).toBe(0)
+      expect(getOptionalCalls).toBeGreaterThanOrEqual(1)
     } finally {
       env.h.db.getOptional = origGetOptional
     }

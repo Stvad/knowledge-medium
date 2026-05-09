@@ -94,21 +94,26 @@ export class Block implements Handle<BlockData | null> {
    *  paths can throw a stable promise across renders. Returns null when
    *  the row doesn't exist.
    *
-   *  Cache fast-path: if the row is already in `BlockCache` (as a live
-   *  snapshot or a confirmed-missing marker) we return synchronously
-   *  without going to SQL. The cache is the source of truth post-tx /
-   *  post-sync — `repo.tx`'s cache writes and `rowEventsTail`'s
-   *  `applySyncSnapshot` keep it current — so a redundant SQL read just
-   *  costs a connection round-trip that contends with PowerSync's
-   *  upload/download work. The hot path (keyboard navigation walks
-   *  through `nextVisibleBlock`/`previousVisibleBlock`) used to do 2-3
-   *  of these per arrow press, each occasionally blocked behind a slow
-   *  sync drain (p99 ~600 ms). Mirrors the cache-first pattern in
-   *  `repo.exists` and the `block.peek() ?? await block.load()` idiom. */
+   *  Cache fast-path: if the row is already in `BlockCache` we return
+   *  synchronously without going to SQL. The cache is the source of
+   *  truth post-tx (`repo.tx`'s commit pipeline writes it) and post-
+   *  sync (`rowEventsTail`'s `applySyncSnapshot` keeps it current), so
+   *  a redundant SQL read just costs a connection round-trip that
+   *  contends with PowerSync's upload/download work. The hot path
+   *  (keyboard navigation through `nextVisibleBlock` /
+   *  `previousVisibleBlock`) does 2-3 of these per arrow press —
+   *  occasionally blocked behind a slow sync drain (p99 ~600 ms in a
+   *  big-DB profile). Mirrors `repo.exists`'s short-circuit and the
+   *  `block.peek() ?? await block.load()` idiom.
+   *
+   *  The `confirmed-missing` marker is NOT a fast-path — `load()` is an
+   *  "ensure loaded" operation, and a missing marker is just the cached
+   *  result of a prior load. A caller asking again means they want SQL
+   *  to re-verify; the marker may be stale relative to a sync that
+   *  hasn't drained yet. */
   load(): Promise<BlockData | null> {
     const cached = this.repo.cache.getSnapshot(this.id)
     if (cached !== undefined) return Promise.resolve(cached)
-    if (this.repo.cache.isMissing(this.id)) return Promise.resolve(null)
     if (this.inflight) return this.inflight
     this.loadingCount++
     const p = this.repo.load(this.id)
