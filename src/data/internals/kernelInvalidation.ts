@@ -80,17 +80,20 @@ const TYPES_PROPERTY_NAME = 'types'
  *  in sync with the schema. */
 const ALIAS_PROPERTY_NAME = 'alias'
 
-/** True iff `properties.alias` decodes to at least one non-empty string.
- *  Used to gate kernel.aliases emission on liveness changes — restoring
- *  or tombstoning a row with no aliases doesn't shift the
- *  block_aliases index, so an alias-keyed query doesn't need to wake. */
+/** True iff `properties.alias` decodes to at least one string entry —
+ *  exactly the predicate the `block_aliases` triggers use to gate
+ *  inserts (`typeof(je.value) = 'text'` in `clientSchema.ts`). The
+ *  empty string is intentionally included: the trigger indexes it, so
+ *  an alias-keyed query subscribed to `kernel.aliases` must wake when a
+ *  row carrying `alias: ['']` enters/leaves the live set or it would
+ *  silently miss block_aliases updates. */
 const hasAlias = (
   properties: Readonly<Record<string, unknown>> | undefined,
 ): boolean => {
   if (!properties) return false
   const raw = properties[ALIAS_PROPERTY_NAME]
   if (!Array.isArray(raw)) return false
-  return raw.some(v => typeof v === 'string' && v !== '')
+  return raw.some(v => typeof v === 'string')
 }
 
 const decodeTypes = (

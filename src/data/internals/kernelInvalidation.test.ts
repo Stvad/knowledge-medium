@@ -276,15 +276,17 @@ describe('emitKernelInvalidations — kernel.aliases', () => {
     expect(out.find(([ch]) => ch === KERNEL_ALIASES_CHANNEL)).toBeUndefined()
   })
 
-  it('treats an empty-string alias as "no alias" (matches block_aliases trigger semantics)', () => {
-    // An alias array with only empty strings doesn't materialize a row
-    // in block_aliases — the kernel rule mirrors that: no emit on
-    // creation of a row whose alias array is [''].
+  it('emits kernel.aliases for an empty-string alias (mirrors block_aliases trigger)', () => {
+    // The block_aliases trigger indexes any `text`-typed alias entry,
+    // including `''` (`typeof(je.value) = 'text'` in clientSchema.ts).
+    // An alias-keyed query subscribed to `kernel.aliases` must wake on
+    // create/restore/tombstone of such a row, or the index update
+    // silently slips past the handle.
     const out = collect({
       before: null,
       after: side({ properties: { alias: [''] } }),
     })
-    expect(out.find(([ch]) => ch === KERNEL_ALIASES_CHANNEL)).toBeUndefined()
+    expect(out).toContainEqual([KERNEL_ALIASES_CHANNEL, kernelAliasesKey(WS)])
   })
 })
 
