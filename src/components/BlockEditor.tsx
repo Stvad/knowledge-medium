@@ -21,6 +21,30 @@ interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChang
   ref?: Ref<ReactCodeMirrorRef>
 }
 
+/** Module-level latch read by BlockEditor's onBlur. While > 0, the
+ *  editor's blur handler refuses to exit edit mode — instead it
+ *  re-focuses the contenteditable so the user stays editing. The
+ *  mobile keyboard toolbar acquires a hold around each structural
+ *  action (reorder / indent / etc.) whose React commit reparents the
+ *  editor's DOM node, dropping native focus and otherwise tripping
+ *  the exit-on-blur path. The counter (rather than a boolean) means
+ *  overlapping taps don't release each other's window. */
+let blurExitSuppressionCount = 0
+
+/** Acquire one hold on the suppression. Returns the release fn;
+ *  callers MUST schedule the release on their own timer or via finally.
+ *  Idempotent — the returned fn is safe to call more than once but
+ *  only decrements the count once. */
+export const acquireBlurExitSuppression = (): (() => void) => {
+  blurExitSuppressionCount++
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    blurExitSuppressionCount--
+  }
+}
+
 export const BlockEditor = ({
   block,
   ref,
@@ -145,8 +169,25 @@ export const BlockEditor = ({
       changes: {from: 0, to: live.length, insert: incoming},
       selection: clampedSelection,
     })
+    // Cancel any pushChange pending from the user's pre-adoption typing,
+    // and the one that the dispatch above just queued via onChange. The
+    // adopted content is, by construction, what the cache already has
+    // (`incoming`), so re-committing it would write a no-op tx that
+    // still records on the undo stack — clearing the redo branch and
+    // breaking redo-after-undo. The "user typed past" guard at line 129
+    // ensured `live === lastCommittedContent` before we got here, so
+    // there are no unflushed user keystrokes to lose.
+    pushChange.cancel()
     lastCommittedContent.current = incoming
     lastAdoptedUpdatedAt.current = incomingUpdatedAt
+    // pushChange is the per-component-instance debounce captured from
+    // useRef.current; its identity is stable across renders so it
+    // doesn't need to be a dep here. Adding it would cause the lint
+    // rule to surface the ref-during-render flag on the `useRef(...)
+    // .current` capture above (a deliberate idiom called out in the
+    // comment block on `pushChange`'s creation), without changing
+    // behavior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockEditData, editorView, block.id])
 
   useEffect(() => {
@@ -220,9 +261,17 @@ export const BlockEditor = ({
       onBlur={() => {
         flushDebouncers()
         requestAnimationFrame(() => {
-          if (document.hasFocus() && shouldExitEditModeAfterBlur(document.activeElement)) {
-            setIsEditing(false)
+          if (!document.hasFocus() || !shouldExitEditModeAfterBlur(document.activeElement)) return
+          // Suppression hold (acquired by the mobile keyboard toolbar
+          // around structural actions whose React commit reparents
+          // this DOM node) — instead of exiting edit mode, snap focus
+          // back so the user keeps editing. The acquirer releases on
+          // its own timer; we just honor the count here.
+          if (blurExitSuppressionCount > 0) {
+            cm.current?.view?.focus()
+            return
           }
+          setIsEditing(false)
         })
       }}
       {...codeMirrorProps}
