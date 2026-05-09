@@ -18,8 +18,9 @@
  *   - Calls `handleStore.invalidate(...)` with a `ChangeNotification`
  *     that lists `rowIds` + `parentIds` + `workspaceIds` so collection
  *     handles re-resolve. `parentIds` covers both before- and after-
- *     parents of sync-applied edge changes, matching the `parent-edge`
- *     dep declared by `repo.children` / `repo.childIds`.
+ *     parents of sync-applied edge changes, plus same-parent order_key
+ *     changes, matching the `parent-edge` dep declared by
+ *     `repo.children` / `repo.childIds`.
  *
  * Throttling: db.onChange's `throttleMs` coalesces sync-burst arrivals
  * into batched processing. 100ms is the spec's recommendation (§9.3).
@@ -162,12 +163,15 @@ export const startRowEventsTail = (args: {
       if (before?.workspaceId) workspaceIds.add(before.workspaceId)
       if (after?.workspaceId) workspaceIds.add(after.workspaceId)
 
-      // Membership-change rules — same as snapshotsToChangeNotification
-      // in the fast path; kept inline because we don't have synthetic
-      // SnapshotEntry shapes here (would force allocations + a parsing
-      // detour just to call the helper).
+      // Membership/order-change rules — same as
+      // snapshotsToChangeNotification in the fast path; kept inline
+      // because we don't have synthetic SnapshotEntry shapes here
+      // (would force allocations + a parsing detour just to call the
+      // helper).
       const beforeParent = before?.parentId ?? null
       const afterParent = after?.parentId ?? null
+      const beforeOrderKey = before?.orderKey
+      const afterOrderKey = after?.orderKey
       const beforeLive = !!before && !before.deleted
       const afterLive = !!after && !after.deleted
 
@@ -178,6 +182,13 @@ export const startRowEventsTail = (args: {
       } else if (beforeLive && afterLive && beforeParent !== afterParent) {
         if (beforeParent !== null) parentIds.add(beforeParent)
         if (afterParent !== null) parentIds.add(afterParent)
+      } else if (
+        beforeLive
+        && afterLive
+        && beforeParent !== null
+        && beforeOrderKey !== afterOrderKey
+      ) {
+        parentIds.add(beforeParent)
       }
 
       for (const rule of invalidationRules) {

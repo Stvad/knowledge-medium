@@ -5,6 +5,7 @@ export type PluginInvalidationMap = ReadonlyMap<string, PluginInvalidationKeys>
 
 export interface ChangeSnapshotSide {
   parentId: string | null
+  orderKey?: string
   workspaceId: string
   deleted?: boolean
   /** Block content. Surfaced here for the kernel `content` invalidation

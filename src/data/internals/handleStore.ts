@@ -47,7 +47,9 @@ export type { Dependency } from '@/data/api'
 export interface ChangeNotification {
   rowIds?: ReadonlySet<string> | readonly string[]
   /** Parent edges affected — for a row whose parent_id changed, BOTH
-   *  the old and new parent ids appear here (spec §9.2). */
+   *  the old and new parent ids appear here; for a same-parent order_key
+   *  change, the parent id appears here so ordered child lists refresh
+   *  (spec §9.2). */
   parentIds?: ReadonlySet<string> | readonly string[]
   workspaceIds?: ReadonlySet<string> | readonly string[]
   tables?: ReadonlySet<string> | readonly string[]
@@ -775,10 +777,11 @@ export type { ChangeSnapshot } from '@/data/invalidation.ts'
  *  Rules:
  *    - `rowIds`: every id touched by the tx (any field change is enough
  *       to invalidate row deps).
- *    - `parentIds`: union of `before.parentId` / `after.parentId` ONLY
- *       when the row's *membership* in a parent's live-children set
- *       changed (creation, soft-deletion, restore, parent move). Pure
- *       content / property edits don't fire parent-edge deps.
+ *    - `parentIds`: union of `before.parentId` / `after.parentId` when
+ *       the row's *membership* in a parent's live-children set changed
+ *       (creation, soft-deletion, restore, parent move), or the live
+ *       sibling order changed under the same parent (`order_key` update).
+ *       Pure content / property edits don't fire parent-edge deps.
  *    - `workspaceIds`: every workspace_id touched (covers backlinks
  *       handles' coarse workspace dep).
  *    - `plugin`: channel/key invalidations emitted by plugin rules.
@@ -805,6 +808,8 @@ export const snapshotsToChangeNotification = (
 
     const beforeParent = entry.before?.parentId ?? null
     const afterParent = entry.after?.parentId ?? null
+    const beforeOrderKey = entry.before?.orderKey
+    const afterOrderKey = entry.after?.orderKey
     const beforeLive = !!entry.before && !entry.before.deleted
     const afterLive = !!entry.after && !entry.after.deleted
 
@@ -822,6 +827,17 @@ export const snapshotsToChangeNotification = (
     else if (beforeLive && afterLive && beforeParent !== afterParent) {
       if (beforeParent !== null) parentIds.add(beforeParent)
       if (afterParent !== null) parentIds.add(afterParent)
+    }
+    // Reordered in place (live both sides, same parent): ordered
+    // child-id lists depend on `(order_key, id)`, so the parent handle
+    // must re-resolve even though membership did not change.
+    else if (
+      beforeLive
+      && afterLive
+      && beforeParent !== null
+      && beforeOrderKey !== afterOrderKey
+    ) {
+      parentIds.add(beforeParent)
     }
     // Pure field change with same parent_id and same liveness: rowId
     // alone covers it. No parent-edge entry — `repo.children(id)`

@@ -121,6 +121,17 @@ describe('snapshotsToChangeNotification', () => {
     expect(Array.from(note.parentIds!).sort()).toEqual(['p1', 'p2'])
   })
 
+  it('parent-edge for same-parent order change: adds parent_id', () => {
+    const map = new Map<string, ChangeSnapshot>([
+      ['c', {
+        before: {parentId: 'p', orderKey: 'b0', workspaceId: 'w'},
+        after: {parentId: 'p', orderKey: 'a0', workspaceId: 'w'},
+      }],
+    ])
+    const note = snapshotsToChangeNotification(map)
+    expect(Array.from(note.parentIds!)).toEqual(['p'])
+  })
+
   it('pure content edit: row dep only, no parent-edge', () => {
     const map = new Map<string, ChangeSnapshot>([
       ['c', {
@@ -226,6 +237,30 @@ describe('TxEngine fast path: repo.tx → handle re-resolve', () => {
     await env.repo.mutate.move({id: 'c', parentId: 'p2', position: {kind: 'last'}})
     await vi.waitFor(() => expect(f1).toEqual([1, 0]))
     await vi.waitFor(() => expect(f2).toEqual([0, 1]))
+  })
+
+  it.each([
+    ['lean', {id: 'p'}],
+    ['hydrating', {id: 'p', hydrate: true}],
+  ] as const)('childIds (%s) re-resolves on same-parent order_key move', async (_label, args) => {
+    await create('p')
+    await create('c1', {parentId: 'p', orderKey: 'a0'})
+    await create('c2', {parentId: 'p', orderKey: 'b0'})
+
+    const h = env.repo.query.childIds(args)
+    const fired: string[][] = []
+    h.subscribe(v => fired.push(v))
+    await vi.waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
+
+    await env.repo.mutate.move({
+      id: 'c2',
+      parentId: 'p',
+      position: {kind: 'before', siblingId: 'c1'},
+    })
+    await vi.waitFor(() => expect(fired).toEqual([
+      ['c1', 'c2'],
+      ['c2', 'c1'],
+    ]))
   })
 
   it('subtree handle re-resolves when a descendant is added', async () => {
@@ -423,6 +458,31 @@ describe('row_events tail: sync-applied invalidation', () => {
     // LoaderHandle defers the SQL rerun until the next load().
     const v = await h.load()
     expect(v.map(b => b.id)).toEqual(['c1-remote'])
+  })
+
+  it('invalidates childIds on sync-applied same-parent order_key update', async () => {
+    await create('p')
+    await create('c1', {parentId: 'p', orderKey: 'a0'})
+    await create('c2', {parentId: 'p', orderKey: 'b0'})
+    const h = env.repo.query.childIds({id: 'p', hydrate: true})
+    const fired: string[][] = []
+    h.subscribe(v => fired.push(v))
+    await vi.waitFor(() => expect(fired).toEqual([['c1', 'c2']]))
+
+    env.repo.startRowEventsTail({initialLastId: 0, throttleMs: 0})
+    await env.h.db.execute(
+      `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
+    )
+    await env.h.db.execute(
+      `UPDATE blocks SET order_key = '0' WHERE id = ?`,
+      ['c2'],
+    )
+
+    await env.repo.flushRowEventsTail()
+    await vi.waitFor(() => expect(fired).toEqual([
+      ['c1', 'c2'],
+      ['c2', 'c1'],
+    ]))
   })
 
   it('does NOT re-resolve children on pure content edits (reviewer P2)', async () => {
