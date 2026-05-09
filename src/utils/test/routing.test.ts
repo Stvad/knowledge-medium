@@ -1,5 +1,62 @@
 import { describe, it, expect } from 'vitest'
-import { buildAppHash, parseAppHash } from '@/utils/routing'
+import {
+  buildAppHash,
+  buildLayout,
+  parseAppHash,
+  parseLayout,
+} from '@/utils/routing'
+
+describe('parseLayout', () => {
+  it('returns an empty block list when hash is empty/undefined/null', () => {
+    expect(parseLayout('')).toEqual({blockIds: []})
+    expect(parseLayout('#')).toEqual({blockIds: []})
+    expect(parseLayout(undefined)).toEqual({blockIds: []})
+    expect(parseLayout(null)).toEqual({blockIds: []})
+  })
+
+  it('parses a workspace with no blocks', () => {
+    expect(parseLayout('#ws-1')).toEqual({
+      workspaceId: 'ws-1',
+      blockIds: [],
+    })
+  })
+
+  it('parses a workspace with one block', () => {
+    expect(parseLayout('#ws-1/block-1')).toEqual({
+      workspaceId: 'ws-1',
+      blockIds: ['block-1'],
+    })
+  })
+
+  it('parses a workspace with multiple ordered blocks', () => {
+    expect(parseLayout('#ws-1/block-1/block-2/block-3')).toEqual({
+      workspaceId: 'ws-1',
+      blockIds: ['block-1', 'block-2', 'block-3'],
+    })
+  })
+
+  it('ignores hash query parameters used for local bridge pairing', () => {
+    expect(parseLayout('#ws-1/block-1/block-2?agent-runtime-secret=secret')).toEqual({
+      workspaceId: 'ws-1',
+      blockIds: ['block-1', 'block-2'],
+    })
+    expect(parseLayout('#?agent-runtime-secret=secret')).toEqual({blockIds: []})
+  })
+})
+
+describe('buildLayout', () => {
+  it('renders workspace-only for an empty block list', () => {
+    expect(buildLayout('ws-1', [])).toBe('#ws-1')
+  })
+
+  it('renders a single block', () => {
+    expect(buildLayout('ws-1', ['block-1'])).toBe('#ws-1/block-1')
+  })
+
+  it('renders multiple blocks in order', () => {
+    expect(buildLayout('ws-1', ['block-1', 'block-2', 'block-3'])).toBe('#ws-1/block-1/block-2/block-3')
+  })
+})
 
 describe('parseAppHash', () => {
   it('returns empty when hash is empty/undefined/null', () => {
@@ -43,6 +100,13 @@ describe('parseAppHash', () => {
       blockId: 'block-2',
     })
     expect(parseAppHash('#?agent-runtime-secret=secret')).toEqual({})
+  })
+
+  it('keeps single-block compatibility by returning the first layout block', () => {
+    expect(parseAppHash('#ws-1/block-1/block-2')).toEqual({
+      workspaceId: 'ws-1',
+      blockId: 'block-1',
+    })
   })
 })
 

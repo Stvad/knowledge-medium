@@ -17,6 +17,7 @@
  *     the panel block; without panelId → ensures a 'ui-state' child
  *     of the user page
  *   - getPanelsBlock: ensures a 'panels' child of the ui-state
+ *   - getPerTabBlock: ensures ui-state/tabs/{tabId}
  *   - isMainPanel: content === 'main'
  *   - getSelectionStateSnapshot: returns peekProperty value, defaults
  *     to the schema default when absent
@@ -34,6 +35,7 @@ import {
 } from '@/data/properties'
 import {
   MAIN_PANEL_NAME,
+  getPerTabBlock,
   getPanelsBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
@@ -215,6 +217,37 @@ describe('getPanelsBlock', () => {
     const a = await getPanelsBlock(uiState)
     const b = await getPanelsBlock(uiState)
     expect(a).toBe(b)
+  })
+})
+
+describe('getPerTabBlock', () => {
+  it('ensures a tab-specific child under ui-state/tabs', async () => {
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const tab = await getPerTabBlock(uiState, 'tab-a')
+
+    expect(tab.peek()?.content).toBe('tab-a')
+
+    const tabsParent = tab.parent
+    expect(tabsParent?.peek()?.parentId).toBe(uiState.id)
+    expect(tabsParent?.peek()?.content).toBe('tabs')
+  })
+
+  it('is idempotent for the same tabId', async () => {
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const a = await getPerTabBlock(uiState, 'tab-a')
+    const b = await getPerTabBlock(uiState, 'tab-a')
+    expect(a).toBe(b)
+  })
+
+  it('keeps different tabIds in independent per-tab blocks', async () => {
+    const uiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const a = await getPerTabBlock(uiState, 'tab-a')
+    const b = await getPerTabBlock(uiState, 'tab-b')
+
+    expect(a.id).not.toBe(b.id)
+    expect(a.peek()?.parentId).toBe(b.peek()?.parentId)
+    expect(a.peek()?.content).toBe('tab-a')
+    expect(b.peek()?.content).toBe('tab-b')
   })
 })
 

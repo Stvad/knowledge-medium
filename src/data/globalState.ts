@@ -41,7 +41,8 @@ import {
   focusedBlockIdProp,
   isEditingProp,
 } from '@/data/properties'
-import { usePropertyValue, useHandle } from '@/hooks/block'
+import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
+import { getTabId } from '@/utils/tabId'
 
 /**
  * One of core principles of the system is to store all state within the system.
@@ -240,6 +241,15 @@ export const getPanelsBlock = memoize(
   (uiBlock) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}`,
 )
 
+const TABS_PATH_PART = 'tabs'
+export const getPerTabBlock = memoize(
+  async (uiStateBlock: Block, tabId: string): Promise<Block> => {
+    const tabsBlock = await ensureUiChild(uiStateBlock.repo, uiStateBlock, TABS_PATH_PART)
+    return ensureUiChild(uiStateBlock.repo, tabsBlock, tabId)
+  },
+  (uiBlock, tabId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${tabId}`,
+)
+
 export const MAIN_PANEL_NAME = 'main'
 
 export const isMainPanel = (panel: Block): boolean =>
@@ -263,6 +273,14 @@ export function useRootUIStateBlock(): Block {
   const workspaceId = requireWorkspaceId(repo, 'useRootUIStateBlock')
 
   return use(getUIStateBlock(repo, workspaceId, user, {}))
+}
+
+export function usePerTabBlock(tabId = getTabId()): Block {
+  return use(getPerTabBlock(useRootUIStateBlock(), tabId))
+}
+
+export function usePanelsForTab(tabId = getTabId()): Block[] {
+  return useChildren(usePerTabBlock(tabId))
 }
 
 export function useUserBlock(): Block {
