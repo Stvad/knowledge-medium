@@ -67,6 +67,9 @@ describe('emitTypedBlocksInvalidations', () => {
       [TYPED_BLOCKS_REFERENCE_CHANNEL, typedBlocksReferenceKey(WS, 't1')],
       [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't1', 'rel')],
       [TYPED_BLOCKS_REFERENCE_CHANNEL, typedBlocksReferenceKey(WS, 't2')],
+      // Content ref (no sourceField) still gets a field channel keyed
+      // by `''` so `referencedBy: {id, sourceField: ''}` queries match.
+      [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't2', '')],
     ]))
   })
 
@@ -86,6 +89,7 @@ describe('emitTypedBlocksInvalidations', () => {
       [TYPED_BLOCKS_TYPE_CHANNEL, typedBlocksTypeKey(WS, 'note')],
       [TYPED_BLOCKS_PROPERTY_CHANNEL, typedBlocksPropertyKey(WS, 'status')],
       [TYPED_BLOCKS_REFERENCE_CHANNEL, typedBlocksReferenceKey(WS, 't1')],
+      [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't1', '')],
     ]))
   })
 
@@ -159,8 +163,28 @@ describe('emitTypedBlocksInvalidations', () => {
       [TYPED_BLOCKS_REFERENCE_CHANNEL, typedBlocksReferenceKey(WS, 't2')],
       [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't2', 'rel')],
       [TYPED_BLOCKS_REFERENCE_CHANNEL, typedBlocksReferenceKey(WS, 't3')],
+      // t3 is a content ref (no sourceField) — emits the field channel
+      // keyed by `''`, matching `referencedBy: {id, sourceField: ''}`.
+      [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't3', '')],
     ]))
     expect(out.filter(([_, key]) => key === typedBlocksReferenceKey(WS, 't1'))).toEqual([])
+  })
+
+  it('emits the empty-string field channel for content refs (sourceField omitted)', () => {
+    // Content refs are stored in `block_references.source_field` as
+    // `''`; queries with `referencedBy: {id, sourceField: ''}` mean
+    // "content refs only". Skipping the empty-field emit would silently
+    // drop those queries on the floor (the broad target channel
+    // doesn't help — `kernelQueries.typedBlocks` narrows to the field
+    // channel when `sourceField !== undefined`).
+    const out = collect({
+      before: side({ references: [] }),
+      after: side({ references: [{ id: 't-content' }] }),
+    })
+    expect(out).toEqual(expect.arrayContaining([
+      [TYPED_BLOCKS_REFERENCE_CHANNEL, typedBlocksReferenceKey(WS, 't-content')],
+      [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't-content', '')],
+    ]))
   })
 
   it('does not double-emit when the same target appears with multiple sourceFields', () => {

@@ -104,12 +104,18 @@ const emitReferenceChannels = (
     emittedTargets.add(targetKey)
     emit(TYPED_BLOCKS_REFERENCE_CHANNEL, targetKey)
   }
-  if (sourceField !== undefined && sourceField !== '') {
-    const fieldKey = typedBlocksReferenceFieldKey(workspaceId, targetId, sourceField)
-    if (!emittedFields.has(fieldKey)) {
-      emittedFields.add(fieldKey)
-      emit(TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, fieldKey)
-    }
+  // Field-specific channel keyed by `sourceField ?? ''`. Content refs
+  // store as `''` in `block_references.source_field`, and a typed query
+  // with `referencedBy: {id, sourceField: ''}` is the "content refs
+  // only" filter — narrower than the broad target channel. Skipping
+  // `''` here would silently drop those queries on the floor (their
+  // dep is on the field channel; `kernelQueries.typedBlocks` doesn't
+  // also subscribe to the broad one when `sourceField !== undefined`).
+  const normalizedField = sourceField ?? ''
+  const fieldKey = typedBlocksReferenceFieldKey(workspaceId, targetId, normalizedField)
+  if (!emittedFields.has(fieldKey)) {
+    emittedFields.add(fieldKey)
+    emit(TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, fieldKey)
   }
 }
 

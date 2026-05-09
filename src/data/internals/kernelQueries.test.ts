@@ -665,6 +665,66 @@ describe('invalidation', () => {
     }
   })
 
+  it('typedBlocks (referencedBy content-only): a content ref appearing on any block invalidates an empty result', async () => {
+    // `referencedBy: {id, sourceField: ''}` is the "content refs only"
+    // filter — block_references stores omitted-sourceField rows as ''.
+    // The query must subscribe to a channel the rule actually emits;
+    // an early version skipped emitting the empty-string field channel,
+    // which silently dropped these queries on the floor when a row
+    // entered from an empty result via a freshly-added content ref.
+    await create({id: 'target'})
+    await create({id: 'src'})
+    const handle = env.repo.query.typedBlocks({
+      workspaceId: WS,
+      referencedBy: {id: 'target', sourceField: ''},
+    })
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual([])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      // Add a content ref `src → target`. block_references writes
+      // `source_field = ''` for content refs.
+      await env.repo.tx(
+        tx => tx.update('src', {references: [{id: 'target', alias: 'target'}]}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['src'])
+      })
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('typedBlocks (types + null-where): a creation that is NOT a member type does NOT invalidate', async () => {
+    // {types:['note'], where:{renderer:null}} — the type filter is the
+    // positive membership axis. A new block in the workspace that
+    // isn't typed `note` cannot enter the result regardless of its
+    // `renderer`, so the query should not subscribe to the live
+    // channel; only the `note` type channel is required.
+    await create({id: 'a', type: 'note'})
+    const handle = env.repo.query.typedBlocks({
+      workspaceId: WS,
+      types: ['note'],
+      where: {renderer: null},
+    })
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      // Create an unrelated block (no `note` type). With the previous
+      // unconditional live dep, this fired the handle for nothing.
+      await create({id: 'unrelated'})
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+    } finally {
+      unsub()
+    }
+  })
+
   it('subtree: identity stable across calls (handle-store key)', async () => {
     await create({id: 'r'})
     const a = env.repo.query.subtree({id: 'r'})

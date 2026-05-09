@@ -400,58 +400,59 @@ export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]
     const whereNames = Object.keys(normalized.where ?? {})
     const referencedBy = normalized.referencedBy
 
-    if (types.length === 0 && whereNames.length === 0 && referencedBy === undefined) {
-      // Degenerate "all live blocks in workspace" — every creation /
-      // soft-delete / restore changes membership.
+    for (const t of types) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_TYPE_CHANNEL,
+        key: typedBlocksTypeKey(workspaceId, t),
+      })
+    }
+    for (const name of whereNames) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
+        key: typedBlocksPropertyKey(workspaceId, name),
+      })
+    }
+    if (referencedBy !== undefined) {
+      if (referencedBy.sourceField !== undefined) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+          key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
+        })
+      } else {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
+          key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
+        })
+      }
+    }
+
+    // Live channel — only when there's no positive membership axis to
+    // catch "fresh row could enter the result". A type/referencedBy
+    // filter or a non-null where predicate already implies the new row
+    // had to fire one of those channels to match, so live would be
+    // pure fan-out. Required for:
+    //   - no filters at all (degenerate "all live blocks" query)
+    //   - where with only null predicates (e.g. `{status: null}`) —
+    //     a row created without `status` set never fires the property
+    //     channel, so live is the only signal that a candidate
+    //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
+    //     don't need live: matching rows must set `foo='bar'` to
+    //     match, which fires the foo property channel.)
+    const hasNonNullWhere = whereNames.some(
+      name => (normalized.where as Record<string, unknown>)[name] !== null,
+    )
+    const hasPositiveAxis =
+      types.length > 0 || referencedBy !== undefined || hasNonNullWhere
+    if (!hasPositiveAxis) {
       ctx.depend({
         kind: 'plugin',
         channel: TYPED_BLOCKS_LIVE_CHANNEL,
         key: typedBlocksLiveKey(workspaceId),
       })
-    } else {
-      for (const t of types) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_TYPE_CHANNEL,
-          key: typedBlocksTypeKey(workspaceId, t),
-        })
-      }
-      for (const name of whereNames) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-          key: typedBlocksPropertyKey(workspaceId, name),
-        })
-      }
-      // `where: {prop: null}` matches blocks where `prop` is unset.
-      // A newly-created block that simply omits `prop` would never
-      // touch the property channel — the live channel is what carries
-      // the "fresh row entered the live set" signal in that case.
-      const wantsLive = whereNames.some(
-        name => (normalized.where as Record<string, unknown>)[name] === null,
-      )
-      if (wantsLive) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_LIVE_CHANNEL,
-          key: typedBlocksLiveKey(workspaceId),
-        })
-      }
-      if (referencedBy !== undefined) {
-        if (referencedBy.sourceField !== undefined) {
-          ctx.depend({
-            kind: 'plugin',
-            channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
-            key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
-          })
-        } else {
-          ctx.depend({
-            kind: 'plugin',
-            channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
-            key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
-          })
-        }
-      }
     }
 
     if (
