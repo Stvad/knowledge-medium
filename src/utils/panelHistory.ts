@@ -105,6 +105,39 @@ export class PanelHistoryStore {
     return next
   }
 
+  reconcileUrlNavigation(
+    panelId: string,
+    currentEntry: HistoryEntry,
+    targetBlockId: string,
+  ): HistoryEntry | null {
+    const current = this.state.get(panelId) ?? EMPTY
+    const backTop = current.back[current.back.length - 1]
+    if (backTop?.blockId === targetBlockId) {
+      this.state.set(panelId, {
+        back: current.back.slice(0, -1),
+        forward: [...current.forward, currentEntry],
+      })
+      this.notify(panelId)
+      return backTop
+    }
+
+    const forwardTop = current.forward[current.forward.length - 1]
+    if (forwardTop?.blockId === targetBlockId) {
+      this.state.set(panelId, {
+        back: [...current.back, currentEntry],
+        forward: current.forward.slice(0, -1),
+      })
+      this.notify(panelId)
+      return forwardTop
+    }
+
+    if (current.back.length > 0 || current.forward.length > 0) {
+      this.state.delete(panelId)
+      this.notify(panelId)
+    }
+    return null
+  }
+
   clear(panelId: string): void {
     const had = this.state.has(panelId)
     this.state.delete(panelId)
