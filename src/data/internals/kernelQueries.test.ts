@@ -725,6 +725,147 @@ describe('invalidation', () => {
     }
   })
 
+  it('searchByContent: a content edit on any block invalidates (kernel.content channel)', async () => {
+    await create({id: 'a', content: 'hello world'})
+    await create({id: 'b', content: 'unrelated'})
+    const handle = env.repo.query.searchByContent({workspaceId: WS, query: 'hello'})
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual(['a'])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('b', {content: 'hello again'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
+      })
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('searchByContent: a UiState property write does NOT invalidate', async () => {
+    // The narrow `kernel.content` channel only fires on content edits +
+    // live-set membership. Property-only writes (the UiState shape) used
+    // to wake every workspace-broad alias/content handle.
+    await create({id: 'a', content: 'hello'})
+    await create({id: 'panel'})
+    const handle = env.repo.query.searchByContent({workspaceId: WS, query: 'hello'})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        {scope: ChangeScope.UiState},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('recentBlocks: a content edit invalidates; a UiState write does NOT', async () => {
+    await create({id: 'a', content: 'aa'})
+    await create({id: 'panel'})
+    const handle = env.repo.query.recentBlocks({workspaceId: WS, limit: 10})
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual(['a'])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      // UiState writes must not wake the handle — recent-picker tolerates
+      // lightly stale `updated_at` ordering between content events.
+      await env.repo.tx(
+        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        {scope: ChangeScope.UiState},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+
+      // A new non-empty block must wake it (live-set membership).
+      await create({id: 'b', content: 'bb'})
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id).sort()).toEqual(['a', 'b'])
+      })
+    } finally {
+      unsub()
+    }
+  })
+
+  it('aliasLookup / aliasMatches / aliasesInWorkspace: alias changes invalidate', async () => {
+    await create({id: 'a', aliases: ['greeting']})
+    const lookupHandle = env.repo.query.aliasLookup({workspaceId: WS, alias: 'greeting'})
+    const matchesHandle = env.repo.query.aliasMatches({workspaceId: WS, filter: ''})
+    const distinctHandle = env.repo.query.aliasesInWorkspace({workspaceId: WS})
+    expect((await lookupHandle.load())?.id).toBe('a')
+    expect((await matchesHandle.load()).map(r => r.alias).sort()).toEqual(['greeting'])
+    expect(await distinctHandle.load()).toEqual(['greeting'])
+
+    const fired: string[] = []
+    const u1 = lookupHandle.subscribe(() => { fired.push('lookup') })
+    const u2 = matchesHandle.subscribe(() => { fired.push('matches') })
+    const u3 = distinctHandle.subscribe(() => { fired.push('distinct') })
+    try {
+      // Adding a new aliased block fires kernel.aliases on the create
+      // path (live flip + `hasAlias` true).
+      await create({id: 'b', aliases: ['farewell']})
+      await vi.waitFor(() => {
+        expect(fired).toContain('matches')
+        expect(fired).toContain('distinct')
+      })
+    } finally {
+      u1(); u2(); u3()
+    }
+  })
+
+  it('aliasLookup: a UiState write does NOT invalidate', async () => {
+    await create({id: 'a', aliases: ['greeting']})
+    await create({id: 'panel'})
+    const handle = env.repo.query.aliasLookup({workspaceId: WS, alias: 'greeting'})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        {scope: ChangeScope.UiState},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('aliasMatches: a non-alias property change on an unrelated block does NOT invalidate', async () => {
+    await create({id: 'a', aliases: ['greeting']})
+    await create({id: 'b'})
+    const handle = env.repo.query.aliasMatches({workspaceId: WS, filter: ''})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      // Non-alias property edit on a different block — block_aliases
+      // index doesn't move, so the alias-keyed handle shouldn't either.
+      await env.repo.tx(
+        tx => tx.update('b', {properties: {renderer: 'markdown'}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+    } finally {
+      unsub()
+    }
+  })
+
   it('subtree: identity stable across calls (handle-store key)', async () => {
     await create({id: 'r'})
     const a = env.repo.query.subtree({id: 'r'})

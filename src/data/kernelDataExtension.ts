@@ -32,7 +32,7 @@ import { invalidationRulesFacet, mutatorsFacet, postCommitProcessorsFacet, prope
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
-import { typedBlocksInvalidationRule } from './internals/typedBlocksInvalidation'
+import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
 import type { AppExtension } from '@/extensions/facet'
@@ -43,5 +43,5 @@ export const kernelDataExtension: AppExtension = [
   KERNEL_QUERIES.map(q => queriesFacet.of(q, {source: 'kernel'})),
   KERNEL_PROPERTY_SCHEMAS.map(s => propertySchemasFacet.of(s, {source: 'kernel'})),
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),
-  invalidationRulesFacet.of(typedBlocksInvalidationRule, {source: 'kernel'}),
+  invalidationRulesFacet.of(kernelInvalidationRule, {source: 'kernel'}),
 ]

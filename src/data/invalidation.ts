@@ -7,6 +7,12 @@ export interface ChangeSnapshotSide {
   parentId: string | null
   workspaceId: string
   deleted?: boolean
+  /** Block content. Surfaced here for the kernel `content` invalidation
+   *  channel — fires when content actually changes, so substring-search
+   *  / recent-blocks queries don't invalidate on UiState property
+   *  writes. Type-level only: runtime values are full `BlockData`
+   *  snapshots that already carry `content`. */
+  content?: string
   references?: ReadonlyArray<{ id: string; sourceField?: string }>
   /** Encoded property bag — same shape as `BlockData.properties`. Surfaced
    *  here so invalidation rules can diff per-property values without

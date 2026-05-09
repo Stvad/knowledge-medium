@@ -32,17 +32,21 @@ import {
   normalizeTypedBlockQuery,
 } from './typedBlockQuery'
 import {
+  KERNEL_ALIASES_CHANNEL,
+  KERNEL_CONTENT_CHANNEL,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
   TYPED_BLOCKS_TYPE_CHANNEL,
+  kernelAliasesKey,
+  kernelContentKey,
   typedBlocksLiveKey,
   typedBlocksPropertyKey,
   typedBlocksReferenceFieldKey,
   typedBlocksReferenceKey,
   typedBlocksTypeKey,
-} from './typedBlocksInvalidation'
+} from './kernelInvalidation'
 
 export const SELECT_BLOCK_BY_ID_SQL = `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}
@@ -485,7 +489,15 @@ export const searchByContentQuery = defineQuery<
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, query, limit = 50}, ctx) => {
     if (!query) return []
-    ctx.depend({kind: 'workspace', workspaceId})
+    // Narrow `kernel.content` channel — fires only when content
+    // actually changes or live-set membership shifts. UiState property
+    // writes (focus / selection) don't move either, so navigation
+    // doesn't churn this handle. See `kernelInvalidation.ts`.
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_CONTENT_CHANNEL,
+      key: kernelContentKey(workspaceId),
+    })
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_CONTENT_SQL, [workspaceId, query, query, query, limit],
     )
@@ -506,7 +518,17 @@ export const recentBlocksQuery = defineQuery<
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    ctx.depend({kind: 'workspace', workspaceId})
+    // `kernel.content` covers content edits + live-set membership
+    // changes. The SQL also orders by `updated_at`, but we deliberately
+    // don't fire on every update — chasing perfect recency ordering
+    // here would put us back at workspace-broad cost (every UiState
+    // write bumps `updated_at`). The picker tolerates lightly stale
+    // ordering between content events.
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_CONTENT_CHANNEL,
+      key: kernelContentKey(workspaceId),
+    })
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_RECENT_BLOCKS_SQL, [workspaceId, limit],
     )
@@ -544,7 +566,14 @@ export const aliasesInWorkspaceQuery = defineQuery<
   resultSchema: z.array(z.string()),
   resolve: async ({workspaceId, filter = ''}, ctx) => {
     if (!workspaceId) return []
-    ctx.depend({kind: 'workspace', workspaceId})
+    // `kernel.aliases` fires only when the `alias` property changes or
+    // an aliased row enters/leaves the live set — narrow enough that
+    // UiState writes don't wake autocomplete handles.
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
     const rows = await ctx.db.getAll<{alias: string}>(
       SELECT_ALIASES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter],
     )
@@ -570,7 +599,11 @@ export const aliasMatchesQuery = defineQuery<
   })),
   resolve: async ({workspaceId, filter, limit = 50}, ctx) => {
     if (!workspaceId) return []
-    ctx.depend({kind: 'workspace', workspaceId})
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
     return ctx.db.getAll<AliasMatch>(
       SELECT_ALIAS_MATCHES_IN_WORKSPACE_SQL, [workspaceId, filter, filter, filter, filter, limit],
     )
@@ -587,7 +620,11 @@ export const aliasLookupQuery = defineQuery<
   resultSchema: blockDataOrNullSchema,
   resolve: async ({workspaceId, alias}, ctx) => {
     if (!workspaceId || !alias) return null
-    ctx.depend({kind: 'workspace', workspaceId})
+    ctx.depend({
+      kind: 'plugin',
+      channel: KERNEL_ALIASES_CHANNEL,
+      key: kernelAliasesKey(workspaceId),
+    })
     const row = await ctx.db.getOptional<BlockRow>(
       SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL, [workspaceId, alias],
     )

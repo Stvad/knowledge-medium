@@ -4,18 +4,22 @@ import { describe, expect, it } from 'vitest'
 import type { ChangeSnapshot } from '@/data/invalidation'
 
 import {
+  KERNEL_ALIASES_CHANNEL,
+  KERNEL_CONTENT_CHANNEL,
   TYPED_BLOCKS_LIVE_CHANNEL,
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
   TYPED_BLOCKS_TYPE_CHANNEL,
-  emitTypedBlocksInvalidations,
+  emitKernelInvalidations,
+  kernelAliasesKey,
+  kernelContentKey,
   typedBlocksLiveKey,
   typedBlocksPropertyKey,
   typedBlocksReferenceFieldKey,
   typedBlocksReferenceKey,
   typedBlocksTypeKey,
-} from './typedBlocksInvalidation'
+} from './kernelInvalidation'
 
 const WS = 'ws-1'
 
@@ -23,6 +27,7 @@ interface SidePatch {
   parentId?: string | null
   workspaceId?: string
   deleted?: boolean
+  content?: string
   references?: ReadonlyArray<{ id: string; sourceField?: string }>
   properties?: Readonly<Record<string, unknown>>
 }
@@ -33,6 +38,7 @@ const side = (patch: SidePatch | null = {}): ChangeSnapshot['after'] => {
     parentId: patch.parentId ?? null,
     workspaceId: patch.workspaceId ?? WS,
     deleted: patch.deleted,
+    content: patch.content,
     references: patch.references,
     properties: patch.properties,
   }
@@ -40,13 +46,13 @@ const side = (patch: SidePatch | null = {}): ChangeSnapshot['after'] => {
 
 const collect = (snapshot: ChangeSnapshot): Array<[string, string]> => {
   const out: Array<[string, string]> = []
-  emitTypedBlocksInvalidations(snapshot, (channel, key) => {
+  emitKernelInvalidations(snapshot, (channel, key) => {
     out.push([channel, key])
   })
   return out
 }
 
-describe('emitTypedBlocksInvalidations', () => {
+describe('emitKernelInvalidations — typedBlocks channels', () => {
   it('emits live + per-axis channels on row creation', () => {
     const out = collect({
       before: null,
@@ -126,7 +132,7 @@ describe('emitTypedBlocksInvalidations', () => {
       [TYPED_BLOCKS_TYPE_CHANNEL, typedBlocksTypeKey(WS, 'page')],
     ]))
     // `note` is on both sides → no emit.
-    expect(out.filter(([_, key]) => key === typedBlocksTypeKey(WS, 'note'))).toEqual([])
+    expect(out.filter(([, key]) => key === typedBlocksTypeKey(WS, 'note'))).toEqual([])
   })
 
   it('emits property channel only for the property name that changed', () => {
@@ -167,7 +173,7 @@ describe('emitTypedBlocksInvalidations', () => {
       // keyed by `''`, matching `referencedBy: {id, sourceField: ''}`.
       [TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL, typedBlocksReferenceFieldKey(WS, 't3', '')],
     ]))
-    expect(out.filter(([_, key]) => key === typedBlocksReferenceKey(WS, 't1'))).toEqual([])
+    expect(out.filter(([, key]) => key === typedBlocksReferenceKey(WS, 't1'))).toEqual([])
   })
 
   it('emits the empty-string field channel for content refs (sourceField omitted)', () => {
@@ -195,7 +201,7 @@ describe('emitTypedBlocksInvalidations', () => {
         { id: 't1', sourceField: 'b' },
       ] }),
     })
-    const targetEmits = out.filter(([_, key]) => key === typedBlocksReferenceKey(WS, 't1'))
+    const targetEmits = out.filter(([, key]) => key === typedBlocksReferenceKey(WS, 't1'))
     expect(targetEmits).toHaveLength(1)
     const fieldEmits = out.filter(([ch]) => ch === TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL)
     expect(fieldEmits).toHaveLength(2)
@@ -215,5 +221,137 @@ describe('emitTypedBlocksInvalidations', () => {
       after: { parentId: null, workspaceId: '' },
     })
     expect(out).toEqual([])
+  })
+})
+
+describe('emitKernelInvalidations — kernel.aliases', () => {
+  it('emits kernel.aliases when the alias property changes on a live row', () => {
+    const out = collect({
+      before: side({ properties: { alias: ['old'] } }),
+      after: side({ properties: { alias: ['new'] } }),
+    })
+    expect(out).toContainEqual([KERNEL_ALIASES_CHANNEL, kernelAliasesKey(WS)])
+  })
+
+  it('does not emit kernel.aliases for non-alias property changes', () => {
+    const out = collect({
+      before: side({ properties: { status: 'open' } }),
+      after: side({ properties: { status: 'done' } }),
+    })
+    expect(out.find(([ch]) => ch === KERNEL_ALIASES_CHANNEL)).toBeUndefined()
+  })
+
+  it('emits kernel.aliases on creation when the new row carries aliases', () => {
+    const out = collect({
+      before: null,
+      after: side({ properties: { alias: ['my-page'] } }),
+    })
+    expect(out).toContainEqual([KERNEL_ALIASES_CHANNEL, kernelAliasesKey(WS)])
+  })
+
+  it('does NOT emit kernel.aliases on creation of a row with no aliases', () => {
+    // block_aliases is keyed off `properties.alias`; a new row with no
+    // alias entry doesn't shift the index, so an alias-keyed query
+    // shouldn't wake.
+    const out = collect({
+      before: null,
+      after: side({ properties: { types: ['note'] } }),
+    })
+    expect(out.find(([ch]) => ch === KERNEL_ALIASES_CHANNEL)).toBeUndefined()
+  })
+
+  it('emits kernel.aliases on tombstone of a row that carried aliases', () => {
+    const out = collect({
+      before: side({ properties: { alias: ['gone'] } }),
+      after: side({ deleted: true, properties: { alias: ['gone'] } }),
+    })
+    expect(out).toContainEqual([KERNEL_ALIASES_CHANNEL, kernelAliasesKey(WS)])
+  })
+
+  it('does NOT emit kernel.aliases on tombstone of a row with no aliases', () => {
+    const out = collect({
+      before: side({ properties: { types: ['note'] } }),
+      after: side({ deleted: true, properties: { types: ['note'] } }),
+    })
+    expect(out.find(([ch]) => ch === KERNEL_ALIASES_CHANNEL)).toBeUndefined()
+  })
+
+  it('treats an empty-string alias as "no alias" (matches block_aliases trigger semantics)', () => {
+    // An alias array with only empty strings doesn't materialize a row
+    // in block_aliases — the kernel rule mirrors that: no emit on
+    // creation of a row whose alias array is [''].
+    const out = collect({
+      before: null,
+      after: side({ properties: { alias: [''] } }),
+    })
+    expect(out.find(([ch]) => ch === KERNEL_ALIASES_CHANNEL)).toBeUndefined()
+  })
+})
+
+describe('emitKernelInvalidations — kernel.content', () => {
+  it('emits kernel.content when content changes on a live row', () => {
+    const out = collect({
+      before: side({ content: 'old' }),
+      after: side({ content: 'new' }),
+    })
+    expect(out).toContainEqual([KERNEL_CONTENT_CHANNEL, kernelContentKey(WS)])
+  })
+
+  it('does not emit kernel.content when content is unchanged', () => {
+    const out = collect({
+      before: side({ content: 'same', properties: { status: 'a' } }),
+      after: side({ content: 'same', properties: { status: 'b' } }),
+    })
+    expect(out.find(([ch]) => ch === KERNEL_CONTENT_CHANNEL)).toBeUndefined()
+  })
+
+  it('emits kernel.content on row creation (membership change)', () => {
+    const out = collect({
+      before: null,
+      after: side({ content: 'hi' }),
+    })
+    expect(out).toContainEqual([KERNEL_CONTENT_CHANNEL, kernelContentKey(WS)])
+  })
+
+  it('emits kernel.content on tombstone (membership change)', () => {
+    const out = collect({
+      before: side({ content: 'bye' }),
+      after: side({ deleted: true, content: 'bye' }),
+    })
+    expect(out).toContainEqual([KERNEL_CONTENT_CHANNEL, kernelContentKey(WS)])
+  })
+
+  it('emits kernel.content on restore (deleted → live)', () => {
+    const out = collect({
+      before: side({ deleted: true, content: 'restored' }),
+      after: side({ content: 'restored' }),
+    })
+    expect(out).toContainEqual([KERNEL_CONTENT_CHANNEL, kernelContentKey(WS)])
+  })
+
+  it('does not emit kernel.content for a property-only edit (UiState focus write shape)', () => {
+    // The whole point of this channel: UiState writes (property bag
+    // changes only, content unchanged) must not invalidate
+    // searchByContent / recentBlocks.
+    const out = collect({
+      before: side({
+        content: 'main',
+        properties: { focusedBlockId: 'a' },
+      }),
+      after: side({
+        content: 'main',
+        properties: { focusedBlockId: 'b' },
+      }),
+    })
+    expect(out.find(([ch]) => ch === KERNEL_CONTENT_CHANNEL)).toBeUndefined()
+  })
+
+  it('emits kernel.content exactly once even when both content and liveness change', () => {
+    const out = collect({
+      before: null,
+      after: side({ content: 'fresh' }),
+    })
+    const contentEmits = out.filter(([ch]) => ch === KERNEL_CONTENT_CHANNEL)
+    expect(contentEmits).toHaveLength(1)
   })
 })

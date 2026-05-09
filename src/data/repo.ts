@@ -51,7 +51,7 @@ import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/d
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
-import { typedBlocksInvalidationRule } from './internals/typedBlocksInvalidation'
+import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import {
   invalidationRulesFacet,
   mutatorsFacet,
@@ -317,10 +317,11 @@ export interface RepoOptions {
    *  the query registry explicitly. Mirrors `registerKernelMutators` /
    *  `registerKernelProcessors`. */
   registerKernelQueries?: boolean
-  /** When true (default), the kernel `typedBlocksInvalidationRule` is
+  /** When true (default), the kernel `kernelInvalidationRule` is
    *  registered at construction time so `core.byType` / `core.typedBlocks`
-   *  fire correctly without a `setFacetRuntime` call. Tests that want to
-   *  populate the invalidation-rules registry explicitly can disable this. */
+   *  / alias / content queries fire correctly without a `setFacetRuntime`
+   *  call. Tests that want to populate the invalidation-rules registry
+   *  explicitly can disable this. */
   registerKernelInvalidationRules?: boolean
   /** When true (default), the row_events tail subscription is started
    *  at construction time so sync-applied writes propagate into the
@@ -607,7 +608,7 @@ export class Repo {
       for (const q of KERNEL_QUERIES) this.queries.set(q.name, q)
     }
     if (opts.registerKernelInvalidationRules ?? true) {
-      this.invalidationRules = [typedBlocksInvalidationRule]
+      this.invalidationRules = [kernelInvalidationRule]
     }
     // Initialize the processor runner. The runner needs a Repo
     // reference for opening processor txs; passing `this` is safe

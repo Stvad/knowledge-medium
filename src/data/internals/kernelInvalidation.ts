@@ -1,17 +1,35 @@
 /**
- * Narrow-dep invalidation for `core.byType` / `core.typedBlocks`.
+ * Narrow-dep invalidation for kernel queries.
  *
- * Replaces the old `{kind:'workspace', workspaceId}` dep — which fired on
- * every write in the workspace, including UiState focus writes — with a
- * set of channels keyed to the dimensions a typed query actually filters
- * on:
+ * Replaces a handful of `{kind:'workspace', workspaceId}` deps that used to
+ * fire on every write in the workspace (including UiState focus writes,
+ * which is what drove the navigation perf regression) with channels keyed
+ * to the dimensions each query actually filters on.
  *
+ * Channels emitted by this rule:
+ *
+ *   typedBlocks (`core.byType` / `core.typedBlocks`):
  *   - `typedBlocks.live`      — any block create / soft-delete / restore
  *                               (membership change in the live set)
  *   - `typedBlocks.type`      — block_types index changed for (ws, type)
  *   - `typedBlocks.property`  — a property value changed for (ws, name)
  *   - `typedBlocks.reference` — incoming-edge set changed for (ws, target)
  *   - `typedBlocks.referenceField` — same, sourceField-granular
+ *
+ *   alias index (`core.aliasLookup` / `core.aliasMatches` /
+ *   `core.aliasesInWorkspace`):
+ *   - `kernel.aliases`        — block_aliases set changed in (ws) — the
+ *                               `alias` property differs across the diff,
+ *                               or a row with non-empty aliases entered
+ *                               or left the live set
+ *
+ *   content scans (`core.searchByContent` / `core.recentBlocks`):
+ *   - `kernel.content`        — content edited or live-set membership
+ *                               changed in (ws). Recent-block ordering
+ *                               by `updated_at` is intentionally NOT a
+ *                               trigger — bumping recency on every
+ *                               UiState property write would put us
+ *                               back at the workspace-broad cost.
  *
  * Per-row deps from `hydrateBlocks` already cover updates to rows that
  * are currently in the result; these channels close the gap for rows
@@ -29,6 +47,8 @@ export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'
 export const TYPED_BLOCKS_PROPERTY_CHANNEL = 'typedBlocks.property'
 export const TYPED_BLOCKS_REFERENCE_CHANNEL = 'typedBlocks.reference'
 export const TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL = 'typedBlocks.referenceField'
+export const KERNEL_ALIASES_CHANNEL = 'kernel.aliases'
+export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
 
 const SEP = '\u0000'
 
@@ -45,10 +65,33 @@ export const typedBlocksReferenceFieldKey = (
   sourceField: string,
 ): string => `${workspaceId}${SEP}${targetId}${SEP}${sourceField}`
 
+export const kernelAliasesKey = (workspaceId: string): string => workspaceId
+export const kernelContentKey = (workspaceId: string): string => workspaceId
+
 /** Property name that holds the type list. Mirrors `typesProp.name` from
  *  `data/properties.ts`; duplicated here so this module stays free of the
  *  property-schema surface (which transitively pulls in codecs etc.). */
 const TYPES_PROPERTY_NAME = 'types'
+
+/** Property name that holds the alias list. Mirrors `aliasesProp.name`
+ *  from `data/internals/coreProperties.ts`; duplicated for the same
+ *  reason as `TYPES_PROPERTY_NAME`. The kernel `block_aliases` trigger
+ *  derives the index from this exact property key — keeping the rule
+ *  in sync with the schema. */
+const ALIAS_PROPERTY_NAME = 'alias'
+
+/** True iff `properties.alias` decodes to at least one non-empty string.
+ *  Used to gate kernel.aliases emission on liveness changes — restoring
+ *  or tombstoning a row with no aliases doesn't shift the
+ *  block_aliases index, so an alias-keyed query doesn't need to wake. */
+const hasAlias = (
+  properties: Readonly<Record<string, unknown>> | undefined,
+): boolean => {
+  if (!properties) return false
+  const raw = properties[ALIAS_PROPERTY_NAME]
+  if (!Array.isArray(raw)) return false
+  return raw.some(v => typeof v === 'string' && v !== '')
+}
 
 const decodeTypes = (
   properties: Readonly<Record<string, unknown>> | undefined,
@@ -119,9 +162,10 @@ const emitReferenceChannels = (
   }
 }
 
-/** Diff a single ChangeSnapshot and emit the relevant typedBlocks channels.
- *  Pure — no side effects beyond `emit`. */
-export const emitTypedBlocksInvalidations = (
+/** Diff a single ChangeSnapshot and emit every channel this rule owns
+ *  (typedBlocks.* + kernel.aliases + kernel.content). Pure — no side
+ *  effects beyond `emit`. */
+export const emitKernelInvalidations = (
   snapshot: ChangeSnapshot,
   emit: Emit,
 ): void => {
@@ -134,6 +178,19 @@ export const emitTypedBlocksInvalidations = (
   const emittedProps = new Set<string>()
   const emittedRefTargets = new Set<string>()
   const emittedRefFields = new Set<string>()
+  let emittedAliases = false
+  let emittedContent = false
+
+  const emitAliasesOnce = (): void => {
+    if (emittedAliases) return
+    emittedAliases = true
+    emit(KERNEL_ALIASES_CHANNEL, kernelAliasesKey(workspaceId))
+  }
+  const emitContentOnce = (): void => {
+    if (emittedContent) return
+    emittedContent = true
+    emit(KERNEL_CONTENT_CHANNEL, kernelContentKey(workspaceId))
+  }
 
   // Liveness change → live channel + emit every axis present on the
   // newly-live (or just-departed) side. A query with no filters subscribes
@@ -163,6 +220,15 @@ export const emitTypedBlocksInvalidations = (
           )
         }
       }
+      // kernel.content fires on any liveness flip — searchByContent's
+      // `content != ''` filter and recentBlocks' result set depend on
+      // membership.
+      emitContentOnce()
+      // kernel.aliases fires only if the live side actually carries an
+      // alias — block_aliases is keyed off `properties.alias`, so a
+      // restore/tombstone of a row with no aliases doesn't shift the
+      // index.
+      if (hasAlias(liveSide.properties)) emitAliasesOnce()
     }
     return
   }
@@ -194,13 +260,23 @@ export const emitTypedBlocksInvalidations = (
     seenNames.add(name)
     if (!encodedEqual(beforeProps[name], afterProps[name])) {
       emitPropertyChannel(emit, emittedProps, workspaceId, name)
+      if (name === ALIAS_PROPERTY_NAME) emitAliasesOnce()
     }
   }
   for (const name of Object.keys(afterProps)) {
     if (seenNames.has(name)) continue
     if (!encodedEqual(beforeProps[name], afterProps[name])) {
       emitPropertyChannel(emit, emittedProps, workspaceId, name)
+      if (name === ALIAS_PROPERTY_NAME) emitAliasesOnce()
     }
+  }
+
+  // Content diff. ChangeSnapshotSide carries content as an optional
+  // top-level field (added alongside this rule). undefined-on-both-sides
+  // (rule-test scaffolding without a content key) is treated as "no
+  // change" — we only fire when the values actually differ.
+  if ((snapshot.before?.content ?? '') !== (snapshot.after?.content ?? '')) {
+    emitContentOnce()
   }
 
   const beforeRefs = snapshot.before?.references ?? []
@@ -239,19 +315,18 @@ export const emitTypedBlocksInvalidations = (
   }
 }
 
-export const typedBlocksInvalidationRule: InvalidationRule = {
-  id: 'core.typedBlocks',
+export const kernelInvalidationRule: InvalidationRule = {
+  id: 'core.kernelInvalidation',
   collectFromSnapshots: (snapshots, emit) => {
     for (const snapshot of snapshots.values()) {
-      emitTypedBlocksInvalidations(snapshot, emit)
+      emitKernelInvalidations(snapshot, emit)
     }
   },
   collectFromRowEvent: ({ before, after }, emit) => {
     // Row-event payloads expose the full BlockData; ChangeSnapshot is the
-    // slim view a rule needs. Fields beyond the slim shape (content,
-    // updatedAt, …) are ignored by the diff, so the structural cast is
-    // safe.
-    emitTypedBlocksInvalidations(
+    // slim view a rule needs. The slim shape is structurally compatible
+    // — `content` and `properties` ride along under their own names.
+    emitKernelInvalidations(
       { before: before as ChangeSnapshot['before'], after: after as ChangeSnapshot['after'] },
       emit,
     )
