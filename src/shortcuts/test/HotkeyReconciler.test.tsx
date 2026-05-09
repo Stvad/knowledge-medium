@@ -59,48 +59,12 @@ const dispatchKeydown = (key: string) => {
   )
 }
 
-const dispatchKeydownFrom = (target: HTMLElement, key: string) => {
-  const code =
-    key.length === 1 && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key
-  const keyCode = key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0
-  target.dispatchEvent(
-    new KeyboardEvent('keydown', {
-      key,
-      code,
-      keyCode,
-      which: keyCode,
-      bubbles: true,
-      cancelable: true,
-    }),
-  )
-}
-
 const Activator = ({context}: {context: ActionContextType}) => {
   const dispatch = useActiveContextsDispatch()
   useEffect(() => {
     dispatch.activate(context, mockDeps)
     return () => dispatch.deactivate(context)
   }, [dispatch, context])
-  return null
-}
-
-const PanelActivator = ({
-  activationId,
-  marker,
-  panelId,
-}: {
-  activationId: string
-  marker: string
-  panelId: string
-}) => {
-  const dispatch = useActiveContextsDispatch()
-  useEffect(() => {
-    dispatch.activate(TEST_CONTEXT, {
-      marker,
-      uiStateBlock: {id: panelId},
-    } as MockDeps, activationId)
-    return () => dispatch.deactivate(TEST_CONTEXT, activationId)
-  }, [activationId, dispatch, marker, panelId])
   return null
 }
 
@@ -273,33 +237,5 @@ describe('HotkeyReconciler', () => {
     )
     act(() => dispatchKeydown('k'))
     expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'second'})
-  })
-
-  it('routes a shared context to the panel containing the keyboard event target', () => {
-    const handler = vi.fn()
-    const action = buildAction({
-      id: 'test.panel-routing',
-      handler,
-      defaultBinding: {keys: 'k'},
-    })
-
-    const harness = render(
-      <Harness actions={[action]} contexts={[testContextConfig]}>
-        <PanelActivator activationId="panel-a-activation" marker="panel-a" panelId="panel-a"/>
-        <PanelActivator activationId="panel-b-activation" marker="panel-b" panelId="panel-b"/>
-        <div data-panel-id="panel-a">
-          <button data-testid="panel-a-target">A</button>
-        </div>
-        <div data-panel-id="panel-b">
-          <button data-testid="panel-b-target">B</button>
-        </div>
-      </Harness>,
-    )
-
-    act(() => dispatchKeydownFrom(harness.getByTestId('panel-a-target'), 'k'))
-    expect(handler.mock.calls[0]?.[0]).toMatchObject({marker: 'panel-a'})
-
-    act(() => dispatchKeydownFrom(harness.getByTestId('panel-b-target'), 'k'))
-    expect(handler.mock.calls[1]?.[0]).toMatchObject({marker: 'panel-b'})
   })
 })

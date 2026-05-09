@@ -15,26 +15,17 @@ import {
   BaseShortcutDependencies,
 } from '@/shortcuts/types.ts'
 
-export interface ActiveContextEntry {
-  activationId: string
-  dependencies: BaseShortcutDependencies
-}
-
-export type ActiveContextsMap = ReadonlyMap<ActionContextType, readonly ActiveContextEntry[]>
+export type ActiveContextsMap = ReadonlyMap<ActionContextType, BaseShortcutDependencies>
 
 export interface ActiveContextsDispatch {
   /**
    * Activate a context with validated dependencies. If the context is already
-   * active for this activation id it is replaced and moved to the end of that
-   * context's activation list.
+   * active it is moved to the end of the activation order (matching prior
+   * singleton semantics).
    */
-  activate: (
-    context: ActionContextType,
-    dependencies: BaseShortcutDependencies,
-    activationId?: string
-  ) => void
-  /** Deactivate one activation of a context. No-op when inactive. */
-  deactivate: (context: ActionContextType, activationId?: string) => void
+  activate: (context: ActionContextType, dependencies: BaseShortcutDependencies) => void
+  /** Deactivate a context. No-op when inactive. */
+  deactivate: (context: ActionContextType) => void
 }
 
 /**
@@ -63,11 +54,7 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
   const [active, setActive] = useState<ActiveContextsMap>(() => new Map())
 
   const activate = useCallback(
-    (
-      context: ActionContextType,
-      dependencies: BaseShortcutDependencies,
-      activationId = context,
-    ) => {
+    (context: ActionContextType, dependencies: BaseShortcutDependencies) => {
       const configs = runtimeRef.current.read(actionContextsFacet)
       const config = configs.find(c => c.type === context)
       if (!config) {
@@ -80,34 +67,22 @@ export function ActiveContextsProvider({children}: PropsWithChildren) {
       }
 
       setActive(prev => {
-        const previousEntries = prev.get(context) ?? []
-        const nextEntries = [
-          ...previousEntries.filter(entry => entry.activationId !== activationId),
-          {activationId, dependencies},
-        ]
         const next = new Map(prev)
-        // Re-insert the context at the end to keep prior context-level
-        // last-active-wins semantics for fallback dispatch and UI ordering.
+        // Re-insert at end to keep activation order deterministic for
+        // ordered consumers and last-active-wins semantics.
         next.delete(context)
-        next.set(context, nextEntries)
+        next.set(context, dependencies)
         return next
       })
     },
     [],
   )
 
-  const deactivate = useCallback((context: ActionContextType, activationId = context) => {
+  const deactivate = useCallback((context: ActionContextType) => {
     setActive(prev => {
-      const previousEntries = prev.get(context)
-      if (!previousEntries) return prev
-
-      const nextEntries = previousEntries.filter(entry => entry.activationId !== activationId)
+      if (!prev.has(context)) return prev
       const next = new Map(prev)
-      if (nextEntries.length) {
-        next.set(context, nextEntries)
-      } else {
-        next.delete(context)
-      }
+      next.delete(context)
       return next
     })
   }, [])

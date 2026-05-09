@@ -2,7 +2,6 @@ import { useCallback } from 'react'
 import { actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { selectActiveDependencies } from '@/shortcuts/activeContextSelection.ts'
 import { ActionTrigger } from '@/shortcuts/types.ts'
 
 export type RunActionByIdFn = (
@@ -50,7 +49,7 @@ export function useRunAction(): RunActionByIdFn {
       if (!action) {
         throw new Error(`[useRunAction] Action with ID "${actionId}" not found.`)
       }
-      const deps = selectActiveDependencies(active, action.context, trigger)
+      const deps = active.get(action.context)
       if (!deps) {
         throw new Error(
           `[useRunAction] Cannot run action "${actionId}". Context "${action.context}" is not active.`,
