@@ -8,9 +8,10 @@ import {
   Redo2,
   KeyboardOff,
 } from 'lucide-react'
-import { useIsEditing } from '@/data/globalState.ts'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useRunAction } from '@/shortcuts/runAction.ts'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
+import { ActionContextTypes } from '@/shortcuts/types.ts'
 
 interface ToolbarAction {
   id: string
@@ -69,7 +70,14 @@ const useKeyboardOffset = (): number => {
  *  invokes, so behavior stays in lockstep with the desktop shortcuts. */
 export function MobileKeyboardToolbar() {
   const isMobile = useIsMobile()
-  const [isEditing] = useIsEditing()
+  // Editing state is per-panel (`isEditingProp` is set on the panel's
+  // UI-state block), so the app-shell `useIsEditing()` hook — which
+  // resolves to the user-root UI-state block when no panel context is
+  // present — never sees `true`. The active-contexts map is the
+  // panel-agnostic source of truth: a CodeMirror editor in edit mode
+  // activates EDIT_MODE_CM regardless of which panel hosts it.
+  const activeContexts = useActiveContextsState()
+  const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
   const keyboardOffset = useKeyboardOffset()
 
