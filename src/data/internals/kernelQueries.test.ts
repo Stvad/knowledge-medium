@@ -531,6 +531,26 @@ describe('invalidation', () => {
     }
   })
 
+  it('firstChildByContent: child content edits can invalidate an empty result', async () => {
+    await create({id: 'p'})
+    await create({id: 'c1', parentId: 'p', content: 'draft'})
+    const handle = env.repo.query.firstChildByContent({parentId: 'p', content: 'published'})
+    await handle.load()
+
+    const fired: Array<BlockData | null> = []
+    const unsub = handle.subscribe(value => { fired.push(value) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('c1', {content: 'published'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => expect(asBlockOrNull(handle.peek())?.id).toBe('c1'))
+      expect(fired.some(value => value?.id === 'c1')).toBe(true)
+    } finally {
+      unsub()
+    }
+  })
+
   it('byType: a new matching row invalidates (typedBlocks.type channel)', async () => {
     await create({id: 'a', type: 'note'})
     const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})

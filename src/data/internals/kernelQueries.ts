@@ -546,6 +546,8 @@ export const firstChildByContentQuery = defineQuery<
   resultSchema: blockDataOrNullSchema,
   resolve: async ({parentId, content}, ctx) => {
     ctx.depend({kind: 'parent-edge', parentId})
+    const children = await ctx.db.getAll<{id: string}>(CHILDREN_IDS_SQL, [parentId])
+    for (const child of children) ctx.depend({kind: 'row', id: child.id})
     const row = await ctx.db.getOptional<BlockRow>(
       SELECT_FIRST_CHILD_BY_CONTENT_SQL, [parentId, content],
     )
