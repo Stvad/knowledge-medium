@@ -189,16 +189,28 @@ const ExpandButton = ({block}: { block: Block }) => {
       ? 'opacity-0 group-hover/block:opacity-100'
       : 'opacity-0'
 
+  // On touch devices the synthesized `click` arrives after a small
+  // delay and after `pointerup`/`touchend`; if anything between those
+  // events reroutes focus or React unmounts/repaints the button, the
+  // click can land on the underlying block-content and dispatch the
+  // block click handler — dropping us into edit mode. Stopping
+  // propagation on `pointerdown` blocks that path the moment the touch
+  // is registered, before the synthetic click bubbles. The redundant
+  // `onClick.stopPropagation` covers the desktop mouse path.
+  const toggle = () => setIsCollapsed(!isCollapsed)
+
   return (
     <Button
       variant="ghost"
       size="sm"
       type="button"
+      data-block-interaction="ignore"
+      onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation()
-        setIsCollapsed(!isCollapsed)
+        toggle()
       }}
-      className={`expand-collapse-button h-6 p-0 hover:bg-none transition-opacity ${visibilityClass} ${isMobile ? 'w-6' : 'w-3'}`}
+      className={`expand-collapse-button p-0 hover:bg-none transition-opacity ${visibilityClass} ${isMobile ? 'h-8 w-8' : 'h-6 w-3'}`}
     >
       <span className="text-lg text-muted-foreground">
         {isCollapsed ? '▸' : '▾'}
@@ -477,7 +489,7 @@ export function DefaultBlockRenderer(
             <BlockBullet block={block}/>
           </div>
           {isMobile && hasChildren && (
-            <div className="absolute right-1 top-0">
+            <div className="absolute right-0 top-0 z-10">
               <ExpandButton block={block}/>
             </div>
           )}
