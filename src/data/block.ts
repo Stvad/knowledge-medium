@@ -119,7 +119,16 @@ export class Block implements Handle<BlockData | null> {
     // `RefPropertyEditor.blockMatchesTargetTypes` rely on `!data` to
     // mean "not a valid live row" and would otherwise treat a
     // tombstone as a real match.
-    if (cached !== undefined && !cached.deleted) return Promise.resolve(cached)
+    if (cached !== undefined && !cached.deleted) {
+      // A successful load — symmetric with the SQL branch's
+      // `lastError = undefined` on resolve. Without this, a prior
+      // failed load leaves `lastError` set; it stays masked while the
+      // snapshot is in cache (status checks `hasSnapshot` first), but
+      // a later eviction surfaces the stale error through `status()` /
+      // `read()` instead of returning to 'idle'.
+      this.lastError = undefined
+      return Promise.resolve(cached)
+    }
     if (this.inflight) return this.inflight
     this.loadingCount++
     const p = this.repo.load(this.id)

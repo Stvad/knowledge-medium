@@ -256,6 +256,52 @@ describe('Block.load', () => {
         env.h.db.getOptional = origGetOptional
       }
     })
+
+    it('cache fast-path clears a prior lastError so a later eviction returns to idle, not error', async () => {
+      // The fast-path branch is a successful load — it must clear
+      // lastError, mirroring the SQL branch's `lastError = undefined`
+      // on resolve. Without this, a prior failed load leaves the error
+      // sticky: status() returns 'ready' while the snapshot is cached
+      // (hasSnapshot wins), but a later eviction surfaces the stale
+      // error through status()/read() instead of dropping back to
+      // 'idle' as a successful load should.
+      const b = new Block(env.repo, 'flaky')
+
+      // Phase 1: fail a load.
+      const sqlError = new Error('boom')
+      const origGetOptional = env.h.db.getOptional.bind(env.h.db)
+      env.h.db.getOptional = (async () => { throw sqlError }) as typeof env.h.db.getOptional
+      try {
+        await expect(b.load()).rejects.toBe(sqlError)
+      } finally {
+        env.h.db.getOptional = origGetOptional
+      }
+      expect(b.status()).toBe('error')
+
+      // Phase 2: a snapshot lands in cache (e.g. via sync drain).
+      // Hand-write through the cache so we don't go through repo.tx
+      // (which would run another SQL round-trip).
+      env.cache.applySyncSnapshot({
+        id: 'flaky',
+        workspaceId: 'ws-1',
+        parentId: null,
+        orderKey: 'a0',
+        content: 'live',
+        properties: {},
+        references: [],
+        createdAt: 1, updatedAt: 1,
+        createdBy: 'u', updatedBy: 'u',
+        deleted: false,
+      })
+      // Cache fast-path returns the snapshot (no SQL).
+      const out = await b.load()
+      expect(out?.content).toBe('live')
+
+      // Phase 3: snapshot evicted. Status should be 'idle' — the fast-
+      // path load was successful, prior error must be forgotten.
+      env.cache.deleteSnapshot('flaky')
+      expect(b.status()).toBe('idle')
+    })
   })
 
   it('falls through to repo.load when the cache has no snapshot', async () => {
