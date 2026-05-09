@@ -31,6 +31,18 @@ import {
   compileTypedBlockQuery,
   normalizeTypedBlockQuery,
 } from './typedBlockQuery'
+import {
+  TYPED_BLOCKS_LIVE_CHANNEL,
+  TYPED_BLOCKS_PROPERTY_CHANNEL,
+  TYPED_BLOCKS_REFERENCE_CHANNEL,
+  TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+  TYPED_BLOCKS_TYPE_CHANNEL,
+  typedBlocksLiveKey,
+  typedBlocksPropertyKey,
+  typedBlocksReferenceFieldKey,
+  typedBlocksReferenceKey,
+  typedBlocksTypeKey,
+} from './typedBlocksInvalidation'
 
 export const SELECT_BLOCK_BY_ID_SQL = `
   SELECT ${SELECT_BLOCK_COLUMNS_SQL}
@@ -324,14 +336,23 @@ export const childIdsQuery = defineQuery<{id: string; hydrate?: boolean}, string
 
 // ──── Search queries ────
 
-/** Live blocks in `workspaceId` whose `type` property equals `type`. */
+/** Live blocks in `workspaceId` whose `type` property equals `type`.
+ *  Membership reactivity rides the `typedBlocks.type` channel — fired
+ *  by the kernel invalidation rule when a block's `block_types` row for
+ *  `(workspaceId, type)` is inserted/removed (creation, restore,
+ *  type-add/remove, soft-delete). Per-row deps from `hydrateBlocks`
+ *  cover edits to currently-matched rows. */
 export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, BlockData[]>({
   name: 'core.byType',
   argsSchema: z.object({workspaceId: z.string(), type: z.string()}),
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, type}, ctx) => {
     if (!workspaceId) return []
-    ctx.depend({kind: 'workspace', workspaceId})
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_TYPE_CHANNEL,
+      key: typedBlocksTypeKey(workspaceId, type),
+    })
     const rows = await ctx.db.getAll<BlockRow>(
       SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, type],
     )
@@ -351,7 +372,22 @@ const typedBlocksArgsSchema = z.object({
 
 /** SQLite-backed typed block query. Repo.queryBlocks / subscribeBlocks
  *  default workspaceId before dispatching here; direct query callers
- *  should pass workspaceId explicitly. */
+ *  should pass workspaceId explicitly.
+ *
+ *  Reactivity (spec §9.2 + §9.4): each filter dimension contributes its
+ *  own narrow dep so the handle re-resolves only when something that
+ *  could flip membership actually changes:
+ *
+ *    - per `type` in `types`     → `typedBlocks.type` channel
+ *    - per name in `where`        → `typedBlocks.property` channel
+ *    - `referencedBy.id` (no field) → `typedBlocks.reference` channel
+ *    - `referencedBy.id + sourceField` → `typedBlocks.referenceField` channel
+ *    - no filter at all           → `typedBlocks.live` channel
+ *
+ *  Per-row deps from `hydrateBlocks` cover edits to rows already in the
+ *  result. The old `{kind:'workspace', workspaceId}` dep was too coarse
+ *  — UiState focus writes (and unrelated content edits) re-fired it
+ *  needlessly. */
 export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]>({
   name: 'core.typedBlocks',
   argsSchema: typedBlocksArgsSchema,
@@ -359,15 +395,72 @@ export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]
   resolve: async (query, ctx) => {
     if (!query.workspaceId) return []
     const normalized = normalizeTypedBlockQuery(query)
-    ctx.depend({kind: 'workspace', workspaceId: normalized.workspaceId})
+    const workspaceId = normalized.workspaceId
     const types = normalized.types ?? []
+    const whereNames = Object.keys(normalized.where ?? {})
+    const referencedBy = normalized.referencedBy
+
+    if (types.length === 0 && whereNames.length === 0 && referencedBy === undefined) {
+      // Degenerate "all live blocks in workspace" — every creation /
+      // soft-delete / restore changes membership.
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_LIVE_CHANNEL,
+        key: typedBlocksLiveKey(workspaceId),
+      })
+    } else {
+      for (const t of types) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_TYPE_CHANNEL,
+          key: typedBlocksTypeKey(workspaceId, t),
+        })
+      }
+      for (const name of whereNames) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
+          key: typedBlocksPropertyKey(workspaceId, name),
+        })
+      }
+      // `where: {prop: null}` matches blocks where `prop` is unset.
+      // A newly-created block that simply omits `prop` would never
+      // touch the property channel — the live channel is what carries
+      // the "fresh row entered the live set" signal in that case.
+      const wantsLive = whereNames.some(
+        name => (normalized.where as Record<string, unknown>)[name] === null,
+      )
+      if (wantsLive) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_LIVE_CHANNEL,
+          key: typedBlocksLiveKey(workspaceId),
+        })
+      }
+      if (referencedBy !== undefined) {
+        if (referencedBy.sourceField !== undefined) {
+          ctx.depend({
+            kind: 'plugin',
+            channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+            key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
+          })
+        } else {
+          ctx.depend({
+            kind: 'plugin',
+            channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
+            key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
+          })
+        }
+      }
+    }
+
     if (
       types.length === 1 &&
       normalized.where === undefined &&
-      normalized.referencedBy === undefined
+      referencedBy === undefined
     ) {
       const rows = await ctx.db.getAll<BlockRow>(
-        SELECT_BLOCKS_BY_TYPE_SQL, [normalized.workspaceId, types[0]],
+        SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, types[0]],
       )
       return ctx.hydrateBlocks(asBlockRows(rows))
     }

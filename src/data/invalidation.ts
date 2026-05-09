@@ -3,19 +3,21 @@ import type { BlockData } from '@/data/api'
 export type PluginInvalidationKeys = ReadonlySet<string> | readonly string[]
 export type PluginInvalidationMap = ReadonlyMap<string, PluginInvalidationKeys>
 
+export interface ChangeSnapshotSide {
+  parentId: string | null
+  workspaceId: string
+  deleted?: boolean
+  references?: ReadonlyArray<{ id: string; sourceField?: string }>
+  /** Encoded property bag — same shape as `BlockData.properties`. Surfaced
+   *  here so invalidation rules can diff per-property values without
+   *  importing `BlockData`. The runtime values are full `BlockData`
+   *  snapshots (`SnapshotEntry`); this type is the slim view rules see. */
+  properties?: Readonly<Record<string, unknown>>
+}
+
 export interface ChangeSnapshot {
-  before: {
-    parentId: string | null
-    workspaceId: string
-    deleted?: boolean
-    references?: ReadonlyArray<{ id: string; sourceField?: string }>
-  } | null
-  after: {
-    parentId: string | null
-    workspaceId: string
-    deleted?: boolean
-    references?: ReadonlyArray<{ id: string; sourceField?: string }>
-  } | null
+  before: ChangeSnapshotSide | null
+  after: ChangeSnapshotSide | null
 }
 
 export interface InvalidationRowEvent {

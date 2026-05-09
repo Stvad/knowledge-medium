@@ -531,7 +531,7 @@ describe('invalidation', () => {
     }
   })
 
-  it('byType: a new matching row invalidates (workspace dep, coarse)', async () => {
+  it('byType: a new matching row invalidates (typedBlocks.type channel)', async () => {
     await create({id: 'a', type: 'note'})
     const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
     let value = asBlocks(await handle.load())
@@ -546,6 +546,120 @@ describe('invalidation', () => {
       })
       value = asBlocks(handle.peek())
       expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('byType: a UiState write on an unrelated block does NOT invalidate', async () => {
+    // Reproduces the "up/down feels slow" regression: focus writes were
+    // re-resolving every workspace-scoped query (including the
+    // userSchemasService's typedBlocks subscription) on every arrow press.
+    await create({id: 'a', type: 'note'})
+    await create({id: 'panel'})
+    const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(async tx => {
+        const block = env.repo.block('panel')
+        await block.load()
+        await tx.update('panel', {properties: {focusedBlockId: 'something'}})
+      }, {scope: ChangeScope.UiState})
+      // Give the handle plenty of opportunity to (incorrectly) re-resolve.
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('byType: an unrelated content edit on a non-matching block does NOT invalidate', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'plain'})  // no type
+    const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('plain', {content: 'edited'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('byType: adding the type to an existing block via property update invalidates', async () => {
+    await create({id: 'a'})  // starts without the type
+    const handle = env.repo.query.byType({workspaceId: WS, type: 'note'})
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual([])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('a', {
+          properties: {[typesProp.name]: typesProp.codec.encode(['note'])},
+        }),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
+      })
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('typedBlocks (where): a property change on a non-matching block invalidates', async () => {
+    // `renderer` is a kernel-registered, where-queryable property —
+    // pick it so we don't have to wire setFacetRuntime here.
+    await create({id: 'a'})
+    await create({id: 'b'})
+    const handle = env.repo.query.typedBlocks({workspaceId: WS, where: {renderer: 'markdown'}})
+    expect(asBlocks(await handle.load()).map(b => b.id)).toEqual([])
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      // `a` was previously not in the result, so per-row deps don't
+      // catch it. The typedBlocks.property:<ws>:renderer channel does.
+      await env.repo.tx(
+        tx => tx.update('a', {properties: {renderer: 'markdown'}}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['a'])
+      })
+      expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('typedBlocks (where): UiState write on a different property does NOT invalidate', async () => {
+    await create({id: 'a', type: 'note'})
+    await create({id: 'panel'})
+    const handle = env.repo.query.typedBlocks({workspaceId: WS, where: {renderer: 'markdown'}})
+    await handle.load()
+
+    const fired: number[] = []
+    const unsub = handle.subscribe(() => { fired.push(1) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('panel', {properties: {focusedBlockId: 'x'}}),
+        {scope: ChangeScope.UiState},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired.length).toBe(0)
     } finally {
       unsub()
     }
