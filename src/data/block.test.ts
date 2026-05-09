@@ -144,6 +144,69 @@ describe('Block.get / peekProperty (codec at boundary)', () => {
   })
 })
 
+describe('Block.load', () => {
+  it('skips SQL when the cache already holds a snapshot (cache fast path)', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'cached', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    const b = new Block(env.repo, 'cached')
+    expect(b.peek()).not.toBeUndefined()
+
+    let getOptionalCalls = 0
+    const origGetOptional = env.h.db.getOptional.bind(env.h.db)
+    env.h.db.getOptional = (async (sql: string, params?: unknown[]) => {
+      getOptionalCalls += 1
+      return origGetOptional(sql, params)
+    }) as typeof env.h.db.getOptional
+
+    try {
+      const out = await b.load()
+      expect(out?.id).toBe('cached')
+      expect(getOptionalCalls).toBe(0)
+    } finally {
+      env.h.db.getOptional = origGetOptional
+    }
+  })
+
+  it('returns null synchronously when the row is confirmed-missing in cache', async () => {
+    const b = new Block(env.repo, 'gone')
+    expect(await env.repo.load('gone')).toBeNull()  // primes the missing marker
+    expect(b.peek()).toBeNull()
+
+    let getOptionalCalls = 0
+    const origGetOptional = env.h.db.getOptional.bind(env.h.db)
+    env.h.db.getOptional = (async (sql: string, params?: unknown[]) => {
+      getOptionalCalls += 1
+      return origGetOptional(sql, params)
+    }) as typeof env.h.db.getOptional
+
+    try {
+      expect(await b.load()).toBeNull()
+      expect(getOptionalCalls).toBe(0)
+    } finally {
+      env.h.db.getOptional = origGetOptional
+    }
+  })
+
+  it('falls through to repo.load when the cache has no snapshot', async () => {
+    // Create the block through repo.tx (so the row lands in SQL), then
+    // evict the cache entry so the next load() has to re-read from SQL.
+    await env.repo.tx(
+      tx => tx.create({id: 'evicted', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    env.cache.deleteSnapshot('evicted')
+    const b = new Block(env.repo, 'evicted')
+    expect(b.peek()).toBeUndefined()
+
+    const out = await b.load()
+    expect(out?.id).toBe('evicted')
+    // After loading, the cache holds it again.
+    expect(b.peek()?.id).toBe('evicted')
+  })
+})
+
 describe('Block.subscribe', () => {
   it('fires the listener on cache mutation with the latest BlockData', async () => {
     await env.repo.tx(
