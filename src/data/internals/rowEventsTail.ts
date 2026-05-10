@@ -120,19 +120,42 @@ export const startRowEventsTail = (args: {
     onError(err)
   }
 
-  /** Inner drain — reads + processes rows with id > lastId. Used by
+  /** Inner drain — advances the row_events watermark over every row
+   *  with id > lastId, but only processes source='sync' rows. Used by
    *  both the init-time catch-up read AND the subscription's onChange
-   *  handler. Does NOT await `ready` (callers ensure ordering). */
+   *  handler. Does NOT await `ready` (callers ensure ordering).
+   *
+   *  Why the two-step MAX + sync-row SELECT instead of
+   *  `WHERE id > ? AND source = 'sync'`: local `repo.tx` writes also
+   *  append row_events rows, but they are handled by the TxEngine fast
+   *  path. If the tail only advanced over returned sync rows, a
+   *  long-lived local-write-heavy session could keep rescanning the
+   *  same local suffix forever. The MAX query makes `lastId` mean
+   *  "last row considered", not "last sync row processed", without
+   *  fetching large before_json/after_json payloads for local rows. */
   const drain = async (): Promise<void> => {
     if (disposed) return
+    const startLastId = lastId
+    const maxRow = await db.getOptional<{ maxId: number | null }>(
+      `SELECT MAX(id) AS maxId
+         FROM row_events
+        WHERE id > ?`,
+      [startLastId],
+    )
+    const maxId = maxRow?.maxId ?? startLastId
+    if (maxId <= startLastId) return
+
     const rows = await db.getAll<RowEventRow>(
       `SELECT id, block_id, kind, before_json, after_json, tx_id
          FROM row_events
-        WHERE id > ? AND source = 'sync'
+        WHERE id > ? AND id <= ? AND source = 'sync'
         ORDER BY id ASC`,
-      [lastId],
+      [startLastId, maxId],
     )
-    if (rows.length === 0) return
+    if (rows.length === 0) {
+      lastId = maxId
+      return
+    }
 
     const rowIds = new Set<string>()
     const parentIds = new Set<string>()
@@ -150,7 +173,6 @@ export const startRowEventsTail = (args: {
     const cycleTxIdsByWs = new Map<string, Set<string>>()
 
     for (const r of rows) {
-      lastId = Math.max(lastId, r.id)
       rowIds.add(r.block_id)
 
       const before = r.before_json
@@ -293,6 +315,7 @@ export const startRowEventsTail = (args: {
       plugin: pluginInvalidations.size > 0 ? pluginInvalidations : undefined,
     }
     handleStore.invalidate(notification)
+    lastId = maxId
   }
 
   // Init flow that closes the row_events tail gap (spec §9.3, §16.13;

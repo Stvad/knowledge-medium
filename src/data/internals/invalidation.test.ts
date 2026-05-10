@@ -564,11 +564,37 @@ describe('row_events tail: sync-applied invalidation', () => {
     await env.repo.flushRowEventsTail()
     const afterInit = tail.lastId()
 
-    // No further activity → second flush keeps lastId stable. The tail
-    // only advances lastId for rows it consumes (source='sync'); a
-    // user-source row_events row would NOT advance it.
+    // No further activity → second flush keeps lastId stable.
     await env.repo.flushRowEventsTail()
     expect(tail.lastId()).toBe(afterInit)
+  })
+
+  it('advances the watermark across local row_events without processing them', async () => {
+    await create('p')
+    const h = env.repo.query.children({id: 'p'})
+    const fired: number[] = []
+    h.subscribe(v => fired.push(v.length))
+    await vi.waitFor(() => expect(fired).toEqual([0]))
+
+    const tail = env.repo.startRowEventsTail({throttleMs: 0})
+    await env.repo.flushRowEventsTail()
+    const afterInit = tail.lastId()
+
+    await create('c1', {parentId: 'p', orderKey: 'a0'})
+    await vi.waitFor(() => expect(fired).toEqual([0, 1]))
+    const maxRow = await env.h.db.getOptional<{maxId: number | null}>(
+      `SELECT MAX(id) AS maxId FROM row_events`,
+    )
+
+    await env.repo.flushRowEventsTail()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(maxRow?.maxId).toBeGreaterThan(afterInit)
+    expect(tail.lastId()).toBe(maxRow?.maxId)
+    // The local row was considered for watermark purposes but not
+    // processed by the sync invalidation path, so no duplicate fire.
+    expect(fired).toEqual([0, 1])
   })
 
 })
