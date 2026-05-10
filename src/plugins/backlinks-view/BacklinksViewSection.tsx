@@ -55,8 +55,11 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
   return (
     <>
       {variants.length > 1 && (
-        <div className="mt-8 flex items-center gap-1 text-xs text-muted-foreground">
-          <span className="mr-1">View:</span>
+        <div
+          className="mt-4 inline-flex items-center gap-0.5 text-xs text-muted-foreground"
+          role="group"
+          aria-label="Backlinks view"
+        >
           {variants.map(variant => {
             const active = variant.id === selected.id
             return (
@@ -64,7 +67,7 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
                 key={variant.id}
                 type="button"
                 onClick={() => setSavedId(variant.id)}
-                className={`rounded-sm px-2 py-0.5 transition-colors ${
+                className={`rounded-sm px-1.5 py-0.5 leading-4 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
                   active
                     ? 'bg-accent text-foreground'
                     : 'hover:bg-accent/50 hover:text-foreground'

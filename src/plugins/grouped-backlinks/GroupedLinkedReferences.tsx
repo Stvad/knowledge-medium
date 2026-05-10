@@ -120,7 +120,7 @@ function GroupedLinkedReferencesInner({
     : String(grouped.total)
 
   return (
-    <div className="mt-8 pt-4 border-t border-border">
+    <div className="mt-4 pt-3 border-t border-border">
       <div className="flex items-center justify-between gap-2">
         <button
           type="button"
