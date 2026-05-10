@@ -7,7 +7,11 @@ import { useUIStateBlock } from '@/data/globalState'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
-import { useActiveSwipeBlockId, setActiveSwipeBlockId } from './store.ts'
+import {
+  useActiveSwipeTarget,
+  clearActiveSwipeTarget,
+  type ActiveSwipeTarget,
+} from './store.ts'
 import {
   PRIMARY_ACTIONS,
   OVERFLOW_ACTIONS,
@@ -21,26 +25,33 @@ interface AnchorRect {
 }
 
 /** Track the swiped block's bounding rect so the floating bar follows
- *  it across scroll / re-layouts (e.g. mid-flight property toggles). */
-const useAnchorRect = (blockId: string | null): AnchorRect | null => {
+ *  it across scroll / re-layouts (e.g. mid-flight property toggles).
+ *  Anchored to the exact element captured at swipe-time — never via
+ *  document.querySelector(blockId), since the same block can render in
+ *  multiple panels and the first match would land in the wrong row. */
+const useAnchorRect = (element: HTMLElement | null): AnchorRect | null => {
   const [rect, setRect] = useState<AnchorRect | null>(null)
 
-  // Reset stale rect on block-id change synchronously during render —
+  // Reset stale rect on element change synchronously during render —
   // the alternative (setRect in an effect body) is the cascading-render
   // anti-pattern that `react-hooks/set-state-in-effect` forbids.
-  const [trackedId, setTrackedId] = useState(blockId)
-  if (trackedId !== blockId) {
-    setTrackedId(blockId)
+  const [trackedElement, setTrackedElement] = useState(element)
+  if (trackedElement !== element) {
+    setTrackedElement(element)
     setRect(null)
   }
 
   useLayoutEffect(() => {
-    if (!blockId) return
+    if (!element) return
 
     const measure = (): void => {
-      const element = document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`)
-      if (!element) {
+      // The captured element may have been detached (block deleted, panel
+      // torn down, React rerender swapped the underlying node). Detect
+      // that and let the menu close itself rather than anchoring to a
+      // ghost rect.
+      if (!element.isConnected) {
         setRect(null)
+        clearActiveSwipeTarget()
         return
       }
       const r = element.getBoundingClientRect()
@@ -62,8 +73,7 @@ const useAnchorRect = (blockId: string | null): AnchorRect | null => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(measure)
     })
-    const targetEl = document.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`)
-    if (targetEl) observer.observe(targetEl)
+    observer.observe(element)
 
     return () => {
       window.removeEventListener('scroll', measure, true)
@@ -71,7 +81,7 @@ const useAnchorRect = (blockId: string | null): AnchorRect | null => {
       cancelAnimationFrame(raf)
       observer.disconnect()
     }
-  }, [blockId])
+  }, [element])
 
   return rect
 }
@@ -110,12 +120,11 @@ interface ActionButtonProps {
 
 const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
   const {Icon, label, item} = resolved
-  // Touch buttons need to defeat the default 300ms tap delay synthesis
-  // and the synthetic click that fires after touchend — running on
-  // `pointerup` keeps the action snappy and avoids a second invocation
-  // when the synthesized click bubbles. The `onClick` mirror keeps
-  // keyboard activation (Enter/Space) functional.
-  const handlePointerUp = (event: { preventDefault: () => void; stopPropagation: () => void }) => {
+  // Single onClick: a touch tap synthesizes touchend → pointerup → click,
+  // so listening on both `pointerup` and `click` would fire the action
+  // twice (and toggle-style state would cancel itself out — see commit
+  // history). `click` covers touch, mouse, and Enter/Space for keyboard.
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
     onRun(resolved)
@@ -127,15 +136,14 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
       aria-label={label}
       title={label}
       data-block-interaction="ignore"
-      onPointerUp={handlePointerUp}
-      onClick={handlePointerUp}
-      className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors active:bg-accent ${
+      onClick={handleClick}
+      className={`flex h-7 w-7 items-center justify-center rounded transition-colors active:bg-accent ${
         item.destructive
           ? 'text-destructive hover:bg-destructive/10 active:bg-destructive/20'
           : 'text-foreground hover:bg-muted'
       }`}
     >
-      <Icon className="h-5 w-5"/>
+      <Icon className="h-4 w-4"/>
     </button>
   )
 }
@@ -150,11 +158,12 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
  *  to avoid mounting cost on desktop. */
 export const SwipeActionMenu = () => {
   const isMobile = useIsMobile()
-  const activeBlockId = useActiveSwipeBlockId()
+  const activeTarget: ActiveSwipeTarget | null = useActiveSwipeTarget()
+  const activeBlockId = activeTarget?.blockId ?? null
   const repo = useRepo()
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const anchor = useAnchorRect(isMobile ? activeBlockId : null)
+  const anchor = useAnchorRect(isMobile ? (activeTarget?.element ?? null) : null)
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -184,7 +193,7 @@ export const SwipeActionMenu = () => {
     const handlePointer = (event: PointerEvent | MouseEvent | globalThis.MouseEvent) => {
       const target = event.target as Node | null
       if (target && containerRef.current?.contains(target)) return
-      setActiveSwipeBlockId(null)
+      clearActiveSwipeTarget()
     }
 
     // Defer attach by a microtask so the same touchend that opened the
@@ -203,7 +212,7 @@ export const SwipeActionMenu = () => {
   useEffect(() => {
     if (!activeBlockId) return
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setActiveSwipeBlockId(null)
+      if (event.key === 'Escape') clearActiveSwipeTarget()
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
@@ -230,7 +239,7 @@ export const SwipeActionMenu = () => {
     const {item, action} = resolved
     if (!action) {
       console.error(`[swipe-quick-actions] Action "${item.actionId}" not registered`)
-      setActiveSwipeBlockId(null)
+      clearActiveSwipeTarget()
       return
     }
     const trigger = new CustomEvent('swipe-quick-action', {
@@ -239,7 +248,7 @@ export const SwipeActionMenu = () => {
     void Promise.resolve(action.handler({block, uiStateBlock}, trigger)).catch(error => {
       console.error(`[swipe-quick-actions] Action "${item.actionId}" failed`, error)
     })
-    setActiveSwipeBlockId(null)
+    clearActiveSwipeTarget()
   }
 
   // Block touch events from bubbling to the underlying block so the
@@ -249,25 +258,28 @@ export const SwipeActionMenu = () => {
     event.stopPropagation()
   }
 
-  // Pin to the right edge of the viewport, vertically centered on the
-  // swiped block. The block's `right` is the rightmost pixel of its
-  // bounding box; we anchor the bar's right edge to the viewport's
-  // right edge minus a small inset so the bar sits in the empty
-  // gutter even when the block extends close to the edge.
-  const top = anchor.top + anchor.height / 2
+  // Align the menu's vertical center to the swiped row's center so the
+  // toolbar sits over the actioned block (Workflowy-style), not floating
+  // above it. The toolbar's intrinsic height is ~32px (h-7 buttons +
+  // 2x p-0.5 padding); on typical row heights (24-30px) that's flush
+  // with the row, on multi-line blocks it sits centered over them.
+  // The right edge anchors near the row's right edge — clamped a few
+  // pixels into the viewport so the menu never clips off-screen.
+  const centerY = anchor.top + anchor.height / 2
+  const rightEdge = Math.max(8, window.innerWidth - anchor.right + 8)
 
   return createPortal(
     <div
       ref={containerRef}
       className="swipe-action-menu fixed z-50 -translate-y-1/2"
-      style={{top: `${top}px`, right: '8px'}}
+      style={{top: `${centerY}px`, right: `${rightEdge}px`}}
       data-block-interaction="ignore"
       onTouchStart={swallowTouch}
       onTouchMove={swallowTouch}
       onTouchEnd={swallowTouch}
     >
       <div
-        className="flex items-center gap-1 rounded-lg border border-border bg-background/95 p-1 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85"
+        className="flex items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
       >
         {primaryResolved.map(resolved => (
           <ActionButton
@@ -282,44 +294,38 @@ export const SwipeActionMenu = () => {
           title="More actions"
           aria-expanded={showOverflow}
           data-block-interaction="ignore"
-          onPointerUp={event => {
-            event.preventDefault()
-            event.stopPropagation()
-            setShowOverflow(prev => !prev)
-          }}
           onClick={event => {
             event.preventDefault()
             event.stopPropagation()
             setShowOverflow(prev => !prev)
           }}
-          className="flex h-10 w-10 items-center justify-center rounded-md text-foreground hover:bg-muted active:bg-accent"
+          className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
         >
-          <MoreHorizontal className="h-5 w-5"/>
+          <MoreHorizontal className="h-4 w-4"/>
         </button>
         <button
           type="button"
           aria-label="Close"
           title="Close"
           data-block-interaction="ignore"
-          onPointerUp={event => {
-            event.preventDefault()
-            event.stopPropagation()
-            setActiveSwipeBlockId(null)
-          }}
           onClick={event => {
             event.preventDefault()
             event.stopPropagation()
-            setActiveSwipeBlockId(null)
+            clearActiveSwipeTarget()
           }}
-          className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:bg-accent"
+          className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
         >
-          <X className="h-5 w-5"/>
+          <X className="h-4 w-4"/>
         </button>
       </div>
 
       {showOverflow && (
         <div
-          className="mt-1 flex flex-col gap-0.5 rounded-lg border border-border bg-background/95 p-1 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/85"
+          // Absolutely positioned so the toolbar stays vertically anchored
+          // to the swiped row when the overflow opens — without this, the
+          // -translate-y-1/2 above would re-center the now-taller
+          // toolbar+overflow container and shift the toolbar off the row.
+          className="absolute right-0 top-full mt-1 flex flex-col gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
         >
           {overflowResolved.map(resolved => {
             const {Icon, label, item} = resolved
@@ -329,11 +335,6 @@ export const SwipeActionMenu = () => {
                 type="button"
                 aria-label={label}
                 data-block-interaction="ignore"
-                onPointerUp={event => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  handleRun(resolved)
-                }}
                 onClick={event => {
                   event.preventDefault()
                   event.stopPropagation()

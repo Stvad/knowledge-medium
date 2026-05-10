@@ -5,7 +5,11 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
 import { Block } from '@/data/block'
-import { setActiveSwipeBlockId, getActiveSwipeBlockId } from './store.ts'
+import {
+  setActiveSwipeTarget,
+  clearActiveSwipeTarget,
+  getActiveSwipeTarget,
+} from './store.ts'
 
 interface TouchStart {
   x: number
@@ -14,6 +18,12 @@ interface TouchStart {
   /** Once a horizontal-swipe intent is locked in, we set this so further
    *  movement doesn't keep re-evaluating direction. */
   decided: 'horizontal' | 'vertical' | null
+  /** The element bearing `data-block-id` for the swiped block instance.
+   *  Captured at touchstart so the menu can later anchor to the exact
+   *  row the user touched, even if the same block id is rendered in
+   *  another panel. Null only if the surface isn't inside a block shell
+   *  (shouldn't happen in practice, but we bail safely). */
+  element: HTMLElement | null
 }
 
 const touchStartByBlockId = new Map<string, TouchStart>()
@@ -47,6 +57,17 @@ const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
   Boolean(uiStateBlock.peekProperty(isEditingProp))
 
+/** Walk up from the touch target to the closest element with a matching
+ *  `data-block-id` attribute. The content surface bears no such attribute
+ *  itself; the block shell (one wrapper out) does. We require the id to
+ *  match the contribution's `block.id` so a synthesized event from a
+ *  child block can't accidentally anchor to its ancestor's row. */
+const findBlockShell = (target: EventTarget | null, blockId: string): HTMLElement | null => {
+  if (!(target instanceof Element)) return null
+  const shell = target.closest<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`)
+  return shell
+}
+
 export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = context => {
   const {block, uiStateBlock} = context
 
@@ -74,6 +95,11 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
         y: touch.clientY,
         time: Date.now(),
         decided: null,
+        // Resolve the swiped block's shell once at touchstart; the bbox
+        // is recomputed against this same element each render so any
+        // post-swipe mutations (collapse toggle, properties show/hide)
+        // still anchor to the right row.
+        element: findBlockShell(event.target, block.id),
       })
     },
 
@@ -119,13 +145,22 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // so back-navigation gestures etc. aren't disturbed.
       if (dx <= -SWIPE_TRIGGER_PX) {
         if (isBlockEditing(block.id, uiStateBlock)) return
+        // No shell element resolved? Skip — opening with a stale or
+        // missing anchor would land the menu somewhere arbitrary.
+        if (!start.element) return
         event.preventDefault()
         event.stopPropagation()
-        setActiveSwipeBlockId(block.id)
-      } else if (dx >= SWIPE_TRIGGER_PX && getActiveSwipeBlockId() === block.id) {
-        event.preventDefault()
-        event.stopPropagation()
-        setActiveSwipeBlockId(null)
+        setActiveSwipeTarget({blockId: block.id, element: start.element})
+      } else if (dx >= SWIPE_TRIGGER_PX) {
+        const active = getActiveSwipeTarget()
+        // Dismiss only when the swipe-right is on the same instance the
+        // menu is anchored to — a swipe-right on a different panel's row
+        // shouldn't close someone else's menu.
+        if (active && active.element === start.element) {
+          event.preventDefault()
+          event.stopPropagation()
+          clearActiveSwipeTarget()
+        }
       }
     },
 
