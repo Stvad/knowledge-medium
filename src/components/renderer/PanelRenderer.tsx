@@ -23,6 +23,10 @@ import {
 } from '@/utils/panelHistory.ts'
 
 const SCROLL_WRITE_DELAY_MS = 200
+const PANEL_ACTION_BUTTON_CLASS =
+  'h-6 w-6 bg-background/70 text-muted-foreground hover:bg-accent/80 hover:text-foreground'
+const PANEL_HISTORY_BUTTON_CLASS =
+  `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/70 disabled:hover:text-muted-foreground/40`
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
@@ -137,7 +141,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:text-muted-foreground/40 disabled:hover:text-muted-foreground/40"
+          className={PANEL_HISTORY_BUTTON_CLASS}
           onClick={() => { void goBackInPanel(block) }}
           disabled={!canBack}
           aria-label="Back"
@@ -148,7 +152,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         <Button
           variant="ghost"
           size="icon"
-          className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:text-muted-foreground/40 disabled:hover:text-muted-foreground/40"
+          className={PANEL_HISTORY_BUTTON_CLASS}
           onClick={() => { void goForwardInPanel(block) }}
           disabled={!canForward}
           aria-label="Forward"
@@ -160,7 +164,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 text-muted-foreground hover:text-foreground"
+            className={PANEL_ACTION_BUTTON_CLASS}
             onClick={handleClose}
             aria-label="Close panel"
           >
