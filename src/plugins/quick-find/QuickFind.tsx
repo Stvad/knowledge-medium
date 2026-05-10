@@ -20,7 +20,7 @@ import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties.ts'
 import { PAGE_TYPE } from '@/data/blockTypes.ts'
 import { v4 as uuidv4 } from 'uuid'
-import { useNavigate } from '@/utils/navigation.ts'
+import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
@@ -47,6 +47,7 @@ export function QuickFind() {
   const repo = useRepo()
   const userPrefsBlock = useUserPrefsBlock()
   const navigate = useNavigate()
+  const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
   const [recentIds] = useUserPrefsProperty(recentBlockIdsProp)
 
   const [open, setOpen] = useState(false)
@@ -127,7 +128,7 @@ export function QuickFind() {
   const jumpToBlock = (blockId: string) => {
     if (!repo.activeWorkspaceId) return
     pushRecentBlockId(userPrefsBlock, blockId)
-    navigate({blockId, target: 'focused'})
+    navigateFromGlobalCommand({blockId})
     setOpen(false)
   }
 

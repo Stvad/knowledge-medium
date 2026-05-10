@@ -12,33 +12,92 @@
 // implementation. Keeping the API a plain function for now lets that hook
 // be added without re-plumbing call sites.
 import { useCallback, type MouseEvent } from 'react'
+import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
 import { navigateInPanel } from './panelHistory'
 import { getLayoutSessionId } from '@/utils/layoutSessionId'
-import { insertPanelRow, insertSidebarStackedPanel } from '@/utils/panelLayoutProjection'
+import { activePanelIdProp } from '@/data/properties'
+import {
+  insertPanelRow,
+  insertSidebarStackedPanel,
+  panelBlockId,
+  panelRowsInLayoutOrder,
+} from '@/utils/panelLayoutProjection'
 
-export type NavigationTarget = 'focused' | 'main' | 'new-panel' | 'sidebar-stack'
+export type NavigateInput =
+  | NavigatePanelInput
+  | NavigateMainInput
+  | NavigateActiveInput
+  | NavigateNewPanelInput
+  | NavigateSidebarStackInput
 
-export interface NavigateInput {
+interface NavigateBaseInput {
   blockId: string
   /** Defaults to repo.activeWorkspaceId. */
   workspaceId?: string
-  target: NavigationTarget
-  /** When target='focused', the panel the click came from. Omit to
-   *  route to the current layout session's main panel (global QuickFind, etc.). */
-  panelId?: string
-  /** Alias for panelId on the new-panel path; kept distinct for clarity at
-   *  call sites. Also used by target='sidebar-stack'. Ignored on other
-   *  targets. */
+}
+
+export interface NavigatePanelInput extends NavigateBaseInput {
+  target: 'panel'
+  panelId: string
+}
+
+export interface NavigateMainInput extends NavigateBaseInput {
+  target: 'main'
+}
+
+export interface NavigateActiveInput extends NavigateBaseInput {
+  target: 'active'
+}
+
+export interface NavigateNewPanelInput extends NavigateBaseInput {
+  target: 'new-panel'
   sourcePanelId?: string
 }
+
+export interface NavigateSidebarStackInput extends NavigateBaseInput {
+  target: 'sidebar-stack'
+  sourcePanelId?: string
+}
+
+export type GlobalCommandNavigateInput = NavigateBaseInput
 
 const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   return getLayoutSessionBlock(uiState, getLayoutSessionId())
+}
+
+const isMobileViewport = (): boolean =>
+  typeof window !== 'undefined' &&
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(max-width: 767px)').matches
+
+const setActivePanel = async (
+  layoutSessionBlock: Block,
+  panelId: string | undefined,
+): Promise<void> => {
+  await layoutSessionBlock.load()
+  if (layoutSessionBlock.peekProperty(activePanelIdProp) === panelId) return
+  await layoutSessionBlock.set(activePanelIdProp, panelId)
+}
+
+const panelRowsForLayoutSession = async (
+  layoutSessionBlock: Block,
+) => panelRowsInLayoutOrder(
+  layoutSessionBlock.id,
+  await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load(),
+)
+
+const resolveActivePanelRow = async (
+  layoutSessionBlock: Block,
+) => {
+  await layoutSessionBlock.load()
+  const panelRows = await panelRowsForLayoutSession(layoutSessionBlock)
+  const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
+  return panelRows.find(row => row.id === activePanelId) ?? panelRows.at(-1) ?? null
 }
 
 const navigateMainPanel = async (
@@ -47,13 +106,40 @@ const navigateMainPanel = async (
   blockId: string,
 ): Promise<void> => {
   const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-  const panels = await layoutSessionBlock.children.load()
+  const panels = await panelRowsForLayoutSession(layoutSessionBlock)
   const firstPanel = panels[0]
   if (firstPanel) {
+    await setActivePanel(layoutSessionBlock, firstPanel.id)
     await navigateInPanel(repo.block(firstPanel.id), blockId)
     return
   }
   await insertPanelRow(repo, layoutSessionBlock, blockId)
+}
+
+const navigateActivePanel = async (
+  repo: Repo,
+  workspaceId: string,
+  blockId: string,
+): Promise<void> => {
+  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+  const panel = await resolveActivePanelRow(layoutSessionBlock)
+  if (panel) {
+    await setActivePanel(layoutSessionBlock, panel.id)
+    await navigateInPanel(repo.block(panel.id), blockId)
+    return
+  }
+  await insertPanelRow(repo, layoutSessionBlock, blockId)
+}
+
+const navigateExplicitPanel = async (
+  repo: Repo,
+  workspaceId: string,
+  panelId: string,
+  blockId: string,
+): Promise<void> => {
+  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+  await setActivePanel(layoutSessionBlock, panelId)
+  await navigateInPanel(repo.block(panelId), blockId)
 }
 
 export const navigate = (repo: Repo, input: NavigateInput): void => {
@@ -76,17 +162,54 @@ export const navigate = (repo: Repo, input: NavigateInput): void => {
     return
   }
 
-  if (input.target === 'main' || !input.panelId) {
+  if (input.target === 'main') {
     void navigateMainPanel(repo, workspaceId, input.blockId)
     return
   }
 
-  void navigateInPanel(repo.block(input.panelId), input.blockId)
+  if (input.target === 'active') {
+    void navigateActivePanel(repo, workspaceId, input.blockId)
+    return
+  }
+
+  void navigateExplicitPanel(repo, workspaceId, input.panelId, input.blockId)
 }
 
 export const useNavigate = () => {
   const repo = useRepo()
   return useCallback((input: NavigateInput) => navigate(repo, input), [repo])
+}
+
+export const navigateFromGlobalCommand = (
+  repo: Repo,
+  input: GlobalCommandNavigateInput,
+): void => {
+  navigate(repo, {
+    ...input,
+    target: isMobileViewport() ? 'active' : 'main',
+  })
+}
+
+export const useNavigateFromGlobalCommand = () => {
+  const repo = useRepo()
+  return useCallback((input: GlobalCommandNavigateInput) => {
+    navigateFromGlobalCommand(repo, input)
+  }, [repo])
+}
+
+export const resolveGlobalCommandTopLevelBlockId = async (
+  repo: Repo,
+  workspaceId = repo.activeWorkspaceId,
+): Promise<string | null> => {
+  if (!workspaceId) return null
+  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+  if (isMobileViewport()) {
+    const panel = await resolveActivePanelRow(layoutSessionBlock)
+    return panel ? panelBlockId(panel) ?? null : null
+  }
+
+  const panels = await panelRowsForLayoutSession(layoutSessionBlock)
+  return panels[0] ? panelBlockId(panels[0]) ?? null : null
 }
 
 export interface BlockLinkClickContext {
@@ -130,7 +253,9 @@ export const handleBlockLinkClick = (
   }
   if (e.metaKey || e.ctrlKey || e.button !== 0) return
   e.preventDefault()
-  navigate({blockId, workspaceId, target: 'focused', panelId})
+  navigate(panelId
+    ? {blockId, workspaceId, target: 'panel', panelId}
+    : {blockId, workspaceId, target: 'active'})
 }
 
 export const useBlockLinkClick = ({blockId, workspaceId}: BlockLinkClickContext) => {

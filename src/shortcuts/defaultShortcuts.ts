@@ -53,7 +53,11 @@ import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { parseAppHash } from '@/utils/routing.ts'
-import { navigate } from '@/utils/navigation.ts'
+import {
+  navigate,
+  navigateFromGlobalCommand,
+  resolveGlobalCommandTopLevelBlockId,
+} from '@/utils/navigation.ts'
 import { navigateInPanel } from '@/utils/panelHistory.ts'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
@@ -260,12 +264,13 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
     if (!workspaceId) return
 
-    const currentIso = route.blockId
-      ? await findContainingDailyNoteIso(repo, route.blockId, workspaceId)
+    const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
+    const currentIso = topLevelBlockId
+      ? await findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
       : null
     const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
     const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
-    navigate(repo, {blockId: note.id, workspaceId, target: 'focused'})
+    navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
   }
 
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
@@ -277,7 +282,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const workspaceId = repo.activeWorkspaceId
         if (!workspaceId) return
         const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-        navigate(repo, {blockId: note.id, workspaceId, target: 'focused'})
+        navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
       },
       defaultBinding: {
         keys: ['cmd+shift+`', 'ctrl+shift+`'],
@@ -380,7 +385,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
                 // repo.create, so the freshly-imported root lives in the
                 // current workspace. Import is gated by an open workspace,
                 // so activeWorkspaceId is set here.
-                navigate(repo, {blockId: block.id, target: 'focused'})
+                navigateFromGlobalCommand(repo, {blockId: block.id})
               }
             } catch (err) {
               console.error('Failed to import document:', err)

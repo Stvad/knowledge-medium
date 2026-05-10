@@ -4,6 +4,7 @@ import type { BlockData, Tx, Unsubscribe } from '@/data/api'
 import { ChangeScope } from '@/data/api'
 import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
+  activePanelIdProp,
   focusedBlockIdProp,
   scrollTopProp,
   topLevelBlockIdProp,
@@ -42,6 +43,26 @@ export const panelBlockId = (row: BlockData): string | undefined => {
 
 export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
   rows.map(panelBlockId).filter((id): id is string => Boolean(id))
+
+export const panelRowsInLayoutOrder = (
+  rootId: string,
+  rows: readonly BlockData[],
+): BlockData[] => {
+  const childrenByParent = new Map<string, BlockData[]>()
+  for (const row of rows) {
+    if (!row.parentId) continue
+    const children = childrenByParent.get(row.parentId) ?? []
+    children.push(row)
+    childrenByParent.set(row.parentId, children)
+  }
+
+  const visit = (row: BlockData): BlockData[] =>
+    isPanelStackRow(row)
+      ? (childrenByParent.get(row.id) ?? []).flatMap(visit)
+      : [row]
+
+  return (childrenByParent.get(rootId) ?? []).flatMap(visit)
+}
 
 const flattenLayoutSlots = (slots: readonly LayoutSlot[]): string[] =>
   slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenLayoutSlots(slot.children))
@@ -239,12 +260,14 @@ export const insertPanelRow = async (
       ? keyBetween(previous?.orderKey ?? null, next?.orderKey ?? null)
       : keyAtEnd(previous?.orderKey ?? null)
 
-    return createPanelRowInTx(repo, tx, {
+    const panelId = await createPanelRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
       parentId: layoutSessionBlock.id,
       orderKey,
       blockId,
     })
+    await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, panelId)
+    return panelId
   }, {scope: ChangeScope.UiState, description: 'insert panel row'})
 
 const insertPanelAtStartOfStackInTx = async (
@@ -280,11 +303,13 @@ export const insertSidebarStackedPanel = async (
       const source = await tx.get(options.sourcePanelId)
       const sourceParent = source?.parentId ? await tx.get(source.parentId) : null
       if (source && sourceParent && isPanelStackRow(sourceParent)) {
-        return insertPanelAtStartOfStackInTx(repo, tx, {
+        const panelId = await insertPanelAtStartOfStackInTx(repo, tx, {
           workspaceId: parent.workspaceId,
           stackId: sourceParent.id,
           blockId,
         })
+        await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, panelId)
+        return panelId
       }
 
       if (source?.parentId === layoutSessionBlock.id) {
@@ -292,11 +317,13 @@ export const insertSidebarStackedPanel = async (
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
-          return insertPanelAtStartOfStackInTx(repo, tx, {
+          const panelId = await insertPanelAtStartOfStackInTx(repo, tx, {
             workspaceId: parent.workspaceId,
             stackId: rightSibling.id,
             blockId,
           })
+          await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, panelId)
+          return panelId
         }
 
         const stackOrderKey = rightSibling
@@ -311,11 +338,13 @@ export const insertSidebarStackedPanel = async (
           const [, rightOrderKey] = keysBetween(null, null, 2)
           await tx.move(rightSibling.id, {parentId: stackId, orderKey: rightOrderKey})
         }
-        return insertPanelAtStartOfStackInTx(repo, tx, {
+        const panelId = await insertPanelAtStartOfStackInTx(repo, tx, {
           workspaceId: parent.workspaceId,
           stackId,
           blockId,
         })
+        await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, panelId)
+        return panelId
       }
     }
 
@@ -326,11 +355,13 @@ export const insertSidebarStackedPanel = async (
       parentId: layoutSessionBlock.id,
       orderKey: keyAtEnd(previous?.orderKey ?? null),
     })
-    return insertPanelAtStartOfStackInTx(repo, tx, {
+    const panelId = await insertPanelAtStartOfStackInTx(repo, tx, {
       workspaceId: parent.workspaceId,
       stackId,
       blockId,
     })
+    await tx.setProperty(layoutSessionBlock.id, activePanelIdProp, panelId)
+    return panelId
   }, {scope: ChangeScope.UiState, description: 'insert sidebar stack panel'})
 
 export const deletePanelRow = async (
@@ -342,12 +373,21 @@ export const deletePanelRow = async (
     const row = await tx.get(panelId)
     if (!row) return
     const parent = row.parentId ? await tx.get(row.parentId) : null
+    const layoutSessionId = parent && isPanelStackRow(parent)
+      ? parent.parentId
+      : row.parentId
+    const layoutSession = layoutSessionId ? await tx.get(layoutSessionId) : null
     const stackSiblingCount = parent && isPanelStackRow(parent)
       ? (await tx.childrenOf(parent.id, parent.workspaceId)).length
       : 0
     await tx.delete(panelId)
     if (parent && isPanelStackRow(parent) && stackSiblingCount <= 1) {
       await tx.delete(parent.id)
+    }
+    if (layoutSession?.properties[activePanelIdProp.name] === panelId) {
+      const rows = await loadSubtreeRowsInTx(tx, layoutSession)
+      const nextActivePanelId = panelRowsInLayoutOrder(layoutSession.id, rows).at(-1)?.id
+      await tx.setProperty(layoutSession.id, activePanelIdProp, nextActivePanelId)
     }
   }, {scope: ChangeScope.UiState, description: 'close panel'})
 }

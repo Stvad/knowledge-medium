@@ -2,10 +2,15 @@ import { BlockComponent } from '@/components/BlockComponent.tsx'
 import { BlockRendererProps } from '@/types.ts'
 import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
-import { useHandle } from '@/hooks/block.ts'
-import { useMemo } from 'react'
+import { useHandle, usePropertyValue } from '@/hooks/block.ts'
+import { useCallback, useEffect, useMemo } from 'react'
 import type { BlockData } from '@/data/api'
-import { isPanelStackRow } from '@/utils/panelLayoutProjection.ts'
+import type { Block } from '@/data/block.ts'
+import { activePanelIdProp } from '@/data/properties.ts'
+import {
+  isPanelStackRow,
+  panelRowsInLayoutOrder,
+} from '@/utils/panelLayoutProjection.ts'
 
 type RenderSlot =
   | {kind: 'panel'; id: string}
@@ -46,21 +51,32 @@ const flattenPanelSlots = (slots: readonly RenderSlot[]): Array<Extract<RenderSl
 
 function PanelSlotView({
   slot,
+  layoutSessionBlock,
   canClosePanel,
   className,
   stacked,
 }: {
   slot: Extract<RenderSlot, {kind: 'panel'}>
+  layoutSessionBlock: Block
   canClosePanel: boolean
   className: string
   stacked: boolean
 }) {
+  const markActivePanel = useCallback(() => {
+    if (layoutSessionBlock.peekProperty(activePanelIdProp) === slot.id) return
+    void layoutSessionBlock.set(activePanelIdProp, slot.id)
+  }, [layoutSessionBlock, slot.id])
+
   return (
     <NestedBlockContextProvider
       overrides={{topLevel: true, panelId: slot.id, canClosePanel, stackedPanel: stacked}}
       key={slot.id}
     >
-      <div className={className}>
+      <div
+        className={className}
+        onPointerDownCapture={markActivePanel}
+        onFocusCapture={markActivePanel}
+      >
         <BlockComponent blockId={slot.id}/>
       </div>
     </NestedBlockContextProvider>
@@ -69,16 +85,19 @@ function PanelSlotView({
 
 function SlotView({
   slot,
+  layoutSessionBlock,
   canClosePanel,
   topLevel,
 }: {
   slot: RenderSlot
+  layoutSessionBlock: Block
   canClosePanel: boolean
   topLevel: boolean
 }) {
   if (slot.kind === 'panel') {
     return <PanelSlotView
       slot={slot}
+      layoutSessionBlock={layoutSessionBlock}
       canClosePanel={canClosePanel}
       className={topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS}
       stacked={!topLevel}
@@ -94,6 +113,7 @@ function SlotView({
         <SlotView
           key={child.id}
           slot={child}
+          layoutSessionBlock={layoutSessionBlock}
           canClosePanel={canClosePanel}
           topLevel={false}
         />
@@ -104,21 +124,38 @@ function SlotView({
 
 export function LayoutRenderer({block}: BlockRendererProps) {
   const isMobile = useIsMobile()
+  const [activePanelId] = usePropertyValue(block, activePanelIdProp)
   const rows = useHandle(block.repo.query.subtree({id: block.id}), {
     selector: data => data ?? EMPTY_ROWS,
   })
   const slots = useMemo(() => buildRenderSlots(block.id, rows), [block.id, rows])
-  const panelSlots = useMemo(() => flattenPanelSlots(slots), [slots])
+  const panelSlots = useMemo(() => {
+    const panelIds = new Set(panelRowsInLayoutOrder(block.id, rows).map(row => row.id))
+    return flattenPanelSlots(slots).filter(slot => panelIds.has(slot.id))
+  }, [block.id, rows, slots])
+  const activePanelSlot = activePanelId
+    ? panelSlots.find(slot => slot.id === activePanelId)
+    : undefined
+  const fallbackActivePanelSlot = isMobile
+    ? panelSlots.at(-1)
+    : panelSlots[0]
+  const mobilePanelSlot = activePanelSlot ?? fallbackActivePanelSlot
   const slotsToRender = isMobile
-    ? panelSlots.slice(-1)
+    ? (mobilePanelSlot ? [mobilePanelSlot] : [])
     : slots
   const canClosePanel = panelSlots.length > 1
+
+  useEffect(() => {
+    if (!fallbackActivePanelSlot || activePanelSlot) return
+    void block.set(activePanelIdProp, fallbackActivePanelSlot.id)
+  }, [block, activePanelSlot, fallbackActivePanelSlot])
 
   return <div className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full">
     {slotsToRender.map(slot => (
       <SlotView
         key={slot.id}
         slot={slot}
+        layoutSessionBlock={block}
         canClosePanel={canClosePanel}
         topLevel
       />

@@ -51,6 +51,12 @@ export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlo
   changeScope: ChangeScope.UiState,
 })
 
+export const activePanelIdProp = defineProperty<string | undefined>('activePanelId', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+})
+
 export const scrollTopProp = defineProperty<number | undefined>('scrollTop', {
   codec: codecs.optionalNumber,
   defaultValue: undefined,
@@ -240,6 +246,7 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockIdProp,
+  activePanelIdProp,
   scrollTopProp,
   editorSelection,
   editorFocusRequestProp,

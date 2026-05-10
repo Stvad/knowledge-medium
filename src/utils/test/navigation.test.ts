@@ -4,6 +4,8 @@ import type { MouseEvent } from 'react'
 import {
   handleBlockLinkClick,
   navigate,
+  navigateFromGlobalCommand,
+  resolveGlobalCommandTopLevelBlockId,
   type NavigateInput,
 } from '@/utils/navigation'
 import { panelHistory } from '@/utils/panelHistory'
@@ -22,6 +24,7 @@ import {
   panelBlockIds,
 } from '@/utils/panelLayoutProjection'
 import { type User } from '@/data/api'
+import { activePanelIdProp } from '@/data/properties'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -51,6 +54,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.unstubAllGlobals()
   await env.h.cleanup()
 })
 
@@ -62,6 +66,11 @@ const layoutSessionBlock = async () => {
 const currentPanelRows = async () => (await layoutSessionBlock()).children.load()
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
+const currentActivePanelId = async () => {
+  const layoutSession = await layoutSessionBlock()
+  await layoutSession.load()
+  return layoutSession.peekProperty(activePanelIdProp)
+}
 const currentLayoutRows = async () => {
   const layoutSession = await layoutSessionBlock()
   return env.repo.query.subtree({id: layoutSession.id}).load()
@@ -72,22 +81,23 @@ const currentLayoutBlockIds = async () => {
 }
 
 describe('navigate', () => {
-  it("target 'focused' without panelId navigates the main panel", async () => {
-    navigate(env.repo, {blockId: 'b-main', target: 'focused'})
+  it("target 'main' creates the main panel when the layout is empty", async () => {
+    navigate(env.repo, {blockId: 'b-main', target: 'main'})
 
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-main'])
     })
   })
 
-  it("target 'focused' with panelId navigates that panel and records local history", async () => {
+  it("target 'panel' navigates that panel, activates it, and records local history", async () => {
     const layoutSession = await layoutSessionBlock()
     const panelId = await insertPanelRow(env.repo, layoutSession, 'b-prev')
 
-    navigate(env.repo, {blockId: 'b-next', target: 'focused', panelId})
+    navigate(env.repo, {blockId: 'b-next', target: 'panel', panelId})
 
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-next'])
+      expect(await currentActivePanelId()).toBe(panelId)
     })
     expect(panelHistory.getSnapshot(panelId).back.map(entry => entry.blockId)).toEqual(['b-prev'])
   })
@@ -97,10 +107,23 @@ describe('navigate', () => {
     await insertPanelRow(env.repo, layoutSession, 'b-main')
     await insertPanelRow(env.repo, layoutSession, 'b-side')
 
-    navigate(env.repo, {blockId: 'b-new-main', target: 'main', panelId: 'unused-side-panel'})
+    navigate(env.repo, {blockId: 'b-new-main', target: 'main'})
 
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-new-main', 'b-side'])
+    })
+  })
+
+  it("target 'active' navigates the stored active panel", async () => {
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    const activePanel = await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    navigate(env.repo, {blockId: 'b-active-next', target: 'active'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-active-next'])
+      expect(await currentActivePanelId()).toBe(activePanel)
     })
   })
 
@@ -118,6 +141,8 @@ describe('navigate', () => {
     await vi.waitFor(async () => {
       expect(await currentPanelBlockIds()).toEqual(['b-a', 'b-b', 'b-c'])
     })
+    const rows = await currentPanelRows()
+    expect(await currentActivePanelId()).toBe(rows[1].id)
   })
 
   it("target 'sidebar-stack' stacks above the panel to the right", async () => {
@@ -153,9 +178,45 @@ describe('navigate', () => {
   it('does nothing when no workspace can be resolved', async () => {
     env.repo.setActiveWorkspaceId(null)
 
-    navigate(env.repo, {blockId: 'b1', target: 'focused'})
+    navigate(env.repo, {blockId: 'b1', target: 'main'})
 
     expect(await currentPanelBlockIds()).toEqual([])
+  })
+})
+
+describe('navigateFromGlobalCommand', () => {
+  const stubViewport = (matches: boolean) => {
+    vi.stubGlobal('window', {
+      matchMedia: vi.fn().mockReturnValue({matches}),
+    })
+  }
+
+  it('routes global commands to the main panel on desktop', async () => {
+    stubViewport(false)
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-global', 'b-side'])
+    })
+    expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-global')
+  })
+
+  it('routes global commands to the active panel on mobile', async () => {
+    stubViewport(true)
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    await insertPanelRow(env.repo, layoutSession, 'b-side')
+
+    navigateFromGlobalCommand(env.repo, {blockId: 'b-global'})
+
+    await vi.waitFor(async () => {
+      expect(await currentPanelBlockIds()).toEqual(['b-main', 'b-global'])
+    })
+    expect(await resolveGlobalCommandTopLevelBlockId(env.repo, WS)).toBe('b-global')
   })
 })
 
@@ -201,19 +262,19 @@ describe('handleBlockLinkClick', () => {
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
-  it('plain primary click navigates focused with panelId', () => {
+  it('plain primary click navigates the current panel with panelId', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent()
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'focused', panelId: 'panel-a'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'panel', panelId: 'panel-a'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
-  it('plain primary click without panelId still navigates focused', () => {
+  it('plain primary click without panelId navigates the active panel', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent()
     handleBlockLinkClick(e, navigate, undefined, ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'focused', panelId: undefined})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'active'})
   })
 
   it.each([

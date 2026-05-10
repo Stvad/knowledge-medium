@@ -87,9 +87,11 @@ const copyBlockEmbed = (block: Block) => {
   navigator.clipboard.writeText(`!((${block.id}))`)
 }
 
-const zoomIn = (block: Block, workspaceId: string) => {
+const zoomIn = (block: Block, workspaceId: string, panelId?: string) => {
   if (typeof window !== 'undefined') {
-    navigate(block.repo, {blockId: block.id, workspaceId, target: 'focused'})
+    navigate(block.repo, panelId
+      ? {blockId: block.id, workspaceId, target: 'panel', panelId}
+      : {blockId: block.id, workspaceId, target: 'active'})
   }
 }
 
@@ -106,6 +108,7 @@ export function BulletDot({withChildrenIndicator = false}: { withChildrenIndicat
 
 const BlockBullet = ({block}: { block: Block }) => {
   const repo = useRepo()
+  const {panelId} = useBlockContext()
   const [showProperties, setShowProperties] = usePropertyValue(block, showPropertiesProp)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
@@ -151,7 +154,7 @@ const BlockBullet = ({block}: { block: Block }) => {
           </ContextMenuItem>
           <ContextMenuItem
             className="flex cursor-pointer items-center px-2 py-1.5 text-sm outline-none hover:bg-muted rounded-sm"
-            onSelect={() => zoomIn(block, workspaceId)}
+            onSelect={() => zoomIn(block, workspaceId, panelId)}
           >
             Zoom In
           </ContextMenuItem>

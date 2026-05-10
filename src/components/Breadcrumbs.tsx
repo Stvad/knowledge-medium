@@ -17,7 +17,11 @@ export const Breadcrumbs = ({block}: { block: Block }) => {
   const navigate = useNavigate()
 
   const handleSelect = useCallback((parent: Block) => {
-    navigate({blockId: parent.id, workspaceId, target: 'focused', panelId})
+    if (panelId) {
+      navigate({blockId: parent.id, workspaceId, target: 'panel', panelId})
+    } else {
+      navigate({blockId: parent.id, workspaceId, target: 'active'})
+    }
   }, [navigate, workspaceId, panelId])
 
   return (
