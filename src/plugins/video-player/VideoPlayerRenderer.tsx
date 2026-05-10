@@ -28,6 +28,7 @@ const MIN_VIDEO_NOTES_PANE_RATIO = 0.28
 const MAX_VIDEO_NOTES_PANE_RATIO = 0.9
 const VIDEO_NOTES_DESKTOP_BREAKPOINT = 768
 const VIDEO_NOTES_KEYBOARD_STEP = 0.05
+const URL_ONLY_WHITESPACE_RE = /\s/
 
 type VideoNotesPaneStyle = CSSProperties & {
   '--video-notes-pane-ratio': string
@@ -37,6 +38,18 @@ const clampVideoNotesPaneRatio = (ratio: number) =>
   Math.min(MAX_VIDEO_NOTES_PANE_RATIO, Math.max(MIN_VIDEO_NOTES_PANE_RATIO, ratio))
 
 const videoNotesPanePercent = (ratio: number) => `${(ratio * 100).toFixed(2)}%`
+
+const standaloneHttpUrl = (content: string) => {
+  const url = content.trim()
+  if (!url || URL_ONLY_WHITESPACE_RE.test(url)) return null
+
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? url : null
+  } catch {
+    return null
+  }
+}
 
 const VideoPlayerContentRenderer = ({block}: BlockRendererProps) => {
   const content = useContent(block)
@@ -342,7 +355,8 @@ export const VideoPlayerRenderer: BlockRenderer = (props: BlockRendererProps) =>
 VideoPlayerRenderer.canRender = ({block}: BlockRendererProps) =>
 {
   const blockData = block.peek()
-  return !!(blockData && ReactPlayer.canPlay?.(blockData.content))
+  const url = blockData ? standaloneHttpUrl(blockData.content) : null
+  return !!(url && ReactPlayer.canPlay?.(url))
 }
 
 VideoPlayerRenderer.priority = () => 5
