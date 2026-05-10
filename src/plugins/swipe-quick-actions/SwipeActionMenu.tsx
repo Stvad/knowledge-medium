@@ -17,15 +17,16 @@ import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
 } from './events.ts'
+import {
+  findSwipeActionBlockElement,
+  findSwipeActionAnchorElement,
+  getSwipeActionAnchorRect,
+  type AnchorRect,
+} from './anchor.ts'
 
-interface AnchorRect {
-  top: number
-  height: number
-  right: number
-}
-
-/** Track the swiped block's bounding rect so the floating bar follows
- *  it across scroll / re-layouts (e.g. mid-flight property toggles).
+/** Track the swiped block content's bounding rect so the floating bar
+ *  follows the visible text row, not the full block shell with open
+ *  properties or children.
  *
  *  `panelRoot` scopes the lookup so the same block id rendered in
  *  another panel can't be picked up here — Codex's panel-disambiguation
@@ -53,16 +54,15 @@ const useAnchorRect = (
     if (!panelRoot || !blockId) return
 
     const find = (): HTMLElement | null =>
-      panelRoot.querySelector<HTMLElement>(blockSelector(blockId))
+      findSwipeActionAnchorElement(panelRoot, blockId)
 
     const measure = (): void => {
-      const element = find()
-      if (!element) {
+      const nextRect = getSwipeActionAnchorRect(panelRoot, blockId)
+      if (!nextRect) {
         setRect(null)
         return
       }
-      const r = element.getBoundingClientRect()
-      setRect({top: r.top, height: r.height, right: r.right})
+      setRect(nextRect)
     }
 
     measure()
@@ -107,9 +107,6 @@ interface ResolvedQuickAction {
 const FallbackIcon: ActionIcon = (props) => <Circle {...props}/>
 
 const TOOLBAR_HEIGHT_PX = 28
-
-const blockSelector = (blockId: string): string =>
-  `[data-block-id="${CSS.escape(blockId)}"]`
 
 /** Build a render-ready view for the toolbar from `(items, registry)`,
  *  so the JSX below stays focused on layout. */
@@ -261,7 +258,7 @@ export const SwipeActionMenu = () => {
     if (!activeBlockId || !isMobile || !panelRoot) return
 
     const id = window.setTimeout(() => {
-      const anchorElement = panelRoot.querySelector<HTMLElement>(blockSelector(activeBlockId))
+      const anchorElement = findSwipeActionBlockElement(panelRoot, activeBlockId)
       const block = repo.block(activeBlockId)
       if (!anchorElement || !block.peek()) dismiss()
     }, 0)
