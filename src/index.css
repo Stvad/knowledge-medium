@@ -203,7 +203,8 @@
 
   a {
     @apply text-blue-500 underline;
-    word-break: break-all;
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   a.wikilink {
@@ -228,9 +229,9 @@
   .block {
     @apply ml-2 md:ml-5 mb-2 flex flex-row relative;
     max-width: 100%;
-    overflow-wrap: break-word;
-    word-wrap: break-word;
-    word-break: break-word;
+    overflow-wrap: normal;
+    word-wrap: normal;
+    word-break: normal;
   }
 
   .block-body {
@@ -267,7 +268,7 @@
   .block-properties {
     @apply ml-2 md:ml-5 mt-1 text-xs md:text-sm opacity-70 relative pointer-events-none;
     max-width: 100%;
-    overflow-wrap: break-word;
+    overflow-wrap: normal;
   }
 
   .block-properties input,
@@ -294,9 +295,9 @@
   .block-content {
     max-width: 100%;
     overflow-x: hidden;
-    overflow-wrap: break-word;
-    word-wrap: break-word;
-    word-break: break-word;
+    overflow-wrap: normal;
+    word-wrap: normal;
+    word-break: normal;
   }
 
   .tm-block[data-editing='true'] {
