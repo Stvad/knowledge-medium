@@ -11,12 +11,35 @@ interface TouchStart {
   x: number
   y: number
   time: number
+  /** The Touch.identifier of the finger that started the gesture. Used
+   *  to pick the same finger out of `touches` / `changedTouches` on
+   *  subsequent events — without this, a second finger landing or
+   *  lifting on the same block during the gesture could swap which
+   *  entry sits at index 0 and produce a bogus dx that spuriously
+   *  opens or closes the menu. */
+  identifier: number
   /** Once a horizontal-swipe intent is locked in, we set this so further
    *  movement doesn't keep re-evaluating direction. */
   decided: 'horizontal' | 'vertical' | null
 }
 
 const touchStartByBlockId = new Map<string, TouchStart>()
+
+/** Find the Touch in a TouchList whose identifier matches the gesture's
+ *  starting finger. Returns null if the gesture's finger isn't in the
+ *  list (e.g. a different finger fired this event), in which case the
+ *  caller should leave the gesture state alone. */
+const findTrackedTouch = (
+  list: { length: number; [index: number]: { identifier: number } } | undefined | null,
+  identifier: number,
+): { clientX: number; clientY: number } | null => {
+  if (!list) return null
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i] as unknown as { identifier: number; clientX: number; clientY: number }
+    if (entry.identifier === identifier) return entry
+  }
+  return null
+}
 
 /** Min horizontal travel before we commit to "this is a swipe" and reveal
  *  the menu. Below this we leave the gesture alone so vertical scrolls and
@@ -66,13 +89,21 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // touch surface — selection drags etc. shouldn't trigger a menu.
       if (isBlockEditing(block.id, uiStateBlock)) return
 
-      const touch = event.touches[0]
+      // First finger down on this block wins the gesture; later fingers
+      // landing on the same block while a gesture is already in flight
+      // are ignored, otherwise the second finger's coords would
+      // overwrite the first finger's start position. Touch.identifier
+      // pairs the tracked finger across move/end events — list-index
+      // pairing is unsafe when fingers come and go.
+      if (touchStartByBlockId.has(block.id)) return
+      const touch = event.changedTouches[0]
       if (!touch) return
 
       touchStartByBlockId.set(block.id, {
         x: touch.clientX,
         y: touch.clientY,
         time: Date.now(),
+        identifier: touch.identifier,
         decided: null,
       })
     },
@@ -81,7 +112,9 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       const start = touchStartByBlockId.get(block.id)
       if (!start) return
 
-      const touch = event.touches[0]
+      const touch = findTrackedTouch(event.touches, start.identifier)
+      // Some other finger moved — ignore the event so we don't update
+      // direction based on a finger we're not tracking.
       if (!touch) return
 
       const dx = touch.clientX - start.x
@@ -102,11 +135,16 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
 
     onTouchEnd: (event: TouchEvent) => {
       const start = touchStartByBlockId.get(block.id)
-      touchStartByBlockId.delete(block.id)
       if (!start) return
 
-      const touch = event.changedTouches[0]
+      // Only act when the finger that started the gesture lifts. A
+      // different finger lifting (multi-touch tap, casual second
+      // finger) leaves the tracked finger still down, so we keep the
+      // gesture state alive for the eventual matching touchend.
+      const touch = findTrackedTouch(event.changedTouches, start.identifier)
       if (!touch) return
+
+      touchStartByBlockId.delete(block.id)
 
       const dx = touch.clientX - start.x
       const dy = touch.clientY - start.y
@@ -132,8 +170,16 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       }
     },
 
-    onTouchCancel: () => {
-      touchStartByBlockId.delete(block.id)
+    onTouchCancel: (event: TouchEvent) => {
+      const start = touchStartByBlockId.get(block.id)
+      if (!start) return
+      // Drop the gesture only if the tracked finger is the one being
+      // cancelled. A different finger getting cancelled (e.g. an
+      // unrelated multi-touch interrupt) leaves our tracked finger
+      // in play.
+      if (findTrackedTouch(event.changedTouches, start.identifier)) {
+        touchStartByBlockId.delete(block.id)
+      }
     },
   }
 }
