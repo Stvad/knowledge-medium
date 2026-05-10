@@ -28,15 +28,6 @@ const toneClass: Record<SyncIndicatorTone, string> = {
   neutral: 'border-border bg-background text-muted-foreground',
 }
 
-const badgeClass: Record<SyncIndicatorTone, string> = {
-  error: 'bg-destructive text-destructive-foreground',
-  local: 'bg-muted-foreground/15 text-foreground',
-  active: 'bg-blue-600 text-white dark:bg-blue-500',
-  warning: 'bg-amber-600 text-white dark:bg-amber-500',
-  success: 'bg-emerald-600 text-white dark:bg-emerald-500',
-  neutral: 'bg-muted-foreground/15 text-foreground',
-}
-
 const iconByName = {
   alert: CircleAlert,
   'hard-drive': HardDrive,
@@ -78,7 +69,7 @@ export function SyncStatusHeaderItem() {
   return (
     <div
       className={cn(
-        'relative flex h-8 max-w-full items-center gap-1.5 overflow-hidden rounded-md border px-2 text-xs font-medium',
+        'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border',
         toneClass[view.tone],
       )}
       role="status"
@@ -86,26 +77,7 @@ export function SyncStatusHeaderItem() {
       aria-label={view.title}
       title={view.title}
     >
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', view.spinning && 'animate-spin')}/>
-      <span className="hidden max-w-24 truncate sm:inline">{view.label}</span>
-      {view.pendingLabel && (
-        <span
-          className={cn(
-            'min-w-5 rounded px-1.5 py-0.5 text-center text-[10px] font-semibold leading-none',
-            badgeClass[view.tone],
-          )}
-        >
-          {view.pendingLabel}
-        </span>
-      )}
-      {view.progressPercent !== null && (
-        <span className="hidden h-1 w-10 overflow-hidden rounded bg-current/20 sm:block">
-          <span
-            className="block h-full rounded bg-current"
-            style={{width: `${view.progressPercent}%`}}
-          />
-        </span>
-      )}
+      <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
     </div>
   )
 }
