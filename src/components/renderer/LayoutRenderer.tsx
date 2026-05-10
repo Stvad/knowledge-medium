@@ -152,9 +152,13 @@ export function LayoutRenderer({block}: BlockRendererProps) {
   const canClosePanel = panelSlots.length > 1
 
   useEffect(() => {
-    if (!fallbackActivePanelSlot || activePanelSlot) return
+    // A panel insert writes activePanelId and the new row in one tx, but
+    // React subscriptions can surface the property before this subtree
+    // query includes the row. Don't treat "active id not in current rows"
+    // as stale here or mobile can immediately hide the newly opened panel.
+    if (!fallbackActivePanelSlot || activePanelSlot || activePanelId) return
     void block.set(activePanelIdProp, fallbackActivePanelSlot.id)
-  }, [block, activePanelSlot, fallbackActivePanelSlot])
+  }, [block, activePanelId, activePanelSlot, fallbackActivePanelSlot])
 
   return <div className="layout flex min-w-0 flex-row flex-grow justify-start overflow-x-auto h-full">
     {slotsToRender.map(slot => (
