@@ -151,7 +151,10 @@ const collectUidRefs = (block: RoamBlock | RoamPage): string[] => {
 }
 
 const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> => {
-  const fromBlockProps = {...((block[':block/props'] ?? block.props ?? {}) as Record<string, unknown>)}
+  const fromBlockProps = {
+    ...((block[':block/props'] ?? {}) as Record<string, unknown>),
+    ...((block.props ?? {}) as Record<string, unknown>),
+  }
   if (block[':children/view-type']) {
     fromBlockProps[':children/view-type'] = block[':children/view-type']
   }
@@ -710,6 +713,65 @@ const collectPlaceholderUids = (
   return [...out]
 }
 
+interface UnconfirmedBlockRef {
+  uid: string
+  blockUid: string
+  pageTitle: string
+  targetKnown: boolean
+}
+
+const collectUnconfirmedBlockRefDiagnostics = (
+  pages: RoamExport,
+  knownUids: Set<string>,
+): string[] => {
+  const occurrences: UnconfirmedBlockRef[] = []
+  const visit = (block: RoamBlock, pageTitle: string) => {
+    const metadataRefUids = new Set(collectUidRefs(block))
+    for (const uid of collectContentRefUids(block.string ?? '')) {
+      if (metadataRefUids.has(uid)) continue
+      occurrences.push({
+        uid,
+        blockUid: block.uid,
+        pageTitle,
+        targetKnown: knownUids.has(uid),
+      })
+    }
+    for (const child of block.children ?? []) visit(child, pageTitle)
+  }
+
+  for (const page of pages) {
+    for (const child of page.children ?? []) visit(child, page.title)
+  }
+  if (occurrences.length === 0) return []
+
+  const uniqueUids = new Set(occurrences.map(occ => occ.uid))
+  const knownUidsSeen = new Set(occurrences.filter(occ => occ.targetKnown).map(occ => occ.uid))
+  const absentUidsSeen = new Set(occurrences.filter(occ => !occ.targetKnown).map(occ => occ.uid))
+  const diagnostics = [
+    `Unconfirmed Roam block-ref-looking text: ${uniqueUids.size} uid(s) appeared as ` +
+    `((uid)) in content without matching :block/refs metadata; ${knownUidsSeen.size} ` +
+    `target uid(s) were present in this export and ${absentUidsSeen.size} target uid(s) ` +
+    `were absent, so absent targets were left literal without placeholders.`,
+  ]
+
+  const sampleCount = 20
+  for (const occ of occurrences.slice(0, sampleCount)) {
+    diagnostics.push(
+      `Unconfirmed Roam block-ref-looking text ((${occ.uid})) in block uid ${occ.blockUid} ` +
+      `on [[${pageTitleForDiagnostic(occ.pageTitle)}]] ` +
+      `(${occ.targetKnown ? 'target present in export' : 'target absent from export'}); ` +
+      `refs metadata did not confirm it.`,
+    )
+  }
+  if (occurrences.length > sampleCount) {
+    diagnostics.push(
+      `${occurrences.length - sampleCount} more unconfirmed Roam block-ref-looking text occurrence(s) omitted from this report section.`,
+    )
+  }
+
+  return diagnostics
+}
+
 const collectPageTitleDiagnostics = (pages: RoamExport): string[] => {
   let blank = 0
   let whitespace = 0
@@ -885,6 +947,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
   diagnostics.push(...collectDuplicateUidDiagnostics(pages))
   diagnostics.push(...collectPageTitleDiagnostics(pages))
   diagnostics.push(...collectRoamCommandFollowUpDiagnostics(pages))
+  diagnostics.push(...collectUnconfirmedBlockRefDiagnostics(pages, knownUids))
   const ctx: BuildContext = {
     options,
     uidMap,

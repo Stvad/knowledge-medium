@@ -237,6 +237,33 @@ describe('planImport', () => {
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 
     expect(plan.placeholders).toEqual([])
+    expect(plan.diagnostics).toContain(
+      'Unconfirmed Roam block-ref-looking text: 1 uid(s) appeared as ((uid)) in content without matching :block/refs metadata; 1 target uid(s) were present in this export and 0 target uid(s) were absent, so absent targets were left literal without placeholders.',
+    )
+    expect(plan.diagnostics).toContain(
+      'Unconfirmed Roam block-ref-looking text ((leaf)) in block uid b1 on [[p]] (target present in export); refs metadata did not confirm it.',
+    )
+  })
+
+  it('reports unconfirmed missing block-ref-looking text without creating placeholders', () => {
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'plain prose ((open)) plus likely uid ((missingUid))',
+        uid: 'b',
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.placeholders).toEqual([])
+    expect(plan.uidMap.has('open')).toBe(false)
+    expect(plan.uidMap.has('missingUid')).toBe(false)
+    expect(plan.diagnostics).toContain(
+      'Unconfirmed Roam block-ref-looking text: 2 uid(s) appeared as ((uid)) in content without matching :block/refs metadata; 0 target uid(s) were present in this export and 2 target uid(s) were absent, so absent targets were left literal without placeholders.',
+    )
+    expect(plan.diagnostics).toContain(
+      'Unconfirmed Roam block-ref-looking text ((open)) in block uid b on [[p]] (target absent from export); refs metadata did not confirm it.',
+    )
   })
 
   it('records aliases referenced from content', () => {
@@ -907,6 +934,8 @@ describe('planImport', () => {
   it('promotes Roam attributes (props/:block/props) to namespaced properties', () => {
     // Cast through RoamExport — `:readwise-highlight-id` is a free-form
     // Roam attribute key not declared on the typed RoamBlock interface.
+    const plainLines = [{plain: true}]
+    const drawingLines = [{drawing: true}]
     const sample = [{
       title: 'p',
       uid: 'pUid',
@@ -915,7 +944,14 @@ describe('planImport', () => {
         uid: 'b',
         ':readwise-highlight-id': 1009146325,
         'readwise-highlight-id': 1009146325,
-        ':block/props': {':readwise-highlight-id': 1009146325},
+        ':block/props': {
+          ':readwise-highlight-id': 1009146325,
+          ':drawing/lines': drawingLines,
+        },
+        props: {
+          'readwise-highlight-id': 1009146325,
+          lines: plainLines,
+        },
       }],
     }] as unknown as RoamExport
     const plan = planImport(sample, {workspaceId: WORKSPACE, currentUserId: USER})
@@ -923,6 +959,8 @@ describe('planImport', () => {
     const block = plan.descendants[0]
     // Flat property shape: number values land directly as numbers.
     expect(block.data.properties['roam:readwise-highlight-id']).toBe(1009146325)
+    expect(block.data.properties['roam:drawing/lines']).toBe(JSON.stringify(drawingLines))
+    expect(block.data.properties['roam:lines']).toBe(JSON.stringify(plainLines))
   })
 
   it('preserves Roam view types as namespaced properties', () => {
