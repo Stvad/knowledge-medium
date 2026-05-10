@@ -21,6 +21,13 @@ export const serializeBlock = async (block: Block): Promise<ClipboardData> => {
     throw new Error(`No block data could be serialized for block with id ${block.id}`)
   }
 
+  if (blocks.length === 1) {
+    return {
+      markdown: blocks[0].content,
+      blocks,
+    }
+  }
+
   const depthById = new Map<string, number>()
   const markdown: string[] = []
   for (const b of blocks) {

@@ -4,7 +4,7 @@
  * subtree → indented-markdown round-trip used by Cmd-C / Cmd-X.
  *
  * Coverage:
- *   - Single block: produces a one-line `- content` markdown
+ *   - Single leaf block: copies its content without a markdown list marker
  *   - Block with no children
  *   - Block with children: children indent two spaces per level
  *   - Multi-level nesting (3 deep) with consistent indentation
@@ -80,10 +80,17 @@ const seed = async (root: SeedNode): Promise<void> => {
 }
 
 describe('serializeBlock', () => {
-  it('serializes a leaf block as a single `- content` line', async () => {
+  it('serializes a leaf block as raw content without a list marker', async () => {
     await seed({id: 'leaf', content: 'hello'})
     const result = await serializeBlock(env.repo.block('leaf'))
-    expect(result.markdown).toBe('- hello')
+    expect(result.markdown).toBe('hello')
+    expect(result.blocks.map(b => b.id)).toEqual(['leaf'])
+  })
+
+  it('preserves multi-line leaf block content as-is', async () => {
+    await seed({id: 'leaf', content: 'line 1\nline 2'})
+    const result = await serializeBlock(env.repo.block('leaf'))
+    expect(result.markdown).toBe('line 1\nline 2')
     expect(result.blocks.map(b => b.id)).toEqual(['leaf'])
   })
 
@@ -134,14 +141,14 @@ describe('serializeSelectedBlocks', () => {
     await seed({id: 'b', content: 'b'})
 
     const result = await serializeSelectedBlocks(['a', 'b'], env.repo)
-    expect(result.markdown).toBe('- a\n  - a1\n- b')
+    expect(result.markdown).toBe('- a\n  - a1\nb')
     expect(result.blocks.map(x => x.id)).toEqual(['a', 'a1', 'b'])
   })
 
   it('skips ids that fail to serialize and returns the rest', async () => {
     await seed({id: 'real', content: 'real'})
     const result = await serializeSelectedBlocks(['real', 'missing'], env.repo)
-    expect(result.markdown).toBe('- real')
+    expect(result.markdown).toBe('real')
     expect(result.blocks.map(x => x.id)).toEqual(['real'])
   })
 
