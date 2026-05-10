@@ -112,6 +112,31 @@ describe('swipe-quick-actions gesture', () => {
     expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBe('b1')
   })
 
+  it('opens the menu when the swipe starts on a rendered link', () => {
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b-link-source', uiState))
+    const link = document.createElement('a')
+    link.href = 'https://example.com'
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), link))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102), link))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), link))
+
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBe('b-link-source')
+  })
+
+  it('keeps non-link interactive controls out of the swipe gesture', () => {
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b-button-source', uiState))
+    const button = document.createElement('button')
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), button))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102), button))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), button))
+
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
+  })
+
   it('only writes to the active panel\'s UI-state, leaving other panels alone', async () => {
     // Two panels: gestures in panel A must not touch panel B's state.
     const panelA = makeFakeUiStateBlock()

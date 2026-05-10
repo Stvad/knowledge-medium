@@ -70,6 +70,15 @@ const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
   Boolean(uiStateBlock.peekProperty(isEditingProp))
 
+const isLinkEvent = (event: { target: EventTarget | null }): boolean => {
+  const target = event.target
+  if (typeof Node === 'undefined' || !(target instanceof Node)) return false
+  const element = target.nodeType === Node.ELEMENT_NODE
+    ? target as Element
+    : target.parentElement
+  return Boolean(element?.closest('a[href]'))
+}
+
 export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = context => {
   const {block, uiStateBlock} = context
 
@@ -81,7 +90,10 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       if (!isMobileViewport()) return
       // Don't intercept gestures starting on links, buttons, the editor,
       // or anything else that already owns its own touch behavior.
-      if (isInteractiveContentEvent(event)) {
+      // Links are the exception: text links can occupy a large part of
+      // readable content, and taps still work because only a completed
+      // horizontal swipe calls preventDefault.
+      if (!isLinkEvent(event) && isInteractiveContentEvent(event)) {
         touchStartByBlockId.delete(block.id)
         return
       }
