@@ -106,7 +106,7 @@ interface ResolvedQuickAction {
 
 const FallbackIcon: ActionIcon = (props) => <Circle {...props}/>
 
-const TOOLBAR_HEIGHT_PX = 48
+const TOOLBAR_HEIGHT_PX = 28
 
 const blockSelector = (blockId: string): string =>
   `[data-block-id="${CSS.escape(blockId)}"]`
@@ -150,13 +150,13 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
       title={label}
       data-block-interaction="ignore"
       onClick={handleClick}
-      className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors active:bg-accent ${
+      className={`flex h-7 w-7 items-center justify-center rounded transition-colors active:bg-accent ${
         item.destructive
           ? 'text-destructive hover:bg-destructive/10 active:bg-destructive/20'
           : 'text-foreground hover:bg-muted'
       }`}
     >
-      <Icon className="h-5 w-5"/>
+      <Icon className="h-4 w-4"/>
     </button>
   )
 }
@@ -346,8 +346,8 @@ export const SwipeActionMenu = () => {
   }
 
   // Align the strip's vertical center to the swiped row's center so it
-  // replaces one row of content (Workflowy-style), while spanning the
-  // viewport horizontally for easy thumb targets.
+  // replaces one normal text row (Workflowy-style), while spanning the
+  // viewport horizontally.
   const centerY = anchor.top + anchor.height / 2
   const toolbarTop = Math.min(
     Math.max(centerY, TOOLBAR_HEIGHT_PX / 2),
@@ -368,7 +368,7 @@ export const SwipeActionMenu = () => {
           onTouchEnd={swallowTouch}
         >
           <div
-            className="flex h-12 w-full items-center justify-around border-y border-border bg-background/95 px-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85"
+            className="flex h-7 w-full items-center justify-around border-y border-border bg-background/95 px-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85"
           >
             {primaryResolved.map(resolved => (
               <ActionButton
@@ -389,9 +389,9 @@ export const SwipeActionMenu = () => {
                   event.stopPropagation()
                   setShowOverflow(prev => !prev)
                 }}
-                className="flex h-10 w-10 items-center justify-center rounded-md text-foreground hover:bg-muted active:bg-accent"
+                className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
               >
-                <MoreHorizontal className="h-5 w-5"/>
+                <MoreHorizontal className="h-4 w-4"/>
               </button>
             )}
             <button
@@ -404,9 +404,9 @@ export const SwipeActionMenu = () => {
                 event.stopPropagation()
                 dismiss()
               }}
-              className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:bg-accent"
+              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
             >
-              <X className="h-5 w-5"/>
+              <X className="h-4 w-4"/>
             </button>
           </div>
 
