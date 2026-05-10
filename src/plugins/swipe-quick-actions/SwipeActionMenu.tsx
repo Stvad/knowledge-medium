@@ -8,11 +8,15 @@ import { actionsFacet } from '@/extensions/core.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
-import { swipeActiveBlockIdProp } from './property.ts'
 import {
   quickActionItemsFacet,
   type QuickActionItem,
 } from './actions.ts'
+import {
+  isSwipeQuickActionMenuEvent,
+  SWIPE_QUICK_ACTION_CLOSE_EVENT,
+  SWIPE_QUICK_ACTION_OPEN_EVENT,
+} from './events.ts'
 
 interface AnchorRect {
   top: number
@@ -25,10 +29,10 @@ interface AnchorRect {
  *
  *  `panelRoot` scopes the lookup so the same block id rendered in
  *  another panel can't be picked up here — Codex's panel-disambiguation
- *  guard. Per-panel UI state means each panel's menu only ever fires
- *  this hook for its own swiped block id, but the scope still matters
- *  inside one panel: if a block is transcluded via embed, querySelector
- *  picks the first match and we accept that as the anchor target. */
+ *  guard. The panel-local event listener means each panel's menu only
+ *  opens from its own swiped block id, but the scope still matters inside
+ *  one panel: if a block is transcluded via embed, querySelector picks the
+ *  first match and we accept that as the anchor target. */
 const useAnchorRect = (
   panelRoot: HTMLElement | null,
   blockId: string | undefined,
@@ -104,12 +108,8 @@ const FallbackIcon: ActionIcon = (props) => <Circle {...props}/>
 
 const TOOLBAR_HEIGHT_PX = 48
 
-const blockSelector = (blockId: string): string => {
-  const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-    ? CSS.escape(blockId)
-    : blockId.replace(/["\\]/g, '\\$&')
-  return `[data-block-id="${escaped}"]`
-}
+const blockSelector = (blockId: string): string =>
+  `[data-block-id="${CSS.escape(blockId)}"]`
 
 /** Build a render-ready view for the toolbar from `(items, registry)`,
  *  so the JSX below stays focused on layout. */
@@ -171,23 +171,16 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
  *  firing without touch input — this component just hides outright to
  *  avoid mounting cost on desktop.
  *
- *  `blockHeaderFacet` passes a `{block}` prop (the panel's top-level
- *  block); we don't need it — the swiped block id comes from the panel
- *  UI-state prop, which we read via `useUIStateBlock()`. */
+ *  `blockHeaderFacet` passes a `{block}` prop (the panel row); we read
+ *  the same panel's UI-state block only for action dependencies and keep
+ *  the currently open menu target in local React state. */
 export const SwipeActionMenu = () => {
   const isMobile = useIsMobile()
   const uiStateBlock = useUIStateBlock()
   const repo = uiStateBlock.repo
   const runtime = useAppRuntime()
-  const [activeBlockId] = usePropertyValue(uiStateBlock, swipeActiveBlockIdProp)
   const [topLevelBlockId] = usePropertyValue(uiStateBlock, topLevelBlockIdProp)
-  const [suppressedInitialActiveBlockId, setSuppressedInitialActiveBlockId] = useState(activeBlockId)
-  if (suppressedInitialActiveBlockId !== undefined && activeBlockId === undefined) {
-    setSuppressedInitialActiveBlockId(undefined)
-  }
-  const activeMenuBlockId = activeBlockId === suppressedInitialActiveBlockId
-    ? undefined
-    : activeBlockId
+  const [activeBlockId, setActiveBlockId] = useState<string | undefined>(undefined)
   // Inline anchor placed inside the panel; we walk upward to find the
   // panel root and scope querySelector to it so the same block id in
   // another panel can't be picked up.
@@ -199,13 +192,13 @@ export const SwipeActionMenu = () => {
 
   const anchor = useAnchorRect(
     isMobile ? panelRoot : null,
-    isMobile ? activeMenuBlockId : undefined,
+    isMobile ? activeBlockId : undefined,
   )
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const dismiss = useCallback((): void => {
-    void uiStateBlock.set(swipeActiveBlockIdProp, undefined)
-  }, [uiStateBlock])
+    setActiveBlockId(undefined)
+  }, [])
 
   // Resolve action metadata once per runtime — the registries are stable
   // across renders so this is effectively a one-time lookup that lets
@@ -228,50 +221,59 @@ export const SwipeActionMenu = () => {
   // re-swipe on a different row doesn't carry stale popout state. Done
   // during render rather than in an effect to avoid the cascading-render
   // anti-pattern flagged by `react-hooks/set-state-in-effect`.
-  const [trackedActiveId, setTrackedActiveId] = useState(activeMenuBlockId)
-  if (trackedActiveId !== activeMenuBlockId) {
-    setTrackedActiveId(activeMenuBlockId)
+  const [trackedActiveId, setTrackedActiveId] = useState(activeBlockId)
+  if (trackedActiveId !== activeBlockId) {
+    setTrackedActiveId(activeBlockId)
     if (showOverflow) setShowOverflow(false)
   }
 
-  // The active id is chrome state, not restorable layout state. The
-  // property is only a panel-scoped bridge from the gesture handlers to
-  // this mount; if IndexedDB brings a previous value back on reload, scrub
-  // it before rendering the menu so stale bars cannot cover the panel.
-  useEffect(() => {
-    if (!suppressedInitialActiveBlockId) return
-    void uiStateBlock.set(swipeActiveBlockIdProp, undefined)
-  }, [suppressedInitialActiveBlockId, uiStateBlock])
-
-  const previousTopLevelBlockIdRef = useRef(topLevelBlockId)
-  useEffect(() => {
-    if (previousTopLevelBlockIdRef.current === topLevelBlockId) return
-    previousTopLevelBlockIdRef.current = topLevelBlockId
-    if (activeBlockId) dismiss()
-  }, [activeBlockId, dismiss, topLevelBlockId])
+  const [trackedTopLevelBlockId, setTrackedTopLevelBlockId] = useState(topLevelBlockId)
+  if (trackedTopLevelBlockId !== topLevelBlockId) {
+    setTrackedTopLevelBlockId(topLevelBlockId)
+    if (activeBlockId) setActiveBlockId(undefined)
+  }
 
   useEffect(() => {
-    if (!activeBlockId) return
-    if (!isMobile) dismiss()
-  }, [activeBlockId, dismiss, isMobile])
+    if (!panelRoot) return
+
+    const handleOpen = (event: Event): void => {
+      if (!isSwipeQuickActionMenuEvent(event)) return
+      event.preventDefault()
+      setActiveBlockId(event.detail.blockId)
+    }
+
+    const handleClose = (event: Event): void => {
+      if (!isSwipeQuickActionMenuEvent(event)) return
+      if (event.detail.blockId !== activeBlockId) return
+      event.preventDefault()
+      setActiveBlockId(undefined)
+    }
+
+    panelRoot.addEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, handleOpen)
+    panelRoot.addEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, handleClose)
+    return () => {
+      panelRoot.removeEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, handleOpen)
+      panelRoot.removeEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, handleClose)
+    }
+  }, [activeBlockId, panelRoot])
 
   useEffect(() => {
-    if (!activeMenuBlockId || !isMobile || !panelRoot) return
+    if (!activeBlockId || !isMobile || !panelRoot) return
 
     const id = window.setTimeout(() => {
-      const anchorElement = panelRoot.querySelector<HTMLElement>(blockSelector(activeMenuBlockId))
-      const block = repo.block(activeMenuBlockId)
+      const anchorElement = panelRoot.querySelector<HTMLElement>(blockSelector(activeBlockId))
+      const block = repo.block(activeBlockId)
       if (!anchorElement || !block.peek()) dismiss()
     }, 0)
 
     return () => window.clearTimeout(id)
-  }, [activeMenuBlockId, dismiss, isMobile, panelRoot, repo])
+  }, [activeBlockId, dismiss, isMobile, panelRoot, repo])
 
   // Dismiss on tap/click anywhere outside the floating bar. Capture phase
   // beats descendant click handlers so an action elsewhere in the tree
   // doesn't fire alongside the dismiss.
   useEffect(() => {
-    if (!activeMenuBlockId) return
+    if (!activeBlockId) return
 
     const handlePointer = (event: PointerEvent | MouseEvent | globalThis.MouseEvent) => {
       const target = event.target as Node | null
@@ -289,17 +291,17 @@ export const SwipeActionMenu = () => {
       window.clearTimeout(id)
       document.removeEventListener('pointerdown', handlePointer, true)
     }
-  }, [activeMenuBlockId, dismiss])
+  }, [activeBlockId, dismiss])
 
   // Dismiss on Escape — keyboard accessibility for hybrid devices.
   useEffect(() => {
-    if (!activeMenuBlockId) return
+    if (!activeBlockId) return
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') dismiss()
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
-  }, [activeMenuBlockId, dismiss])
+  }, [activeBlockId, dismiss])
 
   // Always render the inline anchor (zero-size, invisible) so we have a
   // ref into this panel's DOM regardless of menu state.
@@ -307,11 +309,11 @@ export const SwipeActionMenu = () => {
     <div ref={inlineAnchorRef} className="swipe-action-menu-anchor" aria-hidden="true"/>
   )
 
-  if (!isMobile || !activeMenuBlockId || !anchor) return inlineAnchor
+  if (!isMobile || !activeBlockId || !anchor) return inlineAnchor
 
   // The block whose handler we'll dispatch lives in this panel; resolve
   // it from the active id via the same repo that owns uiStateBlock.
-  const block = repo.block(activeMenuBlockId)
+  const block = repo.block(activeBlockId)
   if (!block.peek()) return inlineAnchor
 
   /** Dispatch the resolved action's handler with our block-level deps.

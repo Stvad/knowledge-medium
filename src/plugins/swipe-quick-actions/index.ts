@@ -18,7 +18,6 @@ export {
   quickActionItemsFacet,
   type QuickActionItem,
 } from './actions.ts'
-export { swipeActiveBlockIdProp } from './property.ts'
 
 const swipeActionMenuPanelMount: PanelMountContribution = {
   id: 'swipe-quick-actions.panel-menu',

@@ -13,7 +13,11 @@ import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { topLevelBlockIdProp } from '@/data/properties'
 import { quickActionItemsFacet } from '../actions'
-import { swipeActiveBlockIdProp } from '../property'
+import {
+  SWIPE_QUICK_ACTION_CLOSE_EVENT,
+  SWIPE_QUICK_ACTION_OPEN_EVENT,
+  type SwipeQuickActionMenuEventDetail,
+} from '../events'
 import { SwipeActionMenu } from '../SwipeActionMenu'
 
 const uiStateBlockRef = vi.hoisted(() => ({
@@ -42,6 +46,16 @@ class TestResizeObserver {
   observe(): void {}
   disconnect(): void {}
 }
+
+const menuEvent = (
+  type: typeof SWIPE_QUICK_ACTION_OPEN_EVENT | typeof SWIPE_QUICK_ACTION_CLOSE_EVENT,
+  blockId = 'block-1',
+): CustomEvent<SwipeQuickActionMenuEventDetail> =>
+  new CustomEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    detail: {blockId},
+  })
 
 describe('SwipeActionMenu', () => {
   let h: TestDb
@@ -118,15 +132,43 @@ describe('SwipeActionMenu', () => {
       </AppRuntimeContextProvider>,
     )
 
-  it('clears a persisted active block id on mount without rendering the stale menu', async () => {
-    const uiStateBlock = repo.block('panel-1')
-    await uiStateBlock.set(swipeActiveBlockIdProp, 'block-1')
+  const blockElement = (): HTMLElement => {
+    const element = document.querySelector<HTMLElement>('[data-block-id="block-1"]')
+    if (!element) throw new Error('missing block element')
+    return element
+  }
 
+  it('opens from a panel-local swipe event without persisted state', async () => {
+    renderMenu()
+    expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
+
+    let event: CustomEvent<SwipeQuickActionMenuEventDetail> | undefined
+    act(() => {
+      event = menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT)
+      blockElement().dispatchEvent(event)
+    })
+
+    expect(event?.defaultPrevented).toBe(true)
+    expect(await screen.findByRole('button', {name: 'Copy'})).toBeTruthy()
+  })
+
+  it('closes from a same-block panel-local swipe event', async () => {
     renderMenu()
 
-    expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
+    act(() => {
+      blockElement().dispatchEvent(menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT))
+    })
+    expect(await screen.findByRole('button', {name: 'Copy'})).toBeTruthy()
+
+    let close: CustomEvent<SwipeQuickActionMenuEventDetail> | undefined
+    act(() => {
+      close = menuEvent(SWIPE_QUICK_ACTION_CLOSE_EVENT)
+      blockElement().dispatchEvent(close)
+    })
+
+    expect(close?.defaultPrevented).toBe(true)
     await waitFor(() => {
-      expect(uiStateBlock.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
+      expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
     })
   })
 
@@ -134,8 +176,8 @@ describe('SwipeActionMenu', () => {
     const uiStateBlock = repo.block('panel-1')
     renderMenu()
 
-    await act(async () => {
-      await uiStateBlock.set(swipeActiveBlockIdProp, 'block-1')
+    act(() => {
+      blockElement().dispatchEvent(menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT))
     })
 
     expect(await screen.findByRole('button', {name: 'Copy'})).toBeTruthy()
@@ -145,7 +187,7 @@ describe('SwipeActionMenu', () => {
     })
 
     await waitFor(() => {
-      expect(uiStateBlock.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
+      expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
     })
   })
 })

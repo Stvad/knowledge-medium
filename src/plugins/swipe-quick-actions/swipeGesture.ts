@@ -4,8 +4,12 @@ import {
   type BlockContentSurfaceContribution,
 } from '@/extensions/blockInteraction.ts'
 import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
-import { Block } from '@/data/block'
-import { swipeActiveBlockIdProp } from './property.ts'
+import type { Block } from '@/data/block'
+import {
+  dispatchSwipeQuickActionMenuEvent,
+  SWIPE_QUICK_ACTION_CLOSE_EVENT,
+  SWIPE_QUICK_ACTION_OPEN_EVENT,
+} from './events.ts'
 
 interface TouchStart {
   x: number
@@ -54,8 +58,8 @@ const DIRECTION_LOCK_PX = 8
 /** The menu is mobile-only — `SwipeActionMenu` early-returns when
  *  `useIsMobile()` is false. The gesture handler must apply the same
  *  gate, otherwise touch-capable laptops/tablets >767px would still
- *  consume the swipe (preventDefault + property write) and render
- *  nothing, making horizontal gestures appear broken. We can't call the
+ *  consume the swipe and render nothing, making horizontal gestures
+ *  appear broken. We can't call the
  *  hook here, so we read the same media query directly at fire time. */
 const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
 
@@ -164,20 +168,31 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // Horizontal-only — vertical scrolls and taps are someone else's job.
       if (Math.abs(dx) <= Math.abs(dy)) return
 
-      // Swipe-left opens this block's menu in this panel. Swipe-right
-      // dismisses only when this panel's menu is currently anchored to
-      // this block — same-block-different-panel and other-block cases
-      // are left alone so we don't disturb unrelated state.
+      // Swipe-left opens this block's menu in this panel. Swipe-right asks
+      // the panel menu to dismiss only if it is currently anchored here.
+      // The menu owns active state locally; it cancels the custom event
+      // only when it handled the request, which tells us whether to
+      // consume the original touch.
       if (dx <= -SWIPE_TRIGGER_PX) {
         if (isBlockEditing(block.id, uiStateBlock)) return
-        event.preventDefault()
-        event.stopPropagation()
-        void uiStateBlock.set(swipeActiveBlockIdProp, block.id)
-      } else if (dx >= SWIPE_TRIGGER_PX) {
-        if (uiStateBlock.peekProperty(swipeActiveBlockIdProp) === block.id) {
+        const handled = !dispatchSwipeQuickActionMenuEvent(
+          event.currentTarget,
+          SWIPE_QUICK_ACTION_OPEN_EVENT,
+          block.id,
+        )
+        if (handled) {
           event.preventDefault()
           event.stopPropagation()
-          void uiStateBlock.set(swipeActiveBlockIdProp, undefined)
+        }
+      } else if (dx >= SWIPE_TRIGGER_PX) {
+        const handled = !dispatchSwipeQuickActionMenuEvent(
+          event.currentTarget,
+          SWIPE_QUICK_ACTION_CLOSE_EVENT,
+          block.id,
+        )
+        if (handled) {
+          event.preventDefault()
+          event.stopPropagation()
         }
       }
     },
