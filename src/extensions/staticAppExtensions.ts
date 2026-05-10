@@ -12,6 +12,7 @@ import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
+import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { backlinksPlugin } from '@/plugins/backlinks'
@@ -40,6 +41,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   accountHeaderPlugin,
   plainOutlinerPlugin,
   mobileKeyboardToolbarPlugin,
+  swipeQuickActionsPlugin,
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   // The backlinks-view coordinator reads variants registered by
