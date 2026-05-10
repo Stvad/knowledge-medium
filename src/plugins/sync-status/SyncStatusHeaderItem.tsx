@@ -8,6 +8,11 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useIsLocalOnly } from '@/components/Login.tsx'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu.tsx'
 import { cn } from '@/lib/utils.ts'
 import {
   getSyncIndicatorView,
@@ -36,6 +41,18 @@ const iconByName = {
   offline: CloudOff,
   check: CloudCheck,
 } satisfies Record<SyncIndicatorIcon, typeof CircleAlert>
+
+const formatPendingChanges = (count: number, localOnly: boolean): string => {
+  if (count <= 0) return 'No unsynced changes'
+  const noun = count === 1 ? 'change' : 'changes'
+  const suffix = localOnly ? 'stored locally' : 'queued for upload'
+  return `${count} ${noun} ${suffix}`
+}
+
+const formatLastSyncedAt = (date: Date | undefined): string => {
+  if (!date) return 'Not synced yet'
+  return date.toLocaleString()
+}
 
 export function SyncStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
@@ -67,17 +84,43 @@ export function SyncStatusHeaderItem() {
   const Icon = iconByName[view.icon]
 
   return (
-    <div
-      className={cn(
-        'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border',
-        toneClass[view.tone],
-      )}
-      role="status"
-      aria-live="polite"
-      aria-label={view.title}
-      title={view.title}
-    >
-      <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring',
+            toneClass[view.tone],
+          )}
+          aria-label={view.title}
+          title={view.title}
+        >
+          <Icon className={cn('h-4 w-4', view.spinning && 'animate-spin')}/>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64 p-3">
+        <div className="space-y-3">
+          <div className="flex items-start gap-2">
+            <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', view.spinning && 'animate-spin')}/>
+            <div className="min-w-0">
+              <div className="text-sm font-medium">{view.label}</div>
+              <div className="text-xs leading-5 text-muted-foreground">{view.title}</div>
+            </div>
+          </div>
+          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+            <div className="text-muted-foreground">Unsynced</div>
+            <div className="text-right">{formatPendingChanges(pendingChanges, localOnly)}</div>
+            {view.progressPercent !== null && (
+              <>
+                <div className="text-muted-foreground">Progress</div>
+                <div className="text-right">{view.progressPercent}%</div>
+              </>
+            )}
+            <div className="text-muted-foreground">Last sync</div>
+            <div className="text-right">{formatLastSyncedAt(status.lastSyncedAt)}</div>
+          </div>
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
