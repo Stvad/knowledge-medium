@@ -14,6 +14,10 @@ import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { usePropertyValue } from '@/hooks/block.ts'
+import { ErrorBoundary } from 'react-error-boundary'
+import { FallbackComponent } from '@/components/util/error.tsx'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { panelMountsFacet } from '@/extensions/core.ts'
 import {
   goBackInPanel,
   goForwardInPanel,
@@ -56,6 +60,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
   );
 
   const {canBack, canForward} = usePanelHistory(block.id)
+  const runtime = useAppRuntime()
+  const panelMounts = useMemo(() => runtime.read(panelMountsFacet), [runtime])
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const pendingScrollTopRef = useRef<number | undefined>(undefined)
   const scrollWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -175,6 +181,17 @@ export function PanelRenderer({block}: BlockRendererProps) {
           <BlockComponent blockId={topLevelBlockId}/>
         </NestedBlockContextProvider>
       </div>
+      {/* Per-panel mount points — chrome contributed via
+          `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
+          inside `.panel` so position:fixed/absolute children sit in the
+          panel's positioning context, and isolated under their own
+          ErrorBoundaries so a misbehaving plugin can't tear down the
+          panel. */}
+      {panelMounts.map(({id, component: Component}) => (
+        <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
+          <Component block={block}/>
+        </ErrorBoundary>
+      ))}
     </div>
   )
 }
