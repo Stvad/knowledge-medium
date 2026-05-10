@@ -1,5 +1,6 @@
 import { dailyNoteBlockId } from '@/data/dailyNotes'
 import {
+  srsArchivedProp,
   srsFactorProp,
   srsIntervalProp,
   srsNextReviewDateProp,
@@ -8,7 +9,7 @@ import {
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamBlock } from './types'
 import { parseRoamImportReferences } from './references'
-import { stripRoamTodoContent } from './todo'
+import { extractRoamTodoMarker, stripRoamTodoContent } from './todo'
 
 export interface PreparedSrsSchedule {
   interval: number
@@ -16,6 +17,7 @@ export interface PreparedSrsSchedule {
   nextReviewDateAlias: string
   nextReviewDateId: string
   reviewCount: number
+  archived?: boolean
 }
 
 const escapeRegExp = (value: string): string =>
@@ -37,6 +39,10 @@ const countReviewStars = (text: string): number => {
 
 const hasFiniteRoamInlineNumber = (rawContent: string, name: string): boolean =>
   Number.isFinite(Number.parseFloat(roamInlinePropertyValue(rawContent, name) ?? ''))
+
+const hasDoneMarker = (rawContent: string): boolean =>
+  extractRoamTodoMarker(rawContent).todoState === 'DONE' ||
+  parseRoamImportReferences(rawContent).some(ref => ref.alias === 'DONE')
 
 export const hasSrsScheduleFields = (rawContent: string): boolean =>
   hasFiniteRoamInlineNumber(rawContent, 'interval') &&
@@ -67,8 +73,12 @@ export const extractSrsScheduleMarker = (
     nextReviewDateAlias: dateRef.ref.alias,
     nextReviewDateId: dailyNoteBlockId(workspaceId, dateRef.parsed.iso),
     reviewCount,
+    ...(hasDoneMarker(rawContent) ? {archived: true} : {}),
   }
 }
+
+const scheduleDueIso = (schedule: PreparedSrsSchedule): string =>
+  parseLiteralDailyPageTitle(schedule.nextReviewDateAlias)?.iso ?? ''
 
 const removeParsedDateRefs = (content: string): string => {
   const refs = parseRoamImportReferences(content)
@@ -130,14 +140,22 @@ export const findPromotedSrsScheduleInChildren = (
       markerOnlyChildren.push({child, schedule})
     }
   }
+  const canonical = markerOnlyChildren.reduce<typeof markerOnlyChildren[number] | undefined>(
+    (latest, candidate) =>
+      latest && scheduleDueIso(latest.schedule) >= scheduleDueIso(candidate.schedule)
+        ? latest
+        : candidate,
+    undefined,
+  )
   const diagnostics = markerOnlyChildren.length > 1
     ? [
       `Multiple marker-only Roam SRS children under uid ${parentUid}; ` +
-      `promoted the first (${markerOnlyChildren[0].child.uid}) and preserved ` +
+      `promoted latest due date ${canonical?.schedule.nextReviewDateAlias ?? 'unknown'} ` +
+      `(${canonical?.child.uid ?? markerOnlyChildren[0].child.uid}) and preserved ` +
       `${markerOnlyChildren.length - 1} additional marker block(s) literally.`,
     ]
     : []
-  return {schedule: markerOnlyChildren[0]?.schedule, diagnostics}
+  return {schedule: canonical?.schedule, diagnostics}
 }
 
 export const propertiesFromSrsSchedule = (
@@ -149,5 +167,6 @@ export const propertiesFromSrsSchedule = (
     [srsFactorProp.name]: schedule.factor,
     [srsNextReviewDateProp.name]: schedule.nextReviewDateId,
     [srsReviewCountProp.name]: schedule.reviewCount,
+    ...(schedule.archived ? {[srsArchivedProp.name]: true} : {}),
   }
 }

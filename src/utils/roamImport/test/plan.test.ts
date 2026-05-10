@@ -520,6 +520,25 @@ describe('planImport', () => {
     expect(parent?.data.properties[srsReviewCountProp.name]).toBe(0)
   })
 
+  it('archives promoted SRS metadata with a DONE marker', () => {
+    const marker = '[[[[interval]]:31.1]] [[[[factor]]:2.50]] [[June 6th, 2026]] [[DONE]]'
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'parent',
+        uid: 'parentUid',
+        children: [{string: marker, uid: 'srsUid'}],
+      }],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
+    const markerBlock = plan.descendants.find(d => d.roamUid === 'srsUid')
+    expect(parent?.srsSchedule?.archived).toBe(true)
+    expect(parent?.data.properties[srsArchivedProp.name]).toBe(true)
+    expect(markerBlock?.srsSchedule).toBeUndefined()
+  })
+
   it('applies embedded SRS metadata to the block that contains substantial content', () => {
     const plan = planImport([{
       title: 'p',
@@ -625,10 +644,12 @@ describe('planImport', () => {
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 
     const parent = plan.descendants.find(d => d.roamUid === 'parentUid')
-    expect(parent?.srsSchedule?.interval).toBe(5)
+    expect(parent?.srsSchedule?.interval).toBe(7)
     expect(plan.diagnostics.some(d =>
       d.includes('Multiple marker-only Roam SRS children') &&
-      d.includes('parentUid'),
+      d.includes('parentUid') &&
+      d.includes('secondMarker') &&
+      d.includes('latest due date June 8th, 2026'),
     )).toBe(true)
   })
 

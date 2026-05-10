@@ -28,10 +28,10 @@ describe('linkRoamUidMentions', () => {
     )
 
     expect(linkRoamUidMentions(
-      'Multiple marker-only Roam SRS children under uid parentUid; promoted the first (childUid) and preserved 1 additional marker block(s) literally.',
+      'Multiple marker-only Roam SRS children under uid parentUid; promoted latest due date June 8th, 2026 (childUid) and preserved 1 additional marker block(s) literally.',
       uidMap,
     )).toBe(
-      'Multiple marker-only Roam SRS children under block ((block-parent)); promoted the first ((block-child)) and preserved 1 additional marker block(s) literally.',
+      'Multiple marker-only Roam SRS children under block ((block-parent)); promoted latest due date June 8th, 2026 ((block-child)) and preserved 1 additional marker block(s) literally.',
     )
 
     expect(linkRoamUidMentions(

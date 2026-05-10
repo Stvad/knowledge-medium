@@ -198,6 +198,35 @@ describe('importRoam', () => {
     expect(doneProps[roamTodoStateProp.name]).toBe('DONE')
   })
 
+  it('imports DONE SRS marker-only children as archived SM-2.5 metadata on the parent', async () => {
+    const srsExport: RoamExport = [{
+      title: 'srs archived',
+      uid: 'srsArchivedPage',
+      children: [{
+        string: 'Archived card',
+        uid: 'srsArchivedParent',
+        children: [{
+          string: '[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]] [[DONE]]',
+          uid: 'srsArchivedMarker',
+        }],
+      }],
+    }]
+
+    await importRoam(srsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const parent = await readBlock(roamBlockId(WORKSPACE, 'srsArchivedParent'))
+    const props = JSON.parse(parent!.properties_json) as Record<string, unknown>
+    expect(props[typesProp.name]).toContain(SRS_SM25_TYPE)
+    expect(props[srsIntervalProp.name]).toBe(5)
+    expect(props[srsArchivedProp.name]).toBe(true)
+
+    const marker = await readBlock(roamBlockId(WORKSPACE, 'srsArchivedMarker'))
+    expect(marker?.content).toBe('[[[[interval]]:5]] [[[[factor]]:2.00]] [[June 6th, 2026]] [[DONE]]')
+  })
+
   it('preserves app-owned todo status while refreshing Roam source mirrors on re-import', async () => {
     const todoExport: RoamExport = [
       {
@@ -789,7 +818,7 @@ describe('importRoam', () => {
     const markerLines = await readChildren(multipleMarkers!.id)
     expect(markerLines).toHaveLength(10)
     expect(markerLines.map(line => line.content)).toContain(
-      `Multiple marker-only Roam SRS children under block ((${roamBlockId(WORKSPACE, 'multiSrsParent9')})); promoted the first ((${roamBlockId(WORKSPACE, 'multiSrsFirst9')})) and preserved 1 additional marker block(s) literally.`,
+      `Multiple marker-only Roam SRS children under block ((${roamBlockId(WORKSPACE, 'multiSrsParent9')})); promoted latest due date June 8th, 2026 ((${roamBlockId(WORKSPACE, 'multiSrsSecond9')})) and preserved 1 additional marker block(s) literally.`,
     )
     expect(markerLines.some(line => line.content.includes('omitted from this report section')))
       .toBe(false)
