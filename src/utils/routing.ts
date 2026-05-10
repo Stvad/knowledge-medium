@@ -35,6 +35,12 @@ export const parseLayout = (hash: string | undefined | null): AppLayoutRoute => 
 export const buildLayout = (workspaceId: string, blockIds: readonly string[] = []): string =>
   blockIds.length > 0 ? `#${workspaceId}/${blockIds.join('/')}` : `#${workspaceId}`
 
+export const layoutWorkspaceChanged = (
+  previousHash: string | undefined | null,
+  nextHash: string | undefined | null,
+): boolean =>
+  parseLayout(previousHash).workspaceId !== parseLayout(nextHash).workspaceId
+
 export const parseAppHash = (hash: string | undefined | null): AppRoute => {
   const {workspaceId, blockIds} = parseLayout(hash)
   if (!workspaceId) return {}

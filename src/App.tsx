@@ -17,7 +17,7 @@ import {
   listLocalWorkspaces,
   primeLocalWorkspaceAndMember,
 } from '@/data/workspaces.ts'
-import { buildLayout, parseLayout } from '@/utils/routing.ts'
+import { buildLayout, layoutWorkspaceChanged, parseLayout } from '@/utils/routing.ts'
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
@@ -294,9 +294,10 @@ const App = () => {
     })
     const syncHash = () => {
       const nextHash = getCurrentHash()
-      setHashSnapshot(current => current.hash === nextHash
-        ? current
-        : {hash: nextHash, version: current.version + 1})
+      setHashSnapshot(current => {
+        if (!layoutWorkspaceChanged(current.hash, nextHash)) return current
+        return {hash: nextHash, version: current.version + 1}
+      })
     }
     const unsubscribe = projection.subscribe(syncHash)
     let disposed = false

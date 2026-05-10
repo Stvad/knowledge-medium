@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildAppHash,
   buildLayout,
+  layoutWorkspaceChanged,
   parseAppHash,
   parseLayout,
 } from '@/utils/routing'
@@ -55,6 +56,19 @@ describe('buildLayout', () => {
 
   it('renders multiple blocks in order', () => {
     expect(buildLayout('ws-1', ['block-1', 'block-2', 'block-3'])).toBe('#ws-1/block-1/block-2/block-3')
+  })
+})
+
+describe('layoutWorkspaceChanged', () => {
+  it('ignores same-workspace panel layout changes', () => {
+    expect(layoutWorkspaceChanged('#ws-1/a', '#ws-1/b/c')).toBe(false)
+    expect(layoutWorkspaceChanged('#ws-1/a', '#ws-1')).toBe(false)
+  })
+
+  it('detects workspace/bootstrap hash changes', () => {
+    expect(layoutWorkspaceChanged('#ws-1/a', '#ws-2/a')).toBe(true)
+    expect(layoutWorkspaceChanged('#ws-1/a', '')).toBe(true)
+    expect(layoutWorkspaceChanged('', '#ws-1/a')).toBe(true)
   })
 })
 
