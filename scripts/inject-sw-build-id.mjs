@@ -46,16 +46,20 @@ const resolveBuildId = () => {
 // any stylesheet links. This is much narrower (and faster on first
 // visit) than precaching every file in dist/ — the rest is lazy and
 // will be picked up by SWR when the user navigates into those features.
+//
+// URLs are kept exactly as Vite emits them (absolute paths under the
+// configured base, e.g. `/knowledge-medium/src/main.js` for a Pages
+// deploy). The SW resolves them against `self.registration.scope`, and
+// `new URL(absolutePath, scope)` is base-aware: passing `./` and
+// stripping leading slashes would otherwise double the base prefix on
+// non-root deployments.
 const collectPrecacheAssets = () => {
   const html = readFileSync(resolve(distDir, 'index.html'), 'utf8')
   const hrefs = new Set()
   const add = (raw) => {
     if (!raw) return
     if (/^https?:|^data:/i.test(raw)) return
-    // Normalize `/foo`, `./foo`, `foo` all to `./foo` so the SW's
-    // `new URL(p, scopeURL)` resolves correctly under any base path.
-    const trimmed = raw.replace(/^\.\//, '').replace(/^\//, '')
-    hrefs.add(`./${trimmed}`)
+    hrefs.add(raw)
   }
   const linkRe = /<link[^>]+rel=["'](?:modulepreload|stylesheet)["'][^>]*?(?:href|src)=["']([^"']+)["'][^>]*>/gi
   const scriptRe = /<script[^>]+src=["']([^"']+)["']/gi
