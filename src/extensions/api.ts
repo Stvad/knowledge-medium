@@ -44,12 +44,14 @@ export {
   blockRenderersFacet,
   createRendererRegistry,
   headerItemsFacet,
+  panelMountsFacet,
   type AppEffect,
   type AppEffectCleanup,
   type AppEffectContext,
   type AppMountContribution,
   type HeaderItemContribution,
   type HeaderItemRegion,
+  type PanelMountContribution,
   type RendererContribution,
 } from '@/extensions/core.ts'
 

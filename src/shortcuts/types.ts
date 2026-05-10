@@ -1,5 +1,12 @@
+import type { ComponentType, SVGProps } from 'react';
 import { Block } from '../data/block';
 import { EditorView } from '@codemirror/view'
+
+/** Action icon — same SVG-component shape lucide-react emits, so the
+ *  default action set can use those directly without an adapter. The
+ *  type stays SVG-only on purpose: actions render in command palettes,
+ *  toolbars, and menus where a vector glyph is the only sensible shape. */
+export type ActionIcon = ComponentType<SVGProps<SVGSVGElement>>
 
 export type KeyCombination = string; // e.g. "ctrl+k", "meta+shift+z"
 
@@ -100,6 +107,10 @@ export interface Action<T extends ActionContextType = ActionContextType> {
   context: T;
   handler: ActionHandler<T>;
   defaultBinding?: Omit<ShortcutBinding, 'action'>; // Optional default binding
+  /** Optional icon for surfaces that render actions visually (toolbars,
+   *  swipe menus, eventual command-palette icon column). Surfaces that
+   *  don't render icons just ignore the field. */
+  icon?: ActionIcon;
 }
 
 export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>

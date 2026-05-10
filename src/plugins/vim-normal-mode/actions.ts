@@ -13,7 +13,6 @@ import {
 } from '@/utils/selection.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
-import { copyBlockToClipboard } from '@/utils/copy.ts'
 import { pasteFromClipboard } from '@/utils/paste.ts'
 import {
   bindBlockActionContext,
@@ -203,17 +202,6 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       },
       defaultBinding: {
         keys: 'shift+g',
-      },
-    }),
-    bindNormal({
-      id: 'copy_block',
-      description: 'Copy block to clipboard',
-      handler: ({block}) => copyBlockToClipboard(block),
-      defaultBinding: {
-        keys: ['cmd+c', 'ctrl+c'],
-        eventOptions: {
-          preventDefault: true,
-        },
       },
     }),
     bindNormal({

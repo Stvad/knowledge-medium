@@ -1,6 +1,7 @@
 import { defineFacet } from '@/extensions/facet.ts'
 import type { FacetRuntime } from '@/extensions/facet.ts'
 import type { Repo } from '../data/repo'
+import type { Block } from '../data/block'
 import { ActionConfig, ActionContextConfig, ActionContextType } from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
 import type { ComponentType } from 'react'
@@ -24,6 +25,21 @@ export interface AppEffect {
 export interface AppMountContribution {
   id: string
   component: ComponentType
+}
+
+/** Per-panel mount point — components contributed via `panelMountsFacet`
+ *  render once inside each `<PanelRenderer/>`'s root, with the panel's
+ *  UI-state block passed as `block`. Use this for chrome that needs to
+ *  live in panel scope (independent menu state per panel, panel-scoped
+ *  DOM lookups, etc.) instead of the global `appMountsFacet` (one
+ *  instance app-wide, no panel context).
+ *
+ *  Components are mounted as siblings to the panel's scrollable
+ *  content, inside `.panel`, so they sit in the same positioning
+ *  context as the panel's body. */
+export interface PanelMountContribution {
+  id: string
+  component: ComponentType<{block: Block}>
 }
 
 export type HeaderItemRegion = 'start' | 'end'
@@ -116,6 +132,16 @@ export const isAppMountContribution = (value: unknown): value is AppMountContrib
 export const appMountsFacet = defineFacet<AppMountContribution, readonly AppMountContribution[]>({
   id: 'core.app-mounts',
   validate: isAppMountContribution,
+})
+
+export const isPanelMountContribution = (value: unknown): value is PanelMountContribution =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.component === 'function'
+
+export const panelMountsFacet = defineFacet<PanelMountContribution, readonly PanelMountContribution[]>({
+  id: 'core.panel-mounts',
+  validate: isPanelMountContribution,
 })
 
 const isHeaderItemRegion = (value: unknown): value is HeaderItemRegion =>
