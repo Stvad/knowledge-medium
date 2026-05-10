@@ -48,7 +48,7 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
       await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
 
       // No daily-note seed here: navigateToWorkspace updates the hash,
-      // App.tsx re-runs getInitialBlock for the new workspace, and
+      // App.tsx re-runs getInitialLayout for the new workspace, and
       // getOrCreateDailyNote creates today's note client-side. Doing
       // it again here would just race with that path.
       /* repo.flush dropped — no write queue in new layer */

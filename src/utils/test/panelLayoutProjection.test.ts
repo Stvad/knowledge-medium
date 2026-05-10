@@ -187,6 +187,7 @@ describe('PanelLayoutProjection', () => {
     await createPanelRows(['a'])
     let currentHash = '#ws-1/a'
     let pushed = ''
+    let notified = 0
     const projection = new PanelLayoutProjection({
       repo: env.repo,
       workspaceId: WS,
@@ -199,6 +200,7 @@ describe('PanelLayoutProjection', () => {
       replaceHash: hash => { currentHash = hash },
       subscribeToUrl: () => () => {},
     })
+    const unsubscribe = projection.subscribe(() => { notified += 1 })
     await projection.start()
 
     const [row] = await rows()
@@ -207,6 +209,31 @@ describe('PanelLayoutProjection', () => {
     }, {scope: ChangeScope.UiState, description: 'navigate panel'})
 
     await waitFor(() => pushed === '#ws-1/b')
+    expect(notified).toBeGreaterThan(0)
+    unsubscribe()
+    projection.dispose()
+  })
+
+  it('notifies subscribers when the URL moves to another workspace', async () => {
+    await createPanelRows(['a'])
+    let currentHash = '#other/a'
+    let notified = 0
+    const projection = new PanelLayoutProjection({
+      repo: env.repo,
+      workspaceId: WS,
+      perTabBlock: perTabBlock(),
+      getHash: () => currentHash,
+      pushHash: hash => { currentHash = hash },
+      replaceHash: hash => { currentHash = hash },
+      subscribeToUrl: () => () => {},
+    })
+    const unsubscribe = projection.subscribe(() => { notified += 1 })
+    await projection.start()
+
+    await projection.applyCurrentUrl()
+
+    expect(notified).toBe(1)
+    unsubscribe()
     projection.dispose()
   })
 })

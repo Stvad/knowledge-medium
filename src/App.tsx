@@ -1,9 +1,9 @@
 import { BlockComponent } from './components/BlockComponent'
 import { BlockContextProvider } from '@/context/block.tsx'
-import { use, useEffect } from 'react'
+import { use, useEffect, useState } from 'react'
 import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.tsx'
-import { useHash, useSearchParam } from 'react-use'
+import { useSearchParam } from 'react-use'
 import type { Repo } from './data/repo'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { useIsLocalOnly } from '@/components/Login.tsx'
@@ -49,8 +49,16 @@ interface InitialLayout {
   perTabBlock: Block
 }
 
+interface HashSnapshot {
+  hash: string
+  version: number
+}
+
 const INITIAL_LAYOUT_CACHE_LIMIT = 64
 const initialLayoutCache = new Map<string, Promise<InitialLayout>>()
+
+const getCurrentHash = (): string =>
+  typeof window === 'undefined' ? '' : window.location.hash
 
 const resolveWorkspace = async (
   repo: Repo,
@@ -226,15 +234,22 @@ const initialLayoutCacheKey = (
   repo: Repo,
   requestedHash: string,
   useRemoteSync: boolean,
+  navigationVersion: number,
 ): string =>
-  `${repo.instanceId}:${requestedHash || '__empty_hash__'}:${useRemoteSync ? 'remote' : 'local'}`
+  [
+    repo.instanceId,
+    requestedHash || '__empty_hash__',
+    useRemoteSync ? 'remote' : 'local',
+    navigationVersion,
+  ].join(':')
 
 const getInitialLayout = (
   repo: Repo,
   requestedHash: string,
   useRemoteSync: boolean,
+  navigationVersion: number,
 ): Promise<InitialLayout> => {
-  const key = initialLayoutCacheKey(repo, requestedHash, useRemoteSync)
+  const key = initialLayoutCacheKey(repo, requestedHash, useRemoteSync, navigationVersion)
   const cached = initialLayoutCache.get(key)
   if (cached) {
     initialLayoutCache.delete(key)
@@ -256,13 +271,10 @@ const getInitialLayout = (
 
 const App = () => {
   const repo = useRepo()
-  // useHash subscribes to the browser `hashchange` event. react-use's
-  // useLocation only listens for popstate/pushstate/replacestate, so a
-  // plain `window.location.hash = X` would not re-render this component —
-  // historically the workspace switcher worked around that by hard-reloading
-  // the page on every navigation. With useHash, switching workspaces just
-  // updates the hash and React re-resolves through getInitialLayout.
-  const [hash] = useHash()
+  const [hashSnapshot, setHashSnapshot] = useState<HashSnapshot>(() => ({
+    hash: getCurrentHash(),
+    version: 0,
+  }))
   const safeMode = Boolean(useSearchParam('safeMode'))
   // hasRemoteSyncConfig is the build-time signal; localOnly is the runtime
   // override (the user clicked "Use without sync" on the login screen).
@@ -271,7 +283,7 @@ const App = () => {
   const useRemoteSync = hasRemoteSyncConfig && !localOnly
 
   const {workspaceId: activeWorkspaceId, perTabBlock} = use(
-    getInitialLayout(repo, hash, useRemoteSync),
+    getInitialLayout(repo, hashSnapshot.hash, useRemoteSync, hashSnapshot.version),
   )
 
   useEffect(() => {
@@ -280,8 +292,28 @@ const App = () => {
       workspaceId: activeWorkspaceId,
       perTabBlock,
     })
+    const syncHash = () => {
+      const nextHash = getCurrentHash()
+      setHashSnapshot(current => current.hash === nextHash
+        ? current
+        : {hash: nextHash, version: current.version + 1})
+    }
+    const unsubscribe = projection.subscribe(syncHash)
+    let disposed = false
     void projection.start()
+      .then(() => {
+        if (disposed) {
+          projection.dispose()
+          return
+        }
+        syncHash()
+      })
+      .catch(error => {
+        console.error('[App] Failed to start panel layout projection', error)
+      })
     return () => {
+      disposed = true
+      unsubscribe()
       projection.dispose()
     }
   }, [repo, activeWorkspaceId, perTabBlock])

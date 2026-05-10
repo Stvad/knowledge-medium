@@ -346,7 +346,7 @@ export class PanelLayoutProjection {
             this.notify()
           },
         })
-        if (result.kind === 'applied' || result.kind === 'normalized') {
+        if (result.kind === 'applied' || result.kind === 'normalized' || result.kind === 'ignored') {
           this.notify()
         }
       })
