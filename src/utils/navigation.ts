@@ -98,8 +98,8 @@ export interface BlockLinkClickContext {
  *  refs, bullets, and other anchors whose href encodes a block target.
  *  Centralises the modifier-key policy so individual components don't
  *  re-implement it (and drift apart):
- *    - ctrl+shift+click: open in the Roam-style vertical sidebar stack
- *    - shift+click: open in a new side panel
+ *    - shift+click: open in the Roam-style vertical sidebar stack
+ *    - shift+alt+click: open in a new side panel
  *    - alt+click: open in the current tab's main panel
  *    - plain primary click: navigate the panel the click came from
  *    - cmd / ctrl / non-primary: fall through to the href so the
@@ -113,14 +113,14 @@ export const handleBlockLinkClick = (
   {blockId, workspaceId}: BlockLinkClickContext,
 ): void => {
   e.stopPropagation()
-  if (e.shiftKey && e.ctrlKey && !e.metaKey && e.button === 0) {
-    e.preventDefault()
-    navigate({blockId, workspaceId, target: 'sidebar-stack', sourcePanelId: panelId})
-    return
-  }
-  if (e.shiftKey) {
+  if (e.shiftKey && e.altKey && !e.metaKey && !e.ctrlKey && e.button === 0) {
     e.preventDefault()
     navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})
+    return
+  }
+  if (e.shiftKey && !e.metaKey && !e.ctrlKey && e.button === 0) {
+    e.preventDefault()
+    navigate({blockId, workspaceId, target: 'sidebar-stack', sourcePanelId: panelId})
     return
   }
   if (e.altKey && !e.metaKey && !e.ctrlKey && e.button === 0) {

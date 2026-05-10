@@ -211,8 +211,8 @@ Current matrix (from `handleBlockLinkClick`):
 | Modifier | Action | Resulting `navigate()` call |
 |---|---|---|
 | plain click | navigate within current panel | `{target: 'focused', panelId}` |
-| ctrl+shift-click | open in Roam-sidebar stack | `{target: 'sidebar-stack', sourcePanelId}` |
-| shift-click | open in new (side) panel | `{target: 'new-panel', sourcePanelId}` |
+| shift-click | open in Roam-sidebar stack | `{target: 'sidebar-stack', sourcePanelId}` |
+| shift+alt-click | open in new (side) panel | `{target: 'new-panel', sourcePanelId}` |
 | cmd / ctrl / middle / right | fall through to native `<a href>` (new browser tab etc.) | none |
 
 Adding **"open in main panel"** — useful when browsing in a side panel and wanting to focus the link as the new main: navigate the leftmost panel's row to the clicked block, regardless of which panel the click came from. Expressed in `NavigateInput` as a new `target: 'main'`.
@@ -229,12 +229,12 @@ Updated matrix:
 | Modifier | Action |
 |---|---|
 | plain | focused (current panel) |
-| ctrl+shift | **Roam-sidebar stack** |
-| shift | new side panel |
+| shift | **Roam-sidebar stack** |
+| shift+alt | new side panel |
 | alt | **main panel** (new) |
 | cmd / ctrl | native browser behavior (new browser tab) |
 | middle / right | native |
-| shift wins over alt; ctrl+shift wins over plain shift | same as today except the sidebar chord |
+| shift+alt wins over plain shift | preserves the old side-panel behavior behind an explicit chord |
 
 Push semantics: alt-click changes the main panel's `topLevelBlockId` → observer pushes a URL entry. Browser back undoes the alt-click. Symmetric with the rest.
 

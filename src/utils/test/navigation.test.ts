@@ -174,19 +174,19 @@ describe('handleBlockLinkClick', () => {
   const callsOf = (e: MouseEvent) =>
     (e as unknown as {calls: {stopProp: number; preventDefault: number}}).calls
 
-  it('shift-click navigates new-panel with sourcePanelId', () => {
+  it('shift-click navigates sidebar stack with sourcePanelId', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent({shiftKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'sidebar-stack', sourcePanelId: 'panel-a'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
-  it('ctrl+shift-click navigates sidebar stack with sourcePanelId', () => {
+  it('shift+alt-click navigates new-panel with sourcePanelId', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
-    const e = makeEvent({shiftKey: true, ctrlKey: true})
+    const e = makeEvent({shiftKey: true, altKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'sidebar-stack', sourcePanelId: 'panel-a'})
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
@@ -216,6 +216,7 @@ describe('handleBlockLinkClick', () => {
   it.each([
     ['metaKey', {metaKey: true}],
     ['ctrlKey', {ctrlKey: true}],
+    ['ctrl+shift', {ctrlKey: true, shiftKey: true}],
     ['middle-button', {button: 1}],
     ['right-button', {button: 2}],
   ])('falls through to href on %s (no navigate, no preventDefault)', (_name, override) => {
@@ -226,10 +227,11 @@ describe('handleBlockLinkClick', () => {
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
   })
 
-  it('shift+non-ctrl modifier still routes to new-panel', () => {
+  it('shift+meta falls through to native behavior', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent({shiftKey: true, metaKey: true, altKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
-    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
+    expect(navigate).not.toHaveBeenCalled()
+    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
   })
 })
