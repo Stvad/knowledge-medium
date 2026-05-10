@@ -27,7 +27,7 @@ const SCROLL_WRITE_DELAY_MS = 200
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [selectionState] = useSelectionState();
-  const isMainPanel = Boolean(useBlockContext().isMainPanel)
+  const canClosePanel = Boolean(useBlockContext().canClosePanel)
 
   const repo = useRepo();
 
@@ -133,30 +133,30 @@ export function PanelRenderer({block}: BlockRendererProps) {
 
   return (
     <div className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
-      {!isMainPanel && (
-        <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:text-muted-foreground/40 disabled:hover:text-muted-foreground/40"
-            onClick={() => { void goBackInPanel(block) }}
-            disabled={!canBack}
-            aria-label="Back"
-            title="Back"
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:text-muted-foreground/40 disabled:hover:text-muted-foreground/40"
-            onClick={() => { void goForwardInPanel(block) }}
-            disabled={!canForward}
-            aria-label="Forward"
-            title="Forward"
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
+      <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:text-muted-foreground/40 disabled:hover:text-muted-foreground/40"
+          onClick={() => { void goBackInPanel(block) }}
+          disabled={!canBack}
+          aria-label="Back"
+          title="Back"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-6 w-6 text-muted-foreground hover:text-foreground disabled:text-muted-foreground/40 disabled:hover:text-muted-foreground/40"
+          onClick={() => { void goForwardInPanel(block) }}
+          disabled={!canForward}
+          aria-label="Forward"
+          title="Forward"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+        {canClosePanel && (
           <Button
             variant="ghost"
             size="icon"
@@ -166,8 +166,8 @@ export function PanelRenderer({block}: BlockRendererProps) {
           >
             <X className="h-4 w-4" />
           </Button>
-        </div>
-      )}
+        )}
+      </div>
       <div
         ref={scrollRef}
         className="flex-grow overflow-y-auto scrollbar-none"
