@@ -1,7 +1,8 @@
-import { ChevronsDownUp, ClipboardCopy, Copy, Hash, Link2, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { ChevronsDownUp, ClipboardCopy, Copy, Link2, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/globalState.ts'
+import { copyBlockToClipboard } from '@/utils/copy.ts'
 import {
   editorSelection,
   focusedBlockIdProp,
@@ -45,9 +46,8 @@ export interface SharedBlockActions {
   toggleBlockCollapse: BlockAction
   extendSelectionUp: BlockAction
   extendSelectionDown: BlockAction
-  copyBlockContent: BlockAction
+  copyBlock: BlockAction
   copyBlockRef: BlockAction
-  copyBlockId: BlockAction
   copyBlockEmbed: BlockAction
 }
 
@@ -261,12 +261,21 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
   }
 
-  const copyBlockContent: BlockAction = {
-    id: 'copy_block_content',
-    description: 'Copy block content',
+  /** Serializes the block + its subtree as indented markdown via the
+   *  shared `copyBlockToClipboard` helper. The vim-normal-mode plugin
+   *  used to define this with the cmd/ctrl+c binding; promoted here so
+   *  it's available to any surface (swipe menu, command palette) and
+   *  not coupled to the vim plugin. The binding still only fires in
+   *  NORMAL_MODE, which only activates when vim is loaded — so removing
+   *  vim disables the keybinding without disabling the action. */
+  const copyBlock: BlockAction = {
+    id: 'copy_block',
+    description: 'Copy block to clipboard',
     icon: Copy,
-    handler: ({block}: BlockShortcutDependencies) => {
-      writeToClipboard(block.peek()?.content ?? '')
+    handler: ({block}: BlockShortcutDependencies) => copyBlockToClipboard(block),
+    defaultBinding: {
+      keys: ['cmd+c', 'ctrl+c'],
+      eventOptions: {preventDefault: true},
     },
   }
 
@@ -276,15 +285,6 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: Link2,
     handler: ({block}: BlockShortcutDependencies) => {
       writeToClipboard(`((${block.id}))`)
-    },
-  }
-
-  const copyBlockId: BlockAction = {
-    id: 'copy_block_id',
-    description: 'Copy block ID',
-    icon: Hash,
-    handler: ({block}: BlockShortcutDependencies) => {
-      writeToClipboard(block.id)
     },
   }
 
@@ -327,9 +327,8 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     toggleBlockCollapse,
     extendSelectionUp: extendSelectionUpAction,
     extendSelectionDown: extendSelectionDownAction,
-    copyBlockContent,
+    copyBlock,
     copyBlockRef,
-    copyBlockId,
     copyBlockEmbed,
   }
 }

@@ -28,19 +28,24 @@ export interface QuickActionItem {
 }
 
 /** Primary toolbar — visible icons. Order: most-used to least-used,
- *  with destructive last so it's farthest from the swipe origin. */
+ *  with destructive last so it's farthest from the swipe origin.
+ *  `copy_block` here is the existing shared action that serializes the
+ *  block + its subtree as indented markdown (the same handler the vim
+ *  cmd+c binding uses) — not just the top-level content string. */
 export const PRIMARY_ACTIONS: readonly QuickActionItem[] = [
-  {actionId: 'copy_block_content', label: 'Copy'},
+  {actionId: 'copy_block', label: 'Copy'},
   {actionId: 'copy_block_ref', label: 'Copy Ref'},
   {actionId: 'open_focused_in_panel', label: 'Open'},
   {actionId: 'delete_block', label: 'Delete', destructive: true},
 ]
 
-/** Secondary toolbar — hidden under the kebab/"More" button. */
+/** Secondary toolbar — hidden under the kebab/"More" button. Note:
+ *  no separate "Copy ID" entry — Copy Ref produces `((id))` which is
+ *  what users almost always want when they think "give me a reference
+ *  to this block". The bare id is rarely useful on its own. */
 export const OVERFLOW_ACTIONS: readonly QuickActionItem[] = [
   {actionId: 'zoom_in', label: 'Zoom In'},
   {actionId: 'toggle_collapse', label: 'Collapse'},
   {actionId: 'toggle_properties', label: 'Properties'},
-  {actionId: 'copy_block_id', label: 'Copy ID'},
   {actionId: 'copy_block_embed', label: 'Copy Embed'},
 ]

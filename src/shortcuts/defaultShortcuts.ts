@@ -142,9 +142,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     toggleBlockCollapse,
     extendSelectionUp: extendSelectionUpBlock,
     extendSelectionDown: extendSelectionDownBlock,
-    copyBlockContent,
+    copyBlock,
     copyBlockRef,
-    copyBlockId,
     copyBlockEmbed,
   } = createSharedBlockActions({repo})
 
@@ -157,9 +156,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock)
   const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock)
-  const copyBlockContentAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockContent)
+  const copyBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlock)
   const copyBlockRefAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockRef)
-  const copyBlockIdAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockId)
   const copyBlockEmbedAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockEmbed)
 
   // Block-bound actions that operate on the focused/edited block in a
@@ -239,9 +237,8 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
-    copyBlockContentAction,
+    copyBlockAction,
     copyBlockRefAction,
-    copyBlockIdAction,
     copyBlockEmbedAction,
   ]
 

@@ -1,17 +1,13 @@
-import { useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent, type TouchEvent } from 'react'
+import { useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Circle, MoreHorizontal, X } from 'lucide-react'
 import { useIsMobile } from '@/utils/react.tsx'
-import { useRepo } from '@/context/repo'
 import { useUIStateBlock } from '@/data/globalState'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { actionsFacet } from '@/extensions/core.ts'
+import { usePropertyValue } from '@/hooks/block.ts'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
-import {
-  useActiveSwipeTarget,
-  clearActiveSwipeTarget,
-  type ActiveSwipeTarget,
-} from './store.ts'
+import { swipeActiveBlockIdProp } from './property.ts'
 import {
   PRIMARY_ACTIONS,
   OVERFLOW_ACTIONS,
@@ -26,32 +22,39 @@ interface AnchorRect {
 
 /** Track the swiped block's bounding rect so the floating bar follows
  *  it across scroll / re-layouts (e.g. mid-flight property toggles).
- *  Anchored to the exact element captured at swipe-time — never via
- *  document.querySelector(blockId), since the same block can render in
- *  multiple panels and the first match would land in the wrong row. */
-const useAnchorRect = (element: HTMLElement | null): AnchorRect | null => {
+ *
+ *  `panelRoot` scopes the lookup so the same block id rendered in
+ *  another panel can't be picked up here — Codex's panel-disambiguation
+ *  guard. Per-panel UI state means each panel's menu only ever fires
+ *  this hook for its own swiped block id, but the scope still matters
+ *  inside one panel: if a block is transcluded via embed, querySelector
+ *  picks the first match and we accept that as the anchor target. */
+const useAnchorRect = (
+  panelRoot: HTMLElement | null,
+  blockId: string | undefined,
+): AnchorRect | null => {
   const [rect, setRect] = useState<AnchorRect | null>(null)
 
-  // Reset stale rect on element change synchronously during render —
+  // Reset stale rect on id/scope change synchronously during render —
   // the alternative (setRect in an effect body) is the cascading-render
   // anti-pattern that `react-hooks/set-state-in-effect` forbids.
-  const [trackedElement, setTrackedElement] = useState(element)
-  if (trackedElement !== element) {
-    setTrackedElement(element)
+  const trackedKey = blockId && panelRoot ? `${blockId}` : null
+  const [tracked, setTracked] = useState<string | null>(trackedKey)
+  if (tracked !== trackedKey) {
+    setTracked(trackedKey)
     setRect(null)
   }
 
   useLayoutEffect(() => {
-    if (!element) return
+    if (!panelRoot || !blockId) return
+
+    const find = (): HTMLElement | null =>
+      panelRoot.querySelector<HTMLElement>(`[data-block-id="${CSS.escape(blockId)}"]`)
 
     const measure = (): void => {
-      // The captured element may have been detached (block deleted, panel
-      // torn down, React rerender swapped the underlying node). Detect
-      // that and let the menu close itself rather than anchoring to a
-      // ghost rect.
-      if (!element.isConnected) {
+      const element = find()
+      if (!element) {
         setRect(null)
-        clearActiveSwipeTarget()
         return
       }
       const r = element.getBoundingClientRect()
@@ -73,7 +76,8 @@ const useAnchorRect = (element: HTMLElement | null): AnchorRect | null => {
       cancelAnimationFrame(raf)
       raf = requestAnimationFrame(measure)
     })
-    observer.observe(element)
+    const targetEl = find()
+    if (targetEl) observer.observe(targetEl)
 
     return () => {
       window.removeEventListener('scroll', measure, true)
@@ -81,7 +85,7 @@ const useAnchorRect = (element: HTMLElement | null): AnchorRect | null => {
       cancelAnimationFrame(raf)
       observer.disconnect()
     }
-  }, [element])
+  }, [panelRoot, blockId])
 
   return rect
 }
@@ -148,22 +152,37 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
   )
 }
 
-/** Floating action bar that appears when a block is swiped left.
- *  Anchored to the right edge of the swiped block; tap-outside or
- *  swipe-right dismisses (the latter handled by the gesture contribution).
+/** Floating action bar that appears when a block in this panel is
+ *  swiped left. Mounted via `blockHeaderFacet` on each panel's
+ *  top-level block, so each panel has its own independent menu and
+ *  the same block id rendered in two panels can't confuse anchoring.
  *
- *  Mobile-only: desktop already has a right-click context menu on the
- *  bullet, and the gesture handler likewise gates on mobile by virtue of
- *  not firing without touch input — this component just hides outright
- *  to avoid mounting cost on desktop. */
+ *  Mobile-only: desktop has a right-click context menu on the bullet,
+ *  and the gesture handler likewise gates on mobile by virtue of not
+ *  firing without touch input — this component just hides outright to
+ *  avoid mounting cost on desktop.
+ *
+ *  `blockHeaderFacet` passes a `{block}` prop (the panel's top-level
+ *  block); we don't need it — the swiped block id comes from the panel
+ *  UI-state prop, which we read via `useUIStateBlock()`. */
 export const SwipeActionMenu = () => {
   const isMobile = useIsMobile()
-  const activeTarget: ActiveSwipeTarget | null = useActiveSwipeTarget()
-  const activeBlockId = activeTarget?.blockId ?? null
-  const repo = useRepo()
   const uiStateBlock = useUIStateBlock()
   const runtime = useAppRuntime()
-  const anchor = useAnchorRect(isMobile ? (activeTarget?.element ?? null) : null)
+  const [activeBlockId] = usePropertyValue(uiStateBlock, swipeActiveBlockIdProp)
+  // Inline anchor placed inside the panel; we walk upward to find the
+  // panel root and scope querySelector to it so the same block id in
+  // another panel can't be picked up.
+  const inlineAnchorRef = useRef<HTMLDivElement | null>(null)
+  const [panelRoot, setPanelRoot] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    setPanelRoot(inlineAnchorRef.current?.closest<HTMLElement>('.panel') ?? null)
+  }, [])
+
+  const anchor = useAnchorRect(
+    isMobile ? panelRoot : null,
+    isMobile ? activeBlockId : undefined,
+  )
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -184,6 +203,10 @@ export const SwipeActionMenu = () => {
     if (showOverflow) setShowOverflow(false)
   }
 
+  const dismiss = (): void => {
+    void uiStateBlock.set(swipeActiveBlockIdProp, undefined)
+  }
+
   // Dismiss on tap/click anywhere outside the floating bar. Capture phase
   // beats descendant click handlers so an action elsewhere in the tree
   // doesn't fire alongside the dismiss.
@@ -193,7 +216,7 @@ export const SwipeActionMenu = () => {
     const handlePointer = (event: PointerEvent | MouseEvent | globalThis.MouseEvent) => {
       const target = event.target as Node | null
       if (target && containerRef.current?.contains(target)) return
-      clearActiveSwipeTarget()
+      dismiss()
     }
 
     // Defer attach by a microtask so the same touchend that opened the
@@ -206,40 +229,46 @@ export const SwipeActionMenu = () => {
       window.clearTimeout(id)
       document.removeEventListener('pointerdown', handlePointer, true)
     }
+    // dismiss is referentially stable enough — uiStateBlock changes only
+    // on workspace switch, which is also when the menu would close anyway.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBlockId])
 
   // Dismiss on Escape — keyboard accessibility for hybrid devices.
   useEffect(() => {
     if (!activeBlockId) return
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') clearActiveSwipeTarget()
+      if (event.key === 'Escape') dismiss()
     }
     document.addEventListener('keydown', handleKey)
     return () => document.removeEventListener('keydown', handleKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBlockId])
 
-  if (!isMobile || !activeBlockId || !anchor) return null
+  // Always render the inline anchor (zero-size, invisible) so we have a
+  // ref into this panel's DOM regardless of menu state.
+  const inlineAnchor = (
+    <div ref={inlineAnchorRef} className="swipe-action-menu-anchor" aria-hidden="true"/>
+  )
 
-  const block = repo.block(activeBlockId)
-  // The gesture handler doesn't fire for unloaded blocks (the user has to
-  // see them to swipe them), but be defensive anyway — repo.block is a
-  // synchronous handle that returns even for unknown ids.
-  if (!block.peek()) return null
+  if (!isMobile || !activeBlockId || !anchor) return inlineAnchor
 
-  const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId) return null
+  // The block whose handler we'll dispatch lives in this panel; resolve
+  // it from the active id via the same repo that owns uiStateBlock.
+  const block = uiStateBlock.repo.block(activeBlockId)
+  if (!block.peek()) return inlineAnchor
 
   /** Dispatch the resolved action's handler with our block-level deps.
-   *  We call the handler directly rather than going through `useRunAction`
-   *  because the dispatcher requires the action's context to be active
-   *  (e.g. NORMAL_MODE), and the swipe gesture is itself the activation.
-   *  The handler is the same one the keyboard binding invokes, so
-   *  semantics (focus restoration, etc.) stay in lockstep. */
+   *  We call the handler directly rather than going through
+   *  `useRunAction` because the dispatcher requires the action's context
+   *  to be active (e.g. NORMAL_MODE), and the swipe gesture is itself
+   *  the activation. The handler is the same one the keyboard binding
+   *  invokes, so semantics (focus restoration, etc.) stay in lockstep. */
   const handleRun = (resolved: ResolvedQuickAction): void => {
     const {item, action} = resolved
     if (!action) {
       console.error(`[swipe-quick-actions] Action "${item.actionId}" not registered`)
-      clearActiveSwipeTarget()
+      dismiss()
       return
     }
     const trigger = new CustomEvent('swipe-quick-action', {
@@ -248,13 +277,13 @@ export const SwipeActionMenu = () => {
     void Promise.resolve(action.handler({block, uiStateBlock}, trigger)).catch(error => {
       console.error(`[swipe-quick-actions] Action "${item.actionId}" failed`, error)
     })
-    clearActiveSwipeTarget()
+    dismiss()
   }
 
   // Block touch events from bubbling to the underlying block so the
   // gesture contribution doesn't see a touch on the menu and reopen /
   // re-trigger anything.
-  const swallowTouch = (event: TouchEvent) => {
+  const swallowTouch = (event: { stopPropagation: () => void }) => {
     event.stopPropagation()
   }
 
@@ -268,88 +297,94 @@ export const SwipeActionMenu = () => {
   const centerY = anchor.top + anchor.height / 2
   const rightEdge = Math.max(8, window.innerWidth - anchor.right + 8)
 
-  return createPortal(
-    <div
-      ref={containerRef}
-      className="swipe-action-menu fixed z-50 -translate-y-1/2"
-      style={{top: `${centerY}px`, right: `${rightEdge}px`}}
-      data-block-interaction="ignore"
-      onTouchStart={swallowTouch}
-      onTouchMove={swallowTouch}
-      onTouchEnd={swallowTouch}
-    >
-      <div
-        className="flex items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
-      >
-        {primaryResolved.map(resolved => (
-          <ActionButton
-            key={resolved.item.actionId}
-            resolved={resolved}
-            onRun={handleRun}
-          />
-        ))}
-        <button
-          type="button"
-          aria-label="More actions"
-          title="More actions"
-          aria-expanded={showOverflow}
-          data-block-interaction="ignore"
-          onClick={event => {
-            event.preventDefault()
-            event.stopPropagation()
-            setShowOverflow(prev => !prev)
-          }}
-          className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
-        >
-          <MoreHorizontal className="h-4 w-4"/>
-        </button>
-        <button
-          type="button"
-          aria-label="Close"
-          title="Close"
-          data-block-interaction="ignore"
-          onClick={event => {
-            event.preventDefault()
-            event.stopPropagation()
-            clearActiveSwipeTarget()
-          }}
-          className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
-        >
-          <X className="h-4 w-4"/>
-        </button>
-      </div>
-
-      {showOverflow && (
+  return (
+    <>
+      {inlineAnchor}
+      {createPortal(
         <div
-          // Absolutely positioned so the toolbar stays vertically anchored
-          // to the swiped row when the overflow opens — without this, the
-          // -translate-y-1/2 above would re-center the now-taller
-          // toolbar+overflow container and shift the toolbar off the row.
-          className="absolute right-0 top-full mt-1 flex flex-col gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
+          ref={containerRef}
+          className="swipe-action-menu fixed z-50 -translate-y-1/2"
+          style={{top: `${centerY}px`, right: `${rightEdge}px`}}
+          data-block-interaction="ignore"
+          onTouchStart={swallowTouch}
+          onTouchMove={swallowTouch}
+          onTouchEnd={swallowTouch}
         >
-          {overflowResolved.map(resolved => {
-            const {Icon, label, item} = resolved
-            return (
-              <button
-                key={item.actionId}
-                type="button"
-                aria-label={label}
-                data-block-interaction="ignore"
-                onClick={event => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  handleRun(resolved)
-                }}
-                className="flex items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground hover:bg-muted active:bg-accent"
-              >
-                <Icon className="h-4 w-4"/>
-                <span>{label}</span>
-              </button>
-            )
-          })}
-        </div>
+          <div
+            className="flex items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
+          >
+            {primaryResolved.map(resolved => (
+              <ActionButton
+                key={resolved.item.actionId}
+                resolved={resolved}
+                onRun={handleRun}
+              />
+            ))}
+            <button
+              type="button"
+              aria-label="More actions"
+              title="More actions"
+              aria-expanded={showOverflow}
+              data-block-interaction="ignore"
+              onClick={event => {
+                event.preventDefault()
+                event.stopPropagation()
+                setShowOverflow(prev => !prev)
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
+            >
+              <MoreHorizontal className="h-4 w-4"/>
+            </button>
+            <button
+              type="button"
+              aria-label="Close"
+              title="Close"
+              data-block-interaction="ignore"
+              onClick={event => {
+                event.preventDefault()
+                event.stopPropagation()
+                dismiss()
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
+            >
+              <X className="h-4 w-4"/>
+            </button>
+          </div>
+
+          {showOverflow && (
+            <div
+              // Absolutely positioned so the toolbar stays vertically
+              // anchored to the swiped row when the overflow opens —
+              // without this, the -translate-y-1/2 above would re-center
+              // the now-taller toolbar+overflow container and shift the
+              // toolbar off the row.
+              className="absolute right-0 top-full mt-1 flex flex-col gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
+            >
+              {overflowResolved.map(resolved => {
+                const {Icon, label, item} = resolved
+                return (
+                  <button
+                    key={item.actionId}
+                    type="button"
+                    aria-label={label}
+                    data-block-interaction="ignore"
+                    onClick={event => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      handleRun(resolved)
+                    }}
+                    className="flex items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground hover:bg-muted active:bg-accent"
+                  >
+                    <Icon className="h-4 w-4"/>
+                    <span>{label}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>,
+        document.body,
       )}
-    </div>,
-    document.body,
+    </>
   )
 }

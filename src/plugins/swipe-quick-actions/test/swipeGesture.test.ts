@@ -2,26 +2,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TouchEvent } from 'react'
 import type { Block } from '../../../data/block'
 import type { Repo } from '../../../data/repo'
+import type { PropertySchema } from '@/data/api'
 import {
   blockContentSurfacePropsFacet,
   type BlockInteractionContext,
 } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { swipeQuickActionsContentSurface } from '../swipeGesture.ts'
-import {
-  clearActiveSwipeTarget,
-  getActiveSwipeTarget,
-  setActiveSwipeTarget,
-} from '../store.ts'
+import { swipeActiveBlockIdProp } from '../property.ts'
 
-const fakeUiStateBlock = {
-  peekProperty: vi.fn().mockReturnValue(undefined),
-} as unknown as Block
+/** Minimal stand-in for the panel UI-state block. Backs `peekProperty`
+ *  / `set` against an in-memory map keyed by schema name, mirroring how
+ *  the real Block stores property values. The async `set` matches the
+ *  real signature; tests await it for state assertions. */
+const makeFakeUiStateBlock = (): Block => {
+  const props = new Map<string, unknown>()
+  return {
+    peekProperty: vi.fn((schema: PropertySchema<unknown>) => props.get(schema.name)),
+    set: vi.fn(async (schema: PropertySchema<unknown>, value: unknown) => {
+      if (value === undefined) props.delete(schema.name)
+      else props.set(schema.name, value)
+    }),
+  } as unknown as Block
+}
 
-const makeContext = (id = 'block-1'): BlockInteractionContext => ({
+const makeContext = (id = 'block-1', uiStateBlock = makeFakeUiStateBlock()): BlockInteractionContext => ({
   block: {id} as Block,
   repo: {} as Repo,
-  uiStateBlock: fakeUiStateBlock,
+  uiStateBlock,
   types: [],
   topLevelBlockId: 'root',
   inFocus: true,
@@ -40,26 +48,10 @@ const handlers = (context = makeContext()) =>
 
 const touch = (x: number, y: number) => ({clientX: x, clientY: y})
 
-/** Build a synthetic React TouchEvent. The default `target` is a fresh
- *  block-shell element (carries `data-block-id`) attached to the document
- *  so the gesture handler's `closest([data-block-id])` lookup at
- *  touchstart finds it. Tests that need a specific block id pass one in;
- *  tests that need a non-block target (e.g. interactive descendant) pass
- *  one explicitly. */
-const makeShellElement = (blockId: string): HTMLElement => {
-  const shell = document.createElement('div')
-  shell.setAttribute('data-block-id', blockId)
-  document.body.appendChild(shell)
-  // Give the shell a child the touch can land on, mimicking the real DOM.
-  const child = document.createElement('span')
-  shell.appendChild(child)
-  return child
-}
-
 const touchEvent = (
   list: 'touches' | 'changedTouches',
   point: { clientX: number; clientY: number },
-  target: EventTarget,
+  target: EventTarget = document.createElement('div'),
 ): TouchEvent<HTMLDivElement> => ({
   target,
   [list]: [point],
@@ -86,12 +78,10 @@ const setMobileViewport = (matches: boolean): void => {
 
 describe('swipe-quick-actions gesture', () => {
   beforeEach(() => {
-    clearActiveSwipeTarget()
     setMobileViewport(true)
-    document.body.innerHTML = ''
   })
+
   afterEach(() => {
-    clearActiveSwipeTarget()
     document.body.innerHTML = ''
   })
 
@@ -103,90 +93,81 @@ describe('swipe-quick-actions gesture', () => {
     expect(props.onTouchCancel).toBeDefined()
   })
 
-  it('opens the menu on a sufficient leftward swipe', () => {
-    const props = handlers(makeContext('b1'))
-    const target = makeShellElement('b1')
-    props.onTouchStart?.(touchEvent('touches', touch(200, 100), target))
-    props.onTouchMove?.(touchEvent('touches', touch(150, 102), target))
-    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), target))
-    const active = getActiveSwipeTarget()
-    expect(active?.blockId).toBe('b1')
-    // The captured element must be the swiped row, not just any matching
-    // block id — the whole point of this regression guard.
-    expect(active?.element.getAttribute('data-block-id')).toBe('b1')
+  it('writes the swiped block id to the panel UI-state on a leftward swipe', async () => {
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b1', uiState))
+    props.onTouchStart?.(touchEvent('touches', touch(200, 100)))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102)))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102)))
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBe('b1')
   })
 
-  it('captures the swiped instance even when another panel renders the same block id', () => {
-    const props = handlers(makeContext('b-shared'))
-    // Simulate two panels rendering the same block id; the user swipes
-    // the second instance.
-    makeShellElement('b-shared')   // panel A's instance
-    const target = makeShellElement('b-shared') // panel B's instance, the one we touch
-    const swipedShell = target.parentElement!
-    props.onTouchStart?.(touchEvent('touches', touch(200, 100), target))
-    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 100), target))
-    const active = getActiveSwipeTarget()
-    expect(active?.element).toBe(swipedShell)
+  it('only writes to the active panel\'s UI-state, leaving other panels alone', async () => {
+    // Two panels: gestures in panel A must not touch panel B's state.
+    const panelA = makeFakeUiStateBlock()
+    const panelB = makeFakeUiStateBlock()
+    const propsA = handlers(makeContext('b-shared', panelA))
+    propsA.onTouchStart?.(touchEvent('touches', touch(200, 100)))
+    propsA.onTouchEnd?.(touchEvent('changedTouches', touch(120, 100)))
+    expect(panelA.peekProperty(swipeActiveBlockIdProp)).toBe('b-shared')
+    expect(panelB.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
   })
 
   it('ignores small horizontal movement (taps)', () => {
-    const props = handlers(makeContext('b2'))
-    const target = makeShellElement('b2')
-    props.onTouchStart?.(touchEvent('touches', touch(200, 100), target))
-    props.onTouchEnd?.(touchEvent('changedTouches', touch(195, 101), target))
-    expect(getActiveSwipeTarget()).toBeNull()
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b2', uiState))
+    props.onTouchStart?.(touchEvent('touches', touch(200, 100)))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(195, 101)))
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
   })
 
   it('ignores predominantly vertical drags (scrolls)', () => {
-    const props = handlers(makeContext('b3'))
-    const target = makeShellElement('b3')
-    props.onTouchStart?.(touchEvent('touches', touch(200, 100), target))
-    props.onTouchEnd?.(touchEvent('changedTouches', touch(180, 220), target))
-    expect(getActiveSwipeTarget()).toBeNull()
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b3', uiState))
+    props.onTouchStart?.(touchEvent('touches', touch(200, 100)))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(180, 220)))
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
   })
 
-  it('dismisses the active menu on swipe-right of the same block instance', () => {
-    const target = makeShellElement('b4')
-    const shell = target.parentElement! as HTMLElement
-    setActiveSwipeTarget({blockId: 'b4', element: shell})
-    const props = handlers(makeContext('b4'))
-    props.onTouchStart?.(touchEvent('touches', touch(50, 100), target))
-    props.onTouchEnd?.(touchEvent('changedTouches', touch(140, 100), target))
-    expect(getActiveSwipeTarget()).toBeNull()
+  it('clears the panel UI-state on swipe-right when the same block is the active one', async () => {
+    const uiState = makeFakeUiStateBlock()
+    await uiState.set(swipeActiveBlockIdProp, 'b4')
+    const props = handlers(makeContext('b4', uiState))
+    props.onTouchStart?.(touchEvent('touches', touch(50, 100)))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(140, 100)))
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
   })
 
-  it('does not consume swipe-right when no menu is open', () => {
-    const props = handlers(makeContext('b5'))
-    const target = makeShellElement('b5')
-    const end = touchEvent('changedTouches', touch(140, 100), target)
-    props.onTouchStart?.(touchEvent('touches', touch(50, 100), target))
+  it('does not consume swipe-right when no menu is open in this panel', () => {
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b5', uiState))
+    const end = touchEvent('changedTouches', touch(140, 100))
+    props.onTouchStart?.(touchEvent('touches', touch(50, 100)))
     props.onTouchEnd?.(end)
     expect(end.preventDefault).not.toHaveBeenCalled()
-    expect(getActiveSwipeTarget()).toBeNull()
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
   })
 
-  it('does not dismiss when swipe-right hits a different instance of the active block', () => {
-    // The user opened the menu against panel A, then swipes right on
-    // panel B's instance of the same block. The menu should stay where
-    // it is — dismissal must be element-scoped, not id-scoped.
-    const panelAShell = makeShellElement('b-shared').parentElement! as HTMLElement
-    setActiveSwipeTarget({blockId: 'b-shared', element: panelAShell})
-    const panelBTarget = makeShellElement('b-shared')
-    const props = handlers(makeContext('b-shared'))
-    props.onTouchStart?.(touchEvent('touches', touch(50, 100), panelBTarget))
-    props.onTouchEnd?.(touchEvent('changedTouches', touch(140, 100), panelBTarget))
-    expect(getActiveSwipeTarget()?.element).toBe(panelAShell)
+  it('does not dismiss when the active id in this panel belongs to a different block', async () => {
+    // Panel has menu open for block X; user swipes right on block Y in
+    // the same panel — Y's menu isn't open, so nothing should change.
+    const uiState = makeFakeUiStateBlock()
+    await uiState.set(swipeActiveBlockIdProp, 'X')
+    const props = handlers(makeContext('Y', uiState))
+    props.onTouchStart?.(touchEvent('touches', touch(50, 100)))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(140, 100)))
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBe('X')
   })
 
   it('does not open the menu on non-mobile viewports', () => {
     setMobileViewport(false)
-    const props = handlers(makeContext('b6'))
-    const target = makeShellElement('b6')
-    const end = touchEvent('changedTouches', touch(120, 102), target)
-    props.onTouchStart?.(touchEvent('touches', touch(200, 100), target))
-    props.onTouchMove?.(touchEvent('touches', touch(150, 102), target))
+    const uiState = makeFakeUiStateBlock()
+    const props = handlers(makeContext('b6', uiState))
+    const end = touchEvent('changedTouches', touch(120, 102))
+    props.onTouchStart?.(touchEvent('touches', touch(200, 100)))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102)))
     props.onTouchEnd?.(end)
-    expect(getActiveSwipeTarget()).toBeNull()
+    expect(uiState.peekProperty(swipeActiveBlockIdProp)).toBeUndefined()
     // Crucially, the gesture must not be consumed: no preventDefault /
     // stopPropagation, so native scroll / back-swipe stays intact.
     expect(end.preventDefault).not.toHaveBeenCalled()
