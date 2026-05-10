@@ -2,9 +2,14 @@
  *
  * Strategy summary:
  *   - HTML navigations  : network-first, fallback to cached shell.
- *   - Same-origin assets: stale-while-revalidate (fast offline, eventually
- *                         consistent online; covers the many small JS/CSS
- *                         files emitted by Vite's preserveModules build).
+ *   - JS/CSS/WASM/JSON  : network-first w/ cache fallback. The Vite
+ *                         preserveModules build emits these at stable URLs
+ *                         (no content hash), so SWR could pair a fresh HTML
+ *                         shell with stale modules across a deploy and
+ *                         half-break the runtime. Network-first keeps online
+ *                         users coherent; cache fallback keeps offline working.
+ *   - Other same-origin : stale-while-revalidate (images, fonts, manifest,
+ *                         maps — staleness here is cosmetic/non-fatal).
  *   - esm.sh imports    : cache-first (URLs include version + integrity, so
  *                         they're effectively immutable).
  *   - Everything else   : passes through to the network (Supabase, PowerSync,
@@ -35,6 +40,11 @@ const SHELL_URLS = [
 ].map((p) => new URL(p, scopeURL).toString())
 
 const VENDOR_HOSTS = new Set(['esm.sh'])
+
+// Asset URLs whose contents define app behavior. Because the build leaves
+// these at unhashed paths, a stale cache entry against a fresh HTML shell
+// can desync the runtime — so we serve them network-first.
+const SEMANTIC_ASSET_RE = /\.(?:m?js|css|wasm|json)$/i
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -118,6 +128,10 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isSameOrigin(url)) {
+    if (SEMANTIC_ASSET_RE.test(url.pathname)) {
+      event.respondWith(networkFirst(request, RUNTIME_CACHE))
+      return
+    }
     event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE))
     return
   }
