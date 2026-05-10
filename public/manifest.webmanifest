@@ -4,6 +4,9 @@
   "description": "A malleable, offline-first medium for knowledge work.",
   "start_url": ".",
   "scope": ".",
+  "launch_handler": {
+    "client_mode": ["focus-existing", "auto"]
+  },
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "any",

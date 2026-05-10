@@ -10,8 +10,11 @@ import { panelHistory } from '@/utils/panelHistory'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { getPerTabBlock, getUIStateBlock } from '@/data/globalState'
-import { getTabId, __resetTabIdForTesting } from '@/utils/tabId'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
+import {
+  __resetLayoutSessionIdForTesting,
+  getLayoutSessionId,
+} from '@/utils/layoutSessionId'
 import {
   insertPanelRow,
   layoutBlockIdsFromRows,
@@ -43,7 +46,7 @@ const setup = async (): Promise<Harness> => {
 let env: Harness
 
 beforeEach(async () => {
-  __resetTabIdForTesting()
+  __resetLayoutSessionIdForTesting()
   env = await setup()
 })
 
@@ -51,21 +54,21 @@ afterEach(async () => {
   await env.h.cleanup()
 })
 
-const perTabBlock = async () => {
+const layoutSessionBlock = async () => {
   const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-  return getPerTabBlock(uiState, getTabId())
+  return getLayoutSessionBlock(uiState, getLayoutSessionId())
 }
 
-const currentPanelRows = async () => (await perTabBlock()).children.load()
+const currentPanelRows = async () => (await layoutSessionBlock()).children.load()
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
 const currentLayoutRows = async () => {
-  const tab = await perTabBlock()
-  return env.repo.query.subtree({id: tab.id}).load()
+  const layoutSession = await layoutSessionBlock()
+  return env.repo.query.subtree({id: layoutSession.id}).load()
 }
 const currentLayoutBlockIds = async () => {
-  const tab = await perTabBlock()
-  return layoutBlockIdsFromRows(tab.id, await currentLayoutRows())
+  const layoutSession = await layoutSessionBlock()
+  return layoutBlockIdsFromRows(layoutSession.id, await currentLayoutRows())
 }
 
 describe('navigate', () => {
@@ -78,8 +81,8 @@ describe('navigate', () => {
   })
 
   it("target 'focused' with panelId navigates that panel and records local history", async () => {
-    const tab = await perTabBlock()
-    const panelId = await insertPanelRow(env.repo, tab, 'b-prev')
+    const layoutSession = await layoutSessionBlock()
+    const panelId = await insertPanelRow(env.repo, layoutSession, 'b-prev')
 
     navigate(env.repo, {blockId: 'b-next', target: 'focused', panelId})
 
@@ -90,9 +93,9 @@ describe('navigate', () => {
   })
 
   it("target 'main' updates the first panel from any context", async () => {
-    const tab = await perTabBlock()
-    await insertPanelRow(env.repo, tab, 'b-main')
-    await insertPanelRow(env.repo, tab, 'b-side')
+    const layoutSession = await layoutSessionBlock()
+    await insertPanelRow(env.repo, layoutSession, 'b-main')
+    await insertPanelRow(env.repo, layoutSession, 'b-side')
 
     navigate(env.repo, {blockId: 'b-new-main', target: 'main', panelId: 'unused-side-panel'})
 
@@ -102,9 +105,9 @@ describe('navigate', () => {
   })
 
   it("target 'new-panel' inserts after the source panel", async () => {
-    const tab = await perTabBlock()
-    const firstPanelId = await insertPanelRow(env.repo, tab, 'b-a')
-    await insertPanelRow(env.repo, tab, 'b-c')
+    const layoutSession = await layoutSessionBlock()
+    const firstPanelId = await insertPanelRow(env.repo, layoutSession, 'b-a')
+    await insertPanelRow(env.repo, layoutSession, 'b-c')
 
     navigate(env.repo, {
       blockId: 'b-b',
@@ -118,10 +121,10 @@ describe('navigate', () => {
   })
 
   it("target 'sidebar-stack' stacks above the panel to the right", async () => {
-    const tab = await perTabBlock()
-    const firstPanelId = await insertPanelRow(env.repo, tab, 'b-a')
-    const rightPanelId = await insertPanelRow(env.repo, tab, 'b-b')
-    await insertPanelRow(env.repo, tab, 'b-c')
+    const layoutSession = await layoutSessionBlock()
+    const firstPanelId = await insertPanelRow(env.repo, layoutSession, 'b-a')
+    const rightPanelId = await insertPanelRow(env.repo, layoutSession, 'b-b')
+    await insertPanelRow(env.repo, layoutSession, 'b-c')
 
     navigate(env.repo, {
       blockId: 'b-x',
@@ -132,7 +135,7 @@ describe('navigate', () => {
     await vi.waitFor(async () => {
       expect(await currentLayoutBlockIds()).toEqual(['b-a', 'b-x', 'b-b', 'b-c'])
     })
-    expect(layoutSlotsFromRows(tab.id, await currentLayoutRows())).toEqual([
+    expect(layoutSlotsFromRows(layoutSession.id, await currentLayoutRows())).toEqual([
       {kind: 'leaf', blockId: 'b-a'},
       {
         kind: 'stack',
@@ -144,7 +147,7 @@ describe('navigate', () => {
       {kind: 'leaf', blockId: 'b-c'},
     ])
     const rightPanel = await env.repo.block(rightPanelId).load()
-    expect(rightPanel?.parentId).not.toBe(tab.id)
+    expect(rightPanel?.parentId).not.toBe(layoutSession.id)
   })
 
   it('does nothing when no workspace can be resolved', async () => {

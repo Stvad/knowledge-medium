@@ -23,8 +23,8 @@ import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
-import { getPerTabBlock, getUIStateBlock } from '@/data/globalState.ts'
-import { getTabId } from '@/utils/tabId.ts'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState.ts'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
   PanelLayoutProjection,
   applyCurrentLayoutUrl,
@@ -46,7 +46,7 @@ interface ResolvedWorkspace {
 
 interface InitialLayout {
   workspaceId: string
-  perTabBlock: Block
+  layoutSessionBlock: Block
 }
 
 interface HashSnapshot {
@@ -181,7 +181,7 @@ const resolveInitialLayout = async (
   await getOrCreatePropertiesPage(repo, workspaceId)
 
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-  const perTabBlock = await getPerTabBlock(uiState, getTabId())
+  const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
   const hashForResolvedWorkspace = route.workspaceId && route.workspaceId !== workspaceId
     ? buildLayout(workspaceId)
     : requestedHash
@@ -189,7 +189,7 @@ const resolveInitialLayout = async (
   const applyResult = await applyCurrentLayoutUrl({
     repo,
     workspaceId,
-    perTabBlock,
+    layoutSessionBlock,
     hash: hashForResolvedWorkspace,
     replaceHash,
   })
@@ -216,18 +216,18 @@ const resolveInitialLayout = async (
 
     replaceHash(buildLayout(workspaceId, [dailyNote.id]))
     await repo.tx(async tx => {
-      const parent = await tx.get(perTabBlock.id)
-      if (!parent) throw new Error(`getInitialLayout: per-tab block ${perTabBlock.id} not found`)
+      const parent = await tx.get(layoutSessionBlock.id)
+      if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
       await createPanelRowInTx(repo, tx, {
         workspaceId,
-        parentId: perTabBlock.id,
+        parentId: layoutSessionBlock.id,
         orderKey: keyAtEnd(null),
         blockId: dailyNote.id,
       })
     }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
   }
 
-  return {workspaceId, perTabBlock}
+  return {workspaceId, layoutSessionBlock}
 }
 
 const initialLayoutCacheKey = (
@@ -282,7 +282,7 @@ const App = () => {
   const localOnly = useIsLocalOnly()
   const useRemoteSync = hasRemoteSyncConfig && !localOnly
 
-  const {workspaceId: activeWorkspaceId, perTabBlock} = use(
+  const {workspaceId: activeWorkspaceId, layoutSessionBlock} = use(
     getInitialLayout(repo, hashSnapshot.hash, useRemoteSync, hashSnapshot.version),
   )
 
@@ -290,7 +290,7 @@ const App = () => {
     const projection = new PanelLayoutProjection({
       repo,
       workspaceId: activeWorkspaceId,
-      perTabBlock,
+      layoutSessionBlock,
     })
     const syncHash = () => {
       const nextHash = getCurrentHash()
@@ -317,7 +317,7 @@ const App = () => {
       unsubscribe()
       projection.dispose()
     }
-  }, [repo, activeWorkspaceId, perTabBlock])
+  }, [repo, activeWorkspaceId, layoutSessionBlock])
 
   // Reactive role tracking. The imperative setReadOnly inside
   // resolveWorkspace handles the *initial* render (so the first paint
@@ -334,7 +334,7 @@ const App = () => {
   return (
     <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
       <AppRuntimeProvider safeMode={safeMode}>
-        <BlockComponent blockId={perTabBlock.id}/>
+        <BlockComponent blockId={layoutSessionBlock.id}/>
       </AppRuntimeProvider>
     </BlockContextProvider>
   )

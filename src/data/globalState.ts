@@ -42,7 +42,7 @@ import {
   isEditingProp,
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
-import { getTabId } from '@/utils/tabId'
+import { getLayoutSessionId } from '@/utils/layoutSessionId'
 
 /**
  * One of core principles of the system is to store all state within the system.
@@ -234,13 +234,13 @@ export const getUIStateBlock = memoize(
     `${repoIdentity(repo)}:${workspaceId}:${user.id}:${context.panelId ?? '__root__'}`,
 )
 
-const TABS_PATH_PART = 'tabs'
-export const getPerTabBlock = memoize(
-  async (uiStateBlock: Block, tabId: string): Promise<Block> => {
-    const tabsBlock = await ensureUiChild(uiStateBlock.repo, uiStateBlock, TABS_PATH_PART)
-    return ensureUiChild(uiStateBlock.repo, tabsBlock, tabId)
+const LAYOUT_SESSIONS_PATH_PART = 'layout-sessions'
+export const getLayoutSessionBlock = memoize(
+  async (uiStateBlock: Block, layoutSessionId: string): Promise<Block> => {
+    const layoutSessionsBlock = await ensureUiChild(uiStateBlock.repo, uiStateBlock, LAYOUT_SESSIONS_PATH_PART)
+    return ensureUiChild(uiStateBlock.repo, layoutSessionsBlock, layoutSessionId)
   },
-  (uiBlock, tabId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${tabId}`,
+  (uiBlock, layoutSessionId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${layoutSessionId}`,
 )
 
 // ──── React hooks ────
@@ -263,12 +263,12 @@ export function useRootUIStateBlock(): Block {
   return use(getUIStateBlock(repo, workspaceId, user, {}))
 }
 
-export function usePerTabBlock(tabId = getTabId()): Block {
-  return use(getPerTabBlock(useRootUIStateBlock(), tabId))
+export function useLayoutSessionBlock(layoutSessionId = getLayoutSessionId()): Block {
+  return use(getLayoutSessionBlock(useRootUIStateBlock(), layoutSessionId))
 }
 
-export function usePanelsForTab(tabId = getTabId()): Block[] {
-  return useChildren(usePerTabBlock(tabId))
+export function usePanelsForLayoutSession(layoutSessionId = getLayoutSessionId()): Block[] {
+  return useChildren(useLayoutSessionBlock(layoutSessionId))
 }
 
 export function useUserBlock(): Block {

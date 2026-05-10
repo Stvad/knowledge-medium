@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { getPerTabBlock, getUIStateBlock } from '@/data/globalState'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { keysBetween } from '@/data/orderKey'
@@ -26,7 +26,7 @@ const USER: User = {id: 'user-1', name: 'Alice'}
 interface Harness {
   h: TestDb
   repo: Repo
-  perTabBlockId: string
+  layoutSessionBlockId: string
 }
 
 const setup = async (): Promise<Harness> => {
@@ -39,21 +39,21 @@ const setup = async (): Promise<Harness> => {
   })
   repo.setActiveWorkspaceId(WS)
   const uiState = await getUIStateBlock(repo, WS, USER, {})
-  const perTabBlock = await getPerTabBlock(uiState, 'tab-a')
-  return {h, repo, perTabBlockId: perTabBlock.id}
+  const layoutSessionBlock = await getLayoutSessionBlock(uiState, 'layout-session-a')
+  return {h, repo, layoutSessionBlockId: layoutSessionBlock.id}
 }
 
 let env: Harness
 beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
-const perTabBlock = () => env.repo.block(env.perTabBlockId)
+const layoutSessionBlock = () => env.repo.block(env.layoutSessionBlockId)
 
 const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
-  const parent = perTabBlock()
+  const parent = layoutSessionBlock()
   await env.repo.tx(async tx => {
     const parentData = await tx.get(parent.id)
-    if (!parentData) throw new Error('missing per-tab block')
+    if (!parentData) throw new Error('missing layout session block')
     const orderKeys = keysBetween(null, null, blockIds.length)
     for (let index = 0; index < blockIds.length; index++) {
       await createPanelRowInTx(env.repo, tx, {
@@ -66,8 +66,8 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
   }, {scope: ChangeScope.UiState, description: 'seed panel rows'})
 }
 
-const rows = async () => perTabBlock().children.load()
-const layoutRows = async () => env.repo.query.subtree({id: env.perTabBlockId}).load()
+const rows = async () => layoutSessionBlock().children.load()
+const layoutRows = async () => env.repo.query.subtree({id: env.layoutSessionBlockId}).load()
 
 const rowIdsByBlock = async (): Promise<Map<string, string>> =>
   new Map((await layoutRows()).map(row => [row.properties[topLevelBlockIdProp.name] as string, row.id]))
@@ -85,7 +85,7 @@ describe('applyCurrentLayoutUrl', () => {
     const result = await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1/a/b',
     })
 
@@ -97,14 +97,14 @@ describe('applyCurrentLayoutUrl', () => {
     const result = await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1/a/(s:x,b)/c',
     })
 
     expect(result.kind).toBe('applied')
     const treeRows = await layoutRows()
-    expect(layoutBlockIdsFromRows(env.perTabBlockId, treeRows)).toEqual(['a', 'x', 'b', 'c'])
-    expect(layoutSlotsFromRows(env.perTabBlockId, treeRows)).toEqual([
+    expect(layoutBlockIdsFromRows(env.layoutSessionBlockId, treeRows)).toEqual(['a', 'x', 'b', 'c'])
+    expect(layoutSlotsFromRows(env.layoutSessionBlockId, treeRows)).toEqual([
       {kind: 'leaf', blockId: 'a'},
       {
         kind: 'stack',
@@ -124,7 +124,7 @@ describe('applyCurrentLayoutUrl', () => {
     await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1/a/b/c',
     })
 
@@ -150,7 +150,7 @@ describe('applyCurrentLayoutUrl', () => {
     await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1/a/x',
     })
 
@@ -168,7 +168,7 @@ describe('applyCurrentLayoutUrl', () => {
     await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1/c/a/b',
     })
 
@@ -179,14 +179,14 @@ describe('applyCurrentLayoutUrl', () => {
     expect(after.get('c')).toBe(before.get('c'))
   })
 
-  it('normalizes a bare workspace URL to existing tab rows without writing rows', async () => {
+  it('normalizes a bare workspace URL to existing layout session rows without writing rows', async () => {
     await createPanelRows(['a', 'b'])
     let replaced = ''
 
     const result = await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1',
       replaceHash: hash => { replaced = hash },
     })
@@ -200,7 +200,7 @@ describe('applyCurrentLayoutUrl', () => {
     const result = await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#other/a',
     })
 
@@ -218,7 +218,7 @@ describe('PanelLayoutProjection', () => {
     const projection = new PanelLayoutProjection({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       getHash: () => currentHash,
       pushHash: hash => {
         pushed = hash
@@ -245,7 +245,7 @@ describe('PanelLayoutProjection', () => {
     await applyCurrentLayoutUrl({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       hash: '#ws-1/a/(s:x,b)',
     })
     let currentHash = '#ws-1/a/(s:x,b)'
@@ -253,7 +253,7 @@ describe('PanelLayoutProjection', () => {
     const projection = new PanelLayoutProjection({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       getHash: () => currentHash,
       pushHash: hash => {
         pushed = hash
@@ -281,7 +281,7 @@ describe('PanelLayoutProjection', () => {
     const projection = new PanelLayoutProjection({
       repo: env.repo,
       workspaceId: WS,
-      perTabBlock: perTabBlock(),
+      layoutSessionBlock: layoutSessionBlock(),
       getHash: () => currentHash,
       pushHash: hash => { currentHash = hash },
       replaceHash: hash => { currentHash = hash },

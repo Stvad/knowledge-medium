@@ -1,5 +1,5 @@
 // User-intent navigation primitive. Single entry point for "go to a block"
-// and "open a block in a new panel" by mutating tab-local panel rows. The
+// and "open a block in a new panel" by mutating layout-session panel rows. The
 // panel layout projection observes those rows and keeps the URL in sync.
 //
 // Treated as a runtime service (like Repo or AppRuntime), not a facet:
@@ -15,9 +15,9 @@ import { useCallback, type MouseEvent } from 'react'
 import type { Repo } from '@/data/repo'
 import { useRepo } from '@/context/repo'
 import { useBlockContext } from '@/context/block'
-import { getPerTabBlock, getUIStateBlock } from '@/data/globalState'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
 import { navigateInPanel } from './panelHistory'
-import { getTabId } from '@/utils/tabId'
+import { getLayoutSessionId } from '@/utils/layoutSessionId'
 import { insertPanelRow, insertSidebarStackedPanel } from '@/utils/panelLayoutProjection'
 
 export type NavigationTarget = 'focused' | 'main' | 'new-panel' | 'sidebar-stack'
@@ -28,7 +28,7 @@ export interface NavigateInput {
   workspaceId?: string
   target: NavigationTarget
   /** When target='focused', the panel the click came from. Omit to
-   *  route to the current tab's main panel (global QuickFind, etc.). */
+   *  route to the current layout session's main panel (global QuickFind, etc.). */
   panelId?: string
   /** Alias for panelId on the new-panel path; kept distinct for clarity at
    *  call sites. Also used by target='sidebar-stack'. Ignored on other
@@ -36,9 +36,9 @@ export interface NavigateInput {
   sourcePanelId?: string
 }
 
-const resolvePerTabBlock = async (repo: Repo, workspaceId: string) => {
+const resolveLayoutSessionBlock = async (repo: Repo, workspaceId: string) => {
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-  return getPerTabBlock(uiState, getTabId())
+  return getLayoutSessionBlock(uiState, getLayoutSessionId())
 }
 
 const navigateMainPanel = async (
@@ -46,14 +46,14 @@ const navigateMainPanel = async (
   workspaceId: string,
   blockId: string,
 ): Promise<void> => {
-  const perTabBlock = await resolvePerTabBlock(repo, workspaceId)
-  const panels = await perTabBlock.children.load()
+  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
+  const panels = await layoutSessionBlock.children.load()
   const firstPanel = panels[0]
   if (firstPanel) {
     await navigateInPanel(repo.block(firstPanel.id), blockId)
     return
   }
-  await insertPanelRow(repo, perTabBlock, blockId)
+  await insertPanelRow(repo, layoutSessionBlock, blockId)
 }
 
 export const navigate = (repo: Repo, input: NavigateInput): void => {
@@ -61,16 +61,16 @@ export const navigate = (repo: Repo, input: NavigateInput): void => {
   if (!workspaceId) return
 
   if (input.target === 'new-panel') {
-    void resolvePerTabBlock(repo, workspaceId)
-      .then(perTabBlock => insertPanelRow(repo, perTabBlock, input.blockId, {
+    void resolveLayoutSessionBlock(repo, workspaceId)
+      .then(layoutSessionBlock => insertPanelRow(repo, layoutSessionBlock, input.blockId, {
         afterPanelId: input.sourcePanelId,
       }))
     return
   }
 
   if (input.target === 'sidebar-stack') {
-    void resolvePerTabBlock(repo, workspaceId)
-      .then(perTabBlock => insertSidebarStackedPanel(repo, perTabBlock, input.blockId, {
+    void resolveLayoutSessionBlock(repo, workspaceId)
+      .then(layoutSessionBlock => insertSidebarStackedPanel(repo, layoutSessionBlock, input.blockId, {
         sourcePanelId: input.sourcePanelId,
       }))
     return
@@ -100,7 +100,7 @@ export interface BlockLinkClickContext {
  *  re-implement it (and drift apart):
  *    - shift+click: open in the Roam-style vertical sidebar stack
  *    - shift+alt+click: open in a new side panel
- *    - alt+click: open in the current tab's main panel
+ *    - alt+click: open in the current layout session's main panel
  *    - plain primary click: navigate the panel the click came from
  *    - cmd / ctrl / non-primary: fall through to the href so the
  *      browser handles new-tab and middle-click as usual

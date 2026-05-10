@@ -7,7 +7,7 @@
 // Ids are UUIDs (text). An empty hash means "use the user's last-active
 // workspace from localStorage, falling back to the first synced workspace".
 // A hash with only a workspace id (no `/`) means "restore or create the
-// workspace's tab-local panel layout".
+// workspace's layout-session panel layout".
 //
 // Phase 2 drops support for legacy hashes (`#<blockId>` without a workspace
 // id). The previous data is disposable per the workspace migration, so any

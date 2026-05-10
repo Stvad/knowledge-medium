@@ -1,6 +1,6 @@
-// Per-panel back/forward history. In-memory, tab-local — never persisted
+// Per-panel back/forward history. In-memory, page-lifetime-local — never persisted
 // or synced. Tab history has no shareable or cross-device meaning, and
-// loses meaning past tab close, so this is the canonical case for the
+// loses meaning past page close, so this is the canonical case for the
 // "ephemeral session state" carve-out from the otherwise-everything-in-DB
 // model. The current displayed block lives on the panel block as
 // topLevelBlockIdProp; the back/forward stacks live here.

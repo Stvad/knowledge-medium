@@ -221,15 +221,15 @@ export const createPanelStackRowInTx = async (
 
 export const insertPanelRow = async (
   repo: Repo,
-  perTabBlock: Block,
+  layoutSessionBlock: Block,
   blockId: string,
   options: {afterPanelId?: string} = {},
 ): Promise<string> =>
   repo.tx(async tx => {
-    const parent = await tx.get(perTabBlock.id)
-    if (!parent) throw new Error(`insertPanelRow: per-tab block ${perTabBlock.id} not found`)
+    const parent = await tx.get(layoutSessionBlock.id)
+    if (!parent) throw new Error(`insertPanelRow: layout session block ${layoutSessionBlock.id} not found`)
 
-    const siblings = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
     const sourceIndex = options.afterPanelId
       ? siblings.findIndex(row => row.id === options.afterPanelId)
       : -1
@@ -241,7 +241,7 @@ export const insertPanelRow = async (
 
     return createPanelRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
-      parentId: perTabBlock.id,
+      parentId: layoutSessionBlock.id,
       orderKey,
       blockId,
     })
@@ -268,13 +268,13 @@ const insertPanelAtStartOfStackInTx = async (
 
 export const insertSidebarStackedPanel = async (
   repo: Repo,
-  perTabBlock: Block,
+  layoutSessionBlock: Block,
   blockId: string,
   options: {sourcePanelId?: string} = {},
 ): Promise<string> =>
   repo.tx(async tx => {
-    const parent = await tx.get(perTabBlock.id)
-    if (!parent) throw new Error(`insertSidebarStackedPanel: per-tab block ${perTabBlock.id} not found`)
+    const parent = await tx.get(layoutSessionBlock.id)
+    if (!parent) throw new Error(`insertSidebarStackedPanel: layout session block ${layoutSessionBlock.id} not found`)
 
     if (options.sourcePanelId) {
       const source = await tx.get(options.sourcePanelId)
@@ -287,8 +287,8 @@ export const insertSidebarStackedPanel = async (
         })
       }
 
-      if (source?.parentId === perTabBlock.id) {
-        const topLevelSiblings = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
+      if (source?.parentId === layoutSessionBlock.id) {
+        const topLevelSiblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
         const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
         const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
         if (rightSibling && isPanelStackRow(rightSibling)) {
@@ -304,7 +304,7 @@ export const insertSidebarStackedPanel = async (
           : keyAtEnd(source.orderKey)
         const stackId = await createPanelStackRowInTx(repo, tx, {
           workspaceId: parent.workspaceId,
-          parentId: perTabBlock.id,
+          parentId: layoutSessionBlock.id,
           orderKey: stackOrderKey,
         })
         if (rightSibling) {
@@ -319,11 +319,11 @@ export const insertSidebarStackedPanel = async (
       }
     }
 
-    const siblings = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
+    const siblings = await tx.childrenOf(layoutSessionBlock.id, parent.workspaceId)
     const previous = siblings.at(-1)
     const stackId = await createPanelStackRowInTx(repo, tx, {
       workspaceId: parent.workspaceId,
-      parentId: perTabBlock.id,
+      parentId: layoutSessionBlock.id,
       orderKey: keyAtEnd(previous?.orderKey ?? null),
     })
     return insertPanelAtStartOfStackInTx(repo, tx, {
@@ -354,7 +354,7 @@ export const deletePanelRow = async (
 
 export const reconcilePanelRows = async (
   repo: Repo,
-  perTabBlock: Block,
+  layoutSessionBlock: Block,
   targetSlotsOrBlockIds: readonly (LayoutSlot | string)[],
 ): Promise<void> => {
   const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
@@ -363,18 +363,18 @@ export const reconcilePanelRows = async (
   const targetBlockIds = flattenLayoutSlots(targetSlots)
 
   await repo.tx(async tx => {
-    const parent = await tx.get(perTabBlock.id)
-    if (!parent) throw new Error(`reconcilePanelRows: per-tab block ${perTabBlock.id} not found`)
+    const parent = await tx.get(layoutSessionBlock.id)
+    if (!parent) throw new Error(`reconcilePanelRows: layout session block ${layoutSessionBlock.id} not found`)
 
     const currentRows = await loadSubtreeRowsInTx(tx, parent)
-    const currentLayoutSlots = layoutSlotsFromRows(perTabBlock.id, currentRows)
+    const currentLayoutSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
     if (sameLayoutSlots(currentLayoutSlots, targetSlots)) return
 
     const currentSlots = currentRows
-      .filter(row => row.id !== perTabBlock.id && !isPanelStackRow(row))
+      .filter(row => row.id !== layoutSessionBlock.id && !isPanelStackRow(row))
       .map(row => ({row, blockId: panelBlockId(row)}))
     const stackRowsToDelete = currentRows
-      .filter(row => row.id !== perTabBlock.id && isPanelStackRow(row))
+      .filter(row => row.id !== layoutSessionBlock.id && isPanelStackRow(row))
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
 
@@ -430,7 +430,7 @@ export const reconcilePanelRows = async (
       }
     }
 
-    await materializeSlots(targetSlots, perTabBlock.id)
+    await materializeSlots(targetSlots, layoutSessionBlock.id)
 
     for (const stackRow of stackRowsToDelete) {
       await tx.delete(stackRow.id)
@@ -441,7 +441,7 @@ export const reconcilePanelRows = async (
 export interface ApplyCurrentLayoutUrlArgs {
   repo: Repo
   workspaceId: string
-  perTabBlock: Block
+  layoutSessionBlock: Block
   hash?: string
   replaceHash?: (hash: string) => void
 }
@@ -449,7 +449,7 @@ export interface ApplyCurrentLayoutUrlArgs {
 export const applyCurrentLayoutUrl = async ({
   repo,
   workspaceId,
-  perTabBlock,
+  layoutSessionBlock,
   hash = typeof window === 'undefined' ? '' : window.location.hash,
   replaceHash,
 }: ApplyCurrentLayoutUrlArgs): Promise<ApplyLayoutResult> => {
@@ -458,8 +458,8 @@ export const applyCurrentLayoutUrl = async ({
     return {kind: 'ignored'}
   }
 
-  const currentRows = await perTabBlock.repo.query.subtree({id: perTabBlock.id}).load()
-  const currentSlots = layoutSlotsFromRows(perTabBlock.id, currentRows)
+  const currentRows = await layoutSessionBlock.repo.query.subtree({id: layoutSessionBlock.id}).load()
+  const currentSlots = layoutSlotsFromRows(layoutSessionBlock.id, currentRows)
 
   if (route.slots.length === 0) {
     if (currentSlots.length > 0) {
@@ -473,14 +473,14 @@ export const applyCurrentLayoutUrl = async ({
     return {kind: 'noop'}
   }
 
-  await reconcilePanelRows(repo, perTabBlock, route.slots)
+  await reconcilePanelRows(repo, layoutSessionBlock, route.slots)
   return {kind: 'applied'}
 }
 
 export interface PanelLayoutProjectionOptions {
   repo: Repo
   workspaceId: string
-  perTabBlock: Block
+  layoutSessionBlock: Block
   getHash?: () => string
   pushHash?: (hash: string) => void
   replaceHash?: (hash: string) => void
@@ -506,7 +506,7 @@ const defaultSubscribeToUrl = (listener: () => void): Unsubscribe => {
 export class PanelLayoutProjection {
   private readonly repo: Repo
   private readonly workspaceId: string
-  private readonly perTabBlock: Block
+  private readonly layoutSessionBlock: Block
   private readonly getHash: () => string
   private readonly pushHash: (hash: string) => void
   private readonly replaceHash: (hash: string) => void
@@ -520,7 +520,7 @@ export class PanelLayoutProjection {
   constructor(options: PanelLayoutProjectionOptions) {
     this.repo = options.repo
     this.workspaceId = options.workspaceId
-    this.perTabBlock = options.perTabBlock
+    this.layoutSessionBlock = options.layoutSessionBlock
     this.getHash = options.getHash ?? defaultGetHash
     this.pushHash = options.pushHash ?? defaultPushHash
     this.replaceHash = options.replaceHash ?? defaultReplaceHash
@@ -529,9 +529,9 @@ export class PanelLayoutProjection {
 
   async start(): Promise<void> {
     if (this.unsubscribeRows || this.unsubscribeUrl) return
-    const rowsHandle = this.perTabBlock.repo.query.subtree({id: this.perTabBlock.id})
+    const rowsHandle = this.layoutSessionBlock.repo.query.subtree({id: this.layoutSessionBlock.id})
     const initialRows = await rowsHandle.load()
-    this.lastSlots = layoutSlotsFromRows(this.perTabBlock.id, initialRows)
+    this.lastSlots = layoutSlotsFromRows(this.layoutSessionBlock.id, initialRows)
     this.unsubscribeRows = rowsHandle.subscribe(rows => {
       this.handleRowsChanged(rows)
     })
@@ -562,7 +562,7 @@ export class PanelLayoutProjection {
         const result = await applyCurrentLayoutUrl({
           repo: this.repo,
           workspaceId: this.workspaceId,
-          perTabBlock: this.perTabBlock,
+          layoutSessionBlock: this.layoutSessionBlock,
           hash: this.getHash(),
           replaceHash: hash => {
             this.replaceHash(hash)
@@ -577,7 +577,7 @@ export class PanelLayoutProjection {
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {
-    const slots = layoutSlotsFromRows(this.perTabBlock.id, rows)
+    const slots = layoutSlotsFromRows(this.layoutSessionBlock.id, rows)
     if (sameLayoutSlots(this.lastSlots, slots)) return
     this.lastSlots = slots
 

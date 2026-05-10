@@ -16,7 +16,7 @@
  *   - getUIStateBlock(repo, ws, user, ctx): with panelId → returns
  *     the panel block; without panelId → ensures a 'ui-state' child
  *     of the user page
- *   - getPerTabBlock: ensures ui-state/tabs/{tabId}
+ *   - getLayoutSessionBlock: ensures ui-state/layout-sessions/{layoutSessionId}
  *   - getSelectionStateSnapshot: returns peekProperty value, defaults
  *     to the schema default when absent
  *   - resetBlockSelection: no-op when already empty, clears when set
@@ -32,7 +32,7 @@ import {
   selectionStateProp,
 } from '@/data/properties'
 import {
-  getPerTabBlock,
+  getLayoutSessionBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
   getUserBlock,
@@ -198,34 +198,34 @@ describe('getUIStateBlock', () => {
   })
 })
 
-describe('getPerTabBlock', () => {
-  it('ensures a tab-specific child under ui-state/tabs', async () => {
+describe('getLayoutSessionBlock', () => {
+  it('ensures a layout-session-specific child under ui-state/layout-sessions', async () => {
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const tab = await getPerTabBlock(uiState, 'tab-a')
+    const layoutSession = await getLayoutSessionBlock(uiState, 'layout-session-a')
 
-    expect(tab.peek()?.content).toBe('tab-a')
+    expect(layoutSession.peek()?.content).toBe('layout-session-a')
 
-    const tabsParent = tab.parent
-    expect(tabsParent?.peek()?.parentId).toBe(uiState.id)
-    expect(tabsParent?.peek()?.content).toBe('tabs')
+    const layoutSessionsParent = layoutSession.parent
+    expect(layoutSessionsParent?.peek()?.parentId).toBe(uiState.id)
+    expect(layoutSessionsParent?.peek()?.content).toBe('layout-sessions')
   })
 
-  it('is idempotent for the same tabId', async () => {
+  it('is idempotent for the same layoutSessionId', async () => {
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const a = await getPerTabBlock(uiState, 'tab-a')
-    const b = await getPerTabBlock(uiState, 'tab-a')
+    const a = await getLayoutSessionBlock(uiState, 'layout-session-a')
+    const b = await getLayoutSessionBlock(uiState, 'layout-session-a')
     expect(a).toBe(b)
   })
 
-  it('keeps different tabIds in independent per-tab blocks', async () => {
+  it('keeps different layoutSessionIds in independent layout session blocks', async () => {
     const uiState = await getUIStateBlock(env.repo, WS, USER, {})
-    const a = await getPerTabBlock(uiState, 'tab-a')
-    const b = await getPerTabBlock(uiState, 'tab-b')
+    const a = await getLayoutSessionBlock(uiState, 'layout-session-a')
+    const b = await getLayoutSessionBlock(uiState, 'layout-session-b')
 
     expect(a.id).not.toBe(b.id)
     expect(a.peek()?.parentId).toBe(b.peek()?.parentId)
-    expect(a.peek()?.content).toBe('tab-a')
-    expect(b.peek()?.content).toBe('tab-b')
+    expect(a.peek()?.content).toBe('layout-session-a')
+    expect(b.peek()?.content).toBe('layout-session-b')
   })
 })
 

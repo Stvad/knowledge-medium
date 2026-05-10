@@ -22,33 +22,34 @@ Panel rows stay in the workspace DB. UiState scope already gives "don't sync acr
 
 The only deviation we considered (a fresh in-memory `panelLayoutStore`) was redundant with what UiState scope already provides, and would have fragmented the substrate for no win.
 
-### Per-tab scoping via per-tab parent block
+### Layout-session scoping via layout-session parent block
 
-Without tab scoping, two browser tabs on the same workspace would share panel rows (and clobber each other's URL state). Each tab gets its own parent block under the existing UI-state tree:
+Without session scoping, two browser tabs on the same workspace would share panel rows (and clobber each other's URL state). Each browser tab gets its own parent block under the existing UI-state tree, while an installed PWA reuses one stable parent across close/reopen:
 
 ```
 workspace
   userBlock(userId)
     ui-state
-      tabs
-        {tabIdA}
+      layout-sessions
+        {layoutSessionIdA}
           panel-row-1
           panel-row-2
-        {tabIdB}
+        {layoutSessionIdB}
           panel-row-3
 ```
 
-Built from the existing `ensureUiChild` pattern in `globalState.ts` — `ensureUiChild(uiState, 'tabs')` then `ensureUiChild(tabs, tabId)` gives the per-tab parent block. Panel rows live as children of the per-tab block (no intermediate `panels` container needed).
+Built from the existing `ensureUiChild` pattern in `globalState.ts` — `ensureUiChild(uiState, 'layout-sessions')` then `ensureUiChild(layoutSessionsBlock, layoutSessionId)` gives the layout-session parent block. Panel rows live as children of the layout-session block (no intermediate `panels` container needed).
 
-- **`tabId` lives in `sessionStorage`** (per-tab natively, persists across reload of the same tab, dies on tab close).
-- On first load: read `sessionStorage['ws-nav.tabId']`; if missing, generate a UUID and store it. (Browsers don't expose a native tab id — `window.name` is the closest but unsafe to share with frames/scripts; Service Worker client ids are per-document and only visible inside the SW. Storing a UUID in `sessionStorage` is the canonical pattern.)
-- **Caveat (accepted for alpha):** "duplicate tab" / "open in new tab" flows can clone the initial `sessionStorage`, so the new tab starts with the same `tabId` and ends up sharing the per-tab block with its opener. We accept this — the failure mode is the same as having one extra browser tab effectively, and the workaround (lease/heartbeat to rotate `tabId` when another live tab claims it) is more machinery than the cost warrants right now. Note as a known limitation; revisit if it becomes a real issue.
-- Layout reads use `useChildren(perTabBlock)` directly — no filter. Order-key sorting is per-parent, so each tab's panel order is independent.
-- Reconciliation writes target the per-tab block's children.
+- **Browser tabs:** `layoutSessionId` lives in `sessionStorage['ws-nav.layoutSessionId']`, so it persists across reload of the same tab and dies on tab close.
+- **Installed PWA / standalone display:** `layoutSessionId` lives in `localStorage['ws-nav.installedAppLayoutSessionId']`, so close/reopen restores the same layout-session block.
+- On first load for either storage mode: read the current mode's key; if missing, generate a UUID and store it. There is no browser-exposed per-installation id, so this is an app-owned client identity.
+- **Caveat (accepted for alpha):** "duplicate tab" / "open in new tab" flows can clone the initial `sessionStorage`, so the new tab starts with the same `layoutSessionId` and ends up sharing the layout-session block with its opener. We accept this — the failure mode is the same as having one extra browser tab effectively, and the workaround (lease/heartbeat to rotate `layoutSessionId` when another live tab claims it) is more machinery than the cost warrants right now. Note as a known limitation; revisit if it becomes a real issue.
+- Layout reads use `useChildren(layoutSessionBlock)` directly — no filter. Order-key sorting is per-parent, so each layout session's panel order is independent.
+- Reconciliation writes target the layout-session block's children.
 
-Considered alternative — shared `panels` parent + `tabId` property on each row — but it loses on both read path (filter step on every render) and GC (per-row scan + delete instead of subtree delete). Per-tab parent matches the existing `ensureUiChild` idiom; not new structure.
+Considered alternative — shared `panels` parent + `layoutSessionId` property on each row — but it loses on both read path (filter step on every render) and GC (per-row scan + delete instead of subtree delete). Layout-session parent matches the existing `ensureUiChild` idiom; not new structure.
 
-GC of orphan tab subtrees (tab closed → its subtree lingers): punt for alpha, but the cleanup story is one delete per stale tab (cascade from the per-tab block) once we want it. Heartbeat in `localStorage` (or a `lastSeenAt` UiState property on the per-tab block itself) tells us which tabIds are stale. Cheaper than the per-row sweep the shared-parent approach would have needed.
+GC of orphan layout-session subtrees: punt for alpha, but the cleanup story is one delete per stale layout session (cascade from the layout-session block) once we want it. Heartbeat in `localStorage` (or a `lastSeenAt` UiState property on the layout-session block itself) tells us which layoutSessionIds are stale. Cheaper than the per-row sweep the shared-parent approach would have needed.
 
 ### URL shape (no back-compat constraint — old shape can break)
 
@@ -56,7 +57,7 @@ GC of orphan tab subtrees (tab closed → its subtree lingers): punt for alpha, 
 #<wsId>/<blockId1>(/<blockId2>(/<blockId3>...))*
 ```
 
-Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) is a transient state — the projection restores prior `(tabId, wsId)` rows if any exist, else the landing layer fills in today's daily note (see "Workspace switch + default landing" below). Compact, shareable, human-readable.
+Flat ordered list, leftmost = focused/main panel, no special focused-vs-panels suffix. Empty list (`#<wsId>`) is a transient state — the projection restores prior `(layoutSessionId, wsId)` rows if any exist, else the landing layer fills in today's daily note (see "Workspace switch + default landing" below). Compact, shareable, human-readable.
 
 Sticking with hash (vs query string / pathname): hash works on any static host with no SPA-fallback config, and block ids never leak into HTTP request lines, server logs, or `Referer` headers. No SEO/SSR target makes the usual reasons to prefer pathname routing moot. Query params remain available for orthogonal config (`?debug=1#wsId/b1/b2`).
 
@@ -101,7 +102,7 @@ Step 4 initially shipped the bare-id + `/`-separated case; Roam-sidebar mode add
 
 Panel rows are the source of truth; their rowId is the slot identity. Survives reload (DB persists), survives intra-panel navigation, naturally extends to splits/tabs (those would just be additional row types).
 
-URL ↔ DB reconciliation on hashchange: for a non-empty block list, LCS diff matches URL block list to existing panel rows for `(workspaceId, tabId)`, preserving per-row state where blocks survive. Insert-in-middle, append, close, intra-panel nav all work; the LCS does the same job it did in the in-memory-store version, just over DB rows. Empty block list (`#<wsId>`) is the special case handled by the workspace-landing path below — it means "restore prior layout for `(tabId, wsId)` if any, else fill in daily note," not "reconcile to zero rows."
+URL ↔ DB reconciliation on hashchange: for a non-empty block list, LCS diff matches URL block list to existing panel rows for `(workspaceId, layoutSessionId)`, preserving per-row state where blocks survive. Insert-in-middle, append, close, intra-panel nav all work; the LCS does the same job it did in the in-memory-store version, just over DB rows. Empty block list (`#<wsId>`) is the special case handled by the workspace-landing path below — it means "restore prior layout for `(layoutSessionId, wsId)` if any, else fill in daily note," not "reconcile to zero rows."
 
 ### Browser history strategy
 
@@ -138,7 +139,7 @@ Already partially shipped in step 3 as in-memory snapshots on panel-history entr
 - `focusedBlockIdProp` — already a UiState property on panel rows. Keep.
 - `scrollTopProp` — new. UiState property on panel rows. Written debounced on scroll (after scroll-stop, ~200ms) and on `visibilitychange`. Read on mount, applied to scroll ref after layout.
 
-Reload-survival of focus + scroll is now free, since DB rows persist and `tabId` scopes them per-tab.
+Reload-survival of focus + scroll is now free, since DB rows persist and `layoutSessionId` scopes them to the layout session.
 
 ### Per-panel back/forward block history — keep in-memory, reconcile on popstate
 
@@ -163,40 +164,40 @@ URL `#<wsId>` (no block list) doesn't mean "render blank." Current bootstrap (Ap
 Refactored landing flow (replaces the eager-daily-note rewrite):
 
 - The **parser** stays pure: `parseLayout('#<wsId>')` → `{workspaceId, blockIds: []}`. It doesn't know about defaults.
-- On bare `#<wsId>` (initial load OR workspace switch), `applyCurrentUrl` looks up panel rows for `(tabId, newWsId)`:
-  - **If rows exist** (user has visited this workspace in this tab before): build URL `#<newWsId>/<block1>/<block2>/...` from those rows and `replaceState` to it, no row writes. Net effect: bare `#<newWsId>` is treated as "go to this workspace, restore my last layout for it." `replaceState` (not push) collapses the bare URL into the full one without doubling the history entry.
-  - **If no rows exist** (first time visiting in this tab): the **landing layer** sitting alongside the projection resolves today's daily note, does `history.replaceState(_, _, buildLayout(wsId, [dailyNoteId]))`, then `repo.tx(UiState, tx => insertPanelRow(dailyNoteId))`. The replaceState lands first so the projection's idempotency rule kicks in: row write fires the observer, observer builds the same URL, no-ops. One history entry, URL `#<wsId>/<dailyNoteId>`, no ping-pong on browser back.
-- **App/Suspense handoff.** `getInitialBlock` no longer resolves a single "landing block." Its replacement returns `{workspaceId, perTabBlock}` once URL + per-tab rows are normalized, and *that's* what App passes to the layout host. Concretely:
-  - `getInitialBlock` (or its renamed successor): resolves the workspace, ensures the per-tab block exists, runs `applyCurrentUrl`, then if the per-tab block still has no children defers to the landing layer (replaceState `#<wsId>/<dailyNoteId>` + insert row); awaits all of the above before resolving. Returns `{workspaceId, perTabBlock}`.
-  - `LayoutRenderer` (or whatever the top-level layout host is) takes `perTabBlock` as its prop instead of a single landing block, and reads `useChildren(perTabBlock)` for the panel list. No "give me one block to render" handoff; the layout host always works from the per-tab block.
-  - Net effect: TopLevelRenderer never receives a "main block" id from bootstrap; the entry block is whatever ends up at `perTabBlock.children[0]?.topLevelBlockIdProp`. Avoids accidentally keeping a vestigial daily-note bootstrap path just to satisfy a rendering contract that no longer applies.
-- The Suspense boundary keeps working — the resolved promise gates first paint, just resolves to the per-tab block now instead of a single landing block.
+- On bare `#<wsId>` (initial load OR workspace switch), `applyCurrentUrl` looks up panel rows for `(layoutSessionId, newWsId)`:
+  - **If rows exist** (user has visited this workspace in this layout session before): build URL `#<newWsId>/<block1>/<block2>/...` from those rows and `replaceState` to it, no row writes. Net effect: bare `#<newWsId>` is treated as "go to this workspace, restore my last layout for it." `replaceState` (not push) collapses the bare URL into the full one without doubling the history entry.
+  - **If no rows exist** (first time visiting in this layout session): the **landing layer** sitting alongside the projection resolves today's daily note, does `history.replaceState(_, _, buildLayout(wsId, [dailyNoteId]))`, then `repo.tx(UiState, tx => insertPanelRow(dailyNoteId))`. The replaceState lands first so the projection's idempotency rule kicks in: row write fires the observer, observer builds the same URL, no-ops. One history entry, URL `#<wsId>/<dailyNoteId>`, no ping-pong on browser back.
+- **App/Suspense handoff.** `getInitialBlock` no longer resolves a single "landing block." Its replacement returns `{workspaceId, layoutSessionBlock}` once URL + layout-session rows are normalized, and *that's* what App passes to the layout host. Concretely:
+  - `getInitialBlock` (or its renamed successor): resolves the workspace, ensures the layout-session block exists, runs `applyCurrentUrl`, then if the layout-session block still has no children defers to the landing layer (replaceState `#<wsId>/<dailyNoteId>` + insert row); awaits all of the above before resolving. Returns `{workspaceId, layoutSessionBlock}`.
+  - `LayoutRenderer` (or whatever the top-level layout host is) takes `layoutSessionBlock` as its prop instead of a single landing block, and reads `useChildren(layoutSessionBlock)` for the panel list. No "give me one block to render" handoff; the layout host always works from the layout-session block.
+  - Net effect: TopLevelRenderer never receives a "main block" id from bootstrap; the entry block is whatever ends up at `layoutSessionBlock.children[0]?.topLevelBlockIdProp`. Avoids accidentally keeping a vestigial daily-note bootstrap path just to satisfy a rendering contract that no longer applies.
+- The Suspense boundary keeps working — the resolved promise gates first paint, just resolves to the layout-session block now instead of a single landing block.
 - **Workspace switch path:** caller writes `#<newWsId>` to URL (`writeAppHash` is fine). Same flow as above runs.
-- Per-(tabId, wsId) row persistence means each tab maintains its own per-workspace layout history. Switching back and forth between two workspaces in one tab restores each side's layout. Other tabs' rows are unaffected.
+- Per-(layoutSessionId, wsId) row persistence means each layout session maintains its own per-workspace layout history. Switching back and forth between two workspaces in one layout session restores each side's layout. Other layout sessions' rows are unaffected.
 
 Keeps the "always land on something" UX, keeps the parser dumb, keeps the projection narrow, and keeps the "DB row write drives URL" property — bootstrap is the one place that pre-writes the URL because it explicitly wants replace-not-push semantics for what would otherwise look like an insert.
 
-### Main panel = first ordered child of per-tab block
+### Main panel = first ordered child of layout-session block
 
-Today the "main" panel is identified by `panel.content === MAIN_PANEL_NAME` ('main'), a sentinel value written by `ensureMainPanel`. With the per-tab parent layout, this stops being meaningful: there's no need for a sentinel-content row, and the leftmost panel can naturally change identity (close-of-leftmost, drag-reorder).
+Today the "main" panel is identified by `panel.content === MAIN_PANEL_NAME` ('main'), a sentinel value written by `ensureMainPanel`. With the layout-session parent layout, this stops being meaningful: there's no need for a sentinel-content row, and the leftmost panel can naturally change identity (close-of-leftmost, drag-reorder).
 
-New semantics: **main panel = first child of the per-tab block by order key.** Positional, no special content. Implications across the codebase:
+New semantics: **main panel = first child of the layout-session block by order key.** Positional, no special content. Implications across the codebase:
 
-- **`ensureMainPanel`** (LayoutRenderer): deleted. The landing layer's row insert (or any user nav that produces the first row) creates whatever block becomes "main" for that `(tabId, wsId)`. No sentinel row.
-- **`MAIN_PANEL_NAME` + `isMainPanel(block)` content check** (globalState, PanelRenderer, navigation, defaultShortcuts, tests): replaced with a positional helper, e.g. `isMainPanel(block, perTabBlock) → block.id === perTabBlock.children[0]?.id`. Memoized at the appropriate scope.
+- **`ensureMainPanel`** (LayoutRenderer): deleted. The landing layer's row insert (or any user nav that produces the first row) creates whatever block becomes "main" for that `(layoutSessionId, wsId)`. No sentinel row.
+- **`MAIN_PANEL_NAME` + `isMainPanel(block)` content check** (globalState, PanelRenderer, navigation, defaultShortcuts, tests): replaced with a positional helper, e.g. `isMainPanel(block, layoutSessionBlock) → block.id === layoutSessionBlock.children[0]?.id`. Memoized at the appropriate scope.
 - **PanelRenderer's chrome-hiding** (close button, back/forward chevrons currently hidden on main): now driven by the positional check. If user reorders panels so a different one becomes leftmost, chrome hides on the new leftmost.
-- **`target: 'main'`** in `NavigateInput` (alt-click): updates `topLevelBlockIdProp` on the first child of the per-tab block, regardless of which panel the click came from.
+- **`target: 'main'`** in `NavigateInput` (alt-click): updates `topLevelBlockIdProp` on the first child of the layout-session block, regardless of which panel the click came from.
 - **Default shortcuts** that branch on `isMainPanel(uiStateBlock)`: same swap to positional check.
 
 The "first child = main" rule fits the URL semantic ("leftmost = focused/main panel"). Drag-reorder and close-of-leftmost both shift the main role to whatever ends up first; mental model matches.
 
 ### Mobile
 
-Render only the last (focused) panel for the current tab. **Close button does a proper close** — deletes the visible panel's row through the same path desktop's `handleClose` uses (UiState delete; observer pushes URL update). Earlier draft of this section said "close button = browser back" which doesn't hold under "push on every URL change" — browser back could undo an intra-panel link click or chevron click instead of closing the visible panel, which is the wrong affordance for a control that visually says "close." Pure renderer change; data model unchanged.
+Render only the last (focused) panel for the current layout session. **Close button does a proper close** — deletes the visible panel's row through the same path desktop's `handleClose` uses (UiState delete; observer pushes URL update). Earlier draft of this section said "close button = browser back" which doesn't hold under "push on every URL change" — browser back could undo an intra-panel link click or chevron click instead of closing the visible panel, which is the wrong affordance for a control that visually says "close." Pure renderer change; data model unchanged.
 
 ### Legacy panel-block rows in existing user DBs
 
-Ignore (alpha). Existing panel rows under `ui-state/panels/` are not children of any per-tab block — they're effectively orphaned by the new readers. Optional one-shot cleanup if cruft becomes an issue (delete the legacy `panels` subtree once we're confident nothing reads from it).
+Ignore (alpha). Existing panel rows under `ui-state/panels/` are not children of any layout-session block — they're effectively orphaned by the new readers. Optional one-shot cleanup if cruft becomes an issue (delete the legacy `panels` subtree once we're confident nothing reads from it).
 
 ### Cmd+[/], forward/back mouse buttons
 
@@ -240,15 +241,15 @@ Push semantics: alt-click changes the main panel's `topLevelBlockId` → observe
 
 ## Step 4 execution plan
 
-### 4a. URL parser/builder + per-tab block infrastructure
+### 4a. URL parser/builder + layout-session block infrastructure
 
 - Extend `routing.ts`: `parseLayout(hash) → {workspaceId, blockIds: string[]}`, `buildLayout(workspaceId, blockIds) → hash`. Bare-id + `/`-separated only; structure to allow extending to `()` groups without breaking the API.
-- New `tabId.ts`: `getTabId()` reads/generates UUID in `sessionStorage['ws-nav.tabId']`, memoized.
-- New `getPerTabBlock(uiState, tabId)` in `globalState.ts` (alongside the existing `getPanelsBlock`): `ensureUiChild(uiState, 'tabs')` then `ensureUiChild(tabsBlock, tabId)` to find-or-create the per-tab parent block. Memoized like the existing helpers.
-- Add `usePanelsForTab()` hook that resolves the per-tab block for the current `(workspaceId, tabId)` and returns `useChildren(perTabBlock)`.
-- Tests: parser round-trips (including empty-list, single-block, multi-block); tabId persistence across the same module's lifetime; tabId differs across simulated tabs; per-tab block is created on first access and reused on subsequent accesses for the same tabId; two simulated tabIds produce independent per-tab blocks.
+- New `layoutSessionId.ts`: `getLayoutSessionId()` reads/generates UUID in `sessionStorage['ws-nav.layoutSessionId']` for browser tabs and `localStorage['ws-nav.installedAppLayoutSessionId']` for installed app display modes, memoized.
+- New `getLayoutSessionBlock(uiState, layoutSessionId)` in `globalState.ts` (alongside the existing `getPanelsBlock`): `ensureUiChild(uiState, 'layout-sessions')` then `ensureUiChild(layoutSessionsBlock, layoutSessionId)` to find-or-create the layout-session parent block. Memoized like the existing helpers.
+- Add `usePanelsForLayoutSession()` hook that resolves the layout-session block for the current `(workspaceId, layoutSessionId)` and returns `useChildren(layoutSessionBlock)`.
+- Tests: parser round-trips (including empty-list, single-block, multi-block); layoutSessionId persistence across the same module's lifetime; browser-tab layout sessions stay independent by storage instance; installed app display modes use the localStorage-backed id; layout-session block is created on first access and reused on subsequent accesses for the same layoutSessionId; two simulated layoutSessionIds produce independent layout-session blocks.
 
-No behavior change yet — the parser/tabId/per-tab-block infrastructure exists but nothing reads the URL or writes through the per-tab block.
+No behavior change yet — the parser/layoutSessionId/layout-session-block infrastructure exists but nothing reads the URL or writes through the layout-session block.
 
 ### 4b. URL ↔ panel-row projection (observer-shaped, two directions)
 
@@ -256,7 +257,7 @@ Panel rows are the source of truth; URL is a derived view. The projection is the
 
 The reviewer's worry — "observer can't tell open-panel from reorder, or close from workspace-switch fallout" — is answered by classifying the **diff between row states**, not the caller's intent. With "push on every URL change" the rule is simple:
 
-| Diff (prev rows → next rows) for `(workspaceId, tabId)` | History mode |
+| Diff (prev rows → next rows) for `(workspaceId, layoutSessionId)` | History mode |
 |---|---|
 | ordered list of `topLevelBlockId`s changed (the URL-encoded view of the rows) | `pushState` |
 | only other props changed (`scrollTop`, `focusedBlockId`, …) | no URL write |
@@ -276,7 +277,7 @@ panelLayoutProjection = {
   applyCurrentUrl(): Promise<void>
 
   // Outbound: subscribed to panel-row commits for (currentWorkspaceId,
-  // currentTabId). On each commit, diffs prev vs next, picks history mode,
+  // currentLayoutSessionId). On each commit, diffs prev vs next, picks history mode,
   // writes URL via pushState/replaceState, then notifies subscribers.
   // No public method — wired up at construction.
 
@@ -301,9 +302,9 @@ Operational details:
 - **Per-tx granularity.** The outbound observer subscribes at the *tx-commit* level (single notification per `repo.tx`), not per-property-update — multiple writes in one tx produce one URL update.
 - **LCS over block ids has duplicate-block ambiguity.** If the URL contains `b1` twice (`#wsId/b1/b2/b1`), and a close removes one of them, browser-back can't unambiguously restore which prior rowId was at which position. **Decision: best-effort.** Duplicates that survive a round-trip get fresh rowId (and lose per-row visit state on that round-trip). Upgrade path if this bites: write `{rowOrder: rowId[]}` into `history.state` on each push so popstate has unambiguous identity recovery — `history.state` survives reload and is per-entry. Not in step 4.
 - **No "intent hints" channel.** Callers don't pass `{kind: 'open-panel'}` or similar. They just write rows.
-- **`LayoutRenderer` reads through `useChildren(perTabBlock)`** where `perTabBlock = ui-state/tabs/{currentTabId}` (resolved via the existing `ensureUiChild` pattern, see "Per-tab scoping" above). No filter — children of the right parent are already the right rows. Order-key ordering is per-parent so each tab's panel order is independent. Considered shared-parent + `tabIdProp` filter and rejected: requires a filter on every render, and GC becomes a per-row scan/delete instead of one cascading subtree delete per stale tab.
+- **`LayoutRenderer` reads through `useChildren(layoutSessionBlock)`** where `layoutSessionBlock = ui-state/layout-sessions/{currentLayoutSessionId}` (resolved via the existing `ensureUiChild` pattern, see "Layout-session scoping" above). No filter — children of the right parent are already the right rows. Order-key ordering is per-parent so each layout session's panel order is independent. Considered shared-parent + `layoutSessionIdProp` filter and rejected: requires a filter on every render, and GC becomes a per-row scan/delete instead of one cascading subtree delete per stale layout session.
 - **`navigate()`** continues to insert a panel row via `repo.tx` (UiState scope); URL update happens through the observer.
-- **Tests:** classification rule covers each diff shape (insert/delete/reorder/intra-panel/property-only/no-op); `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; duplicate-block round-trips get fresh identity (documented best-effort); two simulated tabIds don't see each other; subscribers fire after each of (a) inbound URL→rows, (b) inbound URL-only normalization (bare `#<wsId>` with existing rows → replaceState to full layout), (c) outbound rows→URL; rapid open/close calls converge correctly under serialization.
+- **Tests:** classification rule covers each diff shape (insert/delete/reorder/intra-panel/property-only/no-op); `applyCurrentUrl` reconciles rows correctly across append/close/insert-in-middle/full-replace; reload restores layout; reorder preserves rowId; duplicate-block round-trips get fresh identity (documented best-effort); two simulated layoutSessionIds don't see each other; subscribers fire after each of (a) inbound URL→rows, (b) inbound URL-only normalization (bare `#<wsId>` with existing rows → replaceState to full layout), (c) outbound rows→URL; rapid open/close calls converge correctly under serialization.
 
 ### 4c. Wire `navigate()` and close through panel-row writes
 
@@ -312,7 +313,7 @@ Callers don't talk to the projection directly — they write panel rows. The pro
 - `navigate({target: 'new-panel', sourcePanelId})`: insert a new panel row at `sourceIndex + 1` (UiState scope). Observer classifies as insert → push. Drop `dispatchEvent('open-panel')` from `navigation.ts`; drop `'open-panel'` CustomEvent listener from `LayoutRenderer`.
 - `handleClose` in `PanelRenderer`: stays as-is (UiState delete of the panel row). Observer classifies as delete → push.
 - `navigate({target: 'focused', panelId})` for a side panel: updates the panel row's `topLevelBlockIdProp`. Observer classifies as URL-changed → push (browser back undoes the link click).
-- Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) handles bare `#<wsId>` by either restoring prior `(tabId, wsId)` rows or, if none exist, deferring to the landing layer to fill in the daily note (see "Workspace switch + default landing" above). App.tsx's eager daily-note rewrite in `getInitialBlock` is removed in this step.
+- Workspace switch: existing path writes `#<new-wsId>` to URL via `location.hash =` (or its `writeAppHash` wrapper). The inbound side of the projection (`applyCurrentUrl`) handles bare `#<wsId>` by either restoring prior `(layoutSessionId, wsId)` rows or, if none exist, deferring to the landing layer to fill in the daily note (see "Workspace switch + default landing" above). App.tsx's eager daily-note rewrite in `getInitialBlock` is removed in this step.
 - Cmd-[/], forward/back mouse: keep bound to `history.back/forward()` — gets the right semantics for free now that browser history tracks panel layout.
 
 ### 4d. Visit state persistence (scroll)
@@ -323,12 +324,12 @@ Callers don't talk to the projection directly — they write panel rows. The pro
   - On `visibilitychange` to hidden: flush pending write.
   - On mount + `topLevelBlockId` change: read `scrollTopProp` from row and apply to scrollRef in a post-layout effect (same pattern as the existing `consumeRestore`).
 - Existing in-memory snapshotter / restore queue stays — it's still the right substrate for *intra-session* per-panel back/forward, where we don't want every nav writing to DB.
-- Tests: scroll persists across reload; doesn't sync across devices (UiState); doesn't pollute the other tab's row.
+- Tests: scroll persists across reload; doesn't sync across devices (UiState); doesn't pollute another layout session's row.
 
 ### 4e. Cleanup
 
 - Delete `'open-panel'` CustomEvent (event name + dispatcher + listener).
-- **Delete `ensureMainPanel`, `MAIN_PANEL_NAME`, and the content-based `isMainPanel`.** Replace `isMainPanel` with a positional helper (first child of per-tab block); update PanelRenderer chrome-hiding, default shortcut branches, and navigation routing call sites accordingly. See "Main panel = first ordered child of per-tab block" above.
+- **Delete `ensureMainPanel`, `MAIN_PANEL_NAME`, and the content-based `isMainPanel`.** Replace `isMainPanel` with a positional helper (first child of layout-session block); update PanelRenderer chrome-hiding, default shortcut branches, and navigation routing call sites accordingly. See "Main panel = first ordered child of layout-session block" above.
 - Update tests that reference `MAIN_PANEL_NAME` / panel-content-as-sentinel to use positional setup instead.
 - Delete the legacy `getPanelsBlock` / `PANELS_PATH_PART` indirection if nothing reads from `ui-state/panels` anymore.
 - Confirm no panel-row writes use a non-UiState scope outside the projection.
@@ -349,7 +350,7 @@ The current navigation code grew before facet was the dominant idiom; once step 
 - Per-panel back/forward block history surviving reload: not in step 4. Punt to a follow-up — promoting `panelHistory` stacks to UiState rows is straightforward but adds row churn we don't need yet.
 - Persistent named layouts: not in step 4. A future feature; URL would carry an opaque layout id (`#wsId/L7`) and the structure would live in a saved-layouts store. Coexists with the inline grammar — opt-in only when the user explicitly names a layout.
 - Cross-device sync of any panel layout: explicitly NOT a goal. UiState scope keeps panel rows out of PowerSync.
-- GC of orphan per-tab subtrees from closed tabs: not in step 4. Add a heartbeat-based sweep if/when this becomes a real issue (one cascading delete per stale tab).
+- GC of orphan layout-session subtrees: not in step 4. Add a heartbeat-based sweep if/when this becomes a real issue (one cascading delete per stale layout session).
 
 ## Relation to Riffle's prelude
 
