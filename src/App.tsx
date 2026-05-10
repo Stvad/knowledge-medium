@@ -5,7 +5,6 @@ import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.tsx'
 import { useHash, useSearchParam } from 'react-use'
 import type { Repo } from './data/repo'
-import { memoize } from 'lodash'
 import { hasRemoteSyncConfig } from '@/services/powersync.ts'
 import { useIsLocalOnly } from '@/components/Login.tsx'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
@@ -44,6 +43,14 @@ interface ResolvedWorkspace {
   id: string
   freshlyCreated: boolean
 }
+
+interface InitialLayout {
+  workspaceId: string
+  perTabBlock: Block
+}
+
+const INITIAL_LAYOUT_CACHE_LIMIT = 64
+const initialLayoutCache = new Map<string, Promise<InitialLayout>>()
 
 const resolveWorkspace = async (
   repo: Repo,
@@ -124,100 +131,128 @@ const replaceHash = (hash: string): void => {
   window.history.replaceState(null, '', hash)
 }
 
-const getInitialLayout = memoize(
-  async (
-    repo: Repo,
-    requestedHash: string,
-    useRemoteSync: boolean,
-  ): Promise<{workspaceId: string, perTabBlock: Block}> => {
-    const route = parseLayout(requestedHash)
-    const {id: workspaceId, freshlyCreated} = await resolveWorkspace(
-      repo,
-      route.workspaceId,
-      useRemoteSync,
-    )
-    repo.setActiveWorkspaceId(workspaceId)
+const resolveInitialLayout = async (
+  repo: Repo,
+  requestedHash: string,
+  useRemoteSync: boolean,
+): Promise<InitialLayout> => {
+  const route = parseLayout(requestedHash)
+  const {id: workspaceId, freshlyCreated} = await resolveWorkspace(
+    repo,
+    route.workspaceId,
+    useRemoteSync,
+  )
+  repo.setActiveWorkspaceId(workspaceId)
 
-    // Derive read-only from the local membership row. workspace_members rides
-    // the same sync stream as workspaces, so for any workspace we just
-    // resolved as accessible, the role row is normally already local. Null
-    // (membership not yet synced) defaults to read-only=false; if the role
-    // is actually 'viewer', the very next sync tick flips us — and any
-    // edits attempted in the meantime would be RLS-rejected server-side
-    // anyway.
-    const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
-    repo.setReadOnly(role === 'viewer')
+  // Derive read-only from the local membership row. workspace_members rides
+  // the same sync stream as workspaces, so for any workspace we just
+  // resolved as accessible, the role row is normally already local. Null
+  // (membership not yet synced) defaults to read-only=false; if the role
+  // is actually 'viewer', the very next sync tick flips us — and any
+  // edits attempted in the meantime would be RLS-rejected server-side
+  // anyway.
+  const role = await getLocalMemberRole(repo, workspaceId, repo.user.id)
+  repo.setReadOnly(role === 'viewer')
 
-    rememberWorkspace(workspaceId)
+  rememberWorkspace(workspaceId)
 
-    // Freshly inserted personal workspace: install the starter tutorial
-    // as its own parent-less page. The [[Tutorial]] bullet on today's
-    // daily note (added below) makes it discoverable from the landing
-    // page without hijacking it. AWAIT the seed tx so the Tutorial
-    // alias row exists before parseReferences (post-commit processor)
-    // runs against the wiki-link bullet — otherwise parseReferences
-    // creates a fresh empty alias target for "Tutorial" and the
-    // bullet points at that orphan instead of the real seeded page.
+  // Freshly inserted personal workspace: install the starter tutorial
+  // as its own parent-less page. The [[Tutorial]] bullet on today's
+  // daily note (added below) makes it discoverable from the landing
+  // page without hijacking it. AWAIT the seed tx so the Tutorial
+  // alias row exists before parseReferences (post-commit processor)
+  // runs against the wiki-link bullet — otherwise parseReferences
+  // creates a fresh empty alias target for "Tutorial" and the
+  // bullet points at that orphan instead of the real seeded page.
+  if (freshlyCreated) {
+    await seedTutorial(repo, workspaceId)
+  }
+
+  // Ensure the Properties page exists (idempotent, deterministic id).
+  // User-defined property-schema blocks live under it.
+  await getOrCreatePropertiesPage(repo, workspaceId)
+
+  const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
+  const perTabBlock = await getPerTabBlock(uiState, getTabId())
+  const hashForResolvedWorkspace = route.workspaceId && route.workspaceId !== workspaceId
+    ? buildLayout(workspaceId)
+    : requestedHash
+
+  const applyResult = await applyCurrentLayoutUrl({
+    repo,
+    workspaceId,
+    perTabBlock,
+    hash: hashForResolvedWorkspace,
+    replaceHash,
+  })
+
+  if (applyResult.kind === 'empty') {
+    // Land on today's daily note. getOrCreateDailyNote is idempotent
+    // under deterministic UUIDs: two clients booting offline converge
+    // on the same row when they later sync. We don't wait for sync to
+    // deliver any pre-existing blocks — today's note is fine to create
+    // locally even on a fresh client.
+    const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+
+    // First-run discoverability: prepend a [[Tutorial]] bullet on the
+    // freshly-created daily note so the welcome content is one click
+    // away from the landing page. createChild with position={kind:'first'}
+    // computes an order_key that lands before any existing children.
     if (freshlyCreated) {
-      await seedTutorial(repo, workspaceId)
+      await repo.mutate.createChild({
+        parentId: dailyNote.id,
+        content: '[[Tutorial]]',
+        position: {kind: 'first'},
+      })
     }
 
-    // Ensure the Properties page exists (idempotent, deterministic id).
-    // User-defined property-schema blocks live under it.
-    await getOrCreatePropertiesPage(repo, workspaceId)
+    replaceHash(buildLayout(workspaceId, [dailyNote.id]))
+    await repo.tx(async tx => {
+      const parent = await tx.get(perTabBlock.id)
+      if (!parent) throw new Error(`getInitialLayout: per-tab block ${perTabBlock.id} not found`)
+      await createPanelRowInTx(repo, tx, {
+        workspaceId,
+        parentId: perTabBlock.id,
+        orderKey: keyAtEnd(null),
+        blockId: dailyNote.id,
+      })
+    }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
+  }
 
-    const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
-    const perTabBlock = await getPerTabBlock(uiState, getTabId())
-    const hashForResolvedWorkspace = route.workspaceId && route.workspaceId !== workspaceId
-      ? buildLayout(workspaceId)
-      : requestedHash
+  return {workspaceId, perTabBlock}
+}
 
-    const applyResult = await applyCurrentLayoutUrl({
-      repo,
-      workspaceId,
-      perTabBlock,
-      hash: hashForResolvedWorkspace,
-      replaceHash,
-    })
+const initialLayoutCacheKey = (
+  repo: Repo,
+  requestedHash: string,
+  useRemoteSync: boolean,
+): string =>
+  `${repo.instanceId}:${requestedHash || '__empty_hash__'}:${useRemoteSync ? 'remote' : 'local'}`
 
-    if (applyResult.kind === 'empty') {
-      // Land on today's daily note. getOrCreateDailyNote is idempotent
-      // under deterministic UUIDs: two clients booting offline converge
-      // on the same row when they later sync. We don't wait for sync to
-      // deliver any pre-existing blocks — today's note is fine to create
-      // locally even on a fresh client.
-      const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+const getInitialLayout = (
+  repo: Repo,
+  requestedHash: string,
+  useRemoteSync: boolean,
+): Promise<InitialLayout> => {
+  const key = initialLayoutCacheKey(repo, requestedHash, useRemoteSync)
+  const cached = initialLayoutCache.get(key)
+  if (cached) {
+    initialLayoutCache.delete(key)
+    initialLayoutCache.set(key, cached)
+    return cached
+  }
 
-      // First-run discoverability: prepend a [[Tutorial]] bullet on the
-      // freshly-created daily note so the welcome content is one click
-      // away from the landing page. createChild with position={kind:'first'}
-      // computes an order_key that lands before any existing children.
-      if (freshlyCreated) {
-        await repo.mutate.createChild({
-          parentId: dailyNote.id,
-          content: '[[Tutorial]]',
-          position: {kind: 'first'},
-        })
-      }
-
-      replaceHash(buildLayout(workspaceId, [dailyNote.id]))
-      await repo.tx(async tx => {
-        const parent = await tx.get(perTabBlock.id)
-        if (!parent) throw new Error(`getInitialLayout: per-tab block ${perTabBlock.id} not found`)
-        await createPanelRowInTx(repo, tx, {
-          workspaceId,
-          parentId: perTabBlock.id,
-          orderKey: keyAtEnd(null),
-          blockId: dailyNote.id,
-        })
-      }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
-    }
-
-    return {workspaceId, perTabBlock}
-  },
-  (repo, requestedHash, useRemoteSync) =>
-    `${repo.instanceId}:${requestedHash || '__empty_hash__'}:${useRemoteSync ? 'remote' : 'local'}`,
-)
+  const promise = resolveInitialLayout(repo, requestedHash, useRemoteSync)
+  initialLayoutCache.set(key, promise)
+  if (initialLayoutCache.size > INITIAL_LAYOUT_CACHE_LIMIT) {
+    const oldest = initialLayoutCache.keys().next().value
+    if (oldest) initialLayoutCache.delete(oldest)
+  }
+  void promise.catch(() => {
+    if (initialLayoutCache.get(key) === promise) initialLayoutCache.delete(key)
+  })
+  return promise
+}
 
 const App = () => {
   const repo = useRepo()
