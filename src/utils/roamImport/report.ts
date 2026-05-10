@@ -279,7 +279,7 @@ const summarizeSrsDiagnostics = (
   if (missingDate.length > 0) {
     nodes.push({
       content: `SRS markers missing review dates (${missingDate.length})`,
-      children: sampleNodes(missingDate),
+      children: missingDate.map(content => ({content})),
     })
   }
   if (multipleMarkers.length > 0) {

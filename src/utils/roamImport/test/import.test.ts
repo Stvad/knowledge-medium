@@ -166,6 +166,44 @@ describe('importRoam', () => {
     expect(leaf?.content).toBe('leaf with [[wcs/plan]]')
   })
 
+  it('preserves Roam source-only fields as namespaced properties', async () => {
+    const sourceFieldExport: RoamExport = [{
+      title: 'source fields',
+      uid: 'sourceFieldsPage',
+      ':log/id': 1777334400000,
+      ':create/user': {':user/uid': 'roam-create-user'},
+      ':edit/user': {':user/uid': 'roam-edit-user'},
+      children: [{
+        string: 'aligned reaction',
+        uid: 'sourceFieldsBlock',
+        'text-align': 'center',
+        emojis: [{
+          emoji: {native: '👍'},
+          users: [{uid: 'roam-create-user', time: 1700000000000}],
+        }],
+      }],
+    }]
+
+    await importRoam(sourceFieldExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const page = await readBlock(dailyNoteBlockId(WORKSPACE, '2026-04-28'))
+    const pageProps = JSON.parse(page!.properties_json) as Record<string, unknown>
+    expect(pageProps['roam:log/id']).toBe(1777334400000)
+    expect(pageProps['roam:create/user']).toBe('roam-create-user')
+    expect(pageProps['roam:edit/user']).toBe('roam-edit-user')
+
+    const block = await readBlock(roamBlockId(WORKSPACE, 'sourceFieldsBlock'))
+    const blockProps = JSON.parse(block!.properties_json) as Record<string, unknown>
+    expect(blockProps['roam:text-align']).toBe('center')
+    expect(JSON.parse(blockProps['roam:emojis'] as string)).toEqual([{
+      emoji: {native: '👍'},
+      users: [{uid: 'roam-create-user', time: 1700000000000}],
+    }])
+  })
+
   it('imports Roam TODO markers as todo type metadata and strips the marker from content', async () => {
     const todoExport: RoamExport = [
       {
@@ -541,6 +579,35 @@ describe('importRoam', () => {
     expect(restored?.content).toBe('')
   })
 
+  it('does not create placeholders for unconfirmed double-paren prose', async () => {
+    const proseExport: RoamExport = [
+      {
+        title: 'prose refs',
+        uid: 'prosePage',
+        children: [
+          {
+            string: 'A collapsed ((open)) section and expandable ((text)) snippets',
+            uid: 'proseBlock',
+          },
+        ],
+      },
+    ]
+
+    const summary = await importRoam(proseExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.placeholdersCreated).toBe(0)
+    expect(summary.diagnostics.some(line => line.includes('leaked past placeholder registration')))
+      .toBe(false)
+
+    const block = await readBlock(roamBlockId(WORKSPACE, 'proseBlock'))
+    expect(block?.content).toBe('A collapsed ((open)) section and expandable ((text)) snippets')
+    expect(await readBlock(roamBlockId(WORKSPACE, 'open'))).toBeNull()
+    expect(await readBlock(roamBlockId(WORKSPACE, 'text'))).toBeNull()
+  })
+
   it('writes only into the workspaceId option, never bleeds into others', async () => {
     // Regression for "import picks the first workspace" — exercise
     // the full plan→reconcile→write path with two workspaces present
@@ -824,6 +891,46 @@ describe('importRoam', () => {
       .toBe(false)
   })
 
+  it('lists every missing-date SRS marker in the import report', async () => {
+    const srsExport: RoamExport = [{
+      title: 'many missing-date srs markers',
+      uid: 'manyMissingDateSrsPage',
+      children: Array.from({length: 10}, (_, i) => ({
+        string: `[[[[interval]]:${i + 1}]] [[[[factor]]:2.00]] ;tomorrow;`,
+        uid: `missingDateSrs${i}`,
+      })),
+    }]
+
+    const summary = await importRoam(srsExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.diagnostics.filter(line =>
+      line.includes('has interval/factor but no parseable daily review date'),
+    )).toHaveLength(10)
+
+    const dailyChildren = await readChildren(dailyNoteBlockId(WORKSPACE, todayIso()))
+    const header = dailyChildren.find(c => c.content.startsWith('Roam import '))
+    expect(header).toBeDefined()
+    const sections = await readChildren(header!.id)
+    const notesSection = sections.find(c => c.content === `Notes (${summary.diagnostics.length})`)
+    expect(notesSection).toBeDefined()
+    const noteGroups = await readChildren(notesSection!.id)
+    const srsGroup = noteGroups.find(c => c.content.startsWith('SRS and roam/memo '))
+    expect(srsGroup).toBeDefined()
+    const srsSections = await readChildren(srsGroup!.id)
+    const missingDates = srsSections.find(c => c.content === 'SRS markers missing review dates (10)')
+    expect(missingDates).toBeDefined()
+    const missingDateLines = await readChildren(missingDates!.id)
+    expect(missingDateLines).toHaveLength(10)
+    expect(missingDateLines.map(line => line.content)).toContain(
+      `Roam SRS marker on block ((${roamBlockId(WORKSPACE, 'missingDateSrs9')})) has interval/factor but no parseable daily review date; preserved literally without SRS properties.`,
+    )
+    expect(missingDateLines.some(line => line.content.includes('omitted from this report section')))
+      .toBe(false)
+  })
+
   it('links Roam uid diagnostics in the import report to imported blocks', async () => {
     const srsExport: RoamExport = [{
       title: 'bad srs report link',
@@ -1011,6 +1118,51 @@ describe('importRoam', () => {
     const aliasBlock = await readBlock(roamBlockId(WORKSPACE, 'aliasXY'))
     expect(aliasBlock?.parent_id).toBe(canonicalId)
     expect(aliasBlock?.content).toBe('page_alias::[[page y]]')
+  })
+
+  it('merges pages that claim the same page_alias into one canonical page', async () => {
+    const aliasExport: RoamExport = [
+      {
+        title: 'canonical page',
+        uid: 'canonicalAliasPage',
+        children: [
+          {string: 'page_alias::[[shared alias]]', uid: 'canonicalAliasBlock'},
+          {string: 'canonical child', uid: 'canonicalChild'},
+        ],
+      },
+      {
+        title: 'duplicate page',
+        uid: 'duplicateAliasPage',
+        children: [
+          {string: 'page_alias::[[shared alias]]', uid: 'duplicateAliasBlock'},
+          {string: 'duplicate child', uid: 'duplicateChild'},
+        ],
+      },
+    ]
+
+    const summary = await importRoam(aliasExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.pagesCreated).toBe(1)
+    expect(summary.pagesMerged).toBe(1)
+    expect(summary.diagnostics).toContain(
+      "[[canonical page]] also had 'duplicate page' merged in bc of the alias rule",
+    )
+
+    const canonicalId = roamBlockId(WORKSPACE, 'canonicalAliasPage')
+    const canonical = await readBlock(canonicalId)
+    expect(canonical).not.toBeNull()
+    expect(JSON.parse(canonical!.properties_json)[aliasesProp.name])
+      .toEqual(['canonical page', 'duplicate page', 'shared alias'])
+    expect(await readBlock(roamBlockId(WORKSPACE, 'duplicateAliasPage'))).toBeNull()
+
+    const duplicateChild = await readBlock(roamBlockId(WORKSPACE, 'duplicateChild'))
+    expect(duplicateChild?.parent_id).toBe(canonicalId)
+
+    const duplicateAliasBlock = await readBlock(roamBlockId(WORKSPACE, 'duplicateAliasBlock'))
+    expect(duplicateAliasBlock?.parent_id).toBe(canonicalId)
   })
 
   it('lists all non-standard page aliases and alias merges in the import report', async () => {

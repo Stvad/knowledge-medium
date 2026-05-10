@@ -203,13 +203,14 @@ describe('planImport', () => {
     ])
   })
 
-  it('registers placeholders for `((uid))` refs to blocks not in the export', () => {
+  it('registers placeholders for `((uid))` refs to blocks not in the export when refs metadata confirms them', () => {
     const plan = planImport([{
       title: 'p',
       uid: 'pUid',
       children: [{
         string: '((unknownUid))',
         uid: 'b',
+        ':block/refs': [{':block/uid': 'unknownUid'}],
       }],
     }], {workspaceId: WORKSPACE, currentUserId: USER})
 

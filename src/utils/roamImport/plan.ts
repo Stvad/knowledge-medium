@@ -87,11 +87,12 @@ export interface PreparedPage {
    *  the page block, since each PreparedBlock carries its own
    *  parentId derived from the planner's traversal. */
   childIds: string[]
-  /** Roam attributes hoisted from `key::value` direct children of
-   *  the page. For non-daily, non-merging pages these are already
-   *  baked into `data.properties`; for daily / merging pages the
-   *  orchestrator applies them to the live row with fill-if-missing
-   *  semantics so existing values aren't clobbered. */
+  /** Roam source properties for the page: attributes hoisted from
+   *  `key::value` direct children plus raw page-level Roam props.
+   *  For non-daily, non-merging pages these are already baked into
+   *  `data.properties`; for daily / merging pages the orchestrator
+   *  applies them to the live row with fill-if-missing semantics so
+   *  existing values aren't clobbered. */
   promotedFromChildren: Record<string, unknown>
   /** Page aliases declared through Roam's page_alias::[[Other Page]]
    *  convention. These are applied to the page's canonical alias list
@@ -156,6 +157,23 @@ const collectRoamProps = (block: RoamBlock | RoamPage): Record<string, unknown> 
   }
   if (block[':block/view-type']) {
     fromBlockProps[':block/view-type'] = block[':block/view-type']
+  }
+  const createUserUid = block[':create/user']?.[':user/uid']
+  if (createUserUid) {
+    fromBlockProps[':create/user'] = createUserUid
+  }
+  const editUserUid = block[':edit/user']?.[':user/uid']
+  if (editUserUid) {
+    fromBlockProps[':edit/user'] = editUserUid
+  }
+  if (':log/id' in block && typeof block[':log/id'] === 'number') {
+    fromBlockProps[':log/id'] = block[':log/id']
+  }
+  if ('text-align' in block && typeof block['text-align'] === 'string') {
+    fromBlockProps['text-align'] = block['text-align']
+  }
+  if ('emojis' in block && block.emojis !== undefined) {
+    fromBlockProps.emojis = block.emojis
   }
   return {...fromBlockProps, ...getExtraRoamProps(block)}
 }
@@ -439,7 +457,10 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
   const {ctx, id, roamUid, parentId, orderKey, rawString, heading, roamProps, roamRefUids, createdAt, updatedAt, extraProperties, promotedFromChildren} = args
 
   const rewritten = rewriteRoamContent(rawString, ctx.uidMap)
-  for (const u of rewritten.unresolvedBlockUids) ctx.unresolvedBlockUids.add(u)
+  const confirmedRefUids = new Set(roamRefUids)
+  for (const u of rewritten.unresolvedBlockUids) {
+    if (confirmedRefUids.has(u)) ctx.unresolvedBlockUids.add(u)
+  }
 
   const derived = derivePropertiesFromContent(rewritten.content)
   for (const diagnostic of derived.diagnostics) {
@@ -677,8 +698,9 @@ const collectPlaceholderUids = (
 ): string[] => {
   const out = new Set<string>()
   const visit = (block: RoamBlock) => {
+    const metadataRefUids = new Set(collectUidRefs(block))
     for (const uid of collectContentRefUids(block.string ?? '')) {
-      if (!knownUids.has(uid)) out.add(uid)
+      if (!knownUids.has(uid) && metadataRefUids.has(uid)) out.add(uid)
     }
     for (const child of block.children ?? []) visit(child)
   }
@@ -914,7 +936,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
         isDaily: true,
         iso: daily.iso,
         childIds,
-        promotedFromChildren,
+        promotedFromChildren: pageProperties,
         pageAliases,
       })
       continue
@@ -950,7 +972,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       isDaily: false,
       data: pageData,
       childIds,
-      promotedFromChildren,
+      promotedFromChildren: pageProperties,
       pageAliases,
     })
   }

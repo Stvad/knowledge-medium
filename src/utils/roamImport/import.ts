@@ -705,6 +705,8 @@ const buildPageAliasRulePlan = (
   preparedPages: RoamImportPlan['pages'],
 ): PageAliasRulePlan => {
   const directOwnerByAlias = new Map<string, string>()
+  const conflictOwnerByTitle = new Map<string, string>()
+  const validAliasesByTitle = new Map<string, string[]>()
   const diagnostics: string[] = []
   const pageOrder = new Map(preparedPages.map((page, index) => [page.title, index]))
   const pageByTitle = new Map(preparedPages.map(page => [page.title, page]))
@@ -726,12 +728,13 @@ const buildPageAliasRulePlan = (
     for (const alias of uniqueStrings(page.pageAliases)) {
       if (alias === page.title) continue
       if (skipDailyAliasMerge(page, alias)) continue
+      const aliases = validAliasesByTitle.get(page.title) ?? []
+      aliases.push(alias)
+      validAliasesByTitle.set(page.title, aliases)
+
       const existingOwner = directOwnerByAlias.get(alias)
       if (existingOwner && existingOwner !== page.title) {
-        diagnostics.push(
-          `Page alias "${alias}" was claimed by both [[${existingOwner}]] and ` +
-          `[[${page.title}]]; keeping [[${existingOwner}]].`,
-        )
+        conflictOwnerByTitle.set(page.title, existingOwner)
         continue
       }
       directOwnerByAlias.set(alias, page.title)
@@ -786,7 +789,7 @@ const buildPageAliasRulePlan = (
       seen.set(current, path.length)
       path.push(current)
 
-      const owner = directOwnerByAlias.get(current)
+      const owner = directOwnerByAlias.get(current) ?? conflictOwnerByTitle.get(current)
       if (!owner || owner === current) {
         return remember(current)
       }
@@ -804,30 +807,22 @@ const buildPageAliasRulePlan = (
 
   for (const page of preparedPages) {
     const root = rootByTitle.get(page.title) ?? page.title
-    if (root !== page.title) continue
+    if (root === page.title) aliasesByRootTitle.set(root, [root])
+  }
 
-    const aliases: string[] = [page.title]
-    const visitedPages = new Set<string>()
-    const visit = (source: PreparedPage) => {
-      if (visitedPages.has(source.title)) return
-      visitedPages.add(source.title)
+  for (const page of [...preparedPages].reverse()) {
+    const root = rootByTitle.get(page.title) ?? page.title
+    const aliases = aliasesByRootTitle.get(root) ?? [root]
+    if (page.title !== root) aliases.push(page.title)
 
-      for (const alias of uniqueStrings(source.pageAliases)) {
-        if (alias !== source.title && directOwnerByAlias.get(alias) !== source.title) continue
-        aliases.push(alias)
-
-        const aliasPage = pageByTitle.get(alias)
-        if (aliasPage && rootByTitle.get(aliasPage.title) === root) {
-          visit(aliasPage)
-        }
-      }
+    for (const alias of uniqueStrings(validAliasesByTitle.get(page.title) ?? [])) {
+      aliases.push(alias)
     }
+    aliasesByRootTitle.set(root, uniqueStrings(aliases))
+  }
 
-    visit(page)
-    const uniqueAliases = uniqueStrings(aliases)
-    aliasesByRootTitle.set(root, uniqueAliases)
-
-    const merged = uniqueAliases.filter(alias => {
+  for (const [root, aliases] of aliasesByRootTitle) {
+    const merged = aliases.filter(alias => {
       if (alias === root) return false
       const aliasPage = pageByTitle.get(alias)
       return Boolean(aliasPage && rootByTitle.get(aliasPage.title) === root)
@@ -1300,10 +1295,10 @@ const upsertImportedBlock = async (
 }
 
 /**
- * Fold `key::value` attributes hoisted from a Roam page's direct
- * children onto the live page row with fill-if-missing semantics —
- * an existing local value takes precedence over the imported one
- * (matching the alias-union behavior in `mergeIntoExistingPage`).
+ * Fold Roam page source properties onto the live page row with
+ * fill-if-missing semantics — an existing local value takes precedence
+ * over the imported one (matching the alias-union behavior in
+ * `mergeIntoExistingPage`).
  *
  * Used for daily and merging pages, where the row already exists
  * before the import tx and the page-level `composeBlockData` path

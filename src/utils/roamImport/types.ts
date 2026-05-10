@@ -28,6 +28,8 @@ export interface RoamBlock {
   props?: Record<string, unknown>
   ':create/user'?: RoamUserRef | null
   ':edit/user'?: RoamUserRef | null
+  'text-align'?: string
+  emojis?: unknown
   children?: RoamBlock[]
 }
 
