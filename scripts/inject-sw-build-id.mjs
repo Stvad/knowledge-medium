@@ -1,33 +1,32 @@
 /**
- * Stamps dist/sw.js with a per-build identifier so each deploy lands in
- * its own cache namespace. The previous build's caches are dropped on
- * activate, which closes the stale-vs-fresh skew window that would
- * otherwise be possible with Vite's unhashed `preserveModules` output.
+ * Post-build step that stamps dist/sw.js with two things:
  *
- * Build id sources, in order of preference:
- *   1. SW_BUILD_ID env var (caller can override)
- *   2. GITHUB_SHA   (set by GitHub Actions)
- *   3. `git rev-parse HEAD` (local dev / any checkout)
- *   4. Timestamp + random suffix (last-resort, never deployed)
+ *   1. A per-build identifier (`__BUILD_ID__` placeholder) so each deploy
+ *      lands in its own cache namespace and stale entries are dropped on
+ *      activate. Source order: SW_BUILD_ID env, GITHUB_SHA, git rev-parse
+ *      HEAD, then a timestamped fallback.
+ *   2. The list of emitted JS/CSS assets (`__PRECACHE_ASSETS__`
+ *      placeholder) so the install handler can fetch them up front. The
+ *      initial module graph is dispatched by the browser before our SW
+ *      activates, so without this list a first-time offline reload would
+ *      fail to boot.
  *
- * Fails the build if the placeholder isn't present in sw.js — that means
- * the SW source drifted and we'd otherwise ship a SW with a literal
- * `__BUILD_ID__` cache name across all deploys (no invalidation).
+ * Fails the build if either placeholder is missing — both are required
+ * for the SW to behave correctly.
  */
-import {readFileSync, writeFileSync, existsSync} from 'node:fs'
+import {readFileSync, writeFileSync, existsSync, readdirSync} from 'node:fs'
 import {execSync} from 'node:child_process'
-import {dirname, resolve} from 'node:path'
+import {dirname, resolve, relative, sep} from 'node:path'
 import {fileURLToPath} from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
-const swPath = resolve(__dirname, '..', 'dist', 'sw.js')
+const distDir = resolve(__dirname, '..', 'dist')
+const swPath = resolve(distDir, 'sw.js')
 
 if (!existsSync(swPath)) {
   console.error(`[inject-sw-build-id] missing ${swPath} — run vite build first`)
   process.exit(1)
 }
-
-const placeholder = '__BUILD_ID__'
 
 const resolveBuildId = () => {
   if (process.env.SW_BUILD_ID) return process.env.SW_BUILD_ID
@@ -42,14 +41,50 @@ const resolveBuildId = () => {
   }
 }
 
-const buildId = resolveBuildId()
-const source = readFileSync(swPath, 'utf8')
-
-if (!source.includes(placeholder)) {
-  console.error(`[inject-sw-build-id] placeholder ${placeholder} not found in sw.js`)
-  process.exit(1)
+// Collect the modules the HTML actually pulls in on first paint: the
+// entry script tag + every `<link rel="modulepreload">` it lists, plus
+// any stylesheet links. This is much narrower (and faster on first
+// visit) than precaching every file in dist/ — the rest is lazy and
+// will be picked up by SWR when the user navigates into those features.
+const collectPrecacheAssets = () => {
+  const html = readFileSync(resolve(distDir, 'index.html'), 'utf8')
+  const hrefs = new Set()
+  const add = (raw) => {
+    if (!raw) return
+    if (/^https?:|^data:/i.test(raw)) return
+    // Normalize `/foo`, `./foo`, `foo` all to `./foo` so the SW's
+    // `new URL(p, scopeURL)` resolves correctly under any base path.
+    const trimmed = raw.replace(/^\.\//, '').replace(/^\//, '')
+    hrefs.add(`./${trimmed}`)
+  }
+  const linkRe = /<link[^>]+rel=["'](?:modulepreload|stylesheet)["'][^>]*?(?:href|src)=["']([^"']+)["'][^>]*>/gi
+  const scriptRe = /<script[^>]+src=["']([^"']+)["']/gi
+  for (const m of html.matchAll(linkRe)) add(m[1])
+  for (const m of html.matchAll(scriptRe)) add(m[1])
+  return [...hrefs].sort()
 }
 
-const stamped = source.split(placeholder).join(buildId)
-writeFileSync(swPath, stamped)
-console.log(`[inject-sw-build-id] stamped sw.js with ${buildId}`)
+const buildId = resolveBuildId()
+const precacheAssets = collectPrecacheAssets()
+
+let source = readFileSync(swPath, 'utf8')
+
+const requirePlaceholder = (placeholder) => {
+  if (!source.includes(placeholder)) {
+    console.error(`[inject-sw-build-id] placeholder ${placeholder} not found in sw.js`)
+    process.exit(1)
+  }
+}
+requirePlaceholder('__BUILD_ID__')
+requirePlaceholder('__PRECACHE_ASSETS__')
+
+source = source.split('__BUILD_ID__').join(buildId)
+// Embed as a JSON string then JSON.parse at runtime so the array can
+// contain any number of entries without breaking the surrounding source.
+source = source.split('__PRECACHE_ASSETS__').join(
+  JSON.stringify(precacheAssets).replace(/\\/g, '\\\\').replace(/'/g, "\\'"),
+)
+writeFileSync(swPath, source)
+console.log(
+  `[inject-sw-build-id] stamped sw.js with ${buildId} and ${precacheAssets.length} precache assets`,
+)
