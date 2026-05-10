@@ -2,28 +2,26 @@
  *
  * Strategy summary:
  *   - HTML navigations  : network-first, fallback to cached shell.
- *   - JS/CSS/WASM/JSON  : network-first w/ cache fallback. The Vite
- *                         preserveModules build emits these at stable URLs
- *                         (no content hash), so SWR could pair a fresh HTML
- *                         shell with stale modules across a deploy and
- *                         half-break the runtime. Network-first keeps online
- *                         users coherent; cache fallback keeps offline working.
- *   - Other same-origin : stale-while-revalidate (images, fonts, manifest,
- *                         maps — staleness here is cosmetic/non-fatal).
+ *   - Same-origin assets: stale-while-revalidate. The Vite preserveModules
+ *                         build emits modules at unhashed URLs, but the
+ *                         cache namespace below is stamped with a per-build
+ *                         id, so every deploy starts from an empty runtime
+ *                         cache and the stale-vs-fresh skew window closes
+ *                         on activation rather than spanning sessions.
  *   - esm.sh imports    : cache-first (URLs include version + integrity, so
  *                         they're effectively immutable).
  *   - Everything else   : passes through to the network (Supabase, PowerSync,
  *                         agent-runtime relay, etc. must not be cached).
  *
- * Cache invalidation: bump CACHE_VERSION whenever this file changes in a
- * way that requires purging old caches.
+ * BUILD_ID is replaced by scripts/inject-sw-build-id.mjs after `vite build`.
+ * In dev the placeholder is harmless because the SW isn't registered there.
  */
 
 const CACHE_PREFIX = 'km-'
-const CACHE_VERSION = 'v1'
-const SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}`
-const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${CACHE_VERSION}`
-const VENDOR_CACHE = `${CACHE_PREFIX}vendor-${CACHE_VERSION}`
+const BUILD_ID = '__BUILD_ID__'
+const SHELL_CACHE = `${CACHE_PREFIX}shell-${BUILD_ID}`
+const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${BUILD_ID}`
+const VENDOR_CACHE = `${CACHE_PREFIX}vendor-${BUILD_ID}`
 const ALL_CACHES = new Set([SHELL_CACHE, RUNTIME_CACHE, VENDOR_CACHE])
 
 // The SW lives at <base>/sw.js, so its scope and registration URL share the
@@ -41,11 +39,6 @@ const SHELL_URLS = [
 ].map((p) => new URL(p, scopeURL).toString())
 
 const VENDOR_HOSTS = new Set(['esm.sh'])
-
-// Asset URLs whose contents define app behavior. Because the build leaves
-// these at unhashed paths, a stale cache entry against a fresh HTML shell
-// can desync the runtime — so we serve them network-first.
-const SEMANTIC_ASSET_RE = /\.(?:m?js|css|wasm|json)$/i
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -135,10 +128,6 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isSameOrigin(url)) {
-    if (SEMANTIC_ASSET_RE.test(url.pathname)) {
-      event.respondWith(networkFirst(request, RUNTIME_CACHE))
-      return
-    }
     event.respondWith(staleWhileRevalidate(request, RUNTIME_CACHE))
     return
   }
