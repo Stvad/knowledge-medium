@@ -16,6 +16,7 @@ import {
   ActionContextTypes,
   type ActionConfig,
   type ActionTrigger,
+  type BlockShortcutDependencies,
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types'
 
@@ -108,11 +109,80 @@ const findEditModeAction = (
   return action
 }
 
+const findNormalModeAction = (
+  repo: Repo,
+  id: string,
+): ActionConfig<typeof ActionContextTypes.NORMAL_MODE> => {
+  const action = getDefaultActions({repo}).find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.NORMAL_MODE> =>
+      candidate.id === id && candidate.context === ActionContextTypes.NORMAL_MODE,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
+const seedPanelAndContent = async (): Promise<{uiStateBlock: ReturnType<Repo['block']>; block: ReturnType<Repo['block']>}> => {
+  await env.repo.tx(async tx => {
+    await tx.create({
+      id: 'panel',
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'a0',
+      properties: {[topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('content')},
+    })
+    await tx.create({
+      id: 'content',
+      workspaceId: WS,
+      parentId: null,
+      orderKey: 'b0',
+      content: 'content',
+    })
+  }, {scope: ChangeScope.UiState})
+  return {
+    uiStateBlock: env.repo.block('panel'),
+    block: env.repo.block('content'),
+  }
+}
+
+const isDeleted = async (id: string): Promise<boolean> => {
+  const row = await env.h.db.get<{deleted: number}>('SELECT deleted FROM blocks WHERE id = ?', [id])
+  return row.deleted === 1
+}
+
 let env: Harness
 beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('default CodeMirror shortcuts', () => {
+  it('closes the current panel from normal mode with ctrl+w', async () => {
+    const {uiStateBlock, block} = await seedPanelAndContent()
+    const action = findNormalModeAction(env.repo, 'close_current_panel')
+
+    expect(action.defaultBinding?.keys).toBe('ctrl+w')
+
+    await action.handler({
+      block,
+      uiStateBlock,
+    } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isDeleted('panel')).toBe(true)
+  })
+
+  it('closes the current panel from CodeMirror edit mode with ctrl+w', async () => {
+    const {uiStateBlock, block} = await seedPanelAndContent()
+    const action = findEditModeAction(env.repo, 'edit.cm.close_current_panel')
+
+    expect(action.defaultBinding?.keys).toBe('ctrl+w')
+
+    await action.handler({
+      block,
+      editorView: emptyEditorView(),
+      uiStateBlock,
+    } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(await isDeleted('panel')).toBe(true)
+  })
+
   it('places the cursor at the beginning of the next block after pressing right at block end', async () => {
     await env.repo.tx(async tx => {
       await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})

@@ -54,6 +54,7 @@ import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import { navigate } from '@/utils/navigation.ts'
 import { navigateInPanel } from '@/utils/panelHistory.ts'
+import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
@@ -200,6 +201,18 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  const closeCurrentPanelBlock: BlockAction = {
+    id: 'close_current_panel',
+    description: 'Close current panel',
+    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+      await deletePanelRow(repo, uiStateBlock.id)
+    },
+    defaultBinding: {
+      keys: 'ctrl+w',
+      eventOptions: {preventDefault: true},
+    },
+  }
+
   const insertExampleExtensionsBlock: BlockAction = {
     id: 'insert_example_extensions',
     description: 'Insert example extensions under current block',
@@ -213,6 +226,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomInBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
   ]
 
@@ -835,6 +849,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomInBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, zoomOutBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, openFocusedInPanelBlock, {idPrefix: 'edit.cm'}),
+    bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, closeCurrentPanelBlock, {idPrefix: 'edit.cm'}),
     bindBlockActionContext(ActionContextTypes.EDIT_MODE_CM, insertExampleExtensionsBlock, {idPrefix: 'edit.cm'}),
     moveBlockUpCM,
     moveBlockDownCM,
