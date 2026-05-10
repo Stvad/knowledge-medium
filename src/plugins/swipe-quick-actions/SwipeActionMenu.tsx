@@ -102,6 +102,8 @@ interface ResolvedQuickAction {
 
 const FallbackIcon: ActionIcon = (props) => <Circle {...props}/>
 
+const TOOLBAR_HEIGHT_PX = 48
+
 /** Build a render-ready view for the toolbar from `(items, registry)`,
  *  so the JSX below stays focused on layout. */
 const useResolvedActions = (
@@ -141,13 +143,13 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
       title={label}
       data-block-interaction="ignore"
       onClick={handleClick}
-      className={`flex h-7 w-7 items-center justify-center rounded transition-colors active:bg-accent ${
+      className={`flex h-10 w-10 items-center justify-center rounded-md transition-colors active:bg-accent ${
         item.destructive
           ? 'text-destructive hover:bg-destructive/10 active:bg-destructive/20'
           : 'text-foreground hover:bg-muted'
       }`}
     >
-      <Icon className="h-4 w-4"/>
+      <Icon className="h-5 w-5"/>
     </button>
   )
 }
@@ -287,15 +289,14 @@ export const SwipeActionMenu = () => {
     event.stopPropagation()
   }
 
-  // Align the menu's vertical center to the swiped row's center so the
-  // toolbar sits over the actioned block (Workflowy-style), not floating
-  // above it. The toolbar's intrinsic height is ~32px (h-7 buttons +
-  // 2x p-0.5 padding); on typical row heights (24-30px) that's flush
-  // with the row, on multi-line blocks it sits centered over them.
-  // The right edge anchors near the row's right edge — clamped a few
-  // pixels into the viewport so the menu never clips off-screen.
+  // Align the strip's vertical center to the swiped row's center so it
+  // replaces one row of content (Workflowy-style), while spanning the
+  // viewport horizontally for easy thumb targets.
   const centerY = anchor.top + anchor.height / 2
-  const rightEdge = Math.max(8, window.innerWidth - anchor.right + 8)
+  const toolbarTop = Math.min(
+    Math.max(centerY, TOOLBAR_HEIGHT_PX / 2),
+    window.innerHeight - TOOLBAR_HEIGHT_PX / 2,
+  )
 
   return (
     <>
@@ -303,15 +304,15 @@ export const SwipeActionMenu = () => {
       {createPortal(
         <div
           ref={containerRef}
-          className="swipe-action-menu fixed z-50 -translate-y-1/2"
-          style={{top: `${centerY}px`, right: `${rightEdge}px`}}
+          className="swipe-action-menu fixed left-0 right-0 z-50 -translate-y-1/2"
+          style={{top: `${toolbarTop}px`}}
           data-block-interaction="ignore"
           onTouchStart={swallowTouch}
           onTouchMove={swallowTouch}
           onTouchEnd={swallowTouch}
         >
           <div
-            className="flex items-center gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
+            className="flex h-12 w-full items-center justify-around border-y border-border bg-background/95 px-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85"
           >
             {primaryResolved.map(resolved => (
               <ActionButton
@@ -331,9 +332,9 @@ export const SwipeActionMenu = () => {
                 event.stopPropagation()
                 setShowOverflow(prev => !prev)
               }}
-              className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
+              className="flex h-10 w-10 items-center justify-center rounded-md text-foreground hover:bg-muted active:bg-accent"
             >
-              <MoreHorizontal className="h-4 w-4"/>
+              <MoreHorizontal className="h-5 w-5"/>
             </button>
             <button
               type="button"
@@ -345,9 +346,9 @@ export const SwipeActionMenu = () => {
                 event.stopPropagation()
                 dismiss()
               }}
-              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
+              className="flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-muted active:bg-accent"
             >
-              <X className="h-4 w-4"/>
+              <X className="h-5 w-5"/>
             </button>
           </div>
 
@@ -358,7 +359,7 @@ export const SwipeActionMenu = () => {
               // without this, the -translate-y-1/2 above would re-center
               // the now-taller toolbar+overflow container and shift the
               // toolbar off the row.
-              className="absolute right-0 top-full mt-1 flex flex-col gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
+              className="absolute right-2 top-full mt-1 flex flex-col gap-0.5 rounded-md border border-border bg-background/95 p-0.5 shadow-md backdrop-blur supports-[backdrop-filter]:bg-background/85"
             >
               {overflowResolved.map(resolved => {
                 const {Icon, label, item} = resolved
