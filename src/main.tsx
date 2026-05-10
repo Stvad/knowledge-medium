@@ -8,10 +8,13 @@ import { RepoProvider } from '@/context/repo.tsx'
 import { Login } from '@/components/Login.tsx'
 import { SuspenseFallback } from '@/components/util/suspense.tsx'
 import { BootstrapErrorFallback } from '@/components/util/error.tsx'
+import { registerServiceWorker } from '@/registerServiceWorker.ts'
 
 // Todo remember why I need this something about version mismatch/having implied react in custom blocks
 window.React = React
 window.ReactDOM = ReactDOM
+
+registerServiceWorker()
 
 // The ErrorBoundary lives INSIDE Login so its fallback can call useSignOut,
 // and OUTSIDE RepoProvider so a repo-bootstrap throw still gets caught and
