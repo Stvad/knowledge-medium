@@ -19,10 +19,11 @@
  * way that requires purging old caches.
  */
 
+const CACHE_PREFIX = 'km-'
 const CACHE_VERSION = 'v1'
-const SHELL_CACHE = `km-shell-${CACHE_VERSION}`
-const RUNTIME_CACHE = `km-runtime-${CACHE_VERSION}`
-const VENDOR_CACHE = `km-vendor-${CACHE_VERSION}`
+const SHELL_CACHE = `${CACHE_PREFIX}shell-${CACHE_VERSION}`
+const RUNTIME_CACHE = `${CACHE_PREFIX}runtime-${CACHE_VERSION}`
+const VENDOR_CACHE = `${CACHE_PREFIX}vendor-${CACHE_VERSION}`
 const ALL_CACHES = new Set([SHELL_CACHE, RUNTIME_CACHE, VENDOR_CACHE])
 
 // The SW lives at <base>/sw.js, so its scope and registration URL share the
@@ -66,8 +67,14 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
+      // Only touch caches we own — caches.keys() lists every cache on the
+      // origin, including ones from other apps or features hosted here.
       const keys = await caches.keys()
-      await Promise.all(keys.filter((k) => !ALL_CACHES.has(k)).map((k) => caches.delete(k)))
+      await Promise.all(
+        keys
+          .filter((k) => k.startsWith(CACHE_PREFIX) && !ALL_CACHES.has(k))
+          .map((k) => caches.delete(k)),
+      )
       await self.clients.claim()
     })(),
   )
