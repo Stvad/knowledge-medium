@@ -55,12 +55,14 @@ function PanelSlotView({
   canClosePanel,
   className,
   stacked,
+  trackFocus,
 }: {
   slot: Extract<RenderSlot, {kind: 'panel'}>
   layoutSessionBlock: Block
   canClosePanel: boolean
   className: string
   stacked: boolean
+  trackFocus: boolean
 }) {
   const markActivePanel = useCallback(() => {
     if (layoutSessionBlock.peekProperty(activePanelIdProp) === slot.id) return
@@ -75,7 +77,7 @@ function PanelSlotView({
       <div
         className={className}
         onPointerDownCapture={markActivePanel}
-        onFocusCapture={markActivePanel}
+        onFocusCapture={trackFocus ? markActivePanel : undefined}
       >
         <BlockComponent blockId={slot.id}/>
       </div>
@@ -88,11 +90,13 @@ function SlotView({
   layoutSessionBlock,
   canClosePanel,
   topLevel,
+  trackFocus,
 }: {
   slot: RenderSlot
   layoutSessionBlock: Block
   canClosePanel: boolean
   topLevel: boolean
+  trackFocus: boolean
 }) {
   if (slot.kind === 'panel') {
     return <PanelSlotView
@@ -101,6 +105,7 @@ function SlotView({
       canClosePanel={canClosePanel}
       className={topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS}
       stacked={!topLevel}
+      trackFocus={trackFocus}
     />
   }
 
@@ -116,6 +121,7 @@ function SlotView({
           layoutSessionBlock={layoutSessionBlock}
           canClosePanel={canClosePanel}
           topLevel={false}
+          trackFocus={trackFocus}
         />
       ))}
     </div>
@@ -158,6 +164,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         layoutSessionBlock={block}
         canClosePanel={canClosePanel}
         topLevel
+        trackFocus={!isMobile}
       />
     ))}
   </div>
