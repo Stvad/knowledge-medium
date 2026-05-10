@@ -1,4 +1,4 @@
-import { useEffect, type MouseEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react'
 import {
   IndentDecrease,
   IndentIncrease,
@@ -33,33 +33,111 @@ const TOOLBAR_ACTIONS: readonly ToolbarAction[] = [
   {id: 'done', actionId: EXIT_EDIT_ACTION_ID, label: 'Done', icon: KeyboardOff},
 ]
 
-/** Opt the page into the VirtualKeyboard API on browsers that support
- *  it (Chrome / Edge / Samsung Internet on Android, version-gated).
- *  With `overlaysContent = true`:
- *  - The browser stops shrinking visualViewport when the IME shows.
- *  - It exposes `env(keyboard-inset-height)` (and friends) so CSS can
- *    react to the IME without our JS having to guess where the
- *    keyboard ends.
+/** Computes the on-screen keyboard's CSS-px inset for the toolbar.
  *
- *  This is the cleanest solution for the toolbar's positioning problem
- *  on Android (Edge / Samsung). Without this opt-in, Edge leaves the
- *  layout viewport at full height *and* anchors position:fixed to it,
- *  so `bottom:0` lands under the keyboard; computing an inset from
- *  visualViewport would in turn overshoot by the URL-bar height
- *  (innerHeight includes browser chrome that vv.height excludes).
- *  iOS Safari doesn't support the API but pins position:fixed to the
- *  visual viewport itself, so `env(keyboard-inset-height, 0px)`
- *  resolving to 0 — combined with `bottom: env(...)` — already lands
- *  the toolbar above the keyboard.
+ *  Three browser shapes have to be handled and earlier attempts each
+ *  broke at least one:
+ *  - Chrome on Android (resizes-content default): both layout and
+ *    visual viewports shrink with the IME. `bottom: 0` already lands
+ *    above the keyboard; we just want inset = 0.
+ *  - iOS Safari: visual viewport shrinks, layout stays full, but
+ *    position:fixed is *pinned to the visual viewport*. `bottom: 0`
+ *    again lands above the keyboard; inset must be 0 or we open a gap.
+ *  - Edge / Samsung Internet on Android: visual viewport shrinks,
+ *    layout stays full, AND position:fixed is anchored to the layout
+ *    viewport. `bottom: 0` lands under the keyboard; inset must be the
+ *    keyboard height — and *just* the keyboard height, not the URL
+ *    bar (which is what the naive `innerHeight - vv.height` formula
+ *    accidentally added in earlier attempts, producing the gap the
+ *    user reported).
  *
- *  Idempotent and only takes effect when the API exists. */
-const enableVirtualKeyboardOverlay = (): void => {
-  if (typeof navigator === 'undefined') return
-  const vk = (navigator as Navigator & {
-    virtualKeyboard?: { overlaysContent: boolean }
-  }).virtualKeyboard
-  if (!vk) return
-  if (!vk.overlaysContent) vk.overlaysContent = true
+ *  The fix has two pieces:
+ *  - Track a *baseline* maximum visualViewport.height across the
+ *    component lifetime. The URL bar height is constant — present in
+ *    both the baseline and the current measurement — so it cancels
+ *    out. The keyboard height is the only delta:
+ *    `keyboardHeight = baseline - current`.
+ *  - Use a hidden 1×1 sentinel at `position: fixed; bottom: 0` to
+ *    detect which anchoring mode the browser is using. If the
+ *    sentinel's bottom (in CSS-px) sits below the visual viewport's
+ *    bottom, the browser is layout-anchoring fixed elements (Edge
+ *    case) and we apply the inset. Otherwise (Chrome / iOS) we keep
+ *    inset = 0 because `bottom: 0` is already correct. */
+const useKeyboardInset = (active: boolean): number => {
+  const sentinelRef = useRef<HTMLDivElement | null>(null)
+  const [inset, setInset] = useState(0)
+
+  useLayoutEffect(() => {
+    if (!active || typeof document === 'undefined') return
+    const el = document.createElement('div')
+    el.setAttribute('aria-hidden', 'true')
+    Object.assign(el.style, {
+      position: 'fixed',
+      left: '0',
+      bottom: '0',
+      width: '1px',
+      height: '1px',
+      pointerEvents: 'none',
+      visibility: 'hidden',
+    } as Partial<CSSStyleDeclaration>)
+    document.body.appendChild(el)
+    sentinelRef.current = el
+    return () => {
+      document.body.removeChild(el)
+      sentinelRef.current = null
+    }
+  }, [active])
+
+  useEffect(() => {
+    if (!active || typeof window === 'undefined') return
+    const vv = window.visualViewport
+
+    // Seed the baseline with the larger of innerHeight and the current
+    // visualViewport height. If the toolbar mounts AFTER the keyboard
+    // is already up (vv.height already shrunk), innerHeight still
+    // reflects the no-keyboard layout viewport on layout-anchored
+    // browsers, so it's the right ceiling. On `resizes-content`
+    // browsers innerHeight has shrunk too, but the sentinel-based
+    // anchoring check below gates inset to 0 in that case anyway.
+    let maxVvHeight = Math.max(vv?.height ?? 0, window.innerHeight)
+
+    const update = () => {
+      const sentinel = sentinelRef.current
+      if (!sentinel) return
+      const sentinelBottom = sentinel.getBoundingClientRect().bottom
+      const vvHeight = vv?.height ?? window.innerHeight
+
+      if (vvHeight > maxVvHeight) maxVvHeight = vvHeight
+
+      // Anchoring detection: when position:fixed is pinned to the
+      // visual viewport, the sentinel sits flush with vv.bottom and
+      // sentinelBottom == vvHeight. When it's anchored to the layout
+      // viewport, the sentinel sits past the visual viewport bottom
+      // and sentinelBottom > vvHeight. The 1px tolerance absorbs
+      // sub-pixel rounding from getBoundingClientRect().
+      const isLayoutAnchored = sentinelBottom > vvHeight + 1
+      const keyboardHeight = Math.max(0, maxVvHeight - vvHeight)
+      const next = isLayoutAnchored ? Math.round(keyboardHeight) : 0
+
+      setInset(prev => (prev === next ? prev : next))
+    }
+
+    update()
+    if (vv) {
+      vv.addEventListener('resize', update)
+      vv.addEventListener('scroll', update)
+    }
+    window.addEventListener('resize', update)
+    return () => {
+      if (vv) {
+        vv.removeEventListener('resize', update)
+        vv.removeEventListener('scroll', update)
+      }
+      window.removeEventListener('resize', update)
+    }
+  }, [active])
+
+  return inset
 }
 
 /** Mobile-only toolbar that sits above the on-screen keyboard while a
@@ -78,14 +156,10 @@ export function MobileKeyboardToolbar() {
   const activeContexts = useActiveContextsState()
   const isEditing = activeContexts.has(ActionContextTypes.EDIT_MODE_CM)
   const runAction = useRunAction()
-
-  // Opt into the VirtualKeyboard API once the toolbar would actually
-  // appear — pulling this up to mount-time would penalize sessions
-  // that never edit on mobile by changing the layout-viewport
-  // semantics for nothing. Idempotent on subsequent calls.
-  useEffect(() => {
-    if (isMobile && isEditing) enableVirtualKeyboardOverlay()
-  }, [isMobile, isEditing])
+  // Hooks above the early-return must run on every render. Pass the
+  // activation flag in so the sentinel only mounts/listens while the
+  // toolbar is on screen.
+  const keyboardInset = useKeyboardInset(isMobile && isEditing)
 
   if (!isMobile || !isEditing) return null
 
@@ -152,15 +226,13 @@ export function MobileKeyboardToolbar() {
 
   return (
     <div
-      // `env(keyboard-inset-height)` resolves to the IME's height in CSS
-      // px on browsers with the VirtualKeyboard API enabled (we opt in
-      // above). Falls back to 0 on browsers that don't expose it (notably
-      // iOS Safari) — but iOS Safari pins position:fixed to the visual
-      // viewport itself, so `bottom:0` is already flush above the
-      // keyboard there. The fallback covers older Chromiums equivalently
-      // for the no-keyboard case.
+      // `keyboardInset` is 0 on browsers where bottom:0 already lands
+      // above the keyboard (Chrome on Android, iOS Safari) and equals
+      // the keyboard's CSS-px height on browsers that anchor
+      // position:fixed to a full-height layout viewport (Edge,
+      // Samsung Internet) — see useKeyboardInset.
       className="mobile-keyboard-toolbar fixed left-0 right-0 z-50 flex items-center justify-around gap-1 border-t border-border bg-background/95 px-1 py-1 backdrop-blur supports-[backdrop-filter]:bg-background/80"
-      style={{bottom: 'env(keyboard-inset-height, 0px)'}}
+      style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
       {TOOLBAR_ACTIONS.map(({id, actionId, label, icon: Icon}) => (
