@@ -1,3 +1,4 @@
+import { PanelRightOpen, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -141,6 +142,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     toggleBlockCollapse,
     extendSelectionUp: extendSelectionUpBlock,
     extendSelectionDown: extendSelectionDownBlock,
+    copyBlockContent,
+    copyBlockRef,
+    copyBlockId,
+    copyBlockEmbed,
   } = createSharedBlockActions({repo})
 
   const indentBlockAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, indentBlock)
@@ -152,6 +157,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const toggleBlockCollapseAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, toggleBlockCollapse)
   const extendSelectionUpAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionUpBlock)
   const extendSelectionDownAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, extendSelectionDownBlock)
+  const copyBlockContentAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockContent)
+  const copyBlockRefAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockRef)
+  const copyBlockIdAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockId)
+  const copyBlockEmbedAction = bindBlockActionContext(ActionContextTypes.NORMAL_MODE, copyBlockEmbed)
 
   // Block-bound actions that operate on the focused/edited block in a
   // panel. Declared as BlockActions and bound below to both NORMAL_MODE
@@ -160,6 +169,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const zoomInBlock: BlockAction = {
     id: 'zoom_in',
     description: 'Zoom into focused block',
+    icon: ZoomIn,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
       await navigateInPanel(uiStateBlock, block.id)
     },
@@ -189,6 +199,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
   const openFocusedInPanelBlock: BlockAction = {
     id: 'open_focused_in_panel',
     description: 'Open focused block in a side panel',
+    icon: PanelRightOpen,
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
       navigate(repo, {
         blockId: block.id,
@@ -228,6 +239,10 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
+    copyBlockContentAction,
+    copyBlockRefAction,
+    copyBlockIdAction,
+    copyBlockEmbedAction,
   ]
 
   // CodeMirror versions of move actions

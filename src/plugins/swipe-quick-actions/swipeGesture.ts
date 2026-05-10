@@ -28,6 +28,21 @@ const SWIPE_TRIGGER_PX = 50
  *  threshold above is what actually opens the menu. */
 const DIRECTION_LOCK_PX = 8
 
+/** The menu is mobile-only — `SwipeActionMenu` early-returns when
+ *  `useIsMobile()` is false. The gesture handler must apply the same
+ *  gate, otherwise touch-capable laptops/tablets >767px would still
+ *  consume the swipe (preventDefault + setActive) and render nothing,
+ *  making horizontal gestures appear broken. We can't call the hook
+ *  here, so we read the same media query directly at fire time. */
+const MOBILE_BREAKPOINT_QUERY = '(max-width: 767px)'
+
+const isMobileViewport = (): boolean => {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    return false
+  }
+  return window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
+}
+
 const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
   Boolean(uiStateBlock.peekProperty(isEditingProp))
@@ -37,6 +52,10 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
 
   return {
     onTouchStart: (event: TouchEvent) => {
+      // Mobile-only — see MOBILE_BREAKPOINT_QUERY note above. Skip the
+      // candidate setup entirely on wider viewports so onTouchEnd has no
+      // start record to act on.
+      if (!isMobileViewport()) return
       // Don't intercept gestures starting on links, buttons, the editor,
       // or anything else that already owns its own touch behavior.
       if (isInteractiveContentEvent(event)) {

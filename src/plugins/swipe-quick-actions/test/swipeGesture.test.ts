@@ -47,9 +47,27 @@ const touchEvent = (
   stopPropagation: vi.fn(),
 } as unknown as TouchEvent<HTMLDivElement>)
 
+// jsdom defaults innerWidth to 1024; our gesture handler gates on the
+// `(max-width: 767px)` mobile breakpoint, so mock matchMedia to return
+// `matches: true` for all tests by default. The non-mobile case is
+// asserted explicitly in its own test.
+const setMobileViewport = (matches: boolean): void => {
+  window.matchMedia = ((query: string) => ({
+    matches,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia
+}
+
 describe('swipe-quick-actions gesture', () => {
   beforeEach(() => {
     setActiveSwipeBlockId(null)
+    setMobileViewport(true)
   })
   afterEach(() => {
     setActiveSwipeBlockId(null)
@@ -100,5 +118,19 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchEnd?.(end)
     expect(end.preventDefault).not.toHaveBeenCalled()
     expect(getActiveSwipeBlockId()).toBeNull()
+  })
+
+  it('does not open the menu on non-mobile viewports', () => {
+    setMobileViewport(false)
+    const props = handlers(makeContext('b6'))
+    const end = touchEvent('changedTouches', touch(120, 102))
+    props.onTouchStart?.(touchEvent('touches', touch(200, 100)))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102)))
+    props.onTouchEnd?.(end)
+    expect(getActiveSwipeBlockId()).toBeNull()
+    // Crucially, the gesture must not be consumed: no preventDefault /
+    // stopPropagation, so native scroll / back-swipe stays intact.
+    expect(end.preventDefault).not.toHaveBeenCalled()
+    expect(end.stopPropagation).not.toHaveBeenCalled()
   })
 })
