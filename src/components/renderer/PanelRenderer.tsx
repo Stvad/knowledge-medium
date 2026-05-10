@@ -31,7 +31,9 @@ const PANEL_HISTORY_BUTTON_CLASS =
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
   const [selectionState] = useSelectionState();
-  const canClosePanel = Boolean(useBlockContext().canClosePanel)
+  const blockContext = useBlockContext()
+  const canClosePanel = Boolean(blockContext.canClosePanel)
+  const stackedPanel = Boolean(blockContext.stackedPanel)
 
   const repo = useRepo();
 
@@ -126,7 +128,9 @@ export function PanelRenderer({block}: BlockRendererProps) {
   }
 
   return (
-    <div className="panel min-w-0 max-w-full flex-grow h-full flex flex-col relative overflow-hidden">
+    <div className={`panel min-w-0 max-w-full flex flex-col relative ${
+      stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
+    }`}>
       <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
         <Button
           variant="ghost"
@@ -164,7 +168,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
       </div>
       <div
         ref={scrollRef}
-        className="flex-grow overflow-y-auto scrollbar-none"
+        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none'}
         onScroll={scheduleScrollTopWrite}
       >
         <NestedBlockContextProvider overrides={{topLevel: false}}>

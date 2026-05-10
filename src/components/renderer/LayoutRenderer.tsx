@@ -16,7 +16,7 @@ const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 const TOP_LEVEL_COLUMN_CLASS =
   'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-md md:basis-0 md:grow md:shrink'
 const STACK_CHILD_CLASS =
-  'h-full min-h-full w-full min-w-0 shrink-0 border-t border-border pt-2 first:border-t-0 first:pt-0'
+  'w-full min-w-0 shrink-0 border-t border-border pt-2 first:border-t-0 first:pt-0'
 
 const buildRenderSlots = (rootId: string, rows: readonly BlockData[]): RenderSlot[] => {
   const childrenByParent = new Map<string, BlockData[]>()
@@ -48,14 +48,16 @@ function PanelSlotView({
   slot,
   canClosePanel,
   className,
+  stacked,
 }: {
   slot: Extract<RenderSlot, {kind: 'panel'}>
   canClosePanel: boolean
   className: string
+  stacked: boolean
 }) {
   return (
     <NestedBlockContextProvider
-      overrides={{topLevel: true, panelId: slot.id, canClosePanel}}
+      overrides={{topLevel: true, panelId: slot.id, canClosePanel, stackedPanel: stacked}}
       key={slot.id}
     >
       <div className={className}>
@@ -79,6 +81,7 @@ function SlotView({
       slot={slot}
       canClosePanel={canClosePanel}
       className={topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS}
+      stacked={!topLevel}
     />
   }
 
