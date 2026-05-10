@@ -1,5 +1,6 @@
-import { Block } from '@/data/block'
-import { Repo } from '@/data/repo'
+import type { Block } from '@/data/block'
+import type { Repo } from '@/data/repo'
+import { defineFacet } from '@/extensions/facet.ts'
 
 export interface QuickActionContext {
   block: Block
@@ -25,27 +26,41 @@ export interface QuickActionItem {
   label?: string
   /** Renders the icon button with the destructive color. Default false. */
   destructive?: boolean
+  /** True renders under the overflow menu; false/omitted renders in
+   *  the primary one-row strip. */
+  overflow?: boolean
 }
 
-/** Primary toolbar — visible icons. Order: most-used to least-used,
- *  with destructive last so it's farthest from the swipe origin.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null
+
+export const isQuickActionItem = (value: unknown): value is QuickActionItem =>
+  isRecord(value) &&
+  typeof value.actionId === 'string' &&
+  (value.label === undefined || typeof value.label === 'string') &&
+  (value.destructive === undefined || typeof value.destructive === 'boolean') &&
+  (value.overflow === undefined || typeof value.overflow === 'boolean')
+
+export const quickActionItemsFacet = defineFacet<QuickActionItem, readonly QuickActionItem[]>({
+  id: 'swipe-quick-actions.items',
+  validate: isQuickActionItem,
+})
+
+/** Default visible items. Order: most-used to least-used, with
+ *  destructive last so it's farthest from the swipe origin.
  *  `copy_block` here is the existing shared action that serializes the
  *  block + its subtree as indented markdown (the same handler the vim
  *  cmd+c binding uses) — not just the top-level content string. */
-export const PRIMARY_ACTIONS: readonly QuickActionItem[] = [
+export const DEFAULT_QUICK_ACTION_ITEMS: readonly QuickActionItem[] = [
   {actionId: 'copy_block', label: 'Copy'},
   {actionId: 'copy_block_ref', label: 'Copy Ref'},
   {actionId: 'open_focused_in_panel', label: 'Open'},
   {actionId: 'delete_block', label: 'Delete', destructive: true},
-]
-
-/** Secondary toolbar — hidden under the kebab/"More" button. Note:
- *  no separate "Copy ID" entry — Copy Ref produces `((id))` which is
- *  what users almost always want when they think "give me a reference
- *  to this block". The bare id is rarely useful on its own. */
-export const OVERFLOW_ACTIONS: readonly QuickActionItem[] = [
-  {actionId: 'zoom_in', label: 'Zoom In'},
-  {actionId: 'toggle_collapse', label: 'Collapse'},
-  {actionId: 'toggle_properties', label: 'Properties'},
-  {actionId: 'copy_block_embed', label: 'Copy Embed'},
+  // Overflow items. Note: no separate "Copy ID" entry — Copy Ref
+  // produces `((id))`, which is what users almost always want when they
+  // think "give me a reference to this block".
+  {actionId: 'zoom_in', label: 'Zoom In', overflow: true},
+  {actionId: 'toggle_collapse', label: 'Collapse', overflow: true},
+  {actionId: 'toggle_properties', label: 'Properties', overflow: true},
+  {actionId: 'copy_block_embed', label: 'Copy Embed', overflow: true},
 ]

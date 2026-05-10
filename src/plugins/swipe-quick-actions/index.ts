@@ -7,9 +7,17 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { SwipeActionMenu } from './SwipeActionMenu.tsx'
+import {
+  DEFAULT_QUICK_ACTION_ITEMS,
+  quickActionItemsFacet,
+} from './actions.ts'
 import { swipeQuickActionsContentSurface } from './swipeGesture.ts'
 
 export { SwipeActionMenu } from './SwipeActionMenu.tsx'
+export {
+  quickActionItemsFacet,
+  type QuickActionItem,
+} from './actions.ts'
 export { swipeActiveBlockIdProp } from './property.ts'
 
 const swipeActionMenuPanelMount: PanelMountContribution = {
@@ -21,6 +29,9 @@ export const swipeQuickActionsPlugin: AppExtension = [
   blockContentSurfacePropsFacet.of(swipeQuickActionsContentSurface, {
     source: 'swipe-quick-actions',
   }),
+  DEFAULT_QUICK_ACTION_ITEMS.map(item =>
+    quickActionItemsFacet.of(item, {source: 'swipe-quick-actions'}),
+  ),
   // Per-panel mount: each panel gets its own SwipeActionMenu instance,
   // inheriting the panel's UI-state block via React context. The menu's
   // active-block prop is panel-scoped, and its DOM lookups stay inside

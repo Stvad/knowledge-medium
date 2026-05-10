@@ -9,8 +9,7 @@ import { usePropertyValue } from '@/hooks/block.ts'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
 import { swipeActiveBlockIdProp } from './property.ts'
 import {
-  PRIMARY_ACTIONS,
-  OVERFLOW_ACTIONS,
+  quickActionItemsFacet,
   type QuickActionItem,
 } from './actions.ts'
 
@@ -188,12 +187,22 @@ export const SwipeActionMenu = () => {
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
 
-  // Resolve action metadata once per runtime — the registry is stable
+  // Resolve action metadata once per runtime — the registries are stable
   // across renders so this is effectively a one-time lookup that lets
   // every render re-use the same icon / label.
   const allActions = runtime.read(actionsFacet)
-  const primaryResolved = useResolvedActions(PRIMARY_ACTIONS, allActions)
-  const overflowResolved = useResolvedActions(OVERFLOW_ACTIONS, allActions)
+  const actionItems = runtime.read(quickActionItemsFacet)
+  const [primaryItems, overflowItems] = useMemo(() => {
+    const primary: QuickActionItem[] = []
+    const overflow: QuickActionItem[] = []
+    for (const item of actionItems) {
+      if (item.overflow) overflow.push(item)
+      else primary.push(item)
+    }
+    return [primary, overflow] as const
+  }, [actionItems])
+  const primaryResolved = useResolvedActions(primaryItems, allActions)
+  const overflowResolved = useResolvedActions(overflowItems, allActions)
 
   // Close the overflow popout whenever the active block changes, so a
   // re-swipe on a different row doesn't carry stale popout state. Done
@@ -321,21 +330,23 @@ export const SwipeActionMenu = () => {
                 onRun={handleRun}
               />
             ))}
-            <button
-              type="button"
-              aria-label="More actions"
-              title="More actions"
-              aria-expanded={showOverflow}
-              data-block-interaction="ignore"
-              onClick={event => {
-                event.preventDefault()
-                event.stopPropagation()
-                setShowOverflow(prev => !prev)
-              }}
-              className="flex h-10 w-10 items-center justify-center rounded-md text-foreground hover:bg-muted active:bg-accent"
-            >
-              <MoreHorizontal className="h-5 w-5"/>
-            </button>
+            {overflowResolved.length > 0 && (
+              <button
+                type="button"
+                aria-label="More actions"
+                title="More actions"
+                aria-expanded={showOverflow}
+                data-block-interaction="ignore"
+                onClick={event => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setShowOverflow(prev => !prev)
+                }}
+                className="flex h-10 w-10 items-center justify-center rounded-md text-foreground hover:bg-muted active:bg-accent"
+              >
+                <MoreHorizontal className="h-5 w-5"/>
+              </button>
+            )}
             <button
               type="button"
               aria-label="Close"
@@ -352,7 +363,7 @@ export const SwipeActionMenu = () => {
             </button>
           </div>
 
-          {showOverflow && (
+          {showOverflow && overflowResolved.length > 0 && (
             <div
               // Absolutely positioned so the toolbar stays vertically
               // anchored to the swiped row when the overflow opens —
