@@ -24,9 +24,9 @@ import {
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
-  'h-6 w-6 bg-background/70 text-muted-foreground hover:bg-accent/80 hover:text-foreground'
+  'h-6 w-6 bg-background/40 text-muted-foreground hover:bg-accent/50 hover:text-foreground'
 const PANEL_HISTORY_BUTTON_CLASS =
-  `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/70 disabled:hover:text-muted-foreground/40`
+  `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/40 disabled:hover:text-muted-foreground/40`
 
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
