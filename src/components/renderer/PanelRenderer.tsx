@@ -14,13 +14,13 @@ import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { usePropertyValue } from '@/hooks/block.ts'
-import { ChangeScope } from '@/data/api'
 import {
   goBackInPanel,
   goForwardInPanel,
   panelHistory,
   usePanelHistory,
 } from '@/utils/panelHistory.ts'
+import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
@@ -117,17 +117,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
   }, [flushScrollTop])
 
   const handleClose = () => {
-    // Panels are UI-state rows — their lifecycle (open/close) is local
-    // ephemeral state, not user content. block.delete() routes through
-    // core.delete with ChangeScope.BlockDefault, which would put panel
-    // close into the content undo stack and (in read-only workspaces)
-    // throw a ReadOnlyError. Open an explicit UiState tx instead so
-    // the close lands as local-ephemeral and stays out of content
-    // sync / undo.
-    panelHistory.clear(block.id)
-    void repo.tx(async tx => {
-      await tx.delete(block.id)
-    }, {scope: ChangeScope.UiState, description: 'close panel'})
+    void deletePanelRow(repo, block.id)
   }
 
   if (!topLevelBlockId) {

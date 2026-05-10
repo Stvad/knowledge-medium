@@ -2,14 +2,19 @@ import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import type { BlockData, Tx, Unsubscribe } from '@/data/api'
 import { ChangeScope } from '@/data/api'
-import { PANEL_TYPE } from '@/data/blockTypes'
+import { PANEL_STACK_TYPE, PANEL_TYPE } from '@/data/blockTypes'
 import {
   focusedBlockIdProp,
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
+import { hasBlockType } from '@/data/properties'
 import { keyAtEnd, keyBetween, keysBetween } from '@/data/orderKey'
-import { buildLayout, parseLayout } from '@/utils/routing'
+import {
+  buildLayoutFromSlots,
+  parseLayout,
+  type LayoutSlot,
+} from '@/utils/routing'
 import { panelHistory } from '@/utils/panelHistory'
 
 export interface ApplyLayoutResult {
@@ -26,6 +31,9 @@ interface ReconciliationPlan {
   rowsToDelete: PanelSlot[]
 }
 
+export const isPanelStackRow = (row: Pick<BlockData, 'properties'>): boolean =>
+  hasBlockType(row, PANEL_STACK_TYPE)
+
 export const panelBlockId = (row: BlockData): string | undefined => {
   const stored = row.properties[topLevelBlockIdProp.name]
   if (stored === undefined) return undefined
@@ -35,8 +43,66 @@ export const panelBlockId = (row: BlockData): string | undefined => {
 export const panelBlockIds = (rows: readonly BlockData[]): string[] =>
   rows.map(panelBlockId).filter((id): id is string => Boolean(id))
 
-const sameBlockIds = (left: readonly string[], right: readonly string[]): boolean =>
-  left.length === right.length && left.every((id, index) => id === right[index])
+const flattenLayoutSlots = (slots: readonly LayoutSlot[]): string[] =>
+  slots.flatMap(slot => slot.kind === 'leaf' ? [slot.blockId] : flattenLayoutSlots(slot.children))
+
+const sameLayoutSlots = (left: readonly LayoutSlot[], right: readonly LayoutSlot[]): boolean =>
+  left.length === right.length && left.every((slot, index) => {
+    const other = right[index]
+    if (!other || slot.kind !== other.kind) return false
+    if (slot.kind === 'leaf' && other.kind === 'leaf') return slot.blockId === other.blockId
+    if (slot.kind === 'stack' && other.kind === 'stack') return sameLayoutSlots(slot.children, other.children)
+    return false
+  })
+
+export const layoutSlotsFromRows = (
+  rootId: string,
+  rows: readonly BlockData[],
+): LayoutSlot[] => {
+  const childrenByParent = new Map<string, BlockData[]>()
+  for (const row of rows) {
+    if (!row.parentId) continue
+    const children = childrenByParent.get(row.parentId) ?? []
+    children.push(row)
+    childrenByParent.set(row.parentId, children)
+  }
+
+  const visit = (row: BlockData): LayoutSlot | null => {
+    if (isPanelStackRow(row)) {
+      return {
+        kind: 'stack',
+        children: (childrenByParent.get(row.id) ?? [])
+          .map(visit)
+          .filter((slot): slot is LayoutSlot => Boolean(slot)),
+      }
+    }
+    const blockId = panelBlockId(row)
+    return blockId ? {kind: 'leaf', blockId} : null
+  }
+
+  return (childrenByParent.get(rootId) ?? [])
+    .map(visit)
+    .filter((slot): slot is LayoutSlot => Boolean(slot))
+}
+
+export const layoutBlockIdsFromRows = (rootId: string, rows: readonly BlockData[]): string[] =>
+  flattenLayoutSlots(layoutSlotsFromRows(rootId, rows))
+
+const loadSubtreeRowsInTx = async (
+  tx: Tx,
+  root: BlockData,
+): Promise<BlockData[]> => {
+  const rows: BlockData[] = [root]
+  const visit = async (parentId: string): Promise<void> => {
+    const children = await tx.childrenOf(parentId, root.workspaceId)
+    for (const child of children) {
+      rows.push(child)
+      await visit(child.id)
+    }
+  }
+  await visit(root.id)
+  return rows
+}
 
 const lcsMatches = (
   current: readonly PanelSlot[],
@@ -133,6 +199,26 @@ export const createPanelRowInTx = async (
   return id
 }
 
+export const createPanelStackRowInTx = async (
+  repo: Repo,
+  tx: Tx,
+  args: {
+    workspaceId: string
+    parentId: string
+    orderKey: string
+  },
+): Promise<string> => {
+  const id = await tx.create({
+    workspaceId: args.workspaceId,
+    parentId: args.parentId,
+    orderKey: args.orderKey,
+    content: 'sidebar-stack',
+    properties: {},
+  })
+  await repo.addTypeInTx(tx, id, PANEL_STACK_TYPE)
+  return id
+}
+
 export const insertPanelRow = async (
   repo: Repo,
   perTabBlock: Block,
@@ -161,56 +247,193 @@ export const insertPanelRow = async (
     })
   }, {scope: ChangeScope.UiState, description: 'insert panel row'})
 
+const insertPanelAtStartOfStackInTx = async (
+  repo: Repo,
+  tx: Tx,
+  args: {
+    workspaceId: string
+    stackId: string
+    blockId: string
+  },
+): Promise<string> => {
+  const children = await tx.childrenOf(args.stackId, args.workspaceId)
+  const orderKey = keyBetween(null, children[0]?.orderKey ?? null)
+  return createPanelRowInTx(repo, tx, {
+    workspaceId: args.workspaceId,
+    parentId: args.stackId,
+    orderKey,
+    blockId: args.blockId,
+  })
+}
+
+export const insertSidebarStackedPanel = async (
+  repo: Repo,
+  perTabBlock: Block,
+  blockId: string,
+  options: {sourcePanelId?: string} = {},
+): Promise<string> =>
+  repo.tx(async tx => {
+    const parent = await tx.get(perTabBlock.id)
+    if (!parent) throw new Error(`insertSidebarStackedPanel: per-tab block ${perTabBlock.id} not found`)
+
+    if (options.sourcePanelId) {
+      const source = await tx.get(options.sourcePanelId)
+      const sourceParent = source?.parentId ? await tx.get(source.parentId) : null
+      if (source && sourceParent && isPanelStackRow(sourceParent)) {
+        return insertPanelAtStartOfStackInTx(repo, tx, {
+          workspaceId: parent.workspaceId,
+          stackId: sourceParent.id,
+          blockId,
+        })
+      }
+
+      if (source?.parentId === perTabBlock.id) {
+        const topLevelSiblings = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
+        const sourceIndex = topLevelSiblings.findIndex(row => row.id === source.id)
+        const rightSibling = sourceIndex >= 0 ? topLevelSiblings[sourceIndex + 1] : undefined
+        if (rightSibling && isPanelStackRow(rightSibling)) {
+          return insertPanelAtStartOfStackInTx(repo, tx, {
+            workspaceId: parent.workspaceId,
+            stackId: rightSibling.id,
+            blockId,
+          })
+        }
+
+        const stackOrderKey = rightSibling
+          ? rightSibling.orderKey
+          : keyAtEnd(source.orderKey)
+        const stackId = await createPanelStackRowInTx(repo, tx, {
+          workspaceId: parent.workspaceId,
+          parentId: perTabBlock.id,
+          orderKey: stackOrderKey,
+        })
+        if (rightSibling) {
+          const [, rightOrderKey] = keysBetween(null, null, 2)
+          await tx.move(rightSibling.id, {parentId: stackId, orderKey: rightOrderKey})
+        }
+        return insertPanelAtStartOfStackInTx(repo, tx, {
+          workspaceId: parent.workspaceId,
+          stackId,
+          blockId,
+        })
+      }
+    }
+
+    const siblings = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
+    const previous = siblings.at(-1)
+    const stackId = await createPanelStackRowInTx(repo, tx, {
+      workspaceId: parent.workspaceId,
+      parentId: perTabBlock.id,
+      orderKey: keyAtEnd(previous?.orderKey ?? null),
+    })
+    return insertPanelAtStartOfStackInTx(repo, tx, {
+      workspaceId: parent.workspaceId,
+      stackId,
+      blockId,
+    })
+  }, {scope: ChangeScope.UiState, description: 'insert sidebar stack panel'})
+
+export const deletePanelRow = async (
+  repo: Repo,
+  panelId: string,
+): Promise<void> => {
+  panelHistory.clear(panelId)
+  await repo.tx(async tx => {
+    const row = await tx.get(panelId)
+    if (!row) return
+    const parent = row.parentId ? await tx.get(row.parentId) : null
+    const stackSiblingCount = parent && isPanelStackRow(parent)
+      ? (await tx.childrenOf(parent.id, parent.workspaceId)).length
+      : 0
+    await tx.delete(panelId)
+    if (parent && isPanelStackRow(parent) && stackSiblingCount <= 1) {
+      await tx.delete(parent.id)
+    }
+  }, {scope: ChangeScope.UiState, description: 'close panel'})
+}
+
 export const reconcilePanelRows = async (
   repo: Repo,
   perTabBlock: Block,
-  targetBlockIds: readonly string[],
+  targetSlotsOrBlockIds: readonly (LayoutSlot | string)[],
 ): Promise<void> => {
+  const targetSlots: LayoutSlot[] = targetSlotsOrBlockIds.map(slot =>
+    typeof slot === 'string' ? {kind: 'leaf', blockId: slot} : slot,
+  )
+  const targetBlockIds = flattenLayoutSlots(targetSlots)
+
   await repo.tx(async tx => {
     const parent = await tx.get(perTabBlock.id)
     if (!parent) throw new Error(`reconcilePanelRows: per-tab block ${perTabBlock.id} not found`)
 
-    const currentRows = await tx.childrenOf(perTabBlock.id, parent.workspaceId)
-    const currentSlots = currentRows.map(row => ({row, blockId: panelBlockId(row)}))
-    if (sameBlockIds(panelBlockIds(currentRows), targetBlockIds)) return
+    const currentRows = await loadSubtreeRowsInTx(tx, parent)
+    const currentLayoutSlots = layoutSlotsFromRows(perTabBlock.id, currentRows)
+    if (sameLayoutSlots(currentLayoutSlots, targetSlots)) return
+
+    const currentSlots = currentRows
+      .filter(row => row.id !== perTabBlock.id && !isPanelStackRow(row))
+      .map(row => ({row, blockId: panelBlockId(row)}))
+    const stackRowsToDelete = currentRows
+      .filter(row => row.id !== perTabBlock.id && isPanelStackRow(row))
 
     const {rowsByTargetIndex, rowsToDelete} = planReconciliation(currentSlots, targetBlockIds)
-    const orderKeys = keysBetween(null, null, targetBlockIds.length)
 
     for (const slot of rowsToDelete) {
       panelHistory.clear(slot.row.id)
       await tx.delete(slot.row.id)
     }
 
-    for (let index = 0; index < targetBlockIds.length; index++) {
-      const blockId = targetBlockIds[index]
-      const orderKey = orderKeys[index]
-      const slot = rowsByTargetIndex.get(index)
-      if (!slot) {
-        await createPanelRowInTx(repo, tx, {
-          workspaceId: parent.workspaceId,
-          parentId: perTabBlock.id,
-          orderKey,
-          blockId,
-        })
-        continue
-      }
+    let targetLeafIndex = 0
+    const materializeSlots = async (slots: readonly LayoutSlot[], parentId: string): Promise<void> => {
+      const orderKeys = keysBetween(null, null, slots.length)
+      for (let index = 0; index < slots.length; index++) {
+        const target = slots[index]
+        const orderKey = orderKeys[index]
+        if (target.kind === 'stack') {
+          const stackId = await createPanelStackRowInTx(repo, tx, {
+            workspaceId: parent.workspaceId,
+            parentId,
+            orderKey,
+          })
+          await materializeSlots(target.children, stackId)
+          continue
+        }
 
-      if (slot.row.orderKey !== orderKey || slot.row.parentId !== perTabBlock.id) {
-        await tx.move(slot.row.id, {parentId: perTabBlock.id, orderKey})
+        const blockId = target.blockId
+        const slot = rowsByTargetIndex.get(targetLeafIndex)
+        targetLeafIndex++
+        if (!slot) {
+          await createPanelRowInTx(repo, tx, {
+            workspaceId: parent.workspaceId,
+            parentId,
+            orderKey,
+            blockId,
+          })
+          continue
+        }
+
+        if (slot.row.orderKey !== orderKey || slot.row.parentId !== parentId) {
+          await tx.move(slot.row.id, {parentId, orderKey})
+        }
+        if (slot.blockId !== blockId) {
+          const restored = slot.blockId
+            ? panelHistory.reconcileUrlNavigation(slot.row.id, {
+              blockId: slot.blockId,
+              state: panelHistory.snapshot(slot.row.id),
+            }, blockId)
+            : null
+          panelHistory.enqueueRestore(slot.row.id, restored?.state)
+          await tx.setProperty(slot.row.id, topLevelBlockIdProp, blockId)
+          await tx.setProperty(slot.row.id, focusedBlockIdProp, restored?.state?.focusedBlockId ?? blockId)
+          await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
+        }
       }
-      if (slot.blockId !== blockId) {
-        const restored = slot.blockId
-          ? panelHistory.reconcileUrlNavigation(slot.row.id, {
-            blockId: slot.blockId,
-            state: panelHistory.snapshot(slot.row.id),
-          }, blockId)
-          : null
-        panelHistory.enqueueRestore(slot.row.id, restored?.state)
-        await tx.setProperty(slot.row.id, topLevelBlockIdProp, blockId)
-        await tx.setProperty(slot.row.id, focusedBlockIdProp, restored?.state?.focusedBlockId ?? blockId)
-        await tx.setProperty(slot.row.id, scrollTopProp, restored?.state?.scrollTop ?? 0)
-      }
+    }
+
+    await materializeSlots(targetSlots, perTabBlock.id)
+
+    for (const stackRow of stackRowsToDelete) {
+      await tx.delete(stackRow.id)
     }
   }, {scope: ChangeScope.UiState, description: 'reconcile panel layout from URL'})
 }
@@ -235,22 +458,22 @@ export const applyCurrentLayoutUrl = async ({
     return {kind: 'ignored'}
   }
 
-  const currentRows = await perTabBlock.children.load()
-  const currentBlockIds = panelBlockIds(currentRows)
+  const currentRows = await perTabBlock.repo.query.subtree({id: perTabBlock.id}).load()
+  const currentSlots = layoutSlotsFromRows(perTabBlock.id, currentRows)
 
-  if (route.blockIds.length === 0) {
-    if (currentBlockIds.length > 0) {
-      replaceHash?.(buildLayout(workspaceId, currentBlockIds))
+  if (route.slots.length === 0) {
+    if (currentSlots.length > 0) {
+      replaceHash?.(buildLayoutFromSlots(workspaceId, currentSlots))
       return {kind: 'normalized'}
     }
     return {kind: 'empty'}
   }
 
-  if (sameBlockIds(currentBlockIds, route.blockIds)) {
+  if (sameLayoutSlots(currentSlots, route.slots)) {
     return {kind: 'noop'}
   }
 
-  await reconcilePanelRows(repo, perTabBlock, route.blockIds)
+  await reconcilePanelRows(repo, perTabBlock, route.slots)
   return {kind: 'applied'}
 }
 
@@ -292,7 +515,7 @@ export class PanelLayoutProjection {
   private unsubscribeRows: Unsubscribe | null = null
   private unsubscribeUrl: Unsubscribe | null = null
   private inboundQueue: Promise<void> = Promise.resolve()
-  private lastBlockIds: string[] = []
+  private lastSlots: LayoutSlot[] = []
 
   constructor(options: PanelLayoutProjectionOptions) {
     this.repo = options.repo
@@ -306,9 +529,9 @@ export class PanelLayoutProjection {
 
   async start(): Promise<void> {
     if (this.unsubscribeRows || this.unsubscribeUrl) return
-    const rowsHandle = this.perTabBlock.children
+    const rowsHandle = this.perTabBlock.repo.query.subtree({id: this.perTabBlock.id})
     const initialRows = await rowsHandle.load()
-    this.lastBlockIds = panelBlockIds(initialRows)
+    this.lastSlots = layoutSlotsFromRows(this.perTabBlock.id, initialRows)
     this.unsubscribeRows = rowsHandle.subscribe(rows => {
       this.handleRowsChanged(rows)
     })
@@ -354,11 +577,11 @@ export class PanelLayoutProjection {
   }
 
   private handleRowsChanged(rows: readonly BlockData[]): void {
-    const blockIds = panelBlockIds(rows)
-    if (sameBlockIds(this.lastBlockIds, blockIds)) return
-    this.lastBlockIds = blockIds
+    const slots = layoutSlotsFromRows(this.perTabBlock.id, rows)
+    if (sameLayoutSlots(this.lastSlots, slots)) return
+    this.lastSlots = slots
 
-    const nextHash = buildLayout(this.workspaceId, blockIds)
+    const nextHash = buildLayoutFromSlots(this.workspaceId, slots)
     if (this.getHash() === nextHash) return
     this.pushHash(nextHash)
     this.notify()

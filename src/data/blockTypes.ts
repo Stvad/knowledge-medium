@@ -9,6 +9,7 @@ import {
 export const EXTENSION_TYPE = 'extension'
 export const PAGE_TYPE = 'page'
 export const PANEL_TYPE = 'panel'
+export const PANEL_STACK_TYPE = 'panel-stack'
 export const DAILY_NOTE_TYPE = 'daily-note'
 /** User-defined property schemas live as blocks of this type
  *  (user-defined-properties §4). Kernel-owned; users don't create or
@@ -22,6 +23,7 @@ export const KERNEL_TYPE_CONTRIBUTIONS: readonly TypeContribution[] = [
   defineBlockType({id: EXTENSION_TYPE, label: 'Extension'}),
   defineBlockType({id: PAGE_TYPE, label: 'Page', properties: [aliasesProp]}),
   defineBlockType({id: PANEL_TYPE, label: 'Panel'}),
+  defineBlockType({id: PANEL_STACK_TYPE, label: 'Panel stack'}),
   defineBlockType({id: DAILY_NOTE_TYPE, label: 'Daily note', properties: [aliasesProp]}),
   defineBlockType({
     id: PROPERTY_SCHEMA_TYPE,

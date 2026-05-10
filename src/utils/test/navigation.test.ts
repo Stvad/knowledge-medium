@@ -12,7 +12,12 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import { getPerTabBlock, getUIStateBlock } from '@/data/globalState'
 import { getTabId, __resetTabIdForTesting } from '@/utils/tabId'
-import { insertPanelRow, panelBlockIds } from '@/utils/panelLayoutProjection'
+import {
+  insertPanelRow,
+  layoutBlockIdsFromRows,
+  layoutSlotsFromRows,
+  panelBlockIds,
+} from '@/utils/panelLayoutProjection'
 import { type User } from '@/data/api'
 
 const WS = 'ws-1'
@@ -54,6 +59,14 @@ const perTabBlock = async () => {
 const currentPanelRows = async () => (await perTabBlock()).children.load()
 
 const currentPanelBlockIds = async () => panelBlockIds(await currentPanelRows())
+const currentLayoutRows = async () => {
+  const tab = await perTabBlock()
+  return env.repo.query.subtree({id: tab.id}).load()
+}
+const currentLayoutBlockIds = async () => {
+  const tab = await perTabBlock()
+  return layoutBlockIdsFromRows(tab.id, await currentLayoutRows())
+}
 
 describe('navigate', () => {
   it("target 'focused' without panelId navigates the main panel", async () => {
@@ -104,6 +117,36 @@ describe('navigate', () => {
     })
   })
 
+  it("target 'sidebar-stack' stacks above the panel to the right", async () => {
+    const tab = await perTabBlock()
+    const firstPanelId = await insertPanelRow(env.repo, tab, 'b-a')
+    const rightPanelId = await insertPanelRow(env.repo, tab, 'b-b')
+    await insertPanelRow(env.repo, tab, 'b-c')
+
+    navigate(env.repo, {
+      blockId: 'b-x',
+      target: 'sidebar-stack',
+      sourcePanelId: firstPanelId,
+    })
+
+    await vi.waitFor(async () => {
+      expect(await currentLayoutBlockIds()).toEqual(['b-a', 'b-x', 'b-b', 'b-c'])
+    })
+    expect(layoutSlotsFromRows(tab.id, await currentLayoutRows())).toEqual([
+      {kind: 'leaf', blockId: 'b-a'},
+      {
+        kind: 'stack',
+        children: [
+          {kind: 'leaf', blockId: 'b-x'},
+          {kind: 'leaf', blockId: 'b-b'},
+        ],
+      },
+      {kind: 'leaf', blockId: 'b-c'},
+    ])
+    const rightPanel = await env.repo.block(rightPanelId).load()
+    expect(rightPanel?.parentId).not.toBe(tab.id)
+  })
+
   it('does nothing when no workspace can be resolved', async () => {
     env.repo.setActiveWorkspaceId(null)
 
@@ -136,6 +179,14 @@ describe('handleBlockLinkClick', () => {
     const e = makeEvent({shiftKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)
     expect(navigate).toHaveBeenCalledWith({...ctx, target: 'new-panel', sourcePanelId: 'panel-a'})
+    expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
+  })
+
+  it('ctrl+shift-click navigates sidebar stack with sourcePanelId', () => {
+    const navigate = vi.fn<(i: NavigateInput) => void>()
+    const e = makeEvent({shiftKey: true, ctrlKey: true})
+    handleBlockLinkClick(e, navigate, 'panel-a', ctx)
+    expect(navigate).toHaveBeenCalledWith({...ctx, target: 'sidebar-stack', sourcePanelId: 'panel-a'})
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 1})
   })
 
@@ -175,7 +226,7 @@ describe('handleBlockLinkClick', () => {
     expect(callsOf(e)).toEqual({stopProp: 1, preventDefault: 0})
   })
 
-  it('shift+modifier still routes to new-panel (shift wins)', () => {
+  it('shift+non-ctrl modifier still routes to new-panel', () => {
     const navigate = vi.fn<(i: NavigateInput) => void>()
     const e = makeEvent({shiftKey: true, metaKey: true, altKey: true})
     handleBlockLinkClick(e, navigate, 'panel-a', ctx)

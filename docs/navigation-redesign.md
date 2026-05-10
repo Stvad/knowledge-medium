@@ -67,17 +67,19 @@ The flat-list URL is a degenerate case of the durable data model — a **slot tr
 ```ts
 type Slot =
   | {kind: 'leaf';   block: BlockId}                                       // terminal content node — a block in a position
+  | {kind: 'stack';  children: Slot[]}                                     // Roam-sidebar-style vertical stack
   | {kind: 'tabs';   children: Slot[]; active: number}                     // arrangement: pick one of N
   | {kind: 'split';  orient: 'h'|'v'; ratios: number[]; children: Slot[]}  // arrangement: lay out N side-by-side
 ```
 
-Same shape IDEs / Emacs use for window layout. `tabs` and `split` are arrangement containers; `leaf` is the actual rendered block (the recursion has to bottom out somewhere). Step 4 implements the all-leaves-in-one-tabs case; the model can grow into splits / nested tabs / etc. without re-architecting.
+Same shape IDEs / Emacs use for window layout. `stack`, `tabs`, and `split` are arrangement containers; `leaf` is the actual rendered block (the recursion has to bottom out somewhere). Step 4 implements the all-leaves-in-one-tabs case; the model can grow into splits / nested tabs / etc. without re-architecting. The Roam-sidebar mode is the first extension: a `stack` container is a vertical list of full-height panel leaves inside one horizontal column.
 
 **URL transport: inline grammar, current flat list is a strict subset.** Block ids are alnum+`-_`, so `,` `|` `:` `(` `)` are free as structural chars:
 
 | What | Syntax | Example |
 |---|---|---|
 | leaf | bare id | `b1` |
+| stack | `s:` prefix | `(s:b1,b2)` |
 | tabs | comma in parens | `(b1,b2,b3)` — active = first; `(b1,b2,b3:1)` to pin active |
 | h-split | `h:` prefix | `(h:b1,b2)` |
 | v-split | `v:` prefix | `(v:b1,b2)` |
@@ -87,12 +89,13 @@ Examples across complexity:
 
 ```
 current panel stack    #wsId/b1/b2/b3
+sidebar stack          #wsId/b1/(s:b2,b3)/b4
 tabs in second slot    #wsId/b1/(b2,b3)/b4
 horizontal split       #wsId/(h:b1,b2)
 nested                 #wsId/b1/(h:(v:b2,b3),b4)
 ```
 
-Step 4 only ships the bare-id + `/`-separated case. Adding `()` groups later is a parser extension, not a breaking change — every URL that worked before keeps working. Layout-id (`#wsId/L7` pointing at a stored layout) stays available as an opt-in for *named* saved layouts; not the default transport.
+Step 4 initially shipped the bare-id + `/`-separated case; Roam-sidebar mode adds `(s:...)` groups while preserving every flat URL that already worked. Layout-id (`#wsId/L7` pointing at a stored layout) stays available as an opt-in for *named* saved layouts; not the default transport.
 
 ### Slot identity = panel rowId
 
@@ -208,8 +211,9 @@ Current matrix (from `handleBlockLinkClick`):
 | Modifier | Action | Resulting `navigate()` call |
 |---|---|---|
 | plain click | navigate within current panel | `{target: 'focused', panelId}` |
+| ctrl+shift-click | open in Roam-sidebar stack | `{target: 'sidebar-stack', sourcePanelId}` |
 | shift-click | open in new (side) panel | `{target: 'new-panel', sourcePanelId}` |
-| cmd / ctrl / alt / middle / right | fall through to native `<a href>` (new browser tab etc.) | none |
+| cmd / ctrl / middle / right | fall through to native `<a href>` (new browser tab etc.) | none |
 
 Adding **"open in main panel"** — useful when browsing in a side panel and wanting to focus the link as the new main: navigate the leftmost panel's row to the clicked block, regardless of which panel the click came from. Expressed in `NavigateInput` as a new `target: 'main'`.
 
@@ -225,11 +229,12 @@ Updated matrix:
 | Modifier | Action |
 |---|---|
 | plain | focused (current panel) |
+| ctrl+shift | **Roam-sidebar stack** |
 | shift | new side panel |
 | alt | **main panel** (new) |
 | cmd / ctrl | native browser behavior (new browser tab) |
 | middle / right | native |
-| shift wins over other modifiers | same as today |
+| shift wins over alt; ctrl+shift wins over plain shift | same as today except the sidebar chord |
 
 Push semantics: alt-click changes the main panel's `topLevelBlockId` → observer pushes a URL entry. Browser back undoes the alt-click. Symmetric with the rest.
 

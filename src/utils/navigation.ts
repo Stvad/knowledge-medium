@@ -18,9 +18,9 @@ import { useBlockContext } from '@/context/block'
 import { getPerTabBlock, getUIStateBlock } from '@/data/globalState'
 import { navigateInPanel } from './panelHistory'
 import { getTabId } from '@/utils/tabId'
-import { insertPanelRow } from '@/utils/panelLayoutProjection'
+import { insertPanelRow, insertSidebarStackedPanel } from '@/utils/panelLayoutProjection'
 
-export type NavigationTarget = 'focused' | 'main' | 'new-panel'
+export type NavigationTarget = 'focused' | 'main' | 'new-panel' | 'sidebar-stack'
 
 export interface NavigateInput {
   blockId: string
@@ -31,7 +31,8 @@ export interface NavigateInput {
    *  route to the current tab's main panel (global QuickFind, etc.). */
   panelId?: string
   /** Alias for panelId on the new-panel path; kept distinct for clarity at
-   *  call sites. Ignored on other targets. */
+   *  call sites. Also used by target='sidebar-stack'. Ignored on other
+   *  targets. */
   sourcePanelId?: string
 }
 
@@ -67,6 +68,14 @@ export const navigate = (repo: Repo, input: NavigateInput): void => {
     return
   }
 
+  if (input.target === 'sidebar-stack') {
+    void resolvePerTabBlock(repo, workspaceId)
+      .then(perTabBlock => insertSidebarStackedPanel(repo, perTabBlock, input.blockId, {
+        sourcePanelId: input.sourcePanelId,
+      }))
+    return
+  }
+
   if (input.target === 'main' || !input.panelId) {
     void navigateMainPanel(repo, workspaceId, input.blockId)
     return
@@ -89,6 +98,7 @@ export interface BlockLinkClickContext {
  *  refs, bullets, and other anchors whose href encodes a block target.
  *  Centralises the modifier-key policy so individual components don't
  *  re-implement it (and drift apart):
+ *    - ctrl+shift+click: open in the Roam-style vertical sidebar stack
  *    - shift+click: open in a new side panel
  *    - alt+click: open in the current tab's main panel
  *    - plain primary click: navigate the panel the click came from
@@ -103,6 +113,11 @@ export const handleBlockLinkClick = (
   {blockId, workspaceId}: BlockLinkClickContext,
 ): void => {
   e.stopPropagation()
+  if (e.shiftKey && e.ctrlKey && !e.metaKey && e.button === 0) {
+    e.preventDefault()
+    navigate({blockId, workspaceId, target: 'sidebar-stack', sourcePanelId: panelId})
+    return
+  }
   if (e.shiftKey) {
     e.preventDefault()
     navigate({blockId, workspaceId, target: 'new-panel', sourcePanelId: panelId})

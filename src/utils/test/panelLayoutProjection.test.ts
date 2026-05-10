@@ -14,6 +14,8 @@ import {
   PanelLayoutProjection,
   applyCurrentLayoutUrl,
   createPanelRowInTx,
+  layoutBlockIdsFromRows,
+  layoutSlotsFromRows,
   panelBlockIds,
 } from '@/utils/panelLayoutProjection'
 import { panelHistory } from '@/utils/panelHistory'
@@ -65,9 +67,10 @@ const createPanelRows = async (blockIds: readonly string[]): Promise<void> => {
 }
 
 const rows = async () => perTabBlock().children.load()
+const layoutRows = async () => env.repo.query.subtree({id: env.perTabBlockId}).load()
 
 const rowIdsByBlock = async (): Promise<Map<string, string>> =>
-  new Map((await rows()).map(row => [row.properties[topLevelBlockIdProp.name] as string, row.id]))
+  new Map((await layoutRows()).map(row => [row.properties[topLevelBlockIdProp.name] as string, row.id]))
 
 const waitFor = async (predicate: () => boolean): Promise<void> => {
   const startedAt = Date.now()
@@ -88,6 +91,30 @@ describe('applyCurrentLayoutUrl', () => {
 
     expect(result.kind).toBe('applied')
     expect(panelBlockIds(await rows())).toEqual(['a', 'b'])
+  })
+
+  it('creates a sidebar stack for stack layout URLs', async () => {
+    const result = await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      perTabBlock: perTabBlock(),
+      hash: '#ws-1/a/(s:x,b)/c',
+    })
+
+    expect(result.kind).toBe('applied')
+    const treeRows = await layoutRows()
+    expect(layoutBlockIdsFromRows(env.perTabBlockId, treeRows)).toEqual(['a', 'x', 'b', 'c'])
+    expect(layoutSlotsFromRows(env.perTabBlockId, treeRows)).toEqual([
+      {kind: 'leaf', blockId: 'a'},
+      {
+        kind: 'stack',
+        children: [
+          {kind: 'leaf', blockId: 'x'},
+          {kind: 'leaf', blockId: 'b'},
+        ],
+      },
+      {kind: 'leaf', blockId: 'c'},
+    ])
   })
 
   it('inserts in the middle while preserving surviving row ids', async () => {
@@ -211,6 +238,39 @@ describe('PanelLayoutProjection', () => {
     await waitFor(() => pushed === '#ws-1/b')
     expect(notified).toBeGreaterThan(0)
     unsubscribe()
+    projection.dispose()
+  })
+
+  it('pushes a stack URL when nested panel rows change', async () => {
+    await applyCurrentLayoutUrl({
+      repo: env.repo,
+      workspaceId: WS,
+      perTabBlock: perTabBlock(),
+      hash: '#ws-1/a/(s:x,b)',
+    })
+    let currentHash = '#ws-1/a/(s:x,b)'
+    let pushed = ''
+    const projection = new PanelLayoutProjection({
+      repo: env.repo,
+      workspaceId: WS,
+      perTabBlock: perTabBlock(),
+      getHash: () => currentHash,
+      pushHash: hash => {
+        pushed = hash
+        currentHash = hash
+      },
+      replaceHash: hash => { currentHash = hash },
+      subscribeToUrl: () => () => {},
+    })
+    await projection.start()
+
+    const rowB = (await rowIdsByBlock()).get('b')
+    if (!rowB) throw new Error('missing b row')
+    await env.repo.tx(async tx => {
+      await tx.setProperty(rowB, topLevelBlockIdProp, 'y')
+    }, {scope: ChangeScope.UiState, description: 'navigate nested panel'})
+
+    await waitFor(() => pushed === '#ws-1/a/(s:x,y)')
     projection.dispose()
   })
 
