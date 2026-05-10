@@ -22,6 +22,7 @@ import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
+import { syncStatusPlugin } from '@/plugins/sync-status'
 import type { AppExtension } from '@/extensions/facet.ts'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -53,6 +54,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   backlinksViewPlugin,
   todoPlugin,
   srsReschedulingPlugin,
+  syncStatusPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
 ]
