@@ -42,7 +42,7 @@ import {
   ensureDailyNoteTarget,
   isDateAlias,
 } from '@/data/targets'
-import { dailyNoteBlockId, DAILY_NOTE_NS } from '@/data/dailyNotes'
+import { dailyNoteBlockId, DAILY_NOTE_NS } from '@/plugins/daily-notes'
 
 const WS = 'ws-1'
 

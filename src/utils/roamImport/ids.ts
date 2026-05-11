@@ -1,5 +1,5 @@
 import { v5 as uuidv5 } from 'uuid'
-import { dailyNoteBlockId } from '@/data/dailyNotes'
+import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { RoamPage } from './types'
 

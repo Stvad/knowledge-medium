@@ -6,7 +6,7 @@ import { BlockCache } from '@/data/blockCache'
 import { getUserBlock } from '@/data/globalState.ts'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { journalBlockId } from '@/data/dailyNotes.ts'
+import { journalBlockId } from '@/plugins/daily-notes'
 import { getOrCreateShortcutsBlock } from '../shortcuts.ts'
 
 const WS = 'ws-1'

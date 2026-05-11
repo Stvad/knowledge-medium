@@ -2,7 +2,7 @@ import { memoize } from 'lodash'
 import type { Block } from '@/data/block.ts'
 import { ChangeScope } from '@/data/api'
 import { keyAtEnd } from '@/data/orderKey.ts'
-import { getOrCreateJournalBlock } from '@/data/dailyNotes.ts'
+import { getOrCreateJournalBlock } from '@/plugins/daily-notes'
 
 const SHORTCUTS_BLOCK_CONTENT = 'Shortcuts'
 const JOURNAL_SHORTCUT_CONTENT = '[[Journal]]'

@@ -2,7 +2,7 @@ import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
 import { ChangeScope, type PropertySchema } from '@/data/api'
-import { getOrCreateDailyNote } from '@/data/dailyNotes'
+import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.ts'
 import { formatIsoDate } from '@/utils/dailyPage'
 import {

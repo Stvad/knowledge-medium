@@ -22,7 +22,7 @@ import { PAGE_TYPE } from '@/data/blockTypes.ts'
 import { v4 as uuidv4 } from 'uuid'
 import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
-import { getOrCreateDailyNote } from '@/data/dailyNotes.ts'
+import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import {
   searchLinkTargets,

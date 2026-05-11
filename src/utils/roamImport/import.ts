@@ -22,7 +22,7 @@ import {
 } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes'
 import {
   roamTodoStateProp,
   statusProp,
