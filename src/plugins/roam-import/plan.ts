@@ -40,6 +40,7 @@ import {
   type PreparedSrsSchedule,
 } from './srsMarkers'
 import { parseRoamImportReferences } from './references'
+import { parseBlockRefs } from '@/utils/referenceParser'
 import { extractRoamTodoMarker } from './todo'
 
 export {
@@ -477,13 +478,24 @@ const composeBlockData = (args: ComposeArgs): BlockData => {
   const aliasMatches = parseRoamImportReferences(content)
   for (const ref of aliasMatches) ctx.aliasesUsed.add(ref.alias)
 
-  // Pre-populate references[] with what we can resolve right now: page
-  // aliases (id is filled in later by the orchestrator) and block-ref
-  // uids (already mapped). The orchestrator finishes the alias rows.
-  const blockRefs: BlockReference[] = roamRefUids
-    .map(roamUid => ctx.uidMap.get(roamUid))
-    .filter((mapped): mapped is string => Boolean(mapped))
-    .map(mapped => ({id: mapped, alias: mapped}))
+  // Pre-populate references[] with the block-ref-shape entries this
+  // block's content carries (`((uuid))`, `!((uuid))`, `[label](((uuid)))`).
+  // Roam's `:block/refs` lumps page references and block references into
+  // one list, so `roamRefUids` includes pages too — emitting them all as
+  // {id, alias: id} produced a spurious block-ref-shape duplicate for
+  // every `[[Page Name]]` next to the legitimate alias-form entry that
+  // `patchAliasReferences` writes later. Parse the rewritten content
+  // through the same `parseBlockRefs` the post-commit processor uses so
+  // we agree on shape and the parser re-derive on first save is
+  // idempotent.
+  const blockRefMarks = parseBlockRefs(rewritten.content)
+  const seenBlockRefIds = new Set<string>()
+  const blockRefs: BlockReference[] = []
+  for (const mark of blockRefMarks) {
+    if (seenBlockRefIds.has(mark.blockId)) continue
+    seenBlockRefIds.add(mark.blockId)
+    blockRefs.push({id: mark.blockId, alias: mark.blockId})
+  }
 
   const reconciled = reconcileReadwisePromotedMetadata(
     roamUid,

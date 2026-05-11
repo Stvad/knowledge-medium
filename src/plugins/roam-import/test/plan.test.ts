@@ -203,6 +203,35 @@ describe('planImport', () => {
     ])
   })
 
+  it('does not emit a block-ref-shape duplicate for `[[Page Name]]` content even when :block/refs lists the page', () => {
+    // Roam's `:block/refs` lumps page references and block references
+    // into one list; before the fix the planner emitted a {id, alias: id}
+    // entry for every uid in that list, which duplicated the legitimate
+    // alias-form entry the orchestrator's patchAliasReferences adds for
+    // `[[Page Name]]`. After the fix, only content `((uid))` /
+    // `!((uid))` / `[label](((uid)))` shapes produce block-ref entries.
+    const plan = planImport([{
+      title: 'p',
+      uid: 'pUid',
+      children: [{
+        string: 'see [[flu shot]]',
+        uid: 'b',
+        // Roam records the page reference here even though content has no ((…)).
+        ':block/refs': [{':block/uid': 'fluShotPageUid'}],
+      }],
+      // Standalone page so the importer materialises it with that uid.
+    }, {
+      title: 'flu shot',
+      uid: 'fluShotPageUid',
+      children: [],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    const block = plan.descendants.find(d => d.roamUid === 'b')
+    // No block-ref-shape entry for the page reference. The alias-form is
+    // added later by patchAliasReferences during import, not here.
+    expect(block?.data.references).toEqual([])
+  })
+
   it('registers placeholders for `((uid))` refs to blocks not in the export when refs metadata confirms them', () => {
     const plan = planImport([{
       title: 'p',
