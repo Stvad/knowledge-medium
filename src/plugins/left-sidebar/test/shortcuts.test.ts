@@ -43,7 +43,7 @@ beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('getOrCreateShortcutsBlock', () => {
-  it('seeds a newly-created Shortcuts block with a Journal shortcut', async () => {
+  it('creates Shortcuts with a Journal shortcut when missing', async () => {
     const userBlock = await getUserBlock(env.repo, WS, USER)
     const shortcuts = await getOrCreateShortcutsBlock(userBlock)
 
@@ -54,12 +54,12 @@ describe('getOrCreateShortcutsBlock', () => {
     expect(children[0]).toMatchObject({
       parentId: shortcuts.id,
       workspaceId: WS,
-      content: 'Journal',
+      content: '[[Journal]]',
       references: [{id: journalBlockId(WS), alias: 'Journal'}],
     })
   })
 
-  it('seeds an existing empty Shortcuts block once', async () => {
+  it('returns an existing Shortcuts block without adding children', async () => {
     const userBlock = await getUserBlock(env.repo, WS, USER)
     await env.repo.tx(tx => tx.create({
       id: 'legacy-shortcuts',
@@ -70,14 +70,7 @@ describe('getOrCreateShortcutsBlock', () => {
     }), {scope: ChangeScope.UserPrefs})
 
     const shortcuts = await getOrCreateShortcutsBlock(userBlock)
-    const [seeded] = await shortcutChildren(env.repo, shortcuts.id)
-    expect(seeded?.references).toEqual([{id: journalBlockId(WS), alias: 'Journal'}])
-
-    await env.repo.tx(tx => tx.delete(seeded!.id), {scope: ChangeScope.UserPrefs})
-
-    const freshRepo = createRepo(env.h)
-    const freshUserBlock = await getUserBlock(freshRepo, WS, USER)
-    const freshShortcuts = await getOrCreateShortcutsBlock(freshUserBlock)
-    expect(await freshRepo.block(freshShortcuts.id).childIds.load()).toEqual([])
+    expect(shortcuts.id).toBe('legacy-shortcuts')
+    expect(await env.repo.block(shortcuts.id).childIds.load()).toEqual([])
   })
 })
