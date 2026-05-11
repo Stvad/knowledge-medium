@@ -549,6 +549,53 @@ describe('parseReferences — schema-swap reprojection', () => {
   })
 })
 
+describe('parseReferences — idempotent comparison', () => {
+  it('skips the references write when stored refs canonical-equal the parse output despite differing array order', async () => {
+    // Simulate what a sync-applied row looks like locally: the
+    // `references` column already contains the same set of refs the
+    // parser would produce, but ordered the way some earlier writer
+    // emitted them (e.g. Roam import preserves content-position order
+    // across alias+date kinds; the processor segregates them). Without
+    // canonical comparison this fires a no-op `tx.update` and a
+    // `ps_crud` PATCH per row — the 16k-uploads-on-cold-resync bug.
+    await env.repo.tx(
+      tx => tx.create({
+        id: 'src',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: '[[2026-04-28]] then [[Foo]]',
+        references: [
+          // Content-position order: date first, alias second. The
+          // processor would emit `[Foo, 2026-04-28]` (aliasRefs before
+          // dateRefs). Canonical-equal so no write should fire.
+          {id: dailyId('2026-04-28'), alias: '2026-04-28'},
+          {id: aliasId('Foo'), alias: 'Foo'},
+        ],
+      }),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    // Only the user's `create` row_event should exist for src — no
+    // processor-issued `update`. (Other rows in this tx involve the
+    // alias-target ensure path, which still runs.)
+    const evts = await env.h.db.getAll<{kind: string}>(
+      "SELECT kind FROM row_events WHERE block_id = ? ORDER BY id",
+      ['src'],
+    )
+    expect(evts.map(e => e.kind)).toEqual(['create'])
+
+    // The stored references_json stays in the writer's order — we
+    // deliberately do not normalise on disk.
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([
+      {id: dailyId('2026-04-28'), alias: '2026-04-28'},
+      {id: aliasId('Foo'), alias: 'Foo'},
+    ])
+  })
+})
+
 describe('parseReferences — daily-note routing (§7.6)', () => {
   it('[[YYYY-MM-DD]] produces a daily-note target with the daily-note deterministic id', async () => {
     await env.repo.tx(
