@@ -109,21 +109,28 @@ const assertOpfsAvailable = (): Promise<void> => {
 }
 
 // OPFSCoopSyncVFS uses OPFS sync access handles (much faster than
-// IndexedDB) and requires a dedicated worker. Single-tab today;
-// CoopSync still works correctly if a second tab opens later. We pass
+// IndexedDB) and is designed for cooperative multi-tab access. We pass
 // an explicit `WASQLiteOpenFactory` instead of plain settings because
 // the `vfs` option lives on the factory's option type, not on the
 // generic `SQLOpenOptions` accepted by `database: {…}`.
+//
+// `flags` is left empty so PowerSync's platform-aware defaults apply:
+// `enableMultiTabs` is `true` on desktop browsers with SharedWorker
+// support and `false` on iOS/Safari/Android (see
+// node_modules/@powersync/web/lib/src/db/adapters/web-sql-flags.js).
+// Forcing `enableMultiTabs: false` everywhere — which is what we used
+// to do — causes a checksum-validation race: each tab runs its own
+// sync connection, both write `ps_oplog` / `ps_buckets` concurrently,
+// the checkpoint validator sees a state that doesn't match the
+// server's checksum, and PowerSync deletes the bucket and re-downloads
+// it from scratch. That race is what was burning ~2 GB of sync
+// bandwidth per browsing session.
 const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
   database: new WASQLiteOpenFactory({
     dbFilename: dbFilenameForUser(userId),
     vfs: WASQLiteVFS.OPFSCoopSyncVFS,
   }),
-  flags: {
-    enableMultiTabs: false,
-    useWebWorker: true,
-  },
 })
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
