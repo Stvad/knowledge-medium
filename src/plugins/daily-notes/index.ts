@@ -38,13 +38,25 @@ import type { Repo } from '@/data/repo'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { actionsFacet, workspaceLandingFacet } from '@/extensions/core.ts'
 import { dailyNotesActions } from './actions.ts'
+import { dailyNotesDataExtension } from './dataExtension.ts'
 import { todayDailyNoteLanding } from './landing.ts'
 
 // Factory rather than a const because the action handlers close over
 // `repo` (they call `repo.activeWorkspaceId` and `getOrCreateDailyNote`
 // without going through React context). Same shape as
 // `vimNormalModePlugin({repo})` / `defaultActionsExtension({repo})`.
+//
+// `dailyNotesDataExtension` is bundled here AND exported separately
+// for `staticDataExtensions` (the pre-React Repo bootstrap path).
+// AppRuntimeProvider rebuilds the FacetRuntime from `staticAppExtensions`
+// alone and calls `repo.setFacetRuntime(...)`, which REPLACES the
+// pre-mount registries. Without the data extension here, the
+// daily-note TypeContribution disappears after mount and any later
+// `getOrCreateDailyNote` / `ensureDailyNoteTarget` throws on
+// `repo.addTypeInTx(DAILY_NOTE_TYPE)`. Same pattern as `todoPlugin`,
+// `backlinksPlugin`, `srsReschedulingPlugin`.
 export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
+  dailyNotesDataExtension,
   dailyNotesActions({repo}).map(action =>
     actionsFacet.of(action, {source: 'daily-notes'}),
   ),
