@@ -9,16 +9,16 @@
  *   `{id, inserted}` where `inserted: true` covers both fresh-insert
  *   and tombstone-restore (both are "this tx wrote the row").
  *
- *   Layer 2 — `ensureAliasTarget` / `ensureDailyNoteTarget` are
- *   thin per-domain wrappers. Each computes its own deterministic id,
- *   picks `freshContent` (empty string for v1 callers), and supplies
- *   an `onInsertedOrRestored` callback that writes the alias list via
- *   `tx.setProperty`. Per-domain also drives the cleanup-eligibility
- *   routing in §7.6: only ensureAliasTarget results enter the
- *   newlyInsertedAliasTargetIds list passed to
- *   `backlinks.cleanupOrphanAliases` (date-shaped aliases never enter the
- *   cleanup list — daily notes persist regardless of whether a
- *   referencing block is removed within 4s).
+ *   Layer 2 — `ensureAliasTarget` (here) and `ensureDailyNoteTarget`
+ *   (in `@/plugins/daily-notes`) are thin per-domain wrappers. Each
+ *   computes its own deterministic id, picks `freshContent` (empty
+ *   string for v1 callers), and supplies an `onInsertedOrRestored`
+ *   callback that writes the alias list via `tx.setProperty`.
+ *   Per-domain also drives the cleanup-eligibility routing in §7.6:
+ *   only ensureAliasTarget results enter the newlyInsertedAliasTargetIds
+ *   list passed to `backlinks.cleanupOrphanAliases` (date-shaped aliases
+ *   never enter the cleanup list — daily notes persist regardless of
+ *   whether a referencing block is removed within 4s).
  *
  * Why `tx.createOrGet` doesn't restore on tombstone (v4.26):  Restore
  * is domain policy. The primitive throws DeletedConflictError loudly
@@ -36,7 +36,7 @@ import { DeletedConflictError, type Tx, type TypeRegistrySnapshot } from '@/data
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp } from './internals/coreProperties'
-import { DAILY_NOTE_TYPE, PAGE_TYPE } from './blockTypes'
+import { PAGE_TYPE } from './blockTypes'
 
 /** Layer 1 args. */
 export interface CreateOrRestoreArgs {
@@ -101,12 +101,6 @@ export const createOrRestoreTargetBlock = async (
  *  workspaces typing the same alias get distinct seats. */
 const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
 
-/** Namespace for daily-note target ids. Mirrors
- *  `src/data/dailyNotes.ts` DAILY_NOTE_NS (which the server-side
- *  deterministic-seed migration also references) so date-shaped
- *  aliases compute the same id as the existing daily-notes flow. */
-const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
-
 /** Stable id for the **stub-block seat** that auto-materialises when
  *  nobody owns `alias` in `workspaceId` yet. NOT "the canonical id of
  *  the block named alias" — a real block claiming the alias keeps its
@@ -119,16 +113,6 @@ const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
  *  through PowerSync without a duplicate-block merge. */
 const computeAliasSeatId = (alias: string, workspaceId: string): string =>
   uuidv5(`${workspaceId}:${alias}`, ALIAS_NS)
-
-const computeDailyNoteId = (date: string, workspaceId: string): string =>
-  uuidv5(`${workspaceId}:${date}`, DAILY_NOTE_NS)
-
-/** Date-shaped alias detector (§7.6). Routing decision: dates go to
- *  `ensureDailyNoteTarget` (no cleanup eligibility); non-dates go to
- *  `ensureAliasTarget` (eligible for orphan cleanup if this tx
- *  inserted them). */
-export const isDateAlias = (alias: string): boolean =>
-  /^\d{4}-\d{2}-\d{2}$/.test(alias)
 
 // ──── Layer 2 — per-domain wrappers ────
 
@@ -160,30 +144,6 @@ export const ensureAliasTarget = async (
     },
   })
 
-/** Ensure a daily-note target block exists for ISO date `date` in
- *  `workspaceId`. Same shape as ensureAliasTarget — but the deterministic
- *  id is in the daily-note namespace, and parseReferences routes results
- *  to a separate list so cleanup never sees them (§7.6). */
-export const ensureDailyNoteTarget = async (
-  tx: Tx,
-  repo: Repo,
-  date: string,
-  workspaceId: string,
-  typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
-): Promise<{ id: string; inserted: boolean }> =>
-  createOrRestoreTargetBlock(tx, {
-    id: computeDailyNoteId(date, workspaceId),
-    workspaceId,
-    parentId: null,
-    orderKey: keyAtEnd(),
-    freshContent: '',
-    onInsertedOrRestored: async (tx, id) => {
-      await tx.setProperty(id, aliasesProp, [date])
-      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)
-      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
-    },
-  })
-
-// Re-exports so tests + other callers can use the deterministic-id
-// helpers without re-importing them from internal namespaces.
-export { computeAliasSeatId, computeDailyNoteId }
+// Re-export so tests + other callers can use the deterministic-id
+// helper without re-importing it from internal namespaces.
+export { computeAliasSeatId }

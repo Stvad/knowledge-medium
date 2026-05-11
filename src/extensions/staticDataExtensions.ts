@@ -1,6 +1,7 @@
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension.ts'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.ts'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension.ts'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension.ts'
 import { todoDataExtension } from '@/plugins/todo/dataExtension.ts'
@@ -10,6 +11,7 @@ import { todoDataExtension } from '@/plugins/todo/dataExtension.ts'
  *  data ownership without importing component trees. */
 export const staticDataExtensions: AppExtension[] = [
   kernelDataExtension,
+  dailyNotesDataExtension,
   backlinksDataExtension,
   groupedBacklinksDataExtension,
   srsReschedulingDataExtension,

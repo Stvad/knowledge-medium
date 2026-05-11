@@ -16,15 +16,19 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
-import { DAILY_NOTE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
+import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
   DAILY_NOTE_NS,
+  DAILY_NOTE_TYPE,
   JOURNAL_NS,
   addDaysIso,
   dailyNoteBlockId,
+  dailyNotesDataExtension,
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
@@ -50,6 +54,10 @@ const setup = async (): Promise<Harness> => {
     now: () => ++timeCursor,
     newId: () => `gen-${++idCursor}`,
   })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    dailyNotesDataExtension,
+  ]))
   return {h, cache, repo}
 }
 
@@ -70,8 +78,9 @@ describe('deterministic ids', () => {
   })
 
   it('namespace constants are pinned', () => {
-    // Mirrored by the supabase migration; drift between the two
-    // reintroduces the per-client duplicate-page bug.
+    // Pinned so two clients deriving an id offline land on the same row
+    // once they sync. Drift on either side reintroduces the
+    // per-client duplicate-page bug.
     expect(JOURNAL_NS).toBe('a304a5da-807a-4c20-8af3-53a033aa9df8')
     expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
   })

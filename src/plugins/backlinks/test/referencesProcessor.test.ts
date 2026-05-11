@@ -26,7 +26,8 @@ import { ChangeScope, codecs, defineProperty, type BlockReference } from '@/data
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { computeAliasSeatId, computeDailyNoteId } from '@/data/targets'
+import { computeAliasSeatId } from '@/data/targets'
+import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
@@ -62,6 +63,7 @@ const setup = async (
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    dailyNotesDataExtension,
     backlinksDataExtension,
     ...extraExtensions,
   ]))
@@ -90,7 +92,7 @@ afterEach(async () => {
 const WS = 'ws-1'
 
 const aliasId = (alias: string) => computeAliasSeatId(alias, WS)
-const dailyId = (date: string) => computeDailyNoteId(date, WS)
+const dailyId = (date: string) => dailyNoteBlockId(WS, date)
 
 /** Run all pending processors to completion (synchronous + delayed).
  *  Also advances fake time by 1 ms so any pending `setTimeout(0)`
@@ -244,17 +246,20 @@ describe('parseReferences — schema-swap reprojection', () => {
   })
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
+    dailyNotesDataExtension,
     backlinksDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
+    dailyNotesDataExtension,
     backlinksDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
     propertySchemasFacet.of(approverProp, {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
+    dailyNotesDataExtension,
     backlinksDataExtension,
   ])
 

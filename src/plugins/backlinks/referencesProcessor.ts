@@ -60,13 +60,12 @@ import {
   parseReferences as parseAliasMarks,
   parseBlockRefs,
 } from '@/utils/referenceParser'
+import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
 import {
-  computeAliasSeatId,
-  computeDailyNoteId,
-  ensureAliasTarget,
+  dailyNoteBlockId,
   ensureDailyNoteTarget,
   isDateAlias,
-} from '@/data/targets'
+} from '@/plugins/daily-notes'
 import { BACKLINKS_FOR_BLOCK_QUERY } from './query.ts'
 
 export const PARSE_REFERENCES_PROCESSOR = 'backlinks.parseReferences'
@@ -165,7 +164,7 @@ const buildSourcePlan = async (
       // Daily note path — distinct deterministic id, never feeds cleanup.
       // Always-present id (deterministic from date+workspace); the write
       // phase will ensureDailyNoteTarget which is idempotent.
-      const id = computeDailyNoteId(mark.alias, source.workspaceId)
+      const id = dailyNoteBlockId(source.workspaceId, mark.alias)
       dateRefs.push({id, alias: mark.alias})
       datesToEnsure.push(mark.alias)
       continue

@@ -1,24 +1,19 @@
 import { v5 as uuidv5 } from 'uuid'
-import { ChangeScope } from '@/data/api'
+import { ChangeScope, type Tx, type TypeRegistrySnapshot } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
-import { DAILY_NOTE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE } from '@/data/blockTypes'
+import { keyAtEnd } from '@/data/orderKey'
+import { createOrRestoreTargetBlock } from '@/data/targets'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
+import { DAILY_NOTE_TYPE } from './schema.ts'
 
 // Namespace UUIDs — fixed constants so two clients computing the same
 // (workspaceId, isoDate) pair derive the same block id even before any
 // sync has happened. Without this, two offline clients each create
 // their own "today" page on first launch and we ship duplicate pages
 // on first sync.
-//
-// DAILY_NOTE_NS is mirrored by `v_daily_note_ns` in
-// supabase/migrations/<...>_deterministic_seed_daily_note.sql so that
-// the server-seeded root block id matches what client-side
-// dailyNoteBlockId() computes. The input format
-// (`workspace_id || ':' || iso`) is mirrored there too. Drift between
-// the two — namespace, input shape, or order — reintroduces the
-// duplication.
 export const JOURNAL_NS = 'a304a5da-807a-4c20-8af3-53a033aa9df8'
 export const DAILY_NOTE_NS = '53421e08-2f31-42f8-b73a-43830bb718f1'
 
@@ -224,3 +219,42 @@ export const getOrCreateDailyNote = async (
 // clock midnight for historical analysis; not used by the journal-
 // sort path anymore (orderKey carries that responsibility now).
 export {dailyNoteCreatedAt}
+
+/** Date-shaped alias detector (spec §7.6). Routing decision used by
+ *  the references processor: dates go to `ensureDailyNoteTarget`
+ *  (no cleanup eligibility); non-dates go to `ensureAliasTarget`
+ *  (eligible for orphan cleanup if this tx inserted them). */
+export const isDateAlias = (alias: string): boolean =>
+  /^\d{4}-\d{2}-\d{2}$/.test(alias)
+
+/** Ensure a daily-note **target seat** block exists for ISO date `date`
+ *  in `workspaceId`. The seat is a reference target materialised at
+ *  workspace-root when nobody has authored a real daily-note row for
+ *  that date yet — same `dailyNoteBlockId(workspaceId, date)` namespace
+ *  as `getOrCreateDailyNote`, so the two flows converge on the same
+ *  row through PowerSync without a merge.
+ *
+ *  Distinct from `getOrCreateDailyNote`, which parents the row under
+ *  the Journal page and writes long-form aliases. `ensureDailyNoteTarget`
+ *  is the lighter-weight materialiser invoked from `parseReferences`
+ *  during reference resolution; it leaves the row at workspace-root
+ *  with empty content until `getOrCreateDailyNote` later promotes it. */
+export const ensureDailyNoteTarget = async (
+  tx: Tx,
+  repo: Repo,
+  date: string,
+  workspaceId: string,
+  typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
+): Promise<{ id: string; inserted: boolean }> =>
+  createOrRestoreTargetBlock(tx, {
+    id: dailyNoteBlockId(workspaceId, date),
+    workspaceId,
+    parentId: null,
+    orderKey: keyAtEnd(),
+    freshContent: '',
+    onInsertedOrRestored: async (tx, id) => {
+      await tx.setProperty(id, aliasesProp, [date])
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)
+      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
+    },
+  })

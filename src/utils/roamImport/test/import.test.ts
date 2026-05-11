@@ -27,7 +27,12 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../../../data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { dailyNoteBlockId, journalBlockId, todayIso } from '@/plugins/daily-notes'
+import {
+  dailyNoteBlockId,
+  dailyNotesDataExtension,
+  journalBlockId,
+  todayIso,
+} from '@/plugins/daily-notes'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
@@ -74,6 +79,7 @@ const setup = async (): Promise<Harness> => {
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    dailyNotesDataExtension,
     todoDataExtension,
     srsReschedulingDataExtension,
   ]))
