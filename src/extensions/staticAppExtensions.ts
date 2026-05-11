@@ -23,6 +23,7 @@ import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
+import { roamImportPlugin } from '@/plugins/roam-import'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
@@ -69,4 +70,5 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   syncStatusPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
+  roamImportPlugin({repo}),
 ]

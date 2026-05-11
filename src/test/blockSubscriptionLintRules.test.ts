@@ -70,7 +70,7 @@ describe('block subscription ESLint rules', () => {
           errors: [{messageId: 'directWrite'}],
         },
         {
-          filename: '/repo/src/utils/roamImport/import.ts',
+          filename: '/repo/src/plugins/roam-import/import.ts',
           code: `
             import { typesProp } from '@/data/properties'
             const properties = {[typesProp.name]: typesProp.codec.encode(['page'])}

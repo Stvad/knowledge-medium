@@ -1,3 +1,4 @@
+export { roamImportPlugin } from './plugin'
 export { importRoam } from './import'
 export type { RoamImportOptions, RoamImportSummary } from './import'
 export { computePromotedFromChildren, planImport } from './plan'

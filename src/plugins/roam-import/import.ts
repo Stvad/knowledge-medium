@@ -40,9 +40,9 @@ import {
   srsReviewCountProp,
   srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
-import { computeAliasSeatId } from '../../data/targets'
+import { computeAliasSeatId } from '@/data/targets'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
-import type { Repo } from '../../data/repo'
+import type { Repo } from '@/data/repo'
 import {
   parseRoamImportReferences,
   planImport,
