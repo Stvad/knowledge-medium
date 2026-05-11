@@ -1,8 +1,11 @@
 import { CrudEntry, UpdateType } from '@powersync/common'
+import type { BlockRow } from '@/data/blockSchema'
 import { describe, expect, it } from 'vitest'
 import {
   __compactBlockCrudEntriesForTest,
+  __normalizeLocalBlockUploadRowForTest,
   __orderedBlockUpsertsForTest,
+  __shouldBulkUpsertPatchesForTest,
 } from './powersync'
 
 const put = (
@@ -105,5 +108,29 @@ describe('PowerSync upload compaction', () => {
     ])
 
     expect(ordered.map(row => row.id)).toEqual(['parent', 'child', 'sibling'])
+  })
+
+  it('only switches patch uploads to bulk upserts for multi-row backlogs', () => {
+    expect(__shouldBulkUpsertPatchesForTest([{id: 'block-a'}])).toBe(false)
+    expect(__shouldBulkUpsertPatchesForTest([{id: 'block-a'}, {id: 'block-b'}])).toBe(true)
+  })
+
+  it('normalizes local SQLite block rows before remote upsert', () => {
+    const payload = __normalizeLocalBlockUploadRowForTest({
+      id: 'block-a',
+      workspace_id: 'workspace-a',
+      parent_id: null,
+      order_key: 'a0',
+      content: 'A',
+      properties_json: '{}',
+      references_json: '[]',
+      created_at: 1,
+      updated_at: 2,
+      created_by: 'user-a',
+      updated_by: 'user-a',
+      deleted: 0,
+    } satisfies BlockRow)
+
+    expect(payload.deleted).toBe(false)
   })
 })

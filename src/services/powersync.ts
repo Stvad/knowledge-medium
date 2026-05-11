@@ -5,13 +5,17 @@ import {
   UpdateType,
   type CrudTransaction,
 } from '@powersync/common'
+import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.ts'
 import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.ts'
 
 const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
 
 const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
+const MAX_BLOCKS_PER_LOCAL_SELECT = 500
 const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
+const BULK_PATCH_UPSERT_THRESHOLD = 2
+const BLOCK_UPLOAD_COLUMNS_SQL = BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')
 
 export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
 export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
@@ -48,6 +52,11 @@ const assertSupabase = () => {
 const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
   ...(entry.opData ?? {}),
   id: entry.id,
+})
+
+const normalizeLocalBlockUploadRow = (row: BlockRow): BlockUploadPayload => ({
+  ...row,
+  deleted: Boolean(row.deleted),
 })
 
 const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockOperation[] => {
@@ -191,7 +200,61 @@ const applyBlockUpserts = async (rows: readonly BlockUploadPayload[]) => {
   }
 }
 
-const applyCompactedBlockOperations = async (operations: readonly CompactedBlockOperation[]) => {
+const loadCurrentBlockUploadRows = async (
+  database: AbstractPowerSyncDatabase,
+  ids: readonly string[],
+): Promise<BlockUploadPayload[]> => {
+  const rows: BlockUploadPayload[] = []
+
+  for (const chunk of chunked(ids, MAX_BLOCKS_PER_LOCAL_SELECT)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    const result = await database.getAll<BlockRow>(
+      `SELECT ${BLOCK_UPLOAD_COLUMNS_SQL} FROM blocks WHERE id IN (${placeholders})`,
+      chunk,
+    )
+    rows.push(...result.map(normalizeLocalBlockUploadRow))
+  }
+
+  return rows
+}
+
+const shouldBulkUpsertPatches = (patches: readonly {id: string}[]) =>
+  patches.length >= BULK_PATCH_UPSERT_THRESHOLD
+
+const applyBlockPatches = async (
+  database: AbstractPowerSyncDatabase,
+  patches: readonly {id: string; payload: Record<string, unknown>}[],
+) => {
+  if (patches.length === 0) return
+
+  if (!shouldBulkUpsertPatches(patches)) {
+    await applyBlockPatch(patches[0]!.id, patches[0]!.payload)
+    return
+  }
+
+  const currentRows = await loadCurrentBlockUploadRows(
+    database,
+    patches.map(patch => patch.id),
+  )
+  const rowsById = new Map(currentRows.map(row => [row.id, row]))
+  const upserts = patches
+    .map(patch => rowsById.get(patch.id))
+    .filter((row): row is BlockUploadPayload => Boolean(row))
+
+  console.debug('[powersync] PATCH backlog as UPSERT batch', upserts.length)
+  await applyBlockUpserts(upserts)
+
+  for (const patch of patches) {
+    if (!rowsById.has(patch.id)) {
+      await applyBlockPatch(patch.id, patch.payload)
+    }
+  }
+}
+
+const applyCompactedBlockOperations = async (
+  database: AbstractPowerSyncDatabase,
+  operations: readonly CompactedBlockOperation[],
+) => {
   const upserts: BlockUploadPayload[] = []
   const patches: Array<{id: string; payload: Record<string, unknown>}> = []
   const deletes: string[] = []
@@ -208,9 +271,7 @@ const applyCompactedBlockOperations = async (operations: readonly CompactedBlock
 
   await applyBlockUpserts(upserts)
 
-  for (const patch of patches) {
-    await applyBlockPatch(patch.id, patch.payload)
-  }
+  await applyBlockPatches(database, patches)
 
   for (const id of deletes) {
     await applyBlockDelete(id)
@@ -237,12 +298,15 @@ const collectUploadBatch = async (
   return transactions
 }
 
-const uploadTransactions = async (transactions: readonly CrudTransaction[]) => {
+const uploadTransactions = async (
+  database: AbstractPowerSyncDatabase,
+  transactions: readonly CrudTransaction[],
+) => {
   const entries = transactions.flatMap(transaction => transaction.crud)
   const operations = compactBlockCrudEntries(entries)
 
   try {
-    await applyCompactedBlockOperations(operations)
+    await applyCompactedBlockOperations(database, operations)
   } catch (err) {
     // Surface upload errors loudly — silent failures here look like
     // "sync isn't working" with no explanation in the UI.
@@ -260,7 +324,7 @@ const uploadData = async (database: AbstractPowerSyncDatabase) => {
       return
     }
 
-    await uploadTransactions(transactions)
+    await uploadTransactions(database, transactions)
   }
 }
 
@@ -291,3 +355,5 @@ export const createPowerSyncConnector = (): PowerSyncBackendConnector => ({
 
 export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
+export const __normalizeLocalBlockUploadRowForTest = normalizeLocalBlockUploadRow
+export const __shouldBulkUpsertPatchesForTest = shouldBulkUpsertPatches
