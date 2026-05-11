@@ -11,6 +11,7 @@ import { quickFindPlugin } from '@/plugins/quick-find'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
@@ -41,6 +42,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   themeTogglePlugin,
   accountHeaderPlugin,
   plainOutlinerPlugin,
+  mobileBottomNavPlugin,
   mobileKeyboardToolbarPlugin,
   swipeQuickActionsPlugin,
   vimNormalModePlugin({repo}),
