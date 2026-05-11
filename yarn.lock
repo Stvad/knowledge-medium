@@ -768,12 +768,20 @@
   resolved "https://registry.yarnpkg.com/@oxc-project/types/-/types-0.127.0.tgz#8374fcdfb4a641861218daa5700c447c00b66663"
   integrity sha512-aIYXQBo4lCbO4z0R3FHeucQHpF46l2LbMdxRvqvuRuW2OxdnSkcng5B8+K12spgLDj93rtN3+J2Vac/TIO+ciQ==
 
-"@powersync/common@1.52.0", "@powersync/common@^1.52.0":
+"@powersync/common@1.52.0":
   version "1.52.0"
   resolved "https://registry.yarnpkg.com/@powersync/common/-/common-1.52.0.tgz#d7abe43e3cc3cda36fe7cab21b9fe62409d15b60"
   integrity sha512-rs50iEPcUSjLdKjnQZ4VbtK3U5+MTaY/YVCruN0hGmDMIn6wlT+EDsNFosAUAh6waLDEDfuKbvtHRhPKdBQ/Qg==
   dependencies:
     event-iterator "^2.0.0"
+
+"@powersync/common@1.53.0", "@powersync/common@^1.53.0":
+  version "1.53.0"
+  resolved "https://registry.yarnpkg.com/@powersync/common/-/common-1.53.0.tgz#3a1f3806b916453875bbdcaed948cdbc15099d5d"
+  integrity sha512-RIlpwa8uYEwljZBt+pucRAd6RrpT6wwZN1SC4euBy1ymlSHaFq481q9yhYUlkoxkmWD/AZTL6mULH1dXhhqXYQ==
+  dependencies:
+    event-iterator "^2.0.0"
+    js-logger "^1.6.1"
 
 "@powersync/node@^0.18.4":
   version "0.18.4"
@@ -790,13 +798,12 @@
   resolved "https://registry.yarnpkg.com/@powersync/react/-/react-1.10.0.tgz#20a17805be0d2295cf634212101bbfd2ee886983"
   integrity sha512-orM29qocbF8zYTBM27j9nPNztyplpbNVaw8djpqxl8N2wESqHTbHOKpatg+Fa5aofgjzmrkiGwevJvCbiWYYWQ==
 
-"@powersync/web@^1.37.2":
-  version "1.37.2"
-  resolved "https://registry.yarnpkg.com/@powersync/web/-/web-1.37.2.tgz#891d11636ba2960f1641f789f45d837ea88773b6"
-  integrity sha512-czCY8QFm3LGXAB8LD0O2D0dW2PAx+HZjuEPFMb+Y9MfsWBz124d4q//oJtChBXORfFIW/N6Bc9bxKod/OMXBxg==
+"@powersync/web@^1.38.0":
+  version "1.38.0"
+  resolved "https://registry.yarnpkg.com/@powersync/web/-/web-1.38.0.tgz#f7c5a33625204d98667a8e5ab4ffd06c063a2a1b"
+  integrity sha512-XqNkgwYySRQJpTwWjg3coSm1Z8oF++HnYu8RD87fNTnE5IDeOi+HpT1Q3zd2uSirtB33sbWly8026xb0VViPtw==
   dependencies:
-    "@powersync/common" "1.52.0"
-    bson "^6.10.4"
+    "@powersync/common" "1.53.0"
     comlink "^4.4.2"
     commander "^12.1.0"
 
@@ -3273,6 +3280,11 @@ js-cookie@^2.2.1:
   version "2.2.1"
   resolved "https://registry.npmjs.org/js-cookie/-/js-cookie-2.2.1.tgz"
   integrity sha512-HvdH2LzI/EAZcUwA8+0nKNtWHqS+ZmijLA30RwZA0bo7ToCckjK5MkGhjED9KoRcXO6BaGI3I9UIzSA1FKFPOQ==
+
+js-logger@^1.6.1:
+  version "1.6.1"
+  resolved "https://registry.yarnpkg.com/js-logger/-/js-logger-1.6.1.tgz#8f09671b515e4a6f31dced8fdb8923432e2c60af"
+  integrity sha512-yTgMCPXVjhmg28CuUH8CKjU+cIKL/G+zTu4Fn4lQxs8mRFH/03QTNvEFngcxfg/gRDiQAOoyCKmMTOm9ayOzXA==
 
 "js-tokens@^3.0.0 || ^4.0.0", js-tokens@^4.0.0:
   version "4.0.0"
