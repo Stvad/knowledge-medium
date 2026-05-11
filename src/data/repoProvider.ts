@@ -109,30 +109,35 @@ const assertOpfsAvailable = (): Promise<void> => {
 }
 
 // OPFSCoopSyncVFS uses OPFS sync access handles (much faster than
-// IndexedDB) and is designed for cooperative multi-tab access. We pass
-// an explicit `WASQLiteOpenFactory` instead of plain settings because
-// the `vfs` option lives on the factory's option type, not on the
-// generic `SQLOpenOptions` accepted by `database: {…}`.
+// IndexedDB) and requires a dedicated worker. We pass an explicit
+// `WASQLiteOpenFactory` instead of plain settings because the `vfs`
+// option lives on the factory's option type, not on the generic
+// `SQLOpenOptions` accepted by `database: {…}`.
 //
-// `enableMultiTabs` must be `true` everywhere SharedWorker is
-// available, otherwise each tab runs its own sync connection against
-// the same OPFS DB and races on `ps_oplog` / `ps_buckets` writes —
-// the checkpoint validator then sees a checksum mismatch and
-// PowerSync deletes the bucket and re-downloads it from scratch (the
-// ~2 GB-in-hours sync burst we hit when a second tab opened).
+// `enableMultiTabs: false` is intentional. With OPFSCoopSync + the
+// Rust sync client (the default in @powersync/web ≥1.37 — the JS
+// client was removed in 1.53), `enableMultiTabs: true` makes the
+// SharedSync worker borrow a tab's SQLite connection via Comlink
+// (because OPFSCoopSync requires dedicated workers, so the
+// SharedWorker can't own the DB itself). The Rust sync client stores
+// its sync state on the connection, so any connection cycle — tab
+// reload, second-tab join, an upload-replicate echo — invalidates
+// the Rust state machine, fails the next checkpoint apply, and the
+// shared worker calls `deleteBucket` to recover. Net effect: full
+// bucket re-sync (~350k ops, hundreds of MB) on every reload+edit.
+// We hit this on both 1.37.2 and 1.38.0 (PR #937 reduced the
+// recovery latency but didn't prevent the wipe in our setup).
 //
-// PowerSync's default (web-sql-flags.js) is over-conservative — it
-// also disables multi-tab on Android and on desktop Safari, but
-// SharedWorker is reliable on Android Chrome/Firefox and on Safari
-// 16.4+. iOS is the only platform where SharedWorker actually isn't
-// there; the `typeof SharedWorker` check catches that on its own and
-// the UA regex is belt-and-suspenders for a future iOS that ships a
-// half-working impl.
-const supportsSharedWorker =
-  typeof SharedWorker !== 'undefined' &&
-  typeof navigator !== 'undefined' &&
-  !/iPad|iPhone|iPod/i.test(navigator.userAgent)
-
+// With `enableMultiTabs: false`, single tab works as expected. Two
+// tabs of the same workspace race each other on `ps_oplog` /
+// `ps_buckets` writes (each tab runs its own sync connection) and
+// can also wipe the bucket — so we accept the known limitation:
+// only one tab at a time per workspace on the current setup.
+//
+// Long-term fix path: switch VFS to `IDBBatchAtomicVFS` so the
+// SharedSync worker can own the DB directly (no borrowed-connection
+// race). Cost: slower cold reads. Or wait for upstream to ship more
+// of the "No iteration is active" cleanup beyond PR #937 / #951.
 const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
   database: new WASQLiteOpenFactory({
@@ -140,7 +145,7 @@ const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
     vfs: WASQLiteVFS.OPFSCoopSyncVFS,
   }),
   flags: {
-    enableMultiTabs: supportsSharedWorker,
+    enableMultiTabs: false,
   },
 })
 
