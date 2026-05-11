@@ -13,6 +13,34 @@ export interface AppEffectContext {
   safeMode: boolean
 }
 
+/** Context passed to `workspaceLandingFacet` resolvers when the app
+ *  boots into an empty layout (no panels in the URL hash). The
+ *  resolver decides what block the user lands on — e.g. today's daily
+ *  note. `freshlyCreated` is true on the very first run for a brand-
+ *  new personal workspace; resolvers use it to seed first-run
+ *  affordances (a [[Tutorial]] bullet etc.).
+ *
+ *  Runs BEFORE React mounts (inside App.tsx's bootstrap chain), so
+ *  resolvers cannot use hooks or read the live `FacetRuntime`. Talk
+ *  to the Repo directly. */
+export interface WorkspaceLandingContext {
+  repo: Repo
+  workspaceId: string
+  freshlyCreated: boolean
+}
+
+/** A landing resolver returns the block id to open, or null to defer
+ *  to lower-precedence resolvers. The first resolver (in precedence
+ *  order, highest first) that returns a non-null id wins.
+ *
+ *  The resolver is responsible for any side-effects needed to make
+ *  that block exist (e.g. `getOrCreateDailyNote` calls a tx that
+ *  inserts the row). Returning a block id whose row doesn't exist is
+ *  a bug: the caller will navigate to it and break. */
+export type WorkspaceLandingResolver = (
+  ctx: WorkspaceLandingContext,
+) => Promise<string | null>
+
 export type AppEffectCleanup = () => void | Promise<void>
 
 export interface AppEffect {
@@ -169,4 +197,17 @@ export const isActionContextConfig = (value: unknown): value is ActionContextCon
 export const actionContextsFacet = defineFacet<ActionContextConfig, readonly ActionContextConfig[]>({
   id: 'core.action-contexts',
   validate: isActionContextConfig,
+})
+
+/** Plugins contribute landing resolvers; App.tsx tries them in order
+ *  on bootstrap-with-empty-layout and uses the first non-null result.
+ *  `FacetRuntime` sorts contributions ascending by `precedence`
+ *  (default 0) before passing them here, so the highest-precedence
+ *  resolver ends up LAST in the returned array; App.tsx walks the
+ *  array in reverse so high-precedence wins. Without contributions the
+ *  bootstrap leaves the layout empty — the panel projection then
+ *  renders an empty panel stack, which is the historical fallback. */
+export const workspaceLandingFacet = defineFacet<WorkspaceLandingResolver, readonly WorkspaceLandingResolver[]>({
+  id: 'core.workspace-landing',
+  validate: (value): value is WorkspaceLandingResolver => typeof value === 'function',
 })

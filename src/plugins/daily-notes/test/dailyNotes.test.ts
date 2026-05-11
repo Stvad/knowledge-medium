@@ -28,7 +28,7 @@ import {
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   journalBlockId,
-} from '@/data/dailyNotes'
+} from '@/plugins/daily-notes'
 
 const WS = 'ws-1'
 
