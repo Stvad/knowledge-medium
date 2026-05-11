@@ -1,19 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import { headerItemsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { leftSidebarSectionsFacet } from '@/plugins/left-sidebar'
 import {
   pendingInvitationsHeaderItem,
   workspaceHeaderPlugin,
-  workspaceSwitcherHeaderItem,
-} from '../index.ts'
+  workspaceSwitcherSidebarSection,
+} from '../index'
 
 describe('workspaceHeaderPlugin', () => {
-  it('contributes workspace header items', () => {
+  it('contributes the workspace switcher to the sidebar and invitations to the header', () => {
     const runtime = resolveFacetRuntimeSync(workspaceHeaderPlugin)
 
-    expect(runtime.read(headerItemsFacet)).toEqual([
-      workspaceSwitcherHeaderItem,
-      pendingInvitationsHeaderItem,
-    ])
+    expect(runtime.read(leftSidebarSectionsFacet)).toEqual([workspaceSwitcherSidebarSection])
+    expect(runtime.read(headerItemsFacet)).toEqual([pendingInvitationsHeaderItem])
   })
 })

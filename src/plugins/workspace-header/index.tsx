@@ -2,11 +2,22 @@ import { PendingInvitations } from '@/components/workspace/PendingInvitations.ts
 import { WorkspaceSwitcher } from '@/components/workspace/WorkspaceSwitcher.tsx'
 import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import {
+  leftSidebarSectionsFacet,
+  type LeftSidebarSectionContribution,
+} from '@/plugins/left-sidebar'
 
-export const workspaceSwitcherHeaderItem: HeaderItemContribution = {
+export const WorkspaceSwitcherSidebarSection = () => (
+  <section>
+    <WorkspaceSwitcher
+      triggerClassName="h-11 w-full max-w-none justify-between rounded-lg border border-border px-3 text-base"
+    />
+  </section>
+)
+
+export const workspaceSwitcherSidebarSection: LeftSidebarSectionContribution = {
   id: 'workspace-header.switcher',
-  region: 'start',
-  component: WorkspaceSwitcher,
+  component: WorkspaceSwitcherSidebarSection,
 }
 
 export const pendingInvitationsHeaderItem: HeaderItemContribution = {
@@ -16,9 +27,9 @@ export const pendingInvitationsHeaderItem: HeaderItemContribution = {
 }
 
 export const workspaceHeaderPlugin: AppExtension = [
-  headerItemsFacet.of(workspaceSwitcherHeaderItem, {
+  leftSidebarSectionsFacet.of(workspaceSwitcherSidebarSection, {
     source: 'workspace-header',
-    precedence: 0,
+    precedence: -20,
   }),
   headerItemsFacet.of(pendingInvitationsHeaderItem, {
     source: 'workspace-header',

@@ -11,6 +11,7 @@ import { quickFindPlugin } from '@/plugins/quick-find'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { leftSidebarPlugin } from '@/plugins/left-sidebar'
 import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
@@ -36,6 +37,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),
+  leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
   quickFindPlugin,

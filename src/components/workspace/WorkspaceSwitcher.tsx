@@ -16,9 +16,14 @@ import { forgetRememberedWorkspace } from '@/utils/lastWorkspace'
 import { CreateWorkspaceDialog } from '@/components/workspace/CreateWorkspaceDialog'
 import { WorkspaceSettingsDialog } from '@/components/workspace/WorkspaceSettingsDialog'
 import { useIsLocalOnly } from '@/components/Login'
+import { cn } from '@/lib/utils'
 import type { Workspace } from '@/types'
 
-export function WorkspaceSwitcher() {
+export function WorkspaceSwitcher({
+  triggerClassName,
+}: {
+  triggerClassName?: string
+} = {}) {
   const repo = useRepo()
   // useHash listens for `hashchange` (which `useLocation` does not). That's
   // what makes a hash assignment alone enough to re-render — no page reload
@@ -75,7 +80,10 @@ export function WorkspaceSwitcher() {
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
-            className="flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-accent transition-colors max-w-[14rem]"
+            className={cn(
+              'flex items-center gap-1 rounded-md px-2 py-1 text-sm hover:bg-accent transition-colors max-w-[14rem]',
+              triggerClassName,
+            )}
             aria-label="Switch workspace"
           >
             <span className="truncate">{displayName}</span>
