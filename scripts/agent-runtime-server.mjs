@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 import http from 'node:http'
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
+import {
+  bridgeHost,
+  bridgePort,
+  bridgeServerUrl,
+  bridgeSecret as resolveBridgeSecret,
+  pairingUrl,
+} from './agent-runtime-config.mjs'
 
-const port = Number(process.env.AGENT_RUNTIME_PORT ?? 8787)
-const host = process.env.AGENT_RUNTIME_HOST ?? '127.0.0.1'
+const port = bridgePort()
+const host = bridgeHost()
 if ((host === '0.0.0.0' || host === '::') && process.env.AGENT_RUNTIME_ALLOW_NETWORK !== 'true') {
   throw new Error('Refusing to expose agent runtime bridge on the network without AGENT_RUNTIME_ALLOW_NETWORK=true')
 }
@@ -13,9 +20,8 @@ const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?
 const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
   ? configuredMaxBodyBytes
   : 10 * 1024 * 1024
-const bridgeSecret = process.env.AGENT_RUNTIME_BRIDGE_SECRET?.trim() || randomBytes(32).toString('hex')
+const bridgeSecret = await resolveBridgeSecret()
 const bridgeSecretHeader = 'x-agent-runtime-secret'
-const appUrl = process.env.AGENT_RUNTIME_APP_URL?.trim() || 'https://stvad.github.io/knowledge-medium/'
 const defaultAllowedOrigins = new Set(['https://stvad.github.io'])
 const configuredAllowedOrigins = (process.env.AGENT_RUNTIME_ALLOWED_ORIGINS ?? '')
   .split(',')
@@ -420,16 +426,6 @@ const getStatus = () => ({
   })),
 })
 
-const pairingUrl = () => {
-  const url = new URL(appUrl)
-  const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
-  const separator = rawHash
-    ? rawHash.includes('?') ? '&' : '?'
-    : '?'
-  url.hash = `${rawHash}${separator}agent-runtime-url=${encodeURIComponent(`http://${host}:${port}`)}&agent-runtime-secret=${encodeURIComponent(bridgeSecret)}`
-  return url.toString()
-}
-
 const handleRequest = async (request, response) => {
   responseRequests.set(response, request)
 
@@ -573,5 +569,7 @@ const server = http.createServer(handleRequest)
 
 server.listen(port, host, () => {
   console.log(`Agent runtime server listening at http://${host}:${port}`)
-  console.log(`Pair app with: ${pairingUrl()}`)
+  void pairingUrl(bridgeServerUrl()).then(url => {
+    console.log(`Pair app with: ${url}`)
+  })
 })

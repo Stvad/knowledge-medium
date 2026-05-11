@@ -73,16 +73,16 @@ yarn dev
 
 The app exposes a first-class runtime bridge for coding agents. The browser app connects to a local relay, and agents submit commands to that relay from the terminal. Commands execute inside the live app runtime, with access to the current `Repo`, active workspace, PowerSync SQLite database, resolved runtime facets, block helpers, and arbitrary JavaScript execution.
 
-Start the relay and the app:
+Start the app:
 
 ```bash
-yarn agent:server
 yarn dev
 ```
 
-Then use the CLI from another terminal:
+Then use the CLI from another terminal. If the local relay is not running, the CLI starts it in the background before submitting the command:
 
 ```bash
+yarn agent pair-url
 yarn agent ping
 yarn agent sql all "SELECT id, content FROM blocks LIMIT 5"
 yarn agent create-block '{"parentId":"<block-id>","content":"Created by agent"}'
@@ -91,9 +91,9 @@ yarn agent eval 'return { workspaceId: repo.activeWorkspaceId, user: repo.user }
 
 Available runtime-code bindings include `repo`, `db`, `runtime`, `safeMode`, `sql`, `block`, `getBlock`, `getSubtree`, `createBlock`, `updateBlock`, `installExtension`, `actions`, `renderers`, `refreshAppRuntime`, `React`, `ReactDOM`, `window`, and `document`.
 
-By default the bridge uses `http://127.0.0.1:8787`. When `yarn agent:server` starts, it prints a pairing URL containing a local bridge secret; open that URL in the app once so the browser can register and poll the bridge. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
+By default the bridge uses `http://127.0.0.1:8787`. The bridge secret is stored in the local config file (`~/.config/knowledge-medium/agent-bridge.json` by default), so pairing is normally one-time per browser profile and app origin. Run `yarn agent pair-url` or foreground the relay with `yarn agent:server` to get a pairing URL, then open that URL in the app once so the browser can register and poll the bridge. Override the pairing target with `AGENT_RUNTIME_APP_URL`, the browser endpoint with `VITE_AGENT_RUNTIME_URL`, and the CLI endpoint with `AGENT_RUNTIME_URL`.
 
-The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires `AGENT_RUNTIME_BRIDGE_SECRET`.
+The bridge only accepts browser origins from loopback hosts and configured app origins. Add comma-separated entries with `AGENT_RUNTIME_ALLOWED_ORIGINS`; browser origins do not include URL paths, so GitHub Pages is allowed as `https://stvad.github.io`. Detailed `/health` output requires the bridge secret header; the CLI reads the persisted local secret automatically for `yarn agent status`.
 
 ---
 

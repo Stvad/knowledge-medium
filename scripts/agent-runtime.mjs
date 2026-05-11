@@ -1,23 +1,30 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import os from 'node:os'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import {
+  bridgeLogPath,
+  bridgeSecret as resolveBridgeSecret,
+  bridgeUrl as resolveBridgeUrl,
+  isLocalBridgeUrl,
+  pairingUrl,
+  tokenStorePath as resolveTokenStorePath,
+} from './agent-runtime-config.mjs'
 
-const bridgeUrl = (process.env.AGENT_RUNTIME_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '')
-const bridgeSecret = process.env.AGENT_RUNTIME_BRIDGE_SECRET?.trim() || ''
+const here = path.dirname(fileURLToPath(import.meta.url))
+const serverScript = path.join(here, 'agent-runtime-server.mjs')
+const bridgeUrl = resolveBridgeUrl()
 const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000
-const tokenStorePath = process.env.AGENT_RUNTIME_TOKEN_FILE
-  ?? path.join(
-    process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), '.config'),
-    'knowledge-medium',
-    'agent-token.json',
-  )
+const bridgeStartTimeoutMs = 5_000
+const tokenStorePath = resolveTokenStorePath()
 
 const usage = () => `
 Usage:
   yarn agent connect <token>      persist token (or use AGENT_RUNTIME_TOKEN env)
   yarn agent disconnect           remove the persisted token
+  yarn agent pair-url             print the current app pairing URL
   yarn agent whoami               show audience the persisted token resolves to
   yarn agent ping
   yarn agent status
@@ -33,6 +40,9 @@ Usage:
 `
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+const canAutoStartBridge = () =>
+  !process.env.AGENT_RUNTIME_URL && isLocalBridgeUrl(bridgeUrl)
 
 const parseJson = (value, label) => {
   try {
@@ -94,6 +104,75 @@ const requestJson = async (url, options = {}) => {
   }
 
   return body
+}
+
+const fetchBridgeHealth = async () => {
+  const response = await fetch(`${bridgeUrl}/health`)
+  if (!response.ok) {
+    throw new Error(`Bridge health check failed with status ${response.status}`)
+  }
+}
+
+const waitForBridgeReady = async () => {
+  const startedAt = Date.now()
+  let lastError = null
+
+  while (Date.now() - startedAt < bridgeStartTimeoutMs) {
+    try {
+      await fetchBridgeHealth()
+      return
+    } catch (error) {
+      lastError = error
+      await sleep(100)
+    }
+  }
+
+  throw new Error(
+    `Agent runtime bridge did not become ready at ${bridgeUrl}: ${
+      lastError instanceof Error ? lastError.message : String(lastError)
+    }`,
+  )
+}
+
+const startBridgeInBackground = async () => {
+  const logPath = bridgeLogPath()
+  await resolveBridgeSecret()
+  await fs.mkdir(path.dirname(logPath), {recursive: true})
+  const logFile = await fs.open(logPath, 'a')
+
+  try {
+    const child = spawn(process.execPath, [serverScript], {
+      detached: true,
+      env: process.env,
+      stdio: ['ignore', logFile.fd, logFile.fd],
+    })
+    child.unref()
+  } finally {
+    await logFile.close()
+  }
+
+  process.stderr.write(`Started agent runtime bridge in the background at ${bridgeUrl}. Logs: ${logPath}\n`)
+}
+
+const ensureBridgeRunning = async () => {
+  try {
+    await fetchBridgeHealth()
+    return
+  } catch (error) {
+    if (!canAutoStartBridge()) {
+      throw error
+    }
+  }
+
+  await startBridgeInBackground()
+  await waitForBridgeReady()
+}
+
+const bridgeSecretForStatus = async () => {
+  const fromEnv = process.env.AGENT_RUNTIME_BRIDGE_SECRET?.trim()
+  if (fromEnv) return fromEnv
+  if (process.env.AGENT_RUNTIME_URL) return ''
+  return resolveBridgeSecret()
 }
 
 const authedRequest = async (url, options = {}) => {
@@ -255,6 +334,7 @@ const main = async () => {
     // soft — the token is saved either way; the user will see the
     // problem the next time they actually run a command.
     try {
+      await ensureBridgeRunning()
       const info = await requestJson(`${bridgeUrl}/runtime/whoami`, {
         headers: {authorization: `Bearer ${token}`},
       })
@@ -280,7 +360,14 @@ const main = async () => {
     return
   }
 
+  if (verb === 'pair-url') {
+    await ensureBridgeRunning()
+    process.stdout.write(`${await pairingUrl()}\n`)
+    return
+  }
+
   if (verb === 'whoami') {
+    await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
       throw new Error('No agent token configured. Run `yarn agent connect <token>` first.')
@@ -293,6 +380,8 @@ const main = async () => {
   }
 
   if (verb === 'status') {
+    await ensureBridgeRunning()
+    const bridgeSecret = await bridgeSecretForStatus()
     const status = await requestJson(`${bridgeUrl}/health${bridgeSecret ? '?detail=1' : ''}`, {
       headers: bridgeSecret ? {'x-agent-runtime-secret': bridgeSecret} : {},
     })
@@ -300,6 +389,7 @@ const main = async () => {
     return
   }
 
+  await ensureBridgeRunning()
   const command = await commandFromArgs(args)
   const value = await runCommand(command)
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`)
