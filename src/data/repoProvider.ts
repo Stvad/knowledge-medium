@@ -114,23 +114,34 @@ const assertOpfsAvailable = (): Promise<void> => {
 // the `vfs` option lives on the factory's option type, not on the
 // generic `SQLOpenOptions` accepted by `database: {…}`.
 //
-// `flags` is left empty so PowerSync's platform-aware defaults apply:
-// `enableMultiTabs` is `true` on desktop browsers with SharedWorker
-// support and `false` on iOS/Safari/Android (see
-// node_modules/@powersync/web/lib/src/db/adapters/web-sql-flags.js).
-// Forcing `enableMultiTabs: false` everywhere — which is what we used
-// to do — causes a checksum-validation race: each tab runs its own
-// sync connection, both write `ps_oplog` / `ps_buckets` concurrently,
-// the checkpoint validator sees a state that doesn't match the
-// server's checksum, and PowerSync deletes the bucket and re-downloads
-// it from scratch. That race is what was burning ~2 GB of sync
-// bandwidth per browsing session.
+// `enableMultiTabs` must be `true` everywhere SharedWorker is
+// available, otherwise each tab runs its own sync connection against
+// the same OPFS DB and races on `ps_oplog` / `ps_buckets` writes —
+// the checkpoint validator then sees a checksum mismatch and
+// PowerSync deletes the bucket and re-downloads it from scratch (the
+// ~2 GB-in-hours sync burst we hit when a second tab opened).
+//
+// PowerSync's default (web-sql-flags.js) is over-conservative — it
+// also disables multi-tab on Android and on desktop Safari, but
+// SharedWorker is reliable on Android Chrome/Firefox and on Safari
+// 16.4+. iOS is the only platform where SharedWorker actually isn't
+// there; the `typeof SharedWorker` check catches that on its own and
+// the UA regex is belt-and-suspenders for a future iOS that ships a
+// half-working impl.
+const supportsSharedWorker =
+  typeof SharedWorker !== 'undefined' &&
+  typeof navigator !== 'undefined' &&
+  !/iPad|iPhone|iPod/i.test(navigator.userAgent)
+
 const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
   database: new WASQLiteOpenFactory({
     dbFilename: dbFilenameForUser(userId),
     vfs: WASQLiteVFS.OPFSCoopSyncVFS,
   }),
+  flags: {
+    enableMultiTabs: supportsSharedWorker,
+  },
 })
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
