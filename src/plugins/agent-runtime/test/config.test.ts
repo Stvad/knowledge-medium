@@ -12,6 +12,10 @@ interface ConfigModule {
   bridgeSecret: () => Promise<string>
   bridgeUrl: () => string
   loadOrCreateBridgeConfig: () => Promise<{bridgeSecret: string}>
+  pairingUrl: (
+    runtimeBridgeUrl?: string,
+    options?: {openTokensDialog?: boolean},
+  ) => Promise<string>
 }
 
 const originalEnv = {
@@ -76,5 +80,21 @@ describe('agent runtime config', () => {
     const {bridgeUrl} = await loadConfigModule()
 
     expect(bridgeUrl()).toBe('http://127.0.0.1:9876')
+  })
+
+  it('can request the token dialog in pairing URLs', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-runtime-config-'))
+    process.env.AGENT_RUNTIME_CONFIG_FILE = path.join(dir, 'agent-bridge.json')
+    process.env.AGENT_RUNTIME_BRIDGE_SECRET = 'bridge-secret'
+
+    const {pairingUrl} = await loadConfigModule()
+    const url = new URL(await pairingUrl('http://127.0.0.1:9999', {
+      openTokensDialog: true,
+    }))
+    const params = new URLSearchParams(url.hash.slice(url.hash.indexOf('?') + 1))
+
+    expect(params.get('agent-runtime-url')).toBe('http://127.0.0.1:9999')
+    expect(params.get('agent-runtime-secret')).toBe('bridge-secret')
+    expect(params.get('agent-runtime-open-tokens')).toBe('1')
   })
 })

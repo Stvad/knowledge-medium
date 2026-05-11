@@ -93,7 +93,10 @@ export const bridgeSecret = async () =>
 export const appUrl = () =>
   process.env.AGENT_RUNTIME_APP_URL?.trim() || defaultAppUrl
 
-export const pairingUrl = async (runtimeBridgeUrl = bridgeUrl()) => {
+export const pairingUrl = async (
+  runtimeBridgeUrl = bridgeUrl(),
+  options = {},
+) => {
   const url = new URL(appUrl())
   const rawHash = url.hash.startsWith('#') ? url.hash.slice(1) : url.hash
   const separator = rawHash
@@ -102,6 +105,7 @@ export const pairingUrl = async (runtimeBridgeUrl = bridgeUrl()) => {
   url.hash = `${rawHash}${separator}`
     + `agent-runtime-url=${encodeURIComponent(runtimeBridgeUrl)}`
     + `&agent-runtime-secret=${encodeURIComponent(await bridgeSecret())}`
+    + (options.openTokensDialog ? '&agent-runtime-open-tokens=1' : '')
   return url.toString()
 }
 

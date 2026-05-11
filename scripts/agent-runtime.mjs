@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import {
   bridgeLogPath,
@@ -22,7 +23,8 @@ const tokenStorePath = resolveTokenStorePath()
 
 const usage = () => `
 Usage:
-  yarn agent connect <token>      persist token (or use AGENT_RUNTIME_TOKEN env)
+  yarn agent connect              open app pairing flow and persist pasted token
+  yarn agent connect <token>      persist token directly (or use AGENT_RUNTIME_TOKEN env)
   yarn agent disconnect           remove the persisted token
   yarn agent pair-url             print the current app pairing URL
   yarn agent whoami               show audience the persisted token resolves to
@@ -106,6 +108,18 @@ const requestJson = async (url, options = {}) => {
   return body
 }
 
+const promptForToken = async () => {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stderr,
+  })
+  try {
+    return (await rl.question('Paste agent token: ')).trim()
+  } finally {
+    rl.close()
+  }
+}
+
 const fetchBridgeHealth = async () => {
   const response = await fetch(`${bridgeUrl}/health`)
   if (!response.ok) {
@@ -175,11 +189,78 @@ const bridgeSecretForStatus = async () => {
   return resolveBridgeSecret()
 }
 
+const whoamiWithToken = token =>
+  requestJson(`${bridgeUrl}/runtime/whoami`, {
+    headers: {authorization: `Bearer ${token}`},
+  })
+
+const waitForTokenAudience = async token => {
+  const startedAt = Date.now()
+  let lastError = null
+
+  while (Date.now() - startedAt < 10_000) {
+    try {
+      return await whoamiWithToken(token)
+    } catch (error) {
+      lastError = error
+      await sleep(250)
+    }
+  }
+
+  throw lastError ?? new Error('Timed out waiting for token registration')
+}
+
+const printConnectSuccess = info => {
+  const audience = info.audience ?? {}
+  process.stdout.write(
+    `Connected. Token saved at ${tokenStorePath}\n` +
+    `User: ${audience.userId ?? '?'}\n` +
+    `Workspace: ${audience.workspaceId ?? '?'}\n` +
+    `Connected client: ${info.connected ? 'yes' : 'no (will auto-connect when the app reaches the bridge)'}\n`,
+  )
+}
+
+const connectWithToken = async (token, options = {}) => {
+  const saveBeforeVerify = options.saveBeforeVerify ?? true
+  if (saveBeforeVerify) await writeStoredToken(token)
+
+  // Direct-token mode preserves the old behavior: save first, then
+  // verify when the app is reachable. Interactive pairing verifies
+  // first so a mistyped pasted token is not persisted.
+  try {
+    await ensureBridgeRunning()
+    const info = await waitForTokenAudience(token)
+    if (!saveBeforeVerify) await writeStoredToken(token)
+    printConnectSuccess(info)
+  } catch (error) {
+    if (!saveBeforeVerify) throw error
+    process.stdout.write(
+      `Token saved at ${tokenStorePath}, but bridge contact failed: ${error.message}\n` +
+      `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
+    )
+  }
+}
+
+const connectInteractively = async () => {
+  await ensureBridgeRunning()
+  const url = await pairingUrl(bridgeUrl, {openTokensDialog: true})
+  process.stdout.write(
+    `Open this URL in the app to pair the agent CLI:\n${url}\n\n` +
+    'The app will open the token dialog. Generate a token, copy it, then paste it here.\n',
+  )
+
+  const token = await promptForToken()
+  if (!token) {
+    throw new Error('No token pasted; pairing was not completed.')
+  }
+  await connectWithToken(token, {saveBeforeVerify: false})
+}
+
 const authedRequest = async (url, options = {}) => {
   const token = await resolveToken()
   if (!token) {
     throw new Error(
-      'No agent token configured. Generate one from the app (palette → "Manage agent runtime tokens"), then run `yarn agent connect <token>`.',
+      'No agent token configured. Run `yarn agent connect` to pair the CLI with the app.',
     )
   }
 
@@ -327,29 +408,11 @@ const main = async () => {
   const verb = args[0]
 
   if (verb === 'connect') {
-    const token = args[1]
-    if (!token) throw new Error('connect requires a token. Generate one in the app first.')
-    await writeStoredToken(token)
-    // Resolve audience as a confirmation. Treat connection failures as
-    // soft — the token is saved either way; the user will see the
-    // problem the next time they actually run a command.
-    try {
-      await ensureBridgeRunning()
-      const info = await requestJson(`${bridgeUrl}/runtime/whoami`, {
-        headers: {authorization: `Bearer ${token}`},
-      })
-      const audience = info.audience ?? {}
-      process.stdout.write(
-        `Connected. Token saved at ${tokenStorePath}\n` +
-        `User: ${audience.userId ?? '?'}\n` +
-        `Workspace: ${audience.workspaceId ?? '?'}\n` +
-        `Connected client: ${info.connected ? 'yes' : 'no (will auto-connect when the app reaches the bridge)'}\n`,
-      )
-    } catch (error) {
-      process.stdout.write(
-        `Token saved at ${tokenStorePath}, but bridge contact failed: ${error.message}\n` +
-        `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
-      )
+    const token = args[1]?.trim()
+    if (token) {
+      await connectWithToken(token)
+    } else {
+      await connectInteractively()
     }
     return
   }
@@ -370,11 +433,9 @@ const main = async () => {
     await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
-      throw new Error('No agent token configured. Run `yarn agent connect <token>` first.')
+      throw new Error('No agent token configured. Run `yarn agent connect` first.')
     }
-    const info = await requestJson(`${bridgeUrl}/runtime/whoami`, {
-      headers: {authorization: `Bearer ${token}`},
-    })
+    const info = await whoamiWithToken(token)
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
     return
   }

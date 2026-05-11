@@ -7,6 +7,7 @@ import type { AgentRuntimeBridgeOptions, AgentRuntimeCommand } from './protocol.
 const defaultBridgeUrl = 'http://127.0.0.1:8787'
 const bridgeUrlStorageKey = 'agent-runtime:bridge-url'
 const bridgeSecretStorageKey = 'agent-runtime:bridge-secret'
+const openTokensDialogEvent = 'agent-runtime-bridge:open-tokens-dialog'
 const longPollMs = 25_000
 const retryBaseMs = 1_000
 const retryMaxMs = 30_000
@@ -33,13 +34,15 @@ const storeBridgePairingFromHash = () => {
   const params = new URLSearchParams(paramSource)
   const secret = params.get('agent-runtime-secret')?.trim()
   const url = params.get('agent-runtime-url')?.trim()
-  if (!secret && !url) return
+  const openTokensDialog = params.get('agent-runtime-open-tokens') === '1'
+  if (!secret && !url && !openTokensDialog) return
 
   if (secret) window.localStorage.setItem(bridgeSecretStorageKey, secret)
   if (url) window.localStorage.setItem(bridgeUrlStorageKey, url.replace(/\/+$/, ''))
 
   params.delete('agent-runtime-secret')
   params.delete('agent-runtime-url')
+  params.delete('agent-runtime-open-tokens')
 
   const remainingParams = params.toString()
   const routeHash = queryIndex >= 0 ? rawHash.slice(0, queryIndex) : ''
@@ -52,6 +55,14 @@ const storeBridgePairingFromHash = () => {
     document.title,
     `${window.location.pathname}${window.location.search}${nextHash}`,
   )
+
+  if (openTokensDialog) {
+    window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent(openTokensDialogEvent, {
+        detail: {mode: 'pair-cli'},
+      }))
+    }, 0)
+  }
 }
 
 const getStoredBridgeSecret = () => {
@@ -193,9 +204,15 @@ export const startAgentRuntimeBridge = (
     wakeBridgeLoop()
   }
 
+  const handleHashChanged = () => {
+    storeBridgePairingFromHash()
+    wakeBridgeLoop(true)
+  }
+
   window.addEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
   window.addEventListener(agentTokensChangedEvent, handleTokensChanged)
   window.addEventListener('focus', handleWakeEvent)
+  window.addEventListener('hashchange', handleHashChanged)
   window.addEventListener('online', handleWakeEvent)
   document.addEventListener('visibilitychange', handleVisibilityChanged)
 
@@ -271,6 +288,7 @@ export const startAgentRuntimeBridge = (
     window.removeEventListener(agentRuntimeBridgeRestartEvent, handleRestart)
     window.removeEventListener(agentTokensChangedEvent, handleTokensChanged)
     window.removeEventListener('focus', handleWakeEvent)
+    window.removeEventListener('hashchange', handleHashChanged)
     window.removeEventListener('online', handleWakeEvent)
     document.removeEventListener('visibilitychange', handleVisibilityChanged)
     if (wakeResolve) {

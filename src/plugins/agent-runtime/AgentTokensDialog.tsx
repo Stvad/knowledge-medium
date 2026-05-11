@@ -18,25 +18,34 @@ import type { AgentToken } from './tokens.ts'
 
 export const openAgentTokensDialogEvent = 'agent-runtime-bridge:open-tokens-dialog'
 
+type AgentTokensDialogMode = 'manage' | 'pair-cli'
+
 interface AgentTokensDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  mode?: AgentTokensDialogMode
 }
 
-export function AgentTokensDialog({open, onOpenChange}: AgentTokensDialogProps) {
+export function AgentTokensDialog({
+  open,
+  onOpenChange,
+  mode = 'manage',
+}: AgentTokensDialogProps) {
   const repo = useRepo()
   const userId = repo.user.id
   const workspaceId = repo.activeWorkspaceId
   const noWorkspace = !userId || !workspaceId
+  const pairing = mode === 'pair-cli'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100vh-2rem)] w-[calc(100vw-2rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Agent runtime tokens</DialogTitle>
+          <DialogTitle>{pairing ? 'Pair agent CLI' : 'Agent runtime tokens'}</DialogTitle>
           <DialogDescription>
-            Tokens authorize a local agent process to drive this workspace as you.
-            Stored on this device only — not synced. Each token is shown once at mint.
+            {pairing
+              ? 'Generate a token for this workspace, copy it, then paste it into the waiting terminal prompt.'
+              : 'Tokens authorize a local agent process to drive this workspace as you. Stored on this device only; each token is shown once at mint.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -49,18 +58,30 @@ export function AgentTokensDialog({open, onOpenChange}: AgentTokensDialogProps) 
           // run fresh each time the dialog opens (Radix unmounts the
           // content on close). That avoids a setState-in-effect pattern
           // for "reset transient form state when the dialog opens".
-          <AgentTokensDialogBody userId={userId} workspaceId={workspaceId}/>
+          <AgentTokensDialogBody
+            userId={userId}
+            workspaceId={workspaceId}
+            pairing={pairing}
+          />
         )}
       </DialogContent>
     </Dialog>
   )
 }
 
-function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspaceId: string}) {
+function AgentTokensDialogBody({
+  userId,
+  workspaceId,
+  pairing,
+}: {
+  userId: string
+  workspaceId: string
+  pairing: boolean
+}) {
   const [tokens, setTokens] = useState<AgentToken[]>(
     () => agentTokenStore.list(userId, workspaceId),
   )
-  const [label, setLabel] = useState('')
+  const [label, setLabel] = useState(pairing ? 'agent-cli' : '')
   const [readOnly, setReadOnly] = useState(false)
   const [justMinted, setJustMinted] = useState<AgentToken | null>(null)
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
@@ -97,6 +118,11 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
     <>
       <div className="space-y-2">
         <Label htmlFor="agent-token-label">New token label</Label>
+        {pairing && (
+          <p className="text-xs text-muted-foreground">
+            Use a label that identifies this terminal session.
+          </p>
+        )}
         <div className="flex min-w-0 gap-2">
           <Input
             id="agent-token-label"
@@ -124,7 +150,7 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
       {justMinted && (
         <div className="min-w-0 rounded-md border bg-muted/40 p-3 space-y-2">
           <p className="text-xs font-medium text-muted-foreground">
-            Copy now — this is the only time the secret is shown.
+            Copy now. This is the only time the secret is shown.
           </p>
           <div className="flex min-w-0 items-center gap-2">
             <code className="min-w-0 flex-1 truncate text-xs font-mono">{justMinted.token}</code>
@@ -139,11 +165,17 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
             </Button>
           </div>
           <p className="min-w-0 text-xs text-muted-foreground">
-            Run{' '}
-            <code className="break-all whitespace-normal">
-              yarn agent connect {justMinted.token}
-            </code>{' '}
-            to register it with the CLI.
+            {pairing ? (
+              'Paste this token into the waiting terminal prompt to finish pairing.'
+            ) : (
+              <>
+                Run{' '}
+                <code className="break-all whitespace-normal">
+                  yarn agent connect {justMinted.token}
+                </code>{' '}
+                to register it with the CLI.
+              </>
+            )}
           </p>
         </div>
       )}
@@ -189,12 +221,17 @@ function AgentTokensDialogBody({userId, workspaceId}: {userId: string, workspace
 
 export function AgentTokensDialogMount() {
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<AgentTokensDialogMode>('manage')
 
   useEffect(() => {
-    const handler = () => setOpen(true)
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{mode?: AgentTokensDialogMode}>).detail
+      setMode(detail?.mode === 'pair-cli' ? 'pair-cli' : 'manage')
+      setOpen(true)
+    }
     window.addEventListener(openAgentTokensDialogEvent, handler)
     return () => window.removeEventListener(openAgentTokensDialogEvent, handler)
   }, [])
 
-  return <AgentTokensDialog open={open} onOpenChange={setOpen}/>
+  return <AgentTokensDialog open={open} onOpenChange={setOpen} mode={mode}/>
 }
