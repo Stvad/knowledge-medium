@@ -4,8 +4,9 @@
 // threshold. Workflow failure is the alert channel.
 //
 // Required env: SUPABASE_POOLER_URI (IPv4 pooler — GH runners are IPv4-only).
-// Optional env: SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF (enables the
-// Management-API project-status check).
+// Optional env: SUPABASE_URL + SUPABASE_ANON_KEY (enables external HTTP
+// probes of the project's PostgREST and Auth endpoints — measures the
+// outside-world view alongside the inside DB view).
 //
 // Thresholds — keep in sync with comments in the monitoring memory note.
 
@@ -16,8 +17,11 @@ const SNAPSHOT_FAIL_MB = 200
 const MAPPING_WARN_MB = 20
 const MAPPING_FAIL_MB = 100
 const TMPDIR_FAIL_MB = 100
-const WAL_WARN_MB = 500
-const WAL_FAIL_MB = 1500
+// PowerSync's initial-sync chatter can push WAL to ~500 MB transiently;
+// pg keeps preallocated segments. Thresholds set to catch unbounded growth
+// (multi-GB), not normal operation.
+const WAL_WARN_MB = 2000
+const WAL_FAIL_MB = 5000
 const IDLE_IN_TX_FAIL_SECONDS = 60 * 60
 const CONNECTIONS_WARN_PCT = 0.83
 const CONNECTIONS_FAIL_PCT = 0.97
@@ -28,8 +32,8 @@ const EXPECTED_LOGICAL_SLOTS_MIN = 1
 const EXPECTED_LOGICAL_SLOTS_MAX = 1
 
 const uri = process.env.SUPABASE_POOLER_URI
-const accessToken = process.env.SUPABASE_ACCESS_TOKEN
-const projectRef = process.env.SUPABASE_PROJECT_REF
+const supabaseUrl = process.env.SUPABASE_URL
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY
 
 if (!uri) {
   console.error('SUPABASE_POOLER_URI is required')
@@ -38,7 +42,7 @@ if (!uri) {
 
 const result = {
   timestamp: new Date().toISOString(),
-  project_ref: projectRef ?? null,
+  supabase_url: supabaseUrl ?? null,
   checks: {},
   warnings: [],
   failures: [],
@@ -47,28 +51,32 @@ const result = {
 const fail = (name, msg) => result.failures.push({ check: name, msg })
 const warn = (name, msg) => result.warnings.push({ check: name, msg })
 
-async function checkProjectStatus() {
-  if (!accessToken || !projectRef) {
-    result.checks.project_status = { status: 'skip', reason: 'missing token or ref' }
+async function probeEndpoint(name, url, headers, { acceptStatuses = [200], failName }) {
+  const start = Date.now()
+  try {
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) })
+    const elapsed_ms = Date.now() - start
+    const ok = acceptStatuses.includes(res.status)
+    result.checks[name] = { status: ok ? 'pass' : 'fail', http: res.status, elapsed_ms }
+    if (!ok) fail(failName ?? name, `HTTP ${res.status} (expected one of ${acceptStatuses.join(',')})`)
+  } catch (e) {
+    result.checks[name] = { status: 'error', error: String(e), elapsed_ms: Date.now() - start }
+    fail(failName ?? name, `request failed: ${e.message}`)
+  }
+}
+
+async function checkServiceEndpoints() {
+  if (!supabaseUrl || !supabaseAnonKey) {
+    result.checks.service_endpoints = { status: 'skip', reason: 'missing SUPABASE_URL or SUPABASE_ANON_KEY' }
     return
   }
-  try {
-    const res = await fetch(`https://api.supabase.com/v1/projects/${projectRef}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    })
-    if (!res.ok) {
-      const body = await res.text()
-      result.checks.project_status = { status: 'error', http: res.status, body: body.slice(0, 200) }
-      fail('project_status', `Management API returned ${res.status}`)
-      return
-    }
-    const data = await res.json()
-    result.checks.project_status = { status: data.status === 'ACTIVE_HEALTHY' ? 'pass' : 'fail', value: data.status }
-    if (data.status !== 'ACTIVE_HEALTHY') fail('project_status', `project status is ${data.status}`)
-  } catch (e) {
-    result.checks.project_status = { status: 'error', error: String(e) }
-    fail('project_status', `fetch failed: ${e.message}`)
-  }
+  const authHeaders = { apikey: supabaseAnonKey, Authorization: `Bearer ${supabaseAnonKey}` }
+  await Promise.all([
+    // PostgREST — empty SELECT against a known table. RLS returns [] for anon, but the API responding 200 proves PostgREST is up.
+    probeEndpoint('postgrest', `${supabaseUrl}/rest/v1/blocks?select=id&limit=0`, authHeaders, { failName: 'postgrest' }),
+    // Auth — public health endpoint, anon key sufficient.
+    probeEndpoint('auth', `${supabaseUrl}/auth/v1/health`, { apikey: supabaseAnonKey }, { failName: 'auth' }),
+  ])
 }
 
 async function runDbChecks(client) {
@@ -271,7 +279,7 @@ const client = new pg.Client({ connectionString: uri, ssl: { rejectUnauthorized:
 
 try {
   await client.connect()
-  await Promise.all([runDbChecks(client), checkProjectStatus()])
+  await Promise.all([runDbChecks(client), checkServiceEndpoints()])
 } catch (e) {
   result.failures.push({ check: 'connection', msg: e.message })
 } finally {
