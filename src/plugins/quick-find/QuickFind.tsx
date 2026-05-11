@@ -31,6 +31,13 @@ import {
 } from '@/utils/linkTargetAutocomplete.ts'
 import { toggleQuickFindEvent } from './events.ts'
 import { pushRecentBlockId, recentBlockIdsProp } from './recents.ts'
+import {
+  nextQuickFindSelection,
+  quickFindAliasValue,
+  quickFindBlockValue,
+  quickFindCreateValue,
+  quickFindDateValue,
+} from './selection.ts'
 
 const SEARCH_LIMIT = 25
 const DEBOUNCE_MS = 80
@@ -38,6 +45,12 @@ const DEBOUNCE_MS = 80
 interface RecentItem {
   blockId: string
   label: string
+}
+
+interface SearchResultState {
+  query: string
+  aliases: LinkTargetAliasMatch[]
+  blocks: LinkTargetBlockMatch[]
 }
 
 const truncate = (text: string, max = 80) =>
@@ -53,12 +66,22 @@ export function QuickFind() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [value, setValue] = useState('')
-  const [aliasResults, setAliasResults] = useState<LinkTargetAliasMatch[]>([])
-  const [blockResults, setBlockResults] = useState<LinkTargetBlockMatch[]>([])
-  // Mask stale fetch results when the query is empty so the effect
-  // above doesn't need to setState on the empty path.
-  const aliases = query.trim() ? aliasResults : []
-  const blocks = query.trim() ? blockResults : []
+  const [searchResults, setSearchResults] = useState<SearchResultState>({
+    query: '',
+    aliases: [],
+    blocks: [],
+  })
+  const trimmedQuery = query.trim()
+  // chrono-node parser is recreated each call; cheap, but memoize to keep
+  // the resolved date stable across re-renders for the same input.
+  const parsedDate = useMemo(
+    () => (trimmedQuery ? parseRelativeDate(trimmedQuery) : null),
+    [trimmedQuery],
+  )
+  const dateItemValue = parsedDate ? quickFindDateValue(parsedDate.iso) : ''
+  const dateLabel = parsedDate ? formatRoamDate(parsedDate.date) : null
+  const aliases = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.aliases : []
+  const blocks = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.blocks : []
   const [recents, setRecents] = useState<RecentItem[]>([])
 
   useEffect(() => {
@@ -80,30 +103,40 @@ export function QuickFind() {
     if (!open) return
     const workspaceId = repo.activeWorkspaceId
     if (!workspaceId) return
-    // Empty-query path: no fetch is needed. We don't reset state here
-    // — the displayed `aliases` / `blocks` below mask stale results
-    // when the query is empty, which keeps this effect free of the
-    // set-state-in-effect anti-pattern.
-    if (!query.trim()) return
+    // Empty-query path: no fetch is needed. The displayed `aliases` /
+    // `blocks` are derived from the result query so stale rows stay
+    // hidden without clearing state here.
+    if (!trimmedQuery) return
 
     let cancelled = false
     const timer = setTimeout(async () => {
       const results = await searchLinkTargets(repo, {
         workspaceId,
-        query,
+        query: trimmedQuery,
         limit: SEARCH_LIMIT,
       })
       if (cancelled) return
 
-      setAliasResults(results.aliases)
-      setBlockResults(results.blocks)
+      setSearchResults({
+        query: trimmedQuery,
+        aliases: results.aliases,
+        blocks: results.blocks,
+      })
+
+      setValue(current => nextQuickFindSelection({
+        query: trimmedQuery,
+        aliases: results.aliases,
+        blocks: results.blocks,
+        dateValue: dateItemValue,
+        currentValue: current,
+      }))
     }, DEBOUNCE_MS)
 
     return () => {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, query, repo])
+  }, [open, trimmedQuery, dateItemValue, repo])
 
   useEffect(() => {
     if (!open) return
@@ -200,14 +233,6 @@ export function QuickFind() {
     }
   }
 
-  const trimmedQuery = query.trim()
-  // chrono-node parser is recreated each call; cheap, but memoize to keep
-  // the resolved date stable across re-renders for the same input.
-  const parsedDate = useMemo(
-    () => (trimmedQuery ? parseRelativeDate(trimmedQuery) : null),
-    [trimmedQuery],
-  )
-  const dateLabel = parsedDate ? formatRoamDate(parsedDate.date) : null
   const exactAliasMatch = aliases.some(
     match => match.alias.toLowerCase() === trimmedQuery.toLowerCase(),
   )
@@ -233,7 +258,10 @@ export function QuickFind() {
           <CommandInput
             placeholder="Find or create page or block..."
             value={query}
-            onValueChange={setQuery}
+            onValueChange={nextQuery => {
+              setQuery(nextQuery)
+              setValue('')
+            }}
             onKeyDown={handleKeyDown}
           />
           <CommandList>
@@ -260,7 +288,7 @@ export function QuickFind() {
               <CommandGroup heading="Date">
                 <CommandItem
                   key={`date:${parsedDate.iso}`}
-                  value={`date:${parsedDate.iso}`}
+                  value={dateItemValue}
                   onSelect={selectedValue => handleSelect(selectedValue, false)}
                   className="flex justify-between items-center gap-2"
                 >
@@ -275,7 +303,7 @@ export function QuickFind() {
                 {aliases.map(match => (
                   <CommandItem
                     key={`page:${match.blockId}:${match.alias}`}
-                    value={`page:${match.blockId}:${match.alias}`}
+                    value={quickFindAliasValue(match)}
                     onSelect={selectedValue => handleSelect(selectedValue, false)}
                     className="flex justify-between items-center gap-2"
                   >
@@ -295,7 +323,7 @@ export function QuickFind() {
                 {blocks.map(match => (
                   <CommandItem
                     key={`block:${match.blockId}`}
-                    value={`block:${match.blockId}`}
+                    value={quickFindBlockValue(match)}
                     onSelect={selectedValue => handleSelect(selectedValue, false)}
                   >
                     <span className="truncate">{truncate(match.content)}</span>
@@ -308,7 +336,7 @@ export function QuickFind() {
               <CommandGroup heading="Create">
                 <CommandItem
                   key={`create:${trimmedQuery}`}
-                  value={`create:${trimmedQuery}`}
+                  value={quickFindCreateValue(trimmedQuery)}
                   onSelect={selectedValue => handleSelect(selectedValue, false)}
                 >
                   <span>Create page “{trimmedQuery}”</span>
