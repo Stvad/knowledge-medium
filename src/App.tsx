@@ -22,8 +22,10 @@ import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorksp
 import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
-import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState.ts'
+import { workspaceLandingFacet } from '@/extensions/core.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { staticAppExtensions } from '@/extensions/staticAppExtensions.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
   PanelLayoutProjection,
@@ -139,6 +141,50 @@ const replaceHash = (hash: string): void => {
   window.history.replaceState(null, '', hash)
 }
 
+// Resolve the static-extension runtime once per (repo, workspace).
+// `workspaceLandingFacet` resolvers only need the kernel + static
+// plugin contributions — dynamic plugins haven't loaded yet at this
+// point in bootstrap, and we don't want to give them the power to
+// redirect a user's first paint. The cache keeps the cost down across
+// re-entries via getInitialLayout's promise cache; entries are bound
+// to `repo.instanceId` so a fresh Repo (new login) builds a fresh
+// runtime.
+const landingRuntimeCache = new Map<number, ReturnType<typeof resolveFacetRuntimeSync>>()
+const getLandingRuntime = (repo: Repo) => {
+  const cached = landingRuntimeCache.get(repo.instanceId)
+  if (cached) return cached
+  const runtime = resolveFacetRuntimeSync(staticAppExtensions({repo}), {
+    repo,
+    workspaceId: repo.activeWorkspaceId,
+    safeMode: false,
+  })
+  landingRuntimeCache.set(repo.instanceId, runtime)
+  return runtime
+}
+
+// Walk landing resolvers in reverse (highest precedence last in the
+// array — see `workspaceLandingFacet` docstring). Return the first
+// non-null id, or null if every resolver punts. A throwing resolver
+// is logged and skipped so a misbehaving plugin can't permanently
+// block the user from booting the app.
+const resolveLandingBlockId = async (
+  repo: Repo,
+  workspaceId: string,
+  freshlyCreated: boolean,
+): Promise<string | null> => {
+  const runtime = getLandingRuntime(repo)
+  const resolvers = runtime.read(workspaceLandingFacet)
+  for (let i = resolvers.length - 1; i >= 0; i -= 1) {
+    try {
+      const id = await resolvers[i]({repo, workspaceId, freshlyCreated})
+      if (id) return id
+    } catch (error) {
+      console.error('[App] workspace landing resolver threw', error)
+    }
+  }
+  return null
+}
+
 const resolveInitialLayout = async (
   repo: Repo,
   requestedHash: string,
@@ -195,36 +241,31 @@ const resolveInitialLayout = async (
   })
 
   if (applyResult.kind === 'empty') {
-    // Land on today's daily note. getOrCreateDailyNote is idempotent
-    // under deterministic UUIDs: two clients booting offline converge
-    // on the same row when they later sync. We don't wait for sync to
-    // deliver any pre-existing blocks — today's note is fine to create
-    // locally even on a fresh client.
-    const dailyNote = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-
-    // First-run discoverability: prepend a [[Tutorial]] bullet on the
-    // freshly-created daily note so the welcome content is one click
-    // away from the landing page. createChild with position={kind:'first'}
-    // computes an order_key that lands before any existing children.
-    if (freshlyCreated) {
-      await repo.mutate.createChild({
-        parentId: dailyNote.id,
-        content: '[[Tutorial]]',
-        position: {kind: 'first'},
-      })
+    // Empty layout — ask plugins via `workspaceLandingFacet` what block
+    // to land on. The daily-notes plugin contributes the historical
+    // "open today's note (and seed a [[Tutorial]] bullet on first
+    // run)" behavior; other plugins (or none) can override. We resolve
+    // the static-extension runtime here SYNCHRONOUSLY rather than
+    // waiting for AppRuntimeProvider's full async resolution because
+    // the landing decision blocks the first paint — dynamic
+    // user-defined plugins shouldn't be able to redirect the bootstrap
+    // before we've even built a layout, and the sync runtime carries
+    // the same kernel + static plugin contributions
+    // AppRuntimeProvider's initial render uses.
+    const landingId = await resolveLandingBlockId(repo, workspaceId, freshlyCreated)
+    if (landingId) {
+      replaceHash(buildLayout(workspaceId, [landingId]))
+      await repo.tx(async tx => {
+        const parent = await tx.get(layoutSessionBlock.id)
+        if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
+        await createPanelRowInTx(repo, tx, {
+          workspaceId,
+          parentId: layoutSessionBlock.id,
+          orderKey: keyAtEnd(null),
+          blockId: landingId,
+        })
+      }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
     }
-
-    replaceHash(buildLayout(workspaceId, [dailyNote.id]))
-    await repo.tx(async tx => {
-      const parent = await tx.get(layoutSessionBlock.id)
-      if (!parent) throw new Error(`getInitialLayout: layout session block ${layoutSessionBlock.id} not found`)
-      await createPanelRowInTx(repo, tx, {
-        workspaceId,
-        parentId: layoutSessionBlock.id,
-        orderKey: keyAtEnd(null),
-        blockId: dailyNote.id,
-      })
-    }, {scope: ChangeScope.UiState, description: 'bootstrap landing panel'})
   }
 
   return {workspaceId, layoutSessionBlock}

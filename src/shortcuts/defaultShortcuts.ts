@@ -26,7 +26,6 @@ import {
   editorSelection,
   setIsEditing,
   setFocusedBlockId,
-  aliasesProp,
 } from '@/data/properties.ts'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.ts'
 import { selectionStateProp } from '@/data/properties'
@@ -56,11 +55,9 @@ import { parseAppHash } from '@/utils/routing.ts'
 import {
   navigate,
   navigateFromGlobalCommand,
-  resolveGlobalCommandTopLevelBlockId,
 } from '@/utils/navigation.ts'
 import { navigateInPanel } from '@/utils/panelHistory.ts'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
-import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
 import { importRoam } from '@/utils/roamImport/import.ts'
 import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
@@ -99,30 +96,6 @@ const splitCodeMirrorBlockAtCursor = async (
     after: afterCursor,
   })
   return block
-}
-
-const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
-
-const dailyNoteIsoFromBlock = (block: Block): string | null => {
-  const aliases = block.peekProperty(aliasesProp) ?? []
-  return aliases.find(alias => ISO_ALIAS_RE.test(alias)) ?? null
-}
-
-const findContainingDailyNoteIso = async (
-  repo: Repo,
-  blockId: string,
-  workspaceId: string,
-): Promise<string | null> => {
-  const data = await repo.load(blockId, {ancestors: true})
-  if (!data || data.workspaceId !== workspaceId) return null
-
-  let block: Block | null = repo.block(blockId)
-  while (block) {
-    const iso = dailyNoteIsoFromBlock(block)
-    if (iso) return iso
-    block = block.parent
-  }
-  return null
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
@@ -259,57 +232,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Move block down (CodeMirror)',
   }
 
-  const openDailyNoteByOffset = async (offsetDays: number) => {
-    const route = parseAppHash(window.location.hash)
-    const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
-    if (!workspaceId) return
-
-    const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
-    const currentIso = topLevelBlockId
-      ? await findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
-      : null
-    const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
-    const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
-    navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
-  }
-
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
-    {
-      id: 'open_today',
-      description: "Open today's daily note",
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) return
-        const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-        navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+`', 'ctrl+shift+`'],
-      },
-    },
-    {
-      id: 'open_previous_daily_note',
-      description: 'Open previous daily note',
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        await openDailyNoteByOffset(-1)
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+[', 'ctrl+shift+['],
-      },
-    },
-    {
-      id: 'open_next_daily_note',
-      description: 'Open next daily note',
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        await openDailyNoteByOffset(1)
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+]', 'ctrl+shift+]'],
-      },
-    },
     {
       id: 'undo',
       description: 'Undo',
