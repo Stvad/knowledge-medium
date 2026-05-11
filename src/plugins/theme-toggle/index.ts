@@ -1,18 +1,22 @@
-import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
+import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { ThemeToggle } from './ThemeToggle.tsx'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { toggleTheme } from './theme.ts'
 
 export { ThemeToggle } from './ThemeToggle.tsx'
+export { applyTheme, getCurrentTheme, toggleTheme, type Theme } from './theme.ts'
 
-export const themeToggleHeaderItem: HeaderItemContribution = {
-  id: 'theme-toggle.header',
-  region: 'end',
-  component: ThemeToggle,
+export const toggleThemeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
+  id: 'theme-toggle.toggle',
+  description: 'Toggle theme',
+  context: ActionContextTypes.GLOBAL,
+  handler: () => {
+    toggleTheme()
+  },
 }
 
 export const themeTogglePlugin: AppExtension = [
-  headerItemsFacet.of(themeToggleHeaderItem, {
+  actionsFacet.of(toggleThemeAction, {
     source: 'theme-toggle',
-    precedence: 40,
   }),
 ]
