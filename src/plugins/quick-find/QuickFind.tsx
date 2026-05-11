@@ -1,12 +1,6 @@
 import { useState, useEffect, useMemo, KeyboardEvent } from 'react'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Command,
+  CommandDialog,
   CommandInput,
   CommandList,
   CommandEmpty,
@@ -243,117 +237,115 @@ export function QuickFind() {
   const showRecents = !trimmedQuery && recents.length > 0
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="top-[12vh] translate-y-0 overflow-hidden p-0">
-        <DialogTitle className="sr-only">Quick find</DialogTitle>
-        <DialogDescription className="sr-only">
-          Find or create a page or block by alias or content.
-        </DialogDescription>
-        <Command
-          shouldFilter={false}
-          value={value}
-          onValueChange={setValue}
-          className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5"
-        >
-          <CommandInput
-            placeholder="Find or create page or block..."
-            value={query}
-            onValueChange={nextQuery => {
-              setQuery(nextQuery)
-              setValue('')
-            }}
-            onKeyDown={handleKeyDown}
-          />
-          <CommandList>
-            <CommandEmpty>
-              {trimmedQuery ? 'No results.' : 'Type to search.'}
-            </CommandEmpty>
+    <CommandDialog
+      open={open}
+      onOpenChange={setOpen}
+      title="Quick find"
+      description="Find or create a page or block by alias or content."
+      contentClassName="top-[12vh] translate-y-0"
+      commandProps={{
+        shouldFilter: false,
+        value,
+        onValueChange: setValue,
+      }}
+    >
+      <CommandInput
+        placeholder="Find or create page or block..."
+        value={query}
+        onValueChange={nextQuery => {
+          setQuery(nextQuery)
+          setValue('')
+        }}
+        onKeyDown={handleKeyDown}
+      />
+      <CommandList>
+        <CommandEmpty>
+          {trimmedQuery ? 'No results.' : 'Type to search.'}
+        </CommandEmpty>
 
-            {showRecents && (
-              <CommandGroup heading="Recent">
-                {recents.map(item => (
-                  <CommandItem
-                    key={`recent:${item.blockId}`}
-                    value={`recent:${item.blockId}`}
-                    onSelect={selectedValue => handleSelect(selectedValue, false)}
-                    className="flex justify-between items-center"
-                  >
-                    <span className="truncate">{truncate(item.label)}</span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
+        {showRecents && (
+          <CommandGroup heading="Recent">
+            {recents.map(item => (
+              <CommandItem
+                key={`recent:${item.blockId}`}
+                value={`recent:${item.blockId}`}
+                onSelect={selectedValue => handleSelect(selectedValue, false)}
+                className="flex justify-between items-center"
+              >
+                <span className="truncate">{truncate(item.label)}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
 
-            {parsedDate && (
-              <CommandGroup heading="Date">
-                <CommandItem
-                  key={`date:${parsedDate.iso}`}
-                  value={dateItemValue}
-                  onSelect={selectedValue => handleSelect(selectedValue, false)}
-                  className="flex justify-between items-center gap-2"
-                >
-                  <span className="truncate">{dateLabel}</span>
-                  <span className="text-xs text-muted-foreground">{parsedDate.iso}</span>
-                </CommandItem>
-              </CommandGroup>
-            )}
+        {parsedDate && (
+          <CommandGroup heading="Date">
+            <CommandItem
+              key={`date:${parsedDate.iso}`}
+              value={dateItemValue}
+              onSelect={selectedValue => handleSelect(selectedValue, false)}
+              className="flex justify-between items-center gap-2"
+            >
+              <span className="truncate">{dateLabel}</span>
+              <span className="text-xs text-muted-foreground">{parsedDate.iso}</span>
+            </CommandItem>
+          </CommandGroup>
+        )}
 
-            {aliases.length > 0 && (
-              <CommandGroup heading="Pages">
-                {aliases.map(match => (
-                  <CommandItem
-                    key={`page:${match.blockId}:${match.alias}`}
-                    value={quickFindAliasValue(match)}
-                    onSelect={selectedValue => handleSelect(selectedValue, false)}
-                    className="flex justify-between items-center gap-2"
-                  >
-                    <span className="truncate">{match.alias}</span>
-                    {match.content && match.content !== match.alias && (
-                      <span className="text-xs text-muted-foreground truncate max-w-[40%]">
-                        {truncate(match.content, 50)}
-                      </span>
-                    )}
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
+        {aliases.length > 0 && (
+          <CommandGroup heading="Pages">
+            {aliases.map(match => (
+              <CommandItem
+                key={`page:${match.blockId}:${match.alias}`}
+                value={quickFindAliasValue(match)}
+                onSelect={selectedValue => handleSelect(selectedValue, false)}
+                className="flex justify-between items-center gap-2"
+              >
+                <span className="truncate">{match.alias}</span>
+                {match.content && match.content !== match.alias && (
+                  <span className="text-xs text-muted-foreground truncate max-w-[40%]">
+                    {truncate(match.content, 50)}
+                  </span>
+                )}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
 
-            {blocks.length > 0 && (
-              <CommandGroup heading="Blocks">
-                {blocks.map(match => (
-                  <CommandItem
-                    key={`block:${match.blockId}`}
-                    value={quickFindBlockValue(match)}
-                    onSelect={selectedValue => handleSelect(selectedValue, false)}
-                  >
-                    <span className="truncate">{truncate(match.content)}</span>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
+        {blocks.length > 0 && (
+          <CommandGroup heading="Blocks">
+            {blocks.map(match => (
+              <CommandItem
+                key={`block:${match.blockId}`}
+                value={quickFindBlockValue(match)}
+                onSelect={selectedValue => handleSelect(selectedValue, false)}
+              >
+                <span className="truncate">{truncate(match.content)}</span>
+              </CommandItem>
+            ))}
+          </CommandGroup>
+        )}
 
-            {showCreate && (
-              <CommandGroup heading="Create">
-                <CommandItem
-                  key={`create:${trimmedQuery}`}
-                  value={quickFindCreateValue(trimmedQuery)}
-                  onSelect={selectedValue => handleSelect(selectedValue, false)}
-                >
-                  <span>Create page “{trimmedQuery}”</span>
-                </CommandItem>
-              </CommandGroup>
-            )}
-          </CommandList>
-          <div className="flex justify-end gap-3 border-t px-3 py-2 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Kbd>↵</Kbd> jump
-            </span>
-            <span className="flex items-center gap-1">
-              <Kbd>⇧↵</Kbd> open in panel
-            </span>
-          </div>
-        </Command>
-      </DialogContent>
-    </Dialog>
+        {showCreate && (
+          <CommandGroup heading="Create">
+            <CommandItem
+              key={`create:${trimmedQuery}`}
+              value={quickFindCreateValue(trimmedQuery)}
+              onSelect={selectedValue => handleSelect(selectedValue, false)}
+            >
+              <span>Create page “{trimmedQuery}”</span>
+            </CommandItem>
+          </CommandGroup>
+        )}
+      </CommandList>
+      <div className="flex justify-end gap-3 border-t px-3 py-2 text-xs text-muted-foreground">
+        <span className="flex items-center gap-1">
+          <Kbd>↵</Kbd> jump
+        </span>
+        <span className="flex items-center gap-1">
+          <Kbd>⇧↵</Kbd> open in panel
+        </span>
+      </div>
+    </CommandDialog>
   )
 }

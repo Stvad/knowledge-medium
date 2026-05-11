@@ -25,25 +25,36 @@ const Command = ({
 )
 Command.displayName = CommandPrimitive.displayName
 
+type CommandRootProps = React.ComponentProps<typeof Command>
+
 interface CommandDialogProps extends DialogProps {
   title?: string
   description?: string
   contentClassName?: string
+  commandProps?: Omit<CommandRootProps, "children">
 }
+
+const commandDialogClassName = "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5"
 
 const CommandDialog = ({
   children,
   title = "Command palette",
   description = "Search for a command to run.",
   contentClassName,
+  commandProps,
   ...props
 }: CommandDialogProps) => {
+  const {className: commandClassName, ...rootCommandProps} = commandProps ?? {}
+
   return (
     <Dialog {...props}>
       <DialogContent className={cn("overflow-hidden p-0", contentClassName)}>
         <DialogTitle className="sr-only">{title}</DialogTitle>
         <DialogDescription className="sr-only">{description}</DialogDescription>
-        <Command className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-group]]:px-2 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
+        <Command
+          {...rootCommandProps}
+          className={cn(commandDialogClassName, commandClassName)}
+        >
           {children}
         </Command>
       </DialogContent>
