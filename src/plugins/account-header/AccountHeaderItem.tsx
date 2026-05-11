@@ -1,3 +1,4 @@
+import { LogOut } from 'lucide-react'
 import { useSignOut, useUser } from '@/components/Login.tsx'
 
 export function AccountHeaderItem() {
@@ -10,11 +11,13 @@ export function AccountHeaderItem() {
     <div className="flex items-center gap-2 text-sm text-muted-foreground">
       <span>{user.name}</span>
       <button
-        className="hover:text-foreground transition-colors underline-offset-2 hover:underline"
+        type="button"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         onClick={() => { void signOut() }}
         title="Sign out"
+        aria-label="Sign out"
       >
-        Sign out
+        <LogOut className="h-4 w-4"/>
       </button>
     </div>
   )
