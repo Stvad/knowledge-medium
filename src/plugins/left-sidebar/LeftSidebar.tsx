@@ -1,7 +1,5 @@
 import { use, useCallback, useEffect, useState } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
-import { memoize } from 'lodash'
-import { v5 as uuidv5 } from 'uuid'
 import {
   ArrowLeft,
   CalendarDays,
@@ -11,9 +9,7 @@ import {
 } from 'lucide-react'
 import type { Block } from '@/data/block.ts'
 import type { BlockData } from '@/data/api'
-import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties.ts'
-import { keyAtEnd } from '@/data/orderKey.ts'
 import { useUserBlock } from '@/data/globalState.ts'
 import { useChildren, useHandle } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
@@ -37,12 +33,7 @@ import {
   type LeftSidebarSectionContribution,
   type LeftSidebarSectionProps,
 } from './facet.ts'
-
-const SHORTCUTS_BLOCK_CONTENT = 'Shortcuts'
-const SHORTCUTS_BLOCK_NS = 'e99db742-98fd-494a-aa31-f4afaa3d247f'
-
-const shortcutsBlockId = (userBlockId: string): string =>
-  uuidv5(userBlockId, SHORTCUTS_BLOCK_NS)
+import { getOrCreateShortcutsBlock } from './shortcuts.ts'
 
 const decodeAliases = (data: BlockData): readonly string[] => {
   const raw = data.properties[aliasesProp.name]
@@ -62,63 +53,6 @@ const blockLabel = (
   const trimmed = label.trim()
   return trimmed || fallback || 'Untitled'
 }
-
-const getOrCreateShortcutsBlock = memoize(
-  async (userBlock: Block): Promise<Block> => {
-    const repo = userBlock.repo
-    const userData = userBlock.peek() ?? await userBlock.load()
-    if (!userData) throw new Error(`Shortcuts parent ${userBlock.id} is missing`)
-
-    const existingByContent = await repo.query.firstChildByContent({
-      parentId: userBlock.id,
-      content: SHORTCUTS_BLOCK_CONTENT,
-    }).load()
-    if (existingByContent) return repo.block(existingByContent.id)
-
-    const id = shortcutsBlockId(userBlock.id)
-    const live = await repo.load(id)
-    if (live && !live.deleted) return repo.block(id)
-
-    let resolvedId = id
-    await repo.tx(async tx => {
-      const parent = await tx.get(userBlock.id)
-      if (!parent || parent.deleted) {
-        throw new Error(`Shortcuts parent ${userBlock.id} is missing`)
-      }
-
-      const children = await tx.childrenOf(userBlock.id, parent.workspaceId)
-      const existing = children.find(child => child.content === SHORTCUTS_BLOCK_CONTENT)
-      if (existing) {
-        resolvedId = existing.id
-        return
-      }
-
-      const orderKey = keyAtEnd(children.at(-1)?.orderKey ?? null)
-      const tombstone = await tx.get(id)
-      if (tombstone) {
-        resolvedId = tombstone.id
-        if (tombstone.deleted) {
-          await tx.restore(tombstone.id, {content: SHORTCUTS_BLOCK_CONTENT})
-        }
-        if (tombstone.parentId !== userBlock.id || tombstone.orderKey !== orderKey) {
-          await tx.move(tombstone.id, {parentId: userBlock.id, orderKey})
-        }
-        return
-      }
-
-      resolvedId = await tx.create({
-        id,
-        workspaceId: parent.workspaceId,
-        parentId: userBlock.id,
-        orderKey,
-        content: SHORTCUTS_BLOCK_CONTENT,
-      })
-    }, {scope: ChangeScope.UserPrefs, description: 'ensure shortcuts block'})
-
-    return repo.block(resolvedId)
-  },
-  userBlock => `${userBlock.repo.instanceId}:${userBlock.id}`,
-)
 
 function useShortcutsBlock(): Block {
   return use(getOrCreateShortcutsBlock(useUserBlock()))
