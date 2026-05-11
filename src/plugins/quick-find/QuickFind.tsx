@@ -244,7 +244,7 @@ export function QuickFind() {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="overflow-hidden p-0">
+      <DialogContent className="top-[12vh] translate-y-0 overflow-hidden p-0">
         <DialogTitle className="sr-only">Quick find</DialogTitle>
         <DialogDescription className="sr-only">
           Find or create a page or block by alias or content.

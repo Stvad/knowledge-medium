@@ -63,7 +63,11 @@ export function CommandPalette() {
   }
 
   return (
-    <CommandDialog open={open} onOpenChange={setOpen}>
+    <CommandDialog
+      open={open}
+      onOpenChange={setOpen}
+      contentClassName="top-[12vh] translate-y-0"
+    >
       <CommandInput placeholder="Type a command or search..."/>
       <CommandList>
         <CommandEmpty>No results found.</CommandEmpty>
