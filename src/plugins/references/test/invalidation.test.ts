@@ -6,27 +6,27 @@ import {
   type InvalidationRowEvent,
 } from '@/data/invalidation.ts'
 import {
-  BACKLINKS_TARGET_INVALIDATION_CHANNEL,
-  backlinksInvalidationRule,
+  REFERENCES_TARGET_INVALIDATION_CHANNEL,
+  referencesInvalidationRule,
 } from '../invalidation.ts'
 
 const targetInvalidations = (
   snapshots: ReadonlyMap<string, ChangeSnapshot>,
 ): string[] =>
   Array.from(
-    collectPluginInvalidationsFromSnapshots([backlinksInvalidationRule], snapshots)
-      ?.get(BACKLINKS_TARGET_INVALIDATION_CHANNEL) ?? [],
+    collectPluginInvalidationsFromSnapshots([referencesInvalidationRule], snapshots)
+      ?.get(REFERENCES_TARGET_INVALIDATION_CHANNEL) ?? [],
   ).sort()
 
 const collectFromRowEvent = (event: InvalidationRowEvent): string[] => {
   const out: string[] = []
-  backlinksInvalidationRule.collectFromRowEvent?.(event, (channel, key) => {
-    if (channel === BACKLINKS_TARGET_INVALIDATION_CHANNEL) out.push(key)
+  referencesInvalidationRule.collectFromRowEvent?.(event, (channel, key) => {
+    if (channel === REFERENCES_TARGET_INVALIDATION_CHANNEL) out.push(key)
   })
   return out.sort()
 }
 
-describe('backlinks invalidation rule', () => {
+describe('references invalidation rule', () => {
   it('new live row contributes all target ids', () => {
     const snapshots = new Map<string, ChangeSnapshot>([
       ['src', {

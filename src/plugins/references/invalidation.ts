@@ -4,7 +4,7 @@ import type {
   PluginInvalidationEmit,
 } from '@/data/invalidation.ts'
 
-export const BACKLINKS_TARGET_INVALIDATION_CHANNEL = 'backlinks.target'
+export const REFERENCES_TARGET_INVALIDATION_CHANNEL = 'references.target'
 
 const emitReferenceTargetDiff = (
   before: ReadonlyArray<{id: string; sourceField?: string}>,
@@ -27,13 +27,13 @@ const emitReferenceTargetDiff = (
   for (const [key, id] of beforePairs) {
     if (!afterPairs.has(key) && !emitted.has(id)) {
       emitted.add(id)
-      emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+      emit(REFERENCES_TARGET_INVALIDATION_CHANNEL, id)
     }
   }
   for (const [key, id] of afterPairs) {
     if (!beforePairs.has(key) && !emitted.has(id)) {
       emitted.add(id)
-      emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+      emit(REFERENCES_TARGET_INVALIDATION_CHANNEL, id)
     }
   }
 }
@@ -49,8 +49,8 @@ const emitSnapshotTargetDiff = (
   emitReferenceTargetDiff(beforeRefs, afterRefs, emit)
 }
 
-export const backlinksInvalidationRule: InvalidationRule = {
-  id: 'backlinks.references-invalidation',
+export const referencesInvalidationRule: InvalidationRule = {
+  id: 'references.target-invalidation',
   collectFromSnapshots: (snapshots, emit) => {
     for (const snapshot of snapshots.values()) {
       emitSnapshotTargetDiff(snapshot, emit)

@@ -12,7 +12,7 @@ import {
   BACKFILL_BLOCK_REFERENCES_SQL,
   BLOCK_REFERENCES_BACKFILL_MARKER_KEY,
   BLOCK_REFERENCES_SOURCE_FIELD_MARKER_KEY,
-  backlinksLocalSchema,
+  referencesLocalSchema,
   backfillBlockReferencesIfEmpty,
   backfillBlockReferencesSourceFieldIfNeeded,
 } from '../localSchema.ts'
@@ -80,7 +80,7 @@ const setupDb = (): TestDb => {
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   db.exec(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) db.exec(stmt)
-  for (const stmt of backlinksLocalSchema.statements ?? []) db.exec(stmt)
+  for (const stmt of referencesLocalSchema.statements ?? []) db.exec(stmt)
 
   const columnNames = BLOCK_STORAGE_COLUMNS.map(c => c.name)
   const insertStmt = db.prepare(
@@ -123,7 +123,7 @@ describe('backlinks local schema bootstrap', () => {
       .all() as Array<{name: string}>)
       .map(r => r.name)
     expect(triggers).toEqual(expect.arrayContaining([
-      ...(backlinksLocalSchema.triggerNames ?? []),
+      ...(referencesLocalSchema.triggerNames ?? []),
     ]))
 
     const indexes = (h.db
@@ -137,7 +137,7 @@ describe('backlinks local schema bootstrap', () => {
   })
 
   it('schema statements are idempotent', () => {
-    for (const stmt of backlinksLocalSchema.statements ?? []) {
+    for (const stmt of referencesLocalSchema.statements ?? []) {
       expect(() => h.db.exec(stmt)).not.toThrow()
     }
   })
@@ -400,7 +400,7 @@ describe('block_references backfill', () => {
           {id: 'tgt', alias: 'tgt', sourceField: 'reviewer'},
         ]),
       })
-      for (const triggerName of backlinksLocalSchema.triggerNames ?? []) {
+      for (const triggerName of referencesLocalSchema.triggerNames ?? []) {
         h.db.exec(`DROP TRIGGER IF EXISTS ${triggerName}`)
       }
       h.db.exec('DROP TABLE block_references')

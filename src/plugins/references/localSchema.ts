@@ -154,8 +154,8 @@ export const backfillBlockReferencesSourceFieldIfNeeded = async (
   await db.execute(RECORD_BLOCK_REFERENCES_SOURCE_FIELD_DONE_SQL)
 }
 
-export const backlinksLocalSchema: LocalSchemaContribution = {
-  id: 'backlinks.local-schema',
+export const referencesLocalSchema: LocalSchemaContribution = {
+  id: 'references.local-schema',
   statements: [
     CREATE_BLOCKS_WORKSPACE_REFERENCES_INDEX_SQL,
     CREATE_BLOCK_REFERENCES_TABLE_SQL,
@@ -167,11 +167,11 @@ export const backlinksLocalSchema: LocalSchemaContribution = {
   triggerNames: BLOCK_REFERENCES_TRIGGER_NAMES,
   backfills: [
     {
-      id: 'backlinks.block-references-source-field',
+      id: 'references.block-references-source-field',
       run: backfillBlockReferencesSourceFieldIfNeeded,
     },
     {
-      id: 'backlinks.block-references-backfill',
+      id: 'references.block-references-backfill',
       run: backfillBlockReferencesIfEmpty,
     },
   ],

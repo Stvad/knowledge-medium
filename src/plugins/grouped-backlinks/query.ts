@@ -11,7 +11,7 @@ import {
   SELECT_FILTERED_BACKLINK_CONTEXT_NODE_IDS_SQL,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
-import { BACKLINKS_TARGET_INVALIDATION_CHANNEL } from '@/plugins/backlinks/invalidation.ts'
+import { REFERENCES_TARGET_INVALIDATION_CHANNEL } from '@/plugins/references/invalidation.ts'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -271,7 +271,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     if (!workspaceId || !id) return {groups: [], total: 0}
     ctx.depend({
       kind: 'plugin',
-      channel: BACKLINKS_TARGET_INVALIDATION_CHANNEL,
+      channel: REFERENCES_TARGET_INVALIDATION_CHANNEL,
       key: id,
     })
 

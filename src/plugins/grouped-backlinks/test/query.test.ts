@@ -15,7 +15,7 @@ import {
 } from '@/data/facets.ts'
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.ts'
-import { backlinksInvalidationRule } from '@/plugins/backlinks/invalidation.ts'
+import { referencesInvalidationRule } from '@/plugins/references/invalidation.ts'
 import { getUserPrefsBlock } from '@/data/globalState.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
@@ -35,7 +35,7 @@ const WS = 'ws-1'
 
 const backlinksQueryInvalidationExtension: AppExtension = [
   queriesFacet.of(backlinksForBlockQuery, {source: 'backlinks'}),
-  invalidationRulesFacet.of(backlinksInvalidationRule, {source: 'backlinks'}),
+  invalidationRulesFacet.of(referencesInvalidationRule, {source: 'references'}),
 ]
 
 interface Harness {

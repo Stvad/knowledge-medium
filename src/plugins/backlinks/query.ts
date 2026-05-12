@@ -4,7 +4,7 @@ import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
 } from '@/data/blockSchema'
-import { BACKLINKS_TARGET_INVALIDATION_CHANNEL } from './invalidation.ts'
+import { REFERENCES_TARGET_INVALIDATION_CHANNEL } from '@/plugins/references/invalidation.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -190,7 +190,7 @@ export const backlinksForBlockQuery = defineQuery<
     if (!workspaceId || !id) return []
     ctx.depend({
       kind: 'plugin',
-      channel: BACKLINKS_TARGET_INVALIDATION_CHANNEL,
+      channel: REFERENCES_TARGET_INVALIDATION_CHANNEL,
       key: id,
     })
     const normalizedFilter = normalizeBacklinksFilter(filter)

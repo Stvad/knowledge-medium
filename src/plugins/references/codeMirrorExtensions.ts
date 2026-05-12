@@ -7,7 +7,7 @@ import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.ts'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.ts'
 import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.ts'
 
-export const backlinksCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo}) => [
+export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo}) => [
   autocompletion({
     override: [
       backlinkCompletionSource({

@@ -31,7 +31,7 @@ import { dailyNoteBlockId, dailyNotesDataExtension } from '@/plugins/daily-notes
 import { propertySchemasFacet } from '@/data/facets.ts'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { backlinksDataExtension } from '../dataExtension.ts'
+import { referencesDataExtension } from '../dataExtension.ts'
 import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
@@ -64,7 +64,7 @@ const setup = async (
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
-    backlinksDataExtension,
+    referencesDataExtension,
     ...extraExtensions,
   ]))
   return {
@@ -251,20 +251,20 @@ describe('parseReferences — schema-swap reprojection', () => {
   const runtimeWithReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
-    backlinksDataExtension,
+    referencesDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
   ])
   const runtimeWithReviewerAndApprover = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
-    backlinksDataExtension,
+    referencesDataExtension,
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
     propertySchemasFacet.of(approverProp, {source: 'test'}),
   ])
   const runtimeWithoutReviewer = () => resolveFacetRuntimeSync([
     kernelDataExtension,
     dailyNotesDataExtension,
-    backlinksDataExtension,
+    referencesDataExtension,
   ])
 
   it('projects existing blocks when a property becomes ref-typed', async () => {

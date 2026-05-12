@@ -8,21 +8,16 @@ import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp } from '@/data/properties'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
-import { codeMirrorExtensionsFacet } from '@/extensions/editor.ts'
-import { markdownExtensionsFacet } from '@/markdown/extensions.ts'
 import {
   invalidationRulesFacet,
-  localSchemaFacet,
   propertySchemasFacet,
   queriesFacet,
 } from '@/data/facets.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
 import {
-  BACKLINKS_TARGET_INVALIDATION_CHANNEL,
-  backlinksInvalidationRule,
-} from '../invalidation.ts'
-import { backlinksLocalSchema } from '../localSchema.ts'
-import { backlinksPlugin } from '../index.ts'
+  REFERENCES_TARGET_INVALIDATION_CHANNEL,
+  referencesInvalidationRule,
+} from '@/plugins/references/invalidation.ts'
 import { BACKLINKS_FOR_BLOCK_QUERY, backlinksForBlockQuery } from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 
@@ -31,7 +26,7 @@ const OTHER_WS = 'ws-2'
 
 const backlinksQueryInvalidationExtension: AppExtension = [
   queriesFacet.of(backlinksForBlockQuery, {source: 'backlinks'}),
-  invalidationRulesFacet.of(backlinksInvalidationRule, {source: 'backlinks'}),
+  invalidationRulesFacet.of(referencesInvalidationRule, {source: 'references'}),
 ]
 
 interface Harness {
@@ -105,29 +100,9 @@ describe('backlinksDataExtension query', () => {
     expect(queries.get(BACKLINKS_FOR_BLOCK_QUERY)).toBeDefined()
   })
 
-  it('contributes its local edge index schema through localSchemaFacet', () => {
-    const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
-    expect(runtime.read(localSchemaFacet)).toEqual([backlinksLocalSchema])
-  })
-
-  it('contributes its reference invalidation through invalidationRulesFacet', () => {
-    const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
-    expect(runtime.read(invalidationRulesFacet)).toEqual([backlinksInvalidationRule])
-  })
-
   it('contributes its backlink filter property schema', () => {
     const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
     expect(runtime.read(propertySchemasFacet).get(backlinksFilterProp.name)).toBe(backlinksFilterProp)
-  })
-
-  it('owns markdown syntax and CodeMirror extension registrations', () => {
-    const runtime = resolveFacetRuntimeSync(backlinksPlugin)
-
-    expect(runtime.contributions(markdownExtensionsFacet).map(c => c.source)).toEqual([
-      'backlinks',
-      'backlinks',
-    ])
-    expect(runtime.contributions(codeMirrorExtensionsFacet).map(c => c.source)).toEqual(['backlinks'])
   })
 
   it('is identity-stable across calls', () => {
@@ -353,7 +328,7 @@ describe('backlinksDataExtension query', () => {
     const deps = handle.__depsForTest()
 
     expect(depIds(deps, 'row')).toEqual(['linker', 't'])
-    expect(depIds(deps, 'plugin')).toEqual([`${BACKLINKS_TARGET_INVALIDATION_CHANNEL}:t`])
+    expect(depIds(deps, 'plugin')).toEqual([`${REFERENCES_TARGET_INVALIDATION_CHANNEL}:t`])
     expect(deps.some(d => d.kind === 'table')).toBe(false)
     expect(deps.some(d => d.kind === 'workspace')).toBe(false)
   })

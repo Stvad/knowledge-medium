@@ -1,6 +1,5 @@
 /**
- * `backlinks.parseReferences` + `backlinks.cleanupOrphanAliases` post-commit
- * processors (spec §7).
+ * Reference parsing + orphan-alias cleanup post-commit processors (spec §7).
  *
  * `backlinks.parseReferences`
  *   - watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] }
@@ -67,10 +66,21 @@ import {
   ensureDailyNoteTarget,
   isDateAlias,
 } from '@/plugins/daily-notes'
-import { BACKLINKS_FOR_BLOCK_QUERY } from './query.ts'
 
+// Keep the processor ids stable: cleanup work may already be queued under
+// these names in local command_events rows from earlier app versions.
 export const PARSE_REFERENCES_PROCESSOR = 'backlinks.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'backlinks.cleanupOrphanAliases'
+
+const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
+  SELECT 1 AS present
+  FROM block_references br
+  JOIN blocks source ON source.id = br.source_id
+  WHERE br.workspace_id = ?
+    AND br.target_id = ?
+    AND source.deleted = 0
+  LIMIT 1
+`
 
 /** Per-source plan built during the read phase. The write phase consumes
  *  this and issues all writes in a single tx. */
@@ -330,14 +340,13 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
     if (ids.length === 0 || !workspaceId) return
 
     // Read phase — gather actual orphans without holding a writer slot.
-    // `backlinks.forBlock` returns BlockData[] for blocks in the same
-    // workspace whose `references_json` entries point at `id`. The
-    // workspace-scoped check is correct because per spec invariant 11
-    // refs do not cross workspaces in this app.
     const orphans: string[] = []
     for (const id of ids) {
-      const refs = await ctx.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId, id}).load()
-      if (refs.length === 0) orphans.push(id)
+      const source = await ctx.db.getOptional<{present: number}>(
+        SELECT_LIVE_REFERENCE_SOURCE_SQL,
+        [workspaceId, id],
+      )
+      if (source === null) orphans.push(id)
     }
     if (orphans.length === 0) return
 
@@ -361,7 +370,7 @@ export const cleanupOrphanAliasesProcessor = definePostCommitProcessor<CleanupAr
 
 // ──── Bundle ────
 
-export const backlinksPostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
+export const referencesPostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
   parseReferencesProcessor,
   cleanupOrphanAliasesProcessor,
 ]
