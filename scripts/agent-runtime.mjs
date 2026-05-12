@@ -31,6 +31,7 @@ Commands:
   yarn agent connect              open app pairing flow and persist pasted token
   yarn agent connect <token>      persist token directly (or use AGENT_RUNTIME_TOKEN env)
   yarn agent disconnect           remove the selected profile token
+  yarn agent remove-profile <name>  remove a saved CLI token profile
   yarn agent profiles             list saved CLI token profiles
   yarn agent pair-url             print the current app pairing URL
   yarn agent whoami               show audience the persisted token resolves to
@@ -594,6 +595,20 @@ const main = async () => {
       removed
         ? `Removed profile "${selectedProfileName}" from ${tokenStorePath}\n`
         : `No token profile "${selectedProfileName}" exists in ${tokenStorePath}\n`,
+    )
+    return
+  }
+
+  if (verb === 'remove-profile' || verb === 'disconnect-profile') {
+    const profileName = normalizeProfileName(args[1] ?? '')
+    if (!args[1]) {
+      throw new Error(`${verb} requires a profile name`)
+    }
+    const removed = await removeStoredToken(profileName)
+    process.stdout.write(
+      removed
+        ? `Removed profile "${profileName}" from ${tokenStorePath}\n`
+        : `No token profile "${profileName}" exists in ${tokenStorePath}\n`,
     )
     return
   }

@@ -97,4 +97,26 @@ describe('agent runtime CLI profiles', () => {
       default: {token: 'TOKEN-DEFAULT', savedAt: expect.any(Number)},
     })
   })
+
+  it('removes a named profile without selecting it first', async () => {
+    await runCli(['--profile', 'work', 'connect', 'TOKEN-WORK'])
+    await runCli(['connect', 'TOKEN-DEFAULT'])
+
+    await runCli(['remove-profile', 'work'])
+
+    const stored = JSON.parse(await fs.readFile(tokenFile, 'utf8'))
+    expect(stored.profiles).toEqual({
+      default: {token: 'TOKEN-DEFAULT', savedAt: expect.any(Number)},
+    })
+  })
+
+  it('supports disconnect-profile as a named removal alias', async () => {
+    await runCli(['--profile', 'work', 'connect', 'TOKEN-WORK'])
+
+    await runCli(['disconnect-profile', 'work'])
+
+    await expect(fs.readFile(tokenFile, 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+  })
 })
