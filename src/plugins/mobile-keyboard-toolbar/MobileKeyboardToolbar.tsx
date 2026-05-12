@@ -13,25 +13,47 @@ import { useRunAction } from '@/shortcuts/runAction.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.ts'
 import { acquireBlurExitSuppression } from '@/components/BlockEditor.tsx'
+import {
+  INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
+  INSERT_PAGE_REF_TRIGGER_ACTION_ID,
+} from './actions.ts'
 
-interface ToolbarAction {
+type ToolbarAction = {
+  kind: 'icon'
   id: string
   actionId: string
   label: string
   icon: typeof IndentDecrease
+} | {
+  kind: 'text'
+  id: string
+  actionId: string
+  label: string
+  text: string
 }
 
 const EXIT_EDIT_ACTION_ID = 'exit_edit_mode_cm'
 
 const TOOLBAR_ACTIONS: readonly ToolbarAction[] = [
-  {id: 'outdent', actionId: 'edit.cm.outdent_block', label: 'Outdent', icon: IndentDecrease},
-  {id: 'indent', actionId: 'edit.cm.indent_block', label: 'Indent', icon: IndentIncrease},
-  {id: 'move-up', actionId: 'move_block_up_cm', label: 'Move up', icon: ArrowUp},
-  {id: 'move-down', actionId: 'move_block_down_cm', label: 'Move down', icon: ArrowDown},
-  {id: 'undo', actionId: 'undo', label: 'Undo', icon: Undo2},
-  {id: 'redo', actionId: 'redo', label: 'Redo', icon: Redo2},
-  {id: 'done', actionId: EXIT_EDIT_ACTION_ID, label: 'Done', icon: KeyboardOff},
+  {kind: 'icon', id: 'outdent', actionId: 'edit.cm.outdent_block', label: 'Outdent', icon: IndentDecrease},
+  {kind: 'icon', id: 'indent', actionId: 'edit.cm.indent_block', label: 'Indent', icon: IndentIncrease},
+  {kind: 'text', id: 'page-ref', actionId: INSERT_PAGE_REF_TRIGGER_ACTION_ID, label: 'Page reference', text: '[['},
+  {kind: 'text', id: 'block-ref', actionId: INSERT_BLOCK_REF_TRIGGER_ACTION_ID, label: 'Block reference', text: '(('},
+  {kind: 'icon', id: 'move-up', actionId: 'move_block_up_cm', label: 'Move up', icon: ArrowUp},
+  {kind: 'icon', id: 'move-down', actionId: 'move_block_down_cm', label: 'Move down', icon: ArrowDown},
+  {kind: 'icon', id: 'undo', actionId: 'undo', label: 'Undo', icon: Undo2},
+  {kind: 'icon', id: 'redo', actionId: 'redo', label: 'Redo', icon: Redo2},
+  {kind: 'icon', id: 'done', actionId: EXIT_EDIT_ACTION_ID, label: 'Done', icon: KeyboardOff},
 ]
+
+const ToolbarButtonContent = ({action}: {action: ToolbarAction}) => {
+  if (action.kind === 'text') {
+    return <span className="font-mono text-base font-semibold leading-none">{action.text}</span>
+  }
+
+  const Icon = action.icon
+  return <Icon className="h-5 w-5"/>
+}
 
 /** Computes the on-screen keyboard's CSS-px inset for the toolbar.
  *
@@ -174,6 +196,13 @@ export function MobileKeyboardToolbar() {
     event.preventDefault()
   }
 
+  const getActiveEditorView = () => {
+    const editDeps = activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as
+      | CodeMirrorEditModeDependencies
+      | undefined
+    return editDeps?.editorView
+  }
+
   const handleClick = (actionId: string) => async (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault()
     event.stopPropagation()
@@ -181,10 +210,7 @@ export function MobileKeyboardToolbar() {
     // Snapshot the editor view from the EDIT_MODE_CM dependencies
     // BEFORE the action runs, so a structural action that swaps panels
     // mid-flight can't trick us into focusing the wrong editor.
-    const editDeps = activeContexts.get(ActionContextTypes.EDIT_MODE_CM) as
-      | CodeMirrorEditModeDependencies
-      | undefined
-    const editorView = editDeps?.editorView
+    const editorView = getActiveEditorView()
 
     // Action handlers expect ActionTrigger = KeyboardEvent | CustomEvent.
     // None of the actions wired to this toolbar consult the trigger,
@@ -235,17 +261,17 @@ export function MobileKeyboardToolbar() {
       style={{bottom: keyboardInset}}
       data-block-interaction="ignore"
     >
-      {TOOLBAR_ACTIONS.map(({id, actionId, label, icon: Icon}) => (
+      {TOOLBAR_ACTIONS.map(action => (
         <button
-          key={id}
+          key={action.id}
           type="button"
-          aria-label={label}
-          title={label}
+          aria-label={action.label}
+          title={action.label}
           onMouseDown={handleMouseDown}
-          onClick={handleClick(actionId)}
-          className="flex h-10 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
+          onClick={handleClick(action.actionId)}
+          className="flex h-10 min-w-0 flex-1 items-center justify-center rounded-md text-muted-foreground transition-colors active:bg-accent active:text-accent-foreground"
         >
-          <Icon className="h-5 w-5"/>
+          <ToolbarButtonContent action={action}/>
         </button>
       ))}
     </div>

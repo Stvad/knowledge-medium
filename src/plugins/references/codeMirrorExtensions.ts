@@ -31,11 +31,17 @@ export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = (
           const workspaceId = repo.activeWorkspaceId
           if (!workspaceId) return []
 
-          const blocks = await repo.query.searchByContent({
-            workspaceId,
-            query: filter,
-            limit: 12,
-          }).load()
+          const query = filter.trim()
+          const blocks = query
+            ? await repo.query.searchByContent({
+              workspaceId,
+              query,
+              limit: 12,
+            }).load()
+            : await repo.query.recentBlocks({
+              workspaceId,
+              limit: 12,
+            }).load()
           return blocks.map(block => ({id: block.id, content: block.content}))
         },
       }),
