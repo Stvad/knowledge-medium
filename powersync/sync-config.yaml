@@ -3,8 +3,10 @@
 # src/data/blockSchema.ts or src/data/workspaceSchema.ts.
 # CI runs `yarn check:sync-config` to catch hand-edits.
 #
-# Sync streams scoped to the requesting user. PowerSync re-evaluates the set
-# whenever workspace_members changes.
+# One auto-subscribed stream scoped to the requesting user's workspaces.
+# Grouping the related tables into one stream keeps the client subscription
+# surface and bucket count smaller than three independent auto streams.
+# PowerSync re-evaluates the set whenever workspace_members changes.
 #
 # IMPORTANT: do not alias the primary table in the FROM clause. PowerSync uses
 # the FROM-clause name as the row_type that maps back to the client's raw
@@ -21,53 +23,46 @@ config:
   edition: 3
 
 streams:
-  workspaces:
+  workspace_data:
     auto_subscribe: true
-    query: |
-      SELECT
-        workspaces.id,
-        workspaces.name,
-        workspaces.owner_user_id,
-        workspaces.create_time,
-        workspaces.update_time
-      FROM public.workspaces
-      JOIN public.workspace_members
-        ON workspace_members.workspace_id = workspaces.id
-       AND workspace_members.user_id = auth.user_id()
-
-  workspace_members:
-    auto_subscribe: true
-    query: |
-      SELECT
-        workspace_members.id,
-        workspace_members.workspace_id,
-        workspace_members.user_id,
-        workspace_members.role,
-        workspace_members.create_time
-      FROM public.workspace_members
-      WHERE workspace_members.workspace_id IN (
+    with:
+      user_workspaces: |
         SELECT workspace_id
         FROM public.workspace_members
         WHERE user_id = auth.user_id()
-      )
+    queries:
+      - |
+        SELECT
+          workspaces.id,
+          workspaces.name,
+          workspaces.owner_user_id,
+          workspaces.create_time,
+          workspaces.update_time
+        FROM public.workspaces
+        WHERE workspaces.id IN user_workspaces
+      - |
+        SELECT
+          workspace_members.id,
+          workspace_members.workspace_id,
+          workspace_members.user_id,
+          workspace_members.role,
+          workspace_members.create_time
+        FROM public.workspace_members
+        WHERE workspace_members.workspace_id IN user_workspaces
+      - |
+        SELECT
+          blocks.id,
+          blocks.workspace_id,
+          blocks.parent_id,
+          blocks.order_key,
+          blocks.content,
+          blocks.properties_json,
+          blocks.references_json,
+          blocks.created_at,
+          blocks.updated_at,
+          blocks.created_by,
+          blocks.updated_by,
+          blocks.deleted
+        FROM public.blocks
+        WHERE blocks.workspace_id IN user_workspaces
 
-  blocks:
-    auto_subscribe: true
-    query: |
-      SELECT
-        blocks.id,
-        blocks.workspace_id,
-        blocks.parent_id,
-        blocks.order_key,
-        blocks.content,
-        blocks.properties_json,
-        blocks.references_json,
-        blocks.created_at,
-        blocks.updated_at,
-        blocks.created_by,
-        blocks.updated_by,
-        blocks.deleted
-      FROM public.blocks
-      JOIN public.workspace_members
-        ON workspace_members.workspace_id = blocks.workspace_id
-       AND workspace_members.user_id = auth.user_id()
