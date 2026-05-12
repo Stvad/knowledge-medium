@@ -119,11 +119,11 @@ export type BlockContentSurfaceContribution =
 export type BlockContentSurfaceResolver =
   (context: BlockResolveContext) => BlockContentSurfaceProps
 
-// Slot for sections rendered above a block's body — top-level breadcrumbs
-// live here by default. Mirrors `blockChildrenFooterFacet` exactly: each
-// contribution returns a renderer (or null/undefined/false to opt out
-// for this block); the layout renders all returned components in
-// contribution order.
+// Slot for sections rendered above a block's body — navigation chrome
+// such as top-level breadcrumbs lives here. Mirrors
+// `blockChildrenFooterFacet` exactly: each contribution returns a
+// renderer (or null/undefined/false to opt out for this block); the
+// layout renders all returned components in contribution order.
 export type BlockHeaderContribution =
   (context: BlockResolveContext) => BlockRenderer | null | undefined | false
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getBreadcrumbContentPreview } from '@/components/renderer/breadcrumbPreview'
+import { getBreadcrumbContentPreview } from '../breadcrumbPreview.ts'
 
 describe('getBreadcrumbContentPreview', () => {
   it('uses only the first physical line for multiline content', () => {

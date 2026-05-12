@@ -12,6 +12,7 @@ import { quickFindPlugin } from '@/plugins/quick-find'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
 import { plainOutlinerPlugin } from '@/plugins/plain-outliner'
+import { breadcrumbsPlugin } from '@/plugins/breadcrumbs'
 import { leftSidebarPlugin } from '@/plugins/left-sidebar'
 import { mobileBottomNavPlugin } from '@/plugins/mobile-bottom-nav'
 import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
@@ -37,6 +38,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultRenderersExtension,
+  breadcrumbsPlugin,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),
   // dailyNotesPlugin contributes both the workspace-landing resolver
