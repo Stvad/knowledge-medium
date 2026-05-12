@@ -116,15 +116,44 @@ const installPowerSyncLogCapture = () => {
   if (win.__ps_log_capture_installed) return
   win.__ps_log_capture_installed = true
 
+  const buf: { t: number; level: string; msg: string }[] = []
+  win.__ps_log_buf = buf
+
   // Set the GLOBAL js-logger default to DEBUG. Per `createLogger` in
   // node_modules/@powersync/common/lib/utils/Logger.js, named loggers
   // that aren't passed an explicit logLevel inherit from this default —
   // so flipping this single switch turns on every internal PowerSync
   // logger (sync-stream, bucket-storage, remote, etc.) at once.
-  createBaseLogger().setLevel(LogLevel.DEBUG)
-
-  const buf: { t: number; level: string; msg: string }[] = []
-  win.__ps_log_buf = buf
+  const baseLogger = createBaseLogger()
+  baseLogger.setLevel(LogLevel.DEBUG)
+  // CRITICAL: js-logger ships with NO handler by default — setLevel
+  // alone gates which messages are eligible, but with no handler they
+  // go nowhere. Install one that writes into the buffer *and* forwards
+  // to console so devtools still sees them. Without this we miss every
+  // internal PowerSync debug message (Rust client, sync stream, bucket
+  // storage, checkpoint validation, deleteBucket, …).
+  baseLogger.setHandler((messages: ArrayLike<unknown>, context: { level?: { name?: string }; name?: string }) => {
+    const level = context?.level?.name?.toLowerCase?.() ?? 'log'
+    const name = context?.name ?? ''
+    try {
+      buf.push({
+        t: Date.now(),
+        level,
+        msg: `[${name}] ` + Array.from(messages).map(m => {
+          if (m == null) return String(m)
+          if (typeof m === 'string') return m
+          try { return JSON.stringify(m).slice(0, 800) }
+          catch { return String(m).slice(0, 800) }
+        }).join(' '),
+      })
+      if (buf.length > 5000) buf.splice(0, buf.length - 5000)
+    } catch { /* never let logging break */ }
+    // Forward to console too so devtools still works.
+    const fn = (console as unknown as Record<string, (...args: unknown[]) => void>)[level === 'time' ? 'log' : level]
+      ?? console.log
+    try { fn(`[${name}]`, ...Array.from(messages)) }
+    catch { /* ignore console errors */ }
+  })
   for (const method of ['debug', 'info', 'warn', 'error', 'log'] as const) {
     const original = console[method].bind(console)
     console[method] = (...args: unknown[]) => {
