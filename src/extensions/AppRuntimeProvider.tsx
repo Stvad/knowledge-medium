@@ -18,6 +18,7 @@ import {
   ExtensionLoadErrorsProvider,
   ExtensionLoadErrorStore,
 } from '@/extensions/extensionLoadErrors.tsx'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 
 export function AppRuntimeProvider({
   children,
@@ -204,7 +205,9 @@ function AppMounts({runtime}: {runtime: FacetRuntime}) {
   return (
     <>
       {mounts.map(({id, component: Component}) => (
-        <Component key={id}/>
+        <ExtensionRenderBoundary key={id}>
+          <Component/>
+        </ExtensionRenderBoundary>
       ))}
     </>
   )

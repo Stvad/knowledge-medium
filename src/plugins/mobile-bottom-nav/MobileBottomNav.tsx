@@ -1,7 +1,6 @@
-import { ErrorBoundary } from 'react-error-boundary'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { FallbackComponent } from '@/components/util/error.tsx'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { mobileBottomNavItemsFacet } from './facet.ts'
@@ -21,9 +20,9 @@ function MobileBottomNavSurface() {
     >
       <div className="mx-auto flex h-16 max-w-md items-center justify-around">
         {items.map(({id, component: Item}) => (
-          <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
+          <ExtensionRenderBoundary key={id}>
             <Item/>
-          </ErrorBoundary>
+          </ExtensionRenderBoundary>
         ))}
       </div>
     </nav>

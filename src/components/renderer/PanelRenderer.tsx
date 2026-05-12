@@ -14,10 +14,9 @@ import { useActionContext } from '@/shortcuts/useActionContext'
 import { ActionContextTypes } from '@/shortcuts/types'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { usePropertyValue } from '@/hooks/block.ts'
-import { ErrorBoundary } from 'react-error-boundary'
-import { FallbackComponent } from '@/components/util/error.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { panelMountsFacet } from '@/extensions/core.ts'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 import {
   goBackInPanel,
   goForwardInPanel,
@@ -184,13 +183,13 @@ export function PanelRenderer({block}: BlockRendererProps) {
       {/* Per-panel mount points — chrome contributed via
           `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
           inside `.panel` so position:fixed/absolute children sit in the
-          panel's positioning context, and isolated under their own
-          ErrorBoundaries so a misbehaving plugin can't tear down the
-          panel. */}
+          panel's positioning context, and isolated under render
+          boundaries so a loading or misbehaving plugin can't tear down
+          the panel. */}
       {panelMounts.map(({id, component: Component}) => (
-        <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
+        <ExtensionRenderBoundary key={id}>
           <Component block={block}/>
-        </ErrorBoundary>
+        </ExtensionRenderBoundary>
       ))}
     </div>
   )

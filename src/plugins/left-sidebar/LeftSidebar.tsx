@@ -1,5 +1,4 @@
 import { Suspense, use, useCallback, useEffect, useState } from 'react'
-import { ErrorBoundary } from 'react-error-boundary'
 import {
   ArrowLeft,
   CalendarDays,
@@ -14,7 +13,7 @@ import { useUserBlock } from '@/data/globalState.ts'
 import { useChildren, useHandle } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { FallbackComponent } from '@/components/util/error.tsx'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 import { cn } from '@/lib/utils.ts'
 import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
@@ -282,11 +281,9 @@ function SidebarSections({
   return (
     <>
       {sections.map(({id, component: Section}) => (
-        <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
-          <Suspense fallback={<SidebarSectionFallback/>}>
-            <Section closeSidebar={closeSidebar}/>
-          </Suspense>
-        </ErrorBoundary>
+        <ExtensionRenderBoundary key={id} suspenseFallback={<SidebarSectionFallback/>}>
+          <Section closeSidebar={closeSidebar}/>
+        </ExtensionRenderBoundary>
       ))}
     </>
   )

@@ -1,7 +1,6 @@
-import { ErrorBoundary } from 'react-error-boundary'
 import { headerItemsFacet, type HeaderItemContribution } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { FallbackComponent } from '@/components/util/error.tsx'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 
 const HeaderRegion = ({
   items,
@@ -12,9 +11,9 @@ const HeaderRegion = ({
 }) => (
   <div className={`flex min-w-0 items-center gap-2 sm:gap-4 ${className}`}>
     {items.map(({id, component: Component}) => (
-      <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
+      <ExtensionRenderBoundary key={id}>
         <Component/>
-      </ErrorBoundary>
+      </ExtensionRenderBoundary>
     ))}
   </div>
 )
