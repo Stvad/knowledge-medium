@@ -127,6 +127,13 @@ describe('agent runtime bridge', () => {
     })
     expect(read.status).toBe(202)
 
+    const summary = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'runtime-summary'}),
+    })
+    expect(summary.status).toBe(202)
+
     const write = await fetch(`${baseUrl}/runtime/commands`, {
       method: 'POST',
       headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},

@@ -30,6 +30,8 @@ Usage:
   yarn agent whoami               show audience the persisted token resolves to
   yarn agent ping
   yarn agent status
+  yarn agent runtime-summary      show compact agent-oriented runtime context
+  yarn agent describe-runtime     show full runtime diagnostics
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
   yarn agent get-block <id>
   yarn agent subtree <rootId> [--include-root]
@@ -189,6 +191,56 @@ const bridgeSecretForStatus = async () => {
   return resolveBridgeSecret()
 }
 
+const readBridgeStatus = async () => {
+  const bridgeSecret = await bridgeSecretForStatus()
+  return requestJson(`${bridgeUrl}/health${bridgeSecret ? '?detail=1' : ''}`, {
+    headers: bridgeSecret ? {'x-agent-runtime-secret': bridgeSecret} : {},
+  })
+}
+
+const compactUser = user => {
+  if (!user || typeof user !== 'object') return null
+  const compact = {}
+  if (typeof user.id === 'string') compact.id = user.id
+  if (typeof user.name === 'string') compact.name = user.name
+  return Object.keys(compact).length > 0 ? compact : null
+}
+
+const compactBridgeClient = client => {
+  const metadata = client?.metadata && typeof client.metadata === 'object'
+    ? client.metadata
+    : {}
+  const compact = {
+    id: client.id,
+    lastSeen: client.lastSeen,
+    tokenCount: client.tokenCount,
+  }
+
+  if (client.audience) compact.audience = client.audience
+  if (typeof metadata.activeWorkspaceId === 'string') compact.activeWorkspaceId = metadata.activeWorkspaceId
+  const currentUser = compactUser(metadata.currentUser)
+  if (currentUser) compact.currentUser = currentUser
+
+  return compact
+}
+
+const printPing = async () => {
+  await ensureBridgeRunning()
+  const runtime = await runCommand({type: 'ping'})
+  const status = await readBridgeStatus()
+  const bridge = {ok: Boolean(status?.ok)}
+
+  if (Array.isArray(status?.clients)) {
+    bridge.clients = status.clients.map(compactBridgeClient)
+  }
+
+  process.stdout.write(`${JSON.stringify({
+    ok: runtime?.ok === true && bridge.ok,
+    runtime,
+    bridge,
+  }, null, 2)}\n`)
+}
+
 const whoamiWithToken = token =>
   requestJson(`${bridgeUrl}/runtime/whoami`, {
     headers: {authorization: `Bearer ${token}`},
@@ -320,6 +372,10 @@ const commandFromArgs = async args => {
     case 'ping':
       return {type: 'ping'}
 
+    case 'runtime-summary':
+    case 'describe-runtime':
+      return {type: name}
+
     case 'sql': {
       const [mode, sql, paramsJson] = rest
       if (!mode || !sql) {
@@ -440,12 +496,14 @@ const main = async () => {
     return
   }
 
+  if (verb === 'ping') {
+    await printPing()
+    return
+  }
+
   if (verb === 'status') {
     await ensureBridgeRunning()
-    const bridgeSecret = await bridgeSecretForStatus()
-    const status = await requestJson(`${bridgeUrl}/health${bridgeSecret ? '?detail=1' : ''}`, {
-      headers: bridgeSecret ? {'x-agent-runtime-secret': bridgeSecret} : {},
-    })
+    const status = await readBridgeStatus()
     process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
     return
   }

@@ -3,7 +3,9 @@ import {
   __resetApiSurfaceCacheForTest,
   describeFacets,
   describeRuntime,
+  describeRuntimeSummary,
   getApiSurface,
+  pingRuntime,
 } from '../describeRuntime.ts'
 import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 // Pre-warm `@/extensions/api` so the dynamic import inside
@@ -114,6 +116,74 @@ describe('describeRuntime', () => {
     context: 'global',
     handler: () => {},
     ...(hasBinding ? {defaultBinding: {keys: 'mod+x'}} : {}),
+  })
+
+  it('produces a compact ping payload without diagnostics', async () => {
+    const runtime = await resolveFacetRuntime([])
+    const ping = pingRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: true,
+      actions: [makeAction('a1', true)],
+      renderers: {default: () => null},
+    })
+
+    expect(ping).toEqual({
+      ok: true,
+      activeWorkspaceId: 'ws-1',
+      currentUser: {id: 'u-1', name: 'Test'},
+      safeMode: true,
+    })
+    expect(ping).not.toHaveProperty('actions')
+    expect(ping).not.toHaveProperty('facets')
+    expect(ping).not.toHaveProperty('apiSurface')
+  })
+
+  it('produces a curated runtime summary with counts and expansion hints', async () => {
+    const a = defineFacet({id: 'summary.a'})
+    const b = defineFacet({id: 'summary.b'})
+    const runtime = await resolveFacetRuntime([
+      a.of('one'),
+      a.of('two'),
+      b.of('three'),
+    ])
+
+    const summary = await describeRuntimeSummary({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [
+        makeAction('a1', true),
+        makeAction('a2', false),
+      ],
+      renderers: {default: () => null, custom: () => null},
+    })
+
+    expect(summary.activeWorkspaceId).toBe('ws-1')
+    expect(summary.commands.baseline).toContain('yarn agent ping')
+    expect(summary.commands.diagnostics).toContain('yarn agent describe-runtime')
+    expect(summary.capabilities.actions.count).toBe(2)
+    expect(summary.capabilities.actions.byContext.global).toBe(2)
+    expect(summary.capabilities.actions.examples).toEqual([
+      {id: 'a1', description: 'Description for a1', context: 'global'},
+      {id: 'a2', description: 'Description for a2', context: 'global'},
+    ])
+    expect(summary.capabilities.renderers).toEqual({
+      count: 2,
+      ids: ['default', 'custom'],
+    })
+    expect(summary.capabilities.facets).toEqual({
+      count: 2,
+      contributionCount: 3,
+      largest: [
+        {id: 'summary.a', contributionCount: 2},
+        {id: 'summary.b', contributionCount: 1},
+      ],
+    })
+    expect(summary.capabilities.apiSurface.module).toBe('@/extensions/api')
+    expect(summary.capabilities.apiSurface.exportCount).toBeGreaterThan(0)
+    expect(summary.more.map(hint => hint.command)).toContain('yarn agent status')
+    expect(JSON.stringify(summary)).not.toContain('valueSummary')
   })
 
   it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface', async () => {

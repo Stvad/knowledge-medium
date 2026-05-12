@@ -8,7 +8,11 @@ import { keyAtEnd } from '@/data/orderKey.ts'
 import { blockRenderersFacet } from '@/extensions/core.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { describeRuntime } from './describeRuntime.ts'
+import {
+  describeRuntime,
+  describeRuntimeSummary,
+  pingRuntime,
+} from './describeRuntime.ts'
 import type {
   AgentRuntimeBridgeOptions,
   AgentRuntimeCommand,
@@ -336,6 +340,11 @@ export const executeCommand = async (
 ) => {
   switch (command.type) {
     case 'ping':
+      return pingRuntime(context)
+
+    case 'runtime-summary':
+      return describeRuntimeSummary(context)
+
     case 'describe-runtime':
       return describeRuntime(context)
 

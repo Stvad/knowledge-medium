@@ -171,6 +171,7 @@ const isReadOnlySql = sql =>
 const isReadOnlyCommand = command => {
   switch (command.type) {
     case 'ping':
+    case 'runtime-summary':
     case 'describe-runtime':
     case 'get-block':
     case 'get-subtree':
