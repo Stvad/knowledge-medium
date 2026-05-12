@@ -22,38 +22,133 @@ export interface RealtimeTranscriptionSession {
 const realtimeCallsUrl = 'https://api.openai.com/v1/realtime/calls'
 const finalTranscriptWaitMs = 8_000
 
-const transcriptionSessionConfig = () => ({
-  type: 'transcription',
-  audio: {
-    input: {
-      transcription: {
-        model: OPENAI_REALTIME_WHISPER_MODEL,
-        language: 'en',
-      },
-      turn_detection: null,
+type TurnDetectionMode = 'manual' | 'server_vad' | 'omit'
+
+interface RealtimeCallConfigResult {
+  answerSdp: string
+  commitOnStop: boolean
+}
+
+const serverVadConfig = {
+  type: 'server_vad',
+  threshold: 0.5,
+  prefix_padding_ms: 300,
+  silence_duration_ms: 500,
+} as const
+
+const transcriptionSessionConfig = (turnDetection: TurnDetectionMode) => {
+  const input = {
+    format: {
+      type: 'audio/pcm',
+      rate: 24000,
     },
-  },
-})
-
-const createRealtimeCall = async (apiKey: string, sdp: string): Promise<string> => {
-  const formData = new FormData()
-  formData.set('sdp', sdp)
-  formData.set('session', JSON.stringify(transcriptionSessionConfig()))
-
-  const response = await fetch(realtimeCallsUrl, {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
+    transcription: {
+      model: OPENAI_REALTIME_WHISPER_MODEL,
+      language: 'en',
     },
-    body: formData,
-  })
-
-  if (!response.ok) {
-    const text = await response.text()
-    throw new Error(text || `Realtime WebRTC offer failed with HTTP ${response.status}`)
   }
 
-  return response.text()
+  if (turnDetection === 'manual') {
+    return {
+      type: 'transcription',
+      audio: {
+        input: {
+          ...input,
+          turn_detection: null,
+        },
+      },
+    }
+  }
+
+  if (turnDetection === 'server_vad') {
+    return {
+      type: 'transcription',
+      audio: {
+        input: {
+          ...input,
+          turn_detection: serverVadConfig,
+        },
+      },
+    }
+  }
+
+  return {
+    type: 'transcription',
+    audio: {input},
+  }
+}
+
+const nestedValue = (value: unknown, key: string): string | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const field = (value as Record<string, unknown>)[key]
+  return typeof field === 'string' ? field : undefined
+}
+
+const isTurnDetectionUnsupportedError = (text: string): boolean => {
+  try {
+    const payload = JSON.parse(text) as unknown
+    if (typeof payload !== 'object' || payload === null) return false
+    const error = (payload as Record<string, unknown>).error
+    if (typeof error !== 'object' || error === null) return false
+    const message = nestedValue(error, 'message') ?? ''
+    const param = nestedValue(error, 'param')
+    return param === 'session.audio.input.turn_detection' &&
+      /turn detection is not supported/i.test(message)
+  } catch {
+    return false
+  }
+}
+
+const createRealtimeCall = async (
+  apiKey: string,
+  sdp: string,
+): Promise<RealtimeCallConfigResult> => {
+  const requestWithMode = async (mode: TurnDetectionMode): Promise<string> => {
+    const formData = new FormData()
+    formData.set('sdp', sdp)
+    formData.set('session', JSON.stringify(transcriptionSessionConfig(mode)))
+
+    const response = await fetch(realtimeCallsUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+      },
+      body: formData,
+    })
+
+    if (!response.ok) {
+      const text = await response.text()
+      const error = new Error(text || `Realtime WebRTC offer failed with HTTP ${response.status}`)
+      if (mode !== 'omit' && isTurnDetectionUnsupportedError(text)) {
+        error.name = 'TurnDetectionUnsupportedError'
+      }
+      throw error
+    }
+
+    return response.text()
+  }
+
+  try {
+    const answerSdp = await requestWithMode('manual')
+    return {answerSdp, commitOnStop: true}
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TurnDetectionUnsupportedError') {
+      try {
+        const answerSdp = await requestWithMode('server_vad')
+        return {answerSdp, commitOnStop: false}
+      } catch (serverVadError) {
+        if (
+          serverVadError instanceof Error &&
+          serverVadError.name === 'TurnDetectionUnsupportedError'
+        ) {
+          const answerSdp = await requestWithMode('omit')
+          return {answerSdp, commitOnStop: false}
+        }
+        throw serverVadError
+      }
+    }
+    throw error
+  }
 }
 
 const stopStream = (stream: MediaStream): void => {
@@ -152,6 +247,7 @@ export const startRealtimeTranscription = async (
   let resolveStop: (() => void) | null = null
   let stopTimeout: ReturnType<typeof setTimeout> | null = null
   let waitingForManualCommit = false
+  let commitOnStop = false
   let closePromise: Promise<void> | null = null
   let resolveClose: (() => void) | null = null
 
@@ -227,7 +323,7 @@ export const startRealtimeTranscription = async (
     lastServerError = nestedErrorMessage(payload) ?? lastServerError
     const type = stringField(payload, 'type')
 
-    if (waitingForManualCommit && type === 'error' && isEmptyManualCommitError(payload)) {
+    if (waitingForManualCommit && commitOnStop && type === 'error' && isEmptyManualCommitError(payload)) {
       void close(undefined, {expected: true})
       return
     }
@@ -251,6 +347,7 @@ export const startRealtimeTranscription = async (
 
     if (
       waitingForManualCommit &&
+      commitOnStop &&
       type === 'conversation.item.input_audio_transcription.completed'
     ) {
       void close(undefined, {expected: true})
@@ -282,11 +379,12 @@ export const startRealtimeTranscription = async (
     await peerConnection.setLocalDescription(offer)
     if (!offer.sdp) throw new Error('WebRTC offer did not include SDP')
 
-    const answerSdp = await createRealtimeCall(apiKey, offer.sdp)
+    const call = await createRealtimeCall(apiKey, offer.sdp)
+    commitOnStop = call.commitOnStop
 
     await peerConnection.setRemoteDescription({
       type: 'answer',
-      sdp: answerSdp,
+      sdp: call.answerSdp,
     })
   } catch (error) {
     void close(error instanceof Error ? error : new Error(String(error)))
@@ -297,6 +395,9 @@ export const startRealtimeTranscription = async (
     stop: ({discard = false} = {}) => {
       if (closed) return Promise.resolve()
       if (discard || dataChannel.readyState !== 'open') {
+        return close(undefined, {expected: true})
+      }
+      if (!commitOnStop) {
         return close(undefined, {expected: true})
       }
       if (stopPromise) return stopPromise

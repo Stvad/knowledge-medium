@@ -167,6 +167,85 @@ describe('voice transcription realtime API', () => {
     expect(onClose).toHaveBeenCalledWith(undefined)
   })
 
+  it('falls back to no turn detection when both manual and server VAD are unsupported', async () => {
+    const stopTrack = vi.fn()
+    const stream = {
+      getTracks: () => [{stop: stopTrack}],
+    }
+    const manualUnsupportedResponse = JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        param: 'session.audio.input.turn_detection',
+        message: 'Turn detection is not supported for this transcription model.',
+      },
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(manualUnsupportedResponse, {
+        status: 400,
+        headers: {'content-type': 'application/json'},
+      }))
+      .mockResolvedValueOnce(new Response(manualUnsupportedResponse, {
+        status: 400,
+        headers: {'content-type': 'application/json'},
+      }))
+      .mockResolvedValueOnce(new Response('answer-sdp', {
+        status: 200,
+        headers: {'content-type': 'application/sdp'},
+      }))
+    const onClose = vi.fn()
+
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn(async () => stream),
+      },
+    })
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection)
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
+    saveOpenAiApiKey('sk-test-local-only')
+
+    const session = await startRealtimeTranscription({onClose})
+    const peerConnection = FakePeerConnection.latest
+    const recorder = FakeMediaRecorder.latest
+    expect(peerConnection).not.toBeNull()
+    expect(recorder?.state).toBe('recording')
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    const [, initManual] = fetchMock.mock.calls[0] as [string, RequestInit]
+    const [, initServerVad] = fetchMock.mock.calls[1] as [string, RequestInit]
+    const [, initOmitted] = fetchMock.mock.calls[2] as [string, RequestInit]
+    const manualSession = JSON.parse(String((initManual.body as FormData).get('session'))) as {
+      type: string
+      audio: {input: Record<string, unknown>}
+    }
+    const serverVadSession = JSON.parse(String((initServerVad.body as FormData).get('session'))) as {
+      type: string
+      audio: {input: Record<string, unknown>}
+    }
+    const omittedSession = JSON.parse(String((initOmitted.body as FormData).get('session'))) as {
+      type: string
+      audio: {input: Record<string, unknown>}
+    }
+    expect(manualSession.audio.input.turn_detection).toBeNull()
+    expect(serverVadSession.audio.input.turn_detection).toMatchObject({
+      type: 'server_vad',
+      threshold: 0.5,
+      prefix_padding_ms: 300,
+      silence_duration_ms: 500,
+    })
+    expect('turn_detection' in omittedSession.audio.input).toBe(false)
+
+    if (peerConnection) peerConnection.dataChannel.readyState = 'open'
+    peerConnection?.dataChannel.dispatchEvent(new Event('open'))
+    await new Promise(resolve => {
+      setTimeout(resolve, 0)
+    })
+
+    await session.stop()
+    expect(peerConnection?.dataChannel.send).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledWith(undefined)
+  })
+
   it('reports peer connection diagnostics when the realtime session fails', async () => {
     const stopTrack = vi.fn()
     const stream = {
