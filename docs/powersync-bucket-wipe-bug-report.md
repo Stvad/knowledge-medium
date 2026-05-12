@@ -4,6 +4,12 @@
 **Service:** PowerSync Cloud, Stable channel, "Use latest version" enabled (so v1.20.5, current Stable as of 2026-05-11).
 **Backend:** Supabase Postgres replication; `client_auth: supabase: true`.
 **Rust sync client** (the only option from `@powersync/common@1.53.0`).
+**Our repo (open source):** https://github.com/Stvad/knowledge-medium — concrete file links below.
+
+## Related (read first)
+
+- **[powersync-js#674](https://github.com/powersync-ja/powersync-js/issues/674)** — open since 2025-07, same backend (Supabase), same checkpoint-apply failure class, but the reporter's recovery is "about a second or less" and "everything stays in sync." Our case is worse: every 1–3 echoes the local checksum mismatches the server's expected checksum and PowerSync issues `deleteBucket`, forcing a full bucket re-download.
+- **[powersync-service#584](https://github.com/powersync-ja/powersync-service/issues/584)** — closed, different trigger (client-side priority override on a server-default-priority stream). Documents the same `0x00000000 = 0x00000000 (op) + 0x00000000 (add)` symptom that we hit on ~40% of our wipes (2 of 5 samples below). The maintainer's response noted the server announces priority-0 then sends `partial_checkpoint_complete` before bucket data arrives. We use *only* default-priority auto_subscribe streams with no client overrides, so the specific trigger doesn't apply — but if the underlying "validate before data arrives" mechanism has another trigger path, this might be related.
 
 ## Summary
 
@@ -76,6 +82,24 @@ Sometimes the wipe takes ~5 s between the failed apply and the new checkpoint ar
 
 Our app code does **not** touch `ps_oplog` / `ps_buckets` / `ps_kv` / `powersync_*` virtual functions outside of standard upload triggers writing to `ps_crud`. `db.connect()` is called once per user (memoized + lock-serialized). No row-event handler writes back into synced tables on sync-applied rows.
 
+## Answering "are there async triggers?" (the question on #674)
+
+In response to https://github.com/powersync-ja/powersync-js/issues/674#issuecomment-… the maintainer asked whether triggers might cause asynchronous subsequent writes. For our setup:
+
+- **Server-side (Supabase)**: one trigger on `public.blocks` (`blocks_clamp_updated_at`) that clamps a future `updated_at` to `NOW()` — synchronous, pre-write, doesn't generate additional rows or async work. Standard Postgres trigger semantics.
+- **Client-side (SQLite)**: thirteen triggers, all defined in [`src/data/internals/clientSchema.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/data/internals/clientSchema.ts) — `row_events`, `block_aliases`, `block_types` maintenance triggers that write to *separate side tables* (never back into `blocks`); upload-routing triggers gated on `(SELECT source FROM tx_context WHERE id = 1) = 'user'` so they only fire on user txs, not on sync-applied writes. The audit comment in that file documents the gating with reasoning.
+- **No async fan-out**: the row_events table is consumed by a separate `rowEventsTail` worker that only invalidates React subscriptions / updates an in-memory cache — it does not write back into any synced table. See [`src/data/internals/rowEventsTail.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/data/internals/rowEventsTail.ts).
+
+## Code links (open source)
+
+- Sync rules: [`powersync/sync-config.yaml`](https://github.com/Stvad/knowledge-medium/blob/master/powersync/sync-config.yaml)
+- Sync rules generator (also useful for the column list): [`scripts/gen-sync-config.ts`](https://github.com/Stvad/knowledge-medium/blob/master/scripts/gen-sync-config.ts)
+- PowerSync connector (`fetchCredentials` + `uploadData`): [`src/services/powersync.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/services/powersync.ts)
+- DB / connector setup (PowerSyncDatabase construction, logger setup, VFS, flags): [`src/data/repoProvider.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/data/repoProvider.ts)
+- Schema + raw-table definitions (BLOCKS_RAW_TABLE.put with the no-op WHERE guard discussed below): [`src/data/blockSchema.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/data/blockSchema.ts)
+- All client-side SQLite triggers, including the upload-routing trigger gated on `tx_context.source = 'user'`: [`src/data/internals/clientSchema.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/data/internals/clientSchema.ts)
+- Tx engine (where `tx_context.source` is set and cleared inside the writeTransaction): [`src/data/internals/commitPipeline.ts`](https://github.com/Stvad/knowledge-medium/blob/master/src/data/internals/commitPipeline.ts)
+
 ## Our config (relevant fragments)
 
 `sync-config.yaml` (current shape):
@@ -104,10 +128,11 @@ Client-side: PowerSync's raw-tables are configured for `blocks`, `workspaces`, `
 
 ## Asks
 
-1. Anything obvious wrong with the config or usage pattern we should check first?
+1. Could this be the same underlying mechanism as #674 with a different surface (full re-sync vs. one-off warning that recovers in a second)?
 2. Is there a way (debug log, server endpoint) to surface the *server-side* expected-bucket op list at the moment of mismatch so we can diff against local `ps_oplog`?
-3. Are there known cases where the Rust client's `add` checksum can be zero while the server's bucket manifest declares a non-zero add component?
-4. Happy to provide our instance ID, sync-config, or a live repro account if useful.
+3. Are there known cases where the Rust client's `add` checksum can be zero while the server's bucket manifest declares a non-zero add component? (#584 documents one such case but the trigger doesn't apply to us.)
+4. Anything obvious in our open-source code (linked above) that's wrong?
+5. Happy to provide our PowerSync instance ID, sync-config, or a live repro account if useful — let us know how to share privately.
 
 ## Logs / artifacts available
 
