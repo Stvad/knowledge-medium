@@ -58,6 +58,15 @@ npx powersync@latest deploy
 yarn dev
 ```
 
+### Voice Transcription
+
+The voice transcription plugin uses OpenAI Realtime transcription with
+`gpt-realtime-whisper`. In local Vite dev, set `OPENAI_API_KEY` in the shell
+that starts `yarn dev`; the dev server exposes
+`/api/openai/realtime-client-secret` to mint short-lived browser client
+secrets. In production, provide the same endpoint server-side or set
+`VITE_OPENAI_REALTIME_TOKEN_URL` to a deployment-specific token endpoint.
+
 ### Notes
 
 - The fastest dev path is to use the Supabase direct connection URI as-is in `PS_DATABASE_URI`.

@@ -1,10 +1,102 @@
 import {defineConfig, ViteDevServer} from 'vite'
+import type {IncomingMessage, ServerResponse} from 'node:http'
 import path from "path"
 import react, {reactCompilerPreset} from '@vitejs/plugin-react'
 import babel from '@rolldown/plugin-babel'
 import externalize from "vite-plugin-externalize-dependencies";
 import wasm from "vite-plugin-wasm"
 // import noBundlePlugin from 'vite-plugin-no-bundle';
+
+const openaiRealtimeTokenPath = '/api/openai/realtime-client-secret'
+const openaiRealtimeWhisperModel = 'gpt-realtime-whisper'
+
+const sendJson = (
+    res: ServerResponse,
+    status: number,
+    body: Record<string, unknown>,
+) => {
+    res.writeHead(status, {'content-type': 'application/json'})
+    res.end(JSON.stringify(body))
+}
+
+const readJsonBody = (req: IncomingMessage): Promise<Record<string, unknown>> =>
+    new Promise((resolve, reject) => {
+        const chunks: Buffer[] = []
+        req.on('data', chunk => chunks.push(Buffer.from(chunk)))
+        req.on('end', () => {
+            if (chunks.length === 0) {
+                resolve({})
+                return
+            }
+            try {
+                const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+                resolve(typeof parsed === 'object' && parsed !== null ? parsed : {})
+            } catch (error) {
+                reject(error)
+            }
+        })
+        req.on('error', reject)
+    })
+
+const openaiRealtimeClientSecretDevServer = () => ({
+    name: 'openai-realtime-client-secret-dev-server',
+    configureServer(server: ViteDevServer) {
+        server.middlewares.use(openaiRealtimeTokenPath, async (req, res, next) => {
+            if (req.method === 'OPTIONS') {
+                res.writeHead(204, {
+                    'access-control-allow-methods': 'POST,OPTIONS',
+                    'access-control-allow-headers': 'content-type',
+                })
+                res.end()
+                return
+            }
+            if (req.method !== 'POST') {
+                next()
+                return
+            }
+
+            const apiKey = process.env.OPENAI_API_KEY?.trim()
+            if (!apiKey) {
+                sendJson(res, 501, {
+                    error: 'OPENAI_API_KEY is not configured for the Vite dev server',
+                })
+                return
+            }
+
+            try {
+                const body = await readJsonBody(req)
+                const model = typeof body.model === 'string' && body.model.trim()
+                    ? body.model.trim()
+                    : openaiRealtimeWhisperModel
+                const upstream = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+                    method: 'POST',
+                    headers: {
+                        authorization: `Bearer ${apiKey}`,
+                        'content-type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        session: {
+                            type: 'transcription',
+                            audio: {
+                                input: {
+                                    transcription: {model},
+                                    turn_detection: {type: 'server_vad'},
+                                },
+                            },
+                        },
+                    }),
+                })
+                const payload = await upstream.text()
+                res.writeHead(upstream.status, {'content-type': 'application/json'})
+                res.end(payload)
+            } catch (error) {
+                sendJson(res, 500, {
+                    error: error instanceof Error ? error.message : String(error),
+                })
+            }
+        })
+    },
+})
 
 // https://vite.dev/config/
 export default defineConfig(({command}) => {
@@ -17,6 +109,7 @@ export default defineConfig(({command}) => {
             react(),
             babel({presets: [reactCompilerPreset()]}),
             wasm(),
+            isDev && openaiRealtimeClientSecretDevServer(),
             externalize({
                 externals: [
                     'react', // Externalize "react", and all of its subexports (react/*), such as react/jsx-runtime

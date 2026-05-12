@@ -29,6 +29,7 @@ import { roamImportPlugin } from '@/plugins/roam-import'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
+import { voiceTranscriptionPlugin } from '@/plugins/voice-transcription'
 import type { AppExtension } from '@/extensions/facet.ts'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -72,6 +73,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   todoPlugin,
   srsReschedulingPlugin,
   syncStatusPlugin,
+  voiceTranscriptionPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
   roamImportPlugin({repo}),
