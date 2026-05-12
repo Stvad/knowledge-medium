@@ -4,7 +4,6 @@ import { ChangeScope } from '@/data/api'
 import { useRepo } from '@/context/repo.tsx'
 import { useRootUIStateBlock } from '@/data/globalState.ts'
 import {
-  focusedBlockIdProp,
   setFocusedBlockId,
   topLevelBlockIdProp,
 } from '@/data/properties.ts'
@@ -65,13 +64,6 @@ const initialState: RecorderState = {
 const titleForRecording = (startedAt: number): string =>
   `Voice transcript ${new Date(startedAt).toLocaleString()}`
 
-const blockIdFromActiveElement = (): string | null => {
-  if (typeof document === 'undefined') return null
-  const element = document.activeElement
-  if (!(element instanceof HTMLElement)) return null
-  return element.closest<HTMLElement>('[data-block-id]')?.dataset.blockId ?? null
-}
-
 export function VoiceTranscriptionRecorder() {
   const repo = useRepo()
   const uiStateBlock = useRootUIStateBlock()
@@ -89,30 +81,6 @@ export function VoiceTranscriptionRecorder() {
   const [storedKeyAvailable, setStoredKeyAvailable] = useState(() => hasStoredOpenAiApiKey())
 
   const resolveRecordingTarget = useCallback(() => {
-    const activeElementBlockId = blockIdFromActiveElement()
-    if (activeElementBlockId) {
-      return {
-        parentId: activeElementBlockId,
-        uiStateBlock: activePanelBlock ?? uiStateBlock,
-      }
-    }
-
-    const panelFocusedBlockId = activePanelBlock?.peekProperty(focusedBlockIdProp)
-    if (panelFocusedBlockId && activePanelBlock) {
-      return {
-        parentId: panelFocusedBlockId,
-        uiStateBlock: activePanelBlock,
-      }
-    }
-
-    const rootFocusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
-    if (rootFocusedBlockId) {
-      return {
-        parentId: rootFocusedBlockId,
-        uiStateBlock,
-      }
-    }
-
     if (activeTopLevelBlockId) {
       return {
         parentId: activeTopLevelBlockId,
@@ -247,6 +215,7 @@ export function VoiceTranscriptionRecorder() {
         parentId: recordingTarget.parentId,
         content: titleForRecording(startedAt),
         properties: createTranscriptBlockProperties('recording', startedAt),
+        position: {kind: 'last'},
       })
       transcriptBlockIdRef.current = transcriptBlockId
       setFocusedBlockId(recordingTarget.uiStateBlock, transcriptBlockId)
@@ -295,6 +264,14 @@ export function VoiceTranscriptionRecorder() {
         onError: error => {
           const currentTranscriptBlockId = transcriptBlockIdRef.current
           void failRecording(currentTranscriptBlockId, error)
+        },
+        onClose: () => {
+          const currentTranscriptBlockId = transcriptBlockIdRef.current
+          if (!sessionRef.current || !currentTranscriptBlockId) return
+          void failRecording(
+            currentTranscriptBlockId,
+            new Error('Realtime transcription connection closed'),
+          )
         },
       })
 

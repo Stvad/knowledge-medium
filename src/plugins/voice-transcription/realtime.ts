@@ -22,20 +22,6 @@ export interface RealtimeTranscriptionSession {
 
 const realtimeCallsUrl = 'https://api.openai.com/v1/realtime/calls'
 
-const transcriptionSessionUpdateEvent = () => ({
-  type: 'session.update',
-  session: {
-    type: 'transcription',
-    audio: {
-      input: {
-        transcription: {
-          model: OPENAI_REALTIME_WHISPER_MODEL,
-        },
-      },
-    },
-  },
-})
-
 const transcriptionClientSecretRequest = () => ({
   session: {
     type: 'transcription',
@@ -130,7 +116,6 @@ export const startRealtimeTranscription = async (
   }
 
   dataChannel.addEventListener('open', () => {
-    dataChannel.send(JSON.stringify(transcriptionSessionUpdateEvent()))
     callbacks.onOpen?.()
   })
 
@@ -160,12 +145,10 @@ export const startRealtimeTranscription = async (
     }
   })
 
-  dataChannel.addEventListener('close', close)
   peerConnection.addEventListener('connectionstatechange', () => {
     if (
       peerConnection.connectionState === 'failed' ||
-      peerConnection.connectionState === 'closed' ||
-      peerConnection.connectionState === 'disconnected'
+      peerConnection.connectionState === 'closed'
     ) {
       close()
     }
