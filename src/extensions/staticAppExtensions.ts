@@ -7,6 +7,7 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.ts'
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
+import { dailyNotesPlugin } from '@/plugins/daily-notes'
 import { quickFindPlugin } from '@/plugins/quick-find'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
@@ -22,6 +23,7 @@ import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
+import { roamImportPlugin } from '@/plugins/roam-import'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
@@ -37,6 +39,13 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   defaultRenderersExtension,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),
+  // dailyNotesPlugin contributes both the workspace-landing resolver
+  // (used by App.tsx pre-mount) and the open_today / prev / next
+  // shortcut actions. Order vs other landing-contributing plugins:
+  // higher-precedence resolvers should be appended LATER so the
+  // facet's "last wins" arrangement does the right thing without an
+  // explicit precedence number.
+  dailyNotesPlugin({repo}),
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
@@ -61,4 +70,5 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   syncStatusPlugin,
   updateIndicatorPlugin,
   agentRuntimePlugin,
+  roamImportPlugin({repo}),
 ]

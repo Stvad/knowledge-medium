@@ -1,4 +1,4 @@
-import { dailyNoteBlockId } from '@/data/dailyNotes'
+import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import {
   srsArchivedProp,
   srsFactorProp,

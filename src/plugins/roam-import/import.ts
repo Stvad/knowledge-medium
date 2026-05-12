@@ -22,7 +22,7 @@ import {
 } from '@/data/api'
 import { addBlockTypeToProperties, aliasesProp, hasBlockType, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
-import { dailyNoteBlockId, getOrCreateDailyNote } from '@/data/dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote } from '@/plugins/daily-notes'
 import {
   roamTodoStateProp,
   statusProp,
@@ -40,9 +40,9 @@ import {
   srsReviewCountProp,
   srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
-import { computeAliasSeatId } from '../../data/targets'
+import { computeAliasSeatId } from '@/data/targets'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
-import type { Repo } from '../../data/repo'
+import type { Repo } from '@/data/repo'
 import {
   parseRoamImportReferences,
   planImport,

@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Core → Plugin Extraction Audit</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafaf9;
+    --fg: #111;
+    --muted: #555;
+    --card: #fff;
+    --line: #e5e5e2;
+    --accent: #2b6cb0;
+    --high: #1b7a3a;
+    --med:  #b67500;
+    --low:  #888;
+    --skip: #a33;
+    --code-bg: #f3f1ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161614;
+      --fg: #ececec;
+      --muted: #aaa;
+      --card: #1f1f1d;
+      --line: #2e2e2b;
+      --accent: #6cb6ff;
+      --high: #6fcf97;
+      --med:  #f0c34a;
+      --low:  #999;
+      --skip: #ff8a8a;
+      --code-bg: #232320;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 32px 0 12px; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  p, ul { margin: 0 0 12px; }
+  ul { padding-left: 22px; }
+  code, .path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.88em;
+    background: var(--code-bg);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+  .lede { color: var(--muted); margin: 0 0 28px; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    margin: 16px 0 24px;
+    font-size: 13px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    display: inline-block;
+  }
+  .dot.high { background: var(--high); }
+  .dot.med  { background: var(--med); }
+  .dot.low  { background: var(--low); }
+  .dot.skip { background: var(--skip); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin: 0 0 14px;
+  }
+  .card header {
+    display: flex; align-items: baseline; gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .card header h3 { flex: 1 1 auto; }
+  .tag {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .tag.high { color: var(--high); border-color: var(--high); }
+  .tag.med  { color: var(--med);  border-color: var(--med); }
+  .tag.low  { color: var(--low);  border-color: var(--low); }
+  .tag.skip { color: var(--skip); border-color: var(--skip); }
+  dl.meta {
+    margin: 6px 0 0;
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 4px 12px;
+    font-size: 14px;
+  }
+  dl.meta dt { color: var(--muted); }
+  dl.meta dd { margin: 0; }
+  .why { margin-top: 8px; }
+  .why strong { color: var(--accent); }
+  .footnote { color: var(--muted); font-size: 13px; }
+  .skip-list { color: var(--muted); }
+  .skip-list code { color: var(--fg); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Core → Plugin Extraction Audit</h1>
+<p class="lede">
+  Candidates currently sitting in <code>src/extensions/</code>,
+  <code>src/markdown/</code>, <code>src/shortcuts/</code>, and
+  <code>src/components/</code> that look pluggable. Sorted by
+  expected upside vs. effort.
+</p>
+
+<div class="legend">
+  <span><span class="dot high"></span>High confidence — clean seam, real upside</span>
+  <span><span class="dot med"></span>Medium — needs a small refactor</span>
+  <span><span class="dot low"></span>Possible — but low value alone</span>
+  <span><span class="dot skip"></span>Don't extract — too foundational</span>
+</div>
+
+<h2>High confidence</h2>
+
+<section class="card">
+  <header>
+    <h3>1. Wikilinks &amp; block-refs markdown</h3>
+    <span class="tag high">High</span>
+    <span class="tag">Effort: S</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><code>src/markdown/wikilinks/</code>, <code>src/markdown/blockrefs/</code></dd>
+    <dt>Does</dt>
+    <dd>Parses <code>[[page]]</code> wikilinks and <code>^(block-id)</code> embeds; renders the React components.</dd>
+    <dt>Why</dt>
+    <dd>Already half-extracted — the only place these extensions get registered is
+      <span class="path">src/plugins/backlinks/index.ts</span> (imports
+      <code>wikilinkMarkdownExtension</code> / <code>blockrefMarkdownExtension</code>).
+      Core doesn't depend on them; backlinks does. They belong with their consumer.</dd>
+    <dt>Coupling</dt>
+    <dd>One leak: <span class="path">RefPropertyEditor.tsx</span> imports
+      <code>BlockEmbed</code> &amp; <code>BlockRefAncestorsProvider</code>. Either move
+      <code>RefPropertyEditor</code> alongside, or expose a tiny embed primitive from core
+      and keep the cycle-guard provider in the plugin.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>2. Breadcrumb renderer &amp; header</h3>
+    <span class="tag high">High</span>
+    <span class="tag">Effort: S</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><code>src/components/Breadcrumbs.tsx</code>,
+      <code>src/components/BreadcrumbList.tsx</code>,
+      <code>src/components/renderer/BreadcrumbRenderer.tsx</code>,
+      registered in <span class="path">src/extensions/defaultRenderers.tsx:23,35-38</span></dd>
+    <dt>Does</dt>
+    <dd>Renders parent hierarchy above each top-level block; registers a
+      <code>'breadcrumb'</code> renderer id.</dd>
+    <dt>Why</dt>
+    <dd>Pure navigation chrome. Already self-gates on <code>isTopLevel</code>.
+      Contributes via <code>blockHeaderFacet</code> — the exact public seam plugins use.
+      Nothing in core dispatches to the <code>'breadcrumb'</code> renderer id directly.</dd>
+    <dt>Coupling</dt>
+    <dd>Easy. Depends on <code>useParents</code> + nav utils, both stable.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>3. Roam Research importer</h3>
+    <span class="tag high">High</span>
+    <span class="tag">Effort: S</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><span class="path">src/shortcuts/defaultShortcuts.ts:64-68, 401-460</span> +
+      <code>src/utils/roamImport/</code></dd>
+    <dt>Does</dt>
+    <dd>Imports Roam JSON exports; exposes
+      <code>window.__omniliner.roamImport</code> for agent scripts; renders a
+      progress banner.</dd>
+    <dt>Why</dt>
+    <dd>Niche, one-off feature. Lives uncomfortably inside the
+      &quot;default shortcuts&quot; module. Its presence in core forces every user to
+      ship the importer code &amp; progress UI. Clean action-only seam already exists
+      (<code>actionsFacet</code>).</dd>
+    <dt>Coupling</dt>
+    <dd>Low. Move <code>src/utils/roamImport/</code> into the plugin folder; the only
+      back-reference is the agent runtime window hook — make that opt-in via the plugin.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>4. SQLite export / import actions</h3>
+    <span class="tag high">High</span>
+    <span class="tag">Effort: S</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><span class="path">src/shortcuts/defaultShortcuts.ts:471-519</span> +
+      <code>src/utils/exportSqliteDb.ts</code> (and an import counterpart)</dd>
+    <dt>Does</dt>
+    <dd>Dumps / restores the raw PowerSync SQLite blob — power-user backup/restore.</dd>
+    <dt>Why</dt>
+    <dd>Same shape as Roam import: two actions + a utility module. Doesn't belong in
+      a file called &quot;default shortcuts&quot;. Risky button you'd rather isolate.</dd>
+    <dt>Coupling</dt>
+    <dd>Trivial. Pure action contributions.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>5. Example-extension seeder</h3>
+    <span class="tag high">High</span>
+    <span class="tag">Effort: XS</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><code>src/extensions/exampleExtensions.ts</code>, action wired in
+      <span class="path">src/shortcuts/defaultShortcuts.ts:31</span></dd>
+    <dt>Does</dt>
+    <dd>One action: inserts a set of demo renderer/extension blocks under the
+      selected block — tutorial / authoring playground content.</dd>
+    <dt>Why</dt>
+    <dd>Pure onboarding. Self-contained file. Trivially becomes an
+      <code>example-extensions</code> plugin.</dd>
+    <dt>Coupling</dt>
+    <dd>None. Self-contained.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>6. GFM markdown extras</h3>
+    <span class="tag high">High</span>
+    <span class="tag">Effort: S</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><code>src/markdown/defaultMarkdownExtension.ts</code>, registered in
+      <span class="path">src/extensions/defaultRenderers.tsx:13,29</span></dd>
+    <dt>Does</dt>
+    <dd>Adds remark-gfm (tables, strikethrough, task lists) and the external-link
+      <code>target/rel</code> anchor override.</dd>
+    <dt>Why</dt>
+    <dd>This is exactly what <code>markdownExtensionsFacet</code> was designed for.
+      Other plugins (wikilinks, blockrefs) already use it. GFM is a flavor choice,
+      not a kernel requirement — splitting it makes the markdown layer
+      symmetric: <em>everyone</em> contributes through the facet.</dd>
+    <dt>Coupling</dt>
+    <dd>Easy. The only thing core actually needs is the base markdown renderer;
+      GFM and the anchor override travel together.</dd>
+  </dl>
+</section>
+
+<h2>Medium confidence</h2>
+
+<section class="card">
+  <header>
+    <h3>7. Daily notes</h3>
+    <span class="tag med">Medium</span>
+    <span class="tag">Effort: M</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><code>src/data/dailyNotes.ts</code>, wired in
+      <span class="path">src/shortcuts/defaultShortcuts.ts:63, 106-126</span></dd>
+    <dt>Does</dt>
+    <dd><code>getOrCreateDailyNote</code>, ISO-date alias parsing, &quot;jump to today / next /
+      previous&quot; actions.</dd>
+    <dt>Why</dt>
+    <dd>Optional productivity feature (Roam/Obsidian-style daily pages). Cleanly
+      bounded conceptually but currently leaks: <code>dailyNoteIsoFromBlock</code> in
+      defaultShortcuts treats daily-note semantics as a built-in.</dd>
+    <dt>Coupling</dt>
+    <dd>Medium. Needs a small refactor — extract the helper, expose a clean
+      action API, then make the plugin own the keybindings.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>8. Browser back/forward actions</h3>
+    <span class="tag med">Medium</span>
+    <span class="tag">Effort: XS</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><span class="path">src/shortcuts/defaultShortcuts.ts:521-542</span></dd>
+    <dt>Does</dt>
+    <dd>Cmd+[ / Cmd+] mapped to history nav.</dd>
+    <dt>Why</dt>
+    <dd>Trivial UX polish — but it is the kind of opinion (binding choice) that
+      a plugin should own, not core. Bundle with the daily-notes / nav plugin if
+      you don't want a one-action plugin.</dd>
+    <dt>Coupling</dt>
+    <dd>None.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>9. <code>topLevel</code> renderer</h3>
+    <span class="tag med">Medium</span>
+    <span class="tag">Effort: M</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><span class="path">src/components/renderer/TopLevelRenderer.tsx</span>,
+      registered in <span class="path">src/extensions/defaultRenderers.tsx:19</span></dd>
+    <dt>Does</dt>
+    <dd>Wraps the focused block as a &quot;page&quot;.</dd>
+    <dt>Why</dt>
+    <dd>Less obviously optional than the breadcrumb renderer — most layouts will
+      need <em>some</em> top-level treatment. But the specific implementation
+      (typography, spacing, header slot wiring) is an opinion. Could be split as
+      a &quot;default page chrome&quot; plugin, leaving the renderer id as a contract.</dd>
+    <dt>Coupling</dt>
+    <dd>Medium. The panel renderer dispatches into it; would need a fallback or
+      a documented &quot;you must contribute a topLevel renderer&quot; invariant.</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <header>
+    <h3>10. Dev-only window hooks (<code>__omniliner.metrics</code>)</h3>
+    <span class="tag low">Possible</span>
+    <span class="tag">Effort: XS</span>
+  </header>
+  <dl class="meta">
+    <dt>Now lives at</dt>
+    <dd><span class="path">src/shortcuts/defaultShortcuts.ts:~133-137</span></dd>
+    <dt>Does</dt>
+    <dd>Exposes diagnostic surfaces on <code>window</code> for the agent bridge.</dd>
+    <dt>Why</dt>
+    <dd>Not user-facing. A <code>dev-console</code> plugin keeps prod bundles clean.
+      Low priority — it's tiny.</dd>
+    <dt>Coupling</dt>
+    <dd>None.</dd>
+  </dl>
+</section>
+
+<h2>Don't extract</h2>
+<p class="skip-list">These look feature-y but are foundational once you trace the deps:</p>
+<ul class="skip-list">
+  <li><code>kernelPropertyUiExtension</code> &amp; <code>kernelValuePresetsExtension</code> — the
+    7 built-in property type editors. <code>ref</code>/<code>refList</code> are used by
+    backlinks, todo, and SRS plugins; splitting buys nothing.</li>
+  <li><code>propertyPanelSections.ts</code> — infrastructure for the property panel,
+    not a feature.</li>
+  <li>Renderers <code>default</code>, <code>extension</code>, <code>propertySchema</code>,
+    <code>panel</code>, <code>layout</code>, <code>missingData</code> — dispatched by core code
+    paths (panel layout, missing-data fallback, extension authoring).</li>
+  <li>The base markdown renderer itself, <code>BlockEditor</code>,
+    <code>BlockComponent</code>, the facet runtime, repo &amp; PowerSync wiring.</li>
+</ul>
+
+<h2>Suggested order of attack</h2>
+<ol>
+  <li><strong>Wikilinks/blockrefs</strong> — clearest signal, already half-done.
+    Resolves a layering inversion (core exports what only a plugin consumes).</li>
+  <li><strong>Roam import</strong> + <strong>SQLite export/import</strong> +
+    <strong>example-extensions seeder</strong> — same shape (action + util), can
+    land as one PR each or batched.</li>
+  <li><strong>GFM markdown</strong> — small, symmetric, makes the markdown story
+    cleaner.</li>
+  <li><strong>Breadcrumb renderer</strong> — proves the renderer-as-plugin path
+    end to end, paves the way for the trickier <code>topLevel</code> split.</li>
+  <li><strong>Daily notes</strong> — needs a small API surface first; do it after
+    the action-only extractions to validate the pattern.</li>
+</ol>
+
+<p class="footnote">
+  Audit covers <code>src/extensions/</code>, <code>src/markdown/</code>,
+  <code>src/shortcuts/defaultShortcuts.ts</code>, <code>src/components/</code> renderers,
+  and <code>staticAppExtensions.ts</code> / <code>staticDataExtensions.ts</code>.
+  Line numbers are approximate against
+  <code>claude/audit-core-plugins-PHDk3</code>.
+</p>
+
+</main>
+</body>
+</html>

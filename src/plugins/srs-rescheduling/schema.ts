@@ -1,5 +1,5 @@
 import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
-import { DAILY_NOTE_TYPE } from '@/data/blockTypes'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes'
 
 export const SRS_SM25_TYPE = 'srs-sm2.5'
 

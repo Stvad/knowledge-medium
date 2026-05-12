@@ -3,8 +3,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
-import { dailyNoteBlockId } from '@/data/dailyNotes'
+import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -42,6 +43,7 @@ beforeEach(async () => {
   })
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    dailyNotesDataExtension,
     srsReschedulingDataExtension,
   ]))
 })

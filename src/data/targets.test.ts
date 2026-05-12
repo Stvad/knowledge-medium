@@ -7,9 +7,6 @@
  * Coverage:
  *   - computeAliasSeatId: stable per (workspaceId, alias); workspace-
  *     scoped (same alias in different workspaces → different ids)
- *   - computeDailyNoteId: stable per (workspaceId, iso); namespace
- *     matches dailyNotes.DAILY_NOTE_NS (server migration parity)
- *   - isDateAlias: matches strict YYYY-MM-DD shape, rejects close-but-no
  *   - createOrRestoreTargetBlock: insert path → inserted=true,
  *     onInsertedOrRestored fires
  *   - createOrRestoreTargetBlock: live-row hit → inserted=false,
@@ -18,9 +15,11 @@
  *     applied via tx.restore, onInsertedOrRestored fires, inserted=true
  *   - ensureAliasTarget: id derives from ALIAS_NS, sets aliases=[alias]
  *     on insert, idempotent across calls in same workspace
- *   - ensureDailyNoteTarget: id matches DAILY_NOTE_NS computation,
- *     sets aliases=[date]
  *   - DeterministicIdCrossWorkspaceError surfaces (not swallowed)
+ *
+ * Daily-note-specific coverage (computeDailyNoteId, isDateAlias,
+ * ensureDailyNoteTarget) lives in `src/plugins/daily-notes/test/`
+ * since the daily-notes plugin owns those helpers now.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -30,19 +29,15 @@ import {
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import { typesProp } from '@/data/properties'
-import { DAILY_NOTE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from './repo'
 import {
   computeAliasSeatId,
-  computeDailyNoteId,
   createOrRestoreTargetBlock,
   ensureAliasTarget,
-  ensureDailyNoteTarget,
-  isDateAlias,
 } from '@/data/targets'
-import { dailyNoteBlockId, DAILY_NOTE_NS } from '@/data/dailyNotes'
 
 const WS = 'ws-1'
 
@@ -84,43 +79,6 @@ describe('computeAliasSeatId', () => {
   it('differs across aliases in the same workspace', () => {
     expect(computeAliasSeatId('foo', WS))
       .not.toBe(computeAliasSeatId('bar', WS))
-  })
-})
-
-describe('computeDailyNoteId', () => {
-  it('is stable for a given (workspaceId, iso)', () => {
-    expect(computeDailyNoteId('2026-04-28', WS))
-      .toBe(computeDailyNoteId('2026-04-28', WS))
-  })
-
-  it('matches dailyNotes.dailyNoteBlockId — same namespace + input shape', () => {
-    // The two helpers must agree so parseReferences's daily-note
-    // routing produces the same row as `getOrCreateDailyNote`.
-    expect(computeDailyNoteId('2026-04-28', WS))
-      .toBe(dailyNoteBlockId(WS, '2026-04-28'))
-  })
-
-  it('uses the documented daily-note namespace constant', () => {
-    // Pinned reference: the supabase migration computes the same value
-    // server-side via uuid_generate_v5. Drift on either side
-    // reintroduces the duplicate-page bug.
-    expect(DAILY_NOTE_NS).toBe('53421e08-2f31-42f8-b73a-43830bb718f1')
-  })
-})
-
-describe('isDateAlias', () => {
-  it('matches strict YYYY-MM-DD', () => {
-    expect(isDateAlias('2026-04-28')).toBe(true)
-    expect(isDateAlias('1999-12-31')).toBe(true)
-  })
-
-  it('rejects close-but-no shapes', () => {
-    expect(isDateAlias('2026-4-28')).toBe(false)   // missing zero pad
-    expect(isDateAlias('26-04-28')).toBe(false)    // 2-digit year
-    expect(isDateAlias('2026/04/28')).toBe(false)  // wrong separator
-    expect(isDateAlias('2026-04-28T00:00:00Z')).toBe(false)  // trailing
-    expect(isDateAlias('hello')).toBe(false)
-    expect(isDateAlias('')).toBe(false)
   })
 })
 
@@ -283,28 +241,3 @@ describe('ensureAliasTarget', () => {
   })
 })
 
-describe('ensureDailyNoteTarget', () => {
-  it('inserts a daily-note row with the daily-note deterministic id + iso alias', async () => {
-    const ISO = '2026-04-28'
-    const typeSnapshot = env.repo.snapshotTypeRegistries()
-    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, env.repo, ISO, WS, typeSnapshot),
-      {scope: ChangeScope.BlockDefault})
-
-    expect(result.id).toBe(computeDailyNoteId(ISO, WS))
-    expect(result.inserted).toBe(true)
-
-    const row = await env.h.db.get<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?', [result.id])
-    const props = JSON.parse(row.properties_json)
-    expect(props[aliasesProp.name]).toEqual([ISO])
-    expect(props[typesProp.name]).toEqual([PAGE_TYPE, DAILY_NOTE_TYPE])
-  })
-
-  it('shares the namespace with dailyNotes.dailyNoteBlockId', async () => {
-    const ISO = '2026-04-28'
-    const typeSnapshot = env.repo.snapshotTypeRegistries()
-    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, env.repo, ISO, WS, typeSnapshot),
-      {scope: ChangeScope.BlockDefault})
-    expect(result.id).toBe(dailyNoteBlockId(WS, ISO))
-  })
-})

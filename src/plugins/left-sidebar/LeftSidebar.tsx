@@ -16,7 +16,7 @@ import { useRepo } from '@/context/repo.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { FallbackComponent } from '@/components/util/error.tsx'
 import { cn } from '@/lib/utils.ts'
-import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
+import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { toggleQuickFindEvent } from '@/plugins/quick-find/events.ts'
 import {

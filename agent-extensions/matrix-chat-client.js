@@ -8,9 +8,9 @@ import {
   dailyNoteBlockId,
   getOrCreateDailyNote,
   todayIso,
-} from '@/data/dailyNotes.js'
+} from '@/plugins/daily-notes/index.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
-import { computePromotedFromChildren } from '@/utils/roamImport/plan.js'
+import { computePromotedFromChildren } from '@/plugins/roam-import/plan.js'
 import * as matrixSdk from 'https://esm.sh/matrix-js-sdk@38.0.0?bundle'
 
 const VERSION = 1

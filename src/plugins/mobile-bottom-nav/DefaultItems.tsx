@@ -7,7 +7,7 @@ import {
   Search,
 } from 'lucide-react'
 import { useRepo } from '@/context/repo.tsx'
-import { getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
+import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { toggleQuickFindEvent } from '@/plugins/quick-find/events.ts'
 import { toggleCommandPaletteEvent } from '@/plugins/command-palette/events.ts'

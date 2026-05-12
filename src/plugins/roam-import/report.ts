@@ -1,5 +1,5 @@
 import { ChangeScope, type Tx } from '@/data/api'
-import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes'
+import { dailyNoteBlockId, getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
 import { keyAtEnd, keysBetween } from '@/data/orderKey'
 import type { Repo } from '@/data/repo'
 import type { RoamMemoImportPlanSummary } from './roamMemo'

@@ -26,7 +26,6 @@ import {
   editorSelection,
   setIsEditing,
   setFocusedBlockId,
-  aliasesProp,
 } from '@/data/properties.ts'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.ts'
 import { selectionStateProp } from '@/data/properties'
@@ -52,20 +51,14 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { parseAppHash } from '@/utils/routing.ts'
 import {
   navigate,
   navigateFromGlobalCommand,
-  resolveGlobalCommandTopLevelBlockId,
 } from '@/utils/navigation.ts'
 import { navigateInPanel } from '@/utils/panelHistory.ts'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
-import { addDaysIso, getOrCreateDailyNote, todayIso } from '@/data/dailyNotes.ts'
-import { importRoam } from '@/utils/roamImport/import.ts'
-import { ensureRoamImportWindowHook } from '@/utils/roamImport/runtime.ts'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
-import { showProgressBanner } from '@/utils/roamImport/progressBanner.ts'
-import type { RoamExport } from '@/utils/roamImport/types.ts'
+import { showProgressBanner } from '@/utils/progressBanner.ts'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
 import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
 
@@ -101,37 +94,8 @@ const splitCodeMirrorBlockAtCursor = async (
   return block
 }
 
-const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
-
-const dailyNoteIsoFromBlock = (block: Block): string | null => {
-  const aliases = block.peekProperty(aliasesProp) ?? []
-  return aliases.find(alias => ISO_ALIAS_RE.test(alias)) ?? null
-}
-
-const findContainingDailyNoteIso = async (
-  repo: Repo,
-  blockId: string,
-  workspaceId: string,
-): Promise<string | null> => {
-  const data = await repo.load(blockId, {ancestors: true})
-  if (!data || data.workspaceId !== workspaceId) return null
-
-  let block: Block | null = repo.block(blockId)
-  while (block) {
-    const iso = dailyNoteIsoFromBlock(block)
-    if (iso) return iso
-    block = block.parent
-  }
-  return null
-}
-
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
-  // Idempotent: surfaces window.__omniliner.roamImport for the agent
-  // runtime / devtools console. Living here ties it to the same lifecycle
-  // as the rest of the default actions — the hook gets installed once
-  // per Repo.
-  ensureRoamImportWindowHook(repo)
-  // Same lifecycle for the metrics console hook — surfaces
+  // Idempotent metrics console hook — surfaces
   // `__omniliner.metrics.print()` / `.reset()` / `.snapshot()` and
   // `__omniliner.repo` for ad-hoc cold-start investigation.
   ensureMetricsConsoleHook(repo)
@@ -259,57 +223,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Move block down (CodeMirror)',
   }
 
-  const openDailyNoteByOffset = async (offsetDays: number) => {
-    const route = parseAppHash(window.location.hash)
-    const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
-    if (!workspaceId) return
-
-    const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
-    const currentIso = topLevelBlockId
-      ? await findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
-      : null
-    const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
-    const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
-    navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
-  }
-
   const globalActions: ActionConfig<typeof ActionContextTypes.GLOBAL>[] = [
-    {
-      id: 'open_today',
-      description: "Open today's daily note",
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        const workspaceId = repo.activeWorkspaceId
-        if (!workspaceId) return
-        const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-        navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+`', 'ctrl+shift+`'],
-      },
-    },
-    {
-      id: 'open_previous_daily_note',
-      description: 'Open previous daily note',
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        await openDailyNoteByOffset(-1)
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+[', 'ctrl+shift+['],
-      },
-    },
-    {
-      id: 'open_next_daily_note',
-      description: 'Open next daily note',
-      context: ActionContextTypes.GLOBAL,
-      handler: async () => {
-        await openDailyNoteByOffset(1)
-      },
-      defaultBinding: {
-        keys: ['cmd+shift+]', 'ctrl+shift+]'],
-      },
-    },
     {
       id: 'undo',
       description: 'Undo',
@@ -389,76 +303,6 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               }
             } catch (err) {
               console.error('Failed to import document:', err)
-            }
-          }
-          reader.readAsText(file)
-        }
-
-        input.click()
-      },
-    },
-    {
-      id: 'import_roam',
-      description: 'Import Roam JSON export',
-      context: ActionContextTypes.GLOBAL,
-      handler: () => {
-        const input = document.createElement('input')
-        input.type = 'file'
-        input.accept = '.json,application/json'
-
-        input.onchange = async (e) => {
-          const file = (e.target as HTMLInputElement).files?.[0]
-          if (!file) return
-
-          const reader = new FileReader()
-          reader.onload = async (loadEvent) => {
-            const content = loadEvent.target?.result
-            if (typeof content !== 'string') return
-
-            const banner = showProgressBanner('Roam import: parsing JSON…')
-            try {
-              const parsed = JSON.parse(content) as RoamExport
-              if (!Array.isArray(parsed)) {
-                console.error('[roam-import] expected top-level JSON array of pages')
-                banner.fail('Roam import failed: expected top-level JSON array of pages')
-                return
-              }
-
-              // Prefer the URL hash over `repo.activeWorkspaceId` —
-              // the hash is the source of truth for what workspace
-              // the user is viewing, and `repo.activeWorkspaceId`
-              // can lag behind it (the active id flips inside
-              // App.tsx's async getInitialBlock chain, which awaits
-              // workspace lookup + role role check before settling).
-              // If the user clicks the import shortcut shortly after
-              // switching workspaces, reading repo state alone would
-              // route the import into the prior workspace.
-              const workspaceId = parseAppHash(window.location.hash).workspaceId
-                ?? repo.activeWorkspaceId
-              if (!workspaceId) {
-                console.error('[roam-import] no active workspace')
-                banner.fail('Roam import failed: no active workspace')
-                return
-              }
-
-              banner.update('Roam import: planning…')
-              const summary = await importRoam(parsed, repo, {
-                workspaceId,
-                currentUserId: repo.user.id,
-                onProgress: msg => {
-                  console.log(`[roam-import] ${msg}`)
-                  banner.update(`Roam import: ${msg}`)
-                },
-              })
-              console.log('[roam-import] done', summary)
-              banner.done(
-                `Roam import complete: ${summary.pagesCreated} new pages, ` +
-                `${summary.pagesMerged} merged, ${summary.pagesDaily} daily, ` +
-                `${summary.blocksWritten} blocks (${(summary.durationMs / 1000).toFixed(1)}s)`,
-              )
-            } catch (err) {
-              console.error('[roam-import] failed:', err)
-              banner.fail(`Roam import failed: ${err instanceof Error ? err.message : String(err)}`)
             }
           }
           reader.readAsText(file)

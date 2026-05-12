@@ -1,0 +1,117 @@
+/**
+ * Global keyboard actions for navigating daily notes:
+ *
+ *   - `open_today` (cmd+shift+`)               — today's note
+ *   - `open_previous_daily_note` (cmd+shift+[) — yesterday relative to
+ *     the currently viewed daily note (or to today if not on one)
+ *   - `open_next_daily_note` (cmd+shift+])     — tomorrow relative
+ *
+ * The prev/next actions need to figure out "what daily note is this
+ * panel showing right now" so the offset is relative. We do that by
+ * walking ancestors of the panel's top-level block and looking for a
+ * page whose `aliases` list contains an ISO-shaped date — that's the
+ * canonical alias for a daily note, written by `getOrCreateDailyNote`
+ * via `dailyPageAliases`. Falling back to `todayIso()` when nothing in
+ * the ancestor chain is a daily note keeps the shortcuts functional
+ * from any view.
+ *
+ * Originally lived in `src/shortcuts/defaultShortcuts.ts` alongside
+ * the rest of the kernel action set; extracted here so the daily-notes
+ * feature can be removed/replaced as a single unit.
+ */
+import type { Block } from '@/data/block'
+import type { Repo } from '@/data/repo'
+import { aliasesProp } from '@/data/properties.ts'
+import {
+  ActionConfig,
+  ActionContextTypes,
+} from '@/shortcuts/types.ts'
+import { parseAppHash } from '@/utils/routing.ts'
+import {
+  navigateFromGlobalCommand,
+  resolveGlobalCommandTopLevelBlockId,
+} from '@/utils/navigation.ts'
+import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+
+const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
+
+const dailyNoteIsoFromBlock = (block: Block): string | null => {
+  const aliases = block.peekProperty(aliasesProp) ?? []
+  return aliases.find(alias => ISO_ALIAS_RE.test(alias)) ?? null
+}
+
+const findContainingDailyNoteIso = async (
+  repo: Repo,
+  blockId: string,
+  workspaceId: string,
+): Promise<string | null> => {
+  const data = await repo.load(blockId, {ancestors: true})
+  if (!data || data.workspaceId !== workspaceId) return null
+
+  let block: Block | null = repo.block(blockId)
+  while (block) {
+    const iso = dailyNoteIsoFromBlock(block)
+    if (iso) return iso
+    block = block.parent
+  }
+  return null
+}
+
+const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
+  const route = parseAppHash(window.location.hash)
+  const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
+  if (!workspaceId) return
+
+  const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
+  const currentIso = topLevelBlockId
+    ? await findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
+    : null
+  const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
+  const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
+  navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
+}
+
+export const dailyNotesActions = (
+  {repo}: {repo: Repo},
+): readonly ActionConfig<typeof ActionContextTypes.GLOBAL>[] => [
+  {
+    // Keep the legacy `open_today` id rather than the more-descriptive
+    // `open_today_daily_note`. User-customised key bindings persist
+    // under the action id; renaming would silently break them on
+    // upgrade. (Prev/next never had a shorter id, so they keep theirs.)
+    id: 'open_today',
+    description: "Open today's daily note",
+    context: ActionContextTypes.GLOBAL,
+    handler: async () => {
+      const workspaceId = repo.activeWorkspaceId
+      if (!workspaceId) return
+      const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+      navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
+    },
+    defaultBinding: {
+      keys: ['cmd+shift+`', 'ctrl+shift+`'],
+    },
+  },
+  {
+    id: 'open_previous_daily_note',
+    description: 'Open previous daily note',
+    context: ActionContextTypes.GLOBAL,
+    handler: async () => {
+      await openDailyNoteByOffset(repo, -1)
+    },
+    defaultBinding: {
+      keys: ['cmd+shift+[', 'ctrl+shift+['],
+    },
+  },
+  {
+    id: 'open_next_daily_note',
+    description: 'Open next daily note',
+    context: ActionContextTypes.GLOBAL,
+    handler: async () => {
+      await openDailyNoteByOffset(repo, 1)
+    },
+    defaultBinding: {
+      keys: ['cmd+shift+]', 'ctrl+shift+]'],
+    },
+  },
+]

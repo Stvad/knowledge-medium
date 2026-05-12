@@ -7,7 +7,7 @@ import {
   planImport,
 } from '../plan'
 import { roamBlockId } from '../ids'
-import { dailyNoteBlockId } from '@/data/dailyNotes'
+import { dailyNoteBlockId } from '@/plugins/daily-notes'
 import { aliasesProp, typesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import {
