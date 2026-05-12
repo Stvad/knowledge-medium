@@ -8,6 +8,17 @@
 // Run via `yarn gen:sync-config` after editing the column lists, or
 // `yarn check:sync-config` (no writes) to fail CI on hand-edits to the
 // generated YAML.
+//
+// DIAGNOSTIC (2026-05-11): reverted the single-stream + `with:`-subquery
+// shape introduced in 9ba6d34d back to three independent streams with
+// JOIN-based auth. The bucket-wipe-on-edit pattern (Could not apply
+// checkpoint, Checksums didn't match) reproduces with the single-stream
+// config on the latest SDK and current Cloud service. Reverting forces
+// the server to bump versioned_bucket_ids (4 → 5) and rebuild bucket
+// state from scratch; it also takes us off the subquery-filter pattern
+// flagged by GHSA-q6wc-xx4m-92fj (which is fixed in v1.20.1+ but worth
+// eliminating as a configuration-shape variable). Restore if this
+// doesn't change the wipe behavior.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, relative, resolve } from 'node:path'
@@ -19,31 +30,47 @@ import {
   WORKSPACE_MEMBER_COLUMNS,
 } from '@/data/workspaceSchema'
 
-interface StreamQuery {
+interface Stream {
+  readonly name: string
   // Public-schema-qualified table the SELECT reads from. Also drives
   // the column prefix (e.g. `public.blocks` → `blocks.<col>`).
   readonly table: `public.${string}`
   readonly columns: readonly { readonly name: string }[]
-  // WHERE clause that scopes the table to the workspaces the requesting
-  // user belongs to. Already indented to match the YAML body.
-  readonly predicate: string
+  // Everything between FROM <table> and the next stream — typically a
+  // workspace_members JOIN or a WHERE … IN (subselect). Already indented
+  // to match the YAML body (6 spaces).
+  readonly joinAndPredicate: string
 }
 
-const STREAM_QUERIES: readonly StreamQuery[] = [
+const STREAMS: readonly Stream[] = [
   {
+    name: 'workspaces',
     table: 'public.workspaces',
     columns: WORKSPACE_COLUMNS,
-    predicate: '        WHERE workspaces.id IN user_workspaces',
+    joinAndPredicate:
+`      JOIN public.workspace_members
+        ON workspace_members.workspace_id = workspaces.id
+       AND workspace_members.user_id = auth.user_id()`,
   },
   {
+    name: 'workspace_members',
     table: 'public.workspace_members',
     columns: WORKSPACE_MEMBER_COLUMNS,
-    predicate: '        WHERE workspace_members.workspace_id IN user_workspaces',
+    joinAndPredicate:
+`      WHERE workspace_members.workspace_id IN (
+        SELECT workspace_id
+        FROM public.workspace_members
+        WHERE user_id = auth.user_id()
+      )`,
   },
   {
+    name: 'blocks',
     table: 'public.blocks',
     columns: BLOCK_STORAGE_COLUMNS,
-    predicate: '        WHERE blocks.workspace_id IN user_workspaces',
+    joinAndPredicate:
+`      JOIN public.workspace_members
+        ON workspace_members.workspace_id = blocks.workspace_id
+       AND workspace_members.user_id = auth.user_id()`,
   },
 ] as const
 
@@ -53,10 +80,8 @@ const HEADER =
 # src/data/blockSchema.ts or src/data/workspaceSchema.ts.
 # CI runs \`yarn check:sync-config\` to catch hand-edits.
 #
-# One auto-subscribed stream scoped to the requesting user's workspaces.
-# Grouping the related tables into one stream keeps the client subscription
-# surface and bucket count smaller than three independent auto streams.
-# PowerSync re-evaluates the set whenever workspace_members changes.
+# Sync streams scoped to the requesting user. PowerSync re-evaluates the set
+# whenever workspace_members changes.
 #
 # IMPORTANT: do not alias the primary table in the FROM clause. PowerSync uses
 # the FROM-clause name as the row_type that maps back to the client's raw
@@ -75,31 +100,22 @@ config:
 streams:
 `
 
-const renderQuery = ({ table, columns, predicate }: StreamQuery): string => {
+const renderStream = ({ name, table, columns, joinAndPredicate }: Stream): string => {
   const tableShortName = table.replace(/^public\./, '')
   const projection = columns
-    .map((c) => `          ${tableShortName}.${c.name}`)
+    .map((c) => `        ${tableShortName}.${c.name}`)
     .join(',\n')
-  return `      - |
-        SELECT
+  return `  ${name}:
+    auto_subscribe: true
+    query: |
+      SELECT
 ${projection}
-        FROM ${table}
-${predicate}
+      FROM ${table}
+${joinAndPredicate}
 `
 }
 
-const renderStream = (): string => `  workspace_data:
-    auto_subscribe: true
-    with:
-      user_workspaces: |
-        SELECT workspace_id
-        FROM public.workspace_members
-        WHERE user_id = auth.user_id()
-    queries:
-${STREAM_QUERIES.map(renderQuery).join('')}
-`
-
-const generated = HEADER + renderStream()
+const generated = HEADER + STREAMS.map(renderStream).join('\n')
 
 const here = dirname(fileURLToPath(import.meta.url))
 const targetPath = resolve(here, '..', 'powersync', 'sync-config.yaml')
