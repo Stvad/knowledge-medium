@@ -57,6 +57,27 @@ const nestedErrorMessage = (value: unknown): string | undefined => {
   return stringField(error, 'message')
 }
 
+const realtimeErrorMessage = (event: unknown, fallback: string): string => {
+  const message = nestedErrorMessage(event) ?? stringField(event, 'message') ?? fallback
+  const details: string[] = []
+
+  if (typeof event === 'object' && event !== null) {
+    const eventType = stringField(event, 'type')
+    const error = (event as Record<string, unknown>).error
+    if (eventType) details.push(`event=${eventType}`)
+    if (typeof error === 'object' && error !== null) {
+      const errorType = stringField(error, 'type')
+      const code = stringField(error, 'code')
+      const param = stringField(error, 'param')
+      if (errorType) details.push(`type=${errorType}`)
+      if (code) details.push(`code=${code}`)
+      if (param) details.push(`param=${param}`)
+    }
+  }
+
+  return details.length > 0 ? `${message} (${details.join(', ')})` : message
+}
+
 export const reduceTranscriptEvent = (
   state: TranscriptEventState,
   event: unknown,
@@ -170,14 +191,14 @@ export const reduceTranscriptEvent = (
   if (type === 'conversation.item.input_audio_transcription.failed') {
     effects.push({
       kind: 'error',
-      message: nestedErrorMessage(event) ?? 'Realtime transcription failed',
+      message: realtimeErrorMessage(event, 'Realtime transcription failed'),
     })
   }
 
   if (type === 'error') {
     effects.push({
       kind: 'error',
-      message: nestedErrorMessage(event) ?? stringField(event, 'message') ?? 'Realtime transcription failed',
+      message: realtimeErrorMessage(event, 'Realtime transcription failed'),
     })
   }
 

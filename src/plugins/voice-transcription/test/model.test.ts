@@ -130,7 +130,24 @@ describe('voice transcription model helpers', () => {
 
     expect(result.effects).toEqual([{
       kind: 'error',
-      message: 'bad audio',
+      message: 'bad audio (event=conversation.item.input_audio_transcription.failed)',
+    }])
+  })
+
+  it('includes realtime error event details', () => {
+    const result = reduceTranscriptEvent(createTranscriptEventState(), {
+      type: 'error',
+      error: {
+        message: 'Realtime transcription connection closed',
+        type: 'invalid_request_error',
+        code: 'invalid_value',
+        param: 'session.audio.input.turn_detection',
+      },
+    }, 0)
+
+    expect(result.effects).toEqual([{
+      kind: 'error',
+      message: 'Realtime transcription connection closed (event=error, type=invalid_request_error, code=invalid_value, param=session.audio.input.turn_detection)',
     }])
   })
 })
