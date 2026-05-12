@@ -46,6 +46,7 @@ import { z } from 'zod'
 import {
   ChangeScope,
   definePostCommitProcessor,
+  normalizeReferences,
   type BlockData,
   type BlockReference,
   type AnyPostCommitProcessor,
@@ -140,34 +141,6 @@ const parsePropertyReferences = (
   return refs
 }
 
-/** Canonical text form of a references array — used only for the
- *  `referencesChanged` equality check, NOT for what gets written. Sort by
- *  `(sourceField, id, alias)` and normalise `sourceField` so two arrays
- *  with the same logical set of refs compare equal regardless of array
- *  order or object key order in the original JSON. Without this, a row
- *  whose stored `references_json` was produced by a writer that emitted
- *  refs in a different order (Roam import emits content-position-order
- *  across alias+date+block-ref kinds; the processor segregates them) is
- *  seen as `referencesChanged: true` on every sync, generating a no-op
- *  PATCH per row. Downstream consumers (`json_each`-driven backlinks
- *  index, `BACKLINKS_FOR_BLOCK_QUERY`, the Map-based invalidation rule)
- *  treat references as a set, so eliding writes that only differ by
- *  order is correctness-preserving. */
-const canonicalizeReferences = (refs: ReadonlyArray<BlockReference>): string => {
-  const canonical = refs.map(ref => ({
-    id: ref.id,
-    alias: ref.alias,
-    sourceField: ref.sourceField ?? '',
-  }))
-  canonical.sort((a, b) => {
-    if (a.sourceField !== b.sourceField) return a.sourceField < b.sourceField ? -1 : 1
-    if (a.id !== b.id) return a.id < b.id ? -1 : 1
-    if (a.alias !== b.alias) return a.alias < b.alias ? -1 : 1
-    return 0
-  })
-  return JSON.stringify(canonical)
-}
-
 /** Read phase: parse refs, resolve existing alias targets via committed-
  *  state lookup, and produce a SourcePlan describing what the write
  *  phase needs to do. No tx opened here — `ctx.repo.query.aliasLookup`
@@ -226,7 +199,15 @@ const buildSourcePlan = async (
 
   const propertyRefs = parsePropertyReferences(source, ctx.propertySchemas)
   const references: BlockReference[] = [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs]
-  const referencesChanged = canonicalizeReferences(source.references) !== canonicalizeReferences(references)
+  // tx.update normalises references on write, so storage is canonical.
+  // Normalise both sides here for symmetry — `source.references` is
+  // already canonical post-write, but a row written before the
+  // normalize-on-write change (or by a test fixture going through a
+  // bypass path) might not be, and we want the check to converge
+  // either way.
+  const referencesChanged =
+    JSON.stringify(normalizeReferences(source.references))
+    !== JSON.stringify(normalizeReferences(references))
 
   return {
     sourceId: source.id,

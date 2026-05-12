@@ -38,6 +38,7 @@ import type {
   TxWriteOpts,
   User,
 } from '@/data/api'
+import { normalizeReferences } from '@/data/api'
 import {
   BlockNotFoundError,
   CycleError,
@@ -256,7 +257,7 @@ export class TxImpl implements Tx {
       ...beforeData,
       deleted: false,
       ...(patch?.content !== undefined ? {content: patch.content} : {}),
-      ...(patch?.references !== undefined ? {references: patch.references} : {}),
+      ...(patch?.references !== undefined ? {references: normalizeReferences(patch.references)} : {}),
       ...(patch?.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(opts?.skipMetadata),
     }
@@ -283,7 +284,7 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
-      ...(patch.references !== undefined ? {references: patch.references} : {}),
+      ...(patch.references !== undefined ? {references: normalizeReferences(patch.references)} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(opts?.skipMetadata),
     }
@@ -611,7 +612,7 @@ export class TxImpl implements Tx {
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},
-      references: data.references ?? [],
+      references: normalizeReferences(data.references ?? []),
       createdAt: ts,
       updatedAt: ts,
       createdBy: by,

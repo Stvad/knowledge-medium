@@ -196,10 +196,14 @@ describe('parseReferences — ref-typed properties', () => {
     await flush()
 
     const refs = JSON.parse((await env.read('src'))!.references_json)
+    // tx.update normalises references_json on write — sorted by
+    // (sourceField, id, alias) with duplicates collapsed. The input
+    // `properties` here happens to produce three distinct triples; the
+    // assertion lists them in canonical-sorted order.
     expect(refs).toEqual([
-      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
-      {id: 'target-b', alias: 'target-b', sourceField: 'related'},
       {id: 'target-a', alias: 'target-a', sourceField: 'related'},
+      {id: 'target-b', alias: 'target-b', sourceField: 'related'},
+      {id: 'target-a', alias: 'target-a', sourceField: 'reviewer'},
     ])
     expect(await env.read('target-a')).toBeNull()
     expect(await env.read('target-b')).toBeNull()
@@ -551,13 +555,13 @@ describe('parseReferences — schema-swap reprojection', () => {
 
 describe('parseReferences — idempotent comparison', () => {
   it('skips the references write when stored refs canonical-equal the parse output despite differing array order', async () => {
-    // Simulate what a sync-applied row looks like locally: the
-    // `references` column already contains the same set of refs the
-    // parser would produce, but ordered the way some earlier writer
-    // emitted them (e.g. Roam import preserves content-position order
-    // across alias+date kinds; the processor segregates them). Without
-    // canonical comparison this fires a no-op `tx.update` and a
-    // `ps_crud` PATCH per row — the 16k-uploads-on-cold-resync bug.
+    // Simulate what a sync-applied row looks like locally after the
+    // normalize-on-write change has landed everywhere: the writer
+    // supplied refs in content-position order; tx.create canonicalised
+    // them on the way to disk; the processor's re-parse produces the
+    // same set in (possibly different) build order and the compare
+    // step normalises both sides before equality. No second write
+    // fires — the 16k-uploads-on-cold-resync bug.
     await env.repo.tx(
       tx => tx.create({
         id: 'src',
@@ -566,9 +570,9 @@ describe('parseReferences — idempotent comparison', () => {
         orderKey: 'a0',
         content: '[[2026-04-28]] then [[Foo]]',
         references: [
-          // Content-position order: date first, alias second. The
-          // processor would emit `[Foo, 2026-04-28]` (aliasRefs before
-          // dateRefs). Canonical-equal so no write should fire.
+          // Content-position order: date first, alias second. tx.create
+          // normalises on write so what lands on disk is canonical-sorted,
+          // and the processor's re-parse must compare canonical-equal.
           {id: dailyId('2026-04-28'), alias: '2026-04-28'},
           {id: aliasId('Foo'), alias: 'Foo'},
         ],
@@ -586,13 +590,16 @@ describe('parseReferences — idempotent comparison', () => {
     )
     expect(evts.map(e => e.kind)).toEqual(['create'])
 
-    // The stored references_json stays in the writer's order — we
-    // deliberately do not normalise on disk.
+    // Stored refs are canonical-sorted regardless of writer order. Sort
+    // key is (sourceField, id, alias); both refs have empty sourceField
+    // so id breaks the tie. `2026-04-28` resolves to a daily-note id
+    // whose UUIDv5 string ordering relative to `aliasId('Foo')` is
+    // data-dependent — assert the set rather than a fixed order.
     const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
-    expect(refs).toEqual([
-      {id: dailyId('2026-04-28'), alias: '2026-04-28'},
-      {id: aliasId('Foo'), alias: 'Foo'},
-    ])
+    expect(new Set(refs.map(r => `${r.id}|${r.alias}`))).toEqual(new Set([
+      `${dailyId('2026-04-28')}|2026-04-28`,
+      `${aliasId('Foo')}|Foo`,
+    ]))
   })
 })
 
