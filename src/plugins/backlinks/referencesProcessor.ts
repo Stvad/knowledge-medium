@@ -199,14 +199,17 @@ const buildSourcePlan = async (
 
   const propertyRefs = parsePropertyReferences(source, ctx.propertySchemas)
   const references: BlockReference[] = [...aliasRefs, ...dateRefs, ...blockRefs, ...propertyRefs]
-  // tx.update normalises references on write, so storage is canonical.
-  // Normalise both sides here for symmetry — `source.references` is
-  // already canonical post-write, but a row written before the
-  // normalize-on-write change (or by a test fixture going through a
-  // bypass path) might not be, and we want the check to converge
-  // either way.
+  // tx.update normalises references on write, so `source.references`'s
+  // JSON text — when written by any tx.* path — is already in canonical
+  // form (sorted, deduped, omitted-empty-sourceField, no whitespace).
+  // Re-stringifying through V8's key-order-preserving JSON.parse →
+  // JSON.stringify reproduces the same text, so equality compares
+  // canonical to canonical without a second normalize on this side.
+  // Rows that bypassed normalize-on-write (legacy data, raw bypass
+  // writes) will fail this equality and get rewritten on first parse —
+  // exactly the convergence we want.
   const referencesChanged =
-    JSON.stringify(normalizeReferences(source.references))
+    JSON.stringify(source.references)
     !== JSON.stringify(normalizeReferences(references))
 
   return {
