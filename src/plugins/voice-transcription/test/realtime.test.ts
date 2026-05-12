@@ -89,6 +89,7 @@ describe('voice transcription realtime API', () => {
       }),
     )
     const onOpen = vi.fn()
+    const onSegment = vi.fn()
     const onClose = vi.fn()
 
     vi.stubGlobal('fetch', fetchMock)
@@ -101,7 +102,7 @@ describe('voice transcription realtime API', () => {
     vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
     saveOpenAiApiKey('sk-test-local-only')
 
-    const session = await startRealtimeTranscription({onOpen, onClose})
+    const session = await startRealtimeTranscription({onOpen, onSegment, onClose})
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toBe('https://api.openai.com/v1/realtime/calls')
     expect(init.method).toBe('POST')
@@ -122,12 +123,7 @@ describe('voice transcription realtime API', () => {
       model: OPENAI_REALTIME_WHISPER_MODEL,
       language: 'en',
     })
-    expect(sessionConfig.audio.input.turn_detection).toEqual({
-      type: 'server_vad',
-      threshold: 0.5,
-      prefix_padding_ms: 300,
-      silence_duration_ms: 500,
-    })
+    expect(sessionConfig.audio.input.turn_detection).toBeNull()
 
     const peerConnection = FakePeerConnection.latest
     const recorder = FakeMediaRecorder.latest
@@ -144,68 +140,7 @@ describe('voice transcription realtime API', () => {
     expect(stopTrack).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
 
-    await session.stop()
-    expect(recorder?.state).toBe('inactive')
-    expect(stopTrack).toHaveBeenCalledTimes(1)
-    expect(onClose).toHaveBeenCalledTimes(1)
-    expect(onClose).toHaveBeenCalledWith(undefined)
-  })
-
-  it('falls back to manual commits when server turn detection is rejected', async () => {
-    const stopTrack = vi.fn()
-    const stream = {
-      getTracks: () => [{stop: stopTrack}],
-    }
-    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      void url
-      void init
-      if (fetchMock.mock.calls.length === 1) {
-        return new Response(JSON.stringify({
-          error: {
-            message: 'Turn detection is not supported for this transcription model.',
-            param: 'session.audio.input.turn_detection',
-          },
-        }), {
-          status: 400,
-          headers: {'content-type': 'application/json'},
-        })
-      }
-      return new Response('answer-sdp', {
-        status: 200,
-        headers: {'content-type': 'application/sdp'},
-      })
-    })
-    const onSegment = vi.fn()
-    const onClose = vi.fn()
-
-    vi.stubGlobal('fetch', fetchMock)
-    vi.stubGlobal('navigator', {
-      mediaDevices: {
-        getUserMedia: vi.fn(async () => stream),
-      },
-    })
-    vi.stubGlobal('RTCPeerConnection', FakePeerConnection)
-    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
-    saveOpenAiApiKey('sk-test-local-only')
-
-    const session = await startRealtimeTranscription({onSegment, onClose})
-    expect(fetchMock).toHaveBeenCalledTimes(2)
-    const firstBody = fetchMock.mock.calls[0]?.[1]?.body as FormData
-    const secondBody = fetchMock.mock.calls[1]?.[1]?.body as FormData
-    expect(JSON.parse(String(firstBody.get('session'))).audio.input.turn_detection).toEqual({
-      type: 'server_vad',
-      threshold: 0.5,
-      prefix_padding_ms: 300,
-      silence_duration_ms: 500,
-    })
-    expect(JSON.parse(String(secondBody.get('session'))).audio.input.turn_detection).toBeNull()
-
-    const peerConnection = FakePeerConnection.latest
-    const recorder = FakeMediaRecorder.latest
-    expect(peerConnection).not.toBeNull()
-    if (peerConnection) peerConnection.dataChannel.readyState = 'open'
     const stopPromise = session.stop()
-
     expect(peerConnection?.dataChannel.send).toHaveBeenCalledWith(JSON.stringify({
       type: 'input_audio_buffer.commit',
     }))
