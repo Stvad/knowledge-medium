@@ -13,7 +13,7 @@ export interface RealtimeTranscriptionCallbacks {
   onSegment?: (segment: TranscriptSegment) => void
   onAudioUrl?: (url: string) => void
   onError?: (error: Error) => void
-  onClose?: () => void
+  onClose?: (error?: Error) => void
 }
 
 export interface RealtimeTranscriptionSession {
@@ -61,6 +61,20 @@ const stopStream = (stream: MediaStream): void => {
   for (const track of stream.getTracks()) track.stop()
 }
 
+const stringField = (value: unknown, key: string): string | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const field = (value as Record<string, unknown>)[key]
+  return typeof field === 'string' ? field : undefined
+}
+
+const nestedErrorMessage = (value: unknown): string | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const error = (value as Record<string, unknown>).error
+  if (typeof error === 'string') return error
+  if (typeof error !== 'object' || error === null) return undefined
+  return stringField(error, 'message')
+}
+
 const startAudioRecorder = (
   stream: MediaStream,
   onAudioUrl: ((url: string) => void) | undefined,
@@ -99,10 +113,24 @@ export const startRealtimeTranscription = async (
   const startedAt = performance.now()
   let eventState = createTranscriptEventState()
   let closed = false
+  let lastServerEventType: string | null = null
+  let lastServerError: string | null = null
 
   const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt))
 
-  const close = (): void => {
+  const realtimeStateSummary = (): string => {
+    const parts = [
+      `peer=${peerConnection.connectionState}`,
+      `ice=${peerConnection.iceConnectionState}`,
+      `signaling=${peerConnection.signalingState}`,
+      `dataChannel=${dataChannel.readyState}`,
+    ]
+    if (lastServerEventType) parts.push(`lastEvent=${lastServerEventType}`)
+    if (lastServerError) parts.push(`lastError=${lastServerError}`)
+    return parts.join(', ')
+  }
+
+  const close = (error?: Error): void => {
     if (closed) return
     closed = true
     if (recorder && recorder.state !== 'inactive') {
@@ -113,7 +141,7 @@ export const startRealtimeTranscription = async (
     }
     dataChannel.close()
     peerConnection.close()
-    callbacks.onClose?.()
+    callbacks.onClose?.(error)
   }
 
   dataChannel.addEventListener('open', () => {
@@ -127,6 +155,8 @@ export const startRealtimeTranscription = async (
     } catch {
       return
     }
+    lastServerEventType = stringField(payload, 'type') ?? lastServerEventType
+    lastServerError = nestedErrorMessage(payload) ?? lastServerError
 
     const result = reduceTranscriptEvent(eventState, payload, elapsedMs())
     eventState = result.state
@@ -146,12 +176,16 @@ export const startRealtimeTranscription = async (
     }
   })
 
+  dataChannel.addEventListener('error', () => {
+    close(new Error(`Realtime transcription data channel error (${realtimeStateSummary()})`))
+  })
+
   peerConnection.addEventListener('connectionstatechange', () => {
     if (
       peerConnection.connectionState === 'failed' ||
       peerConnection.connectionState === 'closed'
     ) {
-      close()
+      close(new Error(`Realtime transcription connection ${peerConnection.connectionState} (${realtimeStateSummary()})`))
     }
   })
 

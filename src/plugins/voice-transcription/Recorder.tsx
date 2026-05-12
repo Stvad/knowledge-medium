@@ -155,8 +155,9 @@ export function VoiceTranscriptionRecorder() {
     transcriptBlockId: string | null,
     error: Error,
   ) => {
-    sessionRef.current?.stop()
+    const session = sessionRef.current
     sessionRef.current = null
+    session?.stop()
     transcriptBlockIdRef.current = null
 
     if (transcriptBlockId) {
@@ -265,12 +266,12 @@ export function VoiceTranscriptionRecorder() {
           const currentTranscriptBlockId = transcriptBlockIdRef.current
           void failRecording(currentTranscriptBlockId, error)
         },
-        onClose: () => {
+        onClose: error => {
           const currentTranscriptBlockId = transcriptBlockIdRef.current
           if (!sessionRef.current || !currentTranscriptBlockId) return
           void failRecording(
             currentTranscriptBlockId,
-            new Error('Realtime transcription connection closed'),
+            error ?? new Error('Realtime transcription connection closed'),
           )
         },
       })
