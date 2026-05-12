@@ -29,7 +29,7 @@
  *     doesn't depend on it)
  */
 
-import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
+import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS, createBaseLogger, LogLevel } from '@powersync/web'
 import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
 import {
   BLOCKS_RAW_TABLE,
@@ -104,16 +104,62 @@ let connectChain: Promise<void> = Promise.resolve()
 // instead of OPFS sync access handles — slower for big working sets.
 // The 256 MiB cache_size (set in initializePowerSyncDb) absorbs most
 // of that hit at steady state.
-const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
-  schema: appSchema,
-  database: new WASQLiteOpenFactory({
-    dbFilename: dbFilenameForUser(userId),
-    vfs: WASQLiteVFS.IDBBatchAtomicVFS,
-  }),
-  flags: {
-    enableMultiTabs: false,
-  },
-})
+// DIAGNOSTIC: enable DEBUG-level PowerSync logging and tap console.*
+// so every log line is captured into `window.__ps_log_buf` (a ring
+// buffer). The agent runtime reads this back to correlate PowerSync's
+// internal apply/checkpoint events with observed bucket wipes — no
+// devtools console required. Remove once the bucket-wipe diagnostic
+// is resolved.
+const installPowerSyncLogCapture = () => {
+  if (typeof window === 'undefined') return
+  const win = window as unknown as { __ps_log_buf?: unknown[]; __ps_log_capture_installed?: boolean }
+  if (win.__ps_log_capture_installed) return
+  win.__ps_log_capture_installed = true
+
+  // Set the GLOBAL js-logger default to DEBUG. Per `createLogger` in
+  // node_modules/@powersync/common/lib/utils/Logger.js, named loggers
+  // that aren't passed an explicit logLevel inherit from this default —
+  // so flipping this single switch turns on every internal PowerSync
+  // logger (sync-stream, bucket-storage, remote, etc.) at once.
+  createBaseLogger().setLevel(LogLevel.DEBUG)
+
+  const buf: { t: number; level: string; msg: string }[] = []
+  win.__ps_log_buf = buf
+  for (const method of ['debug', 'info', 'warn', 'error', 'log'] as const) {
+    const original = console[method].bind(console)
+    console[method] = (...args: unknown[]) => {
+      try {
+        buf.push({
+          t: Date.now(),
+          level: method,
+          msg: args.map(a => {
+            if (a == null) return String(a)
+            if (typeof a === 'string') return a
+            try { return JSON.stringify(a).slice(0, 800) }
+            catch { return String(a).slice(0, 800) }
+          }).join(' '),
+        })
+        if (buf.length > 5000) buf.splice(0, buf.length - 5000)
+      } catch { /* never let logging break */ }
+      original(...args)
+    }
+  }
+  buf.push({ t: Date.now(), level: 'info', msg: '[log-tap] PowerSync DEBUG capture installed' })
+}
+
+const buildPowerSyncDb = (userId: string) => {
+  installPowerSyncLogCapture()
+  return new PowerSyncDatabase({
+    schema: appSchema,
+    database: new WASQLiteOpenFactory({
+      dbFilename: dbFilenameForUser(userId),
+      vfs: WASQLiteVFS.IDBBatchAtomicVFS,
+    }),
+    flags: {
+      enableMultiTabs: false,
+    },
+  })
+}
 
 export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
   const existing = dbsByUser.get(userId)
