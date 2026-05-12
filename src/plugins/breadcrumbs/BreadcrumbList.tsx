@@ -20,7 +20,7 @@ interface BreadcrumbListProps {
 }
 
 const INNER_CLASS =
-  'inline [&>*]:inline [&>p]:m-0 [&>*]:whitespace-nowrap [&>*]:overflow-hidden [&>*]:text-ellipsis [&>*]:font-normal [&>*]:text-inherit'
+  'pointer-events-none inline [&>*]:inline [&>p]:m-0 [&>*]:whitespace-nowrap [&>*]:overflow-hidden [&>*]:text-ellipsis [&>*]:font-normal [&>*]:text-inherit'
 
 export const BreadcrumbList = ({
   parents,
@@ -42,10 +42,9 @@ export const BreadcrumbList = ({
             // text-inherit so the link picks up the container's muted color
             // instead of the user-agent blue.
             className={cn('text-inherit', itemClassName)}
-            onClick={(event: MouseEvent) => {
-              // Stop propagation either way — without it, the event bubbles
-              // to a surrounding block's click handler, which preventDefaults
-              // and swallows the browser navigation.
+            onClickCapture={(event: MouseEvent) => {
+              // Capture before nested markdown links/block refs can stop the
+              // event; the breadcrumb item owns clicks on its preview content.
               event.stopPropagation()
               if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
               if (event.button !== 0) return
