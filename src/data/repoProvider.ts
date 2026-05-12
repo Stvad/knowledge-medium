@@ -70,12 +70,14 @@ appSchema.withRawTables({
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
-// v4 = OPFS migration. Old IDB-backed kmp-v3-* databases are abandoned
-// (alpha, no migration). OPFSCoopSyncVFS stores each database as a real
-// file at OPFS root.
+// v5 = back to IDBBatchAtomicVFS for the bucket-wipe diagnostic (see
+// `buildPowerSyncDb` below). v4 was OPFSCoopSync; v3 was the original
+// IDB layout. Each VFS bump gets a fresh filename so we don't reuse
+// storage across backends (IDB and OPFS don't share state anyway, but
+// the version bump keeps debug logs / OPFS-leftovers unambiguous).
 export const dbFilenameForUser = (userId: string) => {
   const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
-  return `kmp-v4-${sanitized}.db`
+  return `kmp-v5-${sanitized}.db`
 }
 
 const dbsByUser = new Map<string, PowerSyncDatabase>()
@@ -83,66 +85,30 @@ const initPromises = new Map<string, Promise<void>>()
 let activeUserId: string | null = null
 let connectChain: Promise<void> = Promise.resolve()
 
-// Firefox and Safari block OPFS in private browsing — `getDirectory()`
-// throws SecurityError. Probe once and surface a useful message before
-// PowerSync gets to fail with the opaque internal error.
-let opfsProbe: Promise<void> | null = null
-const assertOpfsAvailable = (): Promise<void> => {
-  if (!opfsProbe) {
-    opfsProbe = (async () => {
-      try {
-        await navigator.storage.getDirectory()
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'SecurityError') {
-          throw new Error(
-            'This browser is blocking local storage access (OPFS), which Knowledge Medium needs to keep your data on this device. ' +
-            'This usually means you\'re in private/incognito browsing on Firefox or Safari, where OPFS is disabled. ' +
-            'Try a regular (non-private) window, or use Chrome — Chrome incognito allows OPFS.',
-            {cause: err},
-          )
-        }
-        throw err
-      }
-    })()
-  }
-  return opfsProbe
-}
-
-// OPFSCoopSyncVFS uses OPFS sync access handles (much faster than
-// IndexedDB) and requires a dedicated worker. We pass an explicit
-// `WASQLiteOpenFactory` instead of plain settings because the `vfs`
-// option lives on the factory's option type, not on the generic
-// `SQLOpenOptions` accepted by `database: {…}`.
+// DIAGNOSTIC: switched from OPFSCoopSyncVFS back to IDBBatchAtomicVFS
+// to test whether the bucket-wipe-on-edit pattern is OPFS-specific.
+// We saw the same wipe reproduce on a tiny (~40-op) workspace under
+// OPFSCoopSync + Rust sync client, ruling out workspace size. If IDB
+// shows the same wipe, the bug is in the Rust client / checkpoint
+// path. If it doesn't, the bug lives in OPFS / wa-sqlite's interaction
+// with the borrowed-connection pattern.
 //
-// `enableMultiTabs: false` is intentional. With OPFSCoopSync + the
-// Rust sync client (the default in @powersync/web ≥1.37 — the JS
-// client was removed in 1.53), `enableMultiTabs: true` makes the
-// SharedSync worker borrow a tab's SQLite connection via Comlink
-// (because OPFSCoopSync requires dedicated workers, so the
-// SharedWorker can't own the DB itself). The Rust sync client stores
-// its sync state on the connection, so any connection cycle — tab
-// reload, second-tab join, an upload-replicate echo — invalidates
-// the Rust state machine, fails the next checkpoint apply, and the
-// shared worker calls `deleteBucket` to recover. Net effect: full
-// bucket re-sync (~350k ops, hundreds of MB) on every reload+edit.
-// We hit this on both 1.37.2 and 1.38.0 (PR #937 reduced the
-// recovery latency but didn't prevent the wipe in our setup).
+// IDBBatchAtomicVFS doesn't require a dedicated worker
+// (`vfsRequiresDedicatedWorkers` returns false only for it — see
+// node_modules/@powersync/web/lib/src/db/adapters/wa-sqlite/vfs.js),
+// so the SharedSync worker can own the DB directly. We're keeping
+// `enableMultiTabs: false` for now to hold one variable at a time;
+// once we confirm IDB doesn't wipe, flipping to true should be safe.
 //
-// With `enableMultiTabs: false`, single tab works as expected. Two
-// tabs of the same workspace race each other on `ps_oplog` /
-// `ps_buckets` writes (each tab runs its own sync connection) and
-// can also wipe the bucket — so we accept the known limitation:
-// only one tab at a time per workspace on the current setup.
-//
-// Long-term fix path: switch VFS to `IDBBatchAtomicVFS` so the
-// SharedSync worker can own the DB directly (no borrowed-connection
-// race). Cost: slower cold reads. Or wait for upstream to ship more
-// of the "No iteration is active" cleanup beyond PR #937 / #951.
+// Trade-off vs OPFS: cold-page reads go through IndexedDB transactions
+// instead of OPFS sync access handles — slower for big working sets.
+// The 256 MiB cache_size (set in initializePowerSyncDb) absorbs most
+// of that hit at steady state.
 const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
   schema: appSchema,
   database: new WASQLiteOpenFactory({
     dbFilename: dbFilenameForUser(userId),
-    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
+    vfs: WASQLiteVFS.IDBBatchAtomicVFS,
   }),
   flags: {
     enableMultiTabs: false,
@@ -166,7 +132,6 @@ export const ensurePowerSyncReady = async (
   userId: string,
   useRemoteSync: boolean = hasRemoteSyncConfig,
 ) => {
-  await assertOpfsAvailable()
   const db = getPowerSyncDb(userId)
 
   let initPromise = initPromises.get(userId)
