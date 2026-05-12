@@ -31,9 +31,6 @@ const transcriptionSessionUpdateEvent = () => ({
         transcription: {
           model: OPENAI_REALTIME_WHISPER_MODEL,
         },
-        turn_detection: {
-          type: 'server_vad',
-        },
       },
     },
   },
@@ -46,9 +43,6 @@ const transcriptionClientSecretRequest = () => ({
       input: {
         transcription: {
           model: OPENAI_REALTIME_WHISPER_MODEL,
-        },
-        turn_detection: {
-          type: 'server_vad',
         },
       },
     },

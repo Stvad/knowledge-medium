@@ -40,6 +40,7 @@ import {
   hasStoredOpenAiApiKey,
   saveOpenAiApiKey,
 } from './credentials.ts'
+import { useActivePanelNodeTarget } from '@/plugins/left-sidebar/panelTarget.tsx'
 
 type RecorderStatus =
   | 'idle'
@@ -74,6 +75,10 @@ const blockIdFromActiveElement = (): string | null => {
 export function VoiceTranscriptionRecorder() {
   const repo = useRepo()
   const uiStateBlock = useRootUIStateBlock()
+  const {
+    activePanelBlock,
+    activeTopLevelBlockId,
+  } = useActivePanelNodeTarget()
   const sessionRef = useRef<RealtimeTranscriptionSession | null>(null)
   const transcriptBlockIdRef = useRef<string | null>(null)
   const pendingStartRef = useRef(false)
@@ -83,11 +88,48 @@ export function VoiceTranscriptionRecorder() {
   const [keyMessage, setKeyMessage] = useState<string | null>(null)
   const [storedKeyAvailable, setStoredKeyAvailable] = useState(() => hasStoredOpenAiApiKey())
 
-  const resolveParentBlockId = useCallback((): string | null => {
-    const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
+  const resolveRecordingTarget = useCallback(() => {
+    const activeElementBlockId = blockIdFromActiveElement()
+    if (activeElementBlockId) {
+      return {
+        parentId: activeElementBlockId,
+        uiStateBlock: activePanelBlock ?? uiStateBlock,
+      }
+    }
+
+    const panelFocusedBlockId = activePanelBlock?.peekProperty(focusedBlockIdProp)
+    if (panelFocusedBlockId && activePanelBlock) {
+      return {
+        parentId: panelFocusedBlockId,
+        uiStateBlock: activePanelBlock,
+      }
+    }
+
+    const rootFocusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
+    if (rootFocusedBlockId) {
+      return {
+        parentId: rootFocusedBlockId,
+        uiStateBlock,
+      }
+    }
+
+    if (activeTopLevelBlockId) {
+      return {
+        parentId: activeTopLevelBlockId,
+        uiStateBlock: activePanelBlock ?? uiStateBlock,
+      }
+    }
+
     const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-    return blockIdFromActiveElement() ?? focusedBlockId ?? topLevelBlockId ?? null
-  }, [uiStateBlock])
+    if (topLevelBlockId) {
+      return {
+        parentId: topLevelBlockId,
+        uiStateBlock,
+      }
+    }
+
+    return null
+  }, [activePanelBlock, activeTopLevelBlockId, uiStateBlock])
 
   const setTranscriptStatus = useCallback(async (
     transcriptBlockId: string,
@@ -180,13 +222,13 @@ export function VoiceTranscriptionRecorder() {
       return
     }
 
-    const parentId = resolveParentBlockId()
-    if (!parentId) {
+    const recordingTarget = resolveRecordingTarget()
+    if (!recordingTarget) {
       setState({
         status: 'error',
         transcriptBlockId: null,
         draftText: '',
-        error: 'No focused block to attach the transcript to',
+        error: 'No active view to attach the transcript to',
       })
       return
     }
@@ -202,12 +244,12 @@ export function VoiceTranscriptionRecorder() {
     let transcriptBlockId: string | null = null
     try {
       transcriptBlockId = await repo.mutate.createChild({
-        parentId,
+        parentId: recordingTarget.parentId,
         content: titleForRecording(startedAt),
         properties: createTranscriptBlockProperties('recording', startedAt),
       })
       transcriptBlockIdRef.current = transcriptBlockId
-      setFocusedBlockId(uiStateBlock, transcriptBlockId)
+      setFocusedBlockId(recordingTarget.uiStateBlock, transcriptBlockId)
       setState({
         status: 'starting',
         transcriptBlockId,
@@ -264,9 +306,8 @@ export function VoiceTranscriptionRecorder() {
     appendSegment,
     failRecording,
     repo,
-    resolveParentBlockId,
+    resolveRecordingTarget,
     state.status,
-    uiStateBlock,
   ])
 
   useEffect(() => {
