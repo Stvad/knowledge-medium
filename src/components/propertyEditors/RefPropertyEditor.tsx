@@ -11,8 +11,8 @@ import type { Repo } from '@/data/repo'
 import { NestedBlockContextProvider, useBlockContext } from '@/context/block.tsx'
 import { getBlockTypes } from '@/data/properties.ts'
 import { useWorkspaceId } from '@/hooks/block.ts'
-import { BlockEmbed } from '@/markdown/blockrefs/BlockEmbed.tsx'
-import { BlockRefAncestorsProvider } from '@/markdown/blockrefs/cycleGuard.tsx'
+import { BlockEmbed } from '@/components/references/BlockEmbed.tsx'
+import { BlockRefAncestorsProvider } from '@/components/references/cycleGuard.tsx'
 import {
   labelForBlockData,
   searchLinkTargetIdCandidates,

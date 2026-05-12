@@ -1,7 +1,8 @@
 import { BlockComponent } from '@/components/BlockComponent'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
-import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
+import { BlockRefAncestorsProvider } from './cycleGuard'
+import { useBlockRefAncestors } from './useBlockRefAncestors'
 
 export function BlockEmbed({blockId}: {blockId: string}) {
   const repo = useRepo()

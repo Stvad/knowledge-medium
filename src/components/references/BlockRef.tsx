@@ -8,7 +8,8 @@ import { useAppRuntime } from '@/extensions/runtimeContext'
 import { markdownExtensionsFacet } from '@/markdown/extensions'
 import { buildAppHash } from '@/utils/routing'
 import { useBlockLinkClick } from '@/utils/navigation'
-import { BlockRefAncestorsProvider, useBlockRefAncestors } from './cycleGuard'
+import { BlockRefAncestorsProvider } from './cycleGuard'
+import { useBlockRefAncestors } from './useBlockRefAncestors'
 
 // Force the inner Markdown render to stay inline — block-level elements
 // (paragraph, lists, headings) inside a ref span would break flow with the

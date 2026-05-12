@@ -3,7 +3,7 @@ import type { Components } from 'react-markdown'
 import type { MarkdownExtension } from '@/markdown/extensions.ts'
 import { remarkWikilinks } from './remark-wikilinks.ts'
 import { Wikilink } from './Wikilink.tsx'
-import { BlockEmbed } from '@/markdown/blockrefs/BlockEmbed.tsx'
+import { BlockEmbed } from '@/components/references/BlockEmbed.tsx'
 
 interface WikilinkNode {
   properties?: {
