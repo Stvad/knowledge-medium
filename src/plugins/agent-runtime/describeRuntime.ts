@@ -96,6 +96,7 @@ const runtimeCommandHints = {
   baseline: [
     'yarn agent ping',
     'yarn agent runtime-summary',
+    'yarn agent profiles',
   ],
   dataAccess: [
     'yarn agent sql <all|get|optional|execute> <sql> [paramsJson]',

@@ -20,12 +20,18 @@ const pollIntervalMs = 100
 const defaultTimeoutMs = 30_000
 const bridgeStartTimeoutMs = 5_000
 const tokenStorePath = resolveTokenStorePath()
+const defaultProfileName = 'default'
+let selectedProfileName = defaultProfileName
 
 const usage = () => `
 Usage:
+  yarn agent [--profile <name>] <command>
+
+Commands:
   yarn agent connect              open app pairing flow and persist pasted token
   yarn agent connect <token>      persist token directly (or use AGENT_RUNTIME_TOKEN env)
-  yarn agent disconnect           remove the persisted token
+  yarn agent disconnect           remove the selected profile token
+  yarn agent profiles             list saved CLI token profiles
   yarn agent pair-url             print the current app pairing URL
   yarn agent whoami               show audience the persisted token resolves to
   yarn agent ping
@@ -41,6 +47,10 @@ Usage:
   yarn agent eval <code>
   yarn agent eval --file <path>
   yarn agent raw <json>
+
+Profile selection:
+  --profile <name>                select a saved CLI token profile
+  AGENT_RUNTIME_PROFILE=<name>    default selected profile for this command
 `
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -56,33 +66,134 @@ const parseJson = (value, label) => {
   }
 }
 
-const loadStoredToken = async () => {
+const normalizeProfileName = (value = '') => {
+  const name = value.trim()
+  if (!name) return defaultProfileName
+  if (!/^[A-Za-z0-9_.-]+$/.test(name)) {
+    throw new Error('Profile names may only contain letters, numbers, underscores, dots, and dashes.')
+  }
+  return name
+}
+
+selectedProfileName = normalizeProfileName(process.env.AGENT_RUNTIME_PROFILE ?? '')
+
+const parseCliArgs = args => {
+  const rest = []
+  let profileName = selectedProfileName
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--') {
+      rest.push(...args.slice(i + 1))
+      break
+    }
+
+    if (arg === '--profile' || arg === '-p') {
+      const value = args[i + 1]
+      if (!value) throw new Error(`${arg} requires a profile name`)
+      profileName = normalizeProfileName(value)
+      i += 1
+      continue
+    }
+
+    if (arg.startsWith('--profile=')) {
+      profileName = normalizeProfileName(arg.slice('--profile='.length))
+      continue
+    }
+
+    rest.push(arg)
+  }
+
+  return {args: rest, profileName}
+}
+
+const normalizeTokenRecord = value => {
+  if (!value || typeof value !== 'object' || typeof value.token !== 'string') return null
+  return {
+    token: value.token,
+    savedAt: typeof value.savedAt === 'number' ? value.savedAt : undefined,
+  }
+}
+
+const normalizeTokenStore = value => {
+  const profiles = {}
+
+  if (value && typeof value === 'object') {
+    const legacy = normalizeTokenRecord(value)
+    if (legacy) profiles[defaultProfileName] = legacy
+
+    if (value.profiles && typeof value.profiles === 'object') {
+      for (const [name, record] of Object.entries(value.profiles)) {
+        const profileName = normalizeProfileName(name)
+        const normalized = normalizeTokenRecord(record)
+        if (normalized) profiles[profileName] = normalized
+      }
+    }
+  }
+
+  return {profiles}
+}
+
+const loadTokenStore = async () => {
   try {
     const raw = await fs.readFile(tokenStorePath, 'utf8')
-    const parsed = JSON.parse(raw)
-    if (parsed && typeof parsed.token === 'string') return parsed.token
-    return null
+    return normalizeTokenStore(JSON.parse(raw))
   } catch (error) {
-    if (error.code === 'ENOENT') return null
+    if (error.code === 'ENOENT') return {profiles: {}}
     throw error
   }
 }
 
-const writeStoredToken = async token => {
+const writeTokenStore = async store => {
+  const profiles = Object.fromEntries(
+    Object.entries(store.profiles).sort(([a], [b]) => a.localeCompare(b)),
+  )
   await fs.mkdir(path.dirname(tokenStorePath), {recursive: true})
   await fs.writeFile(
     tokenStorePath,
-    JSON.stringify({token, savedAt: Date.now()}, null, 2),
+    `${JSON.stringify({profiles}, null, 2)}\n`,
     {mode: 0o600},
   )
 }
 
-const removeStoredToken = async () => {
+const loadStoredToken = async (profileName = selectedProfileName) => {
+  const store = await loadTokenStore()
+  return store.profiles[profileName]?.token ?? null
+}
+
+const writeStoredToken = async (token, profileName = selectedProfileName) => {
+  const store = await loadTokenStore()
+  store.profiles[profileName] = {token, savedAt: Date.now()}
+  await writeTokenStore(store)
+}
+
+const removeStoredToken = async (profileName = selectedProfileName) => {
+  const store = await loadTokenStore()
+  if (!store.profiles[profileName]) return false
+  delete store.profiles[profileName]
+  if (Object.keys(store.profiles).length > 0) {
+    await writeTokenStore(store)
+    return true
+  }
+
   try {
     await fs.unlink(tokenStorePath)
+    return true
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
+    return false
   }
+}
+
+const listStoredProfiles = async () => {
+  const store = await loadTokenStore()
+  return Object.entries(store.profiles)
+    .map(([name, record]) => ({
+      name,
+      savedAt: record.savedAt ?? null,
+      selected: name === selectedProfileName,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 const resolveToken = async () => {
@@ -236,6 +347,7 @@ const printPing = async () => {
 
   process.stdout.write(`${JSON.stringify({
     ok: runtime?.ok === true && bridge.ok,
+    profile: selectedProfileName,
     runtime,
     bridge,
   }, null, 2)}\n`)
@@ -265,7 +377,7 @@ const waitForTokenAudience = async token => {
 const printConnectSuccess = info => {
   const audience = info.audience ?? {}
   process.stdout.write(
-    `Connected. Token saved at ${tokenStorePath}\n` +
+    `Connected. Token saved at ${tokenStorePath} (profile: ${selectedProfileName})\n` +
     `User: ${audience.userId ?? '?'}\n` +
     `Workspace: ${audience.workspaceId ?? '?'}\n` +
     `Connected client: ${info.connected ? 'yes' : 'no (will auto-connect when the app reaches the bridge)'}\n`,
@@ -287,7 +399,7 @@ const connectWithToken = async (token, options = {}) => {
   } catch (error) {
     if (!saveBeforeVerify) throw error
     process.stdout.write(
-      `Token saved at ${tokenStorePath}, but bridge contact failed: ${error.message}\n` +
+      `Token saved at ${tokenStorePath} (profile: ${selectedProfileName}), but bridge contact failed: ${error.message}\n` +
       `Make sure the app tab is open. Run \`yarn agent whoami\` to verify.\n`,
     )
   }
@@ -312,7 +424,7 @@ const authedRequest = async (url, options = {}) => {
   const token = await resolveToken()
   if (!token) {
     throw new Error(
-      'No agent token configured. Run `yarn agent connect` to pair the CLI with the app.',
+      `No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` to pair the CLI with the app.`,
     )
   }
 
@@ -455,7 +567,10 @@ const commandFromArgs = async args => {
 }
 
 const main = async () => {
-  const args = process.argv.slice(2)
+  const parsed = parseCliArgs(process.argv.slice(2))
+  const args = parsed.args
+  selectedProfileName = parsed.profileName
+
   if (!args.length || args.includes('--help') || args.includes('-h')) {
     process.stdout.write(usage())
     return
@@ -464,7 +579,7 @@ const main = async () => {
   const verb = args[0]
 
   if (verb === 'connect') {
-    const token = args[1]?.trim()
+    const token = args[1]?.trim() || process.env.AGENT_RUNTIME_TOKEN?.trim()
     if (token) {
       await connectWithToken(token)
     } else {
@@ -474,8 +589,22 @@ const main = async () => {
   }
 
   if (verb === 'disconnect') {
-    await removeStoredToken()
-    process.stdout.write(`Removed ${tokenStorePath}\n`)
+    const removed = await removeStoredToken()
+    process.stdout.write(
+      removed
+        ? `Removed profile "${selectedProfileName}" from ${tokenStorePath}\n`
+        : `No token profile "${selectedProfileName}" exists in ${tokenStorePath}\n`,
+    )
+    return
+  }
+
+  if (verb === 'profiles') {
+    const profiles = await listStoredProfiles()
+    process.stdout.write(`${JSON.stringify({
+      tokenStorePath,
+      selectedProfile: selectedProfileName,
+      profiles,
+    }, null, 2)}\n`)
     return
   }
 
@@ -489,7 +618,7 @@ const main = async () => {
     await ensureBridgeRunning()
     const token = await resolveToken()
     if (!token) {
-      throw new Error('No agent token configured. Run `yarn agent connect` first.')
+      throw new Error(`No agent token configured for profile "${selectedProfileName}". Run \`yarn agent --profile ${selectedProfileName} connect\` first.`)
     }
     const info = await whoamiWithToken(token)
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`)
