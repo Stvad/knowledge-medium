@@ -1,4 +1,4 @@
-import { use, useCallback, useEffect, useState } from 'react'
+import { Suspense, use, useCallback, useEffect, useState } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
 import {
   ArrowLeft,
@@ -260,6 +260,18 @@ function NewNodeFooter({
   )
 }
 
+function NewNodeFooterFallback() {
+  return (
+    <div
+      className="shrink-0 border-t border-border px-5 pt-4"
+      style={{paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))'}}
+      aria-label="Loading sidebar footer"
+    >
+      <div className="h-12 w-full animate-pulse rounded-full bg-muted"/>
+    </div>
+  )
+}
+
 function SidebarSections({
   sections,
   closeSidebar,
@@ -271,10 +283,25 @@ function SidebarSections({
     <>
       {sections.map(({id, component: Section}) => (
         <ErrorBoundary key={id} FallbackComponent={FallbackComponent}>
-          <Section closeSidebar={closeSidebar}/>
+          <Suspense fallback={<SidebarSectionFallback/>}>
+            <Section closeSidebar={closeSidebar}/>
+          </Suspense>
         </ErrorBoundary>
       ))}
     </>
+  )
+}
+
+function SidebarSectionFallback() {
+  return (
+    <section
+      className="space-y-2 px-2 py-1"
+      aria-label="Loading sidebar section"
+    >
+      <div className="h-4 w-24 animate-pulse rounded bg-muted"/>
+      <div className="h-8 w-full animate-pulse rounded-md bg-muted/70"/>
+      <div className="h-8 w-3/4 animate-pulse rounded-md bg-muted/70"/>
+    </section>
   )
 }
 
@@ -340,7 +367,9 @@ export function LeftSidebar() {
           <SidebarSections sections={sections} closeSidebar={closeSidebar}/>
         </div>
 
-        <NewNodeFooter closeSidebar={closeSidebar}/>
+        <Suspense fallback={<NewNodeFooterFallback/>}>
+          <NewNodeFooter closeSidebar={closeSidebar}/>
+        </Suspense>
       </aside>
     </div>
   )
