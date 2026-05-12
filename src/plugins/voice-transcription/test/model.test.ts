@@ -97,4 +97,40 @@ describe('voice transcription model helpers', () => {
     }])
     expect(result.state.lastSegmentEndMs).toBe(1_300)
   })
+
+  it('reduces realtime transcription segment and failed events', () => {
+    let state = createTranscriptEventState()
+
+    let result = reduceTranscriptEvent(state, {
+      type: 'conversation.item.input_audio_transcription.segment',
+      item_id: 'item-2',
+      text: 'trimmed segment',
+      start: 1.25,
+      end: 2.5,
+    }, 2_600)
+    state = result.state
+
+    expect(result.effects).toEqual([{
+      kind: 'segment',
+      segment: {
+        itemId: 'item-2',
+        text: 'trimmed segment',
+        startMs: 1_250,
+        endMs: 2_500,
+      },
+    }])
+    expect(state.lastSegmentEndMs).toBe(2_500)
+
+    result = reduceTranscriptEvent(state, {
+      type: 'conversation.item.input_audio_transcription.failed',
+      error: {
+        message: 'bad audio',
+      },
+    }, 2_700)
+
+    expect(result.effects).toEqual([{
+      kind: 'error',
+      message: 'bad audio',
+    }])
+  })
 })

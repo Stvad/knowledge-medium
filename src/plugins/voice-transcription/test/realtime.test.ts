@@ -76,7 +76,7 @@ describe('voice transcription realtime API', () => {
     vi.unstubAllGlobals()
   })
 
-  it('requests transcription client secrets without unsupported turn detection', async () => {
+  it('requests transcription client secrets with whisper-compatible session config', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({value: 'ek-test'}), {
         status: 200,
@@ -107,7 +107,7 @@ describe('voice transcription realtime API', () => {
     expect(body.session.audio.input.transcription).toEqual({
       model: OPENAI_REALTIME_WHISPER_MODEL,
     })
-    expect(body.session.audio.input).not.toHaveProperty('turn_detection')
+    expect(body.session.audio.input.turn_detection).toBeNull()
   })
 
   it('keeps recording across data-channel close and transient disconnects', async () => {

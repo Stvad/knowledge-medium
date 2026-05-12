@@ -356,10 +356,10 @@ export function VoiceTranscriptionRecorder() {
           <DialogHeader>
             <DialogTitle>OpenAI key</DialogTitle>
             <DialogDescription>
-              In the OpenAI key editor, use Restricted with Write for Realtime
-              client secrets (<code>/v1/realtime/client_secrets</code>) and
-              None for everything else. Stored in this browser; any app code
-              running here can read it.
+              In the OpenAI key editor, use Restricted with Write only for
+              Realtime client secrets (<code>/v1/realtime/client_secrets</code>)
+              and None for everything else. The key is stored in this browser and
+              mints short-lived Realtime secrets for each recording.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">

@@ -138,6 +138,42 @@ export const reduceTranscriptEvent = (
     }
   }
 
+  if (type === 'conversation.item.input_audio_transcription.segment') {
+    const itemId = stringField(event, 'item_id') ?? stringField(event, 'id') ?? FALLBACK_ITEM_ID
+    const text = (stringField(event, 'text') ?? '').trim()
+    const startMs = Math.max(0, Math.round((numberField(event, 'start') ?? 0) * 1000))
+    const endMs = Math.max(startMs, Math.round((numberField(event, 'end') ?? startMs / 1000) * 1000))
+    itemDrafts.delete(itemId)
+
+    if (text.length > 0) {
+      effects.push({
+        kind: 'segment',
+        segment: {
+          itemId,
+          text,
+          startMs,
+          endMs,
+        },
+      })
+    }
+
+    return {
+      state: {
+        itemDrafts,
+        lastSegmentEndMs: endMs,
+        speechStartMs: null,
+      },
+      effects,
+    }
+  }
+
+  if (type === 'conversation.item.input_audio_transcription.failed') {
+    effects.push({
+      kind: 'error',
+      message: nestedErrorMessage(event) ?? 'Realtime transcription failed',
+    })
+  }
+
   if (type === 'error') {
     effects.push({
       kind: 'error',

@@ -30,6 +30,7 @@ const transcriptionClientSecretRequest = () => ({
         transcription: {
           model: OPENAI_REALTIME_WHISPER_MODEL,
         },
+        turn_detection: null,
       },
     },
   },
