@@ -77,9 +77,16 @@ export const voiceTranscriptionPlugin: AppExtension = [
 ]
 
 export {
+  openVoiceTranscriptionSettings,
   startVoiceTranscription,
   stopVoiceTranscription,
 } from './events.ts'
+export {
+  clearOpenAiApiKey,
+  hasStoredOpenAiApiKey,
+  readStoredOpenAiApiKey,
+  saveOpenAiApiKey,
+} from './credentials.ts'
 export {
   OPENAI_REALTIME_WHISPER_MODEL,
   formatTranscriptTime,

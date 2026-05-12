@@ -6,6 +6,7 @@ import {
   reduceTranscriptEvent,
   type TranscriptSegment,
 } from './model.ts'
+import { readStoredOpenAiApiKey } from './credentials.ts'
 
 export interface RealtimeTranscriptionCallbacks {
   onOpen?: () => void
@@ -25,6 +26,9 @@ const realtimeCallsUrl = 'https://api.openai.com/v1/realtime/calls'
 const tokenEndpoint = (): string =>
   import.meta.env.VITE_OPENAI_REALTIME_TOKEN_URL?.trim() || DEFAULT_REALTIME_TOKEN_ENDPOINT
 
+export const hasConfiguredRealtimeTokenEndpoint = (): boolean =>
+  Boolean(import.meta.env.VITE_OPENAI_REALTIME_TOKEN_URL?.trim())
+
 const transcriptionSessionUpdateEvent = () => ({
   type: 'session.update',
   session: {
@@ -42,7 +46,41 @@ const transcriptionSessionUpdateEvent = () => ({
   },
 })
 
-export const requestRealtimeClientSecret = async (): Promise<string> => {
+const transcriptionClientSecretRequest = () => ({
+  session: {
+    type: 'transcription',
+    audio: {
+      input: {
+        transcription: {
+          model: OPENAI_REALTIME_WHISPER_MODEL,
+        },
+        turn_detection: {
+          type: 'server_vad',
+        },
+      },
+    },
+  },
+})
+
+const requestStoredKeyClientSecret = async (apiKey: string): Promise<string> => {
+  const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(transcriptionClientSecretRequest()),
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `OpenAI Realtime token request failed with HTTP ${response.status}`)
+  }
+
+  return extractRealtimeClientSecret(await response.json())
+}
+
+const requestEndpointClientSecret = async (): Promise<string> => {
   const response = await fetch(tokenEndpoint(), {
     method: 'POST',
     credentials: 'same-origin',
@@ -60,6 +98,15 @@ export const requestRealtimeClientSecret = async (): Promise<string> => {
   }
 
   return extractRealtimeClientSecret(await response.json())
+}
+
+export const requestRealtimeClientSecret = async (): Promise<string> => {
+  if (hasConfiguredRealtimeTokenEndpoint()) return requestEndpointClientSecret()
+
+  const storedApiKey = readStoredOpenAiApiKey()
+  if (storedApiKey) return requestStoredKeyClientSecret(storedApiKey)
+
+  return requestEndpointClientSecret()
 }
 
 const stopStream = (stream: MediaStream): void => {

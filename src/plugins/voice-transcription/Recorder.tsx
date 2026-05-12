@@ -10,18 +10,37 @@ import {
 } from '@/data/properties.ts'
 import { Button } from '@/components/ui/button.tsx'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog.tsx'
+import { Input } from '@/components/ui/input.tsx'
+import {
   createTranscriptBlockProperties,
   createTranscriptSegmentProperties,
   transcriptStatusPatch,
 } from './blocks.ts'
 import {
+  openVoiceTranscriptionSettingsEvent,
   startVoiceTranscriptionEvent,
   stopVoiceTranscription,
   stopVoiceTranscriptionEvent,
 } from './events.ts'
-import { startRealtimeTranscription, type RealtimeTranscriptionSession } from './realtime.ts'
+import {
+  hasConfiguredRealtimeTokenEndpoint,
+  startRealtimeTranscription,
+  type RealtimeTranscriptionSession,
+} from './realtime.ts'
 import type { TranscriptSegment } from './model.ts'
 import { transcriptAudioUrlProp } from './schema.ts'
+import {
+  clearOpenAiApiKey,
+  hasStoredOpenAiApiKey,
+  saveOpenAiApiKey,
+} from './credentials.ts'
 
 type RecorderStatus =
   | 'idle'
@@ -58,7 +77,12 @@ export function VoiceTranscriptionRecorder() {
   const uiStateBlock = useRootUIStateBlock()
   const sessionRef = useRef<RealtimeTranscriptionSession | null>(null)
   const transcriptBlockIdRef = useRef<string | null>(null)
+  const pendingStartRef = useRef(false)
   const [state, setState] = useState<RecorderState>(initialState)
+  const [keyDialogOpen, setKeyDialogOpen] = useState(false)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [keyMessage, setKeyMessage] = useState<string | null>(null)
+  const [storedKeyAvailable, setStoredKeyAvailable] = useState(() => hasStoredOpenAiApiKey())
 
   const resolveParentBlockId = useCallback((): string | null => {
     const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
@@ -140,6 +164,13 @@ export function VoiceTranscriptionRecorder() {
 
   const startRecording = useCallback(async () => {
     if (state.status === 'starting' || state.status === 'recording') return
+    if (!hasStoredOpenAiApiKey() && !hasConfiguredRealtimeTokenEndpoint()) {
+      pendingStartRef.current = true
+      setStoredKeyAvailable(false)
+      setKeyMessage(null)
+      setKeyDialogOpen(true)
+      return
+    }
     if (repo.isReadOnly) {
       setState({
         status: 'error',
@@ -246,59 +277,146 @@ export function VoiceTranscriptionRecorder() {
     const handleStop = () => {
       void stopRecording()
     }
+    const handleOpenSettings = () => {
+      pendingStartRef.current = false
+      setStoredKeyAvailable(hasStoredOpenAiApiKey())
+      setKeyMessage(null)
+      setKeyDialogOpen(true)
+    }
 
+    window.addEventListener(openVoiceTranscriptionSettingsEvent, handleOpenSettings)
     window.addEventListener(startVoiceTranscriptionEvent, handleStart)
     window.addEventListener(stopVoiceTranscriptionEvent, handleStop)
     return () => {
+      window.removeEventListener(openVoiceTranscriptionSettingsEvent, handleOpenSettings)
       window.removeEventListener(startVoiceTranscriptionEvent, handleStart)
       window.removeEventListener(stopVoiceTranscriptionEvent, handleStop)
       sessionRef.current?.stop()
     }
   }, [startRecording, stopRecording])
 
-  if (state.status === 'idle') return null
+  const saveKey = () => {
+    try {
+      saveOpenAiApiKey(apiKeyInput)
+      setApiKeyInput('')
+      setKeyMessage(null)
+      setKeyDialogOpen(false)
+      setStoredKeyAvailable(true)
+      if (pendingStartRef.current) {
+        pendingStartRef.current = false
+        void startRecording()
+      }
+    } catch (error) {
+      setKeyMessage(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const clearKey = () => {
+    clearOpenAiApiKey()
+    setApiKeyInput('')
+    setStoredKeyAvailable(false)
+    setKeyMessage('Stored OpenAI key cleared.')
+  }
 
   const busy = state.status === 'starting'
   const recording = state.status === 'recording'
 
   return (
-    <div className="fixed bottom-3 left-1/2 z-50 flex w-[min(36rem,calc(100vw-1.5rem))] -translate-x-1/2 items-center gap-3 rounded-md border border-border bg-background p-3 text-sm shadow-lg">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
-        {busy ? <Loader2 className="h-4 w-4 animate-spin"/> : <Mic className="h-4 w-4"/>}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="truncate font-medium">
-          {state.error ?? (recording ? 'Recording transcript' : 'Starting transcript')}
-        </div>
-        {state.draftText && (
-          <div className="truncate text-xs text-muted-foreground">
-            {state.draftText}
+    <>
+      <Dialog
+        open={keyDialogOpen}
+        onOpenChange={open => {
+          if (open) setStoredKeyAvailable(hasStoredOpenAiApiKey())
+          setKeyDialogOpen(open)
+          if (!open) {
+            pendingStartRef.current = false
+            setApiKeyInput('')
+            setKeyMessage(null)
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>OpenAI key</DialogTitle>
+            <DialogDescription>
+              Stored in this browser. Any app code running here can read it.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              type="password"
+              autoComplete="off"
+              placeholder={storedKeyAvailable ? 'Stored key is set' : 'sk-...'}
+              value={apiKeyInput}
+              onChange={event => setApiKeyInput(event.currentTarget.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter') saveKey()
+              }}
+            />
+            {keyMessage && (
+              <div className="text-xs text-muted-foreground">
+                {keyMessage}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      {recording && (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={() => stopVoiceTranscription()}
-          title="Stop voice transcription"
-          aria-label="Stop voice transcription"
-        >
-          <Square className="mr-1 h-3.5 w-3.5"/>
-          Stop
-        </Button>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={clearKey}
+            >
+              Clear
+            </Button>
+            <Button
+              type="button"
+              onClick={saveKey}
+            >
+              Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {state.status !== 'idle' && (
+        <div className="fixed bottom-3 left-1/2 z-50 flex w-[min(36rem,calc(100vw-1.5rem))] -translate-x-1/2 items-center gap-3 rounded-md border border-border bg-background p-3 text-sm shadow-lg">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+            {busy ? <Loader2 className="h-4 w-4 animate-spin"/> : <Mic className="h-4 w-4"/>}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-medium">
+              {state.error ?? (recording ? 'Recording transcript' : 'Starting transcript')}
+            </div>
+            {state.draftText && (
+              <div className="truncate text-xs text-muted-foreground">
+                {state.draftText}
+              </div>
+            )}
+          </div>
+          {recording && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => stopVoiceTranscription()}
+              title="Stop voice transcription"
+              aria-label="Stop voice transcription"
+            >
+              <Square className="mr-1 h-3.5 w-3.5"/>
+              Stop
+            </Button>
+          )}
+          {state.error && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setState(initialState)}
+            >
+              Dismiss
+            </Button>
+          )}
+        </div>
       )}
-      {state.error && (
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={() => setState(initialState)}
-        >
-          Dismiss
-        </Button>
-      )}
-    </div>
+    </>
   )
 }

@@ -61,11 +61,17 @@ yarn dev
 ### Voice Transcription
 
 The voice transcription plugin uses OpenAI Realtime transcription with
-`gpt-realtime-whisper`. In local Vite dev, set `OPENAI_API_KEY` in the shell
-that starts `yarn dev`; the dev server exposes
-`/api/openai/realtime-client-secret` to mint short-lived browser client
-secrets. In production, provide the same endpoint server-side or set
-`VITE_OPENAI_REALTIME_TOKEN_URL` to a deployment-specific token endpoint.
+`gpt-realtime-whisper`. The current BYOK path stores the user's OpenAI API key
+in browser local storage and uses it only to mint short-lived Realtime client
+secrets before opening the WebRTC session. This is convenient and works on
+mobile browsers, but it is not a hardened secret store: any JavaScript running
+in this app origin can read the stored key.
+
+For a server-owned key or app-paid deployment, set `VITE_OPENAI_REALTIME_TOKEN_URL`
+to a server endpoint that mints Realtime client secrets. The Vite dev server
+also exposes `/api/openai/realtime-client-secret` when started with
+`OPENAI_API_KEY`, but BYOK is the default UX unless an explicit token endpoint
+is configured.
 
 ### Notes
 

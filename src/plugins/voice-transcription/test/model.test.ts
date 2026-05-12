@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  clearOpenAiApiKey,
+  hasStoredOpenAiApiKey,
+  readStoredOpenAiApiKey,
+  saveOpenAiApiKey,
+} from '../credentials.ts'
+import {
   createTranscriptEventState,
   extractRealtimeClientSecret,
   formatTranscriptTime,
@@ -8,6 +14,18 @@ import {
 } from '../model.ts'
 
 describe('voice transcription model helpers', () => {
+  it('stores the BYOK API key only in browser storage', () => {
+    clearOpenAiApiKey()
+    expect(hasStoredOpenAiApiKey()).toBe(false)
+
+    saveOpenAiApiKey('  sk-test-key  ')
+    expect(readStoredOpenAiApiKey()).toBe('sk-test-key')
+    expect(hasStoredOpenAiApiKey()).toBe(true)
+
+    clearOpenAiApiKey()
+    expect(readStoredOpenAiApiKey()).toBeNull()
+  })
+
   it('formats transcript timestamps', () => {
     expect(formatTranscriptTime(0)).toBe('0:00')
     expect(formatTranscriptTime(61_400)).toBe('1:01')
