@@ -7,7 +7,6 @@ import {
 } from '../credentials.ts'
 import {
   createTranscriptEventState,
-  extractRealtimeClientSecret,
   formatTranscriptTime,
   reduceTranscriptEvent,
   splitSegmentTimeRange,
@@ -36,12 +35,6 @@ describe('voice transcription model helpers', () => {
     expect(splitSegmentTimeRange(1_000, 5_000, 20, 10)).toBe(3_000)
     expect(splitSegmentTimeRange(1_000, 5_000, 20, 0)).toBe(1_000)
     expect(splitSegmentTimeRange(1_000, 5_000, 20, 20)).toBe(5_000)
-  })
-
-  it('extracts client secrets from OpenAI response shapes', () => {
-    expect(extractRealtimeClientSecret({value: 'ek_direct'})).toBe('ek_direct')
-    expect(extractRealtimeClientSecret({client_secret: {value: 'ek_nested'}})).toBe('ek_nested')
-    expect(extractRealtimeClientSecret({secret: 'ek_alias'})).toBe('ek_alias')
   })
 
   it('reduces realtime transcription deltas into completed timed segments', () => {

@@ -309,9 +309,12 @@ export function VoiceTranscriptionRecorder() {
       window.removeEventListener(openVoiceTranscriptionSettingsEvent, handleOpenSettings)
       window.removeEventListener(startVoiceTranscriptionEvent, handleStart)
       window.removeEventListener(stopVoiceTranscriptionEvent, handleStop)
-      sessionRef.current?.stop()
     }
   }, [startRecording, stopRecording])
+
+  useEffect(() => () => {
+    sessionRef.current?.stop()
+  }, [])
 
   const saveKey = () => {
     try {
@@ -358,9 +361,9 @@ export function VoiceTranscriptionRecorder() {
             <DialogTitle>OpenAI key</DialogTitle>
             <DialogDescription>
               In the OpenAI key editor, use Restricted with Write only for
-              Realtime client secrets (<code>/v1/realtime/client_secrets</code>)
-              and None for everything else. The key is stored in this browser and
-              mints short-lived Realtime secrets for each recording.
+              Realtime calls (<code>/v1/realtime/calls</code>) and None for
+              everything else. The key is stored in this browser and used only to
+              start each WebRTC transcription call.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">

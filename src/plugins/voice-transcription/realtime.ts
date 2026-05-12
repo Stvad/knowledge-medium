@@ -1,7 +1,6 @@
 import {
   OPENAI_REALTIME_WHISPER_MODEL,
   createTranscriptEventState,
-  extractRealtimeClientSecret,
   reduceTranscriptEvent,
   type TranscriptSegment,
 } from './model.ts'
@@ -22,39 +21,37 @@ export interface RealtimeTranscriptionSession {
 
 const realtimeCallsUrl = 'https://api.openai.com/v1/realtime/calls'
 
-const transcriptionClientSecretRequest = () => ({
-  session: {
-    type: 'transcription',
-    audio: {
-      input: {
-        transcription: {
-          model: OPENAI_REALTIME_WHISPER_MODEL,
-        },
-        turn_detection: null,
+const transcriptionSessionConfig = () => ({
+  type: 'transcription',
+  audio: {
+    input: {
+      transcription: {
+        model: OPENAI_REALTIME_WHISPER_MODEL,
       },
+      turn_detection: null,
     },
   },
 })
 
-export const requestRealtimeClientSecret = async (): Promise<string> => {
-  const apiKey = readStoredOpenAiApiKey()
-  if (!apiKey) throw new Error('OpenAI API key is not configured')
+const createRealtimeCall = async (apiKey: string, sdp: string): Promise<string> => {
+  const formData = new FormData()
+  formData.set('sdp', sdp)
+  formData.set('session', JSON.stringify(transcriptionSessionConfig()))
 
-  const response = await fetch('https://api.openai.com/v1/realtime/client_secrets', {
+  const response = await fetch(realtimeCallsUrl, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
     },
-    body: JSON.stringify(transcriptionClientSecretRequest()),
+    body: formData,
   })
 
   if (!response.ok) {
     const text = await response.text()
-    throw new Error(text || `OpenAI Realtime client secret request failed with HTTP ${response.status}`)
+    throw new Error(text || `Realtime WebRTC offer failed with HTTP ${response.status}`)
   }
 
-  return extractRealtimeClientSecret(await response.json())
+  return response.text()
 }
 
 const stopStream = (stream: MediaStream): void => {
@@ -105,7 +102,9 @@ export const startRealtimeTranscription = async (
     throw new Error('This browser does not expose WebRTC peer connections')
   }
 
-  const clientSecret = await requestRealtimeClientSecret()
+  const apiKey = readStoredOpenAiApiKey()
+  if (!apiKey) throw new Error('OpenAI API key is not configured')
+
   const stream = await navigator.mediaDevices.getUserMedia({audio: true})
   const recorder = startAudioRecorder(stream, callbacks.onAudioUrl)
   const peerConnection = new RTCPeerConnection()
@@ -204,26 +203,14 @@ export const startRealtimeTranscription = async (
     await peerConnection.setLocalDescription(offer)
     if (!offer.sdp) throw new Error('WebRTC offer did not include SDP')
 
-    const response = await fetch(realtimeCallsUrl, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${clientSecret}`,
-        'content-type': 'application/sdp',
-      },
-      body: offer.sdp,
-    })
-
-    if (!response.ok) {
-      const text = await response.text()
-      throw new Error(text || `Realtime WebRTC offer failed with HTTP ${response.status}`)
-    }
+    const answerSdp = await createRealtimeCall(apiKey, offer.sdp)
 
     await peerConnection.setRemoteDescription({
       type: 'answer',
-      sdp: await response.text(),
+      sdp: answerSdp,
     })
   } catch (error) {
-    close()
+    close(error instanceof Error ? error : new Error(String(error)))
     throw error
   }
 

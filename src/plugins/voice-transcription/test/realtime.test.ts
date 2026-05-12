@@ -7,7 +7,6 @@ import {
   OPENAI_REALTIME_WHISPER_MODEL,
 } from '../model.ts'
 import {
-  requestRealtimeClientSecret,
   startRealtimeTranscription,
 } from '../realtime.ts'
 
@@ -76,57 +75,17 @@ describe('voice transcription realtime API', () => {
     vi.unstubAllGlobals()
   })
 
-  it('requests transcription client secrets with whisper-compatible session config', async () => {
-    const fetchMock = vi.fn(async () =>
-      new Response(JSON.stringify({value: 'ek-test'}), {
-        status: 200,
-        headers: {'content-type': 'application/json'},
-      }),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
-    saveOpenAiApiKey('sk-test-local-only')
-
-    await expect(requestRealtimeClientSecret()).resolves.toBe('ek-test')
-
-    const call = fetchMock.mock.calls[0]
-    expect(call).toBeDefined()
-    const [url, init] = call as unknown as [string, RequestInit]
-    expect(url).toBe('https://api.openai.com/v1/realtime/client_secrets')
-    expect(init.method).toBe('POST')
-
-    const body = JSON.parse(String(init.body)) as {
-      session: {
-        type: string
-        audio: {
-          input: Record<string, unknown>
-        }
-      }
-    }
-    expect(body.session.type).toBe('transcription')
-    expect(body.session.audio.input.transcription).toEqual({
-      model: OPENAI_REALTIME_WHISPER_MODEL,
-    })
-    expect(body.session.audio.input.turn_detection).toBeNull()
-  })
-
-  it('keeps recording across transient disconnects and stops cleanly', async () => {
+  it('creates BYOK realtime calls with transcription session config', async () => {
     const stopTrack = vi.fn()
     const stream = {
       getTracks: () => [{stop: stopTrack}],
     }
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url === 'https://api.openai.com/v1/realtime/client_secrets') {
-        return new Response(JSON.stringify({value: 'ek-test'}), {
-          status: 200,
-          headers: {'content-type': 'application/json'},
-        })
-      }
-      return new Response('answer-sdp', {
+    const fetchMock = vi.fn(async () =>
+      new Response('answer-sdp', {
         status: 200,
         headers: {'content-type': 'application/sdp'},
-      })
-    })
+      }),
+    )
     const onOpen = vi.fn()
     const onClose = vi.fn()
 
@@ -141,6 +100,27 @@ describe('voice transcription realtime API', () => {
     saveOpenAiApiKey('sk-test-local-only')
 
     const session = await startRealtimeTranscription({onOpen, onClose})
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://api.openai.com/v1/realtime/calls')
+    expect(init.method).toBe('POST')
+    expect(init.headers).toEqual({
+      authorization: 'Bearer sk-test-local-only',
+    })
+    expect(init.body).toBeInstanceOf(FormData)
+    const body = init.body as FormData
+    expect(body.get('sdp')).toBe('offer-sdp')
+    const sessionConfig = JSON.parse(String(body.get('session'))) as {
+      type: string
+      audio: {
+        input: Record<string, unknown>
+      }
+    }
+    expect(sessionConfig.type).toBe('transcription')
+    expect(sessionConfig.audio.input.transcription).toEqual({
+      model: OPENAI_REALTIME_WHISPER_MODEL,
+    })
+    expect(sessionConfig.audio.input.turn_detection).toBeNull()
+
     const peerConnection = FakePeerConnection.latest
     const recorder = FakeMediaRecorder.latest
     expect(peerConnection).not.toBeNull()
@@ -167,18 +147,12 @@ describe('voice transcription realtime API', () => {
     const stream = {
       getTracks: () => [{stop: stopTrack}],
     }
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url === 'https://api.openai.com/v1/realtime/client_secrets') {
-        return new Response(JSON.stringify({value: 'ek-test'}), {
-          status: 200,
-          headers: {'content-type': 'application/json'},
-        })
-      }
-      return new Response('answer-sdp', {
+    const fetchMock = vi.fn(async () =>
+      new Response('answer-sdp', {
         status: 200,
         headers: {'content-type': 'application/sdp'},
-      })
-    })
+      }),
+    )
     const onClose = vi.fn()
 
     vi.stubGlobal('fetch', fetchMock)
@@ -219,18 +193,12 @@ describe('voice transcription realtime API', () => {
     const stream = {
       getTracks: () => [{stop: stopTrack}],
     }
-    const fetchMock = vi.fn(async (url: string) => {
-      if (url === 'https://api.openai.com/v1/realtime/client_secrets') {
-        return new Response(JSON.stringify({value: 'ek-test'}), {
-          status: 200,
-          headers: {'content-type': 'application/json'},
-        })
-      }
-      return new Response('answer-sdp', {
+    const fetchMock = vi.fn(async () =>
+      new Response('answer-sdp', {
         status: 200,
         headers: {'content-type': 'application/sdp'},
-      })
-    })
+      }),
+    )
     const onClose = vi.fn()
 
     vi.stubGlobal('fetch', fetchMock)

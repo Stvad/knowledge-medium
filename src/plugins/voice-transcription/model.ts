@@ -237,21 +237,3 @@ export const splitSegmentTimeRange = (
   const ratio = Math.min(1, Math.max(0, offset / Math.max(1, textLength)))
   return Math.round(startMs + (endMs - startMs) * ratio)
 }
-
-export const extractRealtimeClientSecret = (payload: unknown): string => {
-  if (typeof payload !== 'object' || payload === null) {
-    throw new Error('Realtime client secret response returned a non-object payload')
-  }
-
-  const record = payload as Record<string, unknown>
-  const direct = record.value ?? record.secret ?? record.client_secret
-  if (typeof direct === 'string' && direct.trim()) return direct.trim()
-
-  const nested = record.client_secret
-  if (typeof nested === 'object' && nested !== null) {
-    const value = (nested as Record<string, unknown>).value
-    if (typeof value === 'string' && value.trim()) return value.trim()
-  }
-
-  throw new Error('Realtime client secret response did not return a client secret')
-}
