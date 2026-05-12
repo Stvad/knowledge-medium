@@ -130,7 +130,7 @@ export const startRealtimeTranscription = async (
     return parts.join(', ')
   }
 
-  const close = (error?: Error): void => {
+  const close = (error?: Error, options: {expected?: boolean} = {}): void => {
     if (closed) return
     closed = true
     if (recorder && recorder.state !== 'inactive') {
@@ -141,7 +141,10 @@ export const startRealtimeTranscription = async (
     }
     dataChannel.close()
     peerConnection.close()
-    callbacks.onClose?.(error)
+    callbacks.onClose?.(
+      error ??
+      (options.expected ? undefined : new Error(`Realtime transcription connection closed (${realtimeStateSummary()})`)),
+    )
   }
 
   dataChannel.addEventListener('open', () => {
@@ -178,6 +181,9 @@ export const startRealtimeTranscription = async (
 
   dataChannel.addEventListener('error', () => {
     close(new Error(`Realtime transcription data channel error (${realtimeStateSummary()})`))
+  })
+  dataChannel.addEventListener('close', () => {
+    close(new Error(`Realtime transcription data channel closed (${realtimeStateSummary()})`))
   })
 
   peerConnection.addEventListener('connectionstatechange', () => {
@@ -222,6 +228,6 @@ export const startRealtimeTranscription = async (
   }
 
   return {
-    stop: close,
+    stop: () => close(undefined, {expected: true}),
   }
 }

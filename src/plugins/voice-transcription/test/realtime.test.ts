@@ -110,7 +110,7 @@ describe('voice transcription realtime API', () => {
     expect(body.session.audio.input.turn_detection).toBeNull()
   })
 
-  it('keeps recording across data-channel close and transient disconnects', async () => {
+  it('keeps recording across transient disconnects and stops cleanly', async () => {
     const stopTrack = vi.fn()
     const stream = {
       getTracks: () => [{stop: stopTrack}],
@@ -150,7 +150,6 @@ describe('voice transcription realtime API', () => {
     expect(onOpen).toHaveBeenCalledTimes(1)
     expect(peerConnection?.dataChannel.send).not.toHaveBeenCalled()
 
-    peerConnection?.dataChannel.dispatchEvent(new Event('close'))
     peerConnection?.setConnectionState('disconnected')
     expect(recorder?.state).toBe('recording')
     expect(stopTrack).not.toHaveBeenCalled()
@@ -160,6 +159,7 @@ describe('voice transcription realtime API', () => {
     expect(recorder?.state).toBe('inactive')
     expect(stopTrack).toHaveBeenCalledTimes(1)
     expect(onClose).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledWith(undefined)
   })
 
   it('reports peer connection diagnostics when the realtime session fails', async () => {
@@ -211,6 +211,54 @@ describe('voice transcription realtime API', () => {
     expect(error.message).toContain('Realtime transcription connection failed')
     expect(error.message).toContain('peer=failed')
     expect(error.message).toContain('dataChannel=')
+    expect(error.message).toContain('lastEvent=session.created')
+  })
+
+  it('reports data channel close diagnostics', async () => {
+    const stopTrack = vi.fn()
+    const stream = {
+      getTracks: () => [{stop: stopTrack}],
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url === 'https://api.openai.com/v1/realtime/client_secrets') {
+        return new Response(JSON.stringify({value: 'ek-test'}), {
+          status: 200,
+          headers: {'content-type': 'application/json'},
+        })
+      }
+      return new Response('answer-sdp', {
+        status: 200,
+        headers: {'content-type': 'application/sdp'},
+      })
+    })
+    const onClose = vi.fn()
+
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn(async () => stream),
+      },
+    })
+    vi.stubGlobal('RTCPeerConnection', FakePeerConnection)
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder)
+    saveOpenAiApiKey('sk-test-local-only')
+
+    await startRealtimeTranscription({onClose})
+    const peerConnection = FakePeerConnection.latest
+    const recorder = FakeMediaRecorder.latest
+    expect(peerConnection).not.toBeNull()
+
+    peerConnection?.dataChannel.dispatchEvent(new MessageEvent('message', {
+      data: JSON.stringify({
+        type: 'session.created',
+      }),
+    }))
+    peerConnection?.dataChannel.dispatchEvent(new Event('close'))
+
+    expect(recorder?.state).toBe('inactive')
+    expect(stopTrack).toHaveBeenCalledTimes(1)
+    const [error] = onClose.mock.calls[0] as [Error]
+    expect(error.message).toContain('Realtime transcription data channel closed')
     expect(error.message).toContain('lastEvent=session.created')
   })
 })
