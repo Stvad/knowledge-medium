@@ -16,7 +16,7 @@
  *   callback that writes the alias list via `tx.setProperty`.
  *   Per-domain also drives the cleanup-eligibility routing in §7.6:
  *   only ensureAliasTarget results enter the newlyInsertedAliasTargetIds
- *   list passed to `backlinks.cleanupOrphanAliases` (date-shaped aliases
+ *   list passed to `references.cleanupOrphanAliases` (date-shaped aliases
  *   never enter the cleanup list — daily notes persist regardless of
  *   whether a referencing block is removed within 4s).
  *

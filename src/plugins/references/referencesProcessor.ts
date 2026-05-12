@@ -1,7 +1,7 @@
 /**
  * Reference parsing + orphan-alias cleanup post-commit processors (spec §7).
  *
- * `backlinks.parseReferences`
+ * `references.parseReferences`
  *   - watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] }
  *   - For each changedRow whose `content` or `properties` changed (insert
  *     or update), parse `[[alias]]` / `((uuid))` references and ref-typed
@@ -11,12 +11,12 @@
  *     the target via ensureAliasTarget / ensureDailyNoteTarget.
  *   - Write `tx.update(sourceId, {references}, {skipMetadata: true})`.
  *   - If any non-date alias target was newly inserted (or restored),
- *     schedule `backlinks.cleanupOrphanAliases` with
+ *     schedule `references.cleanupOrphanAliases` with
  *     `{newlyInsertedAliasTargetIds}` after delayMs: 4000.
  *   - Opens its own tx via `ctx.repo.tx(..., {scope:
  *     ChangeScope.References})` — separate undo bucket; uploads.
  *
- * `backlinks.cleanupOrphanAliases`
+ * `references.cleanupOrphanAliases`
  *   - watches: { kind: 'explicit' }
  *   - scheduledArgsSchema: z.object({newlyInsertedAliasTargetIds: z.array(z.string())})
  *     (validated at enqueue time so a bad arg fails the originating tx)
@@ -67,10 +67,8 @@ import {
   isDateAlias,
 } from '@/plugins/daily-notes'
 
-// Keep the processor ids stable: cleanup work may already be queued under
-// these names in local command_events rows from earlier app versions.
-export const PARSE_REFERENCES_PROCESSOR = 'backlinks.parseReferences'
-export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'backlinks.cleanupOrphanAliases'
+export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
+export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'
 
 const SELECT_LIVE_REFERENCE_SOURCE_SQL = `
   SELECT 1 AS present
@@ -312,7 +310,7 @@ export const parseReferencesProcessor = definePostCommitProcessor({
   },
 })
 
-// ──── backlinks.cleanupOrphanAliases ────
+// ──── references.cleanupOrphanAliases ────
 
 const cleanupArgsSchema = z.object({
   workspaceId: z.string(),

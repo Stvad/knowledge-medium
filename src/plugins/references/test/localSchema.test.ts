@@ -116,7 +116,7 @@ let h: TestDb
 beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
-describe('backlinks local schema bootstrap', () => {
+describe('references local schema bootstrap', () => {
   it('creates backlink-owned triggers and indexes', () => {
     const triggers = (h.db
       .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name")

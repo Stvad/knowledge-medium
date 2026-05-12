@@ -594,7 +594,7 @@ describe('Mid-load invalidations are not dropped (reviewer P2)', () => {
   })
 
   it('load() during a post-invalidate inflight reload returns the fresh load, not the stale cached value', async () => {
-    // Regression for the backlinks.parseReferences §7.5 race: the
+    // Regression for the references.parseReferences §7.5 race: the
     // processor calls `aliasLookup(...).load()` after a tx that just
     // tombstoned the looked-up row. handleStore.invalidate fires
     // synchronously on commit and kicks runLoader, but `await tx` only

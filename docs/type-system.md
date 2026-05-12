@@ -16,7 +16,7 @@ These pieces are load-bearing and the design composes them, not replaces them:
 - **`PropertyUiContribution<T>`** ([src/data/api/propertySchema.ts:33](src/data/api/propertySchema.ts:33)) — React `Editor` / `Renderer` joined to a schema by `name`. Already used by `grouped-backlinks` ([plugins/grouped-backlinks/index.ts:21](src/plugins/grouped-backlinks/index.ts:21)).
 - **`propertySchemasFacet` / `propertyUiFacet` / `propertyEditorFallbackFacet`** ([src/data/facets.ts](src/data/facets.ts)) — schema and exact-UI registries keyed by `name`, plus ordered fallback editor contributions that match registered schemas/codecs.
 - **`blockRenderersFacet`** ([src/extensions/core.ts](src/extensions/core.ts)) — renderer registry with `id` + optional `aliases`; `BlockRenderer` supports `canRender` / `priority` for dynamic dispatch ([src/types.ts:65](src/types.ts:65)).
-- **`BlockData.references: BlockReference[]`** ([src/data/api/blockData.ts:26](src/data/api/blockData.ts:26)) — content-derived (parsed from `[[alias]]` and `((uuid))`) by the `backlinks.parseReferences` post-commit processor ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)). `BlockReference = { id, alias }` ([src/data/api/blockData.ts:4](src/data/api/blockData.ts:4)).
+- **`BlockData.references: BlockReference[]`** ([src/data/api/blockData.ts:26](src/data/api/blockData.ts:26)) — content-derived (parsed from `[[alias]]` and `((uuid))`) by the `references.parseReferences` post-commit processor ([src/plugins/references/referencesProcessor.ts](src/plugins/references/referencesProcessor.ts)). `BlockReference = { id, alias }` ([src/data/api/blockData.ts:4](src/data/api/blockData.ts:4)).
 - **`AppExtension`** + facets — plugins contribute via `someFacet.of(contribution, {source})` ([video-player/index.ts](src/plugins/video-player/index.ts) is a good template).
 - **`appEffectsFacet`** ([src/extensions/core.ts](src/extensions/core.ts)) — long-lived runtime effects with cleanup. Not used in the v1 type-system shape (it would be the natural home for the deferred data-defined-types watcher; §9 explains why that's deferred).
 
@@ -214,7 +214,7 @@ export const typesProp = defineProperty<readonly string[]>('types', {
 
 `KERNEL_PROPERTY_SCHEMAS` includes `typesProp`; `typeProp` is removed. All current writers ([dailyNotes.ts](src/data/dailyNotes.ts), [LayoutRenderer.tsx](src/components/renderer/LayoutRenderer.tsx), [roamImport/import.ts](src/utils/roamImport/import.ts), [roamImport/plan.ts](src/utils/roamImport/plan.ts), [initData.ts](src/initData.ts), [exampleExtensions.ts](src/extensions/exampleExtensions.ts), [agent-runtime/commands.ts](src/plugins/agent-runtime/commands.ts)) switch from `typeProp.codec.encode('foo')` / `tx.setProperty(id, typeProp, 'foo')` to `typesProp` writes.
 
-A one-shot migration backfills existing rows: any block with `properties.type` writes `properties.types = [oldValue]` and clears `type`. Land it as a `LocalSchemaBackfill` contributed via `localSchemaFacet` ([src/data/facets.ts](src/data/facets.ts) — `LocalSchemaContribution.backfills`); `propertySchemasFacet` only combines schema registrations and won't run backfills. Kernel local-schema contributions live in the same place as the existing kernel-side migrations (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) for the pattern, including the `client_schema_state` marker key).
+A one-shot migration backfills existing rows: any block with `properties.type` writes `properties.types = [oldValue]` and clears `type`. Land it as a `LocalSchemaBackfill` contributed via `localSchemaFacet` ([src/data/facets.ts](src/data/facets.ts) — `LocalSchemaContribution.backfills`); `propertySchemasFacet` only combines schema registrations and won't run backfills. Kernel local-schema contributions live in the same place as the existing kernel-side migrations (mirror [src/plugins/references/localSchema.ts](src/plugins/references/localSchema.ts) for the pattern, including the `client_schema_state` marker key).
 
 #### 2a. SQL / index migration — type lookup must move off `$.type`
 
@@ -224,7 +224,7 @@ Today's by-type lookup is SQL, not just property reads. Three call sites touch i
 - `SELECT_BLOCKS_BY_TYPE_SQL` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33)) — generic `WHERE json_extract(properties_json, '$.type') = ?`.
 - `findExtensionBlocksQuery` ([src/data/internals/kernelQueries.ts:384](src/data/internals/kernelQueries.ts:384)) — runs at every workspace bootstrap and on every extension change.
 
-Switching to `types: string[]` breaks `=`-comparison; SQLite expression indexes can't directly index array membership. The right shape is a trigger-maintained side table, mirroring the `block_references` design at [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts):
+Switching to `types: string[]` breaks `=`-comparison; SQLite expression indexes can't directly index array membership. The right shape is a trigger-maintained side table, mirroring the `block_references` design at [src/plugins/references/localSchema.ts](src/plugins/references/localSchema.ts):
 
 ```sql
 CREATE TABLE IF NOT EXISTS block_types (
@@ -940,7 +940,7 @@ No back-compat shim. Existing content-derived rows simply have `sourceField` und
 
 #### 6b. `block_references` edge index — add `source_field` to PK
 
-Backlinks/grouped-backlinks queries don't read `references_json` directly — they query the trigger-maintained `block_references` edge index built in [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts). Today its PK is `(source_id, target_id, alias)`, which would collapse two property refs from the same source to the same target via different fields, and offers no way for grouped-backlinks to group by field name.
+Backlinks/grouped-backlinks queries don't read `references_json` directly — they query the trigger-maintained `block_references` edge index built in [src/plugins/references/localSchema.ts](src/plugins/references/localSchema.ts). Today its PK is `(source_id, target_id, alias)`, which would collapse two property refs from the same source to the same target via different fields, and offers no way for grouped-backlinks to group by field name.
 
 Schema delta:
 
@@ -957,7 +957,7 @@ CREATE TABLE IF NOT EXISTS block_references (
 
 The triggers (`blocks_references_insert`, `blocks_references_update`, the backfill `BACKFILL_BLOCK_REFERENCES_SQL`) all extend their `INSERT OR IGNORE` to read `json_extract(je.value, '$.sourceField')` and write it (coalesced to `''`) into the new column.
 
-**Invalidation rule must diff by `(id, sourceField)`.** The existing `backlinksInvalidationRule` ([src/plugins/backlinks/invalidation.ts:9](src/plugins/backlinks/invalidation.ts:9)) compares before/after `references[]` by *target id only* — it builds `Set<string>` of ids and emits when an id appears or disappears. With named-backlinks, *changing a property ref's source-field on the same target* (e.g., a refactor that moves a ref from `Project.tasks` to `Project.archivedTasks`) wouldn't change the id set on either side and would silently fail to invalidate grouped backlinks.
+**Invalidation rule must diff by `(id, sourceField)`.** The existing `referencesInvalidationRule` ([src/plugins/references/invalidation.ts:9](src/plugins/references/invalidation.ts:9)) compares before/after `references[]` by *target id only* — it builds `Set<string>` of ids and emits when an id appears or disappears. With named-backlinks, *changing a property ref's source-field on the same target* (e.g., a refactor that moves a ref from `Project.tasks` to `Project.archivedTasks`) wouldn't change the id set on either side and would silently fail to invalidate grouped backlinks.
 
 Update both `collectFromSnapshots` and `collectFromRowEvent` to diff by composite key:
 
@@ -973,7 +973,7 @@ const emitReferenceTargetDiff = (
   const targets = new Set<string>()
   for (const r of before) if (!afterKeys.has(key(r))) targets.add(r.id)
   for (const r of after) if (!beforeKeys.has(key(r))) targets.add(r.id)
-  for (const id of targets) emit(BACKLINKS_TARGET_INVALIDATION_CHANNEL, id)
+  for (const id of targets) emit(REFERENCES_TARGET_INVALIDATION_CHANNEL, id)
 }
 ```
 
@@ -981,9 +981,9 @@ The emitted channel value stays the target id (consumers index by target). The c
 
 Existing rows (PK collisions on the new schema are impossible since old rows were content-derived with `source_field=''` by construction). The migration is a `CREATE TABLE block_references_new ... INSERT INTO block_references_new SELECT ..., '' FROM block_references; DROP TABLE block_references; ALTER TABLE block_references_new RENAME TO block_references` sequence, gated by a `block_references_source_field_v1` marker.
 
-### 7. Extend `backlinks.parseReferences` to also project property refs
+### 7. Extend `references.parseReferences` to also project property refs
 
-The existing post-commit processor ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) currently watches `{ kind: 'field', table: 'blocks', fields: ['content'] }` and rewrites `references[]` from parsed content. Extend it:
+The existing post-commit processor ([src/plugins/references/referencesProcessor.ts](src/plugins/references/referencesProcessor.ts)) currently watches `{ kind: 'field', table: 'blocks', fields: ['content'] }` and rewrites `references[]` from parsed content. Extend it:
 
 - Watch list expands to `fields: ['content', 'properties']`.
 - After parsing content refs (existing path), iterate the block's `properties`. For each entry whose `PropertySchema.codec` is a ref-codec or ref-list codec (looked up via `ctx.propertySchemas` — the snapshot of the **merged** schemas map per §7a, populated by the §1a lift; not `propertySchemasFacet` directly), decode and emit one `BlockReference { id, alias: id, sourceField: propName }` per ref. **Each property is decoded inside its own try/catch.** Stored values can be malformed for legitimate reasons — plugin upgraded the codec shape, ad-hoc edits in dev tools, sync from an older client that wrote a different encoding. A bad decode logs a warning, skips that one property, and the projector continues with the rest. Without per-property isolation, one corrupt ref-typed property would poison the whole `parseReferences` run for that block — content refs and other valid property refs would silently disappear from `references_json` until the data is fixed. v1 doesn't try to preserve prior `block_references` entries for the bad field; the field's refs simply go missing in the index until the next successful decode (the next `parseReferences` run after the property is fixed).
@@ -1007,7 +1007,7 @@ Add a kernel-side reprojection step. `setFacetRuntime` itself is synchronous and
      - `await tx.get(id)` to read the current row (read-your-own-writes semantics).
      - Run the same property-walk path as `parseReferences` — recompute `references_json` against the new schema set.
      - **Skip the `tx.update` when the recomputed `references_json` deep-equals the existing one** (same `(id, alias, sourceField)` tuples in the same order). On initial app start, the previous `propertySchemas` snapshot is empty, so every registered ref schema *looks* "new"; a naive implementation would touch every block carrying any ref-typed property — pure churn for rows whose references are already correct, including unnecessary undo entries and upload pressure.
-     - When the row does need updating, write through `tx.update(id, {references}, {skipMetadata: true})` — same flag the existing `parseReferences` processor uses ([referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) so the reprojection isn't credited as a user edit (no `updatedAt` / `updatedBy` bump).
+     - When the row does need updating, write through `tx.update(id, {references}, {skipMetadata: true})` — same flag the existing `parseReferences` processor uses ([referencesProcessor.ts](src/plugins/references/referencesProcessor.ts)) so the reprojection isn't credited as a user edit (no `updatedAt` / `updatedBy` bump).
 3. The `ChangeScope.References` tx scope keeps the reprojection out of the user's normal undo bucket, matching the convention `parseReferences` already uses. The trigger that maintains `block_references` from `references_json` runs inside the same tx, so the edge index falls in line automatically.
 
 This is a one-shot pass per runtime rebuild; the watch on per-block edits handles steady-state. Plugin authors don't need to do anything — the kernel detects the schema-set change and triggers the pass automatically. Workspace iteration matters even for predominantly single-workspace clients because the `Repo` may briefly hold blocks from multiple workspaces during workspace switches; one tx per workspace keeps the writer-slot semantics clean.
@@ -1023,7 +1023,7 @@ export interface ProcessorCtx {
   db: ProcessorReadDb
   repo: Repo
   /** Property-schema registry from the active runtime. Lets processors
-   *  look up a property's codec — needed by `backlinks.parseReferences`
+   *  look up a property's codec — needed by `references.parseReferences`
    *  to recognise ref-codec properties. */
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>
 }
@@ -1198,7 +1198,7 @@ Each phase is independently shippable and testable.
 1. Add `typesFacet` and the `defineBlockType` identity helper to [src/data/facets.ts](src/data/facets.ts) / `@/data/api`.
 2. Add `typesProp` schema to [src/data/properties.ts](src/data/properties.ts), include in `KERNEL_PROPERTY_SCHEMAS`.
 3. Add pure helpers `getBlockTypes` / `hasBlockType` / `addBlockTypeToProperties` per §3-pure to [src/data/properties.ts](src/data/properties.ts).
-4. Add the `block_types` table + triggers + backfill marker per §2a, in the kernel local-schema (mirror [src/plugins/backlinks/localSchema.ts](src/plugins/backlinks/localSchema.ts) shape).
+4. Add the `block_types` table + triggers + backfill marker per §2a, in the kernel local-schema (mirror [src/plugins/references/localSchema.ts](src/plugins/references/localSchema.ts) shape).
 5. Rewrite `SELECT_BLOCKS_BY_TYPE_SQL` and `findExtensionBlocksQuery` to join `block_types` ([src/data/internals/kernelQueries.ts:33](src/data/internals/kernelQueries.ts:33), [:384](src/data/internals/kernelQueries.ts:384)). Drop `idx_blocks_workspace_type` ([src/data/blockSchema.ts:111](src/data/blockSchema.ts:111)).
 6. Extend `Repo.setFacetRuntime` per §3a to retain `types` and the **merged `propertySchemas`** map (§1a schema-lift) on `Repo`. The merge runs the two-pass shape from §1a — type-lifted first, direct second, last-wins-with-warn on conflicts, object-identity dedup. Direct registrations end up winning over type-lifted entries with the same name, preserving the kernel's "register-after-to-override" pattern uniformly across sources. Expose a public `get propertySchemas()` getter on `Repo` and a `usePropertySchemas()` hook (§1a-public). **Audit and migrate** every `runtime.read(propertySchemasFacet)` call site to read the merged map: today the only non-`Repo` consumer is [src/components/BlockProperties.tsx](src/components/BlockProperties.tsx); processor consumers already read from `ProcessorCtx.propertySchemas` which is sourced from the merged map per §7a. This merged map is what `repo.addType` reads (for `setup` lookup and `initialValues` codec encoding), what gets snapshotted into `CommittedTxOutcome.propertySchemas` at tx-start (§7a), what the property panel reads in §3c, and what the typed-query primitive reads in §8. Reads on the read path still use `PropertySchema.defaultValue` directly and don't need either registry.
 7. Add `KERNEL_TYPE_CONTRIBUTIONS` for `'page'`, `'panel'`, `'journal'`, `'daily-note'`, `'extension'`.
@@ -1227,9 +1227,9 @@ Each phase is independently shippable and testable.
 1. Add `codecs.ref()` / `codecs.refList()` to [src/data/api/codecs.ts](src/data/api/codecs.ts) with runtime `isRefCodec` / `isRefListCodec` predicates.
 2. Register `kernel.ref` / `kernel.refList` fallback editors in `propertyEditorFallbackFacet` with higher priority than generic string/list fallbacks.
 3. Extend `BlockReference` with optional `sourceField`.
-4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Update `backlinksInvalidationRule` ([src/plugins/backlinks/invalidation.ts](src/plugins/backlinks/invalidation.ts)) to diff by `(id, sourceField)` per §6b so source-field-only changes invalidate grouped backlinks.
+4. **Local-schema delta per §6b**: add `source_field TEXT NOT NULL DEFAULT ''` column to `block_references`, change PK to `(source_id, target_id, alias, source_field)`, update INSERT/UPDATE triggers and `BACKFILL_BLOCK_REFERENCES_SQL` to read `$.sourceField` from `references_json`, gated by a new backfill marker (`block_references_source_field_v1`). Update `referencesInvalidationRule` ([src/plugins/references/invalidation.ts](src/plugins/references/invalidation.ts)) to diff by `(id, sourceField)` per §6b so source-field-only changes invalidate grouped backlinks.
 5. **`ProcessorCtx` extension per §7a**: add `propertySchemas: ReadonlyMap<string, AnyPropertySchema>` to `ProcessorCtx` ([src/data/api/processor.ts:110](src/data/api/processor.ts:110)). Add `propertySchemas` to `CommittedTxOutcome` ([src/data/internals/processorRunner.ts:55](src/data/internals/processorRunner.ts:55)) so it's snapshotted alongside `processors` at tx-start; the commit pipeline at [src/data/repo.ts:664](src/data/repo.ts:664) passes `this._propertySchemas` through. `processorRunner.dispatch` reads the bundle's snapshot rather than reading the public `repo.propertySchemas` afresh, so processors and schemas come from the same resolved runtime.
-6. Extend `backlinks.parseReferences` ([src/plugins/backlinks/referencesProcessor.ts](src/plugins/backlinks/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too. Per §7, isolate each property decode in a try/catch so one malformed value doesn't poison the whole projector run.
+6. Extend `references.parseReferences` ([src/plugins/references/referencesProcessor.ts](src/plugins/references/referencesProcessor.ts)) to also walk ref-typed properties (using `ctx.propertySchemas` to identify ref codecs); watch `properties` field too. Per §7, isolate each property decode in a try/catch so one malformed value doesn't poison the whole projector run.
 7. Add ref-codec-set diff + reprojection pass to `setFacetRuntime` per §7-bis: detect property names whose ref-ness changed between the old and new `propertySchemas` maps, schedule a one-shot processor that re-runs the property-walk over blocks containing those names. Skip `tx.update` when the recomputed `references_json` deep-equals the existing one (avoids churning every block on initial app start when the prior snapshot is empty). Updates use `{skipMetadata: true}` so reprojection isn't credited as a user edit. Tx scope is `References`.
 8. Add `source_field`-aware grouping mode to [src/plugins/grouped-backlinks/](src/plugins/grouped-backlinks/).
 

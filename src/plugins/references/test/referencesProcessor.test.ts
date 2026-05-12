@@ -3,8 +3,8 @@
  * Integration tests for the parseReferences + cleanupOrphanAliases
  * post-commit processors (spec §7.4). Runs the full pipeline:
  * `repo.tx` write of `content` → field-watch fires
- * backlinks.parseReferences → it ensures alias targets +  writes
- * `references` on source → optionally schedules backlinks.cleanupOrphanAliases
+ * references.parseReferences → it ensures alias targets +  writes
+ * `references` on source → optionally schedules references.cleanupOrphanAliases
  * with delayMs:4000 → tests advance timers + await processors before
  * asserting.
  *

@@ -141,19 +141,19 @@
   </header>
   <dl class="meta">
     <dt>Now lives at</dt>
-    <dd><code>src/markdown/wikilinks/</code>, <code>src/markdown/blockrefs/</code></dd>
+    <dd><code>src/plugins/references/markdown/wikilinks/</code>,
+      <code>src/plugins/references/markdown/blockrefs/</code></dd>
     <dt>Does</dt>
     <dd>Parses <code>[[page]]</code> wikilinks and <code>^(block-id)</code> embeds; renders the React components.</dd>
     <dt>Why</dt>
     <dd>Already half-extracted — the only place these extensions get registered is
-      <span class="path">src/plugins/backlinks/index.ts</span> (imports
+      <span class="path">src/plugins/references/index.ts</span> (imports
       <code>wikilinkMarkdownExtension</code> / <code>blockrefMarkdownExtension</code>).
-      Core doesn't depend on them; backlinks does. They belong with their consumer.</dd>
+      Core doesn't depend on them; the references plugin owns the syntax and index.</dd>
     <dt>Coupling</dt>
     <dd>One leak: <span class="path">RefPropertyEditor.tsx</span> imports
-      <code>BlockEmbed</code> &amp; <code>BlockRefAncestorsProvider</code>. Either move
-      <code>RefPropertyEditor</code> alongside, or expose a tiny embed primitive from core
-      and keep the cycle-guard provider in the plugin.</dd>
+      <code>BlockEmbed</code> &amp; <code>BlockRefAncestorsProvider</code>. Resolved by
+      moving the shared render primitives to <code>src/components/references/</code>.</dd>
   </dl>
 </section>
 
