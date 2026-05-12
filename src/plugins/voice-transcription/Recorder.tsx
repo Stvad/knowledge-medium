@@ -139,7 +139,7 @@ export function VoiceTranscriptionRecorder() {
   const stopRecording = useCallback(async () => {
     const session = sessionRef.current
     sessionRef.current = null
-    session?.stop()
+    await session?.stop()
 
     const transcriptBlockId = transcriptBlockIdRef.current
     transcriptBlockIdRef.current = null
@@ -157,7 +157,7 @@ export function VoiceTranscriptionRecorder() {
   ) => {
     const session = sessionRef.current
     sessionRef.current = null
-    session?.stop()
+    void session?.stop({discard: true})
     transcriptBlockIdRef.current = null
 
     if (transcriptBlockId) {
@@ -313,7 +313,7 @@ export function VoiceTranscriptionRecorder() {
   }, [startRecording, stopRecording])
 
   useEffect(() => () => {
-    sessionRef.current?.stop()
+    void sessionRef.current?.stop({discard: true})
   }, [])
 
   const saveKey = () => {

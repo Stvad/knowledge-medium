@@ -16,27 +16,57 @@ export interface RealtimeTranscriptionCallbacks {
 }
 
 export interface RealtimeTranscriptionSession {
-  stop: () => void
+  stop: (options?: {discard?: boolean}) => Promise<void>
 }
 
 const realtimeCallsUrl = 'https://api.openai.com/v1/realtime/calls'
+const finalTranscriptWaitMs = 3_000
 
-const transcriptionSessionConfig = () => ({
+type TurnDetectionMode = 'server_vad' | 'manual'
+
+const serverVadConfig = {
+  type: 'server_vad',
+  threshold: 0.5,
+  prefix_padding_ms: 300,
+  silence_duration_ms: 500,
+} as const
+
+const transcriptionSessionConfig = (turnDetectionMode: TurnDetectionMode) => ({
   type: 'transcription',
   audio: {
     input: {
       transcription: {
         model: OPENAI_REALTIME_WHISPER_MODEL,
+        language: 'en',
       },
-      turn_detection: null,
+      turn_detection: turnDetectionMode === 'server_vad' ? serverVadConfig : null,
     },
   },
 })
 
-const createRealtimeCall = async (apiKey: string, sdp: string): Promise<string> => {
+const isUnsupportedTurnDetectionError = (text: string): boolean => {
+  try {
+    const payload = JSON.parse(text) as unknown
+    if (typeof payload !== 'object' || payload === null) return false
+    const error = (payload as Record<string, unknown>).error
+    if (typeof error !== 'object' || error === null) return false
+    const message = stringField(error, 'message') ?? ''
+    const param = stringField(error, 'param')
+    return param === 'session.audio.input.turn_detection' &&
+      /turn detection is not supported/i.test(message)
+  } catch {
+    return false
+  }
+}
+
+const createRealtimeCallWithConfig = async (
+  apiKey: string,
+  sdp: string,
+  turnDetectionMode: TurnDetectionMode,
+): Promise<string> => {
   const formData = new FormData()
   formData.set('sdp', sdp)
-  formData.set('session', JSON.stringify(transcriptionSessionConfig()))
+  formData.set('session', JSON.stringify(transcriptionSessionConfig(turnDetectionMode)))
 
   const response = await fetch(realtimeCallsUrl, {
     method: 'POST',
@@ -52,6 +82,26 @@ const createRealtimeCall = async (apiKey: string, sdp: string): Promise<string> 
   }
 
   return response.text()
+}
+
+const createRealtimeCall = async (
+  apiKey: string,
+  sdp: string,
+): Promise<{answerSdp: string; turnDetectionMode: TurnDetectionMode}> => {
+  try {
+    return {
+      answerSdp: await createRealtimeCallWithConfig(apiKey, sdp, 'server_vad'),
+      turnDetectionMode: 'server_vad',
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!isUnsupportedTurnDetectionError(message)) throw error
+  }
+
+  return {
+    answerSdp: await createRealtimeCallWithConfig(apiKey, sdp, 'manual'),
+    turnDetectionMode: 'manual',
+  }
 }
 
 const stopStream = (stream: MediaStream): void => {
@@ -72,6 +122,35 @@ const nestedErrorMessage = (value: unknown): string | undefined => {
   return stringField(error, 'message')
 }
 
+const nestedErrorCode = (value: unknown): string | undefined => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const error = (value as Record<string, unknown>).error
+  if (typeof error !== 'object' || error === null) return undefined
+  return stringField(error, 'code')
+}
+
+const isEmptyManualCommitError = (value: unknown): boolean => {
+  const code = nestedErrorCode(value)
+  const message = nestedErrorMessage(value) ?? ''
+  return code === 'input_audio_buffer_commit_empty' ||
+    /input audio buffer.*empty/i.test(message)
+}
+
+const preferredRecorderMimeType = (): string | undefined => {
+  if (
+    typeof MediaRecorder === 'undefined' ||
+    typeof MediaRecorder.isTypeSupported !== 'function'
+  ) {
+    return undefined
+  }
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+  ]
+  return candidates.find(candidate => MediaRecorder.isTypeSupported(candidate))
+}
+
 const startAudioRecorder = (
   stream: MediaStream,
   onAudioUrl: ((url: string) => void) | undefined,
@@ -79,7 +158,10 @@ const startAudioRecorder = (
   if (typeof MediaRecorder === 'undefined') return null
 
   const chunks: Blob[] = []
-  const recorder = new MediaRecorder(stream)
+  const mimeType = preferredRecorderMimeType()
+  const recorder = mimeType
+    ? new MediaRecorder(stream, {mimeType})
+    : new MediaRecorder(stream)
   recorder.addEventListener('dataavailable', event => {
     if (event.data.size > 0) chunks.push(event.data)
   })
@@ -88,7 +170,7 @@ const startAudioRecorder = (
     const type = recorder.mimeType || chunks[0]?.type || 'audio/webm'
     onAudioUrl?.(URL.createObjectURL(new Blob(chunks, {type})))
   })
-  recorder.start()
+  recorder.start(1_000)
   return recorder
 }
 
@@ -112,8 +194,15 @@ export const startRealtimeTranscription = async (
   const startedAt = performance.now()
   let eventState = createTranscriptEventState()
   let closed = false
+  let turnDetectionMode: TurnDetectionMode = 'server_vad'
   let lastServerEventType: string | null = null
   let lastServerError: string | null = null
+  let stopPromise: Promise<void> | null = null
+  let resolveStop: (() => void) | null = null
+  let stopTimeout: ReturnType<typeof setTimeout> | null = null
+  let waitingForManualCommit = false
+  let closePromise: Promise<void> | null = null
+  let resolveClose: (() => void) | null = null
 
   const elapsedMs = () => Math.max(0, Math.round(performance.now() - startedAt))
 
@@ -129,14 +218,40 @@ export const startRealtimeTranscription = async (
     return parts.join(', ')
   }
 
-  const close = (error?: Error, options: {expected?: boolean} = {}): void => {
-    if (closed) return
+  const resolveStopPromise = (): void => {
+    if (stopTimeout) {
+      clearTimeout(stopTimeout)
+      stopTimeout = null
+    }
+    const resolve = resolveStop
+    resolveStop = null
+    stopPromise = null
+    waitingForManualCommit = false
+    resolve?.()
+  }
+
+  const finishClose = (): void => {
+    resolveStopPromise()
+    resolveClose?.()
+    resolveClose = null
+  }
+
+  const close = (error?: Error, options: {expected?: boolean} = {}): Promise<void> => {
+    if (closed) return closePromise ?? Promise.resolve()
     closed = true
+    closePromise = new Promise(resolve => {
+      resolveClose = resolve
+    })
     if (recorder && recorder.state !== 'inactive') {
-      recorder.addEventListener('stop', () => stopStream(stream), {once: true})
+      recorder.addEventListener('stop', () => {
+        stopStream(stream)
+        finishClose()
+      }, {once: true})
+      recorder.requestData?.()
       recorder.stop()
     } else {
       stopStream(stream)
+      finishClose()
     }
     dataChannel.close()
     peerConnection.close()
@@ -144,6 +259,7 @@ export const startRealtimeTranscription = async (
       error ??
       (options.expected ? undefined : new Error(`Realtime transcription connection closed (${realtimeStateSummary()})`)),
     )
+    return closePromise
   }
 
   dataChannel.addEventListener('open', () => {
@@ -159,6 +275,12 @@ export const startRealtimeTranscription = async (
     }
     lastServerEventType = stringField(payload, 'type') ?? lastServerEventType
     lastServerError = nestedErrorMessage(payload) ?? lastServerError
+    const type = stringField(payload, 'type')
+
+    if (waitingForManualCommit && type === 'error' && isEmptyManualCommitError(payload)) {
+      void close(undefined, {expected: true})
+      return
+    }
 
     const result = reduceTranscriptEvent(eventState, payload, elapsedMs())
     eventState = result.state
@@ -176,13 +298,20 @@ export const startRealtimeTranscription = async (
         callbacks.onError?.(new Error(effect.message))
       }
     }
+
+    if (
+      waitingForManualCommit &&
+      type === 'conversation.item.input_audio_transcription.completed'
+    ) {
+      void close(undefined, {expected: true})
+    }
   })
 
   dataChannel.addEventListener('error', () => {
-    close(new Error(`Realtime transcription data channel error (${realtimeStateSummary()})`))
+    void close(new Error(`Realtime transcription data channel error (${realtimeStateSummary()})`))
   })
   dataChannel.addEventListener('close', () => {
-    close(new Error(`Realtime transcription data channel closed (${realtimeStateSummary()})`))
+    void close(new Error(`Realtime transcription data channel closed (${realtimeStateSummary()})`))
   })
 
   peerConnection.addEventListener('connectionstatechange', () => {
@@ -190,7 +319,7 @@ export const startRealtimeTranscription = async (
       peerConnection.connectionState === 'failed' ||
       peerConnection.connectionState === 'closed'
     ) {
-      close(new Error(`Realtime transcription connection ${peerConnection.connectionState} (${realtimeStateSummary()})`))
+      void close(new Error(`Realtime transcription connection ${peerConnection.connectionState} (${realtimeStateSummary()})`))
     }
   })
 
@@ -203,18 +332,35 @@ export const startRealtimeTranscription = async (
     await peerConnection.setLocalDescription(offer)
     if (!offer.sdp) throw new Error('WebRTC offer did not include SDP')
 
-    const answerSdp = await createRealtimeCall(apiKey, offer.sdp)
+    const call = await createRealtimeCall(apiKey, offer.sdp)
+    turnDetectionMode = call.turnDetectionMode
 
     await peerConnection.setRemoteDescription({
       type: 'answer',
-      sdp: answerSdp,
+      sdp: call.answerSdp,
     })
   } catch (error) {
-    close(error instanceof Error ? error : new Error(String(error)))
+    void close(error instanceof Error ? error : new Error(String(error)))
     throw error
   }
 
   return {
-    stop: () => close(undefined, {expected: true}),
+    stop: ({discard = false} = {}) => {
+      if (closed) return Promise.resolve()
+      if (discard || turnDetectionMode !== 'manual' || dataChannel.readyState !== 'open') {
+        return close(undefined, {expected: true})
+      }
+      if (stopPromise) return stopPromise
+
+      waitingForManualCommit = true
+      dataChannel.send(JSON.stringify({type: 'input_audio_buffer.commit'}))
+      stopPromise = new Promise(resolve => {
+        resolveStop = resolve
+        stopTimeout = setTimeout(() => {
+          void close(undefined, {expected: true})
+        }, finalTranscriptWaitMs)
+      })
+      return stopPromise
+    },
   }
 }
