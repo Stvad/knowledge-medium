@@ -30,7 +30,6 @@ import {
   stopVoiceTranscriptionEvent,
 } from './events.ts'
 import {
-  hasConfiguredRealtimeTokenEndpoint,
   startRealtimeTranscription,
   type RealtimeTranscriptionSession,
 } from './realtime.ts'
@@ -164,7 +163,7 @@ export function VoiceTranscriptionRecorder() {
 
   const startRecording = useCallback(async () => {
     if (state.status === 'starting' || state.status === 'recording') return
-    if (!hasStoredOpenAiApiKey() && !hasConfiguredRealtimeTokenEndpoint()) {
+    if (!hasStoredOpenAiApiKey()) {
       pendingStartRef.current = true
       setStoredKeyAvailable(false)
       setKeyMessage(null)
@@ -339,7 +338,10 @@ export function VoiceTranscriptionRecorder() {
           <DialogHeader>
             <DialogTitle>OpenAI key</DialogTitle>
             <DialogDescription>
-              Stored in this browser. Any app code running here can read it.
+              In the OpenAI key editor, use Restricted with Write for Realtime
+              client secrets (<code>/v1/realtime/client_secrets</code>) and
+              None for everything else. Stored in this browser; any app code
+              running here can read it.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">

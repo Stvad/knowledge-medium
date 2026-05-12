@@ -16,7 +16,11 @@ import {
   TranscriptSegmentRenderer,
   VoiceTranscriptRenderer,
 } from './TranscriptRenderer.tsx'
-import { startVoiceTranscription, stopVoiceTranscription } from './events.ts'
+import {
+  openVoiceTranscriptionSettings,
+  startVoiceTranscription,
+  stopVoiceTranscription,
+} from './events.ts'
 import {
   voiceTranscriptionPropertySchemas,
   voiceTranscriptionTypes,
@@ -51,6 +55,13 @@ export const stopVoiceTranscriptionAction: ActionConfig<typeof ActionContextType
   handler: () => stopVoiceTranscription(),
 }
 
+export const configureVoiceTranscriptionAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
+  id: 'voice_transcription.configure',
+  description: 'Configure voice transcription',
+  context: ActionContextTypes.GLOBAL,
+  handler: () => openVoiceTranscriptionSettings(),
+}
+
 export const voiceTranscriptionPlugin: AppExtension = [
   voiceTranscriptionPropertySchemas.map(schema =>
     propertySchemasFacet.of(schema, {source: 'voice-transcription'}),
@@ -74,6 +85,7 @@ export const voiceTranscriptionPlugin: AppExtension = [
   }),
   actionsFacet.of(startVoiceTranscriptionAction, {source: 'voice-transcription'}),
   actionsFacet.of(stopVoiceTranscriptionAction, {source: 'voice-transcription'}),
+  actionsFacet.of(configureVoiceTranscriptionAction, {source: 'voice-transcription'}),
 ]
 
 export {

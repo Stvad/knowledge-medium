@@ -67,11 +67,10 @@ secrets before opening the WebRTC session. This is convenient and works on
 mobile browsers, but it is not a hardened secret store: any JavaScript running
 in this app origin can read the stored key.
 
-For a server-owned key or app-paid deployment, set `VITE_OPENAI_REALTIME_TOKEN_URL`
-to a server endpoint that mints Realtime client secrets. The Vite dev server
-also exposes `/api/openai/realtime-client-secret` when started with
-`OPENAI_API_KEY`, but BYOK is the default UX unless an explicit token endpoint
-is configured.
+Create a restricted project key for a project dedicated to this app. The key
+only needs Write access for Realtime client secrets
+(`/v1/realtime/client_secrets`); no Read permissions are required for
+transcription.
 
 ### Notes
 

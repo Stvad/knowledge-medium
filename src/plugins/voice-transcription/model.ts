@@ -1,5 +1,4 @@
 export const OPENAI_REALTIME_WHISPER_MODEL = 'gpt-realtime-whisper'
-export const DEFAULT_REALTIME_TOKEN_ENDPOINT = '/api/openai/realtime-client-secret'
 
 export interface TranscriptSegment {
   itemId: string
@@ -184,7 +183,7 @@ export const splitSegmentTimeRange = (
 
 export const extractRealtimeClientSecret = (payload: unknown): string => {
   if (typeof payload !== 'object' || payload === null) {
-    throw new Error('Realtime token endpoint returned a non-object payload')
+    throw new Error('Realtime client secret response returned a non-object payload')
   }
 
   const record = payload as Record<string, unknown>
@@ -197,5 +196,5 @@ export const extractRealtimeClientSecret = (payload: unknown): string => {
     if (typeof value === 'string' && value.trim()) return value.trim()
   }
 
-  throw new Error('Realtime token endpoint did not return a client secret')
+  throw new Error('Realtime client secret response did not return a client secret')
 }
