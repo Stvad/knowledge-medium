@@ -127,15 +127,23 @@
 </p>
 <ul class="lede" style="margin-top: -0.6rem;">
   <li><strong>Sync</strong> (alias plugin): same-block content↔alias reconciliation.
-    Replace when old value matches the other side; heal additively when the block has drifted.</li>
+    Replace when old value matches the other side; heal additively when the block has drifted.
+    Runs <strong>same-tx</strong> — amends the user's transaction so content and aliases commit atomically; throws <code>ProcessorRejection</code> on alias collision so the whole tx rolls back cleanly.</li>
   <li><strong>Rename / backlink rewrite</strong> (references plugin): cross-block.
     When aliases are removed or swapped, rewrite source backlinks.
-    Lives next to <code>parseReferences</code> because it needs the
-    <code>block_references</code> projection to find sources.</li>
+    Runs <strong>follow-up</strong> (post-commit) — the cross-block writes can be many and shouldn't block the user's commit. Lives next to <code>parseReferences</code> because it needs the <code>block_references</code> projection to find sources.</li>
 </ul>
 <p class="lede">
-  Sync composes into rename: when a content edit produces an alias-array swap,
-  the rename processor picks it up uniformly via the alias diff. No special path.
+  Sync composes into rename: when a content edit produces an alias-array swap (committed atomically in the user's tx), the rename processor picks it up uniformly via the alias diff. No special path.
+</p>
+<p class="lede" style="font-size: 0.85rem; color: var(--muted);">
+  On the same-tx vs follow-up split: same-tx is reserved for cheap,
+  correctness-critical, single-row work (sync, reference-array
+  normalization). Follow-up keeps expensive or cross-row work
+  (parseReferences, rename, cleanup) off the user-commit path. The
+  earlier decision to keep <code>parseReferences</code> follow-up
+  (data-layer redesign §7.1) stands — that was a typing-latency
+  call about that specific processor, not a category-wide stance.
 </p>
 
 <div class="legend">
@@ -611,16 +619,17 @@
 <h2>Undo interactions</h2>
 
 <p class="lede" style="margin-bottom: 1rem;">
-  User actions land in <code>ChangeScope.BlockDefault</code>; sync and
-  rename open follow-up txs in <code>ChangeScope.References</code>.
-  Cmd-Z targets the <code>BlockDefault</code> stack — the
-  <code>References</code> stack is recorded for parity but not
-  user-exposed (see <a href="../src/data/internals/undoManager.ts">undoManager.ts</a>).
-  So a single user action becomes <em>2 or 3 separate txs across two
-  undo buckets</em>: undo reverses only the user tx, and the field-
-  watcher re-fires sync + rename on the reverted state. Whether the
-  pipeline self-heals depends on whether the forward edit was
-  reversible.
+  With sync as a same-tx processor, the user's content and alias
+  writes commit <strong>atomically in one tx</strong> — one
+  <code>BlockDefault</code> undo entry per user action. Rename
+  remains follow-up (the cross-block writes go in
+  <code>ChangeScope.References</code>, which is recorded for parity
+  but not user-exposed; see
+  <a href="../src/data/internals/undoManager.ts">undoManager.ts</a>).
+  So a single user action becomes <em>one user-visible undo entry</em>
+  plus a follow-up rename tx that the field-watcher re-fires on
+  cmd-Z. Whether the pipeline self-heals depends on whether the
+  forward edit was reversible.
 </p>
 
 <p class="lede" style="margin-bottom: 1rem;">
@@ -639,17 +648,20 @@
   </div>
   <ul style="font-size: 0.9rem; margin: 0 0 0 1rem;">
     <li><strong>A1 (content edit, old ∈ aliases).</strong>
-      Forward: content "Old"→"New" → sync writes alias [Old]→[New] →
-      rename R1 writes source <code>[[Old]]→[[New]]</code>. Undo
-      content: "New"→"Old" → sync sees "New"∈[New] → rule 1 swaps
-      [New]→[Old] → rename R1 writes <code>[[New]]→[[Old]]</code>. ✓
+      Forward: same-tx sync amends the user's tx so content "Old"→"New"
+      and aliases [Old]→[New] commit atomically. Rename R1 fires
+      follow-up and writes <code>[[Old]]→[[New]]</code> at sources.
+      Cmd-Z reverts the single user tx (content and aliases revert
+      together); rename re-fires on the diff and rewrites
+      <code>[[New]]→[[Old]]</code>. ✓
     </li>
     <li><strong>AR1 (alias rename, content matches).</strong>
-      Forward: aliases [Foo]→[Bar] → sync writes content "Bar" →
-      rename R1 writes <code>[[Foo]]→[[Bar]]</code>. Undo alias swap:
-      [Bar]→[Foo], content still "Bar" → sync sees AR1: content "Bar"
-      === removed "Bar" → writes content "Foo" → rename R1 writes
-      <code>[[Bar]]→[[Foo]]</code>. ✓
+      Forward: same-tx sync sees the user's
+      aliases [Foo]→[Bar] write, amends the tx to also rewrite
+      content "Foo"→"Bar". One atomic commit. Rename R1 fires
+      follow-up and writes <code>[[Foo]]→[[Bar]]</code>. Cmd-Z
+      reverts the atomic content+alias swap; rename re-fires and
+      writes <code>[[Bar]]→[[Foo]]</code>. ✓
     </li>
     <li><strong>R1 / R2 (clean alias rename).</strong>
       Forward: [Old]→[New] → rename rewrites
@@ -662,6 +674,12 @@
       exists) → no source writes. ✓
     </li>
   </ul>
+  <p style="font-size: 0.85rem; margin: 0.6rem 0 0 0; color: var(--muted);">
+    The same-tx move closes the previous "two-tx undo, two undo
+    buckets" gap for A1, AR1, and A3 — those used to commit the
+    user's edit and sync's follow-up alias write as separate txs.
+    Now the alias write rides on the user tx and reverts atomically.
+  </p>
 </div>
 
 <div class="case">
@@ -680,19 +698,22 @@
       reconstruct it.
     </li>
     <li><strong>A2-cascade (content edit collapses alias → R4).</strong>
-      Forward: content "X"→"Y" with aliases [X, Y] → sync collapses
-      to [Y] (Case A2) → rename hits R4 for removed X → source
-      <code>[[X]] → [X](((id)))</code>. Undo content: "Y"→"X" → sync
-      rule 1 swaps alias [Y]→[X]. The lost "Y" entry never comes back
-      and the source stays in blockref form. Two regressions in one.
+      Forward: same-tx sync amends the user's tx so content "X"→"Y"
+      and aliases [X, Y]→[Y] commit atomically (Case A2). Rename
+      fires follow-up, hits R4 for removed X, rewrites source
+      <code>[[X]] → [X](((id)))</code>. Undo content+alias atomically
+      (one tx): "Y"→"X", aliases [Y]→[X, Y]. The source stays in
+      blockref form because rename's destructive R4 rewrite is in
+      <code>References</code> scope and isn't reverted by the user
+      undo. Same-tx fixed the alias side; the source-rewrite side is
+      what R4-R7 Options A/D address.
     </li>
     <li><strong>A3-residue (drift heal).</strong>
-      Forward: content edit on a drifted page added new content as an
-      extra alias. Undo content: sync rule 1 swaps the added-back
-      alias to the now-restored content, but the <em>original
-      drifted</em> alias state isn't restored either — A3 leaks an
-      alias entry across the undo. Cosmetic compared to R4 but worth
-      naming.
+      Note: with same-tx sync, A3 healing happens in the user's own
+      tx, so cmd-Z reverts the heal atomically alongside the
+      content. This residue case no longer exists under same-tx
+      placement — kept here for historical reference until the
+      framework lands.
     </li>
   </ul>
   <div class="action bad">
@@ -826,6 +847,169 @@
     rewrite-to-blockref). A2-cascade test asserts that sync still
     collapses the alias but the source content stays
     <code>[[X]]</code>.
+  </p>
+</div>
+
+<h2>Alias collisions</h2>
+
+<p class="lede" style="margin-bottom: 1rem;">
+  A user can request an alias that is already claimed by a different
+  live block — by typing <code>[[Existing]]</code> at the top of their
+  own block (A1, A2) or by adding "Existing" to their block's
+  <code>aliases</code> property directly (AR1). Without intervention
+  the sync processor would either steal the name (if it wrote
+  unconditionally) or silently no-op (leaving content and aliases
+  drifted — the "stuck state"). Neither is acceptable.
+</p>
+
+<p class="lede" style="margin-bottom: 1rem;">
+  V1 policy is <strong>refuse the rename atomically</strong>: the
+  user's transaction rolls back before commit, leaving content and
+  aliases in their pre-edit state. A toast surfaces the reason.
+  The eventual goal is Roam-style "suggest merge" (offer to merge
+  the two blocks into one), but the merge flow has its own design
+  surface — disallowing for now keeps the door open without
+  committing to the merge UX.
+</p>
+
+<div class="case">
+  <div class="case-title">
+    <span>Placement: same-tx alias sync</span>
+    <span class="tag ok">enables atomic rejection</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Collision detection isn't a standalone validator — it folds
+    into the alias sync processor, which moves from post-commit to
+    <strong>same-tx</strong> placement for this work. The same-tx
+    facility is the v4.19 processor mode that v4.20 of the data-
+    layer redesign dropped for being uncalled; it's being
+    reintroduced specifically for cheap, correctness-critical,
+    single-row work like sync (and reference-array normalization,
+    which is currently hardcoded inline in <code>txEngine.ts</code>).
+    The earlier decision to keep <code>parseReferences</code> as
+    follow-up (data-layer redesign §7.1) stands — that decision was
+    about typing-path latency for an expensive processor, not about
+    same-tx as a category.
+  </p>
+  <p style="font-size: 0.9rem; margin: 0;">
+    Concretely: sync registers via
+    <code>sameTxProcessorsFacet</code> (sibling to
+    <code>postCommitProcessorsFacet</code>); its <code>apply</code>
+    receives the user's live <code>Tx</code>; it reads staged state,
+    amends the tx with alias writes when planning succeeds, or
+    throws <code>ProcessorRejection</code> when the collision check
+    fails. The user's whole tx rolls back atomically inside
+    SQLite's <code>writeTransaction</code>.
+  </p>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Detection</span>
+    <span class="tag ok">unified across A1 / A2 / AR1</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Sync's plan phase computes the set of aliases the user is
+    <em>claiming</em> for this block. For each, run the existing
+    seat-id probe (<code>resolveAliasSeatId</code>) against the
+    workspace's staged state. If the resolved seat belongs to a
+    different live block, that's a collision. Self-reclaim (the
+    block reasserting an alias it already owns) is the happy path —
+    the probe returns this block's own seat.
+  </p>
+  <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
+    <li><strong>A1</strong> (content adds <code>[[New]]</code>):
+      <code>newAliases = aliasesFromContent(after) \ before.aliases</code>.
+    </li>
+    <li><strong>A2</strong> (content rewrites <code>[[Old]]</code> →
+      <code>[[New]]</code>): same as A1 — the new name is in the
+      added set.
+    </li>
+    <li><strong>AR1</strong> (user writes aliases directly):
+      <code>newAliases = after.aliases \ before.aliases</code>.
+    </li>
+    <li><strong>A3</strong> (alias removal): no new claim, no check.
+    </li>
+  </ul>
+  <p style="font-size: 0.9rem; margin: 0;">
+    Detection runs inside the user's tx via
+    <code>aliasSeatReaderFromTx(ctx.tx)</code> — sees staged writes
+    that this tx made, so cascades within a single tx (e.g. a
+    mutator that adds two colliding aliases) are caught coherently.
+  </p>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Response: throw ProcessorRejection</span>
+    <span class="tag ok">atomic, no stuck state</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    On collision, the same-tx sync processor throws
+    <code>ProcessorRejection('alias.collision', {alias,
+    conflictingBlockId, attemptedOn})</code>. The error bubbles
+    out of the user's <code>writeTransaction</code>, SQLite rolls
+    back atomically, no rows were committed, no
+    <code>snapshots</code> entry was recorded, no undo entry was
+    created. The user is in the exact pre-edit state. The error
+    surfaces at the <code>repo.tx</code> call site (the editor
+    save / chip edit / programmatic mutator) where a top-level
+    handler maps the error code to a toast with an action button
+    ("Open 'Y'") via the sonner-based toast layer.
+  </p>
+  <p style="font-size: 0.9rem; margin: 0;">
+    What this replaces: an earlier post-commit-revert design used
+    <code>repo.undo(BlockDefault)</code> after the user's tx had
+    already committed, with a behavioral guard (single-row
+    snapshot + <code>snap.after === current</code>) and a "refuse
+    and leave content" fallback when the guard missed. Same-tx
+    rejection makes all of that unnecessary — there is no
+    committed state to revert, no fallback to manage, no
+    multi-row-snapshot edge case.
+  </p>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Why same-tx over editor-layer validation</span>
+    <span class="tag noop">considered alternatives</span>
+  </div>
+  <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
+    <li><strong>Editor-layer guard (refuse in CodeMirror):</strong>
+      clean UX but only catches collisions originating from the
+      user-typing path. Misses programmatic mutators, the chip
+      editor, import flows, and any future surface that writes
+      blocks. The data layer is the right enforcement boundary.
+    </li>
+    <li><strong>Post-commit revert via repo.undo:</strong>
+      doable without engine changes, but creates the stuck-state
+      fallback case (multi-row tx where revert isn't safe) and
+      depends on a behavioral guard that's easy to get subtly
+      wrong. Same-tx is simpler end-to-end.
+    </li>
+    <li><strong>argsSchema validation at the mutator boundary:</strong>
+      doesn't see the cross-block state needed to detect collision
+      (seat-id probe needs SQL access). Schema-level checks are
+      for shape, not semantics.
+    </li>
+  </ul>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Future: suggest merge</span>
+    <span class="tag noop">deferred</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0;">
+    Roam's mental model: a collision means the user probably wants
+    to merge the two blocks (move children, redirect references,
+    delete the duplicate). The toast's action button is the obvious
+    surface ("Merge with 'Y'?"). The merge implementation has its
+    own design — moving children, transferring aliases, handling
+    properties — and isn't blocked by collision detection. Ship
+    detection + refuse first; merge layers on top by replacing
+    the toast action with a confirmation flow that runs a merge
+    mutator.
   </p>
 </div>
 
