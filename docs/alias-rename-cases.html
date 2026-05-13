@@ -614,6 +614,16 @@
     Side benefit: tombstone-restore-on-retype goes away too (probe past tombstones).
     A typed <code>[[Foo]]</code> always means a fresh Foo, not "restore the deleted Foo I had three months ago."
   </p>
+  <p style="margin: 0.5rem 0 0 0; font-size: 0.85rem; color: var(--muted);">
+    <strong>Note on collision detection:</strong> the seat-id probe
+    answers "what id should a fresh claimant get for this alias?" —
+    the right question for <code>ensureAliasTarget</code>. It's the
+    <em>wrong</em> question for "does any live block already claim
+    this alias?" (which doesn't care about ids at all). Collision
+    detection uses the trigger-maintained <code>block_aliases</code>
+    index via <code>tx.aliasLookup</code> instead — see "Alias
+    collisions" below.
+  </p>
 </div>
 
 <h2>Undo interactions</h2>
@@ -910,12 +920,15 @@
   </div>
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
     Sync's plan phase computes the set of aliases the user is
-    <em>claiming</em> for this block. For each, run the existing
-    seat-id probe (<code>resolveAliasSeatId</code>) against the
-    workspace's staged state. If the resolved seat belongs to a
-    different live block, that's a collision. Self-reclaim (the
-    block reasserting an alias it already owns) is the happy path —
-    the probe returns this block's own seat.
+    <em>claiming</em> for this block, then asks
+    <code>tx.aliasLookup(alias, workspaceId)</code> — a tx-aware
+    primitive against the trigger-maintained
+    <code>block_aliases</code> index (the same index
+    <code>parseReferences</code>, quick-find, backlinks filters, and
+    <code>core.aliasLookup</code> read). If the lookup returns a
+    block whose id differs from this row, that's a collision.
+    Self-reclaim (the block reasserting an alias it already owns) is
+    the happy path — the lookup returns this block.
   </p>
   <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
     <li><strong>A1</strong> (content adds <code>[[New]]</code>):
@@ -932,10 +945,26 @@
     </li>
   </ul>
   <p style="font-size: 0.9rem; margin: 0;">
-    Detection runs inside the user's tx via
-    <code>aliasSeatReaderFromTx(ctx.tx)</code> — sees staged writes
-    that this tx made, so cascades within a single tx (e.g. a
-    mutator that adds two colliding aliases) are caught coherently.
+    Detection runs inside the user's tx, so <code>tx.aliasLookup</code>
+    sees staged writes from this tx (the <code>block_aliases</code>
+    triggers fire synchronously inside the writeTransaction).
+    Cascades within a single tx — e.g. a mutator that adds two
+    colliding aliases — are caught coherently.
+  </p>
+  <p style="font-size: 0.85rem; margin: 0.5rem 0 0 0; color: var(--muted);">
+    <strong>Why not the seat-id probe?</strong> An earlier
+    implementation walked <code>computeAliasSeatId(alias, ws,
+    0..N)</code>. That assumed every alias claimant's id is in the
+    seat-id space for the alias it currently claims — which fails in
+    three real cases: (a) a block created via <code>tx.create</code>
+    with an arbitrary id then later given an alias, (b) a block
+    originally seat-id-keyed for alias α then renamed to β (its id
+    is still <code>uuidv5("ws:α:N")</code>, not the seat for β), and
+    (c) a block claiming an alias whose canonical seat is held by a
+    different live block. The <code>block_aliases</code> index covers
+    all three. The seat-id mechanism is kept for
+    <code>ensureAliasTarget</code> (which DOES want a deterministic
+    id for a new claimant — a different question).
   </p>
 </div>
 
@@ -947,15 +976,27 @@
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
     On collision, the same-tx sync processor throws
     <code>ProcessorRejection('alias.collision', {alias,
-    conflictingBlockId, attemptedOn})</code>. The error bubbles
-    out of the user's <code>writeTransaction</code>, SQLite rolls
-    back atomically, no rows were committed, no
-    <code>snapshots</code> entry was recorded, no undo entry was
-    created. The user is in the exact pre-edit state. The error
-    surfaces at the <code>repo.tx</code> call site (the editor
-    save / chip edit / programmatic mutator) where a top-level
-    handler maps the error code to a toast with an action button
-    ("Open 'Y'") via the sonner-based toast layer.
+    conflictingBlockId, conflictingBlockTitle, workspaceId,
+    attemptedOn})</code>. The error bubbles out of the user's
+    <code>writeTransaction</code>, SQLite rolls back atomically, no
+    rows were committed, no <code>snapshots</code> entry was
+    recorded, no undo entry was created. The user is in the exact
+    pre-edit state.
+  </p>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    The error surfaces at the <code>repo.tx</code> call site (the
+    editor save / chip edit / programmatic mutator). A single
+    <code>repo.onUserError</code> subscriber wired at Repo bootstrap
+    (<a href="../src/context/repo.tsx">context/repo.tsx</a>) routes
+    <code>ProcessorRejection</code>s to the sonner-based toast layer.
+    The <code>alias.collision</code> handler renders
+    <em>"Alias 'X' is already used by 'Y'. Your edit was reverted —
+    try a different name."</em> with an <em>"Open"</em> action button
+    that calls <code>navigate(repo, …)</code>.
+    <code>conflictingBlockTitle</code> in the rejection meta is
+    snapshotted at detection time (one extra <code>tx.aliasLookup</code>
+    read returns the full <code>BlockData</code>) so the toast doesn't
+    need a follow-up SQL query.
   </p>
   <p style="font-size: 0.9rem; margin: 0;">
     What this replaces: an earlier post-commit-revert design used
@@ -989,8 +1030,8 @@
     </li>
     <li><strong>argsSchema validation at the mutator boundary:</strong>
       doesn't see the cross-block state needed to detect collision
-      (seat-id probe needs SQL access). Schema-level checks are
-      for shape, not semantics.
+      (a <code>block_aliases</code> SELECT in the active workspace
+      is required). Schema-level checks are for shape, not semantics.
     </li>
   </ul>
 </div>
