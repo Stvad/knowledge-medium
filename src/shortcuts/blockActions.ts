@@ -286,6 +286,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: ({block}: BlockShortcutDependencies) => {
       writeToClipboard(`((${block.id}))`)
     },
+    defaultBinding: {
+      keys: 'alt+y',
+    },
   }
 
   const copyBlockEmbed: BlockAction = {
@@ -294,6 +297,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     icon: ClipboardCopy,
     handler: ({block}: BlockShortcutDependencies) => {
       writeToClipboard(`!((${block.id}))`)
+    },
+    defaultBinding: {
+      keys: 'shift+y',
     },
   }
 

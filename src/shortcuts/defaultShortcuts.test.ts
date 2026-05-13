@@ -154,6 +154,14 @@ beforeEach(async () => { env = await setup() })
 afterEach(async () => { await env.h.cleanup() })
 
 describe('default CodeMirror shortcuts', () => {
+  it('binds copy block reference and embed shortcuts in normal mode', () => {
+    const copyBlockRefAction = findNormalModeAction(env.repo, 'copy_block_ref')
+    const copyBlockEmbedAction = findNormalModeAction(env.repo, 'copy_block_embed')
+
+    expect(copyBlockRefAction.defaultBinding?.keys).toBe('alt+y')
+    expect(copyBlockEmbedAction.defaultBinding?.keys).toBe('shift+y')
+  })
+
   it('closes the current panel from normal mode with ctrl+w', async () => {
     const {uiStateBlock, block} = await seedPanelAndContent()
     const action = findNormalModeAction(env.repo, 'close_current_panel')
