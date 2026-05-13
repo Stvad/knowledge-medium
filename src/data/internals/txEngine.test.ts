@@ -39,6 +39,7 @@ import {
   type Mutator,
   type Schema,
 } from '@/data/api'
+import { aliasesProp } from '@/data/internals/coreProperties'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
@@ -489,6 +490,55 @@ describe('tx.childrenOf / tx.parentOf', () => {
       expect(kids.map(k => k.id)).toEqual(['c-c1', 'c-c2'])
       expect((await tx.parentOf('c-c2'))!.id).toBe('c-p')
       expect(await tx.parentOf('c-p')).toBeNull()
+    }, {scope: ChangeScope.BlockDefault})
+  })
+})
+
+describe('tx.aliasLookup', () => {
+  it('finds a block by exact alias inside the user tx (read-your-own-writes)', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'al-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'Foo'})
+      await tx.setProperty('al-1', aliasesProp, ['Foo'])
+      // The block_aliases trigger fires on the property write — even
+      // mid-tx, the lookup sees the in-flight claimant.
+      const claimant = await tx.aliasLookup('Foo', 'ws-1')
+      expect(claimant?.id).toBe('al-1')
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('returns null when no live block claims the alias', async () => {
+    await env.repo.tx(async tx => {
+      expect(await tx.aliasLookup('Nope', 'ws-1')).toBeNull()
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('is workspace-scoped — a claimant in one workspace does not match in another', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'al-a', workspaceId: 'ws-A', parentId: null, orderKey: 'a0', content: 'X'})
+      await tx.setProperty('al-a', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      expect((await tx.aliasLookup('Shared', 'ws-A'))?.id).toBe('al-a')
+      expect(await tx.aliasLookup('Shared', 'ws-B')).toBeNull()
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('skips soft-deleted claimants', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'al-d', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'X'})
+      await tx.setProperty('al-d', aliasesProp, ['Stale'])
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete('al-d'), {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      expect(await tx.aliasLookup('Stale', 'ws-1')).toBeNull()
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('returns null for blank alias or workspaceId (defensive)', async () => {
+    await env.repo.tx(async tx => {
+      expect(await tx.aliasLookup('', 'ws-1')).toBeNull()
+      expect(await tx.aliasLookup('Foo', '')).toBeNull()
     }, {scope: ChangeScope.BlockDefault})
   })
 })

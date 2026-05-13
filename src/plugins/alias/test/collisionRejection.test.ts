@@ -89,9 +89,10 @@ const flush = async () => {
   await env.repo.awaitProcessors()
 }
 
-/** Create a block claiming `alias` at slot 0 (the canonical seat).
- *  Uses computeAliasSeatId so the row IS the canonical claimant; the
- *  collision check probes through the same seat space. */
+/** Create a block claiming `alias`. Uses computeAliasSeatId for the
+ *  id — the typical convergent path. Co-exists with `seatAtExplicitId`
+ *  below which exercises the alternative-id path the collision
+ *  check has to cover too. */
 const seatAt = async (alias: string, content: string): Promise<string> => {
   const id = computeAliasSeatId(alias, WS, 0)
   await env.repo.tx(async tx => {
@@ -100,6 +101,22 @@ const seatAt = async (alias: string, content: string): Promise<string> => {
   }, {scope: ChangeScope.BlockDefault})
   await flush()
   return id
+}
+
+/** Create a block claiming `alias` at an arbitrary (non-seat) id —
+ *  e.g. a block originally created with content unrelated to its
+ *  current alias. The trigger-maintained `block_aliases` index
+ *  picks it up regardless. */
+const seatAtExplicitId = async (
+  id: string,
+  alias: string,
+  content: string,
+): Promise<void> => {
+  await env.repo.tx(async tx => {
+    await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content})
+    await tx.setProperty(id, aliasesProp, [alias])
+  }, {scope: ChangeScope.BlockDefault})
+  await flush()
 }
 
 describe('alias.collision — A1-style (content edit adds new claim)', () => {
@@ -197,6 +214,53 @@ describe('alias.collision — self-reclaim is not a collision', () => {
     )
 
     expect(await readAliases(id)).toEqual(['Self'])
+  })
+})
+
+describe('alias.collision — detects claimants at non-seat ids', () => {
+  it('catches a collision when the existing claimant has an explicit (non-seat) id', async () => {
+    // The previous seat-id probe would have walked
+    // `computeAliasSeatId('Taken', ws, 0..N)` and missed this block
+    // entirely (its id is unrelated to the seat space). The
+    // `block_aliases`-backed lookup finds it because the trigger
+    // indexes every live row claiming the alias regardless of id.
+    await seatAtExplicitId('explicit-id-abc', 'Taken', 'whatever')
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'fresh'})
+      await tx.setProperty('b', aliasesProp, ['fresh'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    let caught: unknown
+    try {
+      await env.repo.mutate.setContent({id: 'b', content: 'Taken'})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe('explicit-id-abc')
+  })
+
+  it('exposes conflicting block title + workspaceId in the rejection meta', async () => {
+    await seatAtExplicitId('id-foo', 'Foo', 'Foo page')
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'b', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'b'})
+      await tx.setProperty('b', aliasesProp, ['b'])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    let caught: unknown
+    try {
+      await env.repo.mutate.setContent({id: 'b', content: 'Foo'})
+    } catch (err) { caught = err }
+    const rejection = caught as ProcessorRejection
+    expect(rejection.meta).toMatchObject({
+      alias: 'Foo',
+      conflictingBlockId: 'id-foo',
+      conflictingBlockTitle: 'Foo page',
+      workspaceId: WS,
+      attemptedOn: 'b',
+    })
   })
 })
 

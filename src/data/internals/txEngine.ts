@@ -60,6 +60,7 @@ import {
 } from '@/data/blockSchema'
 import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
 import { IS_DESCENDANT_OF_SQL } from './treeQueries'
+import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import type { BlockCache } from '@/data/blockCache'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -435,6 +436,21 @@ export class TxImpl implements Tx {
 
   async parentOf(childId: string): Promise<BlockData | null> {
     const row = await this.ctx.txDb.getOptional<BlockRow>(SELECT_PARENT_SQL, [childId])
+    return row === null ? null : parseBlockRow(row)
+  }
+
+  async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
+    // Defensive: both args are required for a meaningful lookup, but a
+    // bad caller passing '' would otherwise match a row whose alias
+    // entry was '' (block_aliases stores empty strings; see the
+    // block_aliases trigger doc in clientSchema.ts). Return null so
+    // the callsite doesn't accidentally treat an empty match as a
+    // claimant.
+    if (alias === '' || workspaceId === '') return null
+    const row = await this.ctx.txDb.getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+      [workspaceId, alias],
+    )
     return row === null ? null : parseBlockRow(row)
   }
 

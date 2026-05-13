@@ -47,7 +47,6 @@ import {
   type SameTxEvent,
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
-import { aliasSeatReaderFromTx, findAliasClaimant } from '@/data/targets'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
@@ -190,18 +189,26 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
 const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
   // Collision check: for each newly claimed alias, is there a
   // different live block in this workspace that already claims it?
+  // Uses the trigger-maintained `block_aliases` index via
+  // `tx.aliasLookup` — sees own writes from this tx, covers every
+  // claimant regardless of how its id was generated.
   if (plan.claimedAliases.length > 0) {
-    const reader = aliasSeatReaderFromTx(ctx.tx)
     for (const alias of plan.claimedAliases) {
       if (alias === '') continue  // belt-and-suspenders; planner skips blanks
-      const claimantId = await findAliasClaimant(reader, alias, plan.workspaceId)
-      if (claimantId !== null && claimantId !== plan.id) {
+      const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId)
+      if (claimant !== null && claimant.id !== plan.id) {
         throw new ProcessorRejection(
           `Alias "${alias}" is already used by another block`,
           'alias.collision',
           {
             alias,
-            conflictingBlockId: claimantId,
+            conflictingBlockId: claimant.id,
+            // Snapshot the conflicting block's content at rejection
+            // time so the toast layer can show "Already used by 'X'"
+            // without a follow-up read. Truncated to a sane display
+            // length — toast UI doesn't render giant strings well.
+            conflictingBlockTitle: claimant.content.slice(0, 80),
+            workspaceId: plan.workspaceId,
             attemptedOn: plan.id,
           },
         )

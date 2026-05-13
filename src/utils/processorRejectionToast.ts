@@ -2,9 +2,14 @@
  * Routes `ProcessorRejection` from `repo.tx` to the toast layer.
  *
  * Wired once at Repo bootstrap (`src/context/repo.tsx`) via
- * `repo.onUserError(surfaceProcessorRejection)`. Per-code formatting
- * lives here so the data layer stays UI-agnostic and we keep one
- * grep target for "what does this error code look like to the user."
+ * `repo.onUserError(surfaceProcessorRejectionFor(repo))`. The repo
+ * curried into the factory gives the action-button click handler
+ * what it needs (`navigate(repo, ...)`) without each call site
+ * threading it through.
+ *
+ * Per-code formatting lives here so the data layer stays UI-agnostic
+ * and we keep one grep target for "what does this error code look
+ * like to the user."
  *
  * Today's codes:
  *   - `alias.collision` → emitted by the alias.sync same-tx processor
@@ -17,11 +22,15 @@
  */
 
 import type { ProcessorRejection } from '@/data/api'
+import type { Repo } from '@/data/repo'
+import { navigate } from '@/utils/navigation.ts'
 import { showError } from './toast.ts'
 
 interface AliasCollisionMeta {
   alias: string
   conflictingBlockId: string
+  conflictingBlockTitle: string
+  workspaceId: string
   attemptedOn: string
 }
 
@@ -30,35 +39,52 @@ const isAliasCollisionMeta = (meta: unknown): meta is AliasCollisionMeta =>
   && typeof meta === 'object'
   && typeof (meta as AliasCollisionMeta).alias === 'string'
   && typeof (meta as AliasCollisionMeta).conflictingBlockId === 'string'
+  && typeof (meta as AliasCollisionMeta).conflictingBlockTitle === 'string'
+  && typeof (meta as AliasCollisionMeta).workspaceId === 'string'
   && typeof (meta as AliasCollisionMeta).attemptedOn === 'string'
 
-export const surfaceProcessorRejection = (error: ProcessorRejection): void => {
-  switch (error.code) {
-    case 'alias.collision': {
-      if (!isAliasCollisionMeta(error.meta)) {
-        // Defensive: meta shape mismatch shouldn't happen since both
-        // ends are in this repo, but if it does we fall back to the
-        // raw message rather than crashing.
-        showError(error.message)
+const truncate = (s: string, n: number): string =>
+  s.length <= n ? s : `${s.slice(0, n - 1)}…`
+
+export const surfaceProcessorRejectionFor = (repo: Repo) =>
+  (error: ProcessorRejection): void => {
+    switch (error.code) {
+      case 'alias.collision': {
+        if (!isAliasCollisionMeta(error.meta)) {
+          // Defensive: meta shape mismatch shouldn't happen since both
+          // ends are in this repo, but if it does we fall back to the
+          // raw message rather than crashing.
+          showError(error.message)
+          return
+        }
+        const {alias, conflictingBlockId, conflictingBlockTitle, workspaceId} = error.meta
+        // Blank-title fallback: a block can legitimately claim an
+        // alias with empty content, in which case the title would be
+        // useless in the toast — fall back to showing the alias text.
+        const displayTitle = conflictingBlockTitle.trim() === ''
+          ? `"${alias}"`
+          : `"${truncate(conflictingBlockTitle, 60)}"`
+        showError(
+          `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name.`,
+          {
+            duration: 8000,
+            action: {
+              label: 'Open',
+              onClick: () => navigate(repo, {
+                target: 'main',
+                blockId: conflictingBlockId,
+                workspaceId,
+              }),
+            },
+          },
+        )
         return
       }
-      const {alias} = error.meta
-      showError(
-        `Alias "${alias}" is already used by another block. Your edit was reverted — try a different name.`,
-        {duration: 7000},
-      )
-      // TODO: add an action button that navigates to the conflicting
-      // block once we have a stable navigation API for opening a
-      // block by id from non-React contexts (the current navigation
-      // helpers in `src/utils/navigation.ts` expect a workspace
-      // context that we don't have here at error time).
-      return
-    }
-    default: {
-      // Unknown code — show the raw message. Better than swallowing
-      // silently; any new processor that throws ProcessorRejection
-      // surfaces SOMETHING until we add a tailored handler.
-      showError(error.message)
+      default: {
+        // Unknown code — show the raw message. Better than swallowing
+        // silently; any new processor that throws ProcessorRejection
+        // surfaces SOMETHING until we add a tailored handler.
+        showError(error.message)
+      }
     }
   }
-}

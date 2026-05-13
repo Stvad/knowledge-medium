@@ -151,6 +151,19 @@ export interface Tx {
    *  exist. Reads SQL via the writeTransaction. */
   parentOf(childId: string): Promise<BlockData | null>
 
+  /** Look up the live block in `workspaceId` whose `aliases` property
+   *  contains the exact `alias` text. Returns null when no such block
+   *  exists. Tx-aware version of the kernel `core.aliasLookup` query;
+   *  sees this tx's own writes via the writeTransaction (so a same-tx
+   *  processor's collision check sees aliases the user fn just wrote
+   *  in this tx).
+   *
+   *  Reads through the trigger-maintained `block_aliases` side index
+   *  (clientSchema.ts) — exact match via `idx_block_aliases_ws_alias`,
+   *  oldest match wins on the rare case where two blocks have
+   *  accidentally accumulated the same alias. */
+  aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null>
+
   // ──── Post-commit scheduling ────
 
   /** Schedule a follow-up post-commit job. Runs in its own
