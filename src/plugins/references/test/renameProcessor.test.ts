@@ -370,35 +370,63 @@ describe('rename — rapid title edits cascade fully', () => {
 })
 
 describe('rename — replacement form roundtrip safety', () => {
+  // Aliased blockrefs only parse for UUID-shaped target ids (the
+  // grammar pins the id segment to that). Use a real UUID here so
+  // the rewritten content roundtrips through parseReferences and the
+  // backlink survives all the way into `block_references`.
+  const TARGET_UUID = '11111111-2222-4333-8444-555555555555'
+
+  const blockReferences = async (sourceId: string, targetId: string) =>
+    env.h.db.getAll<{alias: string; source_field: string}>(
+      `SELECT alias, source_field FROM block_references
+       WHERE source_id = ? AND target_id = ?
+       ORDER BY alias, source_field`,
+      [sourceId, targetId],
+    )
+
   it('falls back to blockref form when the added alias is blank', async () => {
     // `renderWikilink('')` = `[[]]`, which parseReferences ignores —
     // emitting it would silently drop the backlink. Use blockref form.
-    await seedTarget('t', 'X', ['Old'])
+    await seedTarget(TARGET_UUID, 'X', ['Old'])
     await seedSource('s', 'see [[Old]] please')
 
     await env.repo.tx(
-      tx => tx.setProperty('t', aliasesProp, ['']),
+      tx => tx.setProperty(TARGET_UUID, aliasesProp, ['']),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
 
-    expect((await env.read('s'))!.content).toBe('see [Old](((t))) please')
+    expect((await env.read('s'))!.content).toBe(
+      `see [Old](((${TARGET_UUID}))) please`,
+    )
+    // Backlink must actually resolve: parseReferences re-parses the
+    // rewritten content, the aliased blockref pins to TARGET_UUID,
+    // and the trigger-maintained `block_references` row carries
+    // alias=TARGET_UUID (the blockref convention — alias === id).
+    expect(await blockReferences('s', TARGET_UUID)).toEqual([
+      {alias: TARGET_UUID, source_field: ''},
+    ])
   })
 
   it('falls back to blockref form when the added alias does not roundtrip', async () => {
     // `renderWikilink('foo]]bar')` collapses `]]` to `] ]`; the result
     // parses to `foo] ]bar`, not the original alias. Emitting it
     // would corrupt the backlink text. Blockref form preserves intent.
-    await seedTarget('t', 'X', ['Old'])
+    await seedTarget(TARGET_UUID, 'X', ['Old'])
     await seedSource('s', 'see [[Old]] please')
 
     await env.repo.tx(
-      tx => tx.setProperty('t', aliasesProp, ['foo]]bar']),
+      tx => tx.setProperty(TARGET_UUID, aliasesProp, ['foo]]bar']),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
 
-    expect((await env.read('s'))!.content).toBe('see [Old](((t))) please')
+    expect((await env.read('s'))!.content).toBe(
+      `see [Old](((${TARGET_UUID}))) please`,
+    )
+    expect(await blockReferences('s', TARGET_UUID)).toEqual([
+      {alias: TARGET_UUID, source_field: ''},
+    ])
   })
 })
 

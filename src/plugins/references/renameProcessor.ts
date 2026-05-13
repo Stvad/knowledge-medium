@@ -207,7 +207,7 @@ const applyRefRewrites = (
   // — mirrors the content rewrite order (each `rewriteWikilinks` pass
   // operates on the prior pass's output).
   const swaps = new Map<string, string>()
-  const key = (targetId: string, alias: string) => `${targetId} ${alias}`
+  const key = (targetId: string, alias: string) => `${targetId}\u0000${alias}`
   for (const rw of rewrites) swaps.set(key(rw.targetId, rw.alias), rw.refAlias)
   const next: BlockReference[] = []
   for (const ref of refs) {
