@@ -95,7 +95,10 @@ import {
 import { UndoManager, type UndoEntry } from './internals/undoManager'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
-import { SELECT_BLOCK_BY_ID_SQL } from './internals/kernelQueries'
+import {
+  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
+  SELECT_BLOCK_BY_ID_SQL,
+} from './internals/kernelQueries'
 import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
@@ -341,6 +344,52 @@ export interface RepoOptions {
   startRowEventsTail?: boolean
   /** Options forwarded to the row_events tail when started. */
   rowEventsTailOptions?: RowEventsTailOptions
+}
+
+/** Structured payload of the `block_aliases_workspace_alias_unique`
+ *  trigger's RAISE message. See `clientSchema.ts` for the SQL that
+ *  builds it. The trigger encodes everything it cheaply can (the SQL
+ *  RAISE context has NEW.* but no committed table reads) so the JS
+ *  side only does a single PK-style lookup for the rest. */
+interface ParsedAliasCollision {
+  workspaceId: string
+  alias: string
+  /** The block that the user tried to make claim the alias — the
+   *  attempting row. */
+  attemptedBlockId: string
+}
+
+const ALIAS_COLLISION_RAISE_PREFIX = 'alias_collision'
+// ASCII unit-separator. Picked because (a) it never appears in
+// well-formed alias text (the property codec rejects control chars),
+// (b) it doesn't collide with `:` / `/` / `,` etc that CAN appear in
+// workspace ids and alias text, and (c) it survives the SQLite wrapper
+// untouched. The trigger uses `char(31)` for the same delimiter.
+const ALIAS_COLLISION_FIELD_SEP = '\x1f'
+
+/** Recognise the trigger-raised alias-collision error inside whatever
+ *  wrapping SQLite + better-sqlite3 + PowerSync layer it on. Returns
+ *  parsed fields when matched, `null` otherwise (the caller falls
+ *  back to its existing error handling). */
+const parseAliasCollisionError = (err: unknown): ParsedAliasCollision | null => {
+  if (err === null || typeof err !== 'object') return null
+  const msg = (err as {message?: unknown}).message
+  if (typeof msg !== 'string') return null
+  const needle = `${ALIAS_COLLISION_RAISE_PREFIX}${ALIAS_COLLISION_FIELD_SEP}`
+  const idx = msg.indexOf(needle)
+  if (idx === -1) return null
+  const tail = msg.slice(idx + needle.length)
+  // tail = `<workspaceId>\x1f<alias>\x1f<attemptedBlockId>` possibly
+  // followed by SQLite wrapper text. The unit separator never appears
+  // in any of the three encoded fields nor in the wrapper, so the
+  // first three split parts ARE our three fields verbatim.
+  const parts = tail.split(ALIAS_COLLISION_FIELD_SEP)
+  if (parts.length < 3) return null
+  return {
+    workspaceId: parts[0],
+    alias: parts[1],
+    attemptedBlockId: parts[2],
+  }
 }
 
 export class Repo {
@@ -918,23 +967,11 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
-    let result: Awaited<ReturnType<typeof this._runAndDispatch<R>>>
-    try {
-      result = await this._runAndDispatch(fn, opts)
-    } catch (err) {
-      // Surface ProcessorRejection to user-error listeners so the
-      // toast layer can map it to a UI affordance (collision message,
-      // action button). Re-throw so callers' own error handling
-      // works — listeners are an observation channel, not a swallower.
-      if (err instanceof ProcessorRejection) {
-        for (const listener of [...this.userErrorListeners]) {
-          try { listener(err) } catch (e) {
-            console.warn('[repo.userErrorListeners] listener threw:', e)
-          }
-        }
-      }
-      throw err
-    }
+    // Translation + listener notification happen inside `_runAndDispatch`
+    // so all entry points (`tx`, `undo`, `redo`) get uniform error
+    // shaping — `repo.tx` just re-throws here.
+    const result: Awaited<ReturnType<typeof this._runAndDispatch<R>>> =
+      await this._runAndDispatch(fn, opts)
     // Step 7 of the §10 pipeline — record undo entry. Non-undoable
     // scopes and zero-write txs are filtered inside `record`. Replays go
     // through `_replay`, not here, so they don't add new history.
@@ -987,28 +1024,49 @@ export class Repo {
   }
 
   /** Shared `runTx` + processor-dispatch path. Used by both `tx`
-   *  (records on undo stack) and `_replay` (does not). */
+   *  (records on undo stack) and `_replay` (does not).
+   *
+   *  Storage-layer integrity errors are translated to user-domain
+   *  exceptions here so every caller — `repo.tx`, `repo.undo`,
+   *  `repo.redo` — surfaces the same shape. Currently:
+   *    - `alias_collision` RAISE → `ProcessorRejection('alias.collision',
+   *      …)` via the trigger on `block_aliases`.
+   *  Listeners (`onUserError`) fire on translated ProcessorRejections
+   *  here so the toast layer sees collisions from undo/redo replay,
+   *  not just from `repo.tx` directly. */
   private async _runAndDispatch<R>(
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ) {
     const txT0 = performance.now()
-    const result = await runTx({
-      db: this.db,
-      cache: this.cache,
-      fn,
-      opts,
-      user: this.user,
-      isReadOnly: this.isReadOnly,
-      newTxId: this.newId,
-      newTxSeq: this.newTxSeq,
-      newId: this.newId,
-      now: this.now,
-      mutators: this.mutators,
-      processors: this.processors,
-      sameTxProcessors: this.sameTxProcessors,
-      propertySchemas: this._propertySchemas,
-    })
+    let result
+    try {
+      result = await runTx({
+        db: this.db,
+        cache: this.cache,
+        fn,
+        opts,
+        user: this.user,
+        isReadOnly: this.isReadOnly,
+        newTxId: this.newId,
+        newTxSeq: this.newTxSeq,
+        newId: this.newId,
+        now: this.now,
+        mutators: this.mutators,
+        processors: this.processors,
+        sameTxProcessors: this.sameTxProcessors,
+        propertySchemas: this._propertySchemas,
+      })
+    } catch (err) {
+      const collision = parseAliasCollisionError(err)
+      if (collision !== null) {
+        const rejection = await this.buildAliasCollisionRejection(collision)
+        this.fireUserErrorListeners(rejection)
+        throw rejection
+      }
+      if (err instanceof ProcessorRejection) this.fireUserErrorListeners(err)
+      throw err
+    }
     // Track the slowest tx by description so cold-start metrics can
     // attribute writeTransaction outliers to a concrete site (e.g.
     // 'reproject ref-typed properties after schema swap', mutator names).
@@ -1268,6 +1326,48 @@ export class Repo {
   onUserError(listener: (error: ProcessorRejection) => void): () => void {
     this.userErrorListeners.add(listener)
     return () => { this.userErrorListeners.delete(listener) }
+  }
+
+  /** Notify all subscribed user-error listeners. Each listener's
+   *  exception is caught + logged so one bad listener can't break
+   *  the others or interrupt error propagation back to the caller. */
+  private fireUserErrorListeners(err: ProcessorRejection): void {
+    for (const listener of [...this.userErrorListeners]) {
+      try { listener(err) } catch (e) {
+        console.warn('[repo.userErrorListeners] listener threw:', e)
+      }
+    }
+  }
+
+  /** Translate a parsed alias-collision RAISE into a fully-populated
+   *  `ProcessorRejection`. Runs after the user tx has already rolled
+   *  back, so `block_aliases` is back to the pre-tx state — the
+   *  conflicting claimant is still indexed and one PK lookup away. */
+  private async buildAliasCollisionRejection(
+    collision: ParsedAliasCollision,
+  ): Promise<ProcessorRejection> {
+    const claimantRow = await this.db.getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
+      [collision.workspaceId, collision.alias, collision.attemptedBlockId],
+    )
+    // The claimant should always be present (the trigger only fired
+    // because one existed at INSERT time, and the user tx rolled back
+    // without touching it). Defensive fallback uses the bare info
+    // from the RAISE message if the lookup somehow misses.
+    const claimant = claimantRow === null ? null : parseBlockRow(claimantRow)
+    return new ProcessorRejection(
+      `Alias "${collision.alias}" is already used by another block`,
+      'alias.collision',
+      {
+        alias: collision.alias,
+        conflictingBlockId: claimant?.id ?? null,
+        // 80-char truncation matches the prior in-processor format —
+        // toast UI doesn't render long strings well.
+        conflictingBlockTitle: claimant?.content.slice(0, 80) ?? '',
+        workspaceId: collision.workspaceId,
+        attemptedOn: collision.attemptedBlockId,
+      },
+    )
   }
 
   snapshotTypeRegistries(): TypeRegistrySnapshot {

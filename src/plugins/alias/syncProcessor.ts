@@ -2,12 +2,16 @@
  * Alias sync — same-tx processor (spec: docs/alias-rename-cases.html).
  *
  * Reconciles `content` ↔ `aliases` on the same block when one side
- * changes, AND rejects collisions when a block tries to claim an
- * alias already held by a different live block. Both behaviors live
- * here because they share the "what new aliases is this row
- * claiming?" computation.
+ * changes. Collision detection (refusing a tx that would claim a
+ * taken alias) is enforced at the storage layer by the
+ * `block_aliases_workspace_alias_unique` trigger; the tx engine
+ * translates the trigger's RAISE into a `ProcessorRejection` with
+ * `code: 'alias.collision'`. That arrangement means every write path
+ * (local mutators, `tx.create`, `tx.restore`, undo replay, future
+ * plugins) gets the uniqueness check for free — this processor only
+ * needs to worry about keeping the two representations in agreement.
  *
- * Decision ladder (unchanged from the post-commit version):
+ * Decision ladder:
  *   1. Content changed, old value ∈ aliases (A1, A2) → replace that
  *      entry with new content. Dedupe.
  *   2. Content changed, old value ∉ aliases (A3 — drift heal) → add
@@ -27,19 +31,10 @@
  *   (re-read row at apply time, skip on divergence) is gone here —
  *   we're inside the same tx, so the snapshot we plan against IS
  *   the live state.
- *
- * Collision policy (V1):
- *   Refuse the user's tx via `throw new ProcessorRejection`. SQLite
- *   rolls back atomically; content and aliases stay in their
- *   pre-edit state. The caller (editor save handler, command
- *   palette, etc.) surfaces the rejection via the toast layer. The
- *   eventual goal is Roam-style "suggest merge" but the merge flow
- *   has its own design surface — V1 disallows.
  */
 
 import {
   defineSameTxProcessor,
-  ProcessorRejection,
   type AnySameTxProcessor,
   type BlockData,
   type ChangedRow,
@@ -54,13 +49,6 @@ export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
  *  means no-op for that direction. */
 interface SyncPlan {
   id: string
-  workspaceId: string
-  /** Aliases the user is *newly claiming* on this row. Used by the
-   *  collision check; empty when the diff doesn't add anything (A3
-   *  drift heal adds new content as alias, A1/A2 replace the anchor,
-   *  AR1 only changes content). Computed from the planner's diff
-   *  so it stays consistent with the actual write the plan describes. */
-  claimedAliases: readonly string[]
   contentNext: string | null
   aliasesNext: readonly string[] | null
 }
@@ -93,53 +81,21 @@ const dedupe = (values: readonly string[]): string[] => {
 }
 
 /** Build the plan for one row. Returns null when nothing should be
- *  written — the row was hard-deleted in this commit, no rule
+ *  written — the row was created/deleted in this commit, no rule
  *  applies, the rule's output is identical to current state, or the
- *  rule would propagate a blank value.
- *
- *  Insert / restore re-entry: when a row enters the live population
- *  (either via `tx.create` — `before === null` — or via a soft-
- *  delete → live flip from `tx.restore` / undo of a delete — `before
- *  !== null && before.deleted && !after.deleted`), every non-blank
- *  alias on the now-live row is a fresh claim against the rest of
- *  `block_aliases`. We emit a collision-only plan so the
- *  `aliasLookup` gate fires on these re-entries the same way it
- *  fires on rename / direct-edit. Without this branch:
- *    - alias-bearing inserts bypass the V1 "refuse atomically" policy;
- *    - a soft-delete → claim-by-another → restore sequence (or its
- *      undo equivalent) silently produces two live claimants in
- *      `block_aliases`. */
+ *  rule would propagate a blank value. Collision is a separate
+ *  concern handled by the storage-layer trigger; this planner doesn't
+ *  need to consider it. */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
-  if (row.after === null) return null
+  if (row.before === null || row.after === null) return null
   if (row.after.deleted) return null
 
+  const before = row.before
   const after = row.after
+  const beforeAliases = decodeAliases(before)
   const afterAliases = decodeAliases(after)
   // Sync only reconciles blocks that ARE aliased.
   if (afterAliases.length === 0) return null
-
-  const planShell = {id: row.id, workspaceId: after.workspaceId}
-
-  const isInsert = row.before === null
-  const isRestore = row.before !== null && row.before.deleted && !after.deleted
-  if (isInsert || isRestore) {
-    // The row is (re-)entering the live population. Every non-blank
-    // alias entry is a claim that must clear the aliasLookup gate.
-    // Collision check below filters self via `excludeId`, so the
-    // row's own appearance in `block_aliases` doesn't mask a real
-    // conflict on the other side.
-    const claimedAliases = afterAliases.filter(a => a !== '')
-    if (claimedAliases.length === 0) return null
-    return {
-      ...planShell,
-      claimedAliases,
-      contentNext: null,
-      aliasesNext: null,
-    }
-  }
-
-  const before = row.before!
-  const beforeAliases = decodeAliases(before)
   const contentChanged = before.content !== after.content
 
   if (contentChanged) {
@@ -154,12 +110,8 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
         afterAliases.map(a => (a === before.content ? after.content : a)),
       )
       if (arraysEqual(replaced, afterAliases)) return null
-      // The newly claimed alias here is `after.content` — provided
-      // it's not also in the previous alias list.
-      const claimedAliases = beforeAliases.includes(after.content) ? [] : [after.content]
       return {
-        ...planShell,
-        claimedAliases,
+        id: row.id,
         contentNext: null,
         aliasesNext: replaced,
       }
@@ -168,8 +120,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     // additively by appending new content.
     if (afterAliases.includes(after.content)) return null
     return {
-      ...planShell,
-      claimedAliases: beforeAliases.includes(after.content) ? [] : [after.content],
+      id: row.id,
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
     }
@@ -185,24 +136,8 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     if (added[0] === '') return null
     if (after.content === added[0]) return null
     return {
-      ...planShell,
-      // AR1's added alias is the new claim; collision check applies.
-      claimedAliases: [added[0]],
+      id: row.id,
       contentNext: added[0],
-      aliasesNext: null,
-    }
-  }
-
-  // No matched rule, but the user may still have ADDED aliases
-  // directly (e.g. via the alias chip editor in a future UI, or via
-  // a programmatic mutator). Sync doesn't write anything, but
-  // collision still needs to check those.
-  const directlyClaimed = afterAliases.filter(a => !beforeAliases.includes(a) && a !== '')
-  if (directlyClaimed.length > 0) {
-    return {
-      ...planShell,
-      claimedAliases: directlyClaimed,
-      contentNext: null,
       aliasesNext: null,
     }
   }
@@ -210,54 +145,11 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
   return null
 }
 
-/** Apply one plan: collision-check newly claimed aliases, then issue
- *  the amendment writes if any.
- *
- *  No stale-plan re-validation here — we're inside the user's tx, so
- *  `event.changedRows`'s `after` state IS the live state. (If a
- *  preceding same-tx processor amended this row, the same-tx
- *  runner recomputes our `changedRows` from the live snapshot
- *  before our `apply` fires, so we'd see those amendments.) */
+/** Apply one plan: issue the amendment writes. The storage-layer
+ *  trigger handles collision detection on the alias write below; if
+ *  it fires, the user's writeTransaction rolls back atomically and
+ *  the tx engine translates the RAISE into `ProcessorRejection`. */
 const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
-  // Collision check: for each newly claimed alias, is there a
-  // different live block in this workspace that already claims it?
-  // Uses the trigger-maintained `block_aliases` index via
-  // `tx.aliasLookup` — sees own writes from this tx, covers every
-  // claimant regardless of how its id was generated.
-  //
-  // We pass `excludeId: plan.id` because the attempting row's own
-  // alias write has already been indexed by the time this processor
-  // runs (the block_aliases trigger fires synchronously inside the
-  // writeTransaction). Without the exclusion, `aliasLookup` returns
-  // the oldest claimant by `created_at`, which can BE the attempting
-  // row whenever it's older than the real conflicting claimant —
-  // leaving the collision undetected. With the exclusion, the lookup
-  // returns the oldest OTHER claimant, which is exactly what we
-  // need; if it's null, no real conflict exists.
-  if (plan.claimedAliases.length > 0) {
-    for (const alias of plan.claimedAliases) {
-      if (alias === '') continue  // belt-and-suspenders; planner skips blanks
-      const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId, plan.id)
-      if (claimant !== null) {
-        throw new ProcessorRejection(
-          `Alias "${alias}" is already used by another block`,
-          'alias.collision',
-          {
-            alias,
-            conflictingBlockId: claimant.id,
-            // Snapshot the conflicting block's content at rejection
-            // time so the toast layer can show "Already used by 'X'"
-            // without a follow-up read. Truncated to a sane display
-            // length — toast UI doesn't render giant strings well.
-            conflictingBlockTitle: claimant.content.slice(0, 80),
-            workspaceId: plan.workspaceId,
-            attemptedOn: plan.id,
-          },
-        )
-      }
-    }
-  }
-
   if (plan.aliasesNext !== null) {
     await ctx.tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
   }
@@ -268,12 +160,7 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
 
 export const aliasSyncProcessor = defineSameTxProcessor({
   name: ALIAS_SYNC_PROCESSOR,
-  // `deleted` is watched so restore (and undo of a delete) re-fire
-  // collision detection: a soft-delete clears the row's
-  // `block_aliases` entries, freeing the alias for reuse; reviving
-  // the row needs to re-validate its claims against the now-current
-  // population. See the `isRestore` branch in `planSync`.
-  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted']},
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties']},
   apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     for (const row of event.changedRows) {
       const plan = planSync(row)

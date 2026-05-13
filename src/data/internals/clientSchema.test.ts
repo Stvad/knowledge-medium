@@ -163,9 +163,14 @@ beforeEach(() => { h = setupDb() })
 afterEach(() => { h.db.close() })
 
 describe('client schema bootstrap', () => {
-  it('creates the documented set of triggers on `blocks`', () => {
+  it('creates the documented set of client-schema triggers', () => {
+    // CLIENT_SCHEMA_TRIGGER_NAMES covers triggers on `blocks` (the
+    // bulk of them — row_events, upload routing, workspace
+    // invariants, side-index maintenance) AND on `block_aliases`
+    // (the uniqueness-enforcement trigger). Query against both
+    // tables so the inventory test catches additions on either side.
     const triggers = (h.db
-      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='blocks' ORDER BY name")
+      .prepare("SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name IN ('blocks', 'block_aliases') ORDER BY name")
       .all() as Array<{name: string}>)
       .map(r => r.name)
     expect(triggers.sort()).toEqual([...CLIENT_SCHEMA_TRIGGER_NAMES].sort())

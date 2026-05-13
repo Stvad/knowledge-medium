@@ -620,9 +620,9 @@
     the right question for <code>ensureAliasTarget</code>. It's the
     <em>wrong</em> question for "does any live block already claim
     this alias?" (which doesn't care about ids at all). Collision
-    detection uses the trigger-maintained <code>block_aliases</code>
-    index via <code>tx.aliasLookup</code> instead — see "Alias
-    collisions" below.
+    detection is now enforced at the storage layer by the
+    <code>block_aliases_workspace_alias_unique</code> trigger — see
+    "Alias collisions" below.
   </p>
 </div>
 
@@ -915,92 +915,83 @@
 
 <div class="case">
   <div class="case-title">
-    <span>Detection</span>
-    <span class="tag ok">unified across A1 / A2 / AR1</span>
+    <span>Detection: storage-layer constraint</span>
+    <span class="tag ok">path-independent</span>
   </div>
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
-    Sync's plan phase computes the set of aliases the user is
-    <em>claiming</em> for this block, then asks
-    <code>tx.aliasLookup(alias, workspaceId, <strong>excludeId =
-    plan.id</strong>)</code> — a tx-aware primitive against the
-    trigger-maintained <code>block_aliases</code> index (the same
-    index <code>parseReferences</code>, quick-find, backlinks
-    filters, and <code>core.aliasLookup</code> read). If the lookup
-    returns any non-null block, that's a collision (the excludeId
-    parameter has already filtered out self). Self-reclaim falls out
-    naturally: with self excluded, the only OTHER claimant is what we
-    care about.
+    A <code>BEFORE INSERT</code> trigger on <code>block_aliases</code>
+    (<code>block_aliases_workspace_alias_unique</code>, defined
+    alongside the existing alias-maintenance triggers in
+    <a href="../src/data/internals/clientSchema.ts">clientSchema.ts</a>)
+    enforces <code>(workspace_id, alias)</code> uniqueness for every
+    write that lands in the trigger-maintained side index:
+    <code>tx.create</code> + property write, <code>tx.update</code>,
+    <code>tx.restore</code>, undo replay via <code>applyRaw</code>,
+    backfill, future mutators. If another live row already claims
+    the same <code>(workspace_id, alias)</code> tuple, the trigger
+    <code>RAISE(ABORT, …)</code>s and SQLite rolls back the user's
+    entire <code>writeTransaction</code>.
+  </p>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    The RAISE message is structured —
+    <code>"alias_collision" || char(31) || workspace_id || char(31)
+    || alias || char(31) || NEW.block_id</code> — so the tx engine
+    can translate it back into the existing
+    <code>ProcessorRejection('alias.collision', meta)</code> shape
+    after a single post-rollback read for the conflicting block's
+    content. ASCII unit-separator (U+001F) is the delimiter because
+    it never appears in well-formed alias text (codec rejects
+    control chars) and doesn't collide with <code>:</code>,
+    <code>/</code>, <code>,</code> etc. that <em>can</em> appear in
+    workspace ids or alias text.
+  </p>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Self-reclaim is handled for free: the
+    <code>blocks_alias_update</code> maintenance trigger
+    <code>DELETE</code>s the row's prior aliases before re-inserting
+    them, so a row rewriting its own alias sees zero other claimants
+    at INSERT time. The collision-only trigger fires on every
+    INSERT but the <code>EXISTS</code> sub-select returns false.
   </p>
   <p style="font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--muted);">
-    <strong>Why <code>excludeId</code> is mandatory here:</strong>
-    by the time the same-tx processor runs, the user's own
-    <code>setProperty</code> (in AR1 / direct-claim paths) has
-    already fired the <code>block_aliases</code> trigger inside the
-    writeTransaction. So the attempting row appears in the index for
-    its new alias. <code>SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL</code>
-    returns the OLDEST claimant by <code>created_at</code> with
-    <code>LIMIT 1</code>; without exclusion, an older attempter
-    masks a younger conflicting claimant (the SQL returns the
-    attempter, <code>claimant.id === plan.id</code> wins the
-    self-reclaim check, and the rejection never fires). Excluding
-    self by id resolves the ambiguity at the SQL layer rather than
-    in JS — important because the LIMIT 1 means we can't see past
-    the first row.
+    <strong>Sync-apply policy:</strong> the trigger guards on
+    <code>(SELECT source FROM tx_context WHERE id = 1) IS NOT
+    NULL</code>, so PowerSync's sync-apply (which doesn't set
+    <code>tx_context.source</code>) bypasses the check. Two clients
+    that independently land conflicting alias claims won't break
+    sync replay; V1 treats the resulting in-database dupes as
+    latent (the alias-lookup query has an
+    <code>ORDER BY created_at LIMIT 1</code> tie-break) until the
+    V2 merge-resolution flow lands. The convergent
+    <code>computeAliasSeatId</code> path is unaffected — concurrent
+    clients arriving at the same seat-id produce one row, not two,
+    because PowerSync upserts on <code>id</code>.
+  </p>
+  <p style="font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--muted);">
+    <strong>What the simplification replaced:</strong> an earlier
+    iteration kept collision detection in the alias-sync processor
+    itself — <code>planSync</code> branched on
+    <code>isInsert</code> / <code>isRestore</code> / regular-update,
+    passed <code>excludeId = plan.id</code> to
+    <code>tx.aliasLookup</code>, and watched the <code>deleted</code>
+    field to catch restore. Each new write-path required adding a
+    branch. The storage-layer trigger catches them all by
+    construction. <code>syncProcessor.ts</code> now does only
+    sync (A1 / A2 / A3 / AR1); collision is no longer its concern.
   </p>
   <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
-    <li><strong>A1</strong> (content adds <code>[[New]]</code>):
-      <code>newAliases = aliasesFromContent(after) \ before.aliases</code>.
+    <li>Triggered on every <code>INSERT INTO block_aliases</code>:
+      <code>tx.create</code> + setProperty, content rename adding a
+      new alias, AR1 direct alias edit, <code>tx.restore</code>,
+      undo of a delete, future plugins.
     </li>
-    <li><strong>A2</strong> (content rewrites <code>[[Old]]</code> →
-      <code>[[New]]</code>): same as A1 — the new name is in the
-      added set.
+    <li><code>WHEN tx_context.source IS NOT NULL</code> gates local
+      writes only; sync-apply and backfill flow through untouched.
     </li>
-    <li><strong>AR1</strong> (user writes aliases directly):
-      <code>newAliases = after.aliases \ before.aliases</code>.
-    </li>
-    <li><strong>Insert</strong> (<code>before === null</code>): every
-      non-blank alias on the brand-new row is a fresh claim. The
-      planner emits a collision-only plan for these so
-      <code>tx.create</code> + <code>setProperty</code> can't bypass
-      the rejection policy by starting with the taken name already
-      in place.
-    </li>
-    <li><strong>Restore</strong> (<code>before.deleted &amp;&amp;
-      !after.deleted</code>): a soft-delete clears the row from
-      <code>block_aliases</code>, freeing its alias for reuse;
-      restoring the row (either via <code>tx.restore</code> or
-      <code>repo.undo</code> of a delete) re-introduces it as a
-      claimant. Treated the same as an insert — every non-blank
-      alias is a fresh claim. The processor's <code>watches</code>
-      list includes <code>deleted</code> so a plain
-      <code>tx.restore(id)</code> with no content/property patch
-      still fires the check.
-    </li>
-    <li><strong>A3</strong> (alias removal): no new claim, no check.
+    <li>Self-reclaim passes because the maintenance trigger DELETEs
+      before INSERTing.
     </li>
   </ul>
-  <p style="font-size: 0.9rem; margin: 0;">
-    Detection runs inside the user's tx, so <code>tx.aliasLookup</code>
-    sees staged writes from this tx (the <code>block_aliases</code>
-    triggers fire synchronously inside the writeTransaction).
-    Cascades within a single tx — e.g. a mutator that adds two
-    colliding aliases — are caught coherently.
-  </p>
-  <p style="font-size: 0.85rem; margin: 0.5rem 0 0 0; color: var(--muted);">
-    <strong>Why not the seat-id probe?</strong> An earlier
-    implementation walked <code>computeAliasSeatId(alias, ws,
-    0..N)</code>. That assumed every alias claimant's id is in the
-    seat-id space for the alias it currently claims — which fails in
-    three real cases: (a) a block created via <code>tx.create</code>
-    with an arbitrary id then later given an alias, (b) a block
-    originally seat-id-keyed for alias α then renamed to β (its id
-    is still <code>uuidv5("ws:α:N")</code>, not the seat for β), and
-    (c) a block claiming an alias whose canonical seat is held by a
-    different live block. The <code>block_aliases</code> index covers
-    all three. The seat-id mechanism is kept for
-    <code>ensureAliasTarget</code> (which DOES want a deterministic
-    id for a new claimant — a different question).
-  </p>
 </div>
 
 <div class="case">
@@ -1009,19 +1000,23 @@
     <span class="tag ok">atomic, no stuck state</span>
   </div>
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
-    On collision, the same-tx sync processor throws
+    On collision, the trigger's RAISE rolls back the user's
+    <code>writeTransaction</code> atomically (no rows committed, no
+    <code>snapshots</code> entry recorded, no undo entry created)
+    and the tx engine in <a href="../src/data/repo.ts">repo.ts</a>
+    translates the RAISE message into
     <code>ProcessorRejection('alias.collision', {alias,
     conflictingBlockId, conflictingBlockTitle, workspaceId,
-    attemptedOn})</code>. The error bubbles out of the user's
-    <code>writeTransaction</code>, SQLite rolls back atomically, no
-    rows were committed, no <code>snapshots</code> entry was
-    recorded, no undo entry was created. The user is in the exact
-    pre-edit state.
+    attemptedOn})</code>. The translation happens inside
+    <code>_runAndDispatch</code> so every entry point (<code>repo.tx</code>,
+    <code>repo.undo</code>, <code>repo.redo</code>) surfaces the same
+    error shape. The user is in the exact pre-edit state.
   </p>
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
-    The error surfaces at the <code>repo.tx</code> call site (the
-    editor save / chip edit / programmatic mutator). A single
-    <code>repo.onUserError</code> subscriber wired at Repo bootstrap
+    The error surfaces at the <code>repo.tx</code> / <code>repo.undo</code>
+    call site (the editor save / chip edit / programmatic mutator /
+    undo button). A single <code>repo.onUserError</code> subscriber
+    wired at Repo bootstrap
     (<a href="../src/context/repo.tsx">context/repo.tsx</a>) routes
     <code>ProcessorRejection</code>s to the sonner-based toast layer.
     The <code>alias.collision</code> handler renders
@@ -1029,9 +1024,10 @@
     try a different name."</em> with an <em>"Open"</em> action button
     that calls <code>navigate(repo, …)</code>.
     <code>conflictingBlockTitle</code> in the rejection meta is
-    snapshotted at detection time (one extra <code>tx.aliasLookup</code>
-    read returns the full <code>BlockData</code>) so the toast doesn't
-    need a follow-up SQL query.
+    looked up post-rollback by <code>buildAliasCollisionRejection</code>
+    using <code>SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL</code>
+    (one PK-style read against the still-intact <code>block_aliases</code>
+    index) so the toast doesn't need a follow-up query at render time.
   </p>
   <p style="font-size: 0.9rem; margin: 0;">
     What this replaces: an earlier post-commit-revert design used

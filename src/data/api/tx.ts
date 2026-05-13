@@ -154,29 +154,17 @@ export interface Tx {
   /** Look up the live block in `workspaceId` whose `aliases` property
    *  contains the exact `alias` text. Returns null when no such block
    *  exists. Tx-aware version of the kernel `core.aliasLookup` query;
-   *  sees this tx's own writes via the writeTransaction (so a same-tx
-   *  processor's collision check sees aliases the user fn just wrote
-   *  in this tx).
+   *  sees this tx's own writes via the writeTransaction.
    *
    *  Reads through the trigger-maintained `block_aliases` side index
-   *  (clientSchema.ts) — exact match via `idx_block_aliases_ws_alias`,
-   *  oldest match wins on the rare case where two blocks have
-   *  accidentally accumulated the same alias.
-   *
-   *  `excludeId`: optional id to skip when scanning claimants. Required
-   *  by collision-detection callsites because the attempting row has
-   *  already written its own alias into the index by the time the
-   *  same-tx processor runs — without exclusion, a "find oldest
-   *  claimant" probe returns the attempter itself whenever it happens
-   *  to be older than the real conflicting claimant, and the
-   *  collision goes undetected. Use omitted (or undefined) for the
-   *  "any claimant including self" semantics that resolution paths
-   *  want. */
-  aliasLookup(
-    alias: string,
-    workspaceId: string,
-    excludeId?: string,
-  ): Promise<BlockData | null>
+   *  (clientSchema.ts) — exact match via `idx_block_aliases_ws_alias`.
+   *  V1 enforces `(workspace_id, alias)` uniqueness for local writes
+   *  via the `block_aliases_workspace_alias_unique` trigger, so this
+   *  lookup typically resolves to a single row; the SQL's
+   *  `ORDER BY created_at LIMIT 1` is a defense-in-depth tie-break
+   *  for the sync-apply path that can still race-land duplicates
+   *  from other clients. */
+  aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null>
 
   // ──── Post-commit scheduling ────
 

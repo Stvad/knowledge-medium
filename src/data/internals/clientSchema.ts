@@ -523,6 +523,55 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
   END
 `
 
+/** Workspace-scoped alias uniqueness — enforced at the storage layer
+ *  so the invariant holds regardless of which write path arrives at
+ *  the table (local `tx.create` + `setProperty`, `tx.restore`,
+ *  applyRaw from undo, future mutators). Fires BEFORE every INSERT
+ *  into `block_aliases`; if any other live block already claims the
+ *  same `(workspace_id, alias)`, RAISE(ABORT) rolls back the entire
+ *  user tx atomically.
+ *
+ *  The RAISE message is structured: `alias_collision` followed by
+ *  US-separated (char(31)) workspace_id, alias, and attempting block_id.
+ *  The tx engine catches errors with this prefix and converts them to
+ *  `ProcessorRejection('alias.collision', meta)` after looking up the
+ *  existing claimant. US is the ASCII "unit separator" control char —
+ *  picked because it never appears in alias text (codec rejects
+ *  control chars) and it doesn't collide with `:` / `/` / `,` / etc
+ *  which CAN appear in workspace ids and alias text.
+ *
+ *  Skipped when `tx_context.source IS NULL` so PowerSync sync-apply
+ *  doesn't fail on dupes propagating from other clients (mirrors the
+ *  workspace-invariant trigger's policy). V1 leaves cross-client
+ *  alias merges as latent; the user-facing merge flow is V2.
+ *  Backfill (`BACKFILL_BLOCK_ALIASES_SQL`) also runs outside a
+ *  `tx_context.source` setting, so the one-time index re-population
+ *  on schema upgrade is tolerant of any latent dupes that predate
+ *  this trigger.
+ *
+ *  Self-reclaim is handled naturally: `blocks_alias_update` DELETEs
+ *  the row's prior aliases before re-inserting, so a row rewriting
+ *  its own alias sees no other claimant at INSERT time. */
+export const CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS block_aliases_workspace_alias_unique
+  BEFORE INSERT ON block_aliases
+  WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
+  BEGIN
+    SELECT RAISE(ABORT,
+      'alias_collision' || char(31) ||
+      NEW.workspace_id || char(31) ||
+      NEW.alias || char(31) ||
+      NEW.block_id
+    )
+    WHERE EXISTS (
+      SELECT 1 FROM block_aliases
+      WHERE workspace_id = NEW.workspace_id
+        AND alias = NEW.alias
+        AND block_id != NEW.block_id
+    );
+  END
+`
+
 // ============================================================================
 // block_types triggers (3) — same maintenance shape as block_aliases, but
 // indexing every string in properties_json $.types.
@@ -678,10 +727,11 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,
-  // 3 block_aliases-maintenance triggers
+  // 3 block_aliases-maintenance triggers + 1 uniqueness-enforcement trigger
   CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL,
+  CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL,
   // 3 block_types-maintenance triggers
   CREATE_BLOCKS_TYPE_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_TYPE_UPDATE_TRIGGER_SQL,
@@ -699,6 +749,7 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_alias_insert',
   'blocks_alias_update',
   'blocks_alias_delete',
+  'block_aliases_workspace_alias_unique',
   'blocks_type_insert',
   'blocks_type_update',
   'blocks_type_delete',

@@ -345,11 +345,17 @@ describe('repo.query.firstChildByContent', () => {
 })
 
 describe('repo.query.aliasesInWorkspace', () => {
-  it('returns distinct aliases from all live blocks', async () => {
+  it('returns aliases from all live blocks', async () => {
+    // V1's `block_aliases_workspace_alias_unique` trigger prevents
+    // two live blocks from claiming the same alias in the same
+    // workspace via local writes, so each alias here is unique.
+    // The SQL still has GROUP BY for defense-in-depth against
+    // dupes that race-land via PowerSync sync-apply (which
+    // bypasses the trigger).
     await create({id: 'a', aliases: ['Foo', 'Bar']})
-    await create({id: 'b', aliases: ['Bar', 'Baz']})
+    await create({id: 'b', aliases: ['Baz', 'Qux']})
     const out = await env.repo.query.aliasesInWorkspace({workspaceId: WS}).load()
-    expect([...out].sort()).toEqual(['Bar', 'Baz', 'Foo'])
+    expect([...out].sort()).toEqual(['Bar', 'Baz', 'Foo', 'Qux'])
   })
 
   it('filters case-insensitively', async () => {
@@ -417,9 +423,21 @@ describe('repo.query.aliasLookup', () => {
     expect(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'missing'}).load()).toBeNull()
   })
 
-  it('returns the oldest match on duplicate aliases (deterministic)', async () => {
+  it('returns the oldest match on duplicate aliases (deterministic tie-break)', async () => {
+    // V1's local-write trigger prevents duplicate
+    // `(workspace_id, alias)` rows, so we seed the dupe by
+    // bypassing it: insert directly into `block_aliases` while
+    // `tx_context.source` is NULL (the trigger's `WHEN` guard
+    // skips outside an active local tx — mirrors the PowerSync
+    // sync-apply path where dupes from other clients can race-
+    // land). The query's `ORDER BY created_at LIMIT 1` is the
+    // defense-in-depth tie-break this test pins.
     await create({id: 'older', aliases: ['Dup']})
-    await create({id: 'newer', aliases: ['Dup']})
+    await create({id: 'newer', content: 'Newer'})
+    await env.h.db.execute(
+      `INSERT INTO block_aliases (block_id, workspace_id, alias, alias_lower) VALUES (?, ?, ?, ?)`,
+      ['newer', WS, 'Dup', 'dup'],
+    )
     const got = asBlockOrNull(await env.repo.query.aliasLookup({workspaceId: WS, alias: 'Dup'}).load())
     expect(got?.id).toBe('older')
   })

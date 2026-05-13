@@ -60,10 +60,7 @@ import {
 } from '@/data/blockSchema'
 import { recordWrite, type SnapshotsMap, peekSnapshot } from './txSnapshots'
 import { IS_DESCENDANT_OF_SQL } from './treeQueries'
-import {
-  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
-  SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
-} from './kernelQueries'
+import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import type { BlockCache } from '@/data/blockCache'
 
 /** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
@@ -442,11 +439,7 @@ export class TxImpl implements Tx {
     return row === null ? null : parseBlockRow(row)
   }
 
-  async aliasLookup(
-    alias: string,
-    workspaceId: string,
-    excludeId?: string,
-  ): Promise<BlockData | null> {
+  async aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null> {
     // Defensive: both args are required for a meaningful lookup, but a
     // bad caller passing '' would otherwise match a row whose alias
     // entry was '' (block_aliases stores empty strings; see the
@@ -454,15 +447,10 @@ export class TxImpl implements Tx {
     // the callsite doesn't accidentally treat an empty match as a
     // claimant.
     if (alias === '' || workspaceId === '') return null
-    const row = excludeId === undefined
-      ? await this.ctx.txDb.getOptional<BlockRow>(
-        SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
-        [workspaceId, alias],
-      )
-      : await this.ctx.txDb.getOptional<BlockRow>(
-        SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL,
-        [workspaceId, alias, excludeId],
-      )
+    const row = await this.ctx.txDb.getOptional<BlockRow>(
+      SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL,
+      [workspaceId, alias],
+    )
     return row === null ? null : parseBlockRow(row)
   }
 
