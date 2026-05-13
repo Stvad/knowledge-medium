@@ -216,6 +216,26 @@ describe('agent runtime bridge', () => {
     expect(response.status).toBe(401)
   })
 
+  it('does not expire a token owned by a newer client when an older duplicate registration drops it', async () => {
+    await registerClient('alice-tab-old', {
+      audience: {userId: 'alice', workspaceId: 'ws-1'},
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+    })
+    await registerClient('alice-tab-new', {
+      audience: {userId: 'alice', workspaceId: 'ws-1'},
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+    })
+
+    await registerClient('alice-tab-old', {tokens: []})
+
+    const response = await fetch(`${baseUrl}/runtime/whoami`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+    })
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.clientId).toBe('alice-tab-new')
+  })
+
   it('completes the full submit → deliver → result lifecycle', async () => {
     await registerClient('alice-tab', {
       tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
@@ -282,5 +302,53 @@ describe('agent runtime bridge', () => {
     const body = await status.json()
     expect(body.status).toBe('delivered')
     expect(body.targetClientId).toBe('alice-tab')
+  })
+
+  it('supports concurrent submissions and independent status polling for the same token', async () => {
+    await registerClient('alice-tab', {
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+    })
+
+    const submissions = await Promise.all([
+      fetch(`${baseUrl}/runtime/commands`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+        body: JSON.stringify({type: 'ping', payload: 'one'}),
+      }),
+      fetch(`${baseUrl}/runtime/commands`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+        body: JSON.stringify({type: 'ping', payload: 'two'}),
+      }),
+    ])
+    expect(submissions.map(response => response.status)).toEqual([202, 202])
+    const submitted = await Promise.all(submissions.map(response => response.json()))
+    const ids = submitted.map(body => body.id)
+
+    const delivered = await Promise.all([
+      fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+        headers: bridgeHeaders,
+      }).then(response => response.json()),
+      fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+        headers: bridgeHeaders,
+      }).then(response => response.json()),
+    ])
+    expect(delivered.map(command => command.commandId).sort()).toEqual([...ids].sort())
+
+    await Promise.all(delivered.map((command, index) =>
+      fetch(`${baseUrl}/runtime/commands/${command.commandId}/result`, {
+        method: 'POST',
+        headers: {'content-type': 'application/json', ...bridgeHeaders, 'x-agent-runtime-client-id': 'alice-tab'},
+        body: JSON.stringify({ok: true, value: `result-${index}`}),
+      }),
+    ))
+
+    const statuses = await Promise.all(ids.map(id =>
+      fetch(`${baseUrl}/runtime/commands/${id}`, {
+        headers: {authorization: 'Bearer TOKEN-A'},
+      }).then(response => response.json()),
+    ))
+    expect(statuses.map(status => status.status)).toEqual(['completed', 'completed'])
+    expect(statuses.map(status => status.result.value).sort()).toEqual(['result-0', 'result-1'])
   })
 })

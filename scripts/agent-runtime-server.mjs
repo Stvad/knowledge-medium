@@ -165,6 +165,11 @@ const requireBridgeSecret = (request, response) => {
 const tokenScope = value =>
   value === 'read-only' ? 'read-only' : 'read-write'
 
+const deleteTokenForClient = (token, clientId) => {
+  const entry = tokens.get(token)
+  if (entry?.clientId === clientId) tokens.delete(token)
+}
+
 const isReadOnlySql = sql =>
   typeof sql === 'string' && /^(select|explain)\b/i.test(sql.trimStart())
 
@@ -186,7 +191,7 @@ const isReadOnlyCommand = command => {
 const dropClient = clientId => {
   const client = clients.get(clientId)
   if (client) {
-    for (const token of client.tokens) tokens.delete(token)
+    for (const token of client.tokens) deleteTokenForClient(token, clientId)
   }
   clients.delete(clientId)
 
@@ -274,7 +279,7 @@ const registerClient = (clientId, metadata = {}) => {
   if (existing) {
     for (const oldToken of existing.tokens) {
       if (!tokenList.some(t => t?.token === oldToken)) {
-        tokens.delete(oldToken)
+        deleteTokenForClient(oldToken, clientId)
       }
     }
   }
