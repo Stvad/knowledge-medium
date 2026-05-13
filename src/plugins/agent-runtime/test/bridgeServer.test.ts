@@ -42,6 +42,10 @@ let server: ChildProcess
 let baseUrl: string
 const bridgeSecret = 'BRIDGE-SECRET'
 const bridgeHeaders = {'x-agent-runtime-secret': bridgeSecret}
+const unknownTokenMessage =
+  'Agent token is not registered with the local bridge. ' +
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `yarn agent connect` to pair a fresh token. ' +
+  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.'
 
 beforeEach(async () => {
   const port = await pickPort()
@@ -149,6 +153,7 @@ describe('agent runtime bridge', () => {
       body: JSON.stringify({type: 'ping'}),
     })
     expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({error: unknownTokenMessage})
   })
 
   it('routes commands to the client whose registration carries the token', async () => {
@@ -214,6 +219,7 @@ describe('agent runtime bridge', () => {
       headers: {authorization: 'Bearer TOKEN-A'},
     })
     expect(response.status).toBe(401)
+    expect(await response.json()).toEqual({error: unknownTokenMessage})
   })
 
   it('does not expire a token owned by a newer client when an older duplicate registration drops it', async () => {

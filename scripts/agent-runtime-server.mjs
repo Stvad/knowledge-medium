@@ -16,6 +16,11 @@ if ((host === '0.0.0.0' || host === '::') && process.env.AGENT_RUNTIME_ALLOW_NET
 }
 const commandTtlMs = 10 * 60 * 1000
 const clientTtlMs = 60_000
+const unknownTokenMessage = [
+  'Agent token is not registered with the local bridge.',
+  'Open or focus the app tab for the same workspace, then retry; if needed, run `yarn agent connect` to pair a fresh token.',
+  'Common causes: the bridge restarted, the app tab disconnected or idled out, the token was revoked, or the CLI is using a token/profile from another workspace or browser profile.',
+].join(' ')
 const configuredMaxBodyBytes = Number(process.env.AGENT_RUNTIME_MAX_BODY_BYTES ?? 10 * 1024 * 1024)
 const maxBodyBytes = Number.isFinite(configuredMaxBodyBytes) && configuredMaxBodyBytes > 0
   ? configuredMaxBodyBytes
@@ -467,7 +472,7 @@ const handleRequest = async (request, response) => {
       }
       const entry = tokens.get(token)
       if (!entry) {
-        sendJson(response, 401, {error: 'Unknown or expired token'})
+        sendJson(response, 401, {error: unknownTokenMessage})
         return
       }
       const client = clients.get(entry.clientId)
@@ -495,7 +500,7 @@ const handleRequest = async (request, response) => {
       }
       const entry = tokens.get(token)
       if (!entry) {
-        sendJson(response, 401, {error: 'Unknown or expired token. The client may have disconnected, or the token was revoked.'})
+        sendJson(response, 401, {error: unknownTokenMessage})
         return
       }
       const targetClient = clients.get(entry.clientId)
