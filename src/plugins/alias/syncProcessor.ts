@@ -53,7 +53,16 @@ export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 /** What the write phase should do for one row. `null` means no-op
  *  on that side. `expectedContent` / `expectedAliases` snapshot what
  *  the planner observed; the write phase compares against current
- *  state and skips on mismatch (stale-plan guard). */
+ *  state and skips on mismatch (stale-plan guard).
+ *
+ *  Rule-1 plans additionally carry `rebaseAnchor` — the alias entry
+ *  being replaced. Instead of the strict stale-check, the write phase
+ *  recomputes against current state: if the anchor still lives in
+ *  current aliases, replace it with current content (ignoring
+ *  `contentNext` / `aliasesNext`). This handles rapid title edits
+ *  (Old → New name → Brand new): event-1's plan goes stale by write
+ *  time, but the anchor "Old" is still around, so we swap it for
+ *  the latest "Brand new" rather than leaving it dangling. */
 interface SyncPlan {
   id: string
   workspaceId: string
@@ -61,6 +70,7 @@ interface SyncPlan {
   expectedAliases: readonly string[]
   contentNext: string | null
   aliasesNext: readonly string[] | null
+  rebaseAnchor: string | null
 }
 
 const decodeAliases = (block: BlockData): readonly string[] => {
@@ -143,6 +153,10 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
         ...planShell,
         contentNext: null,
         aliasesNext: replaced,
+        // Anchor = the alias entry we want to replace. The write phase
+        // rebases against current state via this; lets rapid title
+        // edits collapse correctly (see SyncPlan doc).
+        rebaseAnchor: before.content,
       }
     }
     // Rule 2 (A3): old content wasn't an alias anchor — heal additively
@@ -153,6 +167,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       ...planShell,
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
+      rebaseAnchor: null,
     }
   }
 
@@ -176,21 +191,39 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       ...planShell,
       contentNext: added[0],
       aliasesNext: null,
+      rebaseAnchor: null,
     }
   }
 
   return null
 }
 
-/** Apply one plan inside the write tx. Re-reads the row via `tx.get`
- *  and skips if state has diverged from the planner's snapshot — the
- *  watcher will re-fire on the fresher state and produce a new plan.
- *  See file-header for the rationale. */
+/** Apply one plan inside the write tx. Re-reads the row via `tx.get`.
+ *  Rule-1 plans rebase against current state via `rebaseAnchor` —
+ *  see SyncPlan doc. Other plans skip on divergence and let the
+ *  watcher re-fire on the fresher state. */
 const applyPlan = async (tx: Tx, plan: SyncPlan): Promise<void> => {
   const current = await tx.get(plan.id)
   if (current === null || current.deleted) return
-  if (current.content !== plan.expectedContent) return
   const currentAliases = decodeAliases(current)
+
+  if (plan.rebaseAnchor !== null) {
+    // Blank-content guard mirrors the planner's (rule 1 never propagates
+    // a blank into the alias list). If the user cleared content
+    // between event and apply, leave aliases alone.
+    if (current.content === '') return
+    // Anchor gone (user removed it concurrently, or another sync write
+    // already collapsed it). Nothing to rebase against.
+    if (!currentAliases.includes(plan.rebaseAnchor)) return
+    const replaced = dedupe(
+      currentAliases.map(a => (a === plan.rebaseAnchor ? current.content : a)),
+    )
+    if (arraysEqual(replaced, currentAliases)) return
+    await tx.setProperty(plan.id, aliasesProp, [...replaced], {skipMetadata: true})
+    return
+  }
+
+  if (current.content !== plan.expectedContent) return
   if (!arraysEqual(currentAliases, plan.expectedAliases)) return
   if (plan.aliasesNext !== null) {
     await tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})

@@ -187,32 +187,28 @@ describe('alias.sync — blank-content guard', () => {
 })
 
 describe('alias.sync — stale-plan safety', () => {
-  it('does not clobber content when two edits queue before processors flush', async () => {
-    // Two rapid setContent calls commit back-to-back; the watcher
-    // emits event-1 and event-2 with event-1's snapshot already stale
-    // (the row has moved to "Brand new" by the time sync's write tx
-    // opens). The stale-plan guard makes event-1's plan a no-op
-    // (its `expectedContent: "New name"` doesn't match the row's
-    // current "Brand new"); event-2 produces a fresh plan against
-    // the current state. End result: no clobber.
+  it('rebases the rule-1 plan against current content on rapid title edits', async () => {
+    // Two rapid setContent calls commit back-to-back; event-1's
+    // expected snapshot ("New name") is already stale by the time
+    // sync's write tx opens (the row has moved to "Brand new"). The
+    // rebase path swaps the anchor "Old" for current content "Brand
+    // new" instead of skipping and leaving the anchor dangling.
+    // Event-2's drift-heal plan then sees aliases already in sync
+    // (event-2's expectedAliases ["Old"] ≠ current ["Brand new"]) and
+    // skips. Backlinks like [[Old]] cascade via the rename processor
+    // on the rebase's alias swap.
     await createTarget('t', 'Old', ['Old'])
 
     await env.repo.mutate.setContent({id: 't', content: 'New name'})
     // Second edit lands before flush() runs processors; both events
-    // queue, both pass through the divergence check.
+    // queue.
     await env.repo.mutate.setContent({id: 't', content: 'Brand new'})
     await flush()
 
-    // Content is the user's final value; sync didn't roll it back.
     expect((await env.read('t'))!.content).toBe('Brand new')
-    // Aliases tracking: the stale plan that would have written
-    // [New name] is skipped (its expected snapshot diverges). The
-    // event-2 plan sees content "Brand new" with alias "Old" still
-    // in place — A3 drift heal appends "Brand new" without dropping
-    // "Old" (rule 1 doesn't fire because "New name" ∉ ["Old"]).
-    const aliases = await readAliases('t')
-    expect(aliases).toContain('Brand new')
-    expect(aliases).not.toContain('New name')
+    // Anchor "Old" replaced with current content "Brand new" —
+    // not appended alongside, and not left in place.
+    expect(await readAliases('t')).toEqual(['Brand new'])
   })
 })
 

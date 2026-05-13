@@ -272,14 +272,10 @@ describe('rename — parser-aware rewrite (regressions)', () => {
 })
 
 describe('rename — stale-plan safety (concurrent source edit)', () => {
-  it('does not clobber a source edit made after the read phase but before write', async () => {
-    await seedTarget('t', 'Old', ['Old'])
-    await seedSource('s', 'See [[Old]] for context.')
-
-    // Intercept the block_references lookup so we can race in a
-    // concurrent edit to the source between the read phase (which
-    // happens during the SELECT) and the write phase. After the
-    // intercept fires once, the user removes the wikilink entirely.
+  // Helper: race a concurrent setContent into the gap between the
+  // `block_references` SELECT (read phase) and the write tx. Returns
+  // a teardown that restores the spy.
+  const raceSourceEdit = (sourceId: string, nextContent: string) => {
     const originalGetAll = env.h.db.getAll.bind(env.h.db)
     let intercepted = false
     const spy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
@@ -289,24 +285,93 @@ describe('rename — stale-plan safety (concurrent source edit)', () => {
       const rows = await originalGetAll<T>(sql, params)
       if (!intercepted && sql.includes('FROM block_references')) {
         intercepted = true
-        await env.repo.mutate.setContent({id: 's', content: 'See nothing for context.'})
+        await env.repo.mutate.setContent({id: sourceId, content: nextContent})
       }
       return rows
     })
+    return {
+      get intercepted() { return intercepted },
+      restore: () => spy.mockRestore(),
+    }
+  }
 
+  it('does not clobber a source edit that removed the wikilink', async () => {
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'See [[Old]] for context.')
+
+    const race = raceSourceEdit('s', 'See nothing for context.')
     try {
       await env.repo.tx(
         tx => tx.setProperty('t', aliasesProp, ['New']),
         {scope: ChangeScope.BlockDefault},
       )
       await flush()
-      // Concurrent edit removed `[[Old]]`; rename's rewrite is now a
-      // no-op against current content — source content stays as the
-      // user edited it.
-      expect(intercepted).toBe(true)
+      // Content diverged from read-time snapshot → rewrite skipped.
+      expect(race.intercepted).toBe(true)
       expect((await env.read('s'))!.content).toBe('See nothing for context.')
     } finally {
-      spy.mockRestore()
+      race.restore()
+    }
+  })
+
+  it('does not rewrite [[Old]] spans the user typed after the read phase', async () => {
+    // Race in an edit that ADDS another `[[Old]]` to source. With a
+    // naive rewrite-all approach the new span would also be rewritten
+    // to `[[New]]`, even though it didn't exist at decision time. The
+    // strict divergence skip leaves the source alone.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'See [[Old]] for context.')
+
+    const race = raceSourceEdit(
+      's',
+      'See [[Old]] for context. Also [[Old]] here.',
+    )
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty('t', aliasesProp, ['New']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+      expect(race.intercepted).toBe(true)
+      expect((await env.read('s'))!.content).toBe(
+        'See [[Old]] for context. Also [[Old]] here.',
+      )
+    } finally {
+      race.restore()
     }
   })
 })
+
+describe('rename — replacement form roundtrip safety', () => {
+  it('falls back to blockref form when the added alias is blank', async () => {
+    // `renderWikilink('')` = `[[]]`, which parseReferences ignores —
+    // emitting it would silently drop the backlink. Use blockref form.
+    await seedTarget('t', 'X', ['Old'])
+    await seedSource('s', 'see [[Old]] please')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [Old](((t))) please')
+  })
+
+  it('falls back to blockref form when the added alias does not roundtrip', async () => {
+    // `renderWikilink('foo]]bar')` collapses `]]` to `] ]`; the result
+    // parses to `foo] ]bar`, not the original alias. Emitting it
+    // would corrupt the backlink text. Blockref form preserves intent.
+    await seedTarget('t', 'X', ['Old'])
+    await seedSource('s', 'see [[Old]] please')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['foo]]bar']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [Old](((t))) please')
+  })
+})
+

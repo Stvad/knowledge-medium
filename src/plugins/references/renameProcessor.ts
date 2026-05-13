@@ -19,12 +19,12 @@
  * refreshes the source's `references` column for free.
  *
  * Two-phase shape mirrors parseReferences: read phase outside any tx
- * builds a plan describing per-source rewrites; write phase opens
- * one tx, re-reads source content via `tx.get` (so user edits made
- * after the read phase aren't clobbered), and applies the rewrites
- * via parser-aware span splicing — the same wikilinks are found in
- * the current text, rewritten in place, and skipped when they no
- * longer exist (e.g. the user deleted the wikilink concurrently).
+ * builds a plan describing per-source rewrites AND records the source
+ * content observed at decision time. Write phase opens one tx,
+ * re-reads source content via `tx.get`, and skips the source entirely
+ * if content has changed (later user edit wins — see `applyPlan`).
+ * Otherwise applies the rewrites via parser-aware span splicing
+ * (`rewriteWikilinks`).
  *
  * Idempotency: the rewrite produces source content that no longer
  * contains `[[α]]`, so a second pass over the same source content is
@@ -43,6 +43,7 @@ import {
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
 import {
+  parseReferences,
   renderAliasedBlockref,
   renderWikilink,
   rewriteWikilinks,
@@ -51,7 +52,7 @@ import {
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
 const SELECT_BACKLINK_SOURCES_SQL = `
-  SELECT br.source_id AS sourceId
+  SELECT br.source_id AS sourceId, source.content AS sourceContent
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
   WHERE br.workspace_id = ?
@@ -60,8 +61,9 @@ const SELECT_BACKLINK_SOURCES_SQL = `
     AND source.deleted = 0
 `
 
-interface BacklinkSourceIdRow {
+interface BacklinkSourceRow {
   sourceId: string
+  sourceContent: string
 }
 
 const decodeAliases = (block: BlockData): readonly string[] => {
@@ -81,10 +83,23 @@ export const replacementFor = (
   added: readonly string[],
   targetId: string,
 ): string => {
-  if (removed.length === 1 && added.length === 1) return renderWikilink(added[0])
-  // R4/R5/R6/R7/A2-cascade: aliased blockref preserves the original
-  // display text the source author wrote while pinning to the stable
-  // target id.
+  if (removed.length === 1 && added.length === 1) {
+    // Only emit the wikilink form when it roundtrips through the
+    // parser to the same alias. Two cases fail this:
+    //   - Blank/whitespace alias → `renderWikilink('')` = `[[]]`, which
+    //     parseReferences ignores (no link, dropped on the floor).
+    //   - Alias containing `]]` → `renderWikilink` collapses it to
+    //     `] ]`; the rendered form parses to a different alias than
+    //     intended, silently corrupting the backlink text.
+    // Fall through to the blockref form (which preserves the original
+    // display text and pins to the target id) when the wikilink would
+    // be lossy.
+    const candidate = renderWikilink(added[0])
+    if (parseReferences(candidate)[0]?.alias === added[0]) return candidate
+  }
+  // R4/R5/R6/R7/A2-cascade (and the wikilink-unsafe 1-for-1 fallback):
+  // aliased blockref preserves the original display text the source
+  // author wrote while pinning to the stable target id.
   return renderAliasedBlockref(alias, targetId)
 }
 
@@ -97,13 +112,16 @@ interface Rewrite {
   replacement: string
 }
 
-/** Per-source plan. Stores rewrites rather than a pre-baked
- *  `nextContent` so the write phase re-reads the current source
- *  content via `tx.get` and applies the rewrites against fresh
- *  state — avoids clobbering edits the user made between the read
- *  and write phases. */
+/** Per-source plan. Stores rewrites plus the source content observed
+ *  during the read phase. Write phase re-reads the source via
+ *  `tx.get`; if content has diverged at all, the rewrite is skipped
+ *  entirely so the user's later edit wins strictly. Without this
+ *  guard, a `[[α]]` the user typed in the race window between read
+ *  and write would also be rewritten — they didn't exist at decision
+ *  time and shouldn't be touched. */
 interface SourcePlan {
   sourceId: string
+  originalContent: string
   rewrites: Rewrite[]
 }
 
@@ -124,29 +142,37 @@ const collectTargetPlans = async (
 
   for (const alias of removed) {
     const replacement = replacementFor(alias, removed, added, after.id)
-    const sources = await ctx.db.getAll<BacklinkSourceIdRow>(
+    const sources = await ctx.db.getAll<BacklinkSourceRow>(
       SELECT_BACKLINK_SOURCES_SQL,
       [after.workspaceId, after.id, alias],
     )
     for (const row of sources) {
-      const plan = plansBySourceId.get(row.sourceId) ?? {
-        sourceId: row.sourceId,
-        rewrites: [],
+      // First sighting of this source pins `originalContent`. If a
+      // later target rename hits the same source within this event,
+      // both reads are inside the same committed snapshot so the
+      // pinned value still matches what the second SELECT would see.
+      let plan = plansBySourceId.get(row.sourceId)
+      if (plan === undefined) {
+        plan = {sourceId: row.sourceId, originalContent: row.sourceContent, rewrites: []}
+        plansBySourceId.set(row.sourceId, plan)
       }
       plan.rewrites.push({alias, replacement})
-      plansBySourceId.set(row.sourceId, plan)
     }
   }
 }
 
 const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
-  // Re-read inside the write tx so concurrent edits to the source
-  // (made after our committed-state read but before this write)
-  // aren't clobbered by a stale `nextContent`. The rewrites operate
-  // on parser spans — if the user deleted the wikilink in between,
-  // there's nothing to match and the rewrite is a no-op.
+  // Strict "later user edit wins": if source content has changed
+  // between our read phase and this write tx, skip entirely. Without
+  // this we'd also rewrite `[[α]]` spans the user typed in the race
+  // window — they didn't exist when we decided to rewrite, and the
+  // user's typing should take precedence. The cost: a single
+  // unrelated keystroke to the source between event and apply will
+  // cancel this source's rewrite (acceptable — the next deliberate
+  // rename of α catches it, or the user reconciles manually).
   const current = await tx.get(plan.sourceId)
   if (current === null || current.deleted) return
+  if (current.content !== plan.originalContent) return
   let next = current.content
   for (const rewrite of plan.rewrites) {
     next = rewriteWikilinks(next, rewrite.alias, rewrite.replacement)
