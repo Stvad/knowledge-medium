@@ -206,6 +206,9 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     },
     defaultBinding: {
       keys: 'cmd+shift+down',
+      eventOptions: {
+        preventDefault: true,
+      },
     },
   }
 

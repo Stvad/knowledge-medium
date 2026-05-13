@@ -162,6 +162,20 @@ describe('default CodeMirror shortcuts', () => {
     expect(copyBlockEmbedAction.defaultBinding?.keys).toBe('shift+y')
   })
 
+  it('prevents native CodeMirror handling for structural move shortcuts', () => {
+    const moveBlockUpAction = findEditModeAction(env.repo, 'move_block_up_cm')
+    const moveBlockDownAction = findEditModeAction(env.repo, 'move_block_down_cm')
+
+    expect(moveBlockUpAction.defaultBinding).toMatchObject({
+      keys: 'cmd+shift+up',
+      eventOptions: {preventDefault: true},
+    })
+    expect(moveBlockDownAction.defaultBinding).toMatchObject({
+      keys: 'cmd+shift+down',
+      eventOptions: {preventDefault: true},
+    })
+  })
+
   it('closes the current panel from normal mode with ctrl+w', async () => {
     const {uiStateBlock, block} = await seedPanelAndContent()
     const action = findNormalModeAction(env.repo, 'close_current_panel')
