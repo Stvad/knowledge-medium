@@ -128,7 +128,7 @@
 <ul class="lede" style="margin-top: -0.6rem;">
   <li><strong>Sync</strong> (alias plugin): same-block content↔alias reconciliation.
     Replace when old value matches the other side; heal additively when the block has drifted.
-    Runs <strong>same-tx</strong> — amends the user's transaction so content and aliases commit atomically; throws <code>ProcessorRejection</code> on alias collision so the whole tx rolls back cleanly.</li>
+    Runs <strong>same-tx</strong> — amends the user's transaction so content and aliases commit atomically; if an alias write collides, storage aborts and <code>repo.ts</code> surfaces <code>ProcessorRejection</code> so the whole tx rolls back cleanly.</li>
   <li><strong>Rename / backlink rewrite</strong> (references plugin): cross-block.
     When aliases are removed or swapped, rewrite source backlinks.
     Runs <strong>follow-up</strong> (post-commit) — the cross-block writes can be many and shouldn't block the user's commit. Lives next to <code>parseReferences</code> because it needs the <code>block_references</code> projection to find sources.</li>
@@ -906,10 +906,12 @@
     <code>sameTxProcessorsFacet</code> (sibling to
     <code>postCommitProcessorsFacet</code>); its <code>apply</code>
     receives the user's live <code>Tx</code>; it reads staged state,
-    amends the tx with alias writes when planning succeeds, or
-    throws <code>ProcessorRejection</code> when the collision check
-    fails. The user's whole tx rolls back atomically inside
-    SQLite's <code>writeTransaction</code>.
+    amends the tx with alias writes when planning succeeds. If one of
+    those alias writes would collide, the storage-layer trigger aborts
+    the write and <code>repo.ts</code> translates that abort into the
+    user-facing <code>ProcessorRejection</code>. The user's whole tx
+    rolls back atomically inside SQLite's
+    <code>writeTransaction</code>.
   </p>
 </div>
 
@@ -924,26 +926,28 @@
     alongside the existing alias-maintenance triggers in
     <a href="../src/data/internals/clientSchema.ts">clientSchema.ts</a>)
     enforces <code>(workspace_id, alias)</code> uniqueness for every
-    write that lands in the trigger-maintained side index:
+    local write that lands in the trigger-maintained side index:
     <code>tx.create</code> + property write, <code>tx.update</code>,
     <code>tx.restore</code>, undo replay via <code>applyRaw</code>,
-    backfill, future mutators. If another live row already claims
-    the same <code>(workspace_id, alias)</code> tuple, the trigger
+    future mutators. If another live row already claims the same
+    non-blank <code>(workspace_id, alias)</code> tuple, the trigger
     <code>RAISE(ABORT, …)</code>s and SQLite rolls back the user's
-    entire <code>writeTransaction</code>.
+    entire <code>writeTransaction</code>. Blank aliases are skipped to
+    match <code>tx.aliasLookup('', ws)</code> returning null: blanks
+    are stored in the side index but are not meaningful alias claims.
   </p>
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
     The RAISE message is structured —
-    <code>"alias_collision" || char(31) || workspace_id || char(31)
-    || alias || char(31) || NEW.block_id</code> — so the tx engine
-    can translate it back into the existing
+    <code>"alias_collision" || char(31) || hex(NEW.workspace_id)
+    || char(31) || hex(NEW.alias) || char(31) ||
+    hex(NEW.block_id)</code> — so the tx engine can translate it back
+    into the existing
     <code>ProcessorRejection('alias.collision', meta)</code> shape
     after a single post-rollback read for the conflicting block's
-    content. ASCII unit-separator (U+001F) is the delimiter because
-    it never appears in well-formed alias text (codec rejects
-    control chars) and doesn't collide with <code>:</code>,
-    <code>/</code>, <code>,</code> etc. that <em>can</em> appear in
-    workspace ids or alias text.
+    content. Each field is hex-encoded before the ASCII
+    unit-separator (U+001F) delimiter is applied, so the delimiter is
+    unambiguous even when alias text contains control characters,
+    punctuation, slashes, commas, or non-ASCII text.
   </p>
   <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
     Self-reclaim is handled for free: the
@@ -951,7 +955,8 @@
     <code>DELETE</code>s the row's prior aliases before re-inserting
     them, so a row rewriting its own alias sees zero other claimants
     at INSERT time. The collision-only trigger fires on every
-    INSERT but the <code>EXISTS</code> sub-select returns false.
+    non-blank local INSERT but the <code>EXISTS</code> sub-select
+    returns false.
   </p>
   <p style="font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--muted);">
     <strong>Sync-apply policy:</strong> the trigger guards on
@@ -980,7 +985,7 @@
     sync (A1 / A2 / A3 / AR1); collision is no longer its concern.
   </p>
   <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
-    <li>Triggered on every <code>INSERT INTO block_aliases</code>:
+    <li>Triggered on every non-blank local <code>INSERT INTO block_aliases</code>:
       <code>tx.create</code> + setProperty, content rename adding a
       new alias, AR1 direct alias edit, <code>tx.restore</code>,
       undo of a delete, future plugins.
