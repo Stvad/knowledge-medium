@@ -4,6 +4,10 @@ import { Repo } from '../data/repo'
 import { resetBlockSelection } from '@/data/globalState.ts'
 import { copyBlockToClipboard } from '@/utils/copy.ts'
 import {
+  acquireBlurExitSuppression,
+  scheduleBlurExitSuppressionRelease,
+} from '@/utils/editorFocus.ts'
+import {
   editorSelection,
   focusedBlockIdProp,
   isCollapsedProp,
@@ -105,6 +109,26 @@ export const requestEditorFocusIfEditing = (uiStateBlock: Block) => {
   }
 }
 
+const runWithEditorFocusPreservedIfEditing = async (
+  uiStateBlock: Block,
+  action: () => Promise<void>,
+) => {
+  // Moving an edited block later in a keyed sibling list can make React
+  // reinsert the focused CodeMirror DOM subtree, firing blur before the
+  // post-mutation focus request lands. Hold the blur exit path open for
+  // the same short window the mobile toolbar uses for structural actions.
+  const releaseSuppression = uiStateBlock.peekProperty(isEditingProp)
+    ? acquireBlurExitSuppression()
+    : null
+
+  try {
+    await action()
+  } finally {
+    requestEditorFocusIfEditing(uiStateBlock)
+    if (releaseSuppression) scheduleBlurExitSuppressionRelease(releaseSuppression)
+  }
+}
+
 export const enterEditMode = (uiStateBlock: Block, selection?: EditorSelectionState) => {
   // No-op in read-only workspaces — see setIsEditing for the source-level
   // gate. Bailing here also avoids the side-effects (selection reset, focus
@@ -149,8 +173,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     id: 'indent_block',
     description: 'Indent block',
     handler: async (deps: BlockShortcutDependencies) => {
-      await repo.mutate.indent({id: deps.block.id})
-      requestEditorFocusIfEditing(deps.uiStateBlock)
+      await runWithEditorFocusPreservedIfEditing(
+        deps.uiStateBlock,
+        () => repo.mutate.indent({id: deps.block.id}),
+      )
     },
     defaultBinding: {
       keys: 'tab',
@@ -167,8 +193,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
       const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
       if (!topLevelBlockId) return
 
-      await repo.mutate.outdent({id: block.id, topLevelBlockId})
-      requestEditorFocusIfEditing(uiStateBlock)
+      await runWithEditorFocusPreservedIfEditing(
+        uiStateBlock,
+        async () => { await repo.mutate.outdent({id: block.id, topLevelBlockId}) },
+      )
     },
     defaultBinding: {
       keys: 'shift+tab',
@@ -184,8 +212,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await reorderBlock(repo, block, -1)
-      requestEditorFocusIfEditing(uiStateBlock)
+      await runWithEditorFocusPreservedIfEditing(
+        uiStateBlock,
+        () => reorderBlock(repo, block, -1),
+      )
     },
     defaultBinding: {
       keys: 'cmd+shift+up',
@@ -201,8 +231,10 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
     handler: async (deps: BlockShortcutDependencies) => {
       const {block, uiStateBlock} = deps
       if (!block) return
-      await reorderBlock(repo, block, 1)
-      requestEditorFocusIfEditing(uiStateBlock)
+      await runWithEditorFocusPreservedIfEditing(
+        uiStateBlock,
+        () => reorderBlock(repo, block, 1),
+      )
     },
     defaultBinding: {
       keys: 'cmd+shift+down',

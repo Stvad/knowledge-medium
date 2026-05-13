@@ -12,6 +12,7 @@ import { debounce } from 'lodash'
 import { placeCursorAtX, placeCursorAtCoords } from '@/utils/codemirror.ts'
 import { useContentRevision, usePropertyValue } from '@/hooks/block.ts'
 import { shouldExitEditModeAfterBlur } from '@/utils/dom.ts'
+import { isBlurExitSuppressed } from '@/utils/editorFocus.ts'
 import { EditorView } from '@codemirror/view'
 import { EditorSelection } from '@codemirror/state'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
@@ -19,30 +20,6 @@ import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceAc
 interface BlockEditorProps extends Omit<ReactCodeMirrorProps, 'value' | 'onChange' | 'onUpdate' | 'onBlur' | 'ref'> {
   block: Block
   ref?: Ref<ReactCodeMirrorRef>
-}
-
-/** Module-level latch read by BlockEditor's onBlur. While > 0, the
- *  editor's blur handler refuses to exit edit mode — instead it
- *  re-focuses the contenteditable so the user stays editing. The
- *  mobile keyboard toolbar acquires a hold around each structural
- *  action (reorder / indent / etc.) whose React commit reparents the
- *  editor's DOM node, dropping native focus and otherwise tripping
- *  the exit-on-blur path. The counter (rather than a boolean) means
- *  overlapping taps don't release each other's window. */
-let blurExitSuppressionCount = 0
-
-/** Acquire one hold on the suppression. Returns the release fn;
- *  callers MUST schedule the release on their own timer or via finally.
- *  Idempotent — the returned fn is safe to call more than once but
- *  only decrements the count once. */
-export const acquireBlurExitSuppression = (): (() => void) => {
-  blurExitSuppressionCount++
-  let released = false
-  return () => {
-    if (released) return
-    released = true
-    blurExitSuppressionCount--
-  }
 }
 
 export const BlockEditor = ({
@@ -267,7 +244,7 @@ export const BlockEditor = ({
           // this DOM node) — instead of exiting edit mode, snap focus
           // back so the user keeps editing. The acquirer releases on
           // its own timer; we just honor the count here.
-          if (blurExitSuppressionCount > 0) {
+          if (isBlurExitSuppressed()) {
             cm.current?.view?.focus()
             return
           }
