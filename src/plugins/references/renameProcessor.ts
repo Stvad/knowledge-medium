@@ -104,8 +104,8 @@ export const replacementFor = (
 ): Replacement => {
   if (removed.length === 1 && added.length === 1) {
     // Only emit the wikilink form when it roundtrips through the
-    // parser to the same alias. Two cases fail this:
-    //   - Blank/whitespace alias → `renderWikilink('')` = `[[]]`, which
+    // parser to the same alias. Known failures:
+    //   - Blank alias → `renderWikilink('')` = `[[]]`, which
     //     parseReferences ignores (no link, dropped on the floor).
     //   - Alias containing `]]` → `renderWikilink` collapses it to
     //     `] ]`; the rendered form parses to a different alias than

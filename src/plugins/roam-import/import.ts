@@ -40,7 +40,11 @@ import {
   srsReviewCountProp,
   srsSnapshotHistoryProp,
 } from '@/plugins/srs-rescheduling/schema'
-import { computeAliasSeatId } from '@/data/targets'
+import {
+  aliasSeatReaderFromDb,
+  aliasSeatReaderFromTx,
+  resolveAliasSeatId,
+} from '@/data/targets'
 import { parseLiteralDailyPageTitle } from '@/utils/relativeDate'
 import type { Repo } from '@/data/repo'
 import {
@@ -415,10 +419,11 @@ export const importRoam = async (
   await repo.tx(async tx => {
     // 5a. Alias-target seats for unowned aliases. Same idempotent
     //     shape as references.parseReferences' ensureAliasTarget — at
-    //     the deterministic id, with `aliases: [alias]` on insert /
-    //     restore. A live row at the seat (e.g. created earlier by
-    //     parseReferences when the user typed `[[alias]]` before
-    //     importing) is left alone; tombstones restore. The legacy
+    //     the indexed deterministic seat, with `aliases: [alias]` on
+    //     insert / restore. A live row that already claims the alias
+    //     (e.g. created earlier by parseReferences when the user typed
+    //     `[[alias]]` before importing) is reused. Post-rename occupants
+    //     and tombstones are skipped by the probe. The legacy
     //     code wrote `content: alias` so the imported alias-block had
     //     a visible title — preserved here for UI parity (user types
     //     `[[Foo]]` → empty stub; Roam imports `[[Foo]]` → "Foo"
@@ -640,18 +645,18 @@ const collectDailyIsos = (
   return [...isos]
 }
 
-/** Idempotent seat materialisation for unowned aliases — at the
- *  deterministic `computeAliasSeatId(alias, ws)` location. Mirrors
- *  ensureAliasTarget's shape but writes `content: alias` (visible
- *  title for UI) instead of empty content. A live row at the seat is
- *  left alone; tombstones restore as a fresh stub. */
+/** Idempotent seat materialisation for unowned aliases. Mirrors
+ *  ensureAliasTarget's indexed-seat probe, but writes `content: alias`
+ *  (visible title for UI) instead of empty content. Slot 0 is only the
+ *  happy path; a live row there may be a post-rename occupant that no
+ *  longer claims this alias. */
 const ensureAliasSeat = async (
   tx: Tx,
   repo: Repo,
   {alias, workspaceId}: {alias: string; workspaceId: string},
   typeSnapshot: TypeRegistrySnapshot,
 ): Promise<{ id: string; inserted: boolean }> => {
-  const id = computeAliasSeatId(alias, workspaceId)
+  const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
   const properties = {
     [aliasesProp.name]: aliasesProp.codec.encode([alias]),
   }
@@ -942,8 +947,8 @@ interface AliasResolution {
   aliasIdMap: Map<string, string>
   /** Aliases whose seat row needs to be materialised inside the main
    *  import tx. Each entry is an alias whose lookup missed against the
-   *  live workspace, so `aliasIdMap.get(alias) === computeAliasSeatId(
-   *  alias, workspaceId)`. Excludes imported-page hits, daily-note
+   *  live workspace, so `aliasIdMap.get(alias)` is the current
+   *  indexed-seat probe result. Excludes imported-page hits, daily-note
    *  hits, and existing-block hits — those don't need a new row. */
   aliasesNeedingSeat: string[]
 }
@@ -954,8 +959,8 @@ interface AliasResolution {
  * (deterministic; the row gets materialised lazily by
  * `getOrCreateDailyNote`); existing blocks resolve via the now-indexed
  * `findBlockByAliasInWorkspace`; everything else points at the
- * deterministic alias seat (`computeAliasSeatId`) which the main
- * import tx will materialise idempotently.
+ * indexed deterministic alias seat (`resolveAliasSeatId`) which the
+ * main import tx will materialise idempotently.
  *
  * Why not open per-alias txs anymore: a 5K-alias Roam export spawned
  * 5K side-txs, each firing post-commit processors, row-events tail,
@@ -1016,14 +1021,16 @@ const resolveAliases = async (
         if (existing) {
           aliasIdMap.set(alias, existing.id)
         } else {
-          // Unowned alias — point at the deterministic seat
-          // (`computeAliasSeatId`). The seat row will be created in the
-          // main import tx; if it already exists (from a prior import
-          // OR a typed-`[[alias]]` parseReferences run that landed at
-          // the same seat), createOrGet leaves it alone. Either way,
-          // references in imported content resolve to the same id
-          // across runs.
-          aliasIdMap.set(alias, computeAliasSeatId(alias, workspaceId))
+          // Unowned alias — point at the indexed deterministic seat.
+          // The seat row will be created in the main import tx; if slot
+          // 0 is occupied by a post-rename row that no longer claims
+          // this alias, the probe advances to the next stable slot.
+          const id = await resolveAliasSeatId(
+            aliasSeatReaderFromDb(repo.db),
+            alias,
+            workspaceId,
+          )
+          aliasIdMap.set(alias, id)
           aliasesNeedingSeat.push(alias)
         }
       }

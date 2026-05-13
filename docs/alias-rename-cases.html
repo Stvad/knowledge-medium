@@ -967,10 +967,10 @@
     sync replay; V1 treats the resulting in-database dupes as
     latent (the alias-lookup query has an
     <code>ORDER BY created_at LIMIT 1</code> tie-break) until the
-    V2 merge-resolution flow lands. The convergent
-    <code>computeAliasSeatId</code> path is unaffected — concurrent
-    clients arriving at the same seat-id produce one row, not two,
-    because PowerSync upserts on <code>id</code>.
+    V2 merge-resolution flow lands. The convergent indexed-seat path
+    is unaffected — concurrent clients arriving at the same probed
+    seat-id produce one row, not two, because PowerSync upserts on
+    <code>id</code>.
   </p>
   <p style="font-size: 0.85rem; margin: 0 0 0.5rem 0; color: var(--muted);">
     <strong>What the simplification replaced:</strong> an earlier

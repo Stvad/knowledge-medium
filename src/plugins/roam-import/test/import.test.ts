@@ -381,10 +381,10 @@ describe('importRoam', () => {
     const aliasRef = refs.find(r => r.alias === 'Get really good at dancing')
     expect(aliasRef).toBeDefined()
 
-    // The alias block lives at the deterministic seat — same id any
-    // future import (or parseReferences after the user types
-    // [[Get really good at dancing]]) would land on, so the seats
-    // unify across runs and across clients.
+    // With no prior occupant, the alias block lands at slot 0 of the
+    // indexed deterministic seat sequence — same id any future import
+    // (or parseReferences after the user types [[Get really good at
+    // dancing]]) would land on in the same world-state.
     expect(aliasRef!.id).toBe(computeAliasSeatId('Get really good at dancing', WORKSPACE))
 
     const aliasBlock = await readBlock(aliasRef!.id)
@@ -394,7 +394,7 @@ describe('importRoam', () => {
   })
 
   it('reuses an existing seat row instead of duplicating when re-imported', async () => {
-    // First import materialises the seat at the deterministic id.
+    // First import materialises the happy-path slot 0 seat.
     await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
       currentUserId: USER_ID,
@@ -402,7 +402,7 @@ describe('importRoam', () => {
     const seatId = computeAliasSeatId('Get really good at dancing', WORKSPACE)
     expect(await readBlock(seatId)).not.toBeNull()
 
-    // Second import of the same export. With deterministic seat ids,
+    // Second import of the same export. With indexed deterministic seats,
     // createOrGet sees the live row and returns inserted=false, so
     // the import does NOT count this as a fresh alias block.
     const summary = await importRoam(minimalExport, env.repo, {
@@ -429,8 +429,8 @@ describe('importRoam', () => {
   it('points imports at a pre-existing seat instead of creating a parallel block', async () => {
     // Simulate the user typing `[[Get really good at dancing]]` BEFORE
     // running the import — parseReferences would land an empty stub at
-    // the deterministic seat. We forge that state here directly so the
-    // test doesn't depend on the parseReferences pipeline.
+    // the happy-path deterministic seat. We forge that state here
+    // directly so the test doesn't depend on the parseReferences pipeline.
     const seatId = computeAliasSeatId('Get really good at dancing', WORKSPACE)
     await env.repo.tx(async tx => {
       await tx.create({
@@ -465,6 +465,47 @@ describe('importRoam', () => {
     // clobber a pre-owned alias).
     const seat = await readBlock(seatId)
     expect(seat?.content).toBe('')
+  })
+
+  it('probes past a post-rename alias-seat occupant when creating import alias targets', async () => {
+    const alias = 'Get really good at dancing'
+    const slot0Id = computeAliasSeatId(alias, WORKSPACE, 0)
+    const slot1Id = computeAliasSeatId(alias, WORKSPACE, 1)
+
+    // Simulate slot 0 after a rename: the row still lives at the old
+    // alias-derived id, but no longer claims that old alias.
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: slot0Id,
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Renamed target',
+        properties: {
+          [aliasesProp.name]: aliasesProp.codec.encode(['Renamed target']),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const summary = await importRoam(minimalExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    expect(summary.aliasBlocksCreated).toBe(1)
+
+    const parent = await readBlock(roamBlockId(WORKSPACE, 'parentA'))
+    const refs = JSON.parse(parent!.references_json) as {id: string, alias: string}[]
+    const aliasRef = refs.find(r => r.alias === alias)
+    expect(aliasRef?.id).toBe(slot1Id)
+
+    const slot0 = await readBlock(slot0Id)
+    expect(JSON.parse(slot0!.properties_json)[aliasesProp.name])
+      .toEqual(['Renamed target'])
+
+    const slot1 = await readBlock(slot1Id)
+    expect(slot1?.content).toBe(alias)
+    expect(JSON.parse(slot1!.properties_json)[aliasesProp.name]).toEqual([alias])
   })
 
   it('upgrades a previously-imported placeholder when a later import contains the real block', async () => {
