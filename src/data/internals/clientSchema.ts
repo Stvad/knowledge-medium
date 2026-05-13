@@ -422,9 +422,10 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
 //
 // The `NOT EXISTS` predicate catches two failure modes in one check: dangling
 // parent (id pointing to nothing) and cross-workspace parent. Does NOT filter
-// on `deleted = 0` — accepting soft-deleted parents matches the server FK and
-// the v4.24 alignment (§4.1.1). The "don't create new children under a
-// soft-deleted parent" rule lives at the kernel mutator layer.
+// on `deleted = 0` — that rule has its own trigger
+// (`blocks_parent_not_deleted_check_*`) below, with a structured RAISE the
+// engine translates back to `ParentDeletedError`. Splitting the two keeps
+// the error messages distinguishable and each predicate one PK lookup.
 // ============================================================================
 
 export const CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL = `
@@ -453,6 +454,80 @@ export const CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL = `
       SELECT 1 FROM blocks
       WHERE id = NEW.parent_id
         AND workspace_id = NEW.workspace_id
+    );
+  END
+`
+
+// ============================================================================
+// parent-not-deleted triggers — refuse to land a live child under a
+// tombstoned parent on any local write path. Mirrors the alias-uniqueness
+// trigger's pattern: the invariant moves from app code (kernel mutator
+// preflight) into the schema so every path — `tx.create`, `tx.move`,
+// `tx.restore`, future plugins — gets the check by construction.
+//
+// Skipped when `tx_context.source IS NULL` so PowerSync sync-apply doesn't
+// fail on the transient "child arrives before parent's tombstone" cross-
+// client ordering. Spec §4.1.1: server FK accepts tombstoned parents;
+// strict-local / permissive-sync is the documented asymmetry.
+//
+// The RAISE message is structured: `parent_deleted` followed by a
+// US-separated (char(31)) parent id. The tx engine catches errors with
+// this prefix and re-throws as `ParentDeletedError(parentId)` — keeping
+// the existing typed error class for callers that already
+// `instanceof`-check it.
+//
+// INSERT trigger gate: NEW.parent_id IS NOT NULL AND NEW.deleted = 0.
+// `tx.create` always builds rows with `deleted = false`, so this skips
+// the no-op case of a tombstone insert (sync apply, which also bypasses
+// the source gate).
+//
+// UPDATE trigger fires on `parent_id` OR `deleted` change. The deleted
+// gate matters for two cases: (a) `tx.restore` flips `deleted = 0` while
+// `parent_id` stays pinned, (b) `applyRaw` (undo/redo) UPDATEs all
+// columns including `deleted`. Both must respect the rule. Subtree-
+// delete cascading is unaffected — `softDeleteSubtree` visits the parent
+// first, so by the time a descendant is processed its parent is already
+// tombstoned but the descendant's UPDATE has `NEW.deleted = 1`, which
+// the WHEN clause excludes.
+//
+// Undo of a subtree-delete is safe by snapshot ordering: `softDelete-
+// Subtree` records the root's snapshot first (DFS pop), so `_replay`
+// restores the root before its children — descendant UPDATEs see a
+// live parent.
+// ============================================================================
+
+export const CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_parent_not_deleted_check_insert
+  BEFORE INSERT ON blocks
+  WHEN NEW.parent_id IS NOT NULL
+    AND NEW.deleted = 0
+    AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
+  BEGIN
+    SELECT RAISE(ABORT,
+      'parent_deleted' || char(31) || NEW.parent_id
+    )
+    WHERE EXISTS (
+      SELECT 1 FROM blocks
+      WHERE id = NEW.parent_id
+        AND deleted = 1
+    );
+  END
+`
+
+export const CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL = `
+  CREATE TRIGGER IF NOT EXISTS blocks_parent_not_deleted_check_update
+  BEFORE UPDATE OF parent_id, deleted ON blocks
+  WHEN NEW.parent_id IS NOT NULL
+    AND NEW.deleted = 0
+    AND (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
+  BEGIN
+    SELECT RAISE(ABORT,
+      'parent_deleted' || char(31) || NEW.parent_id
+    )
+    WHERE EXISTS (
+      SELECT 1 FROM blocks
+      WHERE id = NEW.parent_id
+        AND deleted = 1
     );
   END
 `
@@ -736,6 +811,9 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   // 2 workspace-invariant triggers
   CREATE_BLOCKS_WORKSPACE_INVARIANT_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL,
+  // 2 parent-not-deleted triggers
+  CREATE_BLOCKS_PARENT_NOT_DELETED_INSERT_TRIGGER_SQL,
+  CREATE_BLOCKS_PARENT_NOT_DELETED_UPDATE_TRIGGER_SQL,
   // 3 block_aliases-maintenance triggers + 1 uniqueness-enforcement trigger
   CREATE_BLOCKS_ALIAS_INSERT_TRIGGER_SQL,
   CREATE_BLOCKS_ALIAS_UPDATE_TRIGGER_SQL,
@@ -755,6 +833,8 @@ export const CLIENT_SCHEMA_TRIGGER_NAMES = [
   'blocks_upload_update',
   'blocks_parent_workspace_check_insert',
   'blocks_parent_workspace_check_update',
+  'blocks_parent_not_deleted_check_insert',
+  'blocks_parent_not_deleted_check_update',
   'blocks_alias_insert',
   'blocks_alias_update',
   'blocks_alias_delete',

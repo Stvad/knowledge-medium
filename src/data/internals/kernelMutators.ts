@@ -24,7 +24,7 @@ import {
   type PropertySchema,
   type Tx,
 } from '@/data/api'
-import { BlockNotFoundError, ParentDeletedError } from '@/data/api'
+import { BlockNotFoundError } from '@/data/api'
 import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from '../orderKey'
 
 // ──── Common helpers ────
@@ -76,20 +76,6 @@ const orderKeyForInsert = async (
   // before
   const prev = siblings[ix - 1]
   return keyBetween(prev?.orderKey ?? null, siblings[ix].orderKey)
-}
-
-/** Refuse to create or move under a soft-deleted parent — UX rule per
- *  §4.7 Layer 1 (v4.30). Storage layer accepts soft-deleted parents;
- *  the kernel mutator layer is where the friendly error lives. */
-const requireLiveParent = async (tx: Tx, parentId: string | null): Promise<void> => {
-  if (parentId === null) return
-  const parent = await tx.get(parentId)
-  if (parent === null) {
-    // Parent existence will surface from the tx engine's parent preflight
-    // when the mutator reaches tx.create/tx.move.
-    return
-  }
-  if (parent.deleted) throw new ParentDeletedError(parentId)
 }
 
 const positionSchema = z.discriminatedUnion('kind', [
@@ -206,7 +192,6 @@ export const createChild = defineMutator<CreateChildArgs, string>({
   describe: ({parentId}) => `create child under ${parentId}`,
   apply: async (tx, args) => {
     const parent = await requireBlock(tx, args.parentId)
-    if (parent.deleted) throw new ParentDeletedError(args.parentId)
     const orderKey = await orderKeyForInsert(tx, args.parentId, parent.workspaceId, args.position ?? {kind: 'last'})
     return tx.create({
       id: args.id,
@@ -246,7 +231,6 @@ export const createSiblingAbove = defineMutator<SiblingArgs, string>({
   describe: ({siblingId}) => `create sibling above ${siblingId}`,
   apply: async (tx, args) => {
     const sibling = await requireBlock(tx, args.siblingId)
-    await requireLiveParent(tx, sibling.parentId)
     const orderKey = await orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
       kind: 'before',
       siblingId: args.siblingId,
@@ -271,7 +255,6 @@ export const createSiblingBelow = defineMutator<SiblingArgs, string>({
   describe: ({siblingId}) => `create sibling below ${siblingId}`,
   apply: async (tx, args) => {
     const sibling = await requireBlock(tx, args.siblingId)
-    await requireLiveParent(tx, sibling.parentId)
     const orderKey = await orderKeyForInsert(tx, sibling.parentId, sibling.workspaceId, {
       kind: 'after',
       siblingId: args.siblingId,
@@ -326,7 +309,6 @@ export const insertChildren = defineMutator<InsertChildrenArgs, string[]>({
   apply: async (tx, args) => {
     if (args.items.length === 0) return []
     const parent = await requireBlock(tx, args.parentId)
-    if (parent.deleted) throw new ParentDeletedError(args.parentId)
     const siblings = await tx.childrenOf(args.parentId)
     const position = args.position ?? {kind: 'last'}
 
@@ -386,7 +368,6 @@ export const move = defineMutator<MoveArgs, void>({
     // workspace_id is immutable (server-side trigger enforces it), so
     // it's also the destination workspace.
     const self = await requireBlock(tx, args.id)
-    await requireLiveParent(tx, args.parentId)
     const orderKey = await orderKeyForInsert(tx, args.parentId, self.workspaceId, args.position)
     await tx.move(args.id, {parentId: args.parentId, orderKey})
   },
@@ -422,7 +403,6 @@ export const indent = defineMutator<{id: string}, void>({
     const ix = siblings.findIndex(s => s.id === id)
     if (ix <= 0) return  // no previous sibling — no-op
     const newParent = siblings[ix - 1]
-    if (newParent.deleted) throw new ParentDeletedError(newParent.id)
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
@@ -463,7 +443,6 @@ export const outdent = defineMutator<OutdentArgs, boolean>({
     // workspace, so the same logic works for both nested and root
     // outdents — no root-level approximation needed.
     const grandparent = parent.parentId
-    await requireLiveParent(tx, grandparent)
     // Pass self.workspaceId so the null-grandparent case scopes
     // correctly even before this tx pins a workspace.
     const grandSiblings = await tx.childrenOf(grandparent, self.workspaceId)

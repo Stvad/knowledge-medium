@@ -435,17 +435,19 @@ describe('workspace-invariant triggers', () => {
     ).toThrow(/parent must exist and share workspace_id/)
   })
 
-  it('accepts local INSERT under a soft-deleted parent (storage-layer alignment)', () => {
+  it('rejects local INSERT under a soft-deleted parent (storage-layer enforcement)', () => {
     // Seed parent + soft-delete it (via local user write so triggers fire).
     h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
     h.insertBlock({id: 'parent', workspace_id: 'ws1'})
     h.updateBlock('parent', {deleted: 1})
-    // Fresh child under the tombstone — the local trigger does NOT filter
-    // on deleted=0 (v4.24 alignment with server FK). Soft-deleted-parent
-    // rejection is a kernel-mutator UX rule, not a storage invariant.
+    // Fresh child under the tombstone — `blocks_parent_not_deleted_check_insert`
+    // RAISEs so the rule is enforced at the storage layer, independent
+    // of which write path arrived. The server FK still accepts soft-
+    // deleted parents (§4.1.1); sync-applied writes bypass via the
+    // `source IS NOT NULL` gate.
     expect(() =>
       h.insertBlock({id: 'child', workspace_id: 'ws1', parent_id: 'parent'}),
-    ).not.toThrow()
+    ).toThrow(/parent_deleted/)
     h.clearTxContext()
   })
 
@@ -473,6 +475,66 @@ describe('workspace-invariant triggers', () => {
     // Updating content (not parent_id/workspace_id) should not invoke the workspace-invariant UPDATE trigger.
     expect(() => h.updateBlock('b1', {content: 'x'})).not.toThrow()
     h.clearTxContext()
+  })
+})
+
+describe('parent-not-deleted triggers', () => {
+  it('rejects local INSERT of a live child under a tombstoned parent', () => {
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.insertBlock({id: 'p', workspace_id: 'ws1'})
+    h.updateBlock('p', {deleted: 1})
+    expect(() => h.insertBlock({id: 'c', workspace_id: 'ws1', parent_id: 'p'})).toThrow(
+      /parent_deleted/,
+    )
+    h.clearTxContext()
+  })
+
+  it('rejects local UPDATE that re-parents an existing block onto a tombstone', () => {
+    h.insertBlock({id: 'p', workspace_id: 'ws1'})
+    h.insertBlock({id: 'q', workspace_id: 'ws1'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('p', {deleted: 1})
+    expect(() => h.updateBlock('q', {parent_id: 'p'})).toThrow(/parent_deleted/)
+    h.clearTxContext()
+  })
+
+  it('rejects local UPDATE that restores a tombstoned child under a tombstoned parent', () => {
+    h.insertBlock({id: 'p', workspace_id: 'ws1'})
+    h.insertBlock({id: 'c', workspace_id: 'ws1', parent_id: 'p'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('c', {deleted: 1})
+    h.updateBlock('p', {deleted: 1})
+    expect(() => h.updateBlock('c', {deleted: 0})).toThrow(/parent_deleted/)
+    h.clearTxContext()
+  })
+
+  it('allows soft-delete UPDATE (deleted 0→1) regardless of parent state', () => {
+    h.insertBlock({id: 'p', workspace_id: 'ws1'})
+    h.insertBlock({id: 'c', workspace_id: 'ws1', parent_id: 'p'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    h.updateBlock('p', {deleted: 1})
+    // Cascading soft-delete: child being tombstoned under an already-
+    // tombstoned parent must succeed (this is how `softDeleteSubtree`
+    // works after the parent is marked).
+    expect(() => h.updateBlock('c', {deleted: 1})).not.toThrow()
+    h.clearTxContext()
+  })
+
+  it('allows local INSERT/UPDATE when the parent is live', () => {
+    h.insertBlock({id: 'p', workspace_id: 'ws1'})
+    h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
+    expect(() => h.insertBlock({id: 'c', workspace_id: 'ws1', parent_id: 'p'})).not.toThrow()
+    expect(() => h.updateBlock('c', {content: 'edited'})).not.toThrow()
+    h.clearTxContext()
+  })
+
+  it('DOES NOT fire on sync-applied writes (source IS NULL gate)', () => {
+    // Seed both blocks via sync (no tx_context). A sync apply that
+    // delivers a live child after the parent's tombstone arrives must
+    // not abort — cross-client tombstone ordering is permitted, mirrors
+    // the workspace-invariant trigger's policy.
+    h.insertBlock({id: 'p', workspace_id: 'ws1', deleted: 1})
+    expect(() => h.insertBlock({id: 'c', workspace_id: 'ws1', parent_id: 'p'})).not.toThrow()
   })
 })
 

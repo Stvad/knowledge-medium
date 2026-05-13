@@ -42,6 +42,7 @@ import type {
 import {
   ChangeScope,
   MutatorNotRegisteredError,
+  ParentDeletedError,
   ProcessorRejection,
   QueryNotRegisteredError,
   isRefCodec,
@@ -360,6 +361,7 @@ interface ParsedAliasCollision {
 }
 
 const ALIAS_COLLISION_RAISE_PREFIX = 'alias_collision'
+const PARENT_DELETED_RAISE_PREFIX = 'parent_deleted'
 // ASCII unit-separator delimits the (hex-encoded) fields. Field
 // contents are hex so the separator is guaranteed-distinct from
 // any field byte — earlier comments asserted the codec rejected
@@ -376,6 +378,28 @@ const decodeHexUtf8 = (hex: string): string => {
     bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16)
   }
   return new TextDecoder().decode(bytes)
+}
+
+/** Recognise the trigger-raised parent-deleted error from
+ *  `blocks_parent_not_deleted_check_{insert,update}`. The payload is
+ *  the bare parent id — block ids are UUIDs or deterministic ids
+ *  (hex + `:` / `-`), so the unit separator never appears in them
+ *  and the hex encoding the alias parser needs isn't required here.
+ *  Returns the parsed id on match, `null` otherwise. */
+const parseParentDeletedError = (err: unknown): {parentId: string} | null => {
+  if (err === null || typeof err !== 'object') return null
+  const msg = (err as {message?: unknown}).message
+  if (typeof msg !== 'string') return null
+  const needle = `${PARENT_DELETED_RAISE_PREFIX}${ALIAS_COLLISION_FIELD_SEP}`
+  const idx = msg.indexOf(needle)
+  if (idx === -1) return null
+  const tail = msg.slice(idx + needle.length)
+  // SQLite wrappers may append context text after the payload, so
+  // split on the unit separator and take the first part. Block ids
+  // never contain `\x1f`, so the first part is the id verbatim.
+  const parentId = tail.split(ALIAS_COLLISION_FIELD_SEP)[0]
+  if (parentId.length === 0) return null
+  return {parentId}
 }
 
 /** Recognise the trigger-raised alias-collision error inside whatever
@@ -1060,6 +1084,10 @@ export class Repo {
    *  `repo.redo` — surfaces the same shape. Currently:
    *    - `alias_collision` RAISE → `ProcessorRejection('alias.collision',
    *      …)` via the trigger on `block_aliases`.
+   *    - `parent_deleted` RAISE → `ParentDeletedError(parentId)` via the
+   *      trigger on `blocks` — kept as a typed error rather than a
+   *      ProcessorRejection because no toast surface is wired for it and
+   *      existing callers `instanceof`-check the class.
    *  Listeners (`onUserError`) fire on translated ProcessorRejections
    *  here so the toast layer sees collisions from undo/redo replay,
    *  not just from `repo.tx` directly. */
@@ -1092,6 +1120,10 @@ export class Repo {
         const rejection = await this.buildAliasCollisionRejection(collision)
         this.fireUserErrorListeners(rejection)
         throw rejection
+      }
+      const parentDeleted = parseParentDeletedError(err)
+      if (parentDeleted !== null) {
+        throw new ParentDeletedError(parentDeleted.parentId)
       }
       if (err instanceof ProcessorRejection) this.fireUserErrorListeners(err)
       throw err

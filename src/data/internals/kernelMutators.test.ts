@@ -395,6 +395,74 @@ describe('core.move', () => {
   })
 })
 
+// ──── ParentDeletedError — storage-layer enforcement ────
+
+/** The kernel-mutator preflight is a UX convenience; the load-bearing
+ *  guarantee is the BEFORE INSERT/UPDATE trigger on `blocks` that fires
+ *  for every local write path. These tests pin the bypass cases: raw
+ *  `tx.create` / `tx.move` from inside `repo.tx` must surface the same
+ *  typed error, and undo of a subtree-delete must replay cleanly. */
+describe('ParentDeletedError — storage-layer enforcement', () => {
+  it('raw tx.create under a soft-deleted parent throws ParentDeletedError', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: 'p'})
+    await expect(env.repo.tx(async tx => {
+      await tx.create({id: 'c', workspaceId: 'ws-1', parentId: 'p', orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(ParentDeletedError)
+  })
+
+  it('raw tx.move onto a soft-deleted parent throws ParentDeletedError', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'q', workspaceId: 'ws-1', parentId: null, orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.mutate.delete({id: 'p'})
+    await expect(env.repo.tx(async tx => {
+      await tx.move('q', {parentId: 'p', orderKey: 'c0'})
+    }, {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(ParentDeletedError)
+  })
+
+  it('raw tx.restore of a tombstoned child whose parent is also tombstoned throws ParentDeletedError', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
+      await tx.create({id: 'c', workspaceId: 'ws-1', parentId: 'p', orderKey: 'b0'})
+    }, {scope: ChangeScope.BlockDefault})
+    // Soft-delete the child first, then the parent — leaves p and c as
+    // separate tombstones. Restoring c alone would re-create a live row
+    // under a tombstoned parent, same invariant violation as the
+    // insert/move cases.
+    await env.repo.tx(async tx => {
+      await tx.delete('c')
+      await tx.delete('p')
+    }, {scope: ChangeScope.BlockDefault})
+    await expect(env.repo.tx(async tx => {
+      await tx.restore('c')
+    }, {scope: ChangeScope.BlockDefault})).rejects.toBeInstanceOf(ParentDeletedError)
+  })
+
+  it('undo of a subtree-delete restores the whole subtree without re-triggering', async () => {
+    // root → A → A1 → A1a;  root → B → C.  Delete A's subtree, then
+    // undo — every tombstone flips back. The trigger fires on each
+    // restore-style UPDATE, so this would break if the snapshot map
+    // were iterated children-first.
+    await seedABC()
+    await env.repo.mutate.createChild({parentId: 'A', id: 'A1'})
+    await env.repo.mutate.createChild({parentId: 'A1', id: 'A1a'})
+    await env.repo.mutate.delete({id: 'A'})
+    for (const id of ['A', 'A1', 'A1a']) {
+      expect(env.read(id)?.deleted).toBe(true)
+    }
+    expect(await env.repo.undo()).toBe(true)
+    for (const id of ['A', 'A1', 'A1a']) {
+      expect(env.read(id)?.deleted).toBe(false)
+    }
+    expect(env.read('A1')!.parentId).toBe('A')
+    expect(env.read('A1a')!.parentId).toBe('A1')
+  })
+})
+
 // ──── setOrderKey ────
 
 describe('core.setOrderKey', () => {
