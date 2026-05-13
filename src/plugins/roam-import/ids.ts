@@ -23,12 +23,17 @@ export interface DailyPageInfo {
 // caller can fall back to the generic id.
 //
 // Rules:
-//   - Roam marks daily pages with `:log/id` (epoch-ms midnight UTC).
-//   - Roam's daily-page uid is `MM-DD-YYYY`; we accept that as the
-//     primary signal.
-//   - We also accept titles in literal daily-page form (ISO or Roam
-//     long form, e.g. "April 28th, 2026"). Strict literal-only here —
-//     a permissive natural-language parser would treat a page literally
+//   - Literal daily-page titles are the canonical signal. Roam export
+//     metadata can drift (e.g. `:log/id` reflecting creation/edit time
+//     near a timezone boundary), but the page title is what Roam links
+//     by and what users see.
+//   - Roam's daily-page uid is often `MM-DD-YYYY`; accept it as a
+//     fallback for title-less / non-standard-title exports.
+//   - Roam also marks daily pages with `:log/id`; use that only after
+//     title and uid fail.
+//   - Title parsing is strict literal-only here — ISO or Roam long
+//     form, e.g. "April 28th, 2026". A permissive natural-language
+//     parser would treat a page literally
 //     titled "today"/"may"/"friday" as a daily note keyed to the
 //     current day, which is wrong (Roam keeps those as regular pages)
 //     and would also stomp the day's daily on import.
@@ -36,6 +41,11 @@ export const resolveDailyPage = (
   workspaceId: string,
   page: RoamPage,
 ): DailyPageInfo | null => {
+  const parsed = parseLiteralDailyPageTitle(page.title)
+  if (parsed) {
+    return {iso: parsed.iso, blockId: dailyNoteBlockId(workspaceId, parsed.iso)}
+  }
+
   const isoFromUid = isoFromDateUid(page.uid)
   if (isoFromUid) {
     return {iso: isoFromUid, blockId: dailyNoteBlockId(workspaceId, isoFromUid)}
@@ -44,11 +54,6 @@ export const resolveDailyPage = (
   if (page[':log/id'] !== undefined) {
     const iso = isoFromLogId(page[':log/id'])
     if (iso) return {iso, blockId: dailyNoteBlockId(workspaceId, iso)}
-  }
-
-  const parsed = parseLiteralDailyPageTitle(page.title)
-  if (parsed) {
-    return {iso: parsed.iso, blockId: dailyNoteBlockId(workspaceId, parsed.iso)}
   }
 
   return null

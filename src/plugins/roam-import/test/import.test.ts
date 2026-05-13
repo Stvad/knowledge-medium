@@ -351,6 +351,49 @@ describe('importRoam', () => {
     expect(child?.content).toBe('morning notes')
   })
 
+  it('imports stale-log-id daily pages by title without alias collisions', async () => {
+    await importRoam([
+      {
+        title: 'scratch',
+        uid: 'scratchPage',
+        children: [
+          {
+            string: 'see [[January 21st, 2020]]',
+            uid: 'linkingBlock',
+          },
+        ],
+      },
+      {
+        title: 'January 21st, 2020',
+        uid: 'staleLogDaily',
+        ':log/id': 1579678296357, // 2020-01-22T07:31:36.357Z
+        'create-time': 1579678296357,
+        children: [
+          {
+            string: 'daily note body',
+            uid: 'staleLogDailyChild',
+          },
+        ],
+      },
+    ], env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const jan21Id = dailyNoteBlockId(WORKSPACE, '2020-01-21')
+    const jan22Id = dailyNoteBlockId(WORKSPACE, '2020-01-22')
+    const jan21 = await readBlock(jan21Id)
+    const jan22 = await readBlock(jan22Id)
+    const child = await readBlock(roamBlockId(WORKSPACE, 'staleLogDailyChild'))
+    const linking = await readBlock(roamBlockId(WORKSPACE, 'linkingBlock'))
+    const refs = JSON.parse(linking!.references_json) as {id: string, alias: string}[]
+
+    expect(jan21).not.toBeNull()
+    expect(jan22).toBeNull()
+    expect(child?.parent_id).toBe(jan21Id)
+    expect(refs).toContainEqual({id: jan21Id, alias: 'January 21st, 2020'})
+  })
+
   it('resolves [[alias]] references to imported page final ids', async () => {
     await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,

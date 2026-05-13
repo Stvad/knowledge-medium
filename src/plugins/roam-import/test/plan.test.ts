@@ -82,6 +82,20 @@ describe('planImport', () => {
     expect(daily?.title).toBe('April 28th, 2026')
   })
 
+  it('trusts literal daily-page titles over stale Roam log ids', () => {
+    const plan = planImport([{
+      title: 'January 21st, 2020',
+      uid: 'stale-log-id',
+      ':log/id': 1579678296357, // 2020-01-22T07:31:36.357Z
+      'create-time': 1579678296357,
+      children: [],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.uidMap.get('stale-log-id')).toBe(dailyNoteBlockId(WORKSPACE, '2020-01-21'))
+    expect(plan.pages[0].isDaily).toBe(true)
+    expect(plan.pages[0].iso).toBe('2020-01-21')
+  })
+
   it('emits non-daily page data with alias property and child ids', () => {
     const plan = planImport(minimalExport, {workspaceId: WORKSPACE, currentUserId: USER})
 
