@@ -38,7 +38,6 @@ import type {
   TxWriteOpts,
   User,
 } from '@/data/api'
-import { normalizeReferences } from '@/data/api'
 import {
   BlockNotFoundError,
   CycleError,
@@ -257,7 +256,10 @@ export class TxImpl implements Tx {
       ...beforeData,
       deleted: false,
       ...(patch?.content !== undefined ? {content: patch.content} : {}),
-      ...(patch?.references !== undefined ? {references: normalizeReferences(patch.references)} : {}),
+      // Reference-array canonicalization runs as a same-tx processor
+      // (`core.normalizeReferences`) after the user fn returns —
+      // see src/data/internals/normalizeReferencesProcessor.ts.
+      ...(patch?.references !== undefined ? {references: patch.references} : {}),
       ...(patch?.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(opts?.skipMetadata),
     }
@@ -284,7 +286,8 @@ export class TxImpl implements Tx {
     const after: BlockData = {
       ...before,
       ...(patch.content !== undefined ? {content: patch.content} : {}),
-      ...(patch.references !== undefined ? {references: normalizeReferences(patch.references)} : {}),
+      // See note on `restore` above re: same-tx normalization.
+      ...(patch.references !== undefined ? {references: patch.references} : {}),
       ...(patch.properties !== undefined ? {properties: patch.properties} : {}),
       ...this.metadataPatch(opts?.skipMetadata),
     }
@@ -612,7 +615,10 @@ export class TxImpl implements Tx {
       orderKey: data.orderKey,
       content: data.content ?? '',
       properties: data.properties ?? {},
-      references: normalizeReferences(data.references ?? []),
+      // Same-tx `core.normalizeReferences` canonicalizes after the
+      // user fn returns; empty default is already canonical so the
+      // common (no-refs) insert path is a same-tx no-op.
+      references: data.references ?? [],
       createdAt: ts,
       updatedAt: ts,
       createdBy: by,

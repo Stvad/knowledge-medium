@@ -51,6 +51,7 @@ import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
+import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import {
@@ -313,6 +314,11 @@ export interface RepoOptions {
    *  processors arrive through `setFacetRuntime`. Kept as a test/tooling
    *  switch for any future core-only processors. */
   registerKernelProcessors?: boolean
+  /** When true (default), kernel same-tx processors are registered at
+   *  construction time. Today that's `core.normalizeReferences`. Set
+   *  false in tests that need to exercise the engine without
+   *  reference normalization (e.g. asserting raw-shape round-trip). */
+  registerKernelSameTxProcessors?: boolean
   /** When true (default), kernel queries are registered at construction
    *  time so `repo.query.subtree({id})` etc. work immediately without a
    *  `setFacetRuntime` call. Set false when a test wants to populate
@@ -611,6 +617,9 @@ export class Repo {
     }
     if (opts.registerKernelProcessors ?? true) {
       for (const p of KERNEL_PROCESSORS) this.processors.set(p.name, p)
+    }
+    if (opts.registerKernelSameTxProcessors ?? true) {
+      for (const p of KERNEL_SAME_TX_PROCESSORS) this.sameTxProcessors.set(p.name, p)
     }
     if (opts.registerKernelQueries ?? true) {
       for (const q of KERNEL_QUERIES) this.queries.set(q.name, q)

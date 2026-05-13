@@ -28,9 +28,18 @@
  * (renderers, actions, contexts) live in their own extensions.
  */
 
-import { invalidationRulesFacet, mutatorsFacet, postCommitProcessorsFacet, propertySchemasFacet, queriesFacet, typesFacet } from './facets'
+import {
+  invalidationRulesFacet,
+  mutatorsFacet,
+  postCommitProcessorsFacet,
+  propertySchemasFacet,
+  queriesFacet,
+  sameTxProcessorsFacet,
+  typesFacet,
+} from './facets'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
 import { KERNEL_PROCESSORS } from './internals/kernelProcessors'
+import { KERNEL_SAME_TX_PROCESSORS } from './internals/normalizeReferencesProcessor'
 import { KERNEL_QUERIES } from './internals/kernelQueries'
 import { kernelInvalidationRule } from './internals/kernelInvalidation'
 import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
@@ -40,6 +49,7 @@ import type { AppExtension } from '@/extensions/facet'
 export const kernelDataExtension: AppExtension = [
   KERNEL_MUTATORS.map(m => mutatorsFacet.of(m, {source: 'kernel'})),
   KERNEL_PROCESSORS.map(p => postCommitProcessorsFacet.of(p, {source: 'kernel'})),
+  KERNEL_SAME_TX_PROCESSORS.map(p => sameTxProcessorsFacet.of(p, {source: 'kernel'})),
   KERNEL_QUERIES.map(q => queriesFacet.of(q, {source: 'kernel'})),
   KERNEL_PROPERTY_SCHEMAS.map(s => propertySchemasFacet.of(s, {source: 'kernel'})),
   KERNEL_TYPE_CONTRIBUTIONS.map(t => typesFacet.of(t, {source: 'kernel'})),

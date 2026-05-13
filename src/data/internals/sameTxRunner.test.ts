@@ -167,8 +167,8 @@ describe('Same-tx runner — amend semantics', () => {
       watches: {kind: 'field', table: 'blocks', fields: ['content']},
       apply: async (event, ctx) => {
         for (const row of event.changedRows) {
-          if (row.after) {
-            await ctx.tx.setProperty(row.id, {name: 'mark', codec: {encode: (v: string) => v, decode: (v: unknown) => v as string}}, 'touched')
+          if (row.after && !row.after.content.endsWith(' [touched]')) {
+            await ctx.tx.update(row.id, {content: `${row.after.content} [touched]`}, {skipMetadata: true})
           }
         }
       },
