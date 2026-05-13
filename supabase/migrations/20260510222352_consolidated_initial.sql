@@ -516,6 +516,7 @@ CREATE TABLE IF NOT EXISTS "public"."blocks" (
     "updated_at" bigint NOT NULL,
     "created_by" "text" NOT NULL,
     "updated_by" "text" NOT NULL,
+    "write_id" "text",
     "deleted" boolean DEFAULT false NOT NULL
 );
 
@@ -618,6 +619,16 @@ ALTER TABLE ONLY "public"."workspace_members"
 
 
 
+ALTER TABLE "public"."blocks" REPLICA IDENTITY FULL;
+
+
+ALTER TABLE "public"."workspace_members" REPLICA IDENTITY FULL;
+
+
+ALTER TABLE "public"."workspaces" REPLICA IDENTITY FULL;
+
+
+
 ALTER TABLE "public"."blocks" ENABLE ROW LEVEL SECURITY;
 
 
@@ -666,27 +677,7 @@ CREATE POLICY "workspaces_update" ON "public"."workspaces" FOR UPDATE USING ("pr
 
 
 
-CREATE PUBLICATION "powersync" WITH (publish = 'insert, update, delete, truncate');
-
-
-ALTER PUBLICATION "powersync" OWNER TO "postgres";
-
-
-
-
 ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
-
-
-ALTER PUBLICATION "powersync" ADD TABLE ONLY "public"."blocks";
-
-
-
-ALTER PUBLICATION "powersync" ADD TABLE ONLY "public"."workspace_members";
-
-
-
-ALTER PUBLICATION "powersync" ADD TABLE ONLY "public"."workspaces";
-
 
 
 GRANT USAGE ON SCHEMA "public" TO "postgres";
@@ -1155,7 +1146,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "anon";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "authenticated";
 ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TABLES TO "service_role";
-
 
 
 

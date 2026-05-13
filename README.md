@@ -11,48 +11,93 @@ Sign-in flow:
 - Primary: enter your email, Supabase emails a 6-digit code, type it back in the app
 - Fallback: "Continue without an account" button performs an anonymous sign-in (per-device session, can't invite or be invited until you sign in with email)
 
-### One-Time Setup
+### Fresh Supabase + Electric Deployment
 
-1. Create a local env file from `.env.example`.
-2. Log into Supabase:
+These steps are written for a new Supabase project. The migration history is squashed into `supabase/migrations/20260510222352_consolidated_initial.sql`; do not use this path against an already-applied production migration history without repairing Supabase's migration table first.
+
+Keep secrets out of shell history and logs. Put real secret values in local ignored `.env.*` files or shell variables, do not run these commands with `--debug`, and do not paste CLI output that includes database URLs, source secrets, or service-role keys into chat.
+
+1. Log in and pick the Supabase org:
 
 ```bash
 npx supabase login
+npx supabase orgs list --output json
 ```
 
-3. Create a hosted project, then link this repo to it:
+2. Create and link the Supabase project. Store the generated database password in a password manager and pass it via a shell variable so it is not written literally into command history.
 
 ```bash
-npx supabase orgs list
-npx supabase projects create knowledge-medium --org-id <org-id> --region us-west-1 --db-password <db-password>
-npx supabase link --project-ref <project-ref> --password <db-password>
+printf "Supabase DB password: "
+read -rs SUPABASE_DB_PASSWORD
+printf "\n"
+npx supabase projects create knowledge-medium \
+  --org-id <org-id> \
+  --region us-west-1 \
+  --db-password "$SUPABASE_DB_PASSWORD" \
+  --output json
+npx supabase link --project-ref <project-ref> --password "$SUPABASE_DB_PASSWORD" --yes
+unset SUPABASE_DB_PASSWORD
 ```
 
-4. Push the committed schema and auth config:
+3. Before pushing config, set the production app origin in `supabase/config.toml` under `[auth].site_url` and `additional_redirect_urls`. Keep the loopback URLs for local development.
+
+4. Push the schema and Supabase config:
 
 ```bash
-npx supabase db push
-npx supabase config push
+npx supabase db push --linked
+npx supabase config push --project-ref <project-ref> --yes
 ```
 
-5. Fill client env vars:
-   - `VITE_SUPABASE_URL`: Supabase project URL
-   - `VITE_SUPABASE_ANON_KEY`: Supabase publishable / anon key
+The initial migration creates the workspace/block schema, RLS policies, RPCs, `blocks.write_id`, and `REPLICA IDENTITY FULL` on the Electric-synced tables. It does not create a PowerSync publication.
 
-6. Create an Electric Cloud source connected to the Supabase Postgres database. The committed migrations add `blocks.write_id` and set `REPLICA IDENTITY FULL` on the synced tables so Electric can emit full update/delete rows.
-
-7. Deploy the Supabase Edge shape proxy in front of Electric Cloud:
+5. Get the browser-safe API key locally. The command may also show secret keys; copy only the anon/publishable key into frontend configuration and never use a service-role key in browser env.
 
 ```bash
-supabase secrets set ELECTRIC_URL=https://api.electric-sql.cloud
-supabase secrets set ELECTRIC_SOURCE_ID=<electric-source-id>
-supabase secrets set ELECTRIC_SOURCE_SECRET=<electric-source-secret>
-# Optional: restrict browser origins instead of the default "*"
-supabase secrets set ELECTRIC_SHAPE_ALLOWED_ORIGINS=https://your-app.example.com
-supabase functions deploy electric-shape
+npx supabase projects api-keys --project-ref <project-ref> --output json
 ```
 
-If your Supabase project does not automatically expose `SUPABASE_URL` and `SUPABASE_ANON_KEY` to Edge Functions, set those as function secrets too.
+6. Create an Electric Cloud Postgres Sync service connected to the Supabase database. The service needs a direct Supabase Postgres connection string for logical replication, not the transaction pooler. If using the Electric CLI, keep the DB URL in an environment variable:
+
+```bash
+npx @electric-sql/cli auth login
+printf "Supabase direct DB URL: "
+read -rs SUPABASE_DIRECT_DB_URL
+printf "\n"
+npx @electric-sql/cli projects create --name knowledge-medium --json
+npx @electric-sql/cli environments create --project <electric-project-id> --name production --json
+npx @electric-sql/cli services create postgres \
+  --environment <electric-environment-id> \
+  --database-url "$SUPABASE_DIRECT_DB_URL" \
+  --region us-west-1 \
+  --json
+unset SUPABASE_DIRECT_DB_URL
+npx @electric-sql/cli services get-secret <electric-service-id>
+```
+
+The Electric dashboard is fine for this step too. Either way, copy the service/source ID and secret into the Edge Function secret file below. `services get-secret` prints the source secret, so run it only in a private terminal. If Electric Cloud cannot reach the direct Supabase host over IPv6, enable Supabase's IPv4 add-on or choose a compatible direct connection option.
+
+7. Create an ignored local file such as `.env.supabase-edge`:
+
+```dotenv
+ELECTRIC_URL=https://api.electric-sql.cloud
+ELECTRIC_SOURCE_ID=<electric-source-id>
+ELECTRIC_SOURCE_SECRET=<electric-source-secret>
+ELECTRIC_SHAPE_ALLOWED_ORIGINS=https://your-app.example.com
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_ANON_KEY=<anon-or-publishable-key>
+```
+
+Then set Edge Function secrets without putting secret values in the command line:
+
+```bash
+npx supabase secrets set --env-file .env.supabase-edge --project-ref <project-ref>
+```
+
+8. Deploy the Supabase Edge shape proxy:
+
+```bash
+npx supabase functions deploy electric-shape --project-ref <project-ref>
+```
 
 The proxy provides three named endpoints:
    - `/blocks`
@@ -61,12 +106,15 @@ The proxy provides three named endpoints:
 
    The browser sends the Supabase access token as `Authorization: Bearer <jwt>`. The proxy validates that token through Supabase PostgREST, keeps the Electric source secret server-side, and enforces the table/workspace predicates server-side instead of accepting arbitrary table or SQL params from the browser.
 
-8. Fill the remaining env var:
-   - `VITE_ELECTRIC_SHAPE_PROXY_URL`: base URL for that shape proxy, without a trailing shape name. For the Supabase Edge deployment, this is usually `https://<project-ref>.functions.supabase.co/electric-shape` or `https://<project-ref>.supabase.co/functions/v1/electric-shape`.
+9. Fill frontend env vars in `.env.local` or your frontend host's production env:
+   - `VITE_SUPABASE_URL`: `https://<project-ref>.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY`: Supabase anon/publishable key
+   - `VITE_ELECTRIC_SHAPE_PROXY_URL`: base URL for the shape proxy, without a trailing shape name. For Supabase Edge, use `https://<project-ref>.supabase.co/functions/v1/electric-shape`.
 
-9. Start the app:
+10. Verify and start the app:
 
 ```bash
+yarn run check
 yarn dev
 ```
 
@@ -75,6 +123,7 @@ yarn dev
 - Local writes land in the durable SQLite `outbox` table and upload through Supabase. Electric owns the ordered read path back into SQLite.
 - The `write_id` column on `blocks` lets the Electric subscriber skip echoes while the matching outbox row is still pending.
 - Because the starter graph is seeded in the remote database, the app will now wait briefly for the first remote sync before falling back to local example data.
+- V1 workspace membership changes can require a reload after join/create so the Electric shape streams reconnect with the expanded workspace set; the production fix is tracked in `docs/follow-ups.md`.
 
 ### Safe Mode
 - Add `?safeMode` to URL to disable dynamic renderer loading
