@@ -106,6 +106,7 @@ describe('collectSchemaReconciliationPlan', () => {
       block('a', {'roam:topics': '[[A]] [[B]]'}),
       block('b', {'roam:topics': '[[C]]'}),
       block('c', {'roam:topics': ['[[D]]', '[[E]]']}),
+      block('d', {'roam:topics': '[[outer [[inner]] tail]]'}),
     ]
     const plan = collectSchemaReconciliationPlan(blocks, env.repo)
     expect(plan.toRegister).toEqual([{name: 'roam:topics', presetId: 'refList'}])
@@ -297,15 +298,19 @@ describe('normalizeRefPropertyValues', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:topics': '[[ Foo ]]'}),
       block('b', {'roam:topics': ['[[ Bar ]]']}),
+      block('c', {'roam:topics': '[[outer [[inner]] tail]]'}),
     ]
     const aliasIdMap = new Map([
       [' Foo ', 'id-foo'],
       [' Bar ', 'id-bar'],
+      ['outer [[inner]] tail', 'id-outer'],
+      ['inner', 'id-inner'],
     ])
     const diagnostics: string[] = []
     normalizeRefPropertyValues(blocks, new Map([['roam:topics', 'refList']]), aliasIdMap, diagnostics)
     expect(blocks[0].properties['roam:topics']).toEqual(['id-foo'])
     expect(blocks[1].properties['roam:topics']).toEqual(['id-bar'])
+    expect(blocks[2].properties['roam:topics']).toEqual(['id-outer'])
     expect(diagnostics).toEqual([])
   })
 

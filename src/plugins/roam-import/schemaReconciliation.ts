@@ -19,11 +19,10 @@
 import type { BlockData } from '@/data/api'
 import type { Repo } from '@/data/repo'
 import {
-  PAGE_TOKEN_RE,
   ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
-  explodePageTokens,
   isRoamSemanticRefListProperty,
+  parsePageTokenList,
 } from './properties'
 
 type ClassifiedPresetId = 'string' | 'number' | 'boolean' | 'list' | 'refList'
@@ -73,16 +72,7 @@ const rememberNonRefListSample = (
 }
 
 const isPureTokenString = (value: string): boolean => {
-  // explodePageTokens returns non-null only when the value is a pure
-  // page-token list with at least 2 tokens. For single-token values
-  // we still want to count it as "page-tokeny", so check separately.
-  if (explodePageTokens(value) !== null) return true
-  // Single token: `[[X]]` (with optional surrounding whitespace).
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('[[') || !trimmed.endsWith(']]')) return false
-  PAGE_TOKEN_RE.lastIndex = 0
-  const match = PAGE_TOKEN_RE.exec(trimmed)
-  return match !== null && match.index === 0 && match[0].length === trimmed.length
+  return parsePageTokenList(value) !== null
 }
 
 const recordSample = (stats: SampledNameStats, blockId: string, value: unknown): void => {
@@ -369,41 +359,17 @@ export const normalizeRefPropertyValues = (
 
 const collectTokens = (raw: unknown): string[] | null => {
   if (typeof raw === 'string') {
-    const exploded = explodePageTokens(raw)
-    if (exploded !== null) {
-      return exploded.map(stripBrackets).filter(Boolean) as string[]
-    }
-    const trimmed = raw.trim()
-    if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-      const inner = trimmed.slice(2, -2)
-      return inner ? [inner] : null
-    }
-    return null
+    return parsePageTokenList(raw)?.map(token => token.alias) ?? null
   }
   if (Array.isArray(raw)) {
     if (raw.length === 0) return []
     if (!raw.every(item => typeof item === 'string')) return null
     const out: string[] = []
     for (const item of raw as string[]) {
-      const exploded = explodePageTokens(item)
-      if (exploded !== null) {
-        out.push(...exploded.map(stripBrackets).filter(Boolean))
-        continue
-      }
-      const trimmed = item.trim()
-      if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-        const inner = trimmed.slice(2, -2)
-        if (inner) out.push(inner)
-      }
+      const tokens = parsePageTokenList(item)
+      if (tokens) out.push(...tokens.map(token => token.alias))
     }
     return out
   }
   return null
-}
-
-const stripBrackets = (value: string): string => {
-  const trimmed = value.trim()
-  return trimmed.startsWith('[[') && trimmed.endsWith(']]')
-    ? trimmed.slice(2, -2)
-    : trimmed
 }

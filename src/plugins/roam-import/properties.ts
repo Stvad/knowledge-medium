@@ -1,4 +1,8 @@
-import { parseReferences } from '@/plugins/references/referenceParser.ts'
+import {
+  parseOutermostReferences,
+  parseReferences,
+  type ParsedReference,
+} from '@/plugins/references/referenceParser.ts'
 
 const NS_PREFIX = 'roam'
 export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`
@@ -113,42 +117,23 @@ const parseLeadingMarkdownLink = (
   }
 }
 
-export const PAGE_TOKEN_RE = /\[\[([^\]]+)\]\]/g
-
-interface PageToken {
+export interface PageToken {
   alias: string
   start: number
   end: number
 }
 
-const parseOuterPageTokens = (value: string): PageToken[] => {
-  const out: PageToken[] = []
-  const stack: number[] = []
-  let i = 0
+const pageTokenFromReference = (ref: ParsedReference): PageToken => ({
+  alias: ref.alias,
+  start: ref.startIndex,
+  end: ref.endIndex,
+})
 
-  while (i < value.length - 1) {
-    const token = value.slice(i, i + 2)
-    if (token === '[[') {
-      stack.push(i)
-      i += 2
-      continue
-    }
-    if (token === ']]') {
-      if (stack.length > 0) {
-        const start = stack.pop()!
-        if (stack.length === 0) {
-          const alias = value.slice(start + 2, i)
-          if (alias !== '') out.push({alias, start, end: i + 2})
-        }
-      }
-      i += 2
-      continue
-    }
-    i += 1
-  }
+const outerPageTokens = (value: string): PageToken[] =>
+  parseOutermostReferences(value).map(pageTokenFromReference)
 
-  return out
-}
+const allPageTokens = (value: string): PageToken[] =>
+  parseReferences(value).map(pageTokenFromReference)
 
 const isPageTokenListValue = (
   value: string,
@@ -164,12 +149,17 @@ const isPageTokenListValue = (
 }
 
 export const explodePageTokens = (value: string): string[] | null => {
-  const tokens = parseOuterPageTokens(value)
-  if (!isPageTokenListValue(value, tokens)) return null
+  const tokens = parsePageTokenList(value)
+  if (!tokens) return null
   const out = tokens.map(token => `[[${token.alias}]]`)
   // Single token: not really a "list", let the caller keep the scalar.
   if (out.length < 2) return null
   return out
+}
+
+export const parsePageTokenList = (value: string): PageToken[] | null => {
+  const tokens = outerPageTokens(value)
+  return isPageTokenListValue(value, tokens) ? tokens : null
 }
 
 // Collect every `[[X]]` token nested inside a property value. Used to
@@ -181,7 +171,7 @@ export const collectAliasesFromPropertyValues = (
   const out = new Set<string>()
   const visit = (v: unknown) => {
     if (typeof v === 'string') {
-      for (const token of parseOuterPageTokens(v)) out.add(token.alias)
+      for (const token of allPageTokens(v)) out.add(token.alias)
     } else if (Array.isArray(v)) {
       for (const item of v) visit(item)
     }
@@ -272,9 +262,9 @@ export const collectAliasesFromRoamSemanticRefListValue = (
   const trimmed = value.trim()
   if (!trimmed) return []
 
-  const tokens = parseOuterPageTokens(trimmed)
-  if (isPageTokenListValue(trimmed, tokens)) return uniqueExactStrings(tokens.map(token => token.alias))
-  if (tokens.length > 0) return []
+  const tokens = parsePageTokenList(trimmed)
+  if (tokens) return uniqueExactStrings(tokens.map(token => token.alias))
+  if (parseReferences(trimmed).length > 0) return []
 
   const quotedAliases = parseQuotedAliasListValue(trimmed)
   if (quotedAliases) return quotedAliases
@@ -291,10 +281,36 @@ export const collectAliasesFromRoamSemanticRefListProperties = (
   uniqueExactStrings(Object.entries(properties)
     .filter(([name]) => isRoamSemanticRefListProperty(name))
     .flatMap(([name, value]) =>
-      collectAliasesFromRoamSemanticRefListValue(
+      collectReferencedAliasesFromRoamSemanticRefListValue(
         value,
         name === ROAM_PAGE_ALIAS_PROP ? 'conservative' : 'broad',
       )))
+
+const collectReferencedAliasesFromRoamSemanticRefListValue = (
+  value: unknown,
+  plainAliasMode: PlainAliasMode,
+): string[] => {
+  if (Array.isArray(value)) {
+    return uniqueExactStrings(value.flatMap(item =>
+      collectReferencedAliasesFromRoamSemanticRefListValue(item, plainAliasMode)))
+  }
+  if (typeof value !== 'string') return []
+
+  const trimmed = value.trim()
+  if (!trimmed) return []
+
+  const tokens = parsePageTokenList(trimmed)
+  if (tokens) return uniqueExactStrings(parseReferences(trimmed).map(ref => ref.alias))
+  if (parseReferences(trimmed).length > 0) return []
+
+  const quotedAliases = parseQuotedAliasListValue(trimmed)
+  if (quotedAliases) return quotedAliases
+
+  if (plainAliasMode === 'conservative') {
+    return isConservativePlainAlias(trimmed) ? [trimmed] : []
+  }
+  return looksSerializedJson(trimmed) ? [] : [trimmed]
+}
 
 /** Translate Roam's property bag into the new flat-property shape:
  *  values are stored encoded directly under their (namespaced) key.
@@ -330,8 +346,8 @@ const collectStandardPageAliasValues = (value: unknown): string[] => {
     if (typeof item !== 'string') continue
     const trimmed = item.trim()
     if (!trimmed) continue
-    const tokens = parseOuterPageTokens(trimmed)
-    if (!isPageTokenListValue(trimmed, tokens)) continue
+    const tokens = parsePageTokenList(trimmed)
+    if (!tokens) continue
     out.push(...tokens.map(token => token.alias))
   }
   return out
@@ -354,8 +370,7 @@ export const nonStandardPageAliasValues = (
     }
     const trimmed = item.trim()
     if (!trimmed) continue
-    const tokens = parseOuterPageTokens(trimmed)
-    if (!isPageTokenListValue(trimmed, tokens)) out.push(trimmed)
+    if (!parsePageTokenList(trimmed)) out.push(trimmed)
   }
   return out
 }
@@ -384,7 +399,7 @@ const READWISE_READ_URL_RE = /^https:\/\/read\.readwise\.io\/read\/[^\s<>)\]]+/i
 const URL_RE = /https?:\/\/[^\s<>)\]]+/i
 
 const parseLeadingPageRef = (value: string): LeadingPageRef | null =>
-  parseOuterPageTokens(value).find(token => /^\s*$/.test(value.slice(0, token.start))) ?? null
+  outerPageTokens(value).find(token => /^\s*$/.test(value.slice(0, token.start))) ?? null
 
 const parseLeadingTitle = (value: string): LeadingTitle | null => {
   const pageRef = parseLeadingPageRef(value)
@@ -442,8 +457,8 @@ const authorPageRef = (value: string): string | undefined => {
 }
 
 const exactAuthorRefs = (value: string): string[] | null => {
-  const tokens = parseOuterPageTokens(value)
-  if (!isPageTokenListValue(value, tokens)) return null
+  const tokens = parsePageTokenList(value)
+  if (!tokens) return null
   return tokens
     .map(token => token.alias)
     .filter(alias => alias !== '')

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   parseReferences,
+  parseOutermostReferences,
   parseReferencesMarkdownAware,
   extractAliases,
   hasReferences,
@@ -104,6 +105,16 @@ describe('referenceParser', () => {
       expect(result[2].alias).toBe('second [[nested2]]')
       expect(result[3].alias).toBe('nested2')
     })
+
+    it('can project nested references to outermost spans', () => {
+      const content = '[[first [[nested1]]]][[second [[nested2]]]]'
+      const result = parseOutermostReferences(content)
+
+      expect(result.map(ref => ref.alias)).toEqual([
+        'first [[nested1]]',
+        'second [[nested2]]',
+      ])
+    })
   })
 
   describe('parseReferencesMarkdownAware', () => {
@@ -114,6 +125,12 @@ describe('referenceParser', () => {
       // Should find the normal reference but skip the one in code
       expect(result).toHaveLength(1)
       expect(result[0].alias).toBe('reference')
+    })
+
+    it('uses the canonical nested wikilink parser inside markdown text nodes', () => {
+      const result = parseReferencesMarkdownAware('Normal [[outer [[inner]] tail]] here')
+
+      expect(result.map(ref => ref.alias)).toEqual(['outer [[inner]] tail', 'inner'])
     })
 
     it('should handle code blocks', () => {

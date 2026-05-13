@@ -50,12 +50,7 @@ export const parseBlockRefTarget = (target: string): string | null => {
   return match ? match[1].toLowerCase() : null
 }
 
-/**
- * Parse [[alias]] patterns from text content using remark
- * @param content The text content to parse
- * @returns Array of found references with their positions
- */
-export function parseReferences(content: string): ParsedReference[] {
+const parseWikilinkReferences = (content: string): ParsedReference[] => {
   const references: ParsedReference[] = []
   const stack: number[] = [] // Stack to track opening bracket positions
   let i = 0
@@ -87,6 +82,32 @@ export function parseReferences(content: string): ParsedReference[] {
 }
 
 /**
+ * Parse every balanced `[[alias]]` pattern from text content. Nested
+ * wikilinks emit both the outer and inner references, matching Roam's
+ * backlink behavior.
+ */
+export function parseReferences(content: string): ParsedReference[] {
+  return parseWikilinkReferences(content)
+}
+
+/**
+ * Parse only the outermost balanced `[[alias]]` spans. Use this when a
+ * caller needs token boundaries for text rewriting/rendering, where
+ * overlapping nested spans would corrupt slicing.
+ */
+export function parseOutermostReferences(content: string): ParsedReference[] {
+  const references = parseWikilinkReferences(content)
+  const outermost: ParsedReference[] = []
+  let cursor = 0
+  for (const ref of references) {
+    if (ref.startIndex < cursor) continue
+    outermost.push(ref)
+    cursor = ref.endIndex
+  }
+  return outermost
+}
+
+/**
  * Parse references using remark for markdown-aware extraction
  * This version respects markdown structure (ignores code blocks, etc.)
  */
@@ -103,21 +124,10 @@ export function parseReferencesMarkdownAware(content: string): ParsedReference[]
       if (['code', 'inlineCode'].includes(parent?.type as string)) return
 
       const text = node.value
-      const regex = /\[\[([^\]]+)\]\]/g
-      let match
-
-      while ((match = regex.exec(text)) !== null) {
-        const alias = match[1]
-        if (alias) {
-          // Note: position calculation would need more work for exact positions
-          // For now, we'll use the simpler approach
-          references.push({
-            alias,
-            startIndex: match.index,
-            endIndex: match.index + match[0].length,
-          })
-        }
-      }
+      // Note: position calculation would need more work for exact positions
+      // across markdown nodes. For now, indexes remain relative to this
+      // text node, matching the earlier implementation.
+      references.push(...parseReferences(text))
     })
   } catch (error) {
     console.warn('Error parsing references:', error)
@@ -145,7 +155,7 @@ export function extractAliases(content: string): string[] {
  * @returns True if content contains [[alias]] patterns
  */
 export function hasReferences(content: string): boolean {
-  return /\[\[([^\]]+)\]\]/.test(content)
+  return parseReferences(content).length > 0
 }
 
 /**

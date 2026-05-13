@@ -2,10 +2,9 @@ import { aliasesProp, typesProp } from '@/data/properties'
 import type { RoamImportPlan } from './plan'
 import { parseRoamImportReferences } from './references'
 import {
-  PAGE_TOKEN_RE,
   ROAM_ISA_PROP,
   ROAM_PAGE_ALIAS_PROP,
-  explodePageTokens,
+  parsePageTokenList,
 } from './properties'
 
 export interface RoamTypeCandidateProperty {
@@ -45,12 +44,7 @@ const MAX_LOW_CONFIDENCE_TYPE_CANDIDATES_IN_REPORT = 10
 const MAX_COMMON_PROPS_IN_REPORT = 5
 
 const isPureTokenString = (value: string): boolean => {
-  if (explodePageTokens(value) !== null) return true
-  const trimmed = value.trim()
-  if (!trimmed.startsWith('[[') || !trimmed.endsWith(']]')) return false
-  PAGE_TOKEN_RE.lastIndex = 0
-  const match = PAGE_TOKEN_RE.exec(trimmed)
-  return match !== null && match.index === 0 && match[0].length === trimmed.length
+  return parsePageTokenList(value) !== null
 }
 
 const typeIdFromIsaAlias = (alias: string): string => {

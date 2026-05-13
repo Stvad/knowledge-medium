@@ -1,7 +1,7 @@
 import { Plugin } from 'unified'
 import { visit, SKIP } from 'unist-util-visit'
 import { Link, Literal, Parent, RootContent } from 'mdast'
-import { parseReferences } from '../../referenceParser.ts'
+import { parseOutermostReferences } from '../../referenceParser.ts'
 
 export interface RemarkWikilinksOptions {
   resolveAlias: (alias: string) => string | undefined
@@ -103,22 +103,12 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     if (index === undefined || !parent) return
 
     const src = node.value
-    const refs = parseReferences(src)
+    const refs = parseOutermostReferences(src)
     if (refs.length === 0) return
-
-    // parseReferences returns nested matches too; for inline rendering we
-    // only want the outermost spans so the surrounding text splices line up.
-    const topLevel: typeof refs = []
-    let cursor = 0
-    for (const ref of refs) {
-      if (ref.startIndex < cursor) continue
-      topLevel.push(ref)
-      cursor = ref.endIndex
-    }
 
     const out: RootContent[] = []
     let last = 0
-    for (const ref of topLevel) {
+    for (const ref of refs) {
       // `![[alias]]` is a page-embed (Obsidian-style transclusion). When the
       // wikilink is preceded by `!` we consume it together with the bang and
       // emit a pageembed node instead of an inline wikilink.

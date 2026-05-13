@@ -1058,7 +1058,21 @@ describe('planImport', () => {
 
     expect(plan.pages[0].pageAliases).toEqual(['defensive [[driving]]'])
     expect(plan.aliasesUsed.has('defensive [[driving]]')).toBe(true)
+    expect(plan.aliasesUsed.has('driving')).toBe(true)
     expect(plan.aliasesUsed.has('defensive [[driving')).toBe(false)
+  })
+
+  it('materializes nested refs from page_alias page props while keeping the outer alias value', () => {
+    const plan = planImport([{
+      title: 'EVOC',
+      uid: 'pUid',
+      props: {page_alias: '[[defensive [[driving]]]]'},
+      children: [],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].pageAliases).toEqual(['defensive [[driving]]'])
+    expect(plan.aliasesUsed.has('defensive [[driving]]')).toBe(true)
+    expect(plan.aliasesUsed.has('driving')).toBe(true)
   })
 
   it('preserves whitespace inside page_alias page refs', () => {
