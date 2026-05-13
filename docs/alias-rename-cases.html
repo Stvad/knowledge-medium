@@ -600,6 +600,227 @@
   </p>
 </div>
 
+<h2>Undo interactions</h2>
+
+<p class="lede" style="margin-bottom: 1rem;">
+  User actions land in <code>ChangeScope.BlockDefault</code>; sync and
+  rename open follow-up txs in <code>ChangeScope.References</code>.
+  Cmd-Z targets the <code>BlockDefault</code> stack — the
+  <code>References</code> stack is recorded for parity but not
+  user-exposed (see <a href="../src/data/internals/undoManager.ts">undoManager.ts</a>).
+  So a single user action becomes <em>2 or 3 separate txs across two
+  undo buckets</em>: undo reverses only the user tx, and the field-
+  watcher re-fires sync + rename on the reverted state. Whether the
+  pipeline self-heals depends on whether the forward edit was
+  reversible.
+</p>
+
+<p class="lede" style="margin-bottom: 1rem;">
+  <strong>Self-healing</strong> cases: forward edit was a pure
+  derivation (alias swap / content swap) that the same rules produce
+  in reverse. <strong>Non-self-healing</strong> cases: forward edit
+  was <em>information-destructive</em> on source content
+  (<code>[[α]] → [α](((id)))</code> erases the original wikilink form;
+  re-firing rules can't reconstruct it).
+</p>
+
+<div class="case">
+  <div class="case-title">
+    <span>Self-healing on Cmd-Z</span>
+    <span class="tag ok">no extra mechanism needed</span>
+  </div>
+  <ul style="font-size: 0.9rem; margin: 0 0 0 1rem;">
+    <li><strong>A1 (content edit, old ∈ aliases).</strong>
+      Forward: content "Old"→"New" → sync writes alias [Old]→[New] →
+      rename R1 writes source <code>[[Old]]→[[New]]</code>. Undo
+      content: "New"→"Old" → sync sees "New"∈[New] → rule 1 swaps
+      [New]→[Old] → rename R1 writes <code>[[New]]→[[Old]]</code>. ✓
+    </li>
+    <li><strong>AR1 (alias rename, content matches).</strong>
+      Forward: aliases [Foo]→[Bar] → sync writes content "Bar" →
+      rename R1 writes <code>[[Foo]]→[[Bar]]</code>. Undo alias swap:
+      [Bar]→[Foo], content still "Bar" → sync sees AR1: content "Bar"
+      === removed "Bar" → writes content "Foo" → rename R1 writes
+      <code>[[Bar]]→[[Foo]]</code>. ✓
+    </li>
+    <li><strong>R1 / R2 (clean alias rename).</strong>
+      Forward: [Old]→[New] → rename rewrites
+      <code>[[Old]]→[[New]]</code>. Undo: [New]→[Old] → rename
+      rewrites <code>[[New]]→[[Old]]</code>. ✓
+    </li>
+    <li><strong>R3 (pure alias add).</strong>
+      Forward: no source rewrite (no removed alias). Undo: pure remove
+      of the added alias → R4 with no backlinks (no <code>[[α]]</code>
+      exists) → no source writes. ✓
+    </li>
+  </ul>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Non-self-healing on Cmd-Z (the gap)</span>
+    <span class="tag bad">user-visible regression</span>
+  </div>
+  <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
+    <li><strong>R4 / R5 / R6 / R7 (alias remove with backlinks).</strong>
+      Forward: alias B removed → rename writes
+      <code>[[B]] → [B](((target-id)))</code> in every source. Undo of
+      target's BlockDefault tx: aliases get B back → rename sees
+      <code>{removed: [], added: [B]}</code> → <strong>R3 (pure add) → no-op</strong>.
+      Sources are stuck in blockref form; the original
+      <code>[[B]]</code> text is gone. Re-firing the pipeline can't
+      reconstruct it.
+    </li>
+    <li><strong>A2-cascade (content edit collapses alias → R4).</strong>
+      Forward: content "X"→"Y" with aliases [X, Y] → sync collapses
+      to [Y] (Case A2) → rename hits R4 for removed X → source
+      <code>[[X]] → [X](((id)))</code>. Undo content: "Y"→"X" → sync
+      rule 1 swaps alias [Y]→[X]. The lost "Y" entry never comes back
+      and the source stays in blockref form. Two regressions in one.
+    </li>
+    <li><strong>A3-residue (drift heal).</strong>
+      Forward: content edit on a drifted page added new content as an
+      extra alias. Undo content: sync rule 1 swaps the added-back
+      alias to the now-restored content, but the <em>original
+      drifted</em> alias state isn't restored either — A3 leaks an
+      alias entry across the undo. Cosmetic compared to R4 but worth
+      naming.
+    </li>
+  </ul>
+  <div class="action bad">
+    <span class="what">Common cause:</span>
+    rename's <code>[α](((id)))</code> rewrite is information-
+    destructive on source content. The forward-direction signal
+    (alias remove with backlinks) has no inverse signal on undo
+    (alias add doesn't tell the processor to undo a rewrite — the
+    processor can't even <em>see</em> that the source's current
+    blockref form came from this pipeline vs. the user typing it
+    directly).
+  </div>
+</div>
+
+<h2>Thoughts on R4-R7</h2>
+
+<p class="lede" style="margin-bottom: 1rem;">
+  Four options, ordered by invasiveness. None is free; the choice
+  depends on how aggressively we want to preserve display text vs.
+  preserve undo.
+</p>
+
+<div class="case">
+  <div class="case-title">
+    <span>Option A — Don't rewrite source; surface as broken link</span>
+    <span class="tag ok">simplest; undo-clean</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Rename only handles the 1-for-1 swap case (R1, R2). For R4-R7,
+    leave <code>[[α]]</code> in source content. The wikilink no
+    longer resolves; render it with a "broken link" affordance.
+    Restoring the alias on the target (via Cmd-Z or manual re-add)
+    naturally re-resolves the link.
+  </p>
+  <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
+    <li><strong>Pros:</strong> trivially undo-correct. No engine work.
+      Matches Roam's mental model (renaming a page doesn't rewrite
+      backlink text). Restores cleanly on re-add.</li>
+    <li><strong>Cons:</strong> link "breaks" when the user removes
+      the last alias (R7) or removes a referenced alias from a multi-
+      alias target (R4). Display text is preserved (it's still
+      <code>[[B]]</code>) but the link is dangling until the user
+      acts.</li>
+    <li><strong>Implementation:</strong> drop the R4/R5/R6/R7 branch
+      from the rename decision ladder. parseReferences continues to
+      project the wikilink into <code>block_references</code>; the
+      lookup just misses, and the renderer shows a broken-link state
+      (already a UI affordance for any <code>[[α]]</code> with no
+      matching alias seat).</li>
+  </ul>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Option B — Engine-level cause-chain undo grouping</span>
+    <span class="tag ok">cleanest semantics; biggest lift</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Every processor tx records the originating user txId on its
+    snapshot (<code>causedByTxId</code>). The undo manager groups
+    consecutive undo entries that share a cause: Cmd-Z pops them all
+    atomically and replays each via <code>applyRaw</code>. One user
+    action ↔ one undo step, regardless of how many processor txs
+    fired downstream.
+  </p>
+  <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
+    <li><strong>Pros:</strong> generalises beyond aliases — any
+      post-commit processor with destructive side effects (today
+      none; tomorrow probably more) gets undo for free. Keeps the
+      current R4 source rewrite (display-text preservation) AND
+      makes it undoable.</li>
+    <li><strong>Cons:</strong> engine work — undoManager needs cause
+      tracking, the tx context needs <code>causedByTxId</code>
+      propagation across the scheduler boundary, the replay path
+      needs to apply a group atomically (and probably suppress
+      processors from firing on the replay to avoid re-cascading).
+      Subtle interactions with the References-bucket-not-user-visible
+      rule today.</li>
+    <li><strong>Effort:</strong> medium-large — touches undo manager,
+      tx context, processor runner.</li>
+  </ul>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Option C — Inverse-rewrite log on the target</span>
+    <span class="tag warn">complex; storage cost</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Rename stamps a <code>previousAliases</code> side property (or
+    side table) on the target when it removes an alias. On the
+    "alias added back" signal (pure add of α that's in
+    <code>previousAliases</code>), rename treats that as an undo and
+    walks sources rewriting <code>[α](((id)))</code> back to
+    <code>[[α]]</code>.
+  </p>
+  <ul style="font-size: 0.9rem; margin: 0 0 0.5rem 1rem;">
+    <li><strong>Pros:</strong> R4 rewrite stays as-is. No engine
+      work. Reverses on alias re-add regardless of <em>how</em> the
+      re-add happens (Cmd-Z, manual, sync from peer).</li>
+    <li><strong>Cons:</strong> sources may have <em>multiple</em>
+      <code>[α](((id)))</code> spans that didn't all come from this
+      pipeline — disambiguating is fuzzy. <code>previousAliases</code>
+      needs TTL / cleanup. Cross-source consistency on partial
+      sync states is hard. Doesn't help A3-residue or A2-cascade
+      (sync's own collapse isn't reversed).</li>
+  </ul>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Option D — Hybrid: drop R4-R7, keep R1-R2; revisit later</span>
+    <span class="tag ok">recommended for v1</span>
+  </div>
+  <p style="font-size: 0.9rem; margin: 0 0 0.5rem 0;">
+    Ship Option A now: rename only handles the 1-for-1 swap case
+    (R1, R2). For R4-R7, leave the wikilink dangling and rely on the
+    renderer's broken-link UI. Revisit Option B when (a) other
+    processors with destructive side effects appear, or (b) the
+    dangling-link UX proves to be a real pain point. R4 forward
+    behavior in production is rare anyway (the UI commits one alias
+    rename per edit, so R5/R6 are safety nets; R4 / R7 happen only
+    on explicit alias removal).
+  </p>
+  <p style="font-size: 0.9rem; margin: 0;">
+    <strong>What this means for the existing implementation:</strong>
+    delete the <code>replacementFor</code> "anything else" branch in
+    <a href="../src/plugins/references/renameProcessor.ts">renameProcessor.ts</a>
+    so non-1-for-1 diffs return early. Update the corresponding
+    tests (R4, R7 cases assert "source untouched" rather than
+    rewrite-to-blockref). A2-cascade test asserts that sync still
+    collapses the alias but the source content stays
+    <code>[[X]]</code>.
+  </p>
+</div>
+
 <h2>Open questions / known wrinkles</h2>
 <ul>
   <li>
