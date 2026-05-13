@@ -12,10 +12,7 @@ import { useIsMobile } from '@/utils/react.tsx'
 import { useRunAction } from '@/shortcuts/runAction.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
 import { ActionContextTypes, type CodeMirrorEditModeDependencies } from '@/shortcuts/types.ts'
-import {
-  acquireBlurExitSuppression,
-  scheduleBlurExitSuppressionRelease,
-} from '@/utils/editorFocus.ts'
+import { acquireBlurExitSuppression } from '@/components/BlockEditor.tsx'
 import {
   INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
   INSERT_PAGE_REF_TRIGGER_ACTION_ID,
@@ -244,7 +241,7 @@ export function MobileKeyboardToolbar() {
       console.error(`[MobileKeyboardToolbar] Failed to run ${actionId}`, error)
     }
     if (releaseHold) {
-      scheduleBlurExitSuppressionRelease(releaseHold)
+      window.setTimeout(releaseHold, 400)
       // Snap focus back immediately for the common case where the editor
       // is already remounted under the new DOM position. If it isn't yet,
       // the suppressed blur won't tear us out of edit mode and the next

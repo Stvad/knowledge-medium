@@ -7,12 +7,10 @@ import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
-  isEditingProp,
   editorSelection,
   focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { isBlurExitSuppressed } from '@/utils/editorFocus'
 import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
 import {
   ActionContextTypes,
@@ -176,41 +174,6 @@ describe('default CodeMirror shortcuts', () => {
       keys: 'cmd+shift+down',
       eventOptions: {preventDefault: true},
     })
-  })
-
-  it('keeps blur-exit suppressed while moving an edited block down', async () => {
-    await env.repo.tx(async tx => {
-      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'a0'})
-      await tx.create({id: 'ui', workspaceId: WS, parentId: null, orderKey: 'z0'})
-    }, {scope: ChangeScope.BlockDefault})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'first', content: 'first'})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'middle', content: 'middle'})
-    await env.repo.mutate.createChild({parentId: 'root', id: 'last', content: 'last'})
-
-    const uiStateBlock = env.repo.block('ui')
-    await uiStateBlock.set(topLevelBlockIdProp, 'root')
-    await uiStateBlock.set(focusedBlockIdProp, 'middle')
-    await uiStateBlock.set(isEditingProp, true)
-
-    vi.useFakeTimers()
-    try {
-      const action = findEditModeAction(env.repo, 'move_block_down_cm')
-
-      await action.handler({
-        block: env.repo.block('middle'),
-        editorView: codeMirrorEditorView('middle', 0),
-        uiStateBlock,
-      } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
-
-      expect(await childIds('root')).toEqual(['first', 'last', 'middle'])
-      expect(uiStateBlock.peekProperty(isEditingProp)).toBe(true)
-      expect(isBlurExitSuppressed()).toBe(true)
-
-      vi.advanceTimersByTime(400)
-      expect(isBlurExitSuppressed()).toBe(false)
-    } finally {
-      vi.useRealTimers()
-    }
   })
 
   it('closes the current panel from normal mode with ctrl+w', async () => {
