@@ -11,9 +11,12 @@
  *
  *   Layer 2 — `ensureAliasTarget` (here) and `ensureDailyNoteTarget`
  *   (in `@/plugins/daily-notes`) are thin per-domain wrappers. Each
- *   computes its own deterministic id, picks `freshContent` (empty
- *   string for v1 callers), and supplies an `onInsertedOrRestored`
- *   callback that writes the alias list via `tx.setProperty`.
+ *   computes its own deterministic id, picks `freshContent` (the
+ *   alias text — so the freshly-materialised seat renders with a
+ *   non-empty title; steady-state drift after a rename is still
+ *   allowed and healed by the A3 sync rule), and supplies an
+ *   `onInsertedOrRestored` callback that writes the alias list via
+ *   `tx.setProperty`.
  *   Per-domain also drives the cleanup-eligibility routing in §7.6:
  *   only ensureAliasTarget results enter the newlyInsertedAliasTargetIds
  *   list passed to `references.cleanupOrphanAliases` (date-shaped aliases
@@ -246,8 +249,12 @@ export const resolveAliasSeatId = async (
  *  the alias has its own id and that's what references should resolve
  *  to); this helper is only invoked when the lookup misses, to
  *  materialise the stub the reference will point at. Inserts at
- *  workspace-root with empty content; sets `aliases` property to
- *  `[alias]` on insert/restore. Returns `{id, inserted}`. */
+ *  workspace-root with `content` defaulted to the alias text (so the
+ *  freshly-materialised page renders with the alias as its title
+ *  instead of empty); sets `aliases` property to `[alias]` on
+ *  insert/restore. Steady-state `content !== aliases[0]` is still
+ *  allowed — any rename produces it — this is just the creation-time
+ *  default. Returns `{id, inserted}`. */
 export const ensureAliasTarget = async (
   tx: Tx,
   repo: Repo,
@@ -261,7 +268,7 @@ export const ensureAliasTarget = async (
     workspaceId,
     parentId: null,
     orderKey: keyAtEnd(),
-    freshContent: '',
+    freshContent: alias,
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [alias])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [alias]}, typeSnapshot)

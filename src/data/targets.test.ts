@@ -228,6 +228,20 @@ describe('ensureAliasTarget', () => {
     expect(props[typesProp.name]).toEqual([PAGE_TYPE])
   })
 
+  it('defaults the inserted row\'s content to the alias text', async () => {
+    // Otherwise a [[Foo]] link-resolution materialises a page whose
+    // displayed title is empty until the next content edit triggers
+    // A3 drift-heal. Steady-state alias≠content (post-rename) is still
+    // allowed; this is just the creation-time default.
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const result = await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'Foo', WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?', [result.id])
+    expect(row.content).toBe('Foo')
+  })
+
   it('is idempotent: second call returns inserted=false on the same row', async () => {
     const typeSnapshot = env.repo.snapshotTypeRegistries()
     const a = await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
