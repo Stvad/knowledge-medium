@@ -965,6 +965,17 @@
       the rejection policy by starting with the taken name already
       in place.
     </li>
+    <li><strong>Restore</strong> (<code>before.deleted &amp;&amp;
+      !after.deleted</code>): a soft-delete clears the row from
+      <code>block_aliases</code>, freeing its alias for reuse;
+      restoring the row (either via <code>tx.restore</code> or
+      <code>repo.undo</code> of a delete) re-introduces it as a
+      claimant. Treated the same as an insert — every non-blank
+      alias is a fresh claim. The processor's <code>watches</code>
+      list includes <code>deleted</code> so a plain
+      <code>tx.restore(id)</code> with no content/property patch
+      still fires the check.
+    </li>
     <li><strong>A3</strong> (alias removal): no new claim, no check.
     </li>
   </ul>

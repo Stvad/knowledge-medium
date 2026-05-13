@@ -427,6 +427,113 @@ describe('alias.collision — tombstoned claimants are not collisions', () => {
   })
 })
 
+// ──── Regression: restore / undo must re-trigger collision detection ────
+//
+// Soft-delete removes a row from `block_aliases`, freeing its alias for
+// reuse. If another block claims that alias in the gap, restoring (or
+// undoing the delete on) the original row would put two live blocks
+// in `block_aliases` for the same alias — silent duplication.
+//
+// Two failure modes the pre-fix code has:
+//   1. The processor's `watches` is `['content', 'properties']`. A
+//      plain `tx.restore(id)` with no patch only flips `deleted`, so
+//      the processor doesn't fire at all.
+//   2. Even if it did fire (because the restore included a patch
+//      changing content or properties), `planSync` treats
+//      `before.deleted=true → after.deleted=false` like a regular
+//      update: aliases are unchanged on both sides, so the AR1 /
+//      direct-claim diffs see nothing added, and the row's
+//      re-emergence as a claimant goes uninspected.
+//
+// Fix: watch `deleted` and treat a restore (`before.deleted &&
+// !after.deleted`) as an insert-like collision-only plan over the
+// non-blank afterAliases.
+
+describe('alias.collision — restore / undo re-claims a now-taken alias', () => {
+  it('rejects tx.restore when another block has claimed the alias in the gap', async () => {
+    const aId = await seatAt('Shared', 'Shared')
+    await env.repo.tx(tx => tx.delete(aId), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // Another block claims 'Shared' while A is tombstoned. No collision
+    // here — block_aliases doesn't index deleted A. We give B an
+    // explicit non-seat id because `seatAt` uses the deterministic
+    // seat-id for the alias, which is still occupied by tombstoned A
+    // (soft-delete doesn't free the id, only the alias index entry).
+    const bId = 'b-explicit'
+    await seatAtExplicitId(bId, 'Shared', 'Shared (B)')
+
+    // Restoring A re-introduces it to block_aliases for 'Shared'. B is
+    // already a live claimant — this must reject.
+    let caught: unknown
+    try {
+      await env.repo.tx(tx => tx.restore(aId), {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    expect((caught as ProcessorRejection).meta?.alias).toBe('Shared')
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe(bId)
+    expect((caught as ProcessorRejection).meta?.attemptedOn).toBe(aId)
+
+    // A is still tombstoned (the restore was rolled back).
+    const aRow = await env.read(aId)
+    expect(aRow!.deleted).toBe(1)
+  })
+
+  it('rejects repo.undo of a delete when the alias was reclaimed in the gap', async () => {
+    const aId = await seatAt('Shared', 'Shared')
+    await env.repo.tx(tx => tx.delete(aId), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // Create B as a competing claimant. Real-world this would happen
+    // in a different session or via collaborative sync — in either
+    // case B's creation isn't part of the user's undo history at the
+    // moment they decide to undo their delete. Pop B's entry to
+    // simulate that: A's delete becomes the top of the stack.
+    await seatAtExplicitId('b-explicit', 'Shared', 'Shared (B)')
+    env.repo.undoManager.popUndo(ChangeScope.BlockDefault)
+
+    // Undo the delete — same alias-collision shape as the explicit
+    // tx.restore case, exercised via the undo replay path
+    // (`txImpl.applyRaw` on the snapshot's `before`).
+    await expect(env.repo.undo(ChangeScope.BlockDefault)).rejects.toBeInstanceOf(ProcessorRejection)
+
+    // A still tombstoned.
+    const aRow = await env.read(aId)
+    expect(aRow!.deleted).toBe(1)
+  })
+
+  it('allows tx.restore when no other claimant exists', async () => {
+    // Negative case: the alias is genuinely free at restore time.
+    const aId = await seatAt('Reusable', 'Reusable')
+    await env.repo.tx(tx => tx.delete(aId), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // No competing claimant created in the gap.
+    await env.repo.tx(tx => tx.restore(aId), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // A back to live, still owns 'Reusable'.
+    const aRow = await env.read(aId)
+    expect(aRow!.deleted).toBe(0)
+    expect(await readAliases(aId)).toEqual(['Reusable'])
+  })
+
+  it('allows repo.undo of a delete when no other claimant exists', async () => {
+    const aId = await seatAt('Reusable', 'Reusable')
+    await env.repo.tx(tx => tx.delete(aId), {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    // Stack top is the delete (no follow-up writes). undo pops it.
+    expect(await env.repo.undo(ChangeScope.BlockDefault)).toBe(true)
+    await flush()
+
+    const aRow = await env.read(aId)
+    expect(aRow!.deleted).toBe(0)
+    expect(await readAliases(aId)).toEqual(['Reusable'])
+  })
+})
+
 // ──── Regression: detection must filter SELF from claimant lookup ────
 //
 // `tx.aliasLookup` reads `block_aliases` and returns the OLDEST

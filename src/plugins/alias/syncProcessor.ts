@@ -97,13 +97,18 @@ const dedupe = (values: readonly string[]): string[] => {
  *  applies, the rule's output is identical to current state, or the
  *  rule would propagate a blank value.
  *
- *  Inserts (before === null): no sync rule fires (there's no prior
- *  content to compare against), but every non-blank alias on the new
- *  row is a fresh claim — so we emit a collision-only plan to gate
- *  alias-bearing inserts through the same `aliasLookup` check the
- *  rename / direct-edit paths use. Without this branch a tx that
- *  creates a brand-new block with `aliases: ['Existing']` bypasses
- *  the V1 "refuse the rename atomically" policy entirely. */
+ *  Insert / restore re-entry: when a row enters the live population
+ *  (either via `tx.create` — `before === null` — or via a soft-
+ *  delete → live flip from `tx.restore` / undo of a delete — `before
+ *  !== null && before.deleted && !after.deleted`), every non-blank
+ *  alias on the now-live row is a fresh claim against the rest of
+ *  `block_aliases`. We emit a collision-only plan so the
+ *  `aliasLookup` gate fires on these re-entries the same way it
+ *  fires on rename / direct-edit. Without this branch:
+ *    - alias-bearing inserts bypass the V1 "refuse atomically" policy;
+ *    - a soft-delete → claim-by-another → restore sequence (or its
+ *      undo equivalent) silently produces two live claimants in
+ *      `block_aliases`. */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
   if (row.after === null) return null
   if (row.after.deleted) return null
@@ -115,11 +120,14 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
 
   const planShell = {id: row.id, workspaceId: after.workspaceId}
 
-  if (row.before === null) {
-    // Insert path. Every non-blank alias entry is a freshly-claimed
-    // alias; collision check below filters self via `excludeId`, so
-    // the brand-new row's own appearance in `block_aliases` doesn't
-    // mask a real conflict.
+  const isInsert = row.before === null
+  const isRestore = row.before !== null && row.before.deleted && !after.deleted
+  if (isInsert || isRestore) {
+    // The row is (re-)entering the live population. Every non-blank
+    // alias entry is a claim that must clear the aliasLookup gate.
+    // Collision check below filters self via `excludeId`, so the
+    // row's own appearance in `block_aliases` doesn't mask a real
+    // conflict on the other side.
     const claimedAliases = afterAliases.filter(a => a !== '')
     if (claimedAliases.length === 0) return null
     return {
@@ -130,7 +138,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     }
   }
 
-  const before = row.before
+  const before = row.before!
   const beforeAliases = decodeAliases(before)
   const contentChanged = before.content !== after.content
 
@@ -260,7 +268,12 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
 
 export const aliasSyncProcessor = defineSameTxProcessor({
   name: ALIAS_SYNC_PROCESSOR,
-  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties']},
+  // `deleted` is watched so restore (and undo of a delete) re-fire
+  // collision detection: a soft-delete clears the row's
+  // `block_aliases` entries, freeing the alias for reuse; reviving
+  // the row needs to re-validate its claims against the now-current
+  // population. See the `isRestore` branch in `planSync`.
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties', 'deleted']},
   apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     for (const row of event.changedRows) {
       const plan = planSync(row)
