@@ -67,7 +67,7 @@ export function parseReferences(content: string): ParsedReference[] {
     } else if (content.slice(i, i + 2) === ']]') {
       if (stack.length > 0) {
         const startPos = stack.pop()!
-        const alias = content.slice(startPos + 2, i).trim()
+        const alias = content.slice(startPos + 2, i)
         if (alias) {
           references.push({
             alias,
@@ -107,7 +107,7 @@ export function parseReferencesMarkdownAware(content: string): ParsedReference[]
       let match
 
       while ((match = regex.exec(text)) !== null) {
-        const alias = match[1].trim()
+        const alias = match[1]
         if (alias) {
           // Note: position calculation would need more work for exact positions
           // For now, we'll use the simpler approach
@@ -239,9 +239,9 @@ export const renderAliasedBlockref = (label: string, id: string): string => {
   return `[${safeLabel}](((${id})))`
 }
 
-/** Replace every wikilink whose (trimmed) alias matches `alias` with
+/** Replace every wikilink whose alias exactly matches `alias` with
  *  the literal `replacement` string. Uses `parseReferences` to find
- *  spans — handles `[[ alias ]]` (trimmed by parser) and avoids the
+ *  spans and avoids the
  *  `String.replace` regex-replacement-string pitfall where `$&`,
  *  `$1`, etc. in `replacement` would be interpreted as backreferences
  *  rather than literals. Returns the input unchanged when no span
@@ -251,8 +251,7 @@ export const rewriteWikilinks = (
   alias: string,
   replacement: string,
 ): string => {
-  const target = alias.trim()
-  if (target === '') return content  // parser never emits empty-alias marks
+  if (alias === '') return content  // parser never emits empty-alias marks
   const marks = parseReferences(content)
   if (marks.length === 0) return content
   let result = ''
@@ -262,7 +261,7 @@ export const rewriteWikilinks = (
     // spans. Skip any whose start falls inside a span we've already
     // rewritten — replacing both would corrupt the outer's text.
     if (mark.startIndex < cursor) continue
-    if (mark.alias !== target) continue
+    if (mark.alias !== alias) continue
     result += content.slice(cursor, mark.startIndex)
     result += replacement
     cursor = mark.endIndex

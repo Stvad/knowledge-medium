@@ -43,12 +43,12 @@ describe('referenceParser', () => {
       expect(result[0].alias).toBe('alias')
     })
 
-    it('should trim whitespace from aliases', () => {
+    it('preserves whitespace inside aliases', () => {
       const content = 'Reference with [[ spaced alias ]] whitespace'
       const result = parseReferences(content)
       
       expect(result).toHaveLength(1)
-      expect(result[0].alias).toBe('spaced alias')
+      expect(result[0].alias).toBe(' spaced alias ')
     })
 
     it('should ignore empty references', () => {
@@ -139,6 +139,13 @@ Another [[normal-ref]]
       
       expect(result).toHaveLength(1)
       expect(result[0].alias).toBe('reference')
+    })
+
+    it('preserves whitespace inside aliases', () => {
+      const result = parseReferencesMarkdownAware('Normal [[ spaced reference ]] here')
+
+      expect(result).toHaveLength(1)
+      expect(result[0].alias).toBe(' spaced reference ')
     })
   })
 
@@ -250,6 +257,7 @@ Another [[normal-ref]]
 
     it('preserves alias whitespace + special chars verbatim', () => {
       expect(renderWikilink(' Foo ')).toBe('[[ Foo ]]')
+      expect(parseReferences(renderWikilink(' Foo '))[0]?.alias).toBe(' Foo ')
       expect(renderWikilink('a/b:c')).toBe('[[a/b:c]]')
     })
 
@@ -284,8 +292,11 @@ Another [[normal-ref]]
       )
     })
 
-    it('rewrites a trimmed-form `[[ Old ]]` (parser-aware match)', () => {
+    it('matches aliases with surrounding whitespace exactly', () => {
       expect(rewriteWikilinks('See [[ Old ]] please', 'Old', '[[New]]')).toBe(
+        'See [[ Old ]] please',
+      )
+      expect(rewriteWikilinks('See [[ Old ]] please', ' Old ', '[[New]]')).toBe(
         'See [[New]] please',
       )
     })

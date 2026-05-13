@@ -53,7 +53,7 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     if (index === undefined || !parent) return
     const match = LINK_URL_RE.exec(node.url ?? '')
     if (!match) return
-    const alias = match[1].trim()
+    const alias = match[1]
     if (!alias) return
 
     parent.children.splice(index, 1, buildWikilinkNode(
@@ -78,7 +78,7 @@ export const remarkWikilinks: Plugin<[RemarkWikilinksOptions?]> = (options) => (
     let match: RegExpExecArray | null
     while ((match = LINK_FORM_RE.exec(src)) !== null) {
       const [whole, displayText, rawAlias] = match
-      const alias = rawAlias.trim()
+      const alias = rawAlias
       if (!alias) continue
       if (match.index > last) {
         out.push({type: 'text', value: src.slice(last, match.index)})

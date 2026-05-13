@@ -80,10 +80,10 @@ describe('remarkWikilinks', () => {
       expect(collectWikilinks(transform('Plain text without links'))).toHaveLength(0)
     })
 
-    it('trims whitespace inside brackets', () => {
-      const tree = transform('Hello [[  Spaced Alias  ]] world', {'Spaced Alias': 'sa'})
+    it('preserves whitespace inside brackets', () => {
+      const tree = transform('Hello [[  Spaced Alias  ]] world', {'  Spaced Alias  ': 'sa'})
       const link = collectWikilinks(tree)[0]
-      expect(link.data.hProperties.alias).toBe('Spaced Alias')
+      expect(link.data.hProperties.alias).toBe('  Spaced Alias  ')
       expect(link.data.hProperties.blockId).toBe('sa')
     })
 

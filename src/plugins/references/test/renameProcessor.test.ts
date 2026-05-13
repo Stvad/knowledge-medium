@@ -125,6 +125,51 @@ describe('rename — Case R1 (clean 1-for-1 swap)', () => {
 
     expect((await env.read('other'))!.content).toBe('unrelated body')
   })
+
+  it('keeps source links in wikilink form while an alias rename passes through a trailing-space value', async () => {
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'See [[Old]] for context.')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['Old ']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('Old ')
+    expect((await env.read('s'))!.content).toBe('See [[Old ]] for context.')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['Old word']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const target = (await env.read('t'))!
+    expect(target.content).toBe('Old word')
+    expect(JSON.parse(target.properties_json).alias).toEqual(['Old word'])
+    expect((await env.read('s'))!.content).toBe('See [[Old word]] for context.')
+  })
+
+  it('keeps source links in wikilink form while a content rename passes through a trailing-space value', async () => {
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'See [[Old]] for context.')
+
+    await env.repo.mutate.setContent({id: 't', content: 'Old '})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('Old ')
+    expect(JSON.parse((await env.read('t'))!.properties_json).alias).toEqual(['Old '])
+    expect((await env.read('s'))!.content).toBe('See [[Old ]] for context.')
+
+    await env.repo.mutate.setContent({id: 't', content: 'Old word'})
+    await flush()
+
+    const target = (await env.read('t'))!
+    expect(target.content).toBe('Old word')
+    expect(JSON.parse(target.properties_json).alias).toEqual(['Old word'])
+    expect((await env.read('s'))!.content).toBe('See [[Old word]] for context.')
+  })
 })
 
 describe('rename — Case R4 (pure remove, some aliases remain)', () => {
@@ -239,9 +284,7 @@ describe('rename — multi-source', () => {
 })
 
 describe('rename — parser-aware rewrite (regressions)', () => {
-  it('rewrites a trimmed `[[ Old ]]` form (parser trims, processor must too)', async () => {
-    // parseReferences trims inside `[[ ... ]]` and indexes the trimmed
-    // alias into block_references. The rewrite must find it too.
+  it('does not rewrite whitespace-distinct aliases', async () => {
     await seedTarget('t', 'Old', ['Old'])
     await seedSource('s', 'see [[ Old ]] please')
 
@@ -251,7 +294,7 @@ describe('rename — parser-aware rewrite (regressions)', () => {
     )
     await flush()
 
-    expect((await env.read('s'))!.content).toBe('see [[New]] please')
+    expect((await env.read('s'))!.content).toBe('see [[ Old ]] please')
   })
 
   it('handles aliases containing `$&` without regex backreference corruption', async () => {
@@ -429,4 +472,3 @@ describe('rename — replacement form roundtrip safety', () => {
     ])
   })
 })
-
