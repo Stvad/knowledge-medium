@@ -15,8 +15,7 @@
  *
  * Lives next to `parseReferencesProcessor` in the references plugin
  * because it needs the `block_references` projection to find source
- * blocks. parseReferences re-fires on the source-content edits and
- * refreshes the source's `references` column for free.
+ * blocks.
  *
  * Two-phase shape mirrors parseReferences: read phase outside any tx
  * builds a plan describing per-source rewrites AND records the source
@@ -24,7 +23,11 @@
  * re-reads source content via `tx.get`, and skips the source entirely
  * if content has changed (later user edit wins — see `applyPlan`).
  * Otherwise applies the rewrites via parser-aware span splicing
- * (`rewriteWikilinks`).
+ * (`rewriteWikilinks`) AND surgically swaps the matching `references`
+ * entries in the same tx so the `block_references` trigger refreshes
+ * in lockstep. Without that, a second rapid rename's SELECT would
+ * race the separate parseReferences processor and miss the source —
+ * leaving the backlink stuck on an alias the target no longer carries.
  *
  * Idempotency: the rewrite produces source content that no longer
  * contains `[[α]]`, so a second pass over the same source content is
@@ -35,8 +38,10 @@
 import {
   ChangeScope,
   definePostCommitProcessor,
+  normalizeReferences,
   type AnyPostCommitProcessor,
   type BlockData,
+  type BlockReference,
   type CommittedEvent,
   type ProcessorCtx,
   type Tx,
@@ -76,13 +81,27 @@ const decodeAliases = (block: BlockData): readonly string[] => {
   }
 }
 
-/** Replacement form for a single removed alias α. */
+/** Replacement form for a single removed alias α. Returns both the
+ *  literal text spliced into source content AND the alias that should
+ *  appear in the source's `references` entry for this target after
+ *  the rewrite (so the inline references update mirrors what
+ *  parseReferences would emit on a re-parse of the new content). */
+export interface Replacement {
+  /** Text spliced into source content in place of `[[α]]`. */
+  text: string
+  /** Alias the corresponding `BlockReference` carries after the
+   *  rewrite. Wikilink form → the new alias `β`. Blockref form →
+   *  the target id (parseReferences sets `alias === id` for blockref
+   *  edges; see referencesProcessor.ts buildSourcePlan). */
+  refAlias: string
+}
+
 export const replacementFor = (
   alias: string,
   removed: readonly string[],
   added: readonly string[],
   targetId: string,
-): string => {
+): Replacement => {
   if (removed.length === 1 && added.length === 1) {
     // Only emit the wikilink form when it roundtrips through the
     // parser to the same alias. Two cases fail this:
@@ -95,21 +114,27 @@ export const replacementFor = (
     // display text and pins to the target id) when the wikilink would
     // be lossy.
     const candidate = renderWikilink(added[0])
-    if (parseReferences(candidate)[0]?.alias === added[0]) return candidate
+    if (parseReferences(candidate)[0]?.alias === added[0]) {
+      return {text: candidate, refAlias: added[0]}
+    }
   }
   // R4/R5/R6/R7/A2-cascade (and the wikilink-unsafe 1-for-1 fallback):
   // aliased blockref preserves the original display text the source
   // author wrote while pinning to the stable target id.
-  return renderAliasedBlockref(alias, targetId)
+  return {text: renderAliasedBlockref(alias, targetId), refAlias: targetId}
 }
 
-/** One rewrite operation applied to a single source. Multiple
- *  rewrites accumulate per source when several aliases on the same
- *  target are removed in one commit. Order matters: applied in the
- *  order collected. */
+/** One rewrite operation applied to a single source. `targetId` +
+ *  `refAlias` drive the inline references update: each content ref
+ *  matching `(targetId, alias, sourceField:'')` becomes
+ *  `(targetId, refAlias, sourceField:'')`. Multiple rewrites per
+ *  source accumulate when several aliases on the same target are
+ *  removed in one commit. Order matters: applied in collection order. */
 interface Rewrite {
   alias: string
   replacement: string
+  targetId: string
+  refAlias: string
 }
 
 /** Per-source plan. Stores rewrites plus the source content observed
@@ -156,9 +181,42 @@ const collectTargetPlans = async (
         plan = {sourceId: row.sourceId, originalContent: row.sourceContent, rewrites: []}
         plansBySourceId.set(row.sourceId, plan)
       }
-      plan.rewrites.push({alias, replacement})
+      plan.rewrites.push({
+        alias,
+        replacement: replacement.text,
+        targetId: after.id,
+        refAlias: replacement.refAlias,
+      })
     }
   }
+}
+
+/** Apply rewrites to a source's `references` list. Swaps the alias on
+ *  content edges matching `(targetId, oldAlias)` to the new ref alias.
+ *  Property-typed refs (`sourceField !== ''`) are untouched — wikilink
+ *  rewrites never affect them. Returned list is run through
+ *  `normalizeReferences` so duplicates introduced by the swap (e.g.
+ *  source already had `[[β]]` before we rewrote `[[α]] → [[β]]`)
+ *  collapse, and the on-disk JSON stays canonical. */
+const applyRefRewrites = (
+  refs: ReadonlyArray<BlockReference>,
+  rewrites: ReadonlyArray<Rewrite>,
+): BlockReference[] => {
+  if (rewrites.length === 0) return [...refs]
+  // (targetId, oldAlias) → newRefAlias. Last-write-wins across rewrites
+  // — mirrors the content rewrite order (each `rewriteWikilinks` pass
+  // operates on the prior pass's output).
+  const swaps = new Map<string, string>()
+  const key = (targetId: string, alias: string) => `${targetId} ${alias}`
+  for (const rw of rewrites) swaps.set(key(rw.targetId, rw.alias), rw.refAlias)
+  const next: BlockReference[] = []
+  for (const ref of refs) {
+    const sourceField = ref.sourceField ?? ''
+    if (sourceField !== '') { next.push(ref); continue }
+    const swapped = swaps.get(key(ref.id, ref.alias))
+    next.push(swapped === undefined ? ref : {...ref, alias: swapped})
+  }
+  return normalizeReferences(next)
 }
 
 const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
@@ -173,12 +231,23 @@ const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
   const current = await tx.get(plan.sourceId)
   if (current === null || current.deleted) return
   if (current.content !== plan.originalContent) return
-  let next = current.content
+  let nextContent = current.content
   for (const rewrite of plan.rewrites) {
-    next = rewriteWikilinks(next, rewrite.alias, rewrite.replacement)
+    nextContent = rewriteWikilinks(nextContent, rewrite.alias, rewrite.replacement)
   }
-  if (next === current.content) return
-  await tx.update(plan.sourceId, {content: next}, {skipMetadata: true})
+  if (nextContent === current.content) return
+  // Surgically swap the matching `references` entries in lockstep with
+  // the content rewrite so the `block_references` trigger refreshes
+  // the projection inside this same SQL tx. parseReferences will fire
+  // on the content change and re-emit the same list (idempotent), but
+  // by then the next rename's SELECT already sees the up-to-date
+  // index — no race window.
+  const nextRefs = applyRefRewrites(current.references, plan.rewrites)
+  await tx.update(
+    plan.sourceId,
+    {content: nextContent, references: nextRefs},
+    {skipMetadata: true},
+  )
 }
 
 /** True iff the alias-encoded value differs between before/after.

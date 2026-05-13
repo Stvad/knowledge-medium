@@ -342,6 +342,33 @@ describe('rename — stale-plan safety (concurrent source edit)', () => {
   })
 })
 
+describe('rename — rapid title edits cascade fully', () => {
+  it('source backlinks resolve to the final target alias after rapid edits', async () => {
+    // Two rapid title renames. Without inline references updates, the
+    // second rename's `block_references` SELECT can run before
+    // parseReferences has reparsed the source rewritten by the first
+    // rename — the index would still say alias="Old", and the lookup
+    // for alias="New name" returns empty, leaving the source stuck at
+    // `[[New name]]` (which no longer resolves to the target, whose
+    // aliases are now ["Brand new"]). Regression test for that race.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'See [[Old]] for context.')
+
+    await env.repo.mutate.setContent({id: 't', content: 'New name'})
+    await env.repo.mutate.setContent({id: 't', content: 'Brand new'})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('Brand new')
+    expect(
+      JSON.parse((await env.read('t'))!.properties_json).alias,
+    ).toEqual(['Brand new'])
+    // Backlink must point to a live alias of the target. `[[New name]]`
+    // would be broken (target has no such alias); `[[Old]]` would mean
+    // the original rename didn't cascade at all.
+    expect((await env.read('s'))!.content).toBe('See [[Brand new]] for context.')
+  })
+})
+
 describe('rename — replacement form roundtrip safety', () => {
   it('falls back to blockref form when the added alias is blank', async () => {
     // `renderWikilink('')` = `[[]]`, which parseReferences ignores —
