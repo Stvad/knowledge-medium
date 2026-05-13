@@ -9,6 +9,7 @@ import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
+import { surfaceProcessorRejection } from '@/utils/processorRejectionToast.ts'
 
 // Memoize on (userId, useRemoteSync) so toggling local-only doesn't reuse a
 // previously-connected repo. In practice the toggle is followed by a reload
@@ -26,6 +27,12 @@ const initRepo = memoize(
       safeMode: false,
       generation: 'repo-bootstrap',
     }))
+    // Subscribe at bootstrap so user-surfaceable errors from any
+    // `repo.tx` call site (mutators, palette actions, programmatic
+    // writes, etc.) route through the toast layer without each call
+    // site having to know about `ProcessorRejection`. The Repo is a
+    // process singleton in practice; we don't bother unsubscribing.
+    repo.onUserError(surfaceProcessorRejection)
     return repo
   },
   (user, useRemoteSync) => `${user.id}:${useRemoteSync ? 'remote' : 'local'}`,

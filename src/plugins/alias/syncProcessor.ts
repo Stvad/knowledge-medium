@@ -1,76 +1,69 @@
 /**
- * Alias sync post-commit processor (spec: docs/alias-rename-cases.html
- * — sync ladder).
+ * Alias sync — same-tx processor (spec: docs/alias-rename-cases.html).
  *
  * Reconciles `content` ↔ `aliases` on the same block when one side
- * changes. Rules (decision ladder):
+ * changes, AND rejects collisions when a block tries to claim an
+ * alias already held by a different live block. Both behaviors live
+ * here because they share the "what new aliases is this row
+ * claiming?" computation.
  *
+ * Decision ladder (unchanged from the post-commit version):
  *   1. Content changed, old value ∈ aliases (A1, A2) → replace that
  *      entry with new content. Dedupe.
  *   2. Content changed, old value ∉ aliases (A3 — drift heal) → add
- *      new content as a fresh alias. Block heals; next content edit
- *      hits rule 1.
+ *      new content as a fresh alias.
  *   3. Alias diff is a 1-for-1 swap AND content === removed alias
  *      (AR1) → rewrite content to the added alias.
  *   4. Otherwise → no sync write.
  *
- * Composition with rename: sync writes a 1-for-1 alias swap on rule
- * 1 / 3, which re-fires the watcher and lets the rename processor
- * (in `@/plugins/references`) do cross-block backlink rewriting via
- * the same alias-diff path. No special path.
+ * Placement (same-tx vs post-commit):
+ *   Sync runs inside the user's writeTransaction so content + alias
+ *   writes commit atomically. Rename remains post-commit (see
+ *   `@/plugins/references/renameProcessor.ts`) — the cross-block
+ *   rewrites are too expensive to inline on the typing path, and
+ *   eventual consistency is fine for backlink display text.
  *
- * Convergence: each rule's "did this write actually change state?"
- * guard ensures the second pass (the watcher re-firing on this
- * processor's own writes) is a no-op — see the per-rule check in
- * `planSync`.
+ *   The "stale plan" guard that the post-commit version needed
+ *   (re-read row at apply time, skip on divergence) is gone here —
+ *   we're inside the same tx, so the snapshot we plan against IS
+ *   the live state.
  *
- * Two-phase shape mirrors parseReferences:
- *   - Read phase computes a plan per row from the event's `(before,
- *     after)` snapshot, outside any tx.
- *   - Write phase opens one tx; for each plan, re-reads the target
- *     row via `tx.get` and verifies the row's current state still
- *     matches the snapshot we planned against. If diverged — the
- *     user (or another processor) wrote to the row between event
- *     and apply — the plan is stale; skip rather than clobber. The
- *     watcher will re-fire on the newer state and the next planSync
- *     pass will produce a fresh decision.
+ * Collision policy (V1):
+ *   Refuse the user's tx via `throw new ProcessorRejection`. SQLite
+ *   rolls back atomically; content and aliases stay in their
+ *   pre-edit state. The caller (editor save handler, command
+ *   palette, etc.) surfaces the rejection via the toast layer. The
+ *   eventual goal is Roam-style "suggest merge" but the merge flow
+ *   has its own design surface — V1 disallows.
  */
 
 import {
-  ChangeScope,
-  definePostCommitProcessor,
-  type AnyPostCommitProcessor,
+  defineSameTxProcessor,
+  ProcessorRejection,
+  type AnySameTxProcessor,
   type BlockData,
   type ChangedRow,
-  type CommittedEvent,
-  type ProcessorCtx,
-  type Tx,
+  type SameTxCtx,
+  type SameTxEvent,
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
+import { aliasSeatReaderFromTx, findAliasClaimant } from '@/data/targets'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
-/** What the write phase should do for one row. `null` means no-op
- *  on that side. `expectedContent` / `expectedAliases` snapshot what
- *  the planner observed; the write phase compares against current
- *  state and skips on mismatch (stale-plan guard).
- *
- *  Rule-1 plans additionally carry `rebaseAnchor` — the alias entry
- *  being replaced. Instead of the strict stale-check, the write phase
- *  recomputes against current state: if the anchor still lives in
- *  current aliases, replace it with current content (ignoring
- *  `contentNext` / `aliasesNext`). This handles rapid title edits
- *  (Old → New name → Brand new): event-1's plan goes stale by write
- *  time, but the anchor "Old" is still around, so we swap it for
- *  the latest "Brand new" rather than leaving it dangling. */
+/** What the write phase should do for one row. `null` on either side
+ *  means no-op for that direction. */
 interface SyncPlan {
   id: string
   workspaceId: string
-  expectedContent: string
-  expectedAliases: readonly string[]
+  /** Aliases the user is *newly claiming* on this row. Used by the
+   *  collision check; empty when the diff doesn't add anything (A3
+   *  drift heal adds new content as alias, A1/A2 replace the anchor,
+   *  AR1 only changes content). Computed from the planner's diff
+   *  so it stays consistent with the actual write the plan describes. */
+  claimedAliases: readonly string[]
   contentNext: string | null
   aliasesNext: readonly string[] | null
-  rebaseAnchor: string | null
 }
 
 const decodeAliases = (block: BlockData): readonly string[] => {
@@ -103,12 +96,8 @@ const dedupe = (values: readonly string[]): string[] => {
 /** Build the plan for one row. Returns null when nothing should be
  *  written — the row was created/deleted in this commit, no rule
  *  applies, the rule's output is identical to current state, or the
- *  rule would propagate a blank value (sync never creates a `""`
- *  alias entry or a `""` content body — see the blank-string guards
- *  below). */
+ *  rule would propagate a blank value. */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
-  // Skip creates (before === null), hard-deletes (after === null), and
-  // soft-deletes. None of these are "edits" the ladder reasons about.
   if (row.before === null || row.after === null) return null
   if (row.after.deleted) return null
 
@@ -116,143 +105,130 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
   const after = row.after
   const beforeAliases = decodeAliases(before)
   const afterAliases = decodeAliases(after)
-  // Sync only reconciles blocks that ARE aliased (an "aliased block"
-  // / page-like row). A block with no aliases isn't a sync target —
-  // we never silently promote a plain block into an aliased one. Note
-  // this still lets rename fire on a "removed last alias" case (R7);
-  // rename has its own gating on the cross-block side.
+  // Sync only reconciles blocks that ARE aliased.
   if (afterAliases.length === 0) return null
   const contentChanged = before.content !== after.content
 
-  const planShell = {
-    id: row.id,
-    workspaceId: after.workspaceId,
-    expectedContent: after.content,
-    expectedAliases: afterAliases,
-  }
+  const planShell = {id: row.id, workspaceId: after.workspaceId}
 
   if (contentChanged) {
-    // Blank-content guard for the content→alias direction: never
-    // write a `""` alias entry. The alias index supports the row but
-    // lookup ignores empty aliases — a blank entry pollutes the
-    // alias list without being useful. The user clearing a page title
-    // expressing "no name" should keep the existing aliases as-is.
+    // Blank-content guard for content→alias direction: never write a
+    // `""` alias entry.
     if (after.content === '') return null
 
     if (afterAliases.includes(before.content)) {
       // Rule 1 (A1, A2): replace old content's alias entry with new
-      // content; dedupe. Guard: if the dedup'd result equals current,
-      // no write — the second pass after sync's own write hits this
-      // branch with afterAliases already containing the new content
-      // (A1) or with afterAliases unchanged (other edge cases).
+      // content; dedupe.
       const replaced = dedupe(
         afterAliases.map(a => (a === before.content ? after.content : a)),
       )
       if (arraysEqual(replaced, afterAliases)) return null
+      // The newly claimed alias here is `after.content` — provided
+      // it's not also in the previous alias list.
+      const claimedAliases = beforeAliases.includes(after.content) ? [] : [after.content]
       return {
         ...planShell,
+        claimedAliases,
         contentNext: null,
         aliasesNext: replaced,
-        // Anchor = the alias entry we want to replace. The write phase
-        // rebases against current state via this; lets rapid title
-        // edits collapse correctly (see SyncPlan doc).
-        rebaseAnchor: before.content,
       }
     }
-    // Rule 2 (A3): old content wasn't an alias anchor — heal additively
-    // by appending new content. Skip if already an alias (e.g. the
-    // user edited to a name that was already an alternate).
+    // Rule 2 (A3): old content wasn't an alias anchor — heal
+    // additively by appending new content.
     if (afterAliases.includes(after.content)) return null
     return {
       ...planShell,
+      claimedAliases: beforeAliases.includes(after.content) ? [] : [after.content],
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
-      rebaseAnchor: null,
     }
   }
 
   // Reverse sync (AR1): content didn't change in this commit. Look
   // for an alias 1-for-1 swap whose removed entry matches current
-  // content — that's the user renaming the alias and expecting
-  // content to follow.
+  // content.
   const removed = beforeAliases.filter(a => !afterAliases.includes(a))
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
   if (removed.length === 1 && added.length === 1 && after.content === removed[0]) {
-    // Defensive: don't propagate a blank rename-to into content. A
-    // user renaming alias "Foo" → "" is unusual but possible; we'd
-    // rather leave content alone than create a blank-titled block.
+    // Blank-rename guard: don't propagate empty into content.
     if (added[0] === '') return null
-    // Guard: the added value equals current content already (somehow)
-    // → nothing to do. Defensive; the swap-shape check above should
-    // already rule this out (added === current would mean content is
-    // also in beforeAliases, so it can't have been "removed").
     if (after.content === added[0]) return null
     return {
       ...planShell,
+      // AR1's added alias is the new claim; collision check applies.
+      claimedAliases: [added[0]],
       contentNext: added[0],
       aliasesNext: null,
-      rebaseAnchor: null,
+    }
+  }
+
+  // No matched rule, but the user may still have ADDED aliases
+  // directly (e.g. via the alias chip editor in a future UI, or via
+  // a programmatic mutator). Sync doesn't write anything, but
+  // collision still needs to check those.
+  const directlyClaimed = afterAliases.filter(a => !beforeAliases.includes(a) && a !== '')
+  if (directlyClaimed.length > 0) {
+    return {
+      ...planShell,
+      claimedAliases: directlyClaimed,
+      contentNext: null,
+      aliasesNext: null,
     }
   }
 
   return null
 }
 
-/** Apply one plan inside the write tx. Re-reads the row via `tx.get`.
- *  Rule-1 plans rebase against current state via `rebaseAnchor` —
- *  see SyncPlan doc. Other plans skip on divergence and let the
- *  watcher re-fire on the fresher state. */
-const applyPlan = async (tx: Tx, plan: SyncPlan): Promise<void> => {
-  const current = await tx.get(plan.id)
-  if (current === null || current.deleted) return
-  const currentAliases = decodeAliases(current)
-
-  if (plan.rebaseAnchor !== null) {
-    // Blank-content guard mirrors the planner's (rule 1 never propagates
-    // a blank into the alias list). If the user cleared content
-    // between event and apply, leave aliases alone.
-    if (current.content === '') return
-    // Anchor gone (user removed it concurrently, or another sync write
-    // already collapsed it). Nothing to rebase against.
-    if (!currentAliases.includes(plan.rebaseAnchor)) return
-    const replaced = dedupe(
-      currentAliases.map(a => (a === plan.rebaseAnchor ? current.content : a)),
-    )
-    if (arraysEqual(replaced, currentAliases)) return
-    await tx.setProperty(plan.id, aliasesProp, [...replaced], {skipMetadata: true})
-    return
+/** Apply one plan: collision-check newly claimed aliases, then issue
+ *  the amendment writes if any.
+ *
+ *  No stale-plan re-validation here — we're inside the user's tx, so
+ *  `event.changedRows`'s `after` state IS the live state. (If a
+ *  preceding same-tx processor amended this row, the same-tx
+ *  runner recomputes our `changedRows` from the live snapshot
+ *  before our `apply` fires, so we'd see those amendments.) */
+const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
+  // Collision check: for each newly claimed alias, is there a
+  // different live block in this workspace that already claims it?
+  if (plan.claimedAliases.length > 0) {
+    const reader = aliasSeatReaderFromTx(ctx.tx)
+    for (const alias of plan.claimedAliases) {
+      if (alias === '') continue  // belt-and-suspenders; planner skips blanks
+      const claimantId = await findAliasClaimant(reader, alias, plan.workspaceId)
+      if (claimantId !== null && claimantId !== plan.id) {
+        throw new ProcessorRejection(
+          `Alias "${alias}" is already used by another block`,
+          'alias.collision',
+          {
+            alias,
+            conflictingBlockId: claimantId,
+            attemptedOn: plan.id,
+          },
+        )
+      }
+    }
   }
 
-  if (current.content !== plan.expectedContent) return
-  if (!arraysEqual(currentAliases, plan.expectedAliases)) return
   if (plan.aliasesNext !== null) {
-    await tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
+    await ctx.tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
   }
   if (plan.contentNext !== null) {
-    await tx.update(plan.id, {content: plan.contentNext}, {skipMetadata: true})
+    await ctx.tx.update(plan.id, {content: plan.contentNext}, {skipMetadata: true})
   }
 }
 
-export const aliasSyncProcessor = definePostCommitProcessor({
+export const aliasSyncProcessor = defineSameTxProcessor({
   name: ALIAS_SYNC_PROCESSOR,
-  watches: { kind: 'field', table: 'blocks', fields: ['content', 'properties'] },
-  apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
-    const plans: SyncPlan[] = []
+  watches: {kind: 'field', table: 'blocks', fields: ['content', 'properties']},
+  apply: async (event: SameTxEvent, ctx: SameTxCtx) => {
     for (const row of event.changedRows) {
       const plan = planSync(row)
-      if (plan !== null) plans.push(plan)
+      if (plan === null) continue
+      await applyPlan(ctx, plan)
     }
-    if (plans.length === 0) return
-
-    await ctx.repo.tx(async tx => {
-      for (const plan of plans) await applyPlan(tx, plan)
-    }, {
-      scope: ChangeScope.References,
-      description: `processor: ${ALIAS_SYNC_PROCESSOR}`,
-    })
   },
 })
 
-export const aliasPostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [
+export const aliasSameTxProcessors: ReadonlyArray<AnySameTxProcessor> = [
   aliasSyncProcessor,
 ]

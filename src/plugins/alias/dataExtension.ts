@@ -1,7 +1,7 @@
-import { postCommitProcessorsFacet } from '@/data/facets.ts'
+import { sameTxProcessorsFacet } from '@/data/facets.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { aliasPostCommitProcessors } from './syncProcessor.ts'
+import { aliasSameTxProcessors } from './syncProcessor.ts'
 
-export const aliasDataExtension: AppExtension = aliasPostCommitProcessors.map(
-  processor => postCommitProcessorsFacet.of(processor, {source: 'alias'}),
+export const aliasDataExtension: AppExtension = aliasSameTxProcessors.map(
+  processor => sameTxProcessorsFacet.of(processor, {source: 'alias'}),
 )

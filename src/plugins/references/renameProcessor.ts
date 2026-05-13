@@ -259,29 +259,66 @@ const aliasFieldChanged = (before: BlockData, after: BlockData): boolean => {
   return JSON.stringify(b ?? null) !== JSON.stringify(a ?? null)
 }
 
+/** Process-wide FIFO queue for rename invocations.
+ *
+ *  Rapid back-to-back title edits (e.g. cmd-Z + retype, or two
+ *  setContent calls in quick succession) produce one rename event
+ *  per user tx. Each event reads `block_references` to find sources,
+ *  then opens a writeTransaction to rewrite. The READ phase runs
+ *  outside the tx (cheap, doesn't hold a writer slot) — which means
+ *  rename-N+1's SELECT can race ahead of rename-N's write commit,
+ *  miss the source, and leave the backlink stuck on an alias the
+ *  target no longer carries.
+ *
+ *  SQLite serializes writeTransactions, so rename-N+1's tx waits for
+ *  rename-N's tx to commit — but by then rename-N+1 has already
+ *  taken its (stale) read snapshot. The serializer-at-write boundary
+ *  is too late; we have to serialize the whole read-plan-write
+ *  cycle. Module-level FIFO queue does that with one promise chain.
+ *
+ *  Cost: at most one rename runs at a time process-wide. Acceptable
+ *  because rename is post-commit and not on the typing path; the
+ *  alternative (in-tx SELECT, or per-source mutex keyed on resolved
+ *  source ids that we don't know pre-read) is more complex for the
+ *  same end-state.
+ *
+ *  Errors swallowed at the chain level (re-thrown to the original
+ *  caller) so a single rename failure doesn't block subsequent
+ *  renames. */
+let renameQueue: Promise<void> = Promise.resolve()
+const serializeRename = <T>(fn: () => Promise<T>): Promise<T> => {
+  const next = renameQueue.then(fn)
+  // Continue the chain regardless of this fn's outcome — failures
+  // are surfaced to the caller via the returned promise (which we
+  // don't intercept), not the chain anchor.
+  renameQueue = next.then(() => {}, () => {})
+  return next
+}
+
 export const renameBacklinksProcessor = definePostCommitProcessor({
   name: RENAME_BACKLINKS_PROCESSOR,
   // Properties-only: alias diffs ride this field. parseReferences
   // watches content separately and refreshes the references column on
   // the rewrites we issue, closing the loop.
   watches: { kind: 'field', table: 'blocks', fields: ['properties'] },
-  apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) => {
-    const plansBySourceId = new Map<string, SourcePlan>()
-    for (const row of event.changedRows) {
-      if (row.before === null || row.after === null) continue
-      if (row.after.deleted) continue
-      if (!aliasFieldChanged(row.before, row.after)) continue
-      await collectTargetPlans(ctx, row.before, row.after, plansBySourceId)
-    }
-    if (plansBySourceId.size === 0) return
+  apply: async (event: CommittedEvent<undefined>, ctx: ProcessorCtx) =>
+    serializeRename(async () => {
+      const plansBySourceId = new Map<string, SourcePlan>()
+      for (const row of event.changedRows) {
+        if (row.before === null || row.after === null) continue
+        if (row.after.deleted) continue
+        if (!aliasFieldChanged(row.before, row.after)) continue
+        await collectTargetPlans(ctx, row.before, row.after, plansBySourceId)
+      }
+      if (plansBySourceId.size === 0) return
 
-    await ctx.repo.tx(async tx => {
-      for (const plan of plansBySourceId.values()) await applyPlan(tx, plan)
-    }, {
-      scope: ChangeScope.References,
-      description: `processor: ${RENAME_BACKLINKS_PROCESSOR}`,
-    })
-  },
+      await ctx.repo.tx(async tx => {
+        for (const plan of plansBySourceId.values()) await applyPlan(tx, plan)
+      }, {
+        scope: ChangeScope.References,
+        description: `processor: ${RENAME_BACKLINKS_PROCESSOR}`,
+      })
+    }),
 })
 
 export const renamePostCommitProcessors: ReadonlyArray<AnyPostCommitProcessor> = [

@@ -1,11 +1,16 @@
 // @vitest-environment node
 /**
- * Integration tests for the alias.sync post-commit processor (cases
- * A1, A2, A3, AR1 in docs/alias-rename-cases.html). Runs the full
- * pipeline through `repo.tx` so the field-watcher actually fires.
+ * Integration tests for the alias.sync same-tx processor (cases A1,
+ * A2, A3, AR1 in docs/alias-rename-cases.html). Runs the full
+ * pipeline through `repo.tx` so the same-tx runner actually fires
+ * inside the user's writeTransaction.
  *
  * Cross-block cascading (rename processor's R1/R4 rewriting source
  * backlinks) is covered in `src/plugins/references/test/renameProcessor.test.ts`.
+ *
+ * Collision rejection is exercised below in the "collision" describe
+ * block — these test that a colliding edit throws ProcessorRejection
+ * and rolls back the whole user tx atomically.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -186,28 +191,19 @@ describe('alias.sync — blank-content guard', () => {
   })
 })
 
-describe('alias.sync — stale-plan safety', () => {
-  it('rebases the rule-1 plan against current content on rapid title edits', async () => {
-    // Two rapid setContent calls commit back-to-back; event-1's
-    // expected snapshot ("New name") is already stale by the time
-    // sync's write tx opens (the row has moved to "Brand new"). The
-    // rebase path swaps the anchor "Old" for current content "Brand
-    // new" instead of skipping and leaving the anchor dangling.
-    // Event-2's drift-heal plan then sees aliases already in sync
-    // (event-2's expectedAliases ["Old"] ≠ current ["Brand new"]) and
-    // skips. Backlinks like [[Old]] cascade via the rename processor
-    // on the rebase's alias swap.
+describe('alias.sync — rapid title edits', () => {
+  it('two back-to-back content edits each commit content+alias atomically', async () => {
+    // Same-tx sync amends each user tx so content + aliases commit
+    // together. There's no stale-plan window — each tx is
+    // independently coherent. After two rapid edits, end state is
+    // determined by the second edit alone.
     await createTarget('t', 'Old', ['Old'])
 
     await env.repo.mutate.setContent({id: 't', content: 'New name'})
-    // Second edit lands before flush() runs processors; both events
-    // queue.
     await env.repo.mutate.setContent({id: 't', content: 'Brand new'})
     await flush()
 
     expect((await env.read('t'))!.content).toBe('Brand new')
-    // Anchor "Old" replaced with current content "Brand new" —
-    // not appended alongside, and not left in place.
     expect(await readAliases('t')).toEqual(['Brand new'])
   })
 })

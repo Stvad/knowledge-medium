@@ -226,6 +226,36 @@ export const resolveAliasSeatId = async (
   )
 }
 
+/** Find the block id (if any) that currently claims `alias` as one of
+ *  its `aliases` property entries. Walks indexed slots until either
+ *  finding a live claimant or hitting an empty slot (no further
+ *  occupants possible). Used by alias-collision detection: when a
+ *  block tries to claim an alias already held by a different live
+ *  block, the caller rejects the tx.
+ *
+ *  Distinct from `resolveAliasSeatId` in two ways:
+ *   - returns `null` instead of an empty-slot id (the caller doesn't
+ *     want to "claim" anything here — only inspect existing state)
+ *   - never throws on slot exhaustion (the slots either have a
+ *     claimant, are tombstones, or terminate with an empty slot;
+ *     hitting MAX_PROBE_SLOTS without an empty slot would indicate a
+ *     pathological probe state — log + return null rather than crash
+ *     a user write) */
+export const findAliasClaimant = async (
+  read: AliasSeatReader,
+  alias: string,
+  workspaceId: string,
+): Promise<string | null> => {
+  for (let index = 0; index < MAX_PROBE_SLOTS; index++) {
+    const id = computeAliasSeatId(alias, workspaceId, index)
+    const row = await read(id)
+    if (row === null) return null
+    if (row.deleted) continue
+    if (row.aliases.includes(alias)) return id
+  }
+  return null
+}
+
 // ──── Layer 2 — per-domain wrappers ────
 
 /** Ensure a stub-block seat exists for `alias` in `workspaceId`. The

@@ -42,6 +42,7 @@ import type {
 import {
   ChangeScope,
   MutatorNotRegisteredError,
+  ProcessorRejection,
   QueryNotRegisteredError,
   isRefCodec,
   isRefListCodec,
@@ -400,6 +401,11 @@ export class Repo {
   private readonly propertyEditorOverridesListeners = new Set<() => void>()
   /** Listeners for value-preset map changes. */
   private readonly valuePresetsListeners = new Set<() => void>()
+  /** Listeners for user-surfaceable errors thrown from inside a
+   *  `repo.tx` — currently `ProcessorRejection` from same-tx
+   *  processors. Subscribers are responsible for the UI side
+   *  (toast routing); the data layer stays UI-agnostic. */
+  private readonly userErrorListeners = new Set<(error: ProcessorRejection) => void>()
   /** Rebuild step descriptors. Defined once per Repo at construction;
    *  each step declares which facets it reads. `setFacetRuntime` runs
    *  every step; `setRuntimeContributions` runs only the steps whose
@@ -912,7 +918,23 @@ export class Repo {
     fn: (tx: Tx) => Promise<R>,
     opts: RepoTxOptions,
   ): Promise<R> {
-    const result = await this._runAndDispatch(fn, opts)
+    let result: Awaited<ReturnType<typeof this._runAndDispatch<R>>>
+    try {
+      result = await this._runAndDispatch(fn, opts)
+    } catch (err) {
+      // Surface ProcessorRejection to user-error listeners so the
+      // toast layer can map it to a UI affordance (collision message,
+      // action button). Re-throw so callers' own error handling
+      // works — listeners are an observation channel, not a swallower.
+      if (err instanceof ProcessorRejection) {
+        for (const listener of [...this.userErrorListeners]) {
+          try { listener(err) } catch (e) {
+            console.warn('[repo.userErrorListeners] listener threw:', e)
+          }
+        }
+      }
+      throw err
+    }
     // Step 7 of the §10 pipeline — record undo entry. Non-undoable
     // scopes and zero-write txs are filtered inside `record`. Replays go
     // through `_replay`, not here, so they don't add new history.
@@ -1235,6 +1257,17 @@ export class Repo {
   onValuePresetsChange(listener: () => void): () => void {
     this.valuePresetsListeners.add(listener)
     return () => { this.valuePresetsListeners.delete(listener) }
+  }
+
+  /** Subscribe to user-surfaceable errors thrown from `repo.tx`
+   *  (currently `ProcessorRejection` from same-tx processors). The
+   *  data layer fires; the UI layer (e.g. toast) listens. Returns an
+   *  unsubscribe fn. Listeners that throw are caught and logged so
+   *  one bad listener can't poison the others or break the
+   *  underlying `repo.tx` error propagation. */
+  onUserError(listener: (error: ProcessorRejection) => void): () => void {
+    this.userErrorListeners.add(listener)
+    return () => { this.userErrorListeners.delete(listener) }
   }
 
   snapshotTypeRegistries(): TypeRegistrySnapshot {
