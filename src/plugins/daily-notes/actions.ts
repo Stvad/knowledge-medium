@@ -2,6 +2,8 @@
  * Global keyboard actions for navigating daily notes:
  *
  *   - `open_today` (cmd+shift+`)               — today's note
+ *   - `append_today_daily_block` (ctrl+shift+n) — new block in today's note,
+ *     opened in a stacked panel
  *   - `open_previous_daily_note` (cmd+shift+[) — yesterday relative to
  *     the currently viewed daily note (or to today if not on one)
  *   - `open_next_daily_note` (cmd+shift+])     — tomorrow relative
@@ -21,16 +23,25 @@
  */
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { aliasesProp } from '@/data/properties.ts'
+import { ChangeScope } from '@/data/api'
+import { getLayoutSessionBlock } from '@/data/globalState.ts'
+import {
+  activePanelIdProp,
+  aliasesProp,
+  editorSelection,
+  isEditingProp,
+} from '@/data/properties.ts'
 import {
   ActionConfig,
   ActionContextTypes,
 } from '@/shortcuts/types.ts'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import {
   navigateFromGlobalCommand,
   resolveGlobalCommandTopLevelBlockId,
 } from '@/utils/navigation.ts'
+import { insertSidebarStackedPanel } from '@/utils/panelLayoutProjection.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -71,6 +82,30 @@ const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
   navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
 }
 
+const appendTodayDailyBlockInStack = async (
+  repo: Repo,
+  uiStateBlock: Block,
+): Promise<void> => {
+  const workspaceId = repo.activeWorkspaceId
+  if (!workspaceId || repo.isReadOnly) return
+
+  const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
+  const blockId = await repo.mutate.createChild({
+    parentId: note.id,
+    position: {kind: 'last'},
+  })
+
+  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+  await layoutSessionBlock.load()
+  const sourcePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
+  const panelId = await insertSidebarStackedPanel(repo, layoutSessionBlock, blockId, {sourcePanelId})
+
+  await repo.tx(async tx => {
+    await tx.setProperty(panelId, editorSelection, {blockId, start: 0})
+    await tx.setProperty(panelId, isEditingProp, true)
+  }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
+}
+
 export const dailyNotesActions = (
   {repo}: {repo: Repo},
 ): readonly ActionConfig<typeof ActionContextTypes.GLOBAL>[] => [
@@ -90,6 +125,20 @@ export const dailyNotesActions = (
     },
     defaultBinding: {
       keys: ['cmd+shift+`', 'ctrl+shift+`'],
+    },
+  },
+  {
+    id: 'append_today_daily_block',
+    description: "Append a block to today's daily note",
+    context: ActionContextTypes.GLOBAL,
+    handler: async ({uiStateBlock}) => {
+      await appendTodayDailyBlockInStack(repo, uiStateBlock)
+    },
+    defaultBinding: {
+      keys: 'ctrl+shift+n',
+      eventOptions: {
+        preventDefault: true,
+      },
     },
   },
   {

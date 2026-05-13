@@ -1,0 +1,139 @@
+// @vitest-environment jsdom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope, type User } from '@/data/api'
+import { BlockCache } from '@/data/blockCache'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
+import {
+  activePanelIdProp,
+  editorSelection,
+  focusedBlockIdProp,
+  isEditingProp,
+  topLevelBlockIdProp,
+} from '@/data/properties'
+import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { Repo } from '@/data/repo'
+import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import {
+  __resetLayoutSessionIdForTesting,
+  getLayoutSessionId,
+} from '@/utils/layoutSessionId'
+import {
+  insertPanelRow,
+  layoutSlotsFromRows,
+  panelBlockId,
+  panelRowsInLayoutOrder,
+} from '@/utils/panelLayoutProjection'
+import {
+  dailyNotesActions,
+} from '../actions.ts'
+import {
+  dailyNotesDataExtension,
+  getOrCreateDailyNote,
+} from '../index.ts'
+
+const WS = 'ws-1'
+const USER: User = {id: 'user-1', name: 'Alice'}
+
+interface Harness {
+  h: TestDb
+  repo: Repo
+}
+
+const setup = async (): Promise<Harness> => {
+  const h = await createTestDb()
+  let id = 0
+  const repo = new Repo({
+    db: h.db,
+    cache: new BlockCache(),
+    user: USER,
+    newId: () => `gen-${++id}`,
+    registerKernelProcessors: false,
+  })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    dailyNotesDataExtension,
+  ]))
+  repo.setActiveWorkspaceId(WS)
+  return {h, repo}
+}
+
+let env: Harness
+
+beforeEach(async () => {
+  __resetLayoutSessionIdForTesting()
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date(2026, 4, 13, 12))
+  env = await setup()
+})
+
+afterEach(async () => {
+  vi.useRealTimers()
+  await env.h.cleanup()
+})
+
+describe('dailyNotesActions', () => {
+  it('appends an empty block to today and opens it in an editing stacked panel', async () => {
+    const daily = await getOrCreateDailyNote(env.repo, WS, '2026-05-13')
+    await env.repo.mutate.createChild({
+      id: 'existing-daily-child',
+      parentId: daily.id,
+      content: 'existing',
+    })
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'main-block',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'm0',
+        content: 'Main',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    await insertPanelRow(env.repo, layoutSession, 'main-block')
+
+    const action = dailyNotesActions({repo: env.repo})
+      .find(candidate => candidate.id === 'append_today_daily_block')
+    expect(action?.defaultBinding?.keys).toBe('ctrl+shift+n')
+
+    await action?.handler(
+      {uiStateBlock: rootUiState},
+      {preventDefault: vi.fn()} as unknown as KeyboardEvent,
+    )
+
+    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    expect(dailyChildren[0]).toBe('existing-daily-child')
+    expect(dailyChildren).toHaveLength(2)
+    const newBlockId = dailyChildren[1]
+    expect(env.repo.block(newBlockId).peek()?.content).toBe('')
+
+    const layoutRows = await env.repo.query.subtree({id: layoutSession.id}).load()
+    expect(layoutSlotsFromRows(layoutSession.id, layoutRows)).toEqual([
+      {kind: 'leaf', blockId: 'main-block'},
+      {
+        kind: 'stack',
+        children: [
+          {kind: 'leaf', blockId: newBlockId},
+        ],
+      },
+    ])
+
+    const newPanel = panelRowsInLayoutOrder(layoutSession.id, layoutRows)
+      .find(row => panelBlockId(row) === newBlockId)
+    expect(newPanel).toBeTruthy()
+    await env.repo.block(newPanel!.id).load()
+    await layoutSession.load()
+
+    expect(env.repo.block(newPanel!.id).peekProperty(topLevelBlockIdProp)).toBe(newBlockId)
+    expect(env.repo.block(newPanel!.id).peekProperty(focusedBlockIdProp)).toBe(newBlockId)
+    expect(env.repo.block(newPanel!.id).peekProperty(editorSelection)).toEqual({
+      blockId: newBlockId,
+      start: 0,
+    })
+    expect(env.repo.block(newPanel!.id).peekProperty(isEditingProp)).toBe(true)
+    expect(layoutSession.peekProperty(activePanelIdProp)).toBe(newPanel!.id)
+  })
+})

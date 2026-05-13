@@ -9,9 +9,10 @@ import {
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
 import { useRepo } from '@/context/repo.tsx'
-import { useUserPrefsBlock, useUserPrefsProperty } from '@/data/globalState.ts'
+import { useLayoutSessionBlock, useUserPrefsBlock, useUserPrefsProperty } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
-import { aliasesProp } from '@/data/properties.ts'
+import { activePanelIdProp, aliasesProp } from '@/data/properties.ts'
+import { usePropertyValue } from '@/hooks/block.ts'
 import { PAGE_TYPE } from '@/data/blockTypes.ts'
 import { v4 as uuidv4 } from 'uuid'
 import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
@@ -55,6 +56,8 @@ export function QuickFind() {
   const userPrefsBlock = useUserPrefsBlock()
   const navigate = useNavigate()
   const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
+  const layoutSessionBlock = useLayoutSessionBlock()
+  const [activePanelId] = usePropertyValue(layoutSessionBlock, activePanelIdProp)
   const [recentIds] = useUserPrefsProperty(recentBlockIdsProp)
 
   const [open, setOpen] = useState(false)
@@ -159,9 +162,9 @@ export function QuickFind() {
     setOpen(false)
   }
 
-  const openInNewPanel = (blockId: string) => {
+  const openInStackedPanel = (blockId: string) => {
     pushRecentBlockId(userPrefsBlock, blockId)
-    navigate({blockId, target: 'new-panel'})
+    navigate({blockId, target: 'sidebar-stack', sourcePanelId: activePanelId})
     setOpen(false)
   }
 
@@ -215,7 +218,7 @@ export function QuickFind() {
     }
     const blockId = payload.split(':')[0]
     if (!blockId) return
-    if (openInPanel) openInNewPanel(blockId)
+    if (openInPanel) openInStackedPanel(blockId)
     else jumpToBlock(blockId)
   }
 
@@ -343,7 +346,7 @@ export function QuickFind() {
           <Kbd>↵</Kbd> jump
         </span>
         <span className="flex items-center gap-1">
-          <Kbd>⇧↵</Kbd> open in panel
+          <Kbd>⇧↵</Kbd> open in stack
         </span>
       </div>
     </CommandDialog>
