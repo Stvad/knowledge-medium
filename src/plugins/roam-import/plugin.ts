@@ -3,7 +3,7 @@
  *
  * Contributes:
  *   - `import_roam` global action — surfaces the file-picker UI and
- *     drives the importer through `progressBanner` updates.
+ *     drives the importer through progress toast updates.
  *   - `roamImportWindowHookEffect` — installs the idempotent
  *     `window.__omniliner.roamImport` debug hook once the Repo is
  *     available, so agent-runtime scripts can call `importRoam`

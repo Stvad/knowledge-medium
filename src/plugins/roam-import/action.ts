@@ -5,7 +5,7 @@ import {
 } from '@/shortcuts/types.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import { importRoam } from './import.ts'
-import { showProgressBanner } from '@/utils/progressBanner.ts'
+import { showProgress } from '@/utils/toast.ts'
 import type { RoamExport } from './types.ts'
 
 export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
@@ -26,7 +26,7 @@ export const importRoamAction = ({repo}: {repo: Repo}): ActionConfig => ({
         const content = loadEvent.target?.result
         if (typeof content !== 'string') return
 
-        const banner = showProgressBanner('Roam import: parsing JSON…')
+        const banner = showProgress('Roam import: parsing JSON…')
         try {
           const parsed = JSON.parse(content) as RoamExport
           if (!Array.isArray(parsed)) {

@@ -58,7 +58,7 @@ import {
 import { navigateInPanel } from '@/utils/panelHistory.ts'
 import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
-import { showProgressBanner } from '@/utils/progressBanner.ts'
+import { showProgress } from '@/utils/toast.ts'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
 import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
 
@@ -316,7 +316,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       description: 'Download raw SQLite database (.db)',
       context: ActionContextTypes.GLOBAL,
       handler: async () => {
-        const banner = showProgressBanner('Exporting SQLite database…')
+        const banner = showProgress('Exporting SQLite database…')
         try {
           const {blob, filename} = await exportRawSqliteDb(repo)
           downloadBlob(blob, filename)
@@ -348,7 +348,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           )
           if (!ok) return
 
-          const banner = showProgressBanner(`Importing SQLite database (${sizeMiB} MiB)…`)
+          const banner = showProgress(`Importing SQLite database (${sizeMiB} MiB)…`)
           try {
             await importRawSqliteDb(repo, file)
             banner.update('Import complete — reloading…')

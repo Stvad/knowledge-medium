@@ -2,6 +2,7 @@ import React, { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
+import { Toaster } from 'sonner'
 import './index.css'
 import App from './App.tsx'
 import { RepoProvider } from '@/context/repo.tsx'
@@ -32,5 +33,9 @@ createRoot(document.getElementById('root')!).render(
         </ErrorBoundary>
       </Login>
     </Suspense>
+    {/* Sonner toast layer — mounted outside Login + RepoProvider so it
+        can render error toasts during bootstrap (Supabase auth failures,
+        repo init errors) before the app tree exists. */}
+    <Toaster position="top-center" richColors closeButton />
   </StrictMode>,
 )
