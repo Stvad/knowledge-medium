@@ -531,14 +531,22 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
  *  same `(workspace_id, alias)`, RAISE(ABORT) rolls back the entire
  *  user tx atomically.
  *
+ *  Blank aliases (`NEW.alias = ''`) are skipped to match the
+ *  `tx.aliasLookup` semantics: lookup returns null for `''` because
+ *  blanks aren't meaningful claims. Without the skip, two blocks
+ *  each carrying an empty entry in their alias array (e.g. notes
+ *  the user cleared) would spuriously collide on the second write.
+ *
  *  The RAISE message is structured: `alias_collision` followed by
- *  US-separated (char(31)) workspace_id, alias, and attempting block_id.
- *  The tx engine catches errors with this prefix and converts them to
- *  `ProcessorRejection('alias.collision', meta)` after looking up the
- *  existing claimant. US is the ASCII "unit separator" control char —
- *  picked because it never appears in alias text (codec rejects
- *  control chars) and it doesn't collide with `:` / `/` / `,` / etc
- *  which CAN appear in workspace ids and alias text.
+ *  US-separated (char(31)) HEX-encoded workspace_id, alias, and
+ *  attempting block_id. Hex encoding guarantees the delimiter never
+ *  appears inside a field, even if the alias text itself contains
+ *  control chars — earlier comments asserted the codec rejected
+ *  control chars, but `codecs.string` only checks typeof, so the
+ *  encoding has to defend itself rather than relying on data-shape
+ *  invariants. The tx engine hex-decodes each field and looks up
+ *  the existing claimant to construct
+ *  `ProcessorRejection('alias.collision', meta)`.
  *
  *  Skipped when `tx_context.source IS NULL` so PowerSync sync-apply
  *  doesn't fail on dupes propagating from other clients (mirrors the
@@ -556,12 +564,13 @@ export const CREATE_BLOCK_ALIASES_WORKSPACE_UNIQUE_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS block_aliases_workspace_alias_unique
   BEFORE INSERT ON block_aliases
   WHEN (SELECT source FROM tx_context WHERE id = 1) IS NOT NULL
+    AND NEW.alias != ''
   BEGIN
     SELECT RAISE(ABORT,
       'alias_collision' || char(31) ||
-      NEW.workspace_id || char(31) ||
-      NEW.alias || char(31) ||
-      NEW.block_id
+      hex(NEW.workspace_id) || char(31) ||
+      hex(NEW.alias) || char(31) ||
+      hex(NEW.block_id)
     )
     WHERE EXISTS (
       SELECT 1 FROM block_aliases

@@ -685,6 +685,65 @@ describe('alias.collision — fresh insert that claims a taken alias', () => {
 
     expect(await readAliases('blank')).toEqual(['', 'OnlyReal'])
   })
+
+  it('two blocks with blank alias entries do not collide', async () => {
+    // `tx.aliasLookup('', ws)` returns null by design (blanks aren't
+    // meaningful claims; see txEngine.ts). The uniqueness trigger
+    // has to agree — otherwise `'']` on two different blocks (e.g.
+    // two notes the user explicitly cleared) would crash the second
+    // write with a spurious `alias.collision`.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'b1', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'first'})
+      await tx.setProperty('b1', aliasesProp, [''])
+    }, {scope: ChangeScope.BlockDefault})
+    await flush()
+
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'b2', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'second'})
+      await tx.setProperty('b2', aliasesProp, [''])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await readAliases('b1')).toEqual([''])
+    expect(await readAliases('b2')).toEqual([''])
+  })
+})
+
+// ──── Regression: RAISE payload must survive control chars in alias text ────
+//
+// Earlier comments claimed the alias codec rejected control chars,
+// so the unit-separator (U+001F) delimiter in the RAISE message
+// would be unambiguous. That invariant was false — `codecs.string`
+// only checks `typeof === 'string'`. An alias containing U+001F
+// would shift the parser fields: the alias-with-separator gets
+// split, downstream `attemptedBlockId` becomes a fragment of the
+// alias text, and the conflicting-block lookup returns nothing.
+// Fix: hex-encode each field in the RAISE so the delimiter is
+// guaranteed-distinct from field contents.
+
+describe('alias.collision — RAISE payload tolerates control chars in alias text', () => {
+  it('reports the correct alias text when a colliding alias contains U+001F', async () => {
+    // Seed the claimant. seatAt forces the codec to accept the
+    // control char — we want to verify the trigger + parser cope,
+    // not whether the codec policies blanks/control chars (that's
+    // an upstream concern).
+    const weird = 'Foo\x1fBar'
+    await seatAtExplicitId('claimant', weird, 'Claimant title')
+
+    let caught: unknown
+    try {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'attempter', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'attempter'})
+        await tx.setProperty('attempter', aliasesProp, [weird])
+      }, {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    // The whole alias survives the encode/decode round-trip — not
+    // truncated at the embedded separator.
+    expect((caught as ProcessorRejection).meta?.alias).toBe(weird)
+    expect((caught as ProcessorRejection).meta?.attemptedOn).toBe('attempter')
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe('claimant')
+    expect((caught as ProcessorRejection).meta?.conflictingBlockTitle).toBe('Claimant title')
+  })
 })
 
 describe('alias.collision — user-error listener wiring', () => {

@@ -360,17 +360,31 @@ interface ParsedAliasCollision {
 }
 
 const ALIAS_COLLISION_RAISE_PREFIX = 'alias_collision'
-// ASCII unit-separator. Picked because (a) it never appears in
-// well-formed alias text (the property codec rejects control chars),
-// (b) it doesn't collide with `:` / `/` / `,` etc that CAN appear in
-// workspace ids and alias text, and (c) it survives the SQLite wrapper
-// untouched. The trigger uses `char(31)` for the same delimiter.
+// ASCII unit-separator delimits the (hex-encoded) fields. Field
+// contents are hex so the separator is guaranteed-distinct from
+// any field byte — earlier comments asserted the codec rejected
+// control chars, but `codecs.string` only checks typeof; the
+// encoding can't rely on that. The trigger uses `char(31)` for
+// the same delimiter and `hex(NEW.<col>)` for each field.
 const ALIAS_COLLISION_FIELD_SEP = '\x1f'
+
+/** Decode SQLite's `hex()` output (uppercase hex of the UTF-8 bytes)
+ *  back to the original string. Empty input decodes to `''`. */
+const decodeHexUtf8 = (hex: string): string => {
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16)
+  }
+  return new TextDecoder().decode(bytes)
+}
 
 /** Recognise the trigger-raised alias-collision error inside whatever
  *  wrapping SQLite + better-sqlite3 + PowerSync layer it on. Returns
  *  parsed fields when matched, `null` otherwise (the caller falls
- *  back to its existing error handling). */
+ *  back to its existing error handling). The three field values are
+ *  hex-encoded in the RAISE message so the unit-separator can be
+ *  used as a delimiter regardless of what bytes the alias text
+ *  contains. */
 const parseAliasCollisionError = (err: unknown): ParsedAliasCollision | null => {
   if (err === null || typeof err !== 'object') return null
   const msg = (err as {message?: unknown}).message
@@ -379,16 +393,31 @@ const parseAliasCollisionError = (err: unknown): ParsedAliasCollision | null => 
   const idx = msg.indexOf(needle)
   if (idx === -1) return null
   const tail = msg.slice(idx + needle.length)
-  // tail = `<workspaceId>\x1f<alias>\x1f<attemptedBlockId>` possibly
-  // followed by SQLite wrapper text. The unit separator never appears
-  // in any of the three encoded fields nor in the wrapper, so the
-  // first three split parts ARE our three fields verbatim.
+  // tail = `<HEX(workspaceId)>\x1f<HEX(alias)>\x1f<HEX(attemptedBlockId)>`
+  // possibly followed by SQLite wrapper text. The hex alphabet is
+  // [0-9A-F], so any byte from the wrapper that ISN'T hex (typically
+  // it starts with a quote or a colon) terminates the third field.
+  // Splitting on the separator yields three hex-only parts whose
+  // tail may carry wrapper garbage on the third field — we
+  // hex-decode each, stopping at the first non-hex character on the
+  // last field to avoid eating any wrapper suffix.
   const parts = tail.split(ALIAS_COLLISION_FIELD_SEP)
   if (parts.length < 3) return null
-  return {
-    workspaceId: parts[0],
-    alias: parts[1],
-    attemptedBlockId: parts[2],
+  const trimToHex = (s: string): string => {
+    const m = s.match(/^[0-9A-Fa-f]*/)
+    const hex = m === null ? '' : m[0]
+    // hex() emits pairs of nibbles; if a wrapper byte landed on an
+    // odd boundary somehow, drop the trailing half-pair.
+    return hex.length % 2 === 0 ? hex : hex.slice(0, -1)
+  }
+  try {
+    return {
+      workspaceId: decodeHexUtf8(trimToHex(parts[0])),
+      alias: decodeHexUtf8(trimToHex(parts[1])),
+      attemptedBlockId: decodeHexUtf8(trimToHex(parts[2])),
+    }
+  } catch {
+    return null
   }
 }
 
