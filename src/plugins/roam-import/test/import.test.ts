@@ -23,6 +23,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, typesProp } from '@/data/properties'
+import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../../../data/repo'
@@ -37,6 +38,7 @@ import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { roamTodoStateProp, statusProp, TODO_TYPE } from '@/plugins/todo/schema'
 import { todoDataExtension } from '@/plugins/todo/dataExtension'
 import { srsReschedulingDataExtension } from '@/plugins/srs-rescheduling/dataExtension'
+import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import {
   SRS_SM25_TYPE,
   srsArchivedProp,
@@ -50,7 +52,7 @@ import {
 import { computeAliasSeatId } from '../../../data/targets'
 import { importRoam } from '../import'
 import { roamBlockId } from '../ids'
-import { ROAM_PAGE_ALIAS_PROP } from '../properties'
+import { ROAM_ISA_PROP, ROAM_PAGE_ALIAS_PROP } from '../properties'
 import type { RoamExport } from '../types'
 
 const WORKSPACE = 'ws-1'
@@ -77,12 +79,15 @@ const setup = async (): Promise<Harness> => {
     // importer also calls processors itself for alias resolution.
     registerKernelProcessors: false,
   })
+  repo.setActiveWorkspaceId(WORKSPACE)
   repo.setFacetRuntime(resolveFacetRuntimeSync([
     kernelDataExtension,
+    kernelValuePresetsExtension,
     dailyNotesDataExtension,
     todoDataExtension,
     srsReschedulingDataExtension,
   ]))
+  await getOrCreatePropertiesPage(repo, WORKSPACE)
   return {h, repo}
 }
 
@@ -408,6 +413,44 @@ describe('importRoam', () => {
     )).toBe(true)
   })
 
+  it('projects ref-typed Roam properties into references during import', async () => {
+    const refPropertyExport: RoamExport = [
+      {
+        title: 'Person',
+        uid: 'personPage',
+        children: [],
+      },
+      {
+        title: 'Alice',
+        uid: 'alicePage',
+        children: [
+          {string: 'isa::[[Person]]', uid: 'aliceIsa'},
+        ],
+      },
+    ]
+
+    await importRoam(refPropertyExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const personId = roamBlockId(WORKSPACE, 'personPage')
+    const alice = await readBlock(roamBlockId(WORKSPACE, 'alicePage'))
+    const props = JSON.parse(alice!.properties_json) as Record<string, unknown>
+    const refs = JSON.parse(alice!.references_json) as {
+      id: string
+      alias: string
+      sourceField?: string
+    }[]
+
+    expect(props[ROAM_ISA_PROP]).toEqual([personId])
+    expect(refs).toContainEqual({
+      id: personId,
+      alias: personId,
+      sourceField: ROAM_ISA_PROP,
+    })
+  })
+
   it('creates permanent alias blocks for unmatched [[alias]] references', async () => {
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
@@ -467,6 +510,32 @@ describe('importRoam', () => {
       [WORKSPACE, 'Get really good at dancing'],
     )
     expect(owners.map(r => r.id)).toEqual([seatId])
+  })
+
+  it('does not rewrite unchanged imported pages or descendants on re-import', async () => {
+    await importRoam(minimalExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const before = await env.h.db.getOptional<{maxId: number | null}>(
+      'SELECT MAX(id) AS maxId FROM row_events',
+    )
+
+    await importRoam(minimalExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const churn = await env.h.db.getOptional<{count: number}>(
+      `SELECT COUNT(*) AS count
+       FROM row_events re
+       JOIN command_events ce ON ce.tx_id = re.tx_id
+       WHERE re.id > ?
+         AND ce.description IN ('roam import: pages', 'roam import: descendants')`,
+      [before?.maxId ?? 0],
+    )
+    expect(churn?.count).toBe(0)
   })
 
   it('points imports at a pre-existing seat instead of creating a parallel block', async () => {
@@ -1523,7 +1592,7 @@ describe('importRoam', () => {
     }[]
     expect(refs).toContainEqual({
       id: nextReviewDateId,
-      alias: 'June 6th, 2026',
+      alias: nextReviewDateId,
       sourceField: srsNextReviewDateProp.name,
     })
 
@@ -1699,6 +1768,8 @@ describe('importRoam', () => {
   })
 
   it('dry-run reports counts without writing rows', async () => {
+    const before = await env.h.db.get<{count: number}>('SELECT COUNT(*) AS count FROM blocks')
+
     const summary = await importRoam(minimalExport, env.repo, {
       workspaceId: WORKSPACE,
       currentUserId: USER_ID,
@@ -1708,8 +1779,8 @@ describe('importRoam', () => {
     expect(summary.dryRun).toBe(true)
     expect(summary.blocksWritten).toBe(3)
 
-    // No rows should have been written.
-    const counts = await env.h.db.get<{count: number}>('SELECT COUNT(*) AS count FROM blocks')
-    expect(counts.count).toBe(0)
+    // No additional rows should have been written.
+    const after = await env.h.db.get<{count: number}>('SELECT COUNT(*) AS count FROM blocks')
+    expect(after.count).toBe(before.count)
   })
 })

@@ -15,7 +15,11 @@
 import {
   ChangeScope,
   DeletedConflictError,
+  normalizeReferences,
+  type AnyPropertySchema,
   type BlockData,
+  type BlockDataPatch,
+  type BlockReference,
   type NewBlockData,
   type TypeRegistrySnapshot,
   type Tx,
@@ -54,6 +58,7 @@ import {
   type PreparedPage,
   type RoamImportPlan,
 } from './plan'
+import { projectPropertyReferences } from '@/plugins/references/referenceProjection.ts'
 import type { RoamExport } from './types'
 import { writeImportLog } from './report'
 import { collectTypeCandidates, type RoamTypeCandidate } from './typeCandidates'
@@ -322,6 +327,12 @@ export const importRoam = async (
       plan.diagnostics,
     )
   }
+  for (const block of allPlannedBlocks) {
+    block.references = referencesWithProjectedProperties(
+      block.references,
+      projectPropertyReferences(block, repo.propertySchemas),
+    )
+  }
   for (const page of plan.pages) {
     if (!page.data) continue
     for (const name of Object.keys(page.promotedFromChildren)) {
@@ -463,13 +474,23 @@ export const importRoam = async (
     for (const recon of rootReconciliations) {
       if (recon.page.isDaily) {
         await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
-        await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
+        await applyPromotedAttributes(
+          tx,
+          recon.finalId,
+          recon.page.promotedFromChildren,
+          repo.propertySchemas,
+        )
         continue
       }
       if (recon.merging) {
         pagesMerged += 1
         await mergeIntoExistingPage(tx, recon, repo, typeSnapshot)
-        await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
+        await applyPromotedAttributes(
+          tx,
+          recon.finalId,
+          recon.page.promotedFromChildren,
+          repo.propertySchemas,
+        )
         continue
       }
       pagesCreated += 1
@@ -484,7 +505,12 @@ export const importRoam = async (
     for (const recon of aliasRuleMergedReconciliations) {
       if (!recon.page.isDaily) pagesMerged += 1
       await mergePageAliases(tx, recon.finalId, recon.aliasesToApply)
-      await applyPromotedAttributes(tx, recon.finalId, recon.page.promotedFromChildren)
+      await applyPromotedAttributes(
+        tx,
+        recon.finalId,
+        recon.page.promotedFromChildren,
+        repo.propertySchemas,
+      )
     }
   }, {scope: ChangeScope.BlockDefault, description: 'roam import: pages'})
 
@@ -1140,6 +1166,14 @@ const ROAM_MEMO_SRS_CONFLICT_FIELDS = [
 const storedValuesEqual = (left: unknown, right: unknown): boolean =>
   JSON.stringify(left) === JSON.stringify(right)
 
+const referencesWithProjectedProperties = (
+  references: readonly BlockReference[] | undefined,
+  propertyRefs: readonly BlockReference[],
+): BlockReference[] => normalizeReferences([
+  ...(references ?? []).filter(ref => (ref.sourceField ?? '') === ''),
+  ...propertyRefs,
+])
+
 const formatStoredForDiagnostic = (value: unknown): string =>
   Array.isArray(value) ? `[${value.length} items]` : JSON.stringify(value)
 
@@ -1244,10 +1278,10 @@ const applyMappedTypesInTx = async (
  * Three branches:
  *   - Fresh insert (createOrGet returns inserted=true): nothing else
  *     to do — the row was written with the planned data.
- *   - Live-row hit (inserted=false): apply the planned content /
- *     references and the planned/source-owned property subset via
- *     tx.update, then re-parent via tx.move so a prior placeholder
- *     gets upgraded.
+ *   - Live-row hit (inserted=false): apply only changed planned
+ *     content / references / source-owned properties, then re-parent
+ *     only when parentId/orderKey differ so re-importing unchanged
+ *     rows doesn't emit metadata-only updates.
  *   - Tombstone hit (createOrGet throws DeletedConflictError):
  *     tx.restore writes deleted=0 + the data-field patch in one
  *     UPDATE; tx.move handles parent_id + order_key. Without this
@@ -1265,6 +1299,7 @@ const upsertImportedBlock = async (
   data: NewBlockData & {id: string; content: string},
   propertyMergeOptions: ImportPropertyMergeOptions = {},
 ) => {
+  const references = normalizeReferences(data.references ?? [])
   try {
     const result = await tx.createOrGet({
       id: data.id,
@@ -1273,7 +1308,7 @@ const upsertImportedBlock = async (
       orderKey: data.orderKey,
       content: data.content,
       properties: data.properties,
-      references: data.references,
+      references,
     })
     if (result.inserted) return
     const existing = await tx.get(data.id)
@@ -1283,18 +1318,28 @@ const upsertImportedBlock = async (
       data.properties ?? {},
       propertyMergeOptions,
     )
-    await tx.update(data.id, {
-      content: data.content,
-      properties,
-      references: data.references ?? [],
-    })
-    await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
+    const patch: BlockDataPatch = {}
+    if (existing.content !== data.content) patch.content = data.content
+    if (!storedValuesEqual(existing.properties, properties)) patch.properties = properties
+    if (!storedValuesEqual(normalizeReferences(existing.references), references)) {
+      patch.references = references
+    }
+    if (
+      patch.content !== undefined
+      || patch.properties !== undefined
+      || patch.references !== undefined
+    ) {
+      await tx.update(data.id, patch)
+    }
+    if (existing.parentId !== data.parentId || existing.orderKey !== data.orderKey) {
+      await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
+    }
   } catch (err) {
     if (!(err instanceof DeletedConflictError)) throw err
     await tx.restore(data.id, {
       content: data.content,
       properties: data.properties ?? {},
-      references: data.references ?? [],
+      references,
     })
     await tx.move(data.id, {parentId: data.parentId, orderKey: data.orderKey})
   }
@@ -1315,6 +1360,7 @@ const applyPromotedAttributes = async (
   tx: Tx,
   id: string,
   promoted: Record<string, unknown>,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ) => {
   const keys = Object.keys(promoted)
   if (keys.length === 0) return
@@ -1328,8 +1374,19 @@ const applyPromotedAttributes = async (
       changed = true
     }
   }
-  if (!changed) return
-  await tx.update(id, {properties: next})
+  const references = referencesWithProjectedProperties(
+    existing.references,
+    projectPropertyReferences({...existing, properties: next}, propertySchemas),
+  )
+  const referencesChanged = !storedValuesEqual(
+    normalizeReferences(existing.references),
+    references,
+  )
+  if (!changed && !referencesChanged) return
+  await tx.update(id, {
+    ...(changed ? {properties: next} : {}),
+    ...(referencesChanged ? {references} : {}),
+  })
 }
 
 const withPageAliases = (
