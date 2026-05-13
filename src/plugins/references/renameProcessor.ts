@@ -46,7 +46,7 @@ import {
   renderAliasedBlockref,
   renderWikilink,
   rewriteWikilinks,
-} from '@/utils/referenceParser'
+} from './referenceParser.ts'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 

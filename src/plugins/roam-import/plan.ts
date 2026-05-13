@@ -40,7 +40,7 @@ import {
   type PreparedSrsSchedule,
 } from './srsMarkers'
 import { parseRoamImportReferences } from './references'
-import { parseBlockRefs } from '@/utils/referenceParser'
+import { parseBlockRefs } from '@/plugins/references/referenceParser.ts'
 import { extractRoamTodoMarker } from './todo'
 
 export {

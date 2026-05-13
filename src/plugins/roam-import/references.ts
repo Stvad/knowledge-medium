@@ -1,4 +1,4 @@
-import { parseReferences } from '@/utils/referenceParser'
+import { parseReferences } from '@/plugins/references/referenceParser.ts'
 
 interface ProtectedRange {
   start: number

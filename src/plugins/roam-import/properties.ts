@@ -1,4 +1,4 @@
-import { parseReferences } from '@/utils/referenceParser'
+import { parseReferences } from '@/plugins/references/referenceParser.ts'
 
 const NS_PREFIX = 'roam'
 export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`

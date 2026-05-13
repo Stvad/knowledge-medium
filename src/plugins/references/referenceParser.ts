@@ -1,6 +1,18 @@
 /**
- * Reference parser for [[alias]] and ((block-id)) syntax in block content.
- * Uses remark-based parsing for consistency with markdown rendering.
+ * Reference parser + renderer for `[[alias]]` and `((block-id))`
+ * syntax. Owned by the references plugin — this is the canonical
+ * grammar for wikilinks and blockrefs across the codebase.
+ *
+ * Consumers (outside this plugin): the roam importer reads from
+ * here. Anything that emits the syntax should also use the
+ * `renderWikilink` / `renderAliasedBlockref` helpers below to avoid
+ * drift from parser expectations (escaping `]]` in aliases, `]` /
+ * newlines in blockref labels, regex-meta + `$&` in aliases through
+ * `rewriteWikilinks`).
+ *
+ * Plain-text parsing here is preferred over the markdown-aware
+ * variant for hot paths; the markdown-aware fallback exists for
+ * surfaces that must skip code blocks (see `parseReferencesMarkdownAware`).
  */
 
 import { unified } from 'unified'

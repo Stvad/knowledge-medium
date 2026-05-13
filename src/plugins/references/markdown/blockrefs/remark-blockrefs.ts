@@ -1,7 +1,7 @@
 import { Plugin } from 'unified'
 import { visit, SKIP } from 'unist-util-visit'
 import { Link, Literal, Parent, RootContent } from 'mdast'
-import { parseBlockRefs, parseBlockRefTarget } from '@/utils/referenceParser'
+import { parseBlockRefs, parseBlockRefTarget } from '../../referenceParser.ts'
 
 const buildNode = (
   tag: 'blockref' | 'blockembed',

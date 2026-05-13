@@ -1,7 +1,7 @@
 import { Plugin } from 'unified'
 import { visit, SKIP } from 'unist-util-visit'
 import { Link, Literal, Parent, RootContent } from 'mdast'
-import { parseReferences } from '@/utils/referenceParser'
+import { parseReferences } from '../../referenceParser.ts'
 
 export interface RemarkWikilinksOptions {
   resolveAlias: (alias: string) => string | undefined

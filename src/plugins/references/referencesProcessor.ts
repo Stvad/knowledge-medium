@@ -59,7 +59,7 @@ import {
 import {
   parseReferences as parseAliasMarks,
   parseBlockRefs,
-} from '@/utils/referenceParser'
+} from './referenceParser.ts'
 import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import {
   dailyNoteBlockId,
