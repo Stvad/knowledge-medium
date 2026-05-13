@@ -238,7 +238,9 @@ export const isDateAlias = (alias: string): boolean =>
  *  the Journal page and writes long-form aliases. `ensureDailyNoteTarget`
  *  is the lighter-weight materialiser invoked from `parseReferences`
  *  during reference resolution; it leaves the row at workspace-root
- *  with empty content until `getOrCreateDailyNote` later promotes it. */
+ *  with the iso date as content (matches the alias — mirrors
+ *  `ensureAliasTarget`'s creation-time-default rule) until
+ *  `getOrCreateDailyNote` later promotes it with the long-form label. */
 export const ensureDailyNoteTarget = async (
   tx: Tx,
   repo: Repo,
@@ -251,7 +253,7 @@ export const ensureDailyNoteTarget = async (
     workspaceId,
     parentId: null,
     orderKey: keyAtEnd(),
-    freshContent: '',
+    freshContent: date,
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)

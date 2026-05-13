@@ -113,6 +113,21 @@ describe('ensureDailyNoteTarget', () => {
     expect(props[typesProp.name]).toEqual([PAGE_TYPE, DAILY_NOTE_TYPE])
   })
 
+  it('defaults the inserted seat\'s content to the iso alias', async () => {
+    // Mirrors the ensureAliasTarget creation-time-default rule: a freshly
+    // materialised daily-note seat shouldn't be born content-drifted from
+    // its alias. getOrCreateDailyNote promotes the seat later with the
+    // long-form label; until then the iso is the right default.
+    const ISO = '2026-04-28'
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const result = await env.repo.tx(tx => ensureDailyNoteTarget(tx, env.repo, ISO, WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault})
+
+    const row = await env.h.db.get<{content: string}>(
+      'SELECT content FROM blocks WHERE id = ?', [result.id])
+    expect(row.content).toBe(ISO)
+  })
+
   it('is idempotent: second call on the same (ws, iso) returns inserted=false', async () => {
     const ISO = '2026-04-28'
     const typeSnapshot = env.repo.snapshotTypeRegistries()
