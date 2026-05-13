@@ -16,6 +16,7 @@ import {
   CLEANUP_ORPHAN_ALIASES_PROCESSOR,
   PARSE_REFERENCES_PROCESSOR,
 } from '../referencesProcessor.ts'
+import { RENAME_BACKLINKS_PROCESSOR } from '../renameProcessor.ts'
 
 describe('referencesDataExtension', () => {
   it('contributes the local reference edge index schema', () => {
@@ -33,6 +34,7 @@ describe('referencesDataExtension', () => {
     expect(Array.from(runtime.read(postCommitProcessorsFacet).keys()).sort()).toEqual([
       CLEANUP_ORPHAN_ALIASES_PROCESSOR,
       PARSE_REFERENCES_PROCESSOR,
+      RENAME_BACKLINKS_PROCESSOR,
     ].sort())
   })
 })

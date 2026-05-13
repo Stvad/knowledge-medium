@@ -26,13 +26,31 @@
  * shared helper here is the canonical refresh policy for parseReferences
  * + Roam import.
  *
+ * Indexed-deterministic seat ids: rather than a single deterministic
+ * id per `(alias, workspaceId)`, alias seats live in a probed sequence
+ * `id₀, id₁, id₂, …` derived from `uuidv5("${ws}:${alias}:${i}",
+ * ALIAS_NS)`. `ensureAliasTarget` walks the sequence until it finds
+ * an empty slot (insert here) or a live row that already claims the
+ * alias (reuse). Live rows that claim a different alias — typical
+ * post-rename case — and tombstones are skipped. Two offline clients
+ * with the same world-state probe the same way and land on the same
+ * slot, preserving the deterministic-id convergence guarantee. The
+ * "claims this alias?" check is what preserves the happy-path
+ * convergence at slot 0; without it the probe would always run past
+ * the existing seat.
+ *
  * NOTE: `createOrRestoreTargetBlock` is helper-layer, NOT exposed on
  * the public Tx surface (per v4.31). Plugin authors writing their own
  * deterministic-id flows can import it from `@/data/targets`.
  */
 
 import { v5 as uuidv5 } from 'uuid'
-import { DeletedConflictError, type Tx, type TypeRegistrySnapshot } from '@/data/api'
+import {
+  DeletedConflictError,
+  type ProcessorReadDb,
+  type Tx,
+  type TypeRegistrySnapshot,
+} from '@/data/api'
 import type { Repo } from '@/data/repo'
 import { keyAtEnd } from './orderKey'
 import { aliasesProp } from './internals/coreProperties'
@@ -95,45 +113,140 @@ export const createOrRestoreTargetBlock = async (
 
 // ──── Deterministic-id namespaces (UUIDv5) ────
 
-/** Namespace for alias-seat ids. Shared with the legacy
- *  `aliasBlockId` if there was one; for v1 we anchor a new namespace
- *  here. The input format is `${workspaceId}:${alias}` so two
- *  workspaces typing the same alias get distinct seats. */
+/** Namespace for alias-seat ids. The probe input is
+ *  `${workspaceId}:${alias}:${index}`; two workspaces typing the same
+ *  alias get distinct seats, and within a workspace the index lets
+ *  parallel probes resolve to additional slots when slot 0 was claimed
+ *  by a previous alias that has since been renamed. */
 const ALIAS_NS = 'a3c8a8c0-7c3a-4d2c-bc4f-1f6c2c6a7d11'
 
-/** Stable id for the **stub-block seat** that auto-materialises when
- *  nobody owns `alias` in `workspaceId` yet. NOT "the canonical id of
- *  the block named alias" — a real block claiming the alias keeps its
- *  own (random) id and lookup-first finds it. The seat id is only
- *  used by callers that resolve an unowned alias and want to either
- *  point a reference at a deterministic spot (parseReferences) or
- *  insert/restore the stub there idempotently (Roam import,
- *  ensureAliasTarget). Two clients computing this for the same
- *  `(alias, workspaceId)` get the same id, so the seats converge
- *  through PowerSync without a duplicate-block merge. */
-const computeAliasSeatId = (alias: string, workspaceId: string): string =>
-  uuidv5(`${workspaceId}:${alias}`, ALIAS_NS)
+/** Probe cap. The expected indexed depth is 0–2 in realistic
+ *  workloads (one rename per alias is rare; multiple is rarer). A cap
+ *  surfaces anomalous state — a saturated alias namespace, an infinite
+ *  probe loop from a buggy read source — as a loud error rather than a
+ *  hang. */
+const MAX_PROBE_SLOTS = 64
+
+/** Deterministic id for the `index`-th alias-seat slot. Slot 0 is the
+ *  happy-path id; higher slots are claimed by probes that skipped a
+ *  live row claiming a different alias (post-rename) or a tombstoned
+ *  prior occupant. Two clients in the same world-state hit the same
+ *  index for a given `(alias, workspaceId)`. */
+export const computeAliasSeatId = (
+  alias: string,
+  workspaceId: string,
+  index: number = 0,
+): string => uuidv5(`${workspaceId}:${alias}:${index}`, ALIAS_NS)
+
+/** Minimal alias-seat row shape the probe needs. `aliases` is the
+ *  decoded `alias` property; `deleted` is the tombstone flag. */
+export interface AliasSeatRow {
+  deleted: boolean
+  aliases: readonly string[]
+}
+
+/** Read function passed to `resolveAliasSeatId`. Returns the row at
+ *  `id` (live or tombstoned) or `null` if no row exists. Concrete
+ *  readers below: `aliasSeatReaderFromTx` (inside ensureAliasTarget,
+ *  honours read-your-own-writes) and `aliasSeatReaderFromDb`
+ *  (read-phase of post-commit processors, hits committed state). */
+export type AliasSeatReader = (id: string) => Promise<AliasSeatRow | null>
+
+const decodeAliasList = (encoded: unknown): readonly string[] => {
+  if (encoded === undefined) return []
+  try {
+    return aliasesProp.codec.decode(encoded)
+  } catch {
+    return []
+  }
+}
+
+/** Tx-scoped reader: `tx.get` returns the row including tombstones,
+ *  with codec-encoded properties (we decode the `alias` list here). */
+export const aliasSeatReaderFromTx = (tx: Tx): AliasSeatReader =>
+  async (id) => {
+    const block = await tx.get(id)
+    if (block === null) return null
+    return {
+      deleted: block.deleted,
+      aliases: decodeAliasList(block.properties[aliasesProp.name]),
+    }
+  }
+
+/** Committed-state SQL reader: used by the read phase of post-commit
+ *  processors that don't hold a tx. Reads `deleted` + `properties_json`
+ *  directly. Robust to property-JSON parse errors (returns `[]` so the
+ *  probe treats the slot as "live with different alias" and steps past
+ *  it — same behavior as a normal row that doesn't claim our alias). */
+export const aliasSeatReaderFromDb = (db: ProcessorReadDb): AliasSeatReader =>
+  async (id) => {
+    const row = await db.getOptional<{deleted: 0 | 1; properties_json: string}>(
+      `SELECT deleted, properties_json FROM blocks WHERE id = ?`,
+      [id],
+    )
+    if (row === null) return null
+    let aliases: readonly string[] = []
+    try {
+      const parsed = JSON.parse(row.properties_json) as Record<string, unknown>
+      aliases = decodeAliasList(parsed[aliasesProp.name])
+    } catch {
+      // Malformed properties_json — leave aliases empty, probe past.
+    }
+    return {deleted: row.deleted === 1, aliases}
+  }
+
+/** Walk indexed-deterministic seat slots for `(alias, workspaceId)`
+ *  until one of:
+ *   - empty slot → return that id (caller will insert),
+ *   - live row claiming `alias` → return that id (reuse / convergence).
+ *  Skips tombstones and live rows claiming a different alias.
+ *
+ *  Two clients with the same observed world-state probe the same way
+ *  and land on the same slot — that's the deterministic-id convergence
+ *  guarantee. Clients with divergent state may pick different slots,
+ *  but PowerSync convergence + the alias-lookup query handle this
+ *  case: `block_aliases` is exact-match by alias text, so a second
+ *  parseReferences pass on either client resolves through the lookup
+ *  rather than the probe. */
+export const resolveAliasSeatId = async (
+  read: AliasSeatReader,
+  alias: string,
+  workspaceId: string,
+): Promise<string> => {
+  for (let index = 0; index < MAX_PROBE_SLOTS; index++) {
+    const id = computeAliasSeatId(alias, workspaceId, index)
+    const row = await read(id)
+    if (row === null) return id
+    if (row.deleted) continue
+    if (row.aliases.includes(alias)) return id
+    // Live row claims a different alias — typical post-rename. Probe next.
+  }
+  throw new Error(
+    `resolveAliasSeatId: ${MAX_PROBE_SLOTS} slots exhausted for alias "${alias}" in workspace "${workspaceId}"`,
+  )
+}
 
 // ──── Layer 2 — per-domain wrappers ────
 
 /** Ensure a stub-block seat exists for `alias` in `workspaceId`. The
- *  seat is the deterministic id `computeAliasSeatId(alias, ws)` —
- *  NOT a canonical id for "the block named alias". Callers should
- *  always lookup-first (a real block claiming the alias has its own
- *  id and that's what references should resolve to); this helper is
- *  only invoked when the lookup misses, to materialise the stub the
- *  reference will point at. Inserts at workspace-root with empty
- *  content; sets `aliases` property to `[alias]` on insert/restore.
- *  Returns `{id, inserted}`. */
+ *  seat is the indexed-deterministic id returned by
+ *  `resolveAliasSeatId` — NOT a canonical id for "the block named
+ *  alias". Callers should always lookup-first (a real block claiming
+ *  the alias has its own id and that's what references should resolve
+ *  to); this helper is only invoked when the lookup misses, to
+ *  materialise the stub the reference will point at. Inserts at
+ *  workspace-root with empty content; sets `aliases` property to
+ *  `[alias]` on insert/restore. Returns `{id, inserted}`. */
 export const ensureAliasTarget = async (
   tx: Tx,
   repo: Repo,
   alias: string,
   workspaceId: string,
   typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries(),
-): Promise<{ id: string; inserted: boolean }> =>
-  createOrRestoreTargetBlock(tx, {
-    id: computeAliasSeatId(alias, workspaceId),
+): Promise<{ id: string; inserted: boolean }> => {
+  const id = await resolveAliasSeatId(aliasSeatReaderFromTx(tx), alias, workspaceId)
+  return createOrRestoreTargetBlock(tx, {
+    id,
     workspaceId,
     parentId: null,
     orderKey: keyAtEnd(),
@@ -143,7 +256,4 @@ export const ensureAliasTarget = async (
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [alias]}, typeSnapshot)
     },
   })
-
-// Re-export so tests + other callers can use the deterministic-id
-// helper without re-importing it from internal namespaces.
-export { computeAliasSeatId }
+}

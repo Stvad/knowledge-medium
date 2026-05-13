@@ -1,5 +1,6 @@
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { aliasDataExtension } from '@/plugins/alias/dataExtension.ts'
 import { backlinksDataExtension } from '@/plugins/backlinks/dataExtension.ts'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes/dataExtension.ts'
 import { groupedBacklinksDataExtension } from '@/plugins/grouped-backlinks/dataExtension.ts'
@@ -14,6 +15,7 @@ export const staticDataExtensions: AppExtension[] = [
   kernelDataExtension,
   dailyNotesDataExtension,
   referencesDataExtension,
+  aliasDataExtension,
   backlinksDataExtension,
   groupedBacklinksDataExtension,
   srsReschedulingDataExtension,

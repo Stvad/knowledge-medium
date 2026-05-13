@@ -712,28 +712,37 @@ describe('parseReferences — orphan cleanup (§7.5)', () => {
     expect((await env.read(aliasId('Inbox')))!.deleted).toBe(0)
   })
 
-  it('re-typing [[foo]] after a create-and-cleanup cycle → restores the tombstoned target', async () => {
-    // Cycle 1: create + cleanup.
+  it('re-typing [[foo]] after a create-and-cleanup cycle → creates a fresh seat (probes past tombstone)', async () => {
+    // Indexed-deterministic seat probe: tombstoned slot 0 is skipped,
+    // so re-typing [[foo]] lands at slot 1 with a fresh target. The
+    // earlier "tombstone-restore-on-retype" shape is gone by design —
+    // a typed [[Foo]] always means a fresh Foo. (See spec doc.)
     await env.repo.tx(
       tx => tx.create({id: 's1', workspaceId: WS, parentId: null, orderKey: 'a0', content: '[[foo]]'}),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
+    const slot0Id = aliasId('foo')
     await env.repo.mutate.setContent({id: 's1', content: ''})
     await flush(4000)
-    expect((await env.read(aliasId('foo')))!.deleted).toBe(1)  // tombstoned
+    expect((await env.read(slot0Id))!.deleted).toBe(1)  // slot 0 tombstoned
 
-    // Cycle 2: re-type [[foo]] in a new block. createOrRestoreTargetBlock
-    // catches DeletedConflictError and runs tx.restore.
     await env.repo.tx(
       tx => tx.create({id: 's2', workspaceId: WS, parentId: null, orderKey: 'a1', content: '[[foo]]'}),
       {scope: ChangeScope.BlockDefault},
     )
     await flush()
-    const target = await env.read(aliasId('foo'))
-    expect(target!.deleted).toBe(0)  // restored
+    // Slot 0 stays tombstoned.
+    expect((await env.read(slot0Id))!.deleted).toBe(1)
+    // The new seat lives at slot 1.
+    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const target = await env.read(slot1Id)
+    expect(target).not.toBeNull()
+    expect(target!.deleted).toBe(0)
+    const aliases = JSON.parse(target!.properties_json).alias as string[]
+    expect(aliases).toEqual(['foo'])
     const refs = JSON.parse((await env.read('s2'))!.references_json)
-    expect(refs).toEqual([{id: aliasId('foo'), alias: 'foo'}])
+    expect(refs).toEqual([{id: slot1Id, alias: 'foo'}])
   })
 })
 

@@ -427,11 +427,17 @@ export function DefaultBlockRenderer(
   // of the underlying inputs (block, decorated renderer, surface props)
   // actually changed.
   const ContentSlot = useMemo<ComponentType>(() => {
+    // Top-of-panel content renders as a title: larger font, less
+    // bullet-list visual weight. The Controls slot already returns
+    // null for top-level so there's no inline bullet to suppress
+    // here. Class hook is applied here (not on the layout's outer
+    // shell) so contributing renderers don't have to opt in.
+    const topLevelClass = isTopLevel ? ' top-level-content' : ''
     return function BlockContentSlot() {
       return (
         <div
           {...contentSurfaceProps}
-          className={`block-content${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
+          className={`block-content${topLevelClass}${contentSurfaceProps.className ? ` ${contentSurfaceProps.className}` : ''}`}
           ref={contentContainerRef}
         >
           <ErrorBoundary FallbackComponent={FallbackComponent}>
@@ -444,7 +450,7 @@ export function DefaultBlockRenderer(
         </div>
       )
     }
-  }, [block, ContentRenderer, contentSurfaceProps])
+  }, [block, ContentRenderer, contentSurfaceProps, isTopLevel])
 
   const PropertiesSlot = useMemo<ComponentType | null>(() => {
     if (!showProperties) return null

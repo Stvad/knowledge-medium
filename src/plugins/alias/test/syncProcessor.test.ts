@@ -1,0 +1,167 @@
+// @vitest-environment node
+/**
+ * Integration tests for the alias.sync post-commit processor (cases
+ * A1, A2, A3, AR1 in docs/alias-rename-cases.html). Runs the full
+ * pipeline through `repo.tx` so the field-watcher actually fires.
+ *
+ * Cross-block cascading (rename processor's R1/R4 rewriting source
+ * backlinks) is covered in `src/plugins/references/test/renameProcessor.test.ts`.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ChangeScope } from '@/data/api'
+import { BlockCache } from '@/data/blockCache'
+import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { Repo } from '@/data/repo'
+import { aliasesProp } from '@/data/internals/coreProperties'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
+import { referencesDataExtension } from '@/plugins/references/dataExtension.ts'
+import { aliasDataExtension } from '../dataExtension.ts'
+
+interface Harness {
+  h: TestDb
+  cache: BlockCache
+  repo: Repo
+  read(id: string): Promise<{id: string; content: string; deleted: 0 | 1; properties_json: string} | null>
+}
+
+const setup = async (): Promise<Harness> => {
+  const h = await createTestDb()
+  const cache = new BlockCache()
+  let timeCursor = 1700_000_000_000
+  let idCursor = 0
+  const repo = new Repo({
+    db: h.db,
+    cache,
+    user: {id: 'user-1'},
+    now: () => ++timeCursor,
+    newId: () => `gen-${++idCursor}`,
+    registerKernelProcessors: false,
+  })
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    dailyNotesDataExtension,
+    referencesDataExtension,
+    aliasDataExtension,
+  ]))
+  return {
+    h,
+    cache,
+    repo,
+    read: async id => h.db.getOptional(
+      `SELECT id, content, deleted, properties_json FROM blocks WHERE id = ?`,
+      [id],
+    ),
+  }
+}
+
+let env: Harness
+beforeEach(async () => {
+  env = await setup()
+  vi.useFakeTimers({shouldAdvanceTime: true})
+})
+afterEach(async () => {
+  vi.useRealTimers()
+  await env.h.cleanup()
+})
+
+const WS = 'ws-1'
+
+const flush = async () => {
+  await vi.advanceTimersByTimeAsync(1)
+  await env.repo.awaitProcessors()
+}
+
+const readAliases = async (id: string): Promise<string[]> => {
+  const row = await env.read(id)
+  if (row === null) return []
+  return (JSON.parse(row.properties_json).alias ?? []) as string[]
+}
+
+const createTarget = async (
+  id: string,
+  content: string,
+  aliases: string[],
+): Promise<void> => {
+  await env.repo.tx(async tx => {
+    await tx.create({id, workspaceId: WS, parentId: null, orderKey: 'a0', content})
+    await tx.setProperty(id, aliasesProp, aliases)
+  }, {scope: ChangeScope.BlockDefault})
+  await flush()
+}
+
+describe('alias.sync — Case A1 (content edit, old value is an alias)', () => {
+  it('rewrites the alias entry to the new content', async () => {
+    await createTarget('t', 'Old name', ['Old name'])
+    await env.repo.mutate.setContent({id: 't', content: 'New name'})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('New name')
+    expect(await readAliases('t')).toEqual(['New name'])
+  })
+})
+
+describe('alias.sync — Case A2 (content edit, new value already an alias)', () => {
+  it('replaces old content entry and dedupes against the existing alias', async () => {
+    await createTarget('t', 'X', ['X', 'Y'])
+    await env.repo.mutate.setContent({id: 't', content: 'Y'})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('Y')
+    expect(await readAliases('t')).toEqual(['Y'])
+  })
+})
+
+describe('alias.sync — Case A3 (drift heal)', () => {
+  it('adds new content as a fresh alias when old content is not an alias', async () => {
+    await createTarget('t', 'already drifted', ['Original'])
+    await env.repo.mutate.setContent({id: 't', content: 'another edit'})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('another edit')
+    expect(await readAliases('t')).toEqual(['Original', 'another edit'])
+  })
+})
+
+describe('alias.sync — Case AR1 (alias rename, content matches removed alias)', () => {
+  it('rewrites content to the added alias', async () => {
+    await createTarget('t', 'Foo', ['Foo'])
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['Bar']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('Bar')
+    expect(await readAliases('t')).toEqual(['Bar'])
+  })
+})
+
+describe('alias.sync — non-aliased blocks', () => {
+  it('does not promote a plain block into an aliased one on content edit', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'plain', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'hello'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    await env.repo.mutate.setContent({id: 'plain', content: 'world'})
+    await flush()
+    expect(await readAliases('plain')).toEqual([])
+  })
+})
+
+describe('alias.sync — convergence', () => {
+  it('second pass after sync writes is a no-op (A1 cascade)', async () => {
+    await createTarget('t', 'Old name', ['Old name'])
+    await env.repo.mutate.setContent({id: 't', content: 'New name'})
+    await flush()
+    const propsAfterFirst = (await env.read('t'))!.properties_json
+
+    // A second flush after no input edits should not change anything.
+    await flush()
+    expect((await env.read('t'))!.properties_json).toBe(propsAfterFirst)
+  })
+})

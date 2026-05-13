@@ -241,3 +241,92 @@ describe('ensureAliasTarget', () => {
   })
 })
 
+describe('ensureAliasTarget — indexed-deterministic seat probe', () => {
+  it('probes past a live row claiming a different alias (post-rename collision)', async () => {
+    // Pre-seed slot 0 with a row that claims a DIFFERENT alias —
+    // simulates the post-rename state where the user renamed `foo`
+    // to `bar`, leaving slot 0 holding `bar`. A subsequent type of
+    // [[foo]] should walk to slot 1, not silently re-resolve to the
+    // renamed `bar` row.
+    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: slot0Id,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+      })
+      await tx.setProperty(slot0Id, aliasesProp, ['bar'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const result = await env.repo.tx(async tx => {
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(result.id).toBe(slot1Id)
+    expect(result.inserted).toBe(true)
+    // Slot 0 untouched (still holds bar).
+    const slot0Row = await env.h.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [slot0Id])
+    expect(JSON.parse(slot0Row.properties_json)[aliasesProp.name]).toEqual(['bar'])
+    // Slot 1 now holds foo.
+    const slot1Row = await env.h.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [slot1Id])
+    expect(JSON.parse(slot1Row.properties_json)[aliasesProp.name]).toEqual(['foo'])
+  })
+
+  it('probes past a tombstone (deleted seat does not get restored on retype)', async () => {
+    // Cycle 1: insert at slot 0, then soft-delete it. Spec says
+    // "tombstone-restore-on-retype goes away" — re-typing [[foo]]
+    // should land at slot 1 as a FRESH seat, not bring slot 0 back.
+    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    const slot1Id = computeAliasSeatId('foo', WS, 1)
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    await env.repo.tx(tx => ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot),
+      {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.delete(slot0Id), {scope: ChangeScope.BlockDefault})
+
+    const result = await env.repo.tx(async tx => {
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(result.id).toBe(slot1Id)
+    expect(result.inserted).toBe(true)
+    // Slot 0 stays tombstoned.
+    const slot0Row = await env.h.db.get<{deleted: 0 | 1}>(
+      'SELECT deleted FROM blocks WHERE id = ?', [slot0Id])
+    expect(slot0Row.deleted).toBe(1)
+  })
+
+  it('reuses slot 0 when a live row already claims this alias', async () => {
+    // Convergence happy path: typing [[foo]], cleanup wipes the seat,
+    // user re-types [[foo]] — no wait, that's the tombstone case
+    // above. Here we test the offline-convergence path: an alias seat
+    // already exists at slot 0 claiming the alias (created by a sync
+    // peer), and a fresh ensureAliasTarget should reuse it rather
+    // than probing past.
+    const slot0Id = computeAliasSeatId('foo', WS, 0)
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: slot0Id,
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: '',
+      })
+      await tx.setProperty(slot0Id, aliasesProp, ['foo'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    const result = await env.repo.tx(async tx => {
+      return ensureAliasTarget(tx, env.repo, 'foo', WS, typeSnapshot)
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(result.id).toBe(slot0Id)
+    expect(result.inserted).toBe(false)
+  })
+})
+

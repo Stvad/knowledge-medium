@@ -19,6 +19,7 @@ import { mobileKeyboardToolbarPlugin } from '@/plugins/mobile-keyboard-toolbar'
 import { swipeQuickActionsPlugin } from '@/plugins/swipe-quick-actions'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
+import { aliasPlugin } from '@/plugins/alias'
 import { referencesPlugin } from '@/plugins/references'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
@@ -62,6 +63,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   vimNormalModePlugin({repo}),
   videoPlayerPlugin,
   referencesPlugin,
+  aliasPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the

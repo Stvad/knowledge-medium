@@ -60,7 +60,7 @@ import {
   parseReferences as parseAliasMarks,
   parseBlockRefs,
 } from '@/utils/referenceParser'
-import { computeAliasSeatId, ensureAliasTarget } from '@/data/targets'
+import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/data/targets'
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
@@ -189,10 +189,17 @@ const buildSourcePlan = async (
       aliasRefs.push({id: existing.id, alias: mark.alias})
       continue
     }
-    // Will be created by ensureAliasTarget in the write phase. The id
-    // is deterministic from (alias, workspaceId), so we can predict it
-    // here for the references column.
-    const id = computeAliasSeatId(mark.alias, source.workspaceId)
+    // Will be created by ensureAliasTarget in the write phase. The
+    // id is the result of the indexed-deterministic seat probe — slot
+    // 0 unless a prior alias claims it (post-rename collision) or it's
+    // tombstoned. We probe here (read-phase, committed state) so the
+    // predicted id matches what ensureAliasTarget will pick in the
+    // write phase. Convergence: same world-state → same probe answer.
+    const id = await resolveAliasSeatId(
+      aliasSeatReaderFromDb(ctx.db),
+      mark.alias,
+      source.workspaceId,
+    )
     aliasRefs.push({id, alias: mark.alias})
     aliasesToEnsure.push(mark.alias)
   }
