@@ -1,6 +1,7 @@
 import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
+import { toastAppMountExtension } from '@/extensions/toastAppMount.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
@@ -40,6 +41,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelPropertyUiExtension,
   kernelValuePresetsExtension,
   defaultRenderersExtension,
+  toastAppMountExtension,
   breadcrumbsPlugin,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),

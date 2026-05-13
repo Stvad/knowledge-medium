@@ -2,7 +2,6 @@ import React, { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { ErrorBoundary } from 'react-error-boundary'
-import { Toaster } from 'sonner'
 import './index.css'
 import App from './App.tsx'
 import { RepoProvider } from '@/context/repo.tsx'
@@ -20,6 +19,11 @@ registerServiceWorker()
 // The ErrorBoundary lives INSIDE Login so its fallback can call useSignOut,
 // and OUTSIDE RepoProvider so a repo-bootstrap throw still gets caught and
 // rendered as a recoverable UI instead of a blank screen.
+// The toast surface is contributed via `appMountsFacet`
+// (toastAppMountExtension) so plugin code stays the one source of
+// truth for "what mounts at the app root". Bootstrap errors before
+// the runtime is up still flow through ErrorBoundary →
+// BootstrapErrorFallback below, not via toast.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <Suspense fallback={<SuspenseFallback/>}>
@@ -33,9 +37,5 @@ createRoot(document.getElementById('root')!).render(
         </ErrorBoundary>
       </Login>
     </Suspense>
-    {/* Sonner toast layer — mounted outside Login + RepoProvider so it
-        can render error toasts during bootstrap (Supabase auth failures,
-        repo init errors) before the app tree exists. */}
-    <Toaster position="top-center" richColors closeButton />
   </StrictMode>,
 )
