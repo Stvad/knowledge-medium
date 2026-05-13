@@ -93,22 +93,46 @@ const dedupe = (values: readonly string[]): string[] => {
 }
 
 /** Build the plan for one row. Returns null when nothing should be
- *  written — the row was created/deleted in this commit, no rule
+ *  written — the row was hard-deleted in this commit, no rule
  *  applies, the rule's output is identical to current state, or the
- *  rule would propagate a blank value. */
+ *  rule would propagate a blank value.
+ *
+ *  Inserts (before === null): no sync rule fires (there's no prior
+ *  content to compare against), but every non-blank alias on the new
+ *  row is a fresh claim — so we emit a collision-only plan to gate
+ *  alias-bearing inserts through the same `aliasLookup` check the
+ *  rename / direct-edit paths use. Without this branch a tx that
+ *  creates a brand-new block with `aliases: ['Existing']` bypasses
+ *  the V1 "refuse the rename atomically" policy entirely. */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
-  if (row.before === null || row.after === null) return null
+  if (row.after === null) return null
   if (row.after.deleted) return null
 
-  const before = row.before
   const after = row.after
-  const beforeAliases = decodeAliases(before)
   const afterAliases = decodeAliases(after)
   // Sync only reconciles blocks that ARE aliased.
   if (afterAliases.length === 0) return null
-  const contentChanged = before.content !== after.content
 
   const planShell = {id: row.id, workspaceId: after.workspaceId}
+
+  if (row.before === null) {
+    // Insert path. Every non-blank alias entry is a freshly-claimed
+    // alias; collision check below filters self via `excludeId`, so
+    // the brand-new row's own appearance in `block_aliases` doesn't
+    // mask a real conflict.
+    const claimedAliases = afterAliases.filter(a => a !== '')
+    if (claimedAliases.length === 0) return null
+    return {
+      ...planShell,
+      claimedAliases,
+      contentNext: null,
+      aliasesNext: null,
+    }
+  }
+
+  const before = row.before
+  const beforeAliases = decodeAliases(before)
+  const contentChanged = before.content !== after.content
 
   if (contentChanged) {
     // Blank-content guard for content→alias direction: never write a
@@ -192,11 +216,21 @@ const applyPlan = async (ctx: SameTxCtx, plan: SyncPlan): Promise<void> => {
   // Uses the trigger-maintained `block_aliases` index via
   // `tx.aliasLookup` — sees own writes from this tx, covers every
   // claimant regardless of how its id was generated.
+  //
+  // We pass `excludeId: plan.id` because the attempting row's own
+  // alias write has already been indexed by the time this processor
+  // runs (the block_aliases trigger fires synchronously inside the
+  // writeTransaction). Without the exclusion, `aliasLookup` returns
+  // the oldest claimant by `created_at`, which can BE the attempting
+  // row whenever it's older than the real conflicting claimant —
+  // leaving the collision undetected. With the exclusion, the lookup
+  // returns the oldest OTHER claimant, which is exactly what we
+  // need; if it's null, no real conflict exists.
   if (plan.claimedAliases.length > 0) {
     for (const alias of plan.claimedAliases) {
       if (alias === '') continue  // belt-and-suspenders; planner skips blanks
-      const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId)
-      if (claimant !== null && claimant.id !== plan.id) {
+      const claimant = await ctx.tx.aliasLookup(alias, plan.workspaceId, plan.id)
+      if (claimant !== null) {
         throw new ProcessorRejection(
           `Alias "${alias}" is already used by another block`,
           'alias.collision',

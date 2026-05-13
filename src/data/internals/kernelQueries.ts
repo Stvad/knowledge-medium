@@ -139,6 +139,27 @@ export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL = `
   LIMIT 1
 `
 
+/** Variant of `SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL` that ignores
+ *  one specific block. Same plan as above with an extra `blocks.id !=
+ *  ?` predicate. Used exclusively by the same-tx collision-detection
+ *  path: when a row writes its own alias inside the user's tx, the
+ *  trigger-maintained index already contains that row by the time the
+ *  processor runs, so a plain "oldest claimant of alias X" would
+ *  return the row itself when it happens to be the oldest claimant —
+ *  silently missing collisions where the actual conflicting claimant
+ *  is younger. Excluding the attempting row fixes that. */
+export const SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_EXCLUDING_SQL = `
+  SELECT ${buildQualifiedBlockColumnsSql('blocks')}
+  FROM block_aliases ba
+  JOIN blocks ON blocks.id = ba.block_id
+  WHERE ba.workspace_id = ?
+    AND ba.alias = ?
+    AND blocks.id != ?
+    AND blocks.deleted = 0
+  ORDER BY blocks.created_at
+  LIMIT 1
+`
+
 /** Alias substring match used by alias-search surfaces; one row per
  *  (alias, block) pair. Same index plan as the distinct-aliases query
  *  above: filter on alias_lower, JOIN blocks for content + ordering. */

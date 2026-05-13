@@ -541,6 +541,47 @@ describe('tx.aliasLookup', () => {
       expect(await tx.aliasLookup('Foo', '')).toBeNull()
     }, {scope: ChangeScope.BlockDefault})
   })
+
+  it('excludeId skips the named row even when it is the oldest claimant', async () => {
+    // Two blocks share an alias (intentionally — backfill / collision-
+    // detection scenarios both rely on excludeId to "find any OTHER
+    // claimant"). The oldest is `older`; an unfiltered lookup returns
+    // it. With `excludeId: 'older'`, the lookup falls back to the next
+    // claimant — `younger`. With `excludeId: 'younger'`, the older one
+    // still wins. With `excludeId` set to the only claimant, null.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'older', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'X'})
+      await tx.setProperty('older', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'younger', workspaceId: 'ws-1', parentId: null, orderKey: 'a1', content: 'Y'})
+      // Bypass the same-tx collision detection so we can construct the
+      // two-claimant state the test cares about. Sync only runs for
+      // registered processors; this tx uses the default repo without
+      // alias plugin registered.
+      await tx.setProperty('younger', aliasesProp, ['Shared'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    await env.repo.tx(async tx => {
+      expect((await tx.aliasLookup('Shared', 'ws-1'))?.id).toBe('older')
+      expect((await tx.aliasLookup('Shared', 'ws-1', 'older'))?.id).toBe('younger')
+      expect((await tx.aliasLookup('Shared', 'ws-1', 'younger'))?.id).toBe('older')
+      // Excluding a non-claimant is a no-op (the index has no matching row
+      // to filter out).
+      expect((await tx.aliasLookup('Shared', 'ws-1', 'unrelated-id'))?.id).toBe('older')
+    }, {scope: ChangeScope.BlockDefault})
+  })
+
+  it('excludeId returns null when the excluded row is the only claimant', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'solo', workspaceId: 'ws-1', parentId: null, orderKey: 'a0', content: 'X'})
+      await tx.setProperty('solo', aliasesProp, ['Unique'])
+    }, {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(async tx => {
+      expect((await tx.aliasLookup('Unique', 'ws-1'))?.id).toBe('solo')
+      expect(await tx.aliasLookup('Unique', 'ws-1', 'solo')).toBeNull()
+    }, {scope: ChangeScope.BlockDefault})
+  })
 })
 
 // ──── Single-workspace invariant ────

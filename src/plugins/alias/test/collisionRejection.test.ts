@@ -427,6 +427,159 @@ describe('alias.collision — tombstoned claimants are not collisions', () => {
   })
 })
 
+// ──── Regression: detection must filter SELF from claimant lookup ────
+//
+// `tx.aliasLookup` reads `block_aliases` and returns the OLDEST
+// claimant by `created_at`. The attempting row's own alias write is
+// already indexed by the time the same-tx processor runs (the
+// trigger fires synchronously inside the writeTransaction). So if
+// the attempting row happens to be older than the real conflicting
+// claimant, an unfiltered lookup returns the attempting row itself
+// — claimant.id === plan.id — and the collision is silently missed.
+//
+// Fix: pass `excludeId: plan.id` so we ask for the oldest OTHER
+// claimant. These tests pin the self-filtering: each scenario seeds
+// an OLDER block that later attempts to claim an alias already held
+// by a YOUNGER block.
+
+describe('alias.collision — attempting row is older than the conflicting claimant', () => {
+  it('rejects AR1-style rename when the renamed block is older than the claimant', async () => {
+    // Older block A originally claims 'OriginalA'. Younger block B
+    // separately claims 'Target'. A is created first, so A.created_at
+    // < B.created_at. User now renames A's alias to 'Target' — B is
+    // the real conflicting claimant; A is the attempter.
+    const a = await seatAt('OriginalA', 'OriginalA')  // older
+    const b = await seatAt('Target', 'Target')         // younger
+    void b
+
+    let caught: unknown
+    try {
+      // A renames its alias from 'OriginalA' to 'Target'.
+      // AR1: aliases changed, content matches removed alias.
+      await env.repo.tx(async tx => {
+        await tx.setProperty(a, aliasesProp, ['Target'])
+      }, {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    // Crucially: the conflicting block reported is B, not A itself.
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe(b)
+    expect((caught as ProcessorRejection).meta?.attemptedOn).toBe(a)
+
+    // A unchanged.
+    expect((await env.read(a))!.content).toBe('OriginalA')
+    expect(await readAliases(a)).toEqual(['OriginalA'])
+  })
+
+  it('rejects A1-style content edit when the editing block is older than the claimant', async () => {
+    // Same shape, A1 path: A is older with content 'OriginalA'; B is
+    // younger and claims 'Target'. User retypes A's content to
+    // 'Target'. Sync's A1 rule would replace A's alias 'OriginalA'
+    // with 'Target' — collision against B.
+    const a = await seatAt('OriginalA', 'OriginalA')  // older
+    const b = await seatAt('Target', 'Target')         // younger
+
+    let caught: unknown
+    try {
+      await env.repo.mutate.setContent({id: a, content: 'Target'})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe(b)
+    expect((caught as ProcessorRejection).meta?.attemptedOn).toBe(a)
+    expect((await env.read(a))!.content).toBe('OriginalA')
+  })
+
+  it('rejects direct-claim addition when the adding block is older than the claimant', async () => {
+    const a = await seatAt('OriginalA', 'OriginalA')  // older
+    const b = await seatAt('Target', 'Target')         // younger
+
+    let caught: unknown
+    try {
+      // A adds 'Target' alongside 'OriginalA' — directly-claimed path.
+      await env.repo.tx(
+        tx => tx.setProperty(a, aliasesProp, ['OriginalA', 'Target']),
+        {scope: ChangeScope.BlockDefault},
+      )
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe(b)
+    expect(await readAliases(a)).toEqual(['OriginalA'])
+  })
+})
+
+// ──── Regression: inserts must go through collision detection ────
+//
+// An earlier `planSync` early-returned on `row.before === null`,
+// treating inserts as not-our-concern. That bypassed the V1 "refuse
+// the rename atomically" policy for any tx that created a new block
+// already claiming a taken alias — `tx.create` + `setProperty` in
+// the same tx, common for the alias chip editor on a fresh block.
+
+describe('alias.collision — fresh insert that claims a taken alias', () => {
+  it('rejects an insert whose initial alias collides', async () => {
+    const claimantId = await seatAt('Taken', 'Taken')
+
+    let caught: unknown
+    try {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'fresh', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'whatever'})
+        await tx.setProperty('fresh', aliasesProp, ['Taken'])
+      }, {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).code).toBe('alias.collision')
+    expect((caught as ProcessorRejection).meta?.alias).toBe('Taken')
+    expect((caught as ProcessorRejection).meta?.conflictingBlockId).toBe(claimantId)
+
+    // Insert rolled back — no row at id 'fresh'.
+    expect(await env.read('fresh')).toBeNull()
+  })
+
+  it('allows an insert whose initial alias is not yet claimed', async () => {
+    // The negative case: an insert with a non-blank alias that doesn't
+    // collide must commit normally. Pins that the new insert-path
+    // collision-only plan doesn't accidentally reject legitimate fresh
+    // claims.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'novel', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'whatever'})
+      await tx.setProperty('novel', aliasesProp, ['NewName'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await readAliases('novel')).toEqual(['NewName'])
+  })
+
+  it('rejects an insert with multiple aliases when any one collides', async () => {
+    await seatAt('TakenB', 'TakenB')
+
+    let caught: unknown
+    try {
+      await env.repo.tx(async tx => {
+        await tx.create({id: 'fresh', workspaceId: WS, parentId: null, orderKey: 'a1', content: 'fresh'})
+        // First alias is novel; second is taken. Detection must scan
+        // every claimed alias, not just the first.
+        await tx.setProperty('fresh', aliasesProp, ['NovelA', 'TakenB'])
+      }, {scope: ChangeScope.BlockDefault})
+    } catch (err) { caught = err }
+    expect(caught).toBeInstanceOf(ProcessorRejection)
+    expect((caught as ProcessorRejection).meta?.alias).toBe('TakenB')
+    expect(await env.read('fresh')).toBeNull()
+  })
+
+  it('skips blank alias entries on an insert (no spurious rejection)', async () => {
+    // The codec writes blank strings literally. The block_aliases
+    // trigger indexes them; an unfiltered lookup on '' would match
+    // every blank-alias row. The planner filters them out of
+    // `claimedAliases` so insert paths don't reject themselves on a
+    // shared empty entry.
+    await env.repo.tx(async tx => {
+      await tx.create({id: 'blank', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'blank'})
+      await tx.setProperty('blank', aliasesProp, ['', 'OnlyReal'])
+    }, {scope: ChangeScope.BlockDefault})
+
+    expect(await readAliases('blank')).toEqual(['', 'OnlyReal'])
+  })
+})
+
 describe('alias.collision — user-error listener wiring', () => {
   it('fires onUserError with the ProcessorRejection', async () => {
     await seatAt('Taken', 'Taken')

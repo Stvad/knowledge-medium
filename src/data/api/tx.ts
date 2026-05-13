@@ -161,8 +161,22 @@ export interface Tx {
    *  Reads through the trigger-maintained `block_aliases` side index
    *  (clientSchema.ts) — exact match via `idx_block_aliases_ws_alias`,
    *  oldest match wins on the rare case where two blocks have
-   *  accidentally accumulated the same alias. */
-  aliasLookup(alias: string, workspaceId: string): Promise<BlockData | null>
+   *  accidentally accumulated the same alias.
+   *
+   *  `excludeId`: optional id to skip when scanning claimants. Required
+   *  by collision-detection callsites because the attempting row has
+   *  already written its own alias into the index by the time the
+   *  same-tx processor runs — without exclusion, a "find oldest
+   *  claimant" probe returns the attempter itself whenever it happens
+   *  to be older than the real conflicting claimant, and the
+   *  collision goes undetected. Use omitted (or undefined) for the
+   *  "any claimant including self" semantics that resolution paths
+   *  want. */
+  aliasLookup(
+    alias: string,
+    workspaceId: string,
+    excludeId?: string,
+  ): Promise<BlockData | null>
 
   // ──── Post-commit scheduling ────
 
