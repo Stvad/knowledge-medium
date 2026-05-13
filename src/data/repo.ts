@@ -19,6 +19,7 @@ import type { FacetRuntime, Facet } from '@/extensions/facet'
 import type {
   AnyMutator,
   AnyPostCommitProcessor,
+  AnySameTxProcessor,
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
@@ -56,6 +57,7 @@ import {
   invalidationRulesFacet,
   mutatorsFacet,
   postCommitProcessorsFacet,
+  sameTxProcessorsFacet,
   propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
@@ -352,6 +354,12 @@ export class Repo {
   private readonly newTxSeq: () => number
   private mutators: Map<string, AnyMutator> = new Map()
   private processors: Map<string, AnyPostCommitProcessor> = new Map()
+  /** Same-tx processor registry — runs inside the user's
+   *  writeTransaction in `runTx`. Kept separate from
+   *  `this.processors` (post-commit) because the two have different
+   *  ctx shapes and run at different pipeline stages; see
+   *  `sameTxProcessorsFacet` doc in `facets.ts`. */
+  private sameTxProcessors: Map<string, AnySameTxProcessor> = new Map()
   private queries: Map<string, AnyQuery> = new Map()
   private _types: ReadonlyMap<string, TypeContribution> = KERNEL_TYPES
   private _propertySchemas: ReadonlyMap<string, AnyPropertySchema> = KERNEL_PROPERTY_SCHEMA_MAP
@@ -967,6 +975,7 @@ export class Repo {
       now: this.now,
       mutators: this.mutators,
       processors: this.processors,
+      sameTxProcessors: this.sameTxProcessors,
       propertySchemas: this._propertySchemas,
     })
     // Track the slowest tx by description so cold-start metrics can
@@ -1560,6 +1569,11 @@ export class Repo {
         run: (rt) => { this.processors = new Map(rt.read(postCommitProcessorsFacet)) },
       },
       {
+        id: 'sameTxProcessors',
+        inputs: [sameTxProcessorsFacet as Facet<unknown, unknown>],
+        run: (rt) => { this.sameTxProcessors = new Map(rt.read(sameTxProcessorsFacet)) },
+      },
+      {
         id: 'invalidationRules',
         inputs: [invalidationRulesFacet as Facet<unknown, unknown>],
         run: (rt) => { this.invalidationRules = rt.read(invalidationRulesFacet) },
@@ -1650,6 +1664,13 @@ export class Repo {
    *  specific processor sets without a FacetRuntime. */
   __setProcessorsForTesting(processors: ReadonlyArray<AnyPostCommitProcessor>): void {
     this.processors = new Map(processors.map(p => [p.name, p]))
+  }
+
+  /** Test-only mirror of `__setProcessorsForTesting` for same-tx
+   *  processors. Used by stage-level tests that need to exercise
+   *  the in-tx runner without going through the facet runtime. */
+  __setSameTxProcessorsForTesting(processors: ReadonlyArray<AnySameTxProcessor>): void {
+    this.sameTxProcessors = new Map(processors.map(p => [p.name, p]))
   }
 
   /** Build the dispatcher closure for a mutator name. Resolution order:

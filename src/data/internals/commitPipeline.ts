@@ -29,6 +29,8 @@ import type {
   AnyMutator,
   AnyPostCommitProcessor,
   AnyPropertySchema,
+  AnySameTxProcessor,
+  ChangedRow,
   RepoTxOptions,
   Tx,
   User,
@@ -86,6 +88,42 @@ export interface PowerSyncDb {
   close(): Promise<void>
 }
 
+/** Compute the changedRows passed to a same-tx processor for the
+ *  current snapshot state. Mirrors the post-commit
+ *  `collectFieldMatches` in `processorRunner.ts` but lives here so
+ *  the same-tx pass doesn't have to import from `processorRunner`
+ *  (which has its own React/Repo dependency baggage). Recomputed
+ *  per-processor inside the runner so later processors see
+ *  amendments by earlier ones in the same pass. */
+const collectSameTxFieldMatches = (
+  processor: AnySameTxProcessor,
+  snapshots: SnapshotsMap,
+): ChangedRow[] => {
+  if (processor.watches.table !== 'blocks') return []
+  const out: ChangedRow[] = []
+  for (const [id, entry] of snapshots) {
+    if (processor.watches.fields.some(f => sameTxFieldChanged(entry.before, entry.after, f as string))) {
+      out.push({id, before: entry.before, after: entry.after})
+    }
+  }
+  return out
+}
+
+/** Mirror of `processorRunner.fieldChanged`. Duplicated rather than
+ *  shared because `processorRunner.ts` depends on Repo + React
+ *  surfaces this file deliberately doesn't pull in. */
+const sameTxFieldChanged = (
+  before: ChangedRow['before'],
+  after: ChangedRow['after'],
+  field: string,
+): boolean => {
+  if (before === null) return after !== null
+  if (after === null) return true
+  const a = (before as unknown as Record<string, unknown>)[field]
+  const b = (after as unknown as Record<string, unknown>)[field]
+  return a === b ? false : JSON.stringify(a) !== JSON.stringify(b)
+}
+
 export interface RunTxParams<R> {
   db: PowerSyncDb
   cache: BlockCache
@@ -107,6 +145,12 @@ export interface RunTxParams<R> {
   /** Processor registry snapshot, captured at tx start. Used by
    *  `tx.afterCommit` to validate scheduledArgs at enqueue time. */
   processors: ReadonlyMap<string, AnyPostCommitProcessor>
+  /** Same-tx processor registry snapshot, captured at tx start. The
+   *  runner walks this in registration order between `fn` returning
+   *  and the `command_events` insert, inside the writeTransaction.
+   *  Throws (e.g. `ProcessorRejection`) propagate out and roll back
+   *  the user's tx atomically. */
+  sameTxProcessors: ReadonlyMap<string, AnySameTxProcessor>
   /** Merged property-schema registry snapshot, captured at the same
    *  boundary as `processors` so processor code sees a consistent
    *  runtime bundle. */
@@ -147,7 +191,7 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
   const {
     db, cache, fn, opts, user, isReadOnly,
     newTxId, newTxSeq, newId, now,
-    mutators, processors, propertySchemas,
+    mutators, processors, sameTxProcessors, propertySchemas,
   } = params
   const {scope, description} = opts
 
@@ -200,6 +244,41 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // a snapshot so the command_events row written in step 4 reflects
     // every mutator the tx actually ran.
     const result = await fn(tx)
+
+    // Step 3.5: same-tx processor pass. Runs after `fn` returns but
+    // before the command_events insert — inside the writeTransaction,
+    // so throws (e.g. ProcessorRejection) propagate to SQLite's abort
+    // and roll back the whole tx atomically.
+    //
+    // Iteration order: registration order from the facet snapshot.
+    // Each processor's changedRows is recomputed from the live
+    // `snapshots` map before its apply runs, so a later processor
+    // sees an earlier processor's amendments. Single pass — no
+    // fixpoint; if two processors fight, that's a registration-order
+    // bug, not infinite-loop-able.
+    //
+    // Only the snapshot taken at tx start (`sameTxProcessors`) is
+    // iterated — mid-tx facet swaps don't affect the running tx,
+    // matching the §3/§8 contract.
+    if (sameTxProcessors.size > 0 && snapshots.size > 0) {
+      for (const processor of sameTxProcessors.values()) {
+        const changedRows = collectSameTxFieldMatches(processor, snapshots)
+        if (changedRows.length === 0) continue
+        // workspaceId is guaranteed non-null when snapshots.size > 0
+        // (every write pins the workspace; meta.workspaceId is set
+        // by the first write in `pinWorkspace`).
+        await processor.apply(
+          {
+            txId,
+            scope,
+            user,
+            workspaceId: meta.workspaceId!,
+            changedRows,
+          },
+          {tx, propertySchemas},
+        )
+      }
+    }
 
     // Step 4: write command_events row — one per repo.tx invocation
     // (per §4.4). workspace_id is the pinned value (or NULL on

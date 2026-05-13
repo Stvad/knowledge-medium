@@ -15,6 +15,7 @@ import type {
   AnyPropertyEditorOverride,
   AnyPropertySchema,
   AnyQuery,
+  AnySameTxProcessor,
   AnyValuePreset,
   TypeContribution,
 } from '@/data/api'
@@ -193,6 +194,34 @@ export const postCommitProcessorsFacet = defineFacet<AnyPostCommitProcessor, Rea
       if (out.has(p.name)) {
         console.warn(
           `[postCommitProcessorsFacet] duplicate registration for "${p.name}"; last-wins per facet convention`,
+        )
+      }
+      out.set(p.name, p)
+    }
+    return out
+  },
+  empty: () => new Map(),
+})
+
+// Sibling to `postCommitProcessorsFacet`. Same-tx processors run
+// inside the user's writeTransaction; the commit pipeline iterates
+// this facet's snapshot between `fn` returning and the
+// `command_events` insert. See `src/data/api/sameTxProcessor.ts`.
+//
+// Two facets (rather than one with a mode discriminator) because the
+// two processor types have genuinely different `ctx` shapes (same-tx
+// gets a live `Tx`; post-commit gets `db + repo`) and different
+// pipeline placement — keeping them separate makes "where does this
+// run" a typed reference rather than a string match, and forces a
+// deliberate refactor on the rare cases that need to flip modes.
+export const sameTxProcessorsFacet = defineFacet<AnySameTxProcessor, ReadonlyMap<string, AnySameTxProcessor>>({
+  id: 'data.sameTxProcessors',
+  combine: (values) => {
+    const out = new Map<string, AnySameTxProcessor>()
+    for (const p of values) {
+      if (out.has(p.name)) {
+        console.warn(
+          `[sameTxProcessorsFacet] duplicate registration for "${p.name}"; last-wins per facet convention`,
         )
       }
       out.set(p.name, p)
