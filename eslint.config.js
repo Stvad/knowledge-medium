@@ -50,4 +50,13 @@ export default tseslint.config(
       }],
     },
   },
+  {
+    files: ['supabase/functions/**/*.{ts,tsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        Deno: 'readonly',
+      },
+    },
+  },
 )

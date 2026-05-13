@@ -41,15 +41,28 @@ npx supabase config push
 
 6. Create an Electric Cloud source connected to the Supabase Postgres database. The committed migrations add `blocks.write_id` and set `REPLICA IDENTITY FULL` on the synced tables so Electric can emit full update/delete rows.
 
-7. Deploy a small shape proxy in front of Electric Cloud and configure three named endpoints:
+7. Deploy the Supabase Edge shape proxy in front of Electric Cloud:
+
+```bash
+supabase secrets set ELECTRIC_URL=https://api.electric-sql.cloud
+supabase secrets set ELECTRIC_SOURCE_ID=<electric-source-id>
+supabase secrets set ELECTRIC_SOURCE_SECRET=<electric-source-secret>
+# Optional: restrict browser origins instead of the default "*"
+supabase secrets set ELECTRIC_SHAPE_ALLOWED_ORIGINS=https://your-app.example.com
+supabase functions deploy electric-shape
+```
+
+If your Supabase project does not automatically expose `SUPABASE_URL` and `SUPABASE_ANON_KEY` to Edge Functions, set those as function secrets too.
+
+The proxy provides three named endpoints:
    - `/blocks`
    - `/workspaces`
    - `/workspace_members`
 
-   The browser sends the Supabase access token as `Authorization: Bearer <jwt>`. The proxy should validate that token, keep the Electric source secret server-side, and enforce the table/workspace predicates server-side instead of accepting arbitrary table or SQL params from the browser.
+   The browser sends the Supabase access token as `Authorization: Bearer <jwt>`. The proxy validates that token through Supabase PostgREST, keeps the Electric source secret server-side, and enforces the table/workspace predicates server-side instead of accepting arbitrary table or SQL params from the browser.
 
 8. Fill the remaining env var:
-   - `VITE_ELECTRIC_SHAPE_PROXY_URL`: base URL for that shape proxy, without a trailing shape name
+   - `VITE_ELECTRIC_SHAPE_PROXY_URL`: base URL for that shape proxy, without a trailing shape name. For the Supabase Edge deployment, this is usually `https://<project-ref>.functions.supabase.co/electric-shape` or `https://<project-ref>.supabase.co/functions/v1/electric-shape`.
 
 9. Start the app:
 

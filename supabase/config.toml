@@ -23,3 +23,9 @@ otp_expiry = 3600
 [auth.email.template.magic_link]
 subject = "Your sign-in code"
 content_path = "./supabase/templates/magic_link.html"
+
+[functions.electric-shape]
+# The handler validates the bearer token against Supabase PostgREST itself.
+# Keeping gateway JWT verification off lets CORS preflight reach the function
+# and keeps the proxy logic portable to Cloudflare Workers.
+verify_jwt = false
