@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Alias sync + rename: case-by-case</title>
+<style>
+  :root {
+    --bg: #fafaf9;
+    --fg: #1c1917;
+    --muted: #57534e;
+    --border: #d6d3d1;
+    --ok: #16a34a;
+    --warn: #d97706;
+    --bad: #dc2626;
+    --code-bg: #f5f5f4;
+    --arrow: #78716c;
+  }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 880px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    line-height: 1.45;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+  h2 {
+    font-size: 1.05rem;
+    margin-top: 2rem;
+    margin-bottom: 0.4rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .lede { color: var(--muted); margin-bottom: 1.5rem; }
+  .case {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.1rem;
+    margin: 0.75rem 0;
+    background: white;
+  }
+  .case-title {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+  }
+  .tag {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.1rem 0.5rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .tag.ok    { background: #dcfce7; color: #166534; }
+  .tag.warn  { background: #fef3c7; color: #92400e; }
+  .tag.bad   { background: #fee2e2; color: #991b1b; }
+  .tag.noop  { background: #e7e5e4; color: #44403c; }
+
+  .state-row {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0.6rem;
+    align-items: center;
+    margin: 0.4rem 0;
+  }
+  .block {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.55rem 0.7rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.82rem;
+    background: var(--code-bg);
+  }
+  .block .label {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 0.7rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.2rem;
+  }
+  .block .field { display: flex; gap: 0.4rem; }
+  .block .field .k { color: var(--muted); }
+  .arrow {
+    color: var(--arrow);
+    font-size: 1.1rem;
+    text-align: center;
+  }
+  .action {
+    margin-top: 0.6rem;
+    padding: 0.5rem 0.7rem;
+    background: #f5f5f4;
+    border-left: 3px solid var(--muted);
+    border-radius: 0 4px 4px 0;
+    font-size: 0.88rem;
+  }
+  .action.ok   { border-left-color: var(--ok);   background: #f0fdf4; }
+  .action.warn { border-left-color: var(--warn); background: #fffbeb; }
+  .action.bad  { border-left-color: var(--bad);  background: #fef2f2; }
+  .action .what { font-weight: 600; }
+  .added   { background: #dcfce7; padding: 0 0.15rem; border-radius: 2px; }
+  .removed { background: #fee2e2; padding: 0 0.15rem; border-radius: 2px; text-decoration: line-through; }
+  .changed { background: #fef3c7; padding: 0 0.15rem; border-radius: 2px; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .legend {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 0.3rem; }
+  .legend .sw { width: 0.8rem; height: 0.8rem; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Alias sync + rename — case-by-case</h1>
+<p class="lede">
+  Two post-commit processors in two plugins, both watching <code>{content, properties}</code> on
+  <code>blocks</code>:
+</p>
+<ul class="lede" style="margin-top: -0.6rem;">
+  <li><strong>Sync</strong> (alias plugin): same-block content↔alias reconciliation.
+    Replace when old value matches the other side; heal additively when the block has drifted.</li>
+  <li><strong>Rename / backlink rewrite</strong> (references plugin): cross-block.
+    When aliases are removed or swapped, rewrite source backlinks.
+    Lives next to <code>parseReferences</code> because it needs the
+    <code>block_references</code> projection to find sources.</li>
+</ul>
+<p class="lede">
+  Sync composes into rename: when a content edit produces an alias-array swap,
+  the rename processor picks it up uniformly via the alias diff. No special path.
+</p>
+
+<div class="legend">
+  <span><span class="sw" style="background:#dcfce7"></span>added</span>
+  <span><span class="sw" style="background:#fee2e2"></span>removed</span>
+  <span><span class="sw" style="background:#fef3c7"></span>changed</span>
+</div>
+
+<h2>Sync (content ↔ aliases, replace)</h2>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case A1 · Content edit on aliased block (clean rename via content)</span>
+    <span class="tag ok">sync → rename</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">content:</span><span>"Old name"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Old name"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after (user edit)</div>
+      <div class="field"><span class="k">content:</span><span class="changed">"New name"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Old name"]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div></div>
+    <div class="arrow">⇣ sync</div>
+    <div class="block">
+      <div class="label">After sync processor</div>
+      <div class="field"><span class="k">content:</span><span>"New name"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="changed">"New name"</span>]</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Sync action:</span>
+    diff: <code>content</code> went "Old name" → "New name". Old value was in
+    <code>aliases</code> → <strong>replace</strong> that entry with the new content
+    (not append). Result is a 1-for-1 alias swap.
+  </div>
+  <div class="action ok" style="margin-top: 0.3rem;">
+    <span class="what">Cascade:</span>
+    the alias-array swap re-fires the watcher; rename processor sees
+    <code>{removed: ["Old name"], added: ["New name"]}</code> → rewrites
+    <code>[[Old name]] → [[New name]]</code> in every backlink source.
+    Sync and rename compose — content edits and alias edits flow through the
+    same backlink-rewrite path.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case A2 · Content edit, new value already an alias</span>
+    <span class="tag ok">sync collapses an alias</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">content:</span><span>"X"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["X", "Y"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after (user edit)</div>
+      <div class="field"><span class="k">content:</span><span class="changed">"Y"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["X", "Y"]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div></div>
+    <div class="arrow">⇣ sync</div>
+    <div class="block">
+      <div class="label">After sync</div>
+      <div class="field"><span class="k">content:</span><span>"Y"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="removed">"X"</span>, "Y"]</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Sync action:</span>
+    old content "X" is in aliases — replace it with "Y", which dedupes against the
+    existing "Y" entry. Net effect: X is dropped. The user said "this is now called Y";
+    keeping X around would contradict that.
+  </div>
+  <div class="action warn" style="margin-top: 0.3rem;">
+    <span class="what">Cascade:</span>
+    rename diff = <code>{removed: ["X"], added: []}</code> — pure remove with aliases
+    still present. Hits Case R4 below: backlink sources rewrite
+    <code>[[X]]</code> → <code>[X](((target-id)))</code> to preserve original display text.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case A3 · Content drifted from aliases (no match) — healing</span>
+    <span class="tag ok">sync, additive</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">content:</span><span>"already drifted"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Original"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after (user edit)</div>
+      <div class="field"><span class="k">content:</span><span class="changed">"another edit"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Original"]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div></div>
+    <div class="arrow">⇣ sync</div>
+    <div class="block">
+      <div class="label">After sync</div>
+      <div class="field"><span class="k">content:</span><span>"another edit"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Original", <span class="added">"another edit"</span>]</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Sync action:</span>
+    old content "already drifted" is not in aliases → no anchor to replace.
+    <strong>Heal by adding</strong> the new content as a fresh alias. From this point on
+    the block is in-sync (next content edit will hit A1/A2). No backlink rewrite —
+    rename diff is <code>{removed: [], added: ["another edit"]}</code>, which is Case R3.
+  </div>
+</div>
+
+<h2>Reverse sync (alias edit → content)</h2>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case AR1 · Alias rename, content matches the renamed alias</span>
+    <span class="tag ok">sync</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">content:</span><span>"Foo"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Foo"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after (user edits alias)</div>
+      <div class="field"><span class="k">content:</span><span>"Foo"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="changed">"Bar"</span>]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div></div>
+    <div class="arrow">⇣ sync</div>
+    <div class="block">
+      <div class="label">After sync</div>
+      <div class="field"><span class="k">content:</span><span class="changed">"Bar"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Bar"]</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Sync action:</span>
+    alias diff = <code>{removed: ["Foo"], added: ["Bar"]}</code>, and
+    <code>content === "Foo"</code> (the removed value) → rewrite content to "Bar".
+    Symmetric with A1 (content edit propagating to alias).
+  </div>
+  <div class="action ok" style="margin-top: 0.3rem;">
+    <span class="what">Cascade:</span>
+    rename processor still sees the same alias diff and rewrites
+    <code>[[Foo]] → [[Bar]]</code> in source backlinks (Case R1). The two processors
+    fire on the same commit; they don't depend on each other's writes.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case AR2 · Alias rename, content does NOT match</span>
+    <span class="tag noop">no content write</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">content:</span><span>"some long body text"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>["Foo"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after</div>
+      <div class="field"><span class="k">content:</span><span>"some long body text"</span></div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="changed">"Bar"</span>]</span></div>
+    </div>
+  </div>
+  <div class="action noop" style="border-left-color: var(--muted);">
+    <span class="what">Sync action:</span>
+    content doesn't match the removed alias → no anchor. Leave content alone.
+    (Block is drifted from the title perspective, but the alias rename is what
+    the user expressed; respecting it.)
+  </div>
+</div>
+
+<h2>Rename (target alias edit → backlink rewrite)</h2>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case R1 · Clean rename (1-for-1 in aliases)</span>
+    <span class="tag ok">rename</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">aliases:</span><span>["Old"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after (alias edit)</div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="changed">"New"</span>]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Source block(s) — before</div>
+      <div class="field"><span class="k">content:</span><span>"See [[Old]] for context."</span></div>
+    </div>
+    <div class="arrow">⇣</div>
+    <div class="block">
+      <div class="label">Source block(s) — after rename processor</div>
+      <div class="field"><span class="k">content:</span><span>"See <span class="changed">[[New]]</span> for context."</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Rename action:</span>
+    diff = {removed: ["Old"], added: ["New"]} with equal cardinality 1 → treat as rename.
+    Find sources via <code>block_references</code> where <code>target_id = this.id</code>,
+    rewrite <code>[[Old]] → [[New]]</code> in each source's content. parseReferences re-fires
+    on those edits and refreshes the references column for free.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case R2 · Rename with other aliases left untouched</span>
+    <span class="tag ok">rename</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">aliases:</span><span>["Old", "X", "Y"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after</div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="changed">"New"</span>, "X", "Y"]</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Rename action:</span>
+    diff = {removed: ["Old"], added: ["New"]}, others unchanged → 1-for-1 rename of Old→New.
+    Same backlink rewrite as R1. X and Y are unaffected.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case R3 · Pure alias add</span>
+    <span class="tag noop">no-op for rename</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">aliases:</span><span>["A"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after</div>
+      <div class="field"><span class="k">aliases:</span><span>["A", <span class="added">"B"</span>]</span></div>
+    </div>
+  </div>
+  <div class="action noop" style="border-left-color: var(--muted);">
+    <span class="what">Rename action:</span>
+    diff = {removed: [], added: ["B"]} → not a rename. Nothing to rewrite.
+    Future <code>[[B]]</code> typings resolve here via aliasLookup.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case R4 · Pure alias remove (some aliases remain)</span>
+    <span class="tag ok">preserve display text</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">aliases:</span><span>["A", "B"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after</div>
+      <div class="field"><span class="k">aliases:</span><span>["A", <span class="removed">"B"</span>]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Source — before</div>
+      <div class="field"><span class="k">content:</span><span>"... [[B]] ..."</span></div>
+    </div>
+    <div class="arrow">⇣</div>
+    <div class="block">
+      <div class="label">Source — after rename processor</div>
+      <div class="field"><span class="k">content:</span><span>"... <span class="changed">[B](((target-id)))</span> ..."</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Rename action:</span>
+    diff = {removed: ["B"], added: []}. The removed alias still has backlinks → rewrite
+    each <code>[[B]]</code> in source content to <code>[B](((target-id)))</code> (the
+    existing aliased-blockref syntax — see
+    <a href="../src/plugins/references/markdown/blockrefs/remark-blockrefs.ts">remark-blockrefs.ts</a>).
+    Preserves the original display text the source author wrote while pointing at the
+    same target by stable id — no silent re-targeting, no aliasLookup miss, no orphan stub seat.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case R5 · Multi-rename / consolidation (shouldn't happen via UI, but)</span>
+    <span class="tag ok">same as R4</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">aliases:</span><span>["A", "B"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after</div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="changed">"C"</span>, <span class="changed">"D"</span>] &nbsp; <em>or</em> &nbsp; [<span class="changed">"C"</span>]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Source — before</div>
+      <div class="field"><span class="k">content:</span><span>"... [[A]] ... [[B]] ..."</span></div>
+    </div>
+    <div class="arrow">⇣</div>
+    <div class="block">
+      <div class="label">Source — after rename processor</div>
+      <div class="field"><span class="k">content:</span><span>"... <span class="changed">[A](((target-id)))</span> ... <span class="changed">[B](((target-id)))</span> ..."</span></div>
+    </div>
+  </div>
+  <div class="action ok">
+    <span class="what">Rename action:</span>
+    Both the multi-rename and consolidation shapes get the same treatment as R4:
+    for each removed alias α with backlinks, rewrite <code>[[α]] → [α](((target-id)))</code>.
+    UI is expected to commit one rename per edit (already the case per current UI),
+    so this branch is mostly a safety net. Special-casing the diff heuristic isn't
+    worth the complexity.
+  </div>
+</div>
+
+<div class="case">
+  <div class="case-title">
+    <span>Case R7 · Remove last alias (aliases becomes empty)</span>
+    <span class="tag warn">forced blockref form</span>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Target — before</div>
+      <div class="field"><span class="k">aliases:</span><span>["A"]</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="block">
+      <div class="label">Target — after</div>
+      <div class="field"><span class="k">aliases:</span><span>[<span class="removed">"A"</span>]</span></div>
+    </div>
+  </div>
+  <div class="state-row">
+    <div class="block">
+      <div class="label">Source — before</div>
+      <div class="field"><span class="k">content:</span><span>"... [[A]] ..."</span></div>
+    </div>
+    <div class="arrow">⇣</div>
+    <div class="block">
+      <div class="label">Source — after rename processor</div>
+      <div class="field"><span class="k">content:</span><span>"... <span class="changed">[A](((target-id)))</span> ..."</span></div>
+    </div>
+  </div>
+  <div class="action warn">
+    <span class="what">Rename action:</span>
+    No aliases remain — main-alias fallback isn't available. Must use the
+    <code>[A](((target-id)))</code> form to keep the link pointing at the target.
+    This is the "block-ref form is the only option" floor of the fallback ladder.
+  </div>
+</div>
+
+<h2>Decision ladder</h2>
+
+<div class="case">
+  <p style="margin: 0 0 0.4rem 0; font-size: 0.9rem;">
+    <strong>Sync processor</strong> (alias plugin) — fires on
+    <code>{content, properties}</code> change to the same block:
+  </p>
+  <ol style="font-size: 0.9rem; margin: 0 0 0.6rem 1.2rem;">
+    <li><strong>Content changed, old value ∈ aliases</strong> (A1, A2) → replace that alias entry with new content. Dedupe.</li>
+    <li><strong>Content changed, old value ∉ aliases</strong> (A3 — drift) → add new content as a fresh alias. Block heals.</li>
+    <li><strong>Alias diff is 1-for-1, content === removed alias</strong> (AR1) → rewrite content to the new value.</li>
+    <li>Otherwise → no sync write. The rename processor may still act on the alias diff.</li>
+  </ol>
+  <p style="margin: 0.8rem 0 0.4rem 0; font-size: 0.9rem;">
+    <strong>Rename processor</strong> (references plugin) — fires on alias-property diff.
+    For each <code>α ∈ removed</code> with live backlinks:
+  </p>
+  <ol style="font-size: 0.9rem; margin: 0 0 0 1.2rem;">
+    <li><strong>1-for-1 swap</strong> (R1, R2, A1-cascade, AR1-cascade): <code>|removed| = |added| = 1</code> → rewrite <code>[[α]] → [[new]]</code>.</li>
+    <li><strong>Anything else with backlinks</strong> (R4, R5, R6, R7, A2-cascade): rewrite <code>[[α]] → [α](((target-id)))</code> (aliased blockref). Preserves display text; doesn't depend on what's left in aliases.</li>
+    <li><strong>Pure add</strong> (R3): no removed aliases → nothing to rewrite.</li>
+  </ol>
+</div>
+
+<h2>Interaction with parseReferences (sanity check)</h2>
+
+<div class="case">
+  <div class="case-title"><span>Idempotency on second pass</span></div>
+  <p style="margin: 0.3rem 0; font-size: 0.9rem;">
+    Sync and rename writes re-fire the field-watcher. Convergence depends on the second pass being a no-op:
+  </p>
+  <ul style="font-size: 0.9rem; margin: 0.3rem 0 0 1rem;">
+    <li><strong>Sync</strong> (A1/A2/A3/AR1): first pass writes the reconciled side. Second pass sees no diff in its trigger field → no work. Cross-processor: sync's alias write re-fires rename, which acts on the (now-final) alias diff.</li>
+    <li><strong>Rename</strong> (R1/R2 etc): rewrites source content. Source edits trigger parseReferences; target wasn't touched again, so rename doesn't re-fire.</li>
+    <li><strong>Rename → blockref form</strong> (R4/R5/R6/R7): source content now has <code>[label](((id)))</code>. parseReferences re-fires on the source, parses the aliased blockref, refreshes the references column to point at the same target id. Convergent.</li>
+    <li><strong>parseReferences</strong>: already convergent — see <code>referencesChanged</code> check at <a href="../src/plugins/references/referencesProcessor.ts">referencesProcessor.ts:219</a>.</li>
+  </ul>
+</div>
+
+<h2>Seat-id mitigation: indexed-deterministic fallback</h2>
+
+<div class="case">
+  <p style="margin: 0 0 0.4rem 0; font-size: 0.9rem;">
+    <code>ensureAliasTarget</code>'s current behavior (<a href="../src/data/targets.ts">targets.ts:128</a>)
+    creates seats at <code>uuidv5(workspaceId:alias, ALIAS_NS)</code>. After a rename the
+    id is stale — the seat now claims a different alias. New typings of the old alias
+    silently resolve to the renamed block.
+  </p>
+  <p style="margin: 0 0 0.4rem 0; font-size: 0.9rem;">
+    <strong>Fix:</strong> probe an indexed-deterministic namespace until we find an
+    empty slot or one that claims our alias.
+  </p>
+  <ol style="font-size: 0.9rem; margin: 0 0 0.4rem 1.2rem;">
+    <li>Try <code>id<sub>0</sub> = uuidv5("ws:alias:0", ALIAS_NS)</code>.</li>
+    <li>If empty → create here. Done.</li>
+    <li>If live <strong>and claims this alias</strong> → reuse (normal convergence path).</li>
+    <li>If live and claims something else, OR tombstone → probe next:
+        <code>id<sub>1</sub>, id<sub>2</sub>, …</code> until step 2 or 3 hits.</li>
+  </ol>
+  <p style="margin: 0; font-size: 0.9rem;">
+    Convergence holds: two offline clients in the same world-state probe the same
+    way and land on the same slot. The "claims this alias?" check is what
+    preserves the happy-path convergence at <code>id<sub>0</sub></code> — without
+    it the algorithm would always probe past the live Foo-seat.
+  </p>
+  <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem;">
+    Side benefit: tombstone-restore-on-retype goes away too (probe past tombstones).
+    A typed <code>[[Foo]]</code> always means a fresh Foo, not "restore the deleted Foo I had three months ago."
+  </p>
+</div>
+
+<h2>Open questions / known wrinkles</h2>
+<ul>
+  <li>
+    <strong>Empty-alias-array edge case in AR1.</strong> If the rename diff is
+    <code>{removed: ["Foo"], added: []}</code> and content === "Foo", do we
+    rewrite content to "" (matching the now-removed alias)? Probably no —
+    blank-content blocks are weird. Treat aliases.after = [] as "no sync
+    target" and leave content alone.
+  </li>
+  <li>
+    <strong>UI guarantee.</strong> One rename per commit is already how the
+    alias editor behaves; the rename processor relies on that to keep R5/R6
+    rare. No new constraint needed.
+  </li>
+</ul>
+
+</body>
+</html>
