@@ -38,14 +38,16 @@ Commands:
   yarn agent ping
   yarn agent status
   yarn agent runtime-summary      show compact agent-oriented runtime context
-  yarn agent describe-runtime     show full runtime diagnostics
+  yarn agent describe-runtime [--actions <text>] [--facets <text>]
+                                  show full or targeted runtime diagnostics
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
   yarn agent get-block <id>
   yarn agent subtree <rootId> [--include-root]
   yarn agent create-block <json>
   yarn agent update-block <json>
-  yarn agent install-extension <file> [label]
-  yarn agent eval <code>
+  yarn agent install-extension [--reload] [--verify] <file> [label]
+  yarn agent run-action <id> [depsJson]
+  yarn agent eval <code>          run JS in the app; use "return ..." to print a value
   yarn agent eval --file <path>
   yarn agent raw <json>
 
@@ -65,6 +67,66 @@ const parseJson = (value, label) => {
   } catch {
     throw new Error(`${label} must be valid JSON`)
   }
+}
+
+const parseDescribeRuntimeArgs = args => {
+  const filters = {actions: [], facets: []}
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    const readValue = flag => {
+      const value = args[i + 1]
+      if (!value) throw new Error(`${flag} requires a value`)
+      i += 1
+      return value
+    }
+
+    if (arg === '--actions') {
+      filters.actions.push(readValue(arg))
+      continue
+    }
+    if (arg.startsWith('--actions=')) {
+      filters.actions.push(arg.slice('--actions='.length))
+      continue
+    }
+    if (arg === '--facets') {
+      filters.facets.push(readValue(arg))
+      continue
+    }
+    if (arg.startsWith('--facets=')) {
+      filters.facets.push(arg.slice('--facets='.length))
+      continue
+    }
+
+    throw new Error(`Unknown describe-runtime option: ${arg}`)
+  }
+
+  return {
+    ...(filters.actions.length > 0 ? {actions: filters.actions} : {}),
+    ...(filters.facets.length > 0 ? {facets: filters.facets} : {}),
+  }
+}
+
+const parseInstallExtensionArgs = args => {
+  let reload = false
+  let verify = false
+  const rest = []
+
+  for (const arg of args) {
+    if (arg === '--reload') {
+      reload = true
+      continue
+    }
+    if (arg === '--verify') {
+      verify = true
+      continue
+    }
+    rest.push(arg)
+  }
+
+  const [file, ...labelParts] = rest
+  if (!file) throw new Error('install-extension requires <file>')
+  return {file, label: labelParts.join(' ').trim(), reload, verify}
 }
 
 const normalizeProfileName = (value = '') => {
@@ -486,8 +548,13 @@ const commandFromArgs = async args => {
       return {type: 'ping'}
 
     case 'runtime-summary':
-    case 'describe-runtime':
       return {type: name}
+
+    case 'describe-runtime':
+      return {
+        type: name,
+        ...parseDescribeRuntimeArgs(rest),
+      }
 
     case 'sql': {
       const [mode, sql, paramsJson] = rest
@@ -533,14 +600,25 @@ const commandFromArgs = async args => {
       }
 
     case 'install-extension': {
-      const [file, ...labelParts] = rest
-      if (!file) throw new Error('install-extension requires <file>')
+      const {file, label, reload, verify} = parseInstallExtensionArgs(rest)
       const source = await fs.readFile(file, 'utf8')
       const basename = path.basename(file).replace(/\.[^.]+$/, '')
       return {
         type: 'install-extension',
         source,
-        label: labelParts.join(' ').trim() || basename,
+        label: label || basename,
+        ...(reload ? {reload: true} : {}),
+        ...(verify ? {verify: true} : {}),
+      }
+    }
+
+    case 'run-action': {
+      const [id, depsJson] = rest
+      if (!id) throw new Error('run-action requires <id>')
+      return {
+        type: 'run-action',
+        id,
+        dependencies: depsJson ? parseJson(depsJson, 'depsJson') : {},
       }
     }
 

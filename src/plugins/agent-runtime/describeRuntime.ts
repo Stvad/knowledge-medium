@@ -42,6 +42,11 @@ export interface RuntimeDescription {
   apiSurface: ApiSurfaceSummary
 }
 
+export interface RuntimeDescriptionFilters {
+  actions?: string[]
+  facets?: string[]
+}
+
 export interface RuntimePing {
   ok: true
   activeWorkspaceId: string | null
@@ -102,11 +107,12 @@ const runtimeCommandHints = {
     'yarn agent sql <all|get|optional|execute> <sql> [paramsJson]',
     'yarn agent get-block <id>',
     'yarn agent subtree <rootId> [--include-root]',
-    'yarn agent eval <code>',
+    'yarn agent run-action <id> [depsJson]',
+    'yarn agent eval <code>  # use `return ...` to print a value',
   ],
   diagnostics: [
     'yarn agent status',
-    'yarn agent describe-runtime',
+    'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
     'yarn agent raw <json>',
   ],
 }
@@ -158,6 +164,27 @@ const countActionsByContext = (actions: readonly ActionConfig[]) =>
     return counts
   }, {})
 
+const normalizedFilters = (filters: string[] | undefined) =>
+  (filters ?? [])
+    .map(filter => filter.trim().toLowerCase())
+    .filter(Boolean)
+
+const matchesAnyFilter = (
+  filters: string[] | undefined,
+  ...values: Array<string | undefined>
+) => {
+  const normalized = normalizedFilters(filters)
+  if (normalized.length === 0) return true
+
+  const haystack = values
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => value.toLowerCase())
+
+  return normalized.some(filter =>
+    haystack.some(value => value === filter || value.includes(filter)),
+  )
+}
+
 const summarizeFacetCounts = (runtime: FacetRuntime) => {
   const facets = runtime.facetIds()
     .sort()
@@ -195,18 +222,22 @@ export const __resetApiSurfaceCacheForTest = () => {
 
 export const describeRuntime = async (
   context: DescribeRuntimeContext,
+  filters: RuntimeDescriptionFilters = {},
 ): Promise<RuntimeDescription> => ({
   activeWorkspaceId: context.repo.activeWorkspaceId,
   currentUser: context.repo.user,
   safeMode: context.safeMode,
-  actions: context.actions.map(action => ({
-    id: action.id,
-    description: action.description,
-    context: action.context,
-    hasDefaultBinding: Boolean(action.defaultBinding),
-  })),
+  actions: context.actions
+    .filter(action => matchesAnyFilter(filters.actions, action.id, action.description, action.context))
+    .map(action => ({
+      id: action.id,
+      description: action.description,
+      context: action.context,
+      hasDefaultBinding: Boolean(action.defaultBinding),
+    })),
   renderers: Object.keys(context.renderers),
-  facets: describeFacets(context.runtime),
+  facets: describeFacets(context.runtime)
+    .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
   apiSurface: await getApiSurface(),
 })
 
@@ -252,7 +283,7 @@ export const describeRuntimeSummary = async (
     more: [
       {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',
-        command: 'yarn agent describe-runtime',
+        command: 'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
       },
       {
         need: 'Bridge clients and pending command queue',
@@ -260,7 +291,7 @@ export const describeRuntimeSummary = async (
       },
       {
         need: 'Targeted in-app inspection using the runtime context',
-        command: 'yarn agent eval <code>',
+        command: 'yarn agent eval <code>  # use `return ...` to print a value',
       },
       {
         need: 'Raw protocol access for uncommon runtime commands',

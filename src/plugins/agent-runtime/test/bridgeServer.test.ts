@@ -249,4 +249,38 @@ describe('agent runtime bridge', () => {
     expect(body.result.value).toBe('pong')
     expect(body.targetClientId).toBe('alice-tab')
   })
+
+  it('allows command status polling after the submitting token re-registers under a new client id', async () => {
+    await registerClient('alice-tab', {
+      audience: {userId: 'alice', workspaceId: 'ws-1'},
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+    })
+
+    const submission = await fetch(`${baseUrl}/runtime/commands`, {
+      method: 'POST',
+      headers: {'content-type': 'application/json', authorization: 'Bearer TOKEN-A'},
+      body: JSON.stringify({type: 'ping'}),
+    })
+    expect(submission.status).toBe(202)
+    const {id} = await submission.json()
+
+    const next = await fetch(`${baseUrl}/runtime/commands/next?clientId=alice-tab&timeoutMs=2000`, {
+      headers: bridgeHeaders,
+    })
+    const command = await next.json()
+    expect(command.commandId).toBe(id)
+
+    await registerClient('alice-tab-after-hmr', {
+      audience: {userId: 'alice', workspaceId: 'ws-1'},
+      tokens: [{token: 'TOKEN-A', label: 'cli', userId: 'alice', workspaceId: 'ws-1'}],
+    })
+
+    const status = await fetch(`${baseUrl}/runtime/commands/${id}`, {
+      headers: {authorization: 'Bearer TOKEN-A'},
+    })
+    expect(status.status).toBe(200)
+    const body = await status.json()
+    expect(body.status).toBe('delivered')
+    expect(body.targetClientId).toBe('alice-tab')
+  })
 })

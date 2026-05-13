@@ -39,12 +39,36 @@ export interface InstallExtensionInput {
   parentId?: string
   id?: string
   disabled?: boolean
+  reload?: boolean
+  verify?: boolean
+}
+
+export interface ExtensionVerificationError {
+  blockId: string
+  message: string
+  name?: string
+}
+
+export interface ExtensionVerificationResult {
+  ok: boolean
+  errors: ExtensionVerificationError[]
+  actions: Array<{
+    id: string
+    description: string
+    context: string
+  }>
+  facets: Array<{
+    id: string
+    contributionCount: number
+  }>
 }
 
 export interface InstallExtensionResult {
   id: string
   inserted: boolean
   label: string | null
+  reloaded?: boolean
+  verification?: ExtensionVerificationResult
 }
 
 export interface AgentRuntimeContext {

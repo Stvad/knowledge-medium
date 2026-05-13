@@ -538,8 +538,7 @@ const handleRequest = async (request, response) => {
       }
       if (!hasBridgeSecret(request)) {
         const token = extractBearer(request)
-        const entry = token ? tokens.get(token) : null
-        if (!entry || entry.clientId !== command.targetClientId || hashToken(token) !== command.submitterTokenHash) {
+        if (!token || hashToken(token) !== command.submitterTokenHash) {
           sendJson(response, 401, {error: 'Missing or invalid command status credentials'})
           return
         }

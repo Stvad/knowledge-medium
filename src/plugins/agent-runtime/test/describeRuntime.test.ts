@@ -161,7 +161,9 @@ describe('describeRuntime', () => {
 
     expect(summary.activeWorkspaceId).toBe('ws-1')
     expect(summary.commands.baseline).toContain('yarn agent ping')
-    expect(summary.commands.diagnostics).toContain('yarn agent describe-runtime')
+    expect(summary.commands.diagnostics.some(command =>
+      command.startsWith('yarn agent describe-runtime'),
+    )).toBe(true)
     expect(summary.capabilities.actions.count).toBe(2)
     expect(summary.capabilities.actions.byContext.global).toBe(2)
     expect(summary.capabilities.actions.examples).toEqual([
@@ -219,6 +221,32 @@ describe('describeRuntime', () => {
 
     expect(description.apiSurface.module).toBe('@/extensions/api')
     expect(description.apiSurface.exports).toContain('defineFacet')
+  })
+
+  it('filters full diagnostics by action and facet text', async () => {
+    const readwiseFacet = defineFacet({id: 'data.propertySchemas'})
+    const otherFacet = defineFacet({id: 'core.actions'})
+    const runtime = await resolveFacetRuntime([
+      readwiseFacet.of({name: 'readwise:book-id'}),
+      otherFacet.of('other'),
+    ])
+
+    const description = await describeRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [
+        makeAction('user.readwise.sync-now', false),
+        makeAction('quick_find', false),
+      ],
+      renderers: {},
+    }, {
+      actions: ['user.readwise'],
+      facets: ['data.propertySchemas'],
+    })
+
+    expect(description.actions.map(action => action.id)).toEqual(['user.readwise.sync-now'])
+    expect(description.facets.map(facet => facet.id)).toEqual(['data.propertySchemas'])
   })
 
   it('reports safeMode=true when set', async () => {
