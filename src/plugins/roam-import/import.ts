@@ -688,14 +688,13 @@ interface PageAliasRulePlan {
   diagnostics: string[]
 }
 
-const uniqueStrings = (values: readonly string[]): string[] => {
+const uniqueExactAliases = (values: readonly string[]): string[] => {
   const out: string[] = []
   const seen = new Set<string>()
   for (const value of values) {
-    const trimmed = value.trim()
-    if (!trimmed || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
+    if (value === '' || seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
   }
   return out
 }
@@ -730,7 +729,7 @@ const buildPageAliasRulePlan = (
   }
 
   for (const page of preparedPages) {
-    for (const alias of uniqueStrings(page.pageAliases)) {
+    for (const alias of uniqueExactAliases(page.pageAliases)) {
       if (alias === page.title) continue
       if (skipDailyAliasMerge(page, alias)) continue
       const aliases = validAliasesByTitle.get(page.title) ?? []
@@ -820,10 +819,10 @@ const buildPageAliasRulePlan = (
     const aliases = aliasesByRootTitle.get(root) ?? [root]
     if (page.title !== root) aliases.push(page.title)
 
-    for (const alias of uniqueStrings(validAliasesByTitle.get(page.title) ?? [])) {
+    for (const alias of uniqueExactAliases(validAliasesByTitle.get(page.title) ?? [])) {
       aliases.push(alias)
     }
-    aliasesByRootTitle.set(root, uniqueStrings(aliases))
+    aliasesByRootTitle.set(root, uniqueExactAliases(aliases))
   }
 
   for (const [root, aliases] of aliasesByRootTitle) {
@@ -1340,7 +1339,7 @@ const withPageAliases = (
   ...data,
   properties: addBlockTypeToProperties({
     ...(data.properties ?? {}),
-    [aliasesProp.name]: aliasesProp.codec.encode(uniqueStrings(aliases)),
+    [aliasesProp.name]: aliasesProp.codec.encode(uniqueExactAliases(aliases)),
   }, PAGE_TYPE),
 })
 
@@ -1356,7 +1355,7 @@ const mergePageAliases = async (
   const current = Array.isArray(currentValue)
     ? currentValue.filter((v): v is string => typeof v === 'string')
     : []
-  const next = uniqueStrings([...current, ...aliasesToApply])
+  const next = uniqueExactAliases([...current, ...aliasesToApply])
   if (next.length === current.length && next.every((alias, index) => alias === current[index])) return
 
   await tx.setProperty(id, aliasesProp, next)

@@ -6,9 +6,9 @@
  * Consumers (outside this plugin): the roam importer reads from
  * here. Anything that emits the syntax should also use the
  * `renderWikilink` / `renderAliasedBlockref` helpers below to avoid
- * drift from parser expectations (escaping `]]` in aliases, `]` /
- * newlines in blockref labels, regex-meta + `$&` in aliases through
- * `rewriteWikilinks`).
+ * drift from parser expectations (`]]` cannot be represented
+ * exactly inside wikilink text, `]` / newlines in blockref labels,
+ * regex-meta + `$&` in aliases through `rewriteWikilinks`).
  *
  * Plain-text parsing here is preferred over the markdown-aware
  * variant for hot paths; the markdown-aware fallback exists for
@@ -213,15 +213,13 @@ export function extractBlockRefIds(content: string): string[] {
 //      / blockref syntax via string templates and accidentally diverge
 //      from parser expectations). ────
 
-/** Render a wikilink targeting `alias`. Sanitizes any embedded `]]`
- *  that would close the wikilink early — collapses `]]` to `] ]` so
- *  the rendered output round-trips through `parseReferences`. */
+/** Render a wikilink targeting `alias`. If `alias` contains the closing
+ *  wikilink delimiter, the output is syntactically safe but lossy;
+ *  callers that need alias identity must verify by parsing the result. */
 export const renderWikilink = (alias: string): string => {
   // `]]` inside the alias would terminate the wikilink at the wrong
   // place. Splitting it with a space keeps the visible text close to
-  // the input and lets the parser match the full alias text. The
-  // edge case is pathological (aliases rarely contain `]]`); we
-  // accept the cosmetic split rather than refusing to render.
+  // the input, but it no longer parses to the same alias.
   const safe = alias.replace(/]]/g, '] ]')
   return `[[${safe}]]`
 }

@@ -263,9 +263,11 @@ Another [[normal-ref]]
 
     it('breaks embedded `]]` so the close bracket cannot terminate early', () => {
       expect(renderWikilink('foo]]bar')).toBe('[[foo] ]bar]]')
-      // Round-trip: the parser finds an alias matching the rendered form.
+      // Syntax safety: the parser finds one complete wikilink, but the
+      // alias identity is not preserved.
       const result = parseReferences(renderWikilink('foo]]bar'))
       expect(result).toHaveLength(1)
+      expect(result[0].alias).toBe('foo] ]bar')
     })
   })
 

@@ -375,7 +375,7 @@ const collectTokens = (raw: unknown): string[] | null => {
     }
     const trimmed = raw.trim()
     if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-      const inner = trimmed.slice(2, -2).trim()
+      const inner = trimmed.slice(2, -2)
       return inner ? [inner] : null
     }
     return null
@@ -392,7 +392,7 @@ const collectTokens = (raw: unknown): string[] | null => {
       }
       const trimmed = item.trim()
       if (trimmed.startsWith('[[') && trimmed.endsWith(']]')) {
-        const inner = trimmed.slice(2, -2).trim()
+        const inner = trimmed.slice(2, -2)
         if (inner) out.push(inner)
       }
     }
@@ -404,6 +404,6 @@ const collectTokens = (raw: unknown): string[] | null => {
 const stripBrackets = (value: string): string => {
   const trimmed = value.trim()
   return trimmed.startsWith('[[') && trimmed.endsWith(']]')
-    ? trimmed.slice(2, -2).trim()
+    ? trimmed.slice(2, -2)
     : trimmed
 }

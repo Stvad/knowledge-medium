@@ -293,6 +293,22 @@ describe('normalizeRefPropertyValues', () => {
     expect(diagnostics).toEqual([])
   })
 
+  it('refList: preserves whitespace inside page-token aliases', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:topics': '[[ Foo ]]'}),
+      block('b', {'roam:topics': ['[[ Bar ]]']}),
+    ]
+    const aliasIdMap = new Map([
+      [' Foo ', 'id-foo'],
+      [' Bar ', 'id-bar'],
+    ])
+    const diagnostics: string[] = []
+    normalizeRefPropertyValues(blocks, new Map([['roam:topics', 'refList']]), aliasIdMap, diagnostics)
+    expect(blocks[0].properties['roam:topics']).toEqual(['id-foo'])
+    expect(blocks[1].properties['roam:topics']).toEqual(['id-bar'])
+    expect(diagnostics).toEqual([])
+  })
+
   it('refList: reports unresolved aliases as diagnostics and drops them from the value', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:topics': '[[Known]] [[Missing]]'}),

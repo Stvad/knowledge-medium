@@ -98,6 +98,17 @@ describe('planImport', () => {
     expect(wcs?.data?.parentId).toBeNull()
   })
 
+  it('preserves whitespace in page-title alias identity', () => {
+    const plan = planImport([{
+      title: ' Foo ',
+      uid: 'spacedPage',
+      children: [],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].data?.properties[aliasesProp.name])
+      .toEqual(aliasesProp.codec.encode([' Foo ']))
+  })
+
   it('emits descendants in post-order: leaves before parents', () => {
     const plan = planImport(minimalExport, {workspaceId: WORKSPACE, currentUserId: USER})
 
@@ -1048,6 +1059,20 @@ describe('planImport', () => {
     expect(plan.pages[0].pageAliases).toEqual(['defensive [[driving]]'])
     expect(plan.aliasesUsed.has('defensive [[driving]]')).toBe(true)
     expect(plan.aliasesUsed.has('defensive [[driving')).toBe(false)
+  })
+
+  it('preserves whitespace inside page_alias page refs', () => {
+    const plan = planImport([{
+      title: 'EVOC',
+      uid: 'pUid',
+      children: [
+        {string: 'page_alias:: [[ Foo ]]', uid: 'aliasUid'},
+      ],
+    }], {workspaceId: WORKSPACE, currentUserId: USER})
+
+    expect(plan.pages[0].pageAliases).toEqual([' Foo '])
+    expect(plan.aliasesUsed.has(' Foo ')).toBe(true)
+    expect(plan.aliasesUsed.has('Foo')).toBe(false)
   })
 
   it('does not use mixed page_alias text as alias-rule merge input', () => {

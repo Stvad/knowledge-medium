@@ -26,6 +26,17 @@ export const uniqueStrings = (values: readonly string[]): string[] => {
   return out
 }
 
+export const uniqueExactStrings = (values: readonly string[]): string[] => {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const value of values) {
+    if (value === '' || seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
+  }
+  return out
+}
+
 const namespacedKey = (key: string): string => {
   // Roam keys come in two flavors: `:foo` (Datalog) and `foo` (camel).
   // Strip the leading `:` if present, then prefix our namespace.
@@ -126,8 +137,8 @@ const parseOuterPageTokens = (value: string): PageToken[] => {
       if (stack.length > 0) {
         const start = stack.pop()!
         if (stack.length === 0) {
-          const alias = value.slice(start + 2, i).trim()
-          if (alias) out.push({alias, start, end: i + 2})
+          const alias = value.slice(start + 2, i)
+          if (alias !== '') out.push({alias, start, end: i + 2})
         }
       }
       i += 2
@@ -219,9 +230,8 @@ const parseQuotedAliasListValue = (value: string): string[] | null => {
     }
     if (!closed) return null
 
-    const trimmed = alias.trim()
-    if (!trimmed) return null
-    out.push(trimmed)
+    if (alias === '') return null
+    out.push(alias)
 
     skipSpace()
     if (i >= value.length) break
@@ -229,7 +239,7 @@ const parseQuotedAliasListValue = (value: string): string[] | null => {
     i += 1
   }
 
-  return out.length > 0 ? uniqueStrings(out) : null
+  return out.length > 0 ? uniqueExactStrings(out) : null
 }
 
 const isConservativePlainAlias = (value: string): boolean => {
@@ -254,7 +264,7 @@ export const collectAliasesFromRoamSemanticRefListValue = (
   plainAliasMode: PlainAliasMode = 'broad',
 ): string[] => {
   if (Array.isArray(value)) {
-    return uniqueStrings(value.flatMap(item =>
+    return uniqueExactStrings(value.flatMap(item =>
       collectAliasesFromRoamSemanticRefListValue(item, plainAliasMode)))
   }
   if (typeof value !== 'string') return []
@@ -263,7 +273,7 @@ export const collectAliasesFromRoamSemanticRefListValue = (
   if (!trimmed) return []
 
   const tokens = parseOuterPageTokens(trimmed)
-  if (isPageTokenListValue(trimmed, tokens)) return uniqueStrings(tokens.map(token => token.alias))
+  if (isPageTokenListValue(trimmed, tokens)) return uniqueExactStrings(tokens.map(token => token.alias))
   if (tokens.length > 0) return []
 
   const quotedAliases = parseQuotedAliasListValue(trimmed)
@@ -278,7 +288,7 @@ export const collectAliasesFromRoamSemanticRefListValue = (
 export const collectAliasesFromRoamSemanticRefListProperties = (
   properties: Record<string, unknown>,
 ): string[] =>
-  uniqueStrings(Object.entries(properties)
+  uniqueExactStrings(Object.entries(properties)
     .filter(([name]) => isRoamSemanticRefListProperty(name))
     .flatMap(([name, value]) =>
       collectAliasesFromRoamSemanticRefListValue(
@@ -328,7 +338,7 @@ const collectStandardPageAliasValues = (value: unknown): string[] => {
 }
 
 export const collectPageAliases = (properties: Record<string, unknown>): string[] =>
-  uniqueStrings(collectStandardPageAliasValues(properties[ROAM_PAGE_ALIAS_PROP]))
+  uniqueExactStrings(collectStandardPageAliasValues(properties[ROAM_PAGE_ALIAS_PROP]))
 
 export const nonStandardPageAliasValues = (
   properties: Record<string, unknown>,
@@ -435,8 +445,8 @@ const exactAuthorRefs = (value: string): string[] | null => {
   const tokens = parseOuterPageTokens(value)
   if (!isPageTokenListValue(value, tokens)) return null
   return tokens
-    .map(token => token.alias.trim())
-    .filter(Boolean)
+    .map(token => token.alias)
+    .filter(alias => alias !== '')
     .map(alias => `[[${alias}]]`)
 }
 

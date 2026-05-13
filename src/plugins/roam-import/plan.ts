@@ -20,6 +20,7 @@ import {
   ROAM_MESSAGE_URL_PROP,
   ROAM_TIMESTAMP_PROP,
   ROAM_URL_PROP,
+  uniqueExactStrings,
   uniqueStrings,
 } from './properties'
 import { computePromotedFromChildren } from './promotion'
@@ -1035,7 +1036,7 @@ export const planImport = (pages: RoamExport, options: PlanOptions): RoamImportP
       createdAt: cloneTimestamp(page['create-time'], Date.now()),
       updatedAt: cloneTimestamp(page['edit-time'] ?? page['create-time'], Date.now()),
       extraProperties: addBlockTypeToProperties({
-        [aliasesProp.name]: aliasesProp.codec.encode(uniqueStrings([page.title, ...pageAliases])),
+        [aliasesProp.name]: aliasesProp.codec.encode(uniqueExactStrings([page.title, ...pageAliases])),
       }, PAGE_TYPE),
       promotedFromChildren,
     })

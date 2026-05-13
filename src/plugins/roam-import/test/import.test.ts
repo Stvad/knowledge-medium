@@ -508,6 +508,30 @@ describe('importRoam', () => {
     expect(JSON.parse(slot1!.properties_json)[aliasesProp.name]).toEqual([alias])
   })
 
+  it('preserves whitespace in imported page-title aliases', async () => {
+    const spacedExport: RoamExport = [{
+      title: ' Foo ',
+      uid: 'spacedPage',
+      children: [],
+    }]
+
+    await importRoam(spacedExport, env.repo, {
+      workspaceId: WORKSPACE,
+      currentUserId: USER_ID,
+    })
+
+    const pageId = roamBlockId(WORKSPACE, 'spacedPage')
+    const page = await readBlock(pageId)
+    expect(JSON.parse(page!.properties_json)[aliasesProp.name]).toEqual([' Foo '])
+
+    const aliasRows = await env.h.db.getAll<{block_id: string, alias: string}>(
+      'SELECT block_id, alias FROM block_aliases WHERE workspace_id = ?',
+      [WORKSPACE],
+    )
+    expect(aliasRows).toContainEqual({block_id: pageId, alias: ' Foo '})
+    expect(aliasRows.some(row => row.alias === 'Foo')).toBe(false)
+  })
+
   it('upgrades a previously-imported placeholder when a later import contains the real block', async () => {
     // First pass: an export that *references* leafA but the real block
     // for leafA isn't in the children of any imported page. The
