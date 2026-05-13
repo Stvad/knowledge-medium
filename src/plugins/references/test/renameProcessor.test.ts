@@ -237,3 +237,76 @@ describe('rename — multi-source', () => {
     expect((await env.read('s3'))!.content).toBe('three [[New]] and [[New]] again')
   })
 })
+
+describe('rename — parser-aware rewrite (regressions)', () => {
+  it('rewrites a trimmed `[[ Old ]]` form (parser trims, processor must too)', async () => {
+    // parseReferences trims inside `[[ ... ]]` and indexes the trimmed
+    // alias into block_references. The rewrite must find it too.
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'see [[ Old ]] please')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['New']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[New]] please')
+  })
+
+  it('handles aliases containing `$&` without regex backreference corruption', async () => {
+    // String.replace(pattern, replacement) interprets `$&`/`$1` in the
+    // replacement; aliases or new names containing those would corrupt
+    // output. Span-splicing avoids it.
+    await seedTarget('t', 'X', ['$&'])
+    await seedSource('s', 'see [[$&]] please')
+
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['$1-new']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    expect((await env.read('s'))!.content).toBe('see [[$1-new]] please')
+  })
+})
+
+describe('rename — stale-plan safety (concurrent source edit)', () => {
+  it('does not clobber a source edit made after the read phase but before write', async () => {
+    await seedTarget('t', 'Old', ['Old'])
+    await seedSource('s', 'See [[Old]] for context.')
+
+    // Intercept the block_references lookup so we can race in a
+    // concurrent edit to the source between the read phase (which
+    // happens during the SELECT) and the write phase. After the
+    // intercept fires once, the user removes the wikilink entirely.
+    const originalGetAll = env.h.db.getAll.bind(env.h.db)
+    let intercepted = false
+    const spy = vi.spyOn(env.h.db, 'getAll').mockImplementation(async <T,>(
+      sql: string,
+      params?: unknown[],
+    ): Promise<T[]> => {
+      const rows = await originalGetAll<T>(sql, params)
+      if (!intercepted && sql.includes('FROM block_references')) {
+        intercepted = true
+        await env.repo.mutate.setContent({id: 's', content: 'See nothing for context.'})
+      }
+      return rows
+    })
+
+    try {
+      await env.repo.tx(
+        tx => tx.setProperty('t', aliasesProp, ['New']),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await flush()
+      // Concurrent edit removed `[[Old]]`; rename's rewrite is now a
+      // no-op against current content — source content stays as the
+      // user edited it.
+      expect(intercepted).toBe(true)
+      expect((await env.read('s'))!.content).toBe('See nothing for context.')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})

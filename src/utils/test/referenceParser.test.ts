@@ -7,6 +7,9 @@ import {
   parseBlockRefs,
   isBlockRefId,
   parseBlockRefTarget,
+  renderAliasedBlockref,
+  renderWikilink,
+  rewriteWikilinks,
 } from '../referenceParser'
 
 describe('referenceParser', () => {
@@ -237,6 +240,92 @@ Another [[normal-ref]]
     })
     it('rejects non-uuid', () => {
       expect(isBlockRefId('not-a-uuid')).toBe(false)
+    })
+  })
+
+  describe('renderWikilink', () => {
+    it('emits a basic wikilink', () => {
+      expect(renderWikilink('Foo')).toBe('[[Foo]]')
+    })
+
+    it('preserves alias whitespace + special chars verbatim', () => {
+      expect(renderWikilink(' Foo ')).toBe('[[ Foo ]]')
+      expect(renderWikilink('a/b:c')).toBe('[[a/b:c]]')
+    })
+
+    it('breaks embedded `]]` so the close bracket cannot terminate early', () => {
+      expect(renderWikilink('foo]]bar')).toBe('[[foo] ]bar]]')
+      // Round-trip: the parser finds an alias matching the rendered form.
+      const result = parseReferences(renderWikilink('foo]]bar'))
+      expect(result).toHaveLength(1)
+    })
+  })
+
+  describe('renderAliasedBlockref', () => {
+    const uuid = '0123abcd-4567-89ef-0123-456789abcdef'
+
+    it('emits the canonical aliased-blockref form', () => {
+      expect(renderAliasedBlockref('shortcut', uuid)).toBe(`[shortcut](((${uuid})))`)
+    })
+
+    it('strips `]` and newlines from the label so the parser regex matches', () => {
+      expect(renderAliasedBlockref('a]b\nc', uuid)).toBe(`[abc](((${uuid})))`)
+      // Round-trip verification.
+      const refs = parseBlockRefs(renderAliasedBlockref('a]b\nc', uuid))
+      expect(refs).toHaveLength(1)
+      expect(refs[0]).toMatchObject({blockId: uuid, label: 'abc'})
+    })
+  })
+
+  describe('rewriteWikilinks', () => {
+    it('rewrites a single [[alias]] occurrence', () => {
+      expect(rewriteWikilinks('See [[Old]] please', 'Old', '[[New]]')).toBe(
+        'See [[New]] please',
+      )
+    })
+
+    it('rewrites a trimmed-form `[[ Old ]]` (parser-aware match)', () => {
+      expect(rewriteWikilinks('See [[ Old ]] please', 'Old', '[[New]]')).toBe(
+        'See [[New]] please',
+      )
+    })
+
+    it('handles aliases containing `$&` (would corrupt String.replace)', () => {
+      // String.replace with a regex would interpret `$&` in the
+      // replacement as "the whole match"; using span-splicing avoids
+      // that pitfall.
+      expect(rewriteWikilinks('See [[$&]] here', '$&', '[[safe]]')).toBe(
+        'See [[safe]] here',
+      )
+      // Aliases with regex meta chars on the source side: with regex
+      // we'd have needed escapeRegex. Span-based comparison is exact.
+      expect(rewriteWikilinks('a [[(group)]] b', '(group)', '[[X]]')).toBe(
+        'a [[X]] b',
+      )
+    })
+
+    it('rewrites every matching occurrence; leaves others alone', () => {
+      expect(
+        rewriteWikilinks('a [[Old]] b [[Other]] c [[Old]] d', 'Old', '[[New]]'),
+      ).toBe('a [[New]] b [[Other]] c [[New]] d')
+    })
+
+    it('returns input unchanged when no wikilinks present', () => {
+      const content = 'plain text with no references'
+      expect(rewriteWikilinks(content, 'Old', '[[New]]')).toBe(content)
+    })
+
+    it('returns input unchanged when no wikilink matches the alias', () => {
+      const content = 'has [[Other]] only'
+      expect(rewriteWikilinks(content, 'Old', '[[New]]')).toBe(content)
+    })
+
+    it('emits the replacement string literally (no $-interpolation in output)', () => {
+      // Replacement contains regex backreference tokens; should pass
+      // through verbatim because we splice, not regex-replace.
+      expect(rewriteWikilinks('see [[Foo]] here', 'Foo', '$&$1[[Bar]]')).toBe(
+        'see $&$1[[Bar]] here',
+      )
     })
   })
 })

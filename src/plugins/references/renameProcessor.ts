@@ -18,13 +18,18 @@
  * blocks. parseReferences re-fires on the source-content edits and
  * refreshes the source's `references` column for free.
  *
- * Two-phase shape mirrors parseReferences: read phase outside any tx;
- * write phase opens one tx for all source rewrites.
+ * Two-phase shape mirrors parseReferences: read phase outside any tx
+ * builds a plan describing per-source rewrites; write phase opens
+ * one tx, re-reads source content via `tx.get` (so user edits made
+ * after the read phase aren't clobbered), and applies the rewrites
+ * via parser-aware span splicing — the same wikilinks are found in
+ * the current text, rewritten in place, and skipped when they no
+ * longer exist (e.g. the user deleted the wikilink concurrently).
  *
  * Idempotency: the rewrite produces source content that no longer
  * contains `[[α]]`, so a second pass over the same source content is
- * a no-op (the regex doesn't match). Rename doesn't re-fire on the
- * source content edit because its watcher is `properties`-only.
+ * a no-op (no matching span). Rename doesn't re-fire on the source
+ * content edit because its watcher is `properties`-only.
  */
 
 import {
@@ -37,11 +42,16 @@ import {
   type Tx,
 } from '@/data/api'
 import { aliasesProp } from '@/data/internals/coreProperties'
+import {
+  renderAliasedBlockref,
+  renderWikilink,
+  rewriteWikilinks,
+} from '@/utils/referenceParser'
 
 export const RENAME_BACKLINKS_PROCESSOR = 'references.renameBacklinks'
 
 const SELECT_BACKLINK_SOURCES_SQL = `
-  SELECT br.source_id AS sourceId, source.content AS content
+  SELECT br.source_id AS sourceId
   FROM block_references br
   JOIN blocks source ON source.id = br.source_id
   WHERE br.workspace_id = ?
@@ -50,9 +60,8 @@ const SELECT_BACKLINK_SOURCES_SQL = `
     AND source.deleted = 0
 `
 
-interface BacklinkSourceRow {
+interface BacklinkSourceIdRow {
   sourceId: string
-  content: string
 }
 
 const decodeAliases = (block: BlockData): readonly string[] => {
@@ -65,21 +74,6 @@ const decodeAliases = (block: BlockData): readonly string[] => {
   }
 }
 
-const REGEX_META = /[.*+?^${}()|[\]\\]/g
-const escapeRegex = (s: string): string => s.replace(REGEX_META, '\\$&')
-
-/** Replace every `[[alias]]` in `content` with `replacement`. Returns
- *  the new content; equality with `content` signals "no match", which
- *  the write phase uses to skip a no-op `tx.update`. */
-export const rewriteWikilink = (
-  content: string,
-  alias: string,
-  replacement: string,
-): string => {
-  const pattern = new RegExp(`\\[\\[${escapeRegex(alias)}\\]\\]`, 'g')
-  return content.replace(pattern, replacement)
-}
-
 /** Replacement form for a single removed alias α. */
 export const replacementFor = (
   alias: string,
@@ -87,19 +81,30 @@ export const replacementFor = (
   added: readonly string[],
   targetId: string,
 ): string => {
-  if (removed.length === 1 && added.length === 1) return `[[${added[0]}]]`
+  if (removed.length === 1 && added.length === 1) return renderWikilink(added[0])
   // R4/R5/R6/R7/A2-cascade: aliased blockref preserves the original
   // display text the source author wrote while pinning to the stable
   // target id.
-  return `[${alias}](((${targetId})))`
+  return renderAliasedBlockref(alias, targetId)
 }
 
-/** Per-source running plan. `nextContent` is the running rewrite; we
- *  layer additional alias-rewrites onto it as we encounter them. */
+/** One rewrite operation applied to a single source. Multiple
+ *  rewrites accumulate per source when several aliases on the same
+ *  target are removed in one commit. Order matters: applied in the
+ *  order collected. */
+interface Rewrite {
+  alias: string
+  replacement: string
+}
+
+/** Per-source plan. Stores rewrites rather than a pre-baked
+ *  `nextContent` so the write phase re-reads the current source
+ *  content via `tx.get` and applies the rewrites against fresh
+ *  state — avoids clobbering edits the user made between the read
+ *  and write phases. */
 interface SourcePlan {
   sourceId: string
-  originalContent: string
-  nextContent: string
+  rewrites: Rewrite[]
 }
 
 /** Pull source plans for one target's alias diff and merge into the
@@ -119,28 +124,35 @@ const collectTargetPlans = async (
 
   for (const alias of removed) {
     const replacement = replacementFor(alias, removed, added, after.id)
-    const sources = await ctx.db.getAll<BacklinkSourceRow>(
+    const sources = await ctx.db.getAll<BacklinkSourceIdRow>(
       SELECT_BACKLINK_SOURCES_SQL,
       [after.workspaceId, after.id, alias],
     )
     for (const row of sources) {
-      const existing = plansBySourceId.get(row.sourceId)
-      if (existing) {
-        existing.nextContent = rewriteWikilink(existing.nextContent, alias, replacement)
-      } else {
-        plansBySourceId.set(row.sourceId, {
-          sourceId: row.sourceId,
-          originalContent: row.content,
-          nextContent: rewriteWikilink(row.content, alias, replacement),
-        })
+      const plan = plansBySourceId.get(row.sourceId) ?? {
+        sourceId: row.sourceId,
+        rewrites: [],
       }
+      plan.rewrites.push({alias, replacement})
+      plansBySourceId.set(row.sourceId, plan)
     }
   }
 }
 
 const applyPlan = async (tx: Tx, plan: SourcePlan): Promise<void> => {
-  if (plan.nextContent === plan.originalContent) return
-  await tx.update(plan.sourceId, {content: plan.nextContent}, {skipMetadata: true})
+  // Re-read inside the write tx so concurrent edits to the source
+  // (made after our committed-state read but before this write)
+  // aren't clobbered by a stale `nextContent`. The rewrites operate
+  // on parser spans — if the user deleted the wikilink in between,
+  // there's nothing to match and the rewrite is a no-op.
+  const current = await tx.get(plan.sourceId)
+  if (current === null || current.deleted) return
+  let next = current.content
+  for (const rewrite of plan.rewrites) {
+    next = rewriteWikilinks(next, rewrite.alias, rewrite.replacement)
+  }
+  if (next === current.content) return
+  await tx.update(plan.sourceId, {content: next}, {skipMetadata: true})
 }
 
 /** True iff the alias-encoded value differs between before/after.

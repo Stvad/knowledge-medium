@@ -24,9 +24,16 @@
  * processor's own writes) is a no-op — see the per-rule check in
  * `planSync`.
  *
- * Two-phase shape mirrors parseReferences: read phase computes a plan
- * per row outside any tx; write phase opens one tx for all plans
- * that need writing.
+ * Two-phase shape mirrors parseReferences:
+ *   - Read phase computes a plan per row from the event's `(before,
+ *     after)` snapshot, outside any tx.
+ *   - Write phase opens one tx; for each plan, re-reads the target
+ *     row via `tx.get` and verifies the row's current state still
+ *     matches the snapshot we planned against. If diverged — the
+ *     user (or another processor) wrote to the row between event
+ *     and apply — the plan is stale; skip rather than clobber. The
+ *     watcher will re-fire on the newer state and the next planSync
+ *     pass will produce a fresh decision.
  */
 
 import {
@@ -43,10 +50,15 @@ import { aliasesProp } from '@/data/internals/coreProperties'
 
 export const ALIAS_SYNC_PROCESSOR = 'alias.sync'
 
-/** What the write phase should do for one row. `null` means no-op. */
+/** What the write phase should do for one row. `null` means no-op
+ *  on that side. `expectedContent` / `expectedAliases` snapshot what
+ *  the planner observed; the write phase compares against current
+ *  state and skips on mismatch (stale-plan guard). */
 interface SyncPlan {
   id: string
   workspaceId: string
+  expectedContent: string
+  expectedAliases: readonly string[]
   contentNext: string | null
   aliasesNext: readonly string[] | null
 }
@@ -79,8 +91,11 @@ const dedupe = (values: readonly string[]): string[] => {
 }
 
 /** Build the plan for one row. Returns null when nothing should be
- *  written — the row was created/deleted in this commit, or no rule
- *  applies, or the rule's output is identical to current state. */
+ *  written — the row was created/deleted in this commit, no rule
+ *  applies, the rule's output is identical to current state, or the
+ *  rule would propagate a blank value (sync never creates a `""`
+ *  alias entry or a `""` content body — see the blank-string guards
+ *  below). */
 export const planSync = (row: ChangedRow): SyncPlan | null => {
   // Skip creates (before === null), hard-deletes (after === null), and
   // soft-deletes. None of these are "edits" the ladder reasons about.
@@ -99,7 +114,21 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
   if (afterAliases.length === 0) return null
   const contentChanged = before.content !== after.content
 
+  const planShell = {
+    id: row.id,
+    workspaceId: after.workspaceId,
+    expectedContent: after.content,
+    expectedAliases: afterAliases,
+  }
+
   if (contentChanged) {
+    // Blank-content guard for the content→alias direction: never
+    // write a `""` alias entry. The alias index supports the row but
+    // lookup ignores empty aliases — a blank entry pollutes the
+    // alias list without being useful. The user clearing a page title
+    // expressing "no name" should keep the existing aliases as-is.
+    if (after.content === '') return null
+
     if (afterAliases.includes(before.content)) {
       // Rule 1 (A1, A2): replace old content's alias entry with new
       // content; dedupe. Guard: if the dedup'd result equals current,
@@ -111,8 +140,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
       )
       if (arraysEqual(replaced, afterAliases)) return null
       return {
-        id: row.id,
-        workspaceId: after.workspaceId,
+        ...planShell,
         contentNext: null,
         aliasesNext: replaced,
       }
@@ -122,8 +150,7 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
     // user edited to a name that was already an alternate).
     if (afterAliases.includes(after.content)) return null
     return {
-      id: row.id,
-      workspaceId: after.workspaceId,
+      ...planShell,
       contentNext: null,
       aliasesNext: [...afterAliases, after.content],
     }
@@ -136,14 +163,17 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
   const removed = beforeAliases.filter(a => !afterAliases.includes(a))
   const added = afterAliases.filter(a => !beforeAliases.includes(a))
   if (removed.length === 1 && added.length === 1 && after.content === removed[0]) {
+    // Defensive: don't propagate a blank rename-to into content. A
+    // user renaming alias "Foo" → "" is unusual but possible; we'd
+    // rather leave content alone than create a blank-titled block.
+    if (added[0] === '') return null
     // Guard: the added value equals current content already (somehow)
     // → nothing to do. Defensive; the swap-shape check above should
     // already rule this out (added === current would mean content is
     // also in beforeAliases, so it can't have been "removed").
     if (after.content === added[0]) return null
     return {
-      id: row.id,
-      workspaceId: after.workspaceId,
+      ...planShell,
       contentNext: added[0],
       aliasesNext: null,
     }
@@ -152,7 +182,16 @@ export const planSync = (row: ChangedRow): SyncPlan | null => {
   return null
 }
 
+/** Apply one plan inside the write tx. Re-reads the row via `tx.get`
+ *  and skips if state has diverged from the planner's snapshot — the
+ *  watcher will re-fire on the fresher state and produce a new plan.
+ *  See file-header for the rationale. */
 const applyPlan = async (tx: Tx, plan: SyncPlan): Promise<void> => {
+  const current = await tx.get(plan.id)
+  if (current === null || current.deleted) return
+  if (current.content !== plan.expectedContent) return
+  const currentAliases = decodeAliases(current)
+  if (!arraysEqual(currentAliases, plan.expectedAliases)) return
   if (plan.aliasesNext !== null) {
     await tx.setProperty(plan.id, aliasesProp, [...plan.aliasesNext], {skipMetadata: true})
   }

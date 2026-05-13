@@ -572,14 +572,22 @@
 
 <div class="case">
   <p style="margin: 0 0 0.4rem 0; font-size: 0.9rem;">
-    <code>ensureAliasTarget</code>'s current behavior (<a href="../src/data/targets.ts">targets.ts:128</a>)
-    creates seats at <code>uuidv5(workspaceId:alias, ALIAS_NS)</code>. After a rename the
-    id is stale — the seat now claims a different alias. New typings of the old alias
-    silently resolve to the renamed block.
+    <strong>Problem (pre-fix):</strong> the legacy
+    <code>ensureAliasTarget</code> created seats at
+    <code>uuidv5(workspaceId:alias, ALIAS_NS)</code> — a single id per
+    <code>(alias, ws)</code>. After a rename the id is stale — the
+    seat now claims a different alias — and new typings of the old
+    alias silently resolve to the renamed block. Tombstone-restore-
+    on-retype had the same flavour: deleting an alias seat and re-
+    typing the wikilink resurrected the deleted target instead of
+    creating a fresh one.
   </p>
   <p style="margin: 0 0 0.4rem 0; font-size: 0.9rem;">
-    <strong>Fix:</strong> probe an indexed-deterministic namespace until we find an
-    empty slot or one that claims our alias.
+    <strong>Implemented in <a href="../src/data/targets.ts">targets.ts</a></strong>
+    (<code>resolveAliasSeatId</code> +
+    <code>computeAliasSeatId(alias, ws, index)</code>): probe an
+    indexed-deterministic namespace until we find an empty slot or
+    one that claims our alias.
   </p>
   <ol style="font-size: 0.9rem; margin: 0 0 0.4rem 1.2rem;">
     <li>Try <code>id<sub>0</sub> = uuidv5("ws:alias:0", ALIAS_NS)</code>.</li>

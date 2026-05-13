@@ -196,3 +196,64 @@ export function parseBlockRefs(content: string): ParsedBlockRef[] {
 export function extractBlockRefIds(content: string): string[] {
   return Array.from(new Set(parseBlockRefs(content).map(r => r.blockId)))
 }
+
+// ──── Rendering helpers (centralized so callers don't build wikilink
+//      / blockref syntax via string templates and accidentally diverge
+//      from parser expectations). ────
+
+/** Render a wikilink targeting `alias`. Sanitizes any embedded `]]`
+ *  that would close the wikilink early — collapses `]]` to `] ]` so
+ *  the rendered output round-trips through `parseReferences`. */
+export const renderWikilink = (alias: string): string => {
+  // `]]` inside the alias would terminate the wikilink at the wrong
+  // place. Splitting it with a space keeps the visible text close to
+  // the input and lets the parser match the full alias text. The
+  // edge case is pathological (aliases rarely contain `]]`); we
+  // accept the cosmetic split rather than refusing to render.
+  const safe = alias.replace(/]]/g, '] ]')
+  return `[[${safe}]]`
+}
+
+/** Render an aliased blockref `[label](((id)))`. Strips `]` and
+ *  newlines from `label` because the parser's regex rejects them in
+ *  the label segment (see `ALIASED_BLOCK_REF_RE`). `id` is assumed
+ *  to be a UUID — already safe. */
+export const renderAliasedBlockref = (label: string, id: string): string => {
+  // Parser regex: `\[([^\]\n]*)\]\(\(\((UUID)\)\)\)`. Anything in `]`
+  // or `\n` would break the match; drop them. Empty label after
+  // stripping is allowed — the parser matches `[]` (zero-length
+  // label) and the renderer falls back to displaying the id.
+  const safeLabel = label.replace(/[\]\n]/g, '')
+  return `[${safeLabel}](((${id})))`
+}
+
+/** Replace every wikilink whose (trimmed) alias matches `alias` with
+ *  the literal `replacement` string. Uses `parseReferences` to find
+ *  spans — handles `[[ alias ]]` (trimmed by parser) and avoids the
+ *  `String.replace` regex-replacement-string pitfall where `$&`,
+ *  `$1`, etc. in `replacement` would be interpreted as backreferences
+ *  rather than literals. Returns the input unchanged when no span
+ *  matches. */
+export const rewriteWikilinks = (
+  content: string,
+  alias: string,
+  replacement: string,
+): string => {
+  const target = alias.trim()
+  if (target === '') return content  // parser never emits empty-alias marks
+  const marks = parseReferences(content)
+  if (marks.length === 0) return content
+  let result = ''
+  let cursor = 0
+  for (const mark of marks) {
+    // Nested wikilinks (`[[outer [[inner]] tail]]`) produce overlapping
+    // spans. Skip any whose start falls inside a span we've already
+    // rewritten — replacing both would corrupt the outer's text.
+    if (mark.startIndex < cursor) continue
+    if (mark.alias !== target) continue
+    result += content.slice(cursor, mark.startIndex)
+    result += replacement
+    cursor = mark.endIndex
+  }
+  return cursor === 0 ? content : result + content.slice(cursor)
+}

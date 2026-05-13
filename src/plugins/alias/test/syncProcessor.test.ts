@@ -153,6 +153,69 @@ describe('alias.sync — non-aliased blocks', () => {
   })
 })
 
+describe('alias.sync — blank-content guard', () => {
+  it('clearing content does NOT add `""` to the alias list (A1 path)', async () => {
+    await createTarget('t', 'Old', ['Old'])
+    await env.repo.mutate.setContent({id: 't', content: ''})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('')
+    // Aliases stay as ["Old"]; sync refuses to write a blank alias
+    // entry. The alias index ignores empty strings anyway, so this
+    // would just pollute the alias list.
+    expect(await readAliases('t')).toEqual(['Old'])
+  })
+
+  it('A3 drift heal does not append `""` either', async () => {
+    await createTarget('t', 'already drifted', ['Original'])
+    await env.repo.mutate.setContent({id: 't', content: ''})
+    await flush()
+
+    expect((await env.read('t'))!.content).toBe('')
+    expect(await readAliases('t')).toEqual(['Original'])
+  })
+
+  it('AR1 does not rewrite content to `""` when an alias is renamed to empty', async () => {
+    await createTarget('t', 'Foo', ['Foo'])
+    await env.repo.tx(
+      tx => tx.setProperty('t', aliasesProp, ['']),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+    expect((await env.read('t'))!.content).toBe('Foo')
+  })
+})
+
+describe('alias.sync — stale-plan safety', () => {
+  it('does not clobber content when two edits queue before processors flush', async () => {
+    // Two rapid setContent calls commit back-to-back; the watcher
+    // emits event-1 and event-2 with event-1's snapshot already stale
+    // (the row has moved to "Brand new" by the time sync's write tx
+    // opens). The stale-plan guard makes event-1's plan a no-op
+    // (its `expectedContent: "New name"` doesn't match the row's
+    // current "Brand new"); event-2 produces a fresh plan against
+    // the current state. End result: no clobber.
+    await createTarget('t', 'Old', ['Old'])
+
+    await env.repo.mutate.setContent({id: 't', content: 'New name'})
+    // Second edit lands before flush() runs processors; both events
+    // queue, both pass through the divergence check.
+    await env.repo.mutate.setContent({id: 't', content: 'Brand new'})
+    await flush()
+
+    // Content is the user's final value; sync didn't roll it back.
+    expect((await env.read('t'))!.content).toBe('Brand new')
+    // Aliases tracking: the stale plan that would have written
+    // [New name] is skipped (its expected snapshot diverges). The
+    // event-2 plan sees content "Brand new" with alias "Old" still
+    // in place — A3 drift heal appends "Brand new" without dropping
+    // "Old" (rule 1 doesn't fire because "New name" ∉ ["Old"]).
+    const aliases = await readAliases('t')
+    expect(aliases).toContain('Brand new')
+    expect(aliases).not.toContain('New name')
+  })
+})
+
 describe('alias.sync — convergence', () => {
   it('second pass after sync writes is a no-op (A1 cascade)', async () => {
     await createTarget('t', 'Old name', ['Old name'])
