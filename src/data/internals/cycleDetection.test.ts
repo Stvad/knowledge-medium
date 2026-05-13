@@ -51,7 +51,7 @@ afterEach(async () => {
 
 /** Insert a row directly via SQL with `tx_context.source = NULL`, so the
  *  row_events trigger COALESCEs to 'sync' — closest in-test approximation
- *  to PowerSync's CRUD-apply path. Same shape as the helpers in
+ *  to Electric shape apply. Same shape as the helpers in
  *  invalidation.test.ts. */
 const seedSync = async (
   args: { id: string; workspaceId?: string; parentId?: string | null; orderKey?: string },
@@ -75,8 +75,7 @@ const seedSync = async (
 
 /** Repoint an existing block's parent via direct SQL (sync-applied). The
  *  workspace-invariant trigger is gated on `source IS NOT NULL`, so this
- *  bypasses parent-existence checks the same way PowerSync's CRUD-apply
- *  path does. */
+ *  bypasses parent-existence checks the same way Electric shape apply does. */
 const movePartySync = async (id: string, parentId: string | null): Promise<void> => {
   await env.h.db.execute(
     `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
@@ -109,7 +108,7 @@ describe('cycle detection (§4.7)', () => {
     // Two concurrent sync-applied moves close the loop:
     //   client X moved A under B
     //   client Y moved B under A
-    // Both land via PowerSync's CRUD-apply path → source=NULL → tagged
+    // Both land via Electric shape apply → source=NULL → tagged
     // 'sync' by the row_events trigger.
     await movePartySync('A', 'B')
     await movePartySync('B', 'A')

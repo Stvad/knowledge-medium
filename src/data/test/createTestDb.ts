@@ -1,27 +1,14 @@
 /**
- * Real-PowerSync test harness for the data-layer redesign.
+ * Real SQLite test harness for the data-layer redesign.
  *
- * Spins up an actual `@powersync/node` `PowerSyncDatabase` with the
- * production raw-table mapping and the v2 client schema. Tests for
- * `Repo` / `Tx` / tree CTEs run against this — same `db.execute` /
- * `db.writeTransaction` surface as production, same SQLite engine
- * semantics, same triggers and side indexes.
- *
- * Why @powersync/node and not node:sqlite + adapter:
- *   The Tx engine relies on `db.writeTransaction(fn)` semantics — locking,
- *   queueing, rollback-on-throw — that PowerSync's wrapper provides.
- *   Mocking that with our own adapter would make tests pass against a
- *   subtly different contract than production. @powersync/node is the
- *   officially-supported Node story; better-sqlite3 underneath gives us
- *   real SQLite, and the wrapper is identical to @powersync/web's.
- *
- * Why a real file (not :memory:):
- *   @powersync/node spawns worker threads for reads (writer + ≥1 reader).
- *   :memory: gives each worker its own private DB, so reads see an empty
- *   schema. A per-test tmpdir is the supported pattern.
+ * Spins up a node:sqlite database with the same async interface as the
+ * browser wa-sqlite adapter. Tests for `Repo` / `Tx` / tree CTEs run against
+ * this — same schema, same triggers and side indexes, and the same
+ * rollback-on-throw `writeTransaction` contract production relies on.
  */
 
 import { createHash } from 'node:crypto'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import {
   cpSync,
   existsSync,
@@ -34,9 +21,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PowerSyncDatabase, Schema } from '@powersync/node'
 import {
-  BLOCKS_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -46,6 +31,12 @@ import {
   backfillBlockAliasesIfEmpty,
   backfillBlockTypesIfEmpty,
 } from '@/data/internals/clientSchema'
+import type {
+  LocalDb,
+  LocalDbChangeHandler,
+  LocalDbChangeOptions,
+} from '@/data/internals/commitPipeline'
+import type { TxDb } from '@/data/internals/txEngine'
 import {
   applyLocalSchemaContributions,
   resolveLocalSchemaContributions,
@@ -53,46 +44,163 @@ import {
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
 
 export interface TestDb {
-  /** The real PowerSync database — same type as production. */
-  db: PowerSyncDatabase
-  /** Tear down: closes the db and removes the per-test tmpdir. Call from
-   *  `afterAll` or `afterEach`. Idempotent. */
+  db: LocalDb
   cleanup: () => Promise<void>
 }
 
 const localSchemaContributions = resolveLocalSchemaContributions(staticDataExtensions)
 
-const createTestSchema = (): Schema => {
-  const schema = new Schema({})
-  schema.withRawTables({blocks: BLOCKS_RAW_TABLE})
-  return schema
+type Listener = {
+  handler: LocalDbChangeHandler
+  options?: LocalDbChangeOptions
 }
 
-const openTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
-  const schema = createTestSchema()
-  const db = new PowerSyncDatabase({
-    schema,
-    database: {dbFilename: 'test.db', dbLocation: dbDir},
-  })
-  await db.waitForReady()
-  return db
+const normalizeParam = (value: unknown): SQLInputValue => {
+  if (value === undefined || value === null) return null
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'bigint' ||
+    value instanceof Uint8Array
+  ) {
+    return value
+  }
+  if (typeof value === 'boolean') return value ? 1 : 0
+  throw new Error(`Unsupported SQLite parameter type: ${typeof value}`)
 }
 
-const initializeTestDb = async (dbDir: string): Promise<PowerSyncDatabase> => {
-  const db = await openTestDb(dbDir)
-  // PowerSync's RawTable mapping does not auto-create the local SQLite
-  // table — production runs the DDL itself in `repoProvider.ts`. We
-  // mirror that ordering: blocks table + indexes first, then the
-  // client-schema add-ons (auxiliary tables + triggers).
+const normalizeParams = (params: unknown[]): SQLInputValue[] =>
+  params.map(normalizeParam)
+
+class NodeSqliteDb implements LocalDb {
+  private readonly db: DatabaseSync
+  private readonly listeners = new Set<Listener>()
+  private chain: Promise<void> = Promise.resolve()
+  private closed = false
+
+  constructor(filename: string) {
+    this.db = new DatabaseSync(filename)
+  }
+
+  async writeTransaction<R>(fn: (tx: TxDb) => Promise<R>): Promise<R> {
+    return this.enqueue(async () => {
+      this.ensureOpen()
+      this.db.prepare('BEGIN IMMEDIATE').run()
+      try {
+        const result = await fn(this.txDb)
+        this.db.prepare('COMMIT').run()
+        this.notify()
+        return result
+      } catch (error) {
+        this.db.prepare('ROLLBACK').run()
+        throw error
+      }
+    })
+  }
+
+  async getAll<T>(sql: string, params: unknown[] = []): Promise<T[]> {
+    return this.enqueue(async () => {
+      this.ensureOpen()
+      return this.db.prepare(sql).all(...normalizeParams(params)) as T[]
+    })
+  }
+
+  async getOptional<T>(sql: string, params: unknown[] = []): Promise<T | null> {
+    return this.enqueue(async () => {
+      this.ensureOpen()
+      return (this.db.prepare(sql).get(...normalizeParams(params)) as T | undefined) ?? null
+    })
+  }
+
+  async get<T>(sql: string, params: unknown[] = []): Promise<T> {
+    const row = await this.getOptional<T>(sql, params)
+    if (row === null) throw new Error(`SQLite query returned no rows: ${sql}`)
+    return row
+  }
+
+  async execute(sql: string, params: unknown[] = []): Promise<unknown> {
+    return this.enqueue(async () => {
+      this.ensureOpen()
+      if (params.length === 0) {
+        this.db.exec(sql)
+      } else {
+        this.db.prepare(sql).run(...normalizeParams(params))
+      }
+      this.notify()
+      return undefined
+    })
+  }
+
+  onChange(
+    handler: LocalDbChangeHandler,
+    options?: LocalDbChangeOptions,
+  ): () => void {
+    const listener = {handler, options}
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.enqueue(async () => {
+      if (this.closed) return
+      this.closed = true
+      this.listeners.clear()
+      this.db.close()
+    })
+  }
+
+  private readonly txDb: TxDb = {
+    execute: async (sql, params = []) => {
+      if (params.length === 0) {
+        this.db.exec(sql)
+      } else {
+      this.db.prepare(sql).run(...normalizeParams(params))
+      }
+    },
+    getAll: async <T,>(sql: string, params: unknown[] = []) =>
+      this.db.prepare(sql).all(...normalizeParams(params)) as T[],
+    getOptional: async <T,>(sql: string, params: unknown[] = []) =>
+      (this.db.prepare(sql).get(...normalizeParams(params)) as T | undefined) ?? null,
+    get: async <T,>(sql: string, params: unknown[] = []) => {
+      const row = this.db.prepare(sql).get(...normalizeParams(params)) as T | undefined
+      if (!row) throw new Error(`SQLite query returned no rows: ${sql}`)
+      return row
+    },
+  }
+
+  private ensureOpen(): void {
+    if (this.closed) throw new Error('SQLite database is closed')
+  }
+
+  private async enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.chain.then(fn, fn)
+    this.chain = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  private notify(): void {
+    for (const {handler} of this.listeners) {
+      Promise.resolve(handler.onChange()).catch(error => {
+        handler.onError?.(error)
+      })
+    }
+  }
+}
+
+const initializeTestDb = async (dbFile: string): Promise<NodeSqliteDb> => {
+  const db = new NodeSqliteDb(dbFile)
   await db.execute(CREATE_BLOCKS_TABLE_SQL)
   await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
   await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
     await db.execute(stmt)
   }
-  // No-op against a fresh test DB (no blocks yet), but mirrors the
-  // production startup ordering so any test that pre-seeds rows
-  // before the harness opens still gets backfilled.
+
   const backfillDb = {
     execute: (sql: string) => db.execute(sql),
     getOptional: async <T,>(sql: string) => {
@@ -153,7 +261,7 @@ const waitForTemplateReadyOrLockRelease = async (
 
 const ensureTemplateDbDir = async (): Promise<string> => {
   templateDbDirPromise ??= (async () => {
-    const cacheDir = join(tmpdir(), 'ps-test-template-cache')
+    const cacheDir = join(tmpdir(), 'electric-test-template-cache')
     mkdirSync(cacheDir, {recursive: true})
     const templateDir = join(cacheDir, getTemplateFingerprint())
     const readyFile = join(templateDir, TEMPLATE_READY_FILE)
@@ -171,10 +279,11 @@ const ensureTemplateDbDir = async (): Promise<string> => {
     }
 
     const dbDir = mkdtempSync(join(cacheDir, 'building-'))
-    let db: PowerSyncDatabase | null = null
+    const dbFile = join(dbDir, 'test.db')
+    let db: NodeSqliteDb | null = null
     try {
       rmSync(templateDir, {recursive: true, force: true})
-      db = await initializeTestDb(dbDir)
+      db = await initializeTestDb(dbFile)
       await db.close()
       writeFileSync(join(dbDir, TEMPLATE_READY_FILE), '')
       renameSync(dbDir, templateDir)
@@ -197,13 +306,13 @@ const copyTemplateDb = (templateDir: string, dbDir: string): void => {
   }
 }
 
-/** Open an in-tmpdir PowerSyncDatabase with the production blocks
- *  raw-table + the v2 client schema applied. */
+/** Open an in-tmpdir SQLite database with the production blocks table + the
+ *  v2 client schema applied. */
 export const createTestDb = async (): Promise<TestDb> => {
   const templateDir = await ensureTemplateDbDir()
-  const dbDir = mkdtempSync(join(tmpdir(), 'ps-test-'))
+  const dbDir = mkdtempSync(join(tmpdir(), 'electric-test-'))
   copyTemplateDb(templateDir, dbDir)
-  const db = await openTestDb(dbDir)
+  const db = new NodeSqliteDb(join(dbDir, 'test.db'))
 
   return {
     db,

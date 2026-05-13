@@ -3,11 +3,11 @@
  *
  *   1. Validate scope vs. read-only mode.
  *   2. Open `db.writeTransaction(fn)`.
- *      a. Set `tx_context` (tx_id, user_id, scope, source).
+ *      a. Set `tx_context` (tx_id, tx_seq, write_id, user_id, scope, source).
  *      b. Construct TxImpl + snapshots map.
  *      c. Run user fn (primitives write through to SQL inline).
  *      d. INSERT command_events row.
- *      e. Clear `tx_context` (all four → NULL).
+ *      e. Clear `tx_context` (all context fields → NULL).
  *   3. On COMMIT (post-fn-resolve, before promise resolves):
  *      a. Walk snapshots map: update cache to `after` per id (or evict
  *         on hard-delete).
@@ -51,25 +51,25 @@ import {
 import { newSnapshotsMap, type SnapshotsMap } from './txSnapshots'
 import type { BlockCache } from '@/data/blockCache'
 
-/** Minimal subset of the full PowerSync DB our pipeline + Repo talks
+/** Minimal subset of the full local SQLite DB our pipeline + Repo talks
  *  to. The test harness (`createTestDb`) returns a real
- *  `PowerSyncDatabase` that satisfies this; production passes the
- *  same. Both `writeTransaction` (for tx primitives) and the read
+ *  SQLite adapter that satisfies this; production passes the same.
+ *  Both `writeTransaction` (for tx primitives) and the read
  *  surface (`getAll` / `getOptional` / `get` for `repo.load`) are
  *  needed. `onChange` is the table-change subscription used by
  *  reactive query hooks until the row_events tail in Phase 2 ships a
  *  typed invalidation surface. */
-export interface PowerSyncDbChangeHandler {
+export interface LocalDbChangeHandler {
   onChange: () => void | Promise<void>
   onError?: (error: unknown) => void
 }
 
-export interface PowerSyncDbChangeOptions {
+export interface LocalDbChangeOptions {
   tables?: readonly string[]
   throttleMs?: number
 }
 
-export interface PowerSyncDb {
+export interface LocalDb {
   writeTransaction<R>(fn: (tx: TxDb) => Promise<R>): Promise<R>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
   getOptional<T>(sql: string, params?: unknown[]): Promise<T | null>
@@ -79,8 +79,8 @@ export interface PowerSyncDb {
    *  application code — every write should go through `repo.tx`. */
   execute(sql: string, params?: unknown[]): Promise<unknown>
   onChange(
-    handler: PowerSyncDbChangeHandler,
-    options?: PowerSyncDbChangeOptions,
+    handler: LocalDbChangeHandler,
+    options?: LocalDbChangeOptions,
   ): () => void
   /** Release the underlying connection (OPFS sync access handle on
    *  web, file handle in node). Used by `exportSqliteDb` when
@@ -125,7 +125,7 @@ const sameTxFieldChanged = (
 }
 
 export interface RunTxParams<R> {
-  db: PowerSyncDb
+  db: LocalDb
   cache: BlockCache
   fn: (tx: Tx) => Promise<R>
   opts: RepoTxOptions
@@ -134,8 +134,8 @@ export interface RunTxParams<R> {
   newTxId: () => string
   /** Monotonically increasing INTEGER per `repo.tx`. Written into
    *  `tx_context.tx_seq` so the upload-routing triggers can stamp
-   *  `ps_crud.tx_id` and PowerSync's `getNextCrudTransaction()` groups
-   *  multi-row writes correctly. Required to be strictly increasing
+   *  `outbox.tx_id` and the upload loop can group multi-row writes
+   *  correctly. Required to be strictly increasing
    *  across calls within a single `Repo`; the default Repo provider
    *  uses a counter seeded from `Date.now()`. */
   newTxSeq: () => number
@@ -218,11 +218,11 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
     // Step 1: set tx_context — triggers read this for source-tagging
     // row_events + gating upload routing + gating workspace-invariant
     // checks (§4.1.1, §4.3, §4.5). tx_seq is the integer key the
-    // upload triggers stamp into ps_crud.tx_id so PowerSync's
-    // getNextCrudTransaction() groups multi-row writes correctly.
+    // upload triggers stamp into outbox.tx_id; write_id is the
+    // server-roundtripped echo-skip key.
     await txDb.execute(
-      `UPDATE tx_context SET tx_id = ?, tx_seq = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`,
-      [txId, txSeq, user.id, scope, source],
+      `UPDATE tx_context SET tx_id = ?, tx_seq = ?, write_id = ?, user_id = ?, scope = ?, source = ? WHERE id = 1`,
+      [txId, txSeq, txId, user.id, scope, source],
     )
 
     // Step 2: construct Tx + snapshots map + run user fn.
@@ -306,12 +306,12 @@ export const runTx = async <R>(params: RunTxParams<R>): Promise<TxResult<R>> => 
 
     // Step 5: clear tx_context. Doing this inside the writeTransaction
     // means rollback restores the pre-tx state atomically — no risk of
-    // a stale tx_id / tx_seq leaking into a sync-applied row_event or
-    // ps_crud row after a crashed local tx (the trigger CASE on
+    // a stale tx_id / tx_seq / write_id leaking into a sync-applied
+    // row_event or outbox row after a crashed local tx (the trigger CASE on
     // `source IS NULL` is the belt-and-suspenders backup for row_events;
     // this clear is the primary).
     await txDb.execute(
-      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
+      `UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, write_id = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1`,
     )
 
     return result

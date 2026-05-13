@@ -1,11 +1,11 @@
 # Malleable Thought Medium
 
-## Supabase + PowerSync Setup
+## Supabase + Electric Setup
 
 This repo now expects:
 - Supabase hosted Postgres for the source database
 - Supabase Auth for app sessions (email OTP, with anonymous as a fallback)
-- PowerSync Cloud for syncing into local SQLite
+- Electric Cloud for shape streams into local SQLite, reached through an app-owned shape proxy
 
 Sign-in flow:
 - Primary: enter your email, Supabase emails a 6-digit code, type it back in the app
@@ -39,20 +39,19 @@ npx supabase config push
    - `VITE_SUPABASE_URL`: Supabase project URL
    - `VITE_SUPABASE_ANON_KEY`: Supabase publishable / anon key
 
-6. Log into PowerSync and create a cloud instance:
+6. Create an Electric Cloud source connected to the Supabase Postgres database. The committed migrations add `blocks.write_id` and set `REPLICA IDENTITY FULL` on the synced tables so Electric can emit full update/delete rows.
 
-```bash
-npx powersync@latest login
-npx powersync@latest link cloud --create --project-id <powersync-project-id>
-npx powersync@latest validate
-npx powersync@latest deploy
-```
+7. Deploy a small shape proxy in front of Electric Cloud and configure three named endpoints:
+   - `/blocks`
+   - `/workspaces`
+   - `/workspace_members`
 
-7. Fill the remaining env vars:
-   - `PS_DATABASE_URI`: Supabase "Direct connection" URI copied from the Supabase Connect dialog
-   - `VITE_POWERSYNC_URL`: PowerSync instance URL from the PowerSync dashboard / connect dialog
+   The browser sends the Supabase access token as `Authorization: Bearer <jwt>`. The proxy should validate that token, keep the Electric source secret server-side, and enforce the table/workspace predicates server-side instead of accepting arbitrary table or SQL params from the browser.
 
-8. Start the app:
+8. Fill the remaining env var:
+   - `VITE_ELECTRIC_SHAPE_PROXY_URL`: base URL for that shape proxy, without a trailing shape name
+
+9. Start the app:
 
 ```bash
 yarn dev
@@ -60,8 +59,8 @@ yarn dev
 
 ### Notes
 
-- The fastest dev path is to use the Supabase direct connection URI as-is in `PS_DATABASE_URI`.
-- For a hardened setup, create a dedicated `powersync_role` with replication privileges and replace the username/password in `PS_DATABASE_URI` before deploying PowerSync.
+- Local writes land in the durable SQLite `outbox` table and upload through Supabase. Electric owns the ordered read path back into SQLite.
+- The `write_id` column on `blocks` lets the Electric subscriber skip echoes while the matching outbox row is still pending.
 - Because the starter graph is seeded in the remote database, the app will now wait briefly for the first remote sync before falling back to local example data.
 
 ### Safe Mode
@@ -71,7 +70,7 @@ yarn dev
 
 ## Agent Runtime Access
 
-The app exposes a first-class runtime bridge for coding agents. The browser app connects to a local relay, and agents submit commands to that relay from the terminal. Commands execute inside the live app runtime, with access to the current `Repo`, active workspace, PowerSync SQLite database, resolved runtime facets, block helpers, and arbitrary JavaScript execution.
+The app exposes a first-class runtime bridge for coding agents. The browser app connects to a local relay, and agents submit commands to that relay from the terminal. Commands execute inside the live app runtime, with access to the current `Repo`, active workspace, local SQLite database, resolved runtime facets, block helpers, and arbitrary JavaScript execution.
 
 Start the app:
 

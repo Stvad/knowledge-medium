@@ -2,7 +2,7 @@
  * row_events tail benchmarks.
  *
  * The tail is the sync-applied invalidation path (spec §9.3 path 2):
- * sync writes hit SQLite via PowerSync's CRUD-apply, the trigger writes
+ * sync writes hit SQLite via Electric shape apply, the trigger writes
  * row_events with `source = 'sync'`, and this subscription drains them
  * into cache updates + handle invalidations.
  *
@@ -18,8 +18,8 @@
  * trigger COALESCEs to 'sync'. That's exactly what the production sync
  * apply path produces, so the tail consumes it the same way.
  *
- * Deferred (would need PowerSync internals): measuring tail latency
- * end-to-end through a real sync apply (we'd need a syncing connection,
+ * Deferred: measuring tail latency end-to-end through a real sync apply
+ * (we'd need a syncing connection,
  * which makes this an integration test, not a microbench).
  */
 
@@ -32,7 +32,7 @@ import { populateFlat } from './fixtures'
 /** Insert N rows mimicking a sync-applied burst. tx_context is NOT set,
  *  so the row_events trigger tags them `source='sync'`. */
 const insertSyncRows = async (
-  db: import('@/data/internals/commitPipeline').PowerSyncDb,
+  db: import('@/data/internals/commitPipeline').LocalDb,
   args: {workspaceId: string; count: number; parentId?: string | null},
 ): Promise<string[]> => {
   const ids: string[] = []

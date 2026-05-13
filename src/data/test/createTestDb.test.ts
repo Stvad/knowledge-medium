@@ -22,16 +22,16 @@ describe('createTestDb harness', () => {
     await h.cleanup()
   })
 
-  it('opens a writable PowerSyncDatabase with the v2 blocks shape', async () => {
+  it('opens a writable SQLite database with the v2 blocks shape', async () => {
     const cols = (await h.db.getAll<{name: string}>(
       "SELECT name FROM pragma_table_info('blocks') ORDER BY cid",
     )).map(r => r.name)
     expect(cols).toEqual(BLOCK_STORAGE_COLUMNS.map(c => c.name))
   })
 
-  it('seeds tx_context with one NULL row across all five tx fields', async () => {
+  it('seeds tx_context with one NULL row across all tx fields', async () => {
     const row = await h.db.get<Record<string, unknown>>('SELECT * FROM tx_context')
-    expect(row).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
+    expect(row).toEqual({id: 1, tx_id: null, tx_seq: null, write_id: null, user_id: null, scope: null, source: null})
   })
 
   it('installs the documented set of blocks triggers', async () => {

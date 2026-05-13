@@ -13,7 +13,7 @@
  *   - Stacks cleared via `clear()`
  *
  * The replay-against-DB tests live in `repoUndo.test.ts` — they need
- * the real `Repo` + PowerSync harness because they exercise SQL state.
+ * the real `Repo` + SQLite harness because they exercise SQL state.
  */
 
 import { describe, expect, it } from 'vitest'

@@ -3,7 +3,7 @@
  *
  *   - `bench(name, fn, opts)` runs warmup + measured iterations, returns
  *     stats (mean / p50 / p95 / p99 / min / max / stddev / ops-per-sec).
- *   - `instrumentDb(db)` wraps a PowerSyncDb with a counter that tallies
+ *   - `instrumentDb(db)` wraps a LocalDb with a counter that tallies
  *     `execute` / `getAll` / `getOptional` / `get` / `writeTransaction`
  *     calls — used to verify "tree walks push to SQL" by counting
  *     roundtrips per mutation.
@@ -15,7 +15,7 @@
  * For O(s)-scale ops we want a few stable samples, not a fixed thousand.
  */
 
-import type { PowerSyncDb } from '@/data/internals/commitPipeline'
+import type { LocalDb } from '@/data/internals/commitPipeline'
 
 export interface BenchOptions {
   warmup?: number
@@ -134,7 +134,7 @@ export const bench = async (
   }
 }
 
-/** SQL-roundtrip counter wrapped around a PowerSyncDb. The bench harness
+/** SQL-roundtrip counter wrapped around a LocalDb. The bench harness
  *  uses this to count how many SQL calls a single mutation makes — the
  *  Phase 5 acceptance is "subtree of 1000 blocks 5 levels deep = 1 SQL
  *  query"; this is how we measure that. */
@@ -159,7 +159,7 @@ export interface DbCounterSnapshot {
   total: number
 }
 
-export const instrumentDb = (db: PowerSyncDb): {db: PowerSyncDb; counters: DbCounters} => {
+export const instrumentDb = (db: LocalDb): {db: LocalDb; counters: DbCounters} => {
   const state = {execute: 0, getAll: 0, getOptional: 0, get: 0, writeTransaction: 0}
   const counters: DbCounters = {
     get execute() { return state.execute },
@@ -197,7 +197,7 @@ export const instrumentDb = (db: PowerSyncDb): {db: PowerSyncDb; counters: DbCou
     get: ((sql: string, params?: unknown[]) => { state.get++; return txDb.get(sql, params) }) as T['get'],
   })
 
-  const wrapped: PowerSyncDb = {
+  const wrapped: LocalDb = {
     execute: (sql, params) => { state.execute++; return db.execute(sql, params) },
     getAll: (sql, params) => { state.getAll++; return db.getAll(sql, params) },
     getOptional: (sql, params) => { state.getOptional++; return db.getOptional(sql, params) },
@@ -207,6 +207,7 @@ export const instrumentDb = (db: PowerSyncDb): {db: PowerSyncDb; counters: DbCou
       return db.writeTransaction((txDb) => fn(wrapTxDb(txDb)))
     },
     onChange: (h, opts) => db.onChange(h, opts),
+    close: () => db.close(),
   }
   return {db: wrapped, counters}
 }

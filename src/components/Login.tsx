@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { useLocalStorage } from 'react-use'
 import { User } from '@/types.ts'
 import { hasSupabaseAuthConfig, sessionUserToAppUser, supabase } from '@/services/supabase.ts'
-import { hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { hasRemoteSyncConfig } from '@/services/electric.ts'
 import { Session } from '@supabase/supabase-js'
 
 interface UserContextType {
@@ -12,7 +12,7 @@ interface UserContextType {
   setUser: (user?: User) => void
   signOut: () => Promise<void>
   // True when this session is running without remote sync — either because
-  // VITE_SUPABASE_*/VITE_POWERSYNC_URL aren't configured (LocalLogin is the
+  // VITE_SUPABASE_*/VITE_ELECTRIC_SHAPE_PROXY_URL aren't configured (LocalLogin is the
   // only path), or because the user explicitly chose "Use without sync" on
   // the Supabase login screen. Consumers gate Supabase-dependent UI/RPCs on
   // this so they don't blow up when the client isn't reachable.
@@ -214,15 +214,15 @@ function SupabaseLogin({children, onContinueLocally}: SupabaseLoginProps) {
       if (err) {
         console.error('Sign-out failed', err)
       }
-      // We DON'T wipe the local PowerSync database. Per-user databases
-      // (see src/data/repoInstance.ts) mean this user's local SQLite is
+      // We DON'T wipe the local SQLite database. Per-user databases
+      // (see src/data/repoProvider.ts) mean this user's local SQLite is
       // already isolated from any other user's; signing back in as the
       // same user reopens it and unsynced edits resume uploading. A
       // different user signs into a fresh database.
       window.location.reload()
     }
     // Even with a Supabase session, the runtime can still be in local-only
-    // mode if VITE_POWERSYNC_URL is missing — `hasRemoteSyncConfig` covers
+    // mode if the Electric shape proxy URL is missing — `hasRemoteSyncConfig` covers
     // both env-var holes; consumers should gate on it.
     return (
       <UserContext

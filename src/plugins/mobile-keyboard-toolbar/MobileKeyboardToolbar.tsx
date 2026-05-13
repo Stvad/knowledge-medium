@@ -224,7 +224,7 @@ export function MobileKeyboardToolbar() {
     // because document.activeElement is no longer inside any
     // .cm-editor. The blur fires whenever React eventually commits
     // the post-mutation render — that's *after* this handler returns,
-    // and the timing is variable (PowerSync subscription → React
+    // and the timing is variable (sync subscription → React
     // batched render → DOM diff/commit → blur). Stacked requestAnimation
     // Frames aren't enough; the blur regularly lands several frames
     // later still. Acquire a hold for a window that covers the worst-

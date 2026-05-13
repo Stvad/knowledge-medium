@@ -145,7 +145,7 @@ describe('QueryMetrics', () => {
 })
 
 describe('wrapDbWithMetrics', () => {
-  // Build a minimal fake PowerSyncDb that resolves after a short delay
+  // Build a minimal fake LocalDb that resolves after a short delay
   // so we get measurable timings (single-digit ms is fine — we only
   // assert that calls were recorded and ordering is sane).
   const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))

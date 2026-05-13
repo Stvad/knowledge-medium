@@ -96,7 +96,7 @@ interface SourcePlan {
   datesToEnsure: string[]
   /** True iff the planned `references` differ from what's currently on
    *  the row — used to skip a no-op write that would re-fire the
-   *  field-watcher and produce a useless row_events / ps_crud entry. */
+   *  field-watcher and produce a useless row_events / outbox entry. */
   referencesChanged: boolean
 }
 

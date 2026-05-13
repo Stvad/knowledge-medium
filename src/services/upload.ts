@@ -1,26 +1,37 @@
-import {
-  AbstractPowerSyncDatabase,
-  CrudEntry,
-  PowerSyncBackendConnector,
-  UpdateType,
-  type CrudTransaction,
-} from '@powersync/common'
 import { BLOCK_STORAGE_COLUMNS, type BlockRow } from '@/data/blockSchema.ts'
-import { supabase, hasSupabaseAuthConfig } from '@/services/supabase.ts'
+import type { LocalDb } from '@/data/internals/commitPipeline'
+import { supabase } from '@/services/supabase.ts'
 
-const powerSyncUrl = import.meta.env.VITE_POWERSYNC_URL?.trim()
-
-const MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH = 10_000
+const MAX_OUTBOX_ENTRIES_PER_UPLOAD_BATCH = 10_000
 const MAX_TRANSACTIONS_PER_UPLOAD_BATCH = 25
 const MAX_BLOCKS_PER_LOCAL_SELECT = 500
 const MAX_BLOCKS_PER_SUPABASE_UPSERT = 500
 const BULK_PATCH_UPSERT_THRESHOLD = 2
+const UPLOAD_RETRY_DELAY_MS = 5_000
 const BLOCK_UPLOAD_COLUMNS_SQL = BLOCK_STORAGE_COLUMNS.map(column => column.name).join(', ')
 
-export const hasPowerSyncServiceConfig = Boolean(powerSyncUrl)
-export const hasRemoteSyncConfig = hasSupabaseAuthConfig && hasPowerSyncServiceConfig
+export enum UploadOperation {
+  PUT = 'PUT',
+  PATCH = 'PATCH',
+  DELETE = 'DELETE',
+}
 
-type BlockUploadPayload = Record<string, unknown> & {id: string}
+export interface UploadQueueEntry {
+  table: string
+  op: UploadOperation
+  id: string
+  opData?: Record<string, unknown>
+  writeId: string
+}
+
+interface OutboxRow {
+  id: number
+  tx_id: number
+  write_id: string
+  data: string
+}
+
+type BlockUploadPayload = Record<string, unknown> & {id: string; write_id: string}
 
 type CompactedBlockOperation =
   | {
@@ -28,18 +39,26 @@ type CompactedBlockOperation =
       id: string
       payload: BlockUploadPayload
       order: number
+      writeId: string
     }
   | {
       kind: 'patch'
       id: string
       payload: Record<string, unknown>
       order: number
+      writeId: string
     }
   | {
       kind: 'delete'
       id: string
       order: number
+      writeId: string
     }
+
+export interface UploadLoop {
+  drainNow: () => void
+  stop: () => void
+}
 
 const assertSupabase = () => {
   if (!supabase) {
@@ -49,17 +68,24 @@ const assertSupabase = () => {
   return supabase
 }
 
-const blockPayloadFromPut = (entry: CrudEntry): BlockUploadPayload => ({
+const blockPayloadFromPut = (entry: UploadQueueEntry): BlockUploadPayload => ({
   ...(entry.opData ?? {}),
   id: entry.id,
+  write_id: entry.writeId,
 })
 
-const normalizeLocalBlockUploadRow = (row: BlockRow): BlockUploadPayload => ({
+const normalizeLocalBlockUploadRow = (
+  row: BlockRow,
+  writeId: string = row.write_id ?? '',
+): BlockUploadPayload => ({
   ...row,
+  write_id: writeId,
   deleted: Boolean(row.deleted),
 })
 
-const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockOperation[] => {
+const compactBlockUploadEntries = (
+  entries: readonly UploadQueueEntry[],
+): CompactedBlockOperation[] => {
   const byId = new Map<string, CompactedBlockOperation>()
 
   for (const [order, entry] of entries.entries()) {
@@ -67,18 +93,19 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
       throw new Error(`Unsupported table in upload queue: ${entry.table}`)
     }
 
-    if (entry.op === UpdateType.PUT) {
+    if (entry.op === UploadOperation.PUT) {
       byId.set(entry.id, {
         kind: 'upsert',
         id: entry.id,
         payload: blockPayloadFromPut(entry),
         order,
+        writeId: entry.writeId,
       })
       continue
     }
 
-    if (entry.op === UpdateType.PATCH) {
-      const patch = entry.opData ?? {}
+    if (entry.op === UploadOperation.PATCH) {
+      const patch = {...(entry.opData ?? {}), write_id: entry.writeId}
       const existing = byId.get(entry.id)
       if (existing?.kind === 'upsert') {
         byId.set(entry.id, {
@@ -89,6 +116,7 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
             ...patch,
           },
           order: existing.order,
+          writeId: entry.writeId,
         })
       } else if (existing?.kind === 'patch') {
         byId.set(entry.id, {
@@ -99,6 +127,7 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
             ...patch,
           },
           order: existing.order,
+          writeId: entry.writeId,
         })
       } else {
         byId.set(entry.id, {
@@ -106,21 +135,23 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
           id: entry.id,
           payload: patch,
           order,
+          writeId: entry.writeId,
         })
       }
       continue
     }
 
-    if (entry.op === UpdateType.DELETE) {
+    if (entry.op === UploadOperation.DELETE) {
       byId.set(entry.id, {
         kind: 'delete',
         id: entry.id,
         order,
+        writeId: entry.writeId,
       })
       continue
     }
 
-    throw new Error(`Unsupported CRUD operation: ${entry.op}`)
+    throw new Error(`Unsupported upload operation: ${entry.op}`)
   }
 
   return [...byId.values()].sort((left, right) => left.order - right.order)
@@ -159,7 +190,7 @@ const chunked = <T,>(items: readonly T[], size: number): T[][] => {
 const applyBlockPatch = async (id: string, payload: Record<string, unknown>) => {
   const client = assertSupabase()
 
-  console.debug('[powersync] PATCH', id, Object.keys(payload))
+  console.debug('[electric-upload] PATCH', id, Object.keys(payload))
   const {error} = await client
     .from('blocks')
     .update(payload)
@@ -173,7 +204,7 @@ const applyBlockPatch = async (id: string, payload: Record<string, unknown>) => 
 const applyBlockDelete = async (id: string) => {
   const client = assertSupabase()
 
-  console.debug('[powersync] DELETE', id)
+  console.debug('[electric-upload] DELETE', id)
   const {error} = await client
     .from('blocks')
     .delete()
@@ -189,7 +220,7 @@ const applyBlockUpserts = async (rows: readonly BlockUploadPayload[]) => {
   const client = assertSupabase()
 
   for (const chunk of chunked(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
-    console.debug('[powersync] UPSERT batch', chunk.length)
+    console.debug('[electric-upload] UPSERT batch', chunk.length)
     const {error} = await client
       .from('blocks')
       .upsert(chunk, {onConflict: 'id'})
@@ -201,7 +232,7 @@ const applyBlockUpserts = async (rows: readonly BlockUploadPayload[]) => {
 }
 
 const loadCurrentBlockUploadRows = async (
-  database: AbstractPowerSyncDatabase,
+  database: LocalDb,
   ids: readonly string[],
 ): Promise<BlockUploadPayload[]> => {
   const rows: BlockUploadPayload[] = []
@@ -212,7 +243,7 @@ const loadCurrentBlockUploadRows = async (
       `SELECT ${BLOCK_UPLOAD_COLUMNS_SQL} FROM blocks WHERE id IN (${placeholders})`,
       chunk,
     )
-    rows.push(...result.map(normalizeLocalBlockUploadRow))
+    rows.push(...result.map(row => normalizeLocalBlockUploadRow(row)))
   }
 
   return rows
@@ -222,8 +253,8 @@ const shouldBulkUpsertPatches = (patches: readonly {id: string}[]) =>
   patches.length >= BULK_PATCH_UPSERT_THRESHOLD
 
 const applyBlockPatches = async (
-  database: AbstractPowerSyncDatabase,
-  patches: readonly {id: string; payload: Record<string, unknown>}[],
+  database: LocalDb,
+  patches: readonly {id: string; payload: Record<string, unknown>; writeId: string}[],
 ) => {
   if (patches.length === 0) return
 
@@ -236,12 +267,14 @@ const applyBlockPatches = async (
     database,
     patches.map(patch => patch.id),
   )
+  const writeIdById = new Map(patches.map(patch => [patch.id, patch.writeId]))
   const rowsById = new Map(currentRows.map(row => [row.id, row]))
   const upserts = patches
     .map(patch => rowsById.get(patch.id))
     .filter((row): row is BlockUploadPayload => Boolean(row))
+    .map(row => ({...row, write_id: writeIdById.get(row.id) ?? row.write_id}))
 
-  console.debug('[powersync] PATCH backlog as UPSERT batch', upserts.length)
+  console.debug('[electric-upload] PATCH backlog as UPSERT batch', upserts.length)
   await applyBlockUpserts(upserts)
 
   for (const patch of patches) {
@@ -252,18 +285,18 @@ const applyBlockPatches = async (
 }
 
 const applyCompactedBlockOperations = async (
-  database: AbstractPowerSyncDatabase,
+  database: LocalDb,
   operations: readonly CompactedBlockOperation[],
 ) => {
   const upserts: BlockUploadPayload[] = []
-  const patches: Array<{id: string; payload: Record<string, unknown>}> = []
+  const patches: Array<{id: string; payload: Record<string, unknown>; writeId: string}> = []
   const deletes: string[] = []
 
   for (const operation of operations) {
     if (operation.kind === 'upsert') {
       upserts.push(operation.payload)
     } else if (operation.kind === 'patch') {
-      patches.push({id: operation.id, payload: operation.payload})
+      patches.push({id: operation.id, payload: operation.payload, writeId: operation.writeId})
     } else {
       deletes.push(operation.id)
     }
@@ -278,82 +311,123 @@ const applyCompactedBlockOperations = async (
   }
 }
 
-const collectUploadBatch = async (
-  database: AbstractPowerSyncDatabase,
-): Promise<CrudTransaction[]> => {
-  const transactions: CrudTransaction[] = []
-  const iterator = database.getCrudTransactions()[Symbol.asyncIterator]()
-  let entryCount = 0
-
-  while (
-    transactions.length < MAX_TRANSACTIONS_PER_UPLOAD_BATCH &&
-    (transactions.length === 0 || entryCount < MAX_CRUD_ENTRIES_PER_UPLOAD_BATCH)
-  ) {
-    const next = await iterator.next()
-    if (next.done || !next.value) break
-    transactions.push(next.value)
-    entryCount += next.value.crud.length
+const parseOutboxEntry = (row: OutboxRow): UploadQueueEntry => {
+  const parsed = JSON.parse(row.data) as {
+    op: UploadOperation
+    type: string
+    id: string
+    data?: Record<string, unknown>
   }
-
-  return transactions
+  return {
+    op: parsed.op,
+    table: parsed.type,
+    id: parsed.id,
+    opData: parsed.data,
+    writeId: row.write_id,
+  }
 }
 
-const uploadTransactions = async (
-  database: AbstractPowerSyncDatabase,
-  transactions: readonly CrudTransaction[],
-) => {
-  const entries = transactions.flatMap(transaction => transaction.crud)
-  const operations = compactBlockCrudEntries(entries)
+const collectUploadBatch = async (database: LocalDb): Promise<OutboxRow[]> => {
+  const transactions = await database.getAll<{tx_id: number}>(`
+    SELECT tx_id
+    FROM outbox
+    GROUP BY tx_id
+    ORDER BY MIN(id)
+    LIMIT ?
+  `, [MAX_TRANSACTIONS_PER_UPLOAD_BATCH])
+  if (transactions.length === 0) return []
 
-  try {
-    await applyCompactedBlockOperations(database, operations)
-  } catch (err) {
-    // Surface upload errors loudly — silent failures here look like
-    // "sync isn't working" with no explanation in the UI.
-    console.error('[powersync] upload failed', err)
-    throw err
-  }
-
-  await transactions[transactions.length - 1]?.complete()
+  const txIds = transactions.map(row => row.tx_id)
+  const placeholders = txIds.map(() => '?').join(', ')
+  return database.getAll<OutboxRow>(`
+    SELECT id, tx_id, write_id, data
+    FROM outbox
+    WHERE tx_id IN (${placeholders})
+    ORDER BY id
+    LIMIT ?
+  `, [...txIds, MAX_OUTBOX_ENTRIES_PER_UPLOAD_BATCH])
 }
 
-const uploadData = async (database: AbstractPowerSyncDatabase) => {
+const deleteUploadedRows = async (
+  database: LocalDb,
+  rows: readonly OutboxRow[],
+): Promise<void> => {
+  for (const chunk of chunked(rows, 500)) {
+    const placeholders = chunk.map(() => '?').join(', ')
+    await database.execute(
+      `DELETE FROM outbox WHERE id IN (${placeholders})`,
+      chunk.map(row => row.id),
+    )
+  }
+}
+
+export const uploadData = async (database: LocalDb) => {
   while (true) {
-    const transactions = await collectUploadBatch(database)
-    if (transactions.length === 0) {
+    const rows = await collectUploadBatch(database)
+    if (rows.length === 0) {
       return
     }
 
-    await uploadTransactions(database, transactions)
+    const operations = compactBlockUploadEntries(rows.map(parseOutboxEntry))
+
+    try {
+      await applyCompactedBlockOperations(database, operations)
+    } catch (err) {
+      console.error('[electric-upload] upload failed', err)
+      throw err
+    }
+
+    await deleteUploadedRows(database, rows)
   }
 }
 
-export const createPowerSyncConnector = (): PowerSyncBackendConnector => ({
-  fetchCredentials: async () => {
-    const client = assertSupabase()
-    const {data, error} = await client.auth.getSession()
+export const startUploadLoop = (database: LocalDb): UploadLoop => {
+  let stopped = false
+  let running = false
+  let rerun = false
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
 
-    if (error) {
-      throw error
+  const schedule = () => {
+    if (stopped) return
+    if (running) {
+      rerun = true
+      return
     }
+    void drain()
+  }
 
-    const accessToken = data.session?.access_token
-    if (!accessToken || !powerSyncUrl) {
-      return null
+  const drain = async () => {
+    if (stopped || running) return
+    running = true
+    try {
+      await uploadData(database)
+    } catch {
+      if (!stopped) {
+        retryTimer = setTimeout(schedule, UPLOAD_RETRY_DELAY_MS)
+      }
+    } finally {
+      running = false
+      if (rerun) {
+        rerun = false
+        schedule()
+      }
     }
+  }
 
-    return {
-      endpoint: powerSyncUrl,
-      token: accessToken,
-      expiresAt: data.session?.expires_at
-        ? new Date(data.session.expires_at * 1000)
-        : undefined,
-    }
-  },
-  uploadData,
-})
+  const unsubscribe = database.onChange({onChange: schedule}, {tables: ['outbox']})
+  schedule()
 
-export const __compactBlockCrudEntriesForTest = compactBlockCrudEntries
+  return {
+    drainNow: schedule,
+    stop: () => {
+      stopped = true
+      unsubscribe()
+      if (retryTimer) clearTimeout(retryTimer)
+    },
+  }
+}
+
+export const __compactBlockUploadEntriesForTest = compactBlockUploadEntries
 export const __orderedBlockUpsertsForTest = orderedBlockUpserts
 export const __normalizeLocalBlockUploadRowForTest = normalizeLocalBlockUploadRow
 export const __shouldBulkUpsertPatchesForTest = shouldBulkUpsertPatches

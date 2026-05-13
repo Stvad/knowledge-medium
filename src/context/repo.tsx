@@ -1,10 +1,8 @@
 import { createContext, ReactNode, use, useContext } from 'react'
-import { PowerSyncContext } from '@powersync/react'
-import type { AbstractPowerSyncDatabase } from '@powersync/common'
 import { Repo } from '../data/repo'
 import { BlockCache } from '@/data/blockCache'
 import { useIsLocalOnly, useUser } from '@/components/Login'
-import { ensurePowerSyncReady, getPowerSyncDb } from '@/data/repoProvider'
+import { ensureRepoReady, getRepoDb } from '@/data/repoProvider'
 import { User } from '@/types.ts'
 import { memoize } from 'lodash'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
@@ -17,8 +15,8 @@ import { surfaceProcessorRejectionFor } from '@/utils/processorRejectionToast.ts
 // correctly keeps the contract honest.
 const initRepo = memoize(
   async (user: User, useRemoteSync: boolean): Promise<Repo> => {
-    await ensurePowerSyncReady(user.id, useRemoteSync)
-    const db = getPowerSyncDb(user.id)
+    await ensureRepoReady(user.id, useRemoteSync)
+    const db = getRepoDb(user.id)
     const cache = new BlockCache()
     const repo = new Repo({db, cache, user: {id: user.id, name: user.name}})
     repo.setFacetRuntime(resolveFacetRuntimeSync(staticDataExtensions, {
@@ -51,9 +49,7 @@ export function RepoProvider({children}: { children: ReactNode }) {
 
   return (
     <RepoContext value={repoInstance}>
-      <PowerSyncContext value={repoInstance.db as unknown as AbstractPowerSyncDatabase}>
-        {children}
-      </PowerSyncContext>
+      {children}
     </RepoContext>
   )
 }

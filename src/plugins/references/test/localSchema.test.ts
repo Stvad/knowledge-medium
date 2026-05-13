@@ -36,6 +36,7 @@ interface BlockInsert {
   updated_at: number
   created_by: string
   updated_by: string
+  write_id: string | null
   deleted: 0 | 1
 }
 
@@ -59,6 +60,7 @@ const defaultBlock: BlockInsert = {
   updated_at: 1700000000000,
   created_by: 'user-1',
   updated_by: 'user-1',
+  write_id: null,
   deleted: 0,
 }
 
@@ -67,14 +69,6 @@ const blockValues = (row: BlockInsert): Array<string | number | null> =>
 
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
-
-  db.exec(`
-    CREATE TABLE ps_crud (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL,
-      tx_id INTEGER
-    )
-  `)
 
   db.exec(CREATE_BLOCKS_TABLE_SQL)
   db.exec(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)

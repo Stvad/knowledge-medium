@@ -23,7 +23,7 @@ export type Dependency =
   | { kind: 'plugin'; channel: string; key: string }
 
 /** Read-only SQL surface available to a query resolver. Sees committed
- *  state at resolve time. Intentionally narrower than `PowerSyncDatabase`
+ *  state at resolve time. Intentionally narrower than `LocalDb`
  *  — no `execute`, no `writeTransaction` — so the type prevents
  *  accidental writes through this handle. */
 export interface QueryReadDb {

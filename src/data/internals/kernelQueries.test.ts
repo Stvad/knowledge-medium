@@ -350,7 +350,7 @@ describe('repo.query.aliasesInWorkspace', () => {
     // two live blocks from claiming the same alias in the same
     // workspace via local writes, so each alias here is unique.
     // The SQL still has GROUP BY for defense-in-depth against
-    // dupes that race-land via PowerSync sync-apply (which
+    // dupes that race-land via Electric sync-apply (which
     // bypasses the trigger).
     await create({id: 'a', aliases: ['Foo', 'Bar']})
     await create({id: 'b', aliases: ['Baz', 'Qux']})
@@ -428,7 +428,7 @@ describe('repo.query.aliasLookup', () => {
     // `(workspace_id, alias)` rows, so we seed the dupe by
     // bypassing it: insert directly into `block_aliases` while
     // `tx_context.source` is NULL (the trigger's `WHEN` guard
-    // skips outside an active local tx — mirrors the PowerSync
+    // skips outside an active local tx — mirrors the Electric
     // sync-apply path where dupes from other clients can race-
     // land). The query's `ORDER BY created_at LIMIT 1` is the
     // defense-in-depth tie-break this test pins.
@@ -496,7 +496,7 @@ describe('invalidation', () => {
       // Wait for the async re-resolve. `setTimeout(10)` was racy
       // under full-suite parallelism — the loader's reader-pool
       // round-trip can take longer than 10 ms when 65+ files are
-      // contending for PowerSync's worker threads.
+      // contending for SQLite worker time.
       await vi.waitFor(() => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['r', 'c1', 'gc'])
       })

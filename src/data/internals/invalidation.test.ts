@@ -12,8 +12,8 @@
  *   2. row_events tail: filtered to source='sync', throttled, single
  *      Repo-level subscription. Updates the cache from after_json and
  *      walks the same handle invalidation (parent-edge dep on each
- *      sync-applied parent_id assignment). Covers PowerSync's
- *      CRUD-apply path, which bypasses repo.tx.
+ *      sync-applied parent_id assignment). Covers Electric shape apply,
+ *      which bypasses repo.tx.
  *
  * These tests verify each path drives handle re-resolution end-to-end
  * (real Repo, real BlockCache, real DB, real LoaderHandle), and that
@@ -386,8 +386,8 @@ describe('row_events tail: sync-applied invalidation', () => {
 
     // Simulate a sync-applied insert by writing directly with
     // tx_context.source = NULL (the COALESCE in the trigger tags it
-    // 'sync'). This is the closest approximation to PowerSync's
-    // CRUD-apply path in tests.
+    // 'sync'). This is the closest approximation to Electric shape apply
+    // in tests.
     await env.h.db.execute(
       `UPDATE tx_context SET source = NULL, tx_id = NULL, tx_seq = NULL WHERE id = 1`,
     )

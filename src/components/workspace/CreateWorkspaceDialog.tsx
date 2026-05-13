@@ -42,9 +42,9 @@ export function CreateWorkspaceDialog({open, onOpenChange, onCreated}: Props) {
     try {
       const result = await createWorkspace(trimmed)
       // Optimistically write to local SQLite so the new workspace shows up
-      // in the switcher before PowerSync replicates it. We use the
+      // in the switcher before Electric replicates it. We use the
       // canonical member row returned by the RPC (real id) so we don't
-      // collide with the row PowerSync will later sync down.
+      // collide with the row Electric will later sync down.
       await primeLocalWorkspaceAndMember(repo, result.workspace, result.member)
 
       // No daily-note seed here: navigateToWorkspace updates the hash,

@@ -34,7 +34,8 @@ const rowFromParams = (params: ReturnType<typeof blockToRowParams>): BlockRow =>
   updated_at: params[8],
   created_by: params[9],
   updated_by: params[10],
-  deleted: params[11],
+  write_id: params[11],
+  deleted: params[12],
 })
 
 describe('BLOCK_STORAGE_COLUMNS', () => {
@@ -52,6 +53,7 @@ describe('BLOCK_STORAGE_COLUMNS', () => {
       'updated_at',
       'created_by',
       'updated_by',
+      'write_id',
       'deleted',
     ])
     // Hard guard against the legacy column ever sneaking back in.
@@ -78,7 +80,7 @@ describe('blockToRowParams / parseBlockRow round-trip', () => {
   it('encodes deleted=true as 1 and decodes back to boolean true', () => {
     const tombstone: BlockData = {...fixture, deleted: true}
     const params = blockToRowParams(tombstone)
-    expect(params[11]).toBe(1)
+    expect(params[12]).toBe(1)
     expect(parseBlockRow(rowFromParams(params)).deleted).toBe(true)
   })
 

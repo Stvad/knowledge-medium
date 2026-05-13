@@ -5,7 +5,7 @@ import type { Block } from './data/block'
 import { useRepo } from '@/context/repo.tsx'
 import { useSearchParam } from 'react-use'
 import type { Repo } from './data/repo'
-import { hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { hasRemoteSyncConfig } from '@/services/electric.ts'
 import { useIsLocalOnly } from '@/components/Login.tsx'
 import { AppRuntimeProvider } from '@/extensions/AppRuntimeProvider.tsx'
 import {
@@ -68,7 +68,7 @@ const resolveWorkspace = async (
   useRemoteSync: boolean,
 ): Promise<ResolvedWorkspace> => {
   if (requestedWorkspaceId) {
-    // Fast path: if PowerSync has already replicated this workspace into
+    // Fast path: if Electric has already replicated this workspace into
     // our local DB, RLS allowed it — we have access, trust the URL.
     const localWs = await getLocalWorkspace(repo, requestedWorkspaceId)
     if (localWs) return {id: localWs.id, freshlyCreated: false}
@@ -76,9 +76,8 @@ const resolveWorkspace = async (
     // Slow path: not local. This could be either "we don't have access"
     // or "we have access but sync hasn't replicated yet". Ask the server
     // (RLS-gated) to disambiguate. We can't poll local sqlite for this:
-    // `db.waitForFirstSync` resolves instantly on subsequent sessions
-    // (persistent IndexedDB), and a missing row could legitimately mean
-    // either case.
+    // the local SQLite database persists across sessions, and a missing
+    // row could legitimately mean either case.
     if (useRemoteSync) {
       const access = await canAccessRemoteWorkspace(requestedWorkspaceId)
       if (access.kind === 'allowed') {

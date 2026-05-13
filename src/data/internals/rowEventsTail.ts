@@ -2,8 +2,8 @@
  * row_events tail — sync-applied invalidation path (spec §9.3 path 2).
  *
  * Local writes go through `repo.tx`, which fires the engine's fast-path
- * `handleStore.invalidate(...)` and updates the cache directly. PowerSync
- * sync-applied writes land in SQLite via the CRUD-apply path, BYPASSING
+ * `handleStore.invalidate(...)` and updates the cache directly. Electric
+ * sync-applied writes land in SQLite through the shape subscriber, BYPASSING
  * `repo.tx` — they never set `tx_context.source`, so the `row_events`
  * trigger COALESCEs source to `'sync'`.
  *
@@ -33,7 +33,7 @@
 
 import type { BlockData, CycleDetectedEvent } from '@/data/api'
 import type { BlockCache } from '@/data/blockCache'
-import type { PowerSyncDb } from './commitPipeline'
+import type { LocalDb } from './commitPipeline'
 import type { ChangeNotification, HandleStore } from './handleStore'
 import { cycleScanSql } from './treeQueries'
 import {
@@ -83,7 +83,7 @@ export interface RowEventsTail {
  *  flush. The async initialization runs in the background; the returned
  *  object is usable immediately (`flush()` will await initialization). */
 export const startRowEventsTail = (args: {
-  db: PowerSyncDb
+  db: LocalDb
   cache: BlockCache
   handleStore: HandleStore
   getInvalidationRules?: () => readonly InvalidationRule[]
@@ -101,7 +101,7 @@ export const startRowEventsTail = (args: {
   let unsubscribe: (() => void) | null = null
   let initComplete = false
 
-  // A drain in flight when the underlying PowerSync DB closes (test
+  // A drain in flight when the underlying SQLite DB closes (test
   // teardown closing the db without stopping the tail; production
   // tab-close / signOut) rejects from `db.getAll(...)` with
   // ConnectionClosedError. That's a benign shutdown signal — there's
@@ -253,7 +253,7 @@ export const startRowEventsTail = (args: {
       // Cache update: sync writes don't go through commitPipeline's
       // post-commit cache walk. Without this, Block.subscribe listeners
       // wouldn't fire on remote changes. Routed through
-      // `applySyncSnapshot` so a stale `updated_at` (PowerSync delivering
+      // `applySyncSnapshot` so a stale `updated_at` (Electric delivering
       // server-state-at-time-T while the local cache has advanced via the
       // fast path) is rejected — otherwise the editor sees its own older
       // echoes clobber the live snapshot mid-typing.
@@ -319,7 +319,7 @@ export const startRowEventsTail = (args: {
   }
 
   // Init flow that closes the row_events tail gap (spec §9.3, §16.13;
-  // reviewer P2 — PowerSync's onChange is trailing-throttled, so a row
+  // reviewer P2 — db.onChange is trailing-throttled, so a row
   // that lands while a post-subscription MAX query is in flight can be
   // both included in the MAX result AND not yet delivered to the
   // throttled callback; lastId would skip past it and the eventual
@@ -426,10 +426,9 @@ export const startRowEventsTail = (args: {
   }
 }
 
-/** PowerSync raises this from queued `db.getAll` / `db.getOptional`
- *  calls when the underlying connection closes mid-flight. Identified
- *  by name to avoid taking a runtime dep on `@powersync/common` here
- *  (the tail's `PowerSyncDb` type is structural). */
+/** Local DB adapters may raise this from queued `db.getAll` / `db.getOptional`
+ *  calls when the underlying connection closes mid-flight. Identified by name
+ *  so the tail's `LocalDb` type stays structural. */
 const isConnectionClosedError = (err: unknown): boolean => {
   if (!err || typeof err !== 'object') return false
   const name = (err as { name?: unknown }).name

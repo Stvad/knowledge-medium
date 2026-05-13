@@ -10,7 +10,7 @@
  *   - core.delete on subtrees.
  *   - Multi-mutator tx: build a 50-node tree in one repo.tx vs 50 calls.
  *   - Concurrent setContent (10 in parallel — measures serialization
- *     through PowerSync's writeTransaction queue).
+ *     through the local SQLite writeTransaction queue).
  *
  * Roundtrip counts come from the instrumented db wrapper. They're the
  * direct data-layer-spec proxy for "tree walks push to SQL" — if a

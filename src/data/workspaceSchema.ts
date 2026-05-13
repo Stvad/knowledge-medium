@@ -1,29 +1,36 @@
-import type { PendingStatementParameter, RawTableType } from '@powersync/web'
 import type { Workspace, WorkspaceMembership, WorkspaceRole } from '@/types'
 
 // These tables are sync-only from the client's perspective: rows arrive via
-// PowerSync streams (powersync/sync-config.yaml) and outgoing changes go
-// through Supabase RPCs (src/data/workspaces.ts). We therefore do NOT wire
-// powersync_crud triggers for them in repoInstance.ts.
+// Electric shapes and outgoing changes go through Supabase RPCs
+// (src/data/workspaces.ts). We therefore do NOT wire outbox triggers for them.
 
 type ColumnDef = {
   readonly name: string
   readonly definition: string
 }
 
-const buildPutSql = (tableName: string, columns: readonly ColumnDef[]) => `
-  INSERT OR REPLACE INTO ${tableName} (
+const buildInsertSql = (tableName: string, columns: readonly ColumnDef[]) => `
+  INSERT INTO ${tableName} (
 ${columns.map(c => `        ${c.name}`).join(',\n')}
       ) VALUES (${columns.map(() => '?').join(', ')})
 `
-
-const buildPutParams = (columns: readonly ColumnDef[]): PendingStatementParameter[] =>
-  columns.map(c => (c.name === 'id' ? 'Id' : {Column: c.name}))
 
 const buildCreateTableSql = (tableName: string, columns: readonly ColumnDef[]) => `
   CREATE TABLE IF NOT EXISTS ${tableName} (
 ${columns.map(c => `    ${c.definition}`).join(',\n')}
   )
+`
+
+const buildUpdateAssignments = (columns: readonly ColumnDef[]) =>
+  columns
+    .filter(column => column.name !== 'id')
+    .map(column => `${column.name} = excluded.${column.name}`)
+    .join(',\n    ')
+
+const buildUpsertSql = (tableName: string, columns: readonly ColumnDef[]) => `
+  ${buildInsertSql(tableName, columns).trim()}
+  ON CONFLICT(id) DO UPDATE SET
+    ${buildUpdateAssignments(columns)}
 `
 
 // ---------------------------------------------------------------------------
@@ -48,16 +55,8 @@ export const WORKSPACE_COLUMNS: readonly ColumnDef[] = [
 
 export const CREATE_WORKSPACES_TABLE_SQL = buildCreateTableSql('workspaces', WORKSPACE_COLUMNS)
 
-export const WORKSPACES_RAW_TABLE = {
-  put: {
-    sql: buildPutSql('workspaces', WORKSPACE_COLUMNS),
-    params: buildPutParams(WORKSPACE_COLUMNS),
-  },
-  delete: {
-    sql: 'DELETE FROM workspaces WHERE id = ?',
-    params: ['Id'],
-  },
-} satisfies RawTableType
+export const UPSERT_WORKSPACE_SQL = buildUpsertSql('workspaces', WORKSPACE_COLUMNS)
+export const DELETE_WORKSPACE_SQL = 'DELETE FROM workspaces WHERE id = ?'
 
 export const parseWorkspaceRow = (row: WorkspaceRow): Workspace => ({
   id: row.id,
@@ -97,16 +96,8 @@ export const CREATE_WORKSPACE_MEMBERS_INDEX_SQL = `
   ON workspace_members (user_id)
 `
 
-export const WORKSPACE_MEMBERS_RAW_TABLE = {
-  put: {
-    sql: buildPutSql('workspace_members', WORKSPACE_MEMBER_COLUMNS),
-    params: buildPutParams(WORKSPACE_MEMBER_COLUMNS),
-  },
-  delete: {
-    sql: 'DELETE FROM workspace_members WHERE id = ?',
-    params: ['Id'],
-  },
-} satisfies RawTableType
+export const UPSERT_WORKSPACE_MEMBER_SQL = buildUpsertSql('workspace_members', WORKSPACE_MEMBER_COLUMNS)
+export const DELETE_WORKSPACE_MEMBER_SQL = 'DELETE FROM workspace_members WHERE id = ?'
 
 export const parseWorkspaceMemberRow = (row: WorkspaceMemberRow): WorkspaceMembership => ({
   id: row.id,

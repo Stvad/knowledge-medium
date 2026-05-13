@@ -1,4 +1,3 @@
-import type { PendingStatementParameter, RawTableType } from '@powersync/web'
 import type { BlockData, BlockReference } from '@/data/api'
 
 /** Storage shape — snake_case columns matching the Postgres schema and the
@@ -17,9 +16,10 @@ export interface BlockRow {
   updated_at: number
   created_by: string
   updated_by: string
+  write_id: string | null
   // SQLite has no native boolean — stored as INTEGER 0/1 and the wa-sqlite
   // driver hands them back as JS numbers verbatim. Postgres column is
-  // boolean; PowerSync hydrates the local row as 0/1.
+  // boolean; Electric hydrates the local row as 0/1.
   deleted: 0 | 1
 }
 
@@ -30,10 +30,9 @@ type BlockStorageColumn = {
   readonly definition: string
 }
 
-/** Local SQLite column definitions. The PowerSync sync rule projects the
- *  same column names against Postgres (`scripts/gen-sync-config.ts` reads
- *  this array directly), so client and server stay structurally aligned —
- *  see feedback_powersync_sync_config_with_schema. */
+/** Local SQLite column definitions. The Electric shape proxy must project the
+ *  same column names against Postgres, so client and server stay structurally
+ *  aligned. */
 export const BLOCK_STORAGE_COLUMNS = [
   {name: 'id', definition: 'id TEXT PRIMARY KEY NOT NULL'},
   {name: 'workspace_id', definition: 'workspace_id TEXT NOT NULL'},
@@ -46,6 +45,7 @@ export const BLOCK_STORAGE_COLUMNS = [
   {name: 'updated_at', definition: 'updated_at INTEGER NOT NULL'},
   {name: 'created_by', definition: 'created_by TEXT NOT NULL'},
   {name: 'updated_by', definition: 'updated_by TEXT NOT NULL'},
+  {name: 'write_id', definition: 'write_id TEXT'},
   {name: 'deleted', definition: 'deleted INTEGER NOT NULL DEFAULT 0'},
 ] as const satisfies readonly BlockStorageColumn[]
 
@@ -109,39 +109,7 @@ ${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 4)}
   WHERE
 ${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 4)}
 `
-
-const powerSyncParamForColumn = (columnName: BlockColumnName): PendingStatementParameter =>
-  columnName === 'id' ? 'Id' : {Column: columnName}
-
-// PowerSync's CRUD-apply path runs this `put` for both inserts and updates of
-// a synced row. INSERT OR REPLACE would fire SQLite's DELETE+INSERT trigger
-// pair on an update, so the `row_events` audit trigger sees the change as
-// kind='insert' with before_json=NULL — and `rowEventsTail` then treats a
-// pure content/property edit as a child-membership change and clears the
-// parent's child-loaded marker. ON CONFLICT(id) DO UPDATE preserves the
-// UPDATE shape (OLD/NEW visible to triggers), keeping before_json populated
-// so the membership-vs-content classification in `rowEventsTail` is correct.
-// The WHERE guard keeps re-delivered identical sync rows from firing UPDATE
-// triggers at all; `row_events` is an invalidation queue, not a durable copy
-// of every sync operation PowerSync has replayed.
-export const BLOCKS_RAW_TABLE = {
-  put: {
-    sql: `
-      INSERT INTO blocks (
-${formatSqlList(BLOCK_COLUMN_NAMES, 8)}
-      ) VALUES (${BLOCK_COLUMN_NAMES.map(() => '?').join(', ')})
-      ON CONFLICT(id) DO UPDATE SET
-${formatSqlList(BLOCK_SYNC_ASSIGNMENTS, 8)}
-      WHERE
-${formatSqlOrList(BLOCK_SYNC_DIFF_PREDICATES, 8)}
-    `,
-    params: BLOCK_COLUMN_NAMES.map(powerSyncParamForColumn),
-  },
-  delete: {
-    sql: 'DELETE FROM blocks WHERE id = ?',
-    params: ['Id'],
-  },
-} satisfies RawTableType
+export const DELETE_BLOCK_SQL = 'DELETE FROM blocks WHERE id = ?'
 
 export const buildBlockCrudJsonSql = (rowRef: string) => `
   json_object(
@@ -216,6 +184,7 @@ type BlockRowParams = [
   updatedAt: number,
   createdBy: string,
   updatedBy: string,
+  writeId: string | null,
   deleted: 0 | 1,
 ]
 
@@ -231,5 +200,6 @@ export const blockToRowParams = (blockData: BlockData): BlockRowParams => [
   blockData.updatedAt,
   blockData.createdBy,
   blockData.updatedBy,
+  null,
   blockData.deleted ? 1 : 0,
 ]

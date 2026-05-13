@@ -155,7 +155,7 @@ describe('getUserPrefsBlock', () => {
       )
       expect(events.every(event => event.scope === ChangeScope.UserPrefs)).toBe(true)
       expect(events.every(event => event.source === 'local-ephemeral')).toBe(true)
-      expect(await h.db.getAll('SELECT id FROM ps_crud')).toEqual([])
+      expect(await h.db.getAll('SELECT id FROM outbox')).toEqual([])
     } finally {
       await h.cleanup()
     }

@@ -13,7 +13,7 @@ export interface CycleDetectedEvent {
   startIds: string[]
   /** tx_ids of the row_events that triggered detection. Empty for the
    *  pure-sync case (the row_events trigger writes tx_id = NULL when
-   *  source IS NULL, which is always true for PowerSync's CRUD-apply
-   *  path); the field exists for completeness. */
+   *  source IS NULL, which is true for Electric shape apply); the field
+   *  exists for completeness. */
   txIdsInvolved: string[]
 }

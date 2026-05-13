@@ -207,7 +207,7 @@ export const aliasSeatReaderFromDb = (db: ProcessorReadDb): AliasSeatReader =>
  *  Two clients with the same observed world-state probe the same way
  *  and land on the same slot — that's the deterministic-id convergence
  *  guarantee. Clients with divergent state may pick different slots,
- *  but PowerSync convergence + the alias-lookup query handle this
+ *  but Electric convergence + the alias-lookup query handle this
  *  case: `block_aliases` is exact-match by alias text, so a second
  *  parseReferences pass on either client resolves through the lookup
  *  rather than the probe. */

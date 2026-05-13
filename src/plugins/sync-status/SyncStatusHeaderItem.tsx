@@ -1,4 +1,3 @@
-import { useQuery, useStatus } from '@powersync/react'
 import {
   CircleAlert,
   CloudCheck,
@@ -8,6 +7,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useIsLocalOnly } from '@/components/Login.tsx'
+import { useSyncStatus } from '@/hooks/useSyncStatus'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -19,10 +19,6 @@ import {
   type SyncIndicatorIcon,
   type SyncIndicatorTone,
 } from './model.ts'
-
-interface UploadQueueCountRow {
-  count: number
-}
 
 const toneClass: Record<SyncIndicatorTone, string> = {
   error: 'border-destructive/30 bg-destructive/10 text-destructive',
@@ -56,29 +52,18 @@ const formatLastSyncedAt = (date: Date | undefined): string => {
 
 export function SyncStatusHeaderItem() {
   const localOnly = useIsLocalOnly()
-  const status = useStatus()
-  const queue = useQuery<UploadQueueCountRow>(
-    'SELECT COUNT(*) AS count FROM ps_crud',
-    [],
-    {reportFetching: false},
-  )
-  const pendingChanges = Number(queue.data[0]?.count ?? 0)
-  const dataFlow = status.dataFlowStatus
-  const errorMessage =
-    queue.error?.message ??
-    dataFlow.uploadError?.message ??
-    dataFlow.downloadError?.message ??
-    null
+  const status = useSyncStatus()
+  const pendingChanges = status.pendingChanges
   const view = getSyncIndicatorView({
     localOnly,
     connected: status.connected,
     connecting: status.connecting,
     hasSynced: status.hasSynced,
-    uploading: Boolean(dataFlow.uploading),
-    downloading: Boolean(dataFlow.downloading),
+    uploading: pendingChanges > 0,
+    downloading: status.downloading,
     pendingChanges,
-    downloadFraction: status.downloadProgress?.downloadedFraction ?? null,
-    errorMessage,
+    downloadFraction: null,
+    errorMessage: status.errorMessage,
     lastSyncedAt: status.lastSyncedAt,
   })
   const Icon = iconByName[view.icon]

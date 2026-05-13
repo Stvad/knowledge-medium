@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Tests for the recursive tree CTEs (§11 of the data-layer redesign).
- * Runs against the real PowerSync test harness so trigger semantics
+ * Runs against the real SQLite test harness so trigger semantics
  * (which can fire during seed inserts here) are exercised the same way
  * as production.
  *

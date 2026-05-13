@@ -15,7 +15,7 @@
  *
  * Replaces deleted `src/utils/roamImport/test/import.test.ts` (legacy
  * 3-arg `new Repo(db, undoRedoManager, user)` + stub-DB regex
- * router). The new test runs against `createTestDb` (real PowerSync
+ * router). The new test runs against `createTestDb` (real SQLite
  * + tx engine) so the importer's tx writes hit the same triggers as
  * production.
  */

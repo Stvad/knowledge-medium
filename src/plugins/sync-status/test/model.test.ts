@@ -12,7 +12,7 @@ const baseInput = {
 }
 
 describe('getSyncIndicatorView', () => {
-  it('shows the pending upload count from the PowerSync queue', () => {
+  it('shows the pending upload count from the local outbox', () => {
     const view = getSyncIndicatorView({
       ...baseInput,
       pendingChanges: 3,

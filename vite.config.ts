@@ -70,9 +70,6 @@ export default defineConfig(({command}) => {
         optimizeDeps: {
             exclude: [
                 '@journeyapps/wa-sqlite',
-                '@powersync/common',
-                '@powersync/react',
-                '@powersync/web',
             ],
         },
         worker: {

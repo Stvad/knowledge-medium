@@ -17,9 +17,9 @@ const SNAPSHOT_FAIL_MB = 200
 const MAPPING_WARN_MB = 20
 const MAPPING_FAIL_MB = 100
 const TMPDIR_FAIL_MB = 100
-// PowerSync's initial-sync chatter can push WAL to ~500 MB transiently;
-// pg keeps preallocated segments. Thresholds set to catch unbounded growth
-// (multi-GB), not normal operation.
+// Logical replication catch-up can push WAL high transiently; pg keeps
+// preallocated segments. Thresholds set to catch unbounded growth (multi-GB),
+// not normal operation.
 const WAL_WARN_MB = 2000
 const WAL_FAIL_MB = 5000
 const IDLE_IN_TX_FAIL_SECONDS = 60 * 60
@@ -27,7 +27,7 @@ const CONNECTIONS_WARN_PCT = 0.83
 const CONNECTIONS_FAIL_PCT = 0.97
 const VACUUM_WARN_HOURS = 48
 const EXPECTED_RLS_TABLES = ['workspaces', 'workspace_members', 'workspace_invitations', 'blocks']
-const EXPECTED_PUB_TABLES = ['blocks', 'workspace_members', 'workspaces']
+const EXPECTED_REPLICA_IDENTITY_FULL_TABLES = ['blocks', 'workspace_members', 'workspaces']
 const EXPECTED_LOGICAL_SLOTS_MIN = 1
 const EXPECTED_LOGICAL_SLOTS_MAX = 1
 
@@ -80,7 +80,7 @@ async function checkServiceEndpoints() {
 }
 
 async function runDbChecks(client) {
-  // Replication slots — main PowerSync leak indicator
+  // Replication slots — main logical-replication leak indicator
   const slots = (await client.query(`
     select slot_name, slot_type, plugin, active,
            confirmed_flush_lsn, restart_lsn,
@@ -252,19 +252,29 @@ async function runDbChecks(client) {
     fail('rls', `RLS disabled on: ${disabled.join(', ')}`)
   }
 
-  // Publication contents — schema-drift regression check
-  const pubTables = (await client.query(`
-    select tablename from pg_publication_tables where pubname = 'powersync' order by tablename
-  `)).rows.map((r) => r.tablename)
-  const expected = [...EXPECTED_PUB_TABLES].sort()
-  const actual = [...pubTables].sort()
-  const driftAdd = actual.filter((t) => !expected.includes(t))
-  const driftRemove = expected.filter((t) => !actual.includes(t))
-  result.checks.publication = { status: 'pass', expected, actual }
-  if (driftAdd.length || driftRemove.length) {
-    result.checks.publication.status = 'fail'
-    if (driftAdd.length) fail('publication', `unexpected tables in publication: ${driftAdd.join(', ')}`)
-    if (driftRemove.length) fail('publication', `missing tables from publication: ${driftRemove.join(', ')}`)
+  // Electric shape consumers need full old-row values for deletes/updates.
+  const replicaRows = (await client.query(`
+    select c.relname as table, c.relreplident as replica_identity
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind = 'r'
+      and c.relname = ANY($1::text[])
+  `, [EXPECTED_REPLICA_IDENTITY_FULL_TABLES])).rows
+  const replicaTables = replicaRows.map((r) => r.table)
+  const missingReplica = EXPECTED_REPLICA_IDENTITY_FULL_TABLES.filter((t) => !replicaTables.includes(t))
+  const notFull = replicaRows.filter((r) => r.replica_identity !== 'f').map((r) => r.table)
+  result.checks.replica_identity = {
+    status: missingReplica.length || notFull.length ? 'fail' : 'pass',
+    expected: 'FULL',
+    tables: replicaRows,
+    missing: missingReplica,
+  }
+  if (missingReplica.length) {
+    fail('replica_identity', `expected tables missing: ${missingReplica.join(', ')}`)
+  }
+  if (notFull.length) {
+    fail('replica_identity', `replica identity is not FULL on: ${notFull.join(', ')}`)
   }
 
   result.checks.summary = {

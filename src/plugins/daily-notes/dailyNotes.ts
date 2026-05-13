@@ -232,7 +232,7 @@ export const isDateAlias = (alias: string): boolean =>
  *  workspace-root when nobody has authored a real daily-note row for
  *  that date yet — same `dailyNoteBlockId(workspaceId, date)` namespace
  *  as `getOrCreateDailyNote`, so the two flows converge on the same
- *  row through PowerSync without a merge.
+ *  row through sync without a merge.
  *
  *  Distinct from `getOrCreateDailyNote`, which parents the row under
  *  the Journal page and writes long-form aliases. `ensureDailyNoteTarget`

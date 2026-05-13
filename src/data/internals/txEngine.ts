@@ -1,6 +1,6 @@
 /**
  * Tx engine — implements the public `Tx` interface (`src/data/api/tx.ts`)
- * over a PowerSync `writeTransaction` callback context. Spec §5.3, §10.
+ * over a local SQLite `writeTransaction` callback context. Spec §5.3, §10.
  *
  * Write-through to SQL: every primitive runs INSERT / UPDATE inline
  * against the writeTransaction's lock context. Triggers fire per
@@ -63,9 +63,8 @@ import { IS_DESCENDANT_OF_SQL } from './treeQueries'
 import { SELECT_BLOCK_BY_ALIAS_IN_WORKSPACE_SQL } from './kernelQueries'
 import type { BlockCache } from '@/data/blockCache'
 
-/** Minimal subset of `@powersync/common`'s `LockContext` we actually use.
- *  Production passes the real type; the test harness's
- *  `writeTransaction` callback exposes the same shape. */
+/** Minimal subset of the write-transaction context we actually use.
+ *  Production and test adapters expose the same structural shape. */
 export interface TxDb {
   execute(sql: string, params?: unknown[]): Promise<unknown>
   getAll<T>(sql: string, params?: unknown[]): Promise<T[]>
@@ -668,7 +667,7 @@ export class TxImpl implements Tx {
 /** Detect SQLite UNIQUE-constraint failures on `blocks.id`. SQLite's
  *  error messages embed the column name, so a string-match is the
  *  reliable signal in practice. The shape `'UNIQUE constraint failed:
- *  blocks.id'` covers the SQLite C error and the better-sqlite3 wrapper
+ *  blocks.id'` covers the SQLite C error and node:sqlite wrapper
  *  thereof. */
 const isUniqueConstraint = (e: unknown, columnFqn: string): boolean => {
   if (e === null || typeof e !== 'object') return false

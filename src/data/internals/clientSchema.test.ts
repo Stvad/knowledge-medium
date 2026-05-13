@@ -4,7 +4,7 @@
  *
  * Uses `node:sqlite` (built into Node ≥22) — same SQLite C library as
  * wa-sqlite, so trigger semantics are identical to what runs in the
- * browser via PowerSync. Sync API keeps the tests legible. No extra
+ * browser via direct wa-sqlite. Sync API keeps the tests legible. No extra
  * dependency added.
  *
  * What this covers (data-layer-redesign §4.3 / §4.5 / §4.1.1):
@@ -19,19 +19,19 @@
  *   - all documented trigger names exist after running CLIENT_SCHEMA_STATEMENTS
  *
  * What this does NOT cover (deferred to later stages):
- *   - PowerSync's actual outgoing-queue behavior — we only check that the
- *     trigger writes a row to ps_crud, not that it ever reaches the server
+ *   - upload-loop behavior — we only check that the trigger writes a row to
+ *     outbox, not that it ever reaches the server
  *   - Cycle prevention — engine-side, not trigger-side
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import {
-  BLOCKS_RAW_TABLE,
   BLOCK_STORAGE_COLUMNS,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
+  UPSERT_BLOCK_SQL,
 } from '@/data/blockSchema'
 import {
   ALIAS_BACKFILL_MARKER_KEY,
@@ -43,13 +43,13 @@ import {
 
 interface TestDb {
   db: DatabaseSync
-  setTxContext: (ctx: { txId?: string | null; txSeq?: number | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
+  setTxContext: (ctx: { txId?: string | null; txSeq?: number | null; writeId?: string | null; userId?: string | null; scope?: string | null; source?: string | null }) => void
   clearTxContext: () => void
   insertBlock: (overrides?: Partial<BlockInsert>) => void
   updateBlock: (id: string, set: Record<string, unknown>) => void
   deleteBlock: (id: string) => void
   rowEvents: () => Array<RowEventRow>
-  psCrud: () => Array<{ id: number; data: string; tx_id: number | null }>
+  outbox: () => Array<{ id: number; data: string; tx_id: number | null; write_id: string }>
   rowEventCount: () => number
 }
 
@@ -76,6 +76,7 @@ interface BlockInsert {
   updated_at: number
   created_by: string
   updated_by: string
+  write_id: string | null
   deleted: 0 | 1
 }
 
@@ -91,6 +92,7 @@ const defaultBlock: BlockInsert = {
   updated_at: 1700000000000,
   created_by: 'user-1',
   updated_by: 'user-1',
+  write_id: null,
   deleted: 0,
 }
 
@@ -99,20 +101,6 @@ const blockValues = (row: BlockInsert): Array<string | number | null> =>
 
 const setupDb = (): TestDb => {
   const db = new DatabaseSync(':memory:')
-
-  // PowerSync's outgoing queue table. Real schema is
-  // `(id INTEGER PK AUTOINCREMENT, data TEXT, tx_id INTEGER)`; the
-  // upload-routing triggers populate (tx_id, data). PowerSync's
-  // `getNextCrudTransaction()` groups CRUD entries by tx_id, so a
-  // multi-row repo.tx must stamp every row with the same non-null
-  // tx_id or atomicity intent is lost on the server.
-  db.exec(`
-    CREATE TABLE ps_crud (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      data TEXT NOT NULL,
-      tx_id INTEGER
-    )
-  `)
 
   // The blocks table (built from the same column list as production).
   db.exec(CREATE_BLOCKS_TABLE_SQL)
@@ -130,13 +118,14 @@ const setupDb = (): TestDb => {
 
   return {
     db,
-    setTxContext: ({txId = null, txSeq = null, userId = null, scope = null, source = null}) => {
+    setTxContext: ({txId = null, txSeq = null, writeId = txId, userId = null, scope = null, source = null}) => {
+      const resolvedTxSeq = txSeq ?? (source === 'user' ? 1 : null)
       db.exec(
-        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, tx_seq = ${txSeq === null ? 'NULL' : String(txSeq)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)} WHERE id = 1`,
+        `UPDATE tx_context SET tx_id = ${sqlLit(txId)}, tx_seq = ${resolvedTxSeq === null ? 'NULL' : String(resolvedTxSeq)}, write_id = ${sqlLit(writeId)}, user_id = ${sqlLit(userId)}, scope = ${sqlLit(scope)}, source = ${sqlLit(source)} WHERE id = 1`,
       )
     },
     clearTxContext: () => {
-      db.exec('UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1')
+      db.exec('UPDATE tx_context SET tx_id = NULL, tx_seq = NULL, write_id = NULL, user_id = NULL, scope = NULL, source = NULL WHERE id = 1')
     },
     insertBlock: (overrides = {}) => {
       const row = {...defaultBlock, ...overrides}
@@ -151,7 +140,7 @@ const setupDb = (): TestDb => {
       db.prepare('DELETE FROM blocks WHERE id = ?').run(id)
     },
     rowEvents: () => db.prepare('SELECT * FROM row_events ORDER BY id').all() as unknown as RowEventRow[],
-    psCrud: () => db.prepare('SELECT * FROM ps_crud ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null }[],
+    outbox: () => db.prepare('SELECT * FROM outbox ORDER BY id').all() as unknown as { id: number; data: string; tx_id: number | null; write_id: string }[],
     rowEventCount: () => (db.prepare('SELECT COUNT(*) AS n FROM row_events').get() as {n: number}).n,
   }
 }
@@ -177,9 +166,9 @@ describe('client schema bootstrap', () => {
     expect(triggers).toHaveLength(CLIENT_SCHEMA_TRIGGER_NAMES.length)
   })
 
-  it('seeds tx_context with one row that starts NULL across all five tx fields', () => {
+  it('seeds tx_context with one row that starts NULL across all tx fields', () => {
     const ctx = h.db.prepare('SELECT * FROM tx_context').get() as Record<string, unknown>
-    expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, user_id: null, scope: null, source: null})
+    expect(ctx).toEqual({id: 1, tx_id: null, tx_seq: null, write_id: null, user_id: null, scope: null, source: null})
   })
 
   it('CLIENT_SCHEMA_STATEMENTS is idempotent', () => {
@@ -260,9 +249,9 @@ describe('row_events trigger — UPDATE', () => {
   })
 })
 
-describe('PowerSync raw-table put', () => {
+describe('Electric shape apply UPSERT', () => {
   it('does not fire UPDATE triggers for identical sync replays', () => {
-    const put = h.db.prepare(BLOCKS_RAW_TABLE.put.sql)
+    const put = h.db.prepare(UPSERT_BLOCK_SQL)
     const row = {...defaultBlock, id: 'raw-put'}
 
     put.run(...blockValues(row))
@@ -298,24 +287,26 @@ describe('row_events trigger — DELETE', () => {
 })
 
 describe('upload-routing triggers', () => {
-  it("forwards INSERT to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
+  it("forwards INSERT to outbox when source='user' and stamps tx_id from tx_seq", () => {
     h.setTxContext({txId: 'tx-1', txSeq: 4242, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.insertBlock({id: 'b1'})
     h.clearTxContext()
-    const crud = h.psCrud()
+    const crud = h.outbox()
     expect(crud).toHaveLength(1)
     expect(crud[0].tx_id).toBe(4242)
+    expect(crud[0].write_id).toBe('tx-1')
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id: 'b1'})
   })
 
-  it("forwards UPDATE to ps_crud when source='user' and stamps tx_id from tx_seq", () => {
+  it("forwards UPDATE to outbox when source='user' and stamps tx_id from tx_seq", () => {
     h.insertBlock({id: 'b1'})  // sync insert
     h.setTxContext({txId: 'tx-1', txSeq: 5151, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.updateBlock('b1', {content: 'x'})
     h.clearTxContext()
-    const crud = h.psCrud()
+    const crud = h.outbox()
     expect(crud).toHaveLength(1)
     expect(crud[0].tx_id).toBe(5151)
+    expect(crud[0].write_id).toBe('tx-1')
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PATCH', id: 'b1'})
   })
 
@@ -334,7 +325,7 @@ describe('upload-routing triggers', () => {
     })
     h.clearTxContext()
 
-    const payload = JSON.parse(h.psCrud()[0].data)
+    const payload = JSON.parse(h.outbox()[0].data)
     expect(payload).toMatchObject({op: 'PATCH', type: 'blocks', id: 'b1'})
     expect(payload.data).toEqual({
       content: 'new',
@@ -349,7 +340,7 @@ describe('upload-routing triggers', () => {
     h.updateBlock('b1', {parent_id: null})
     h.clearTxContext()
 
-    const payload = JSON.parse(h.psCrud()[0].data)
+    const payload = JSON.parse(h.outbox()[0].data)
     expect(payload.data).toEqual({parent_id: null})
   })
 
@@ -359,20 +350,20 @@ describe('upload-routing triggers', () => {
     h.updateBlock('b1', {content: 'same'})
     h.clearTxContext()
 
-    expect(h.psCrud()).toHaveLength(0)
+    expect(h.outbox()).toHaveLength(0)
   })
 
-  it('groups all writes from one tx under the same ps_crud.tx_id', () => {
+  it('groups all writes from one tx under the same outbox.tx_id', () => {
     // Multi-row repo.tx — emulates two creates inside one writeTransaction
-    // by holding tx_context constant across two inserts. PowerSync's
-    // getNextCrudTransaction() depends on this tx_id grouping; without
-    // it, atomicity intent is lost on the upload side.
+    // by holding tx_context constant across two inserts. The upload loop
+    // depends on this tx_id grouping; without it, atomicity intent is
+    // lost on the upload side.
     h.setTxContext({txId: 'tx-multi', txSeq: 7777, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.insertBlock({id: 'mb-1'})
     h.insertBlock({id: 'mb-2'})
     h.clearTxContext()
 
-    const crud = h.psCrud()
+    const crud = h.outbox()
     expect(crud).toHaveLength(2)
     // Both rows share the tx_id stamped from tx_seq.
     expect(new Set(crud.map(r => r.tx_id))).toEqual(new Set([7777]))
@@ -381,7 +372,7 @@ describe('upload-routing triggers', () => {
     expect(ids).toEqual(['mb-1', 'mb-2'])
   })
 
-  it('two distinct repo.tx invocations get distinct ps_crud.tx_id', () => {
+  it('two distinct repo.tx invocations get distinct outbox.tx_id', () => {
     h.setTxContext({txId: 'tx-a', txSeq: 100, userId: 'user-1', scope: 'block-default', source: 'user'})
     h.insertBlock({id: 'tx-a-block'})
     h.clearTxContext()
@@ -389,7 +380,7 @@ describe('upload-routing triggers', () => {
     h.insertBlock({id: 'tx-b-block'})
     h.clearTxContext()
 
-    const crud = h.psCrud()
+    const crud = h.outbox()
     expect(crud).toHaveLength(2)
     // Each tx has its own grouping key.
     expect(new Set(crud.map(r => r.tx_id))).toEqual(new Set([100, 101]))
@@ -399,12 +390,12 @@ describe('upload-routing triggers', () => {
     h.setTxContext({txId: 'tx-2', userId: 'user-1', scope: 'local-ui', source: 'local-ephemeral'})
     h.insertBlock({id: 'b2'})
     h.clearTxContext()
-    expect(h.psCrud()).toHaveLength(0)
+    expect(h.outbox()).toHaveLength(0)
   })
 
   it("does NOT forward sync-applied writes (source NULL → 'sync' is not 'user')", () => {
     h.insertBlock({id: 'b1'})  // source is NULL
-    expect(h.psCrud()).toHaveLength(0)
+    expect(h.outbox()).toHaveLength(0)
   })
 
   it('v1 has no DELETE upload-routing trigger', () => {
@@ -412,8 +403,8 @@ describe('upload-routing triggers', () => {
     h.setTxContext({txId: 'tx-1', userId: 'user-1', scope: 'block-default', source: 'user'})
     h.deleteBlock('b1')
     h.clearTxContext()
-    // The DELETE row_event still fires; ps_crud stays empty.
-    expect(h.psCrud()).toHaveLength(0)
+    // The DELETE row_event still fires; outbox stays empty.
+    expect(h.outbox()).toHaveLength(0)
   })
 })
 
@@ -651,7 +642,7 @@ describe('block_aliases backfill', () => {
   describe('backfillBlockAliasesIfEmpty marker gate', () => {
     // The runner adapts node:sqlite's synchronous DatabaseSync to the
     // async {execute, getOptional} interface backfillBlockAliasesIfEmpty
-    // expects in production (PowerSync's db handle).
+    // expects in production (the local SQLite db handle).
     const runBackfill = async () => {
       await backfillBlockAliasesIfEmpty({
         execute: async (sql) => h.db.exec(sql),

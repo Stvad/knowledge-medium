@@ -1,7 +1,7 @@
 // @vitest-environment node
 /**
  * Integration tests for `repo.undo()` / `repo.redo()` (spec §10 step 7,
- * §17 line 2228). Runs against a real PowerSyncDatabase via
+ * §17 line 2228). Runs against a real SQLite database via
  * `createTestDb` so triggers fire correctly and SQL state matches what
  * the production app would observe.
  *
@@ -17,7 +17,7 @@
  *   - References scope is recorded but isolated from BlockDefault
  *   - Empty stack: undo / redo return false (no-op)
  *   - Replay tx tags `source = 'user'` so the inverse uploads — verified
- *     by checking ps_crud row count grew after the undo replay
+ *     by checking outbox row count grew after the undo replay
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -296,19 +296,19 @@ describe('repo.undo / redo on empty stack', () => {
 })
 
 describe('undo replay uploads (source = user)', () => {
-  it('writes to ps_crud just like the original tx did', async () => {
+  it('writes to outbox just like the original tx did', async () => {
     await seedRoot(env.repo, 'a', 'v0')
-    const baseline = await rowCount(env.repo, 'ps_crud')
+    const baseline = await rowCount(env.repo, 'outbox')
 
     await env.repo.tx(async (tx) => {
       await tx.update('a', {content: 'v1'})
     }, {scope: ChangeScope.BlockDefault})
-    const afterEdit = await rowCount(env.repo, 'ps_crud')
+    const afterEdit = await rowCount(env.repo, 'outbox')
     expect(afterEdit).toBeGreaterThan(baseline)
 
     await env.repo.undo()
-    const afterUndo = await rowCount(env.repo, 'ps_crud')
-    // Undo must produce its own ps_crud row(s) so the inverse syncs.
+    const afterUndo = await rowCount(env.repo, 'outbox')
+    // Undo must produce its own outbox row(s) so the inverse syncs.
     expect(afterUndo).toBeGreaterThan(afterEdit)
   })
 })

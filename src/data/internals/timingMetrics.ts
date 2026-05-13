@@ -5,7 +5,7 @@
  * Counterpart to the simple-counter metrics on HandleStore / BlockCache.
  * Where those answer "how often", these answer "how long":
  *
- *   - `DbMetrics` aggregates wall-clock timings for every PowerSyncDb
+ *   - `DbMetrics` aggregates wall-clock timings for every LocalDb
  *     call site that flows through the Repo (`getAll`, `getOptional`,
  *     `get`, `execute`, `writeTransaction`). Use to tell whether
  *     a slow cold-start lives in raw SQL roundtrip cost or above it.
@@ -128,7 +128,7 @@ export interface TimingSnapshot {
   readonly totalMs: number
 }
 
-/** Aggregate timings for every PowerSyncDb call that flows through the
+/** Aggregate timings for every LocalDb call that flows through the
  *  Repo (read calls + writeTransaction wall-clock). One instance per
  *  Repo. */
 export class DbMetrics {
@@ -196,7 +196,7 @@ export class QueryMetrics {
 
 // ──── DB wrapper ────
 
-/** Thin shape we actually wrap. Mirrors the `PowerSyncDb` interface
+/** Thin shape we actually wrap. Mirrors the `LocalDb` interface
  *  in `commitPipeline.ts` but kept loose here so this module doesn't
  *  pull the full type — `wrapDbWithMetrics` returns whatever it was
  *  given, with timing-instrumented call sites. */
@@ -216,20 +216,19 @@ interface TimedTxDb {
   get<T>(sql: string, params?: unknown[]): Promise<T>
 }
 
-/** Wrap a `PowerSyncDb` with timing instrumentation. Returns a Proxy
+/** Wrap a `LocalDb` with timing instrumentation. Returns a Proxy
  *  over the input — five methods (`getAll`, `getOptional`, `get`,
  *  `execute`, `writeTransaction`) are intercepted and timed; everything
  *  else (`onChange`, `close`, …) passes through to the original db.
- *  This means consumers like `exportSqliteDb` that need
- *  PowerSyncDatabase-only methods continue to work without us
- *  re-declaring them.
+ *  This means consumers like `exportSqliteDb` that need adapter-specific
+ *  methods continue to work without us re-declaring them.
  *
  *  `writeTransaction` also wraps the LockContext passed to the callback
  *  so tx-internal SQL is timed under the same metrics buckets.
  *
  *  Type-erased to `unknown` here so the module doesn't import
- *  `PowerSyncDb`; `Repo` casts at the call site (it owns the
- *  `PowerSyncDb` type contract). */
+ *  `LocalDb`; `Repo` casts at the call site (it owns the
+ *  `LocalDb` type contract). */
 export const wrapDbWithMetrics = (rawDb: unknown, metrics: DbMetrics): unknown => {
   const db = rawDb as TimedDb
   const wrappedTx = wrapTxDb.bind(null, metrics)

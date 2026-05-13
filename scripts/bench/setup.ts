@@ -3,8 +3,8 @@
  * exposes the optional db instrumentation for roundtrip counting.
  *
  * Each call:
- *   - mints a tmpdir + opens a real `@powersync/node` PowerSyncDatabase,
- *   - applies the production blocks raw-table + v2 client schema,
+ *   - mints a tmpdir + opens the same SQLite test harness used by data tests,
+ *   - applies the production tables + v2 client schema,
  *   - constructs a `Repo` (kernel mutators registered by default),
  *   - returns the bundle with a `cleanup` to remove the tmpdir.
  *
@@ -13,29 +13,14 @@
  * mutators count too.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { PowerSyncDatabase, Schema } from '@powersync/node'
-import {
-  BLOCKS_RAW_TABLE,
-  CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
-  CREATE_BLOCKS_TABLE_SQL,
-  CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
-} from '@/data/blockSchema'
-import { CLIENT_SCHEMA_STATEMENTS, backfillBlockAliasesIfEmpty } from '@/data/internals/clientSchema'
-import {
-  applyLocalSchemaContributions,
-  resolveLocalSchemaContributions,
-} from '@/data/localSchema'
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/internals/repo'
-import type { PowerSyncDb } from '@/data/internals/commitPipeline'
+import type { LocalDb } from '@/data/internals/commitPipeline'
+import { createTestDb } from '@/data/test/createTestDb'
 import { instrumentDb, type DbCounters } from './harness'
-import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 
 export interface BenchEnv {
-  db: PowerSyncDb
+  db: LocalDb
   /** Counters; only meaningful when `instrumented: true`. */
   counters: DbCounters | null
   cache: BlockCache
@@ -55,34 +40,8 @@ export interface SetupOptions {
 }
 
 export const setupBenchEnv = async (opts: SetupOptions = {}): Promise<BenchEnv> => {
-  const schema = new Schema({})
-  schema.withRawTables({blocks: BLOCKS_RAW_TABLE})
-
-  const dbDir = mkdtempSync(join(tmpdir(), 'bench-'))
-  const psDb = new PowerSyncDatabase({
-    schema,
-    database: {dbFilename: 'bench.db', dbLocation: dbDir},
-  })
-  await psDb.waitForReady()
-
-  await psDb.execute(CREATE_BLOCKS_TABLE_SQL)
-  await psDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-  await psDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
-  for (const stmt of CLIENT_SCHEMA_STATEMENTS) await psDb.execute(stmt)
-  const backfillDb = {
-    execute: (sql: string) => psDb.execute(sql),
-    getOptional: async <T,>(sql: string) => {
-      const row = await psDb.getOptional<T>(sql)
-      return row ?? null
-    },
-  }
-  await backfillBlockAliasesIfEmpty(backfillDb)
-  await applyLocalSchemaContributions(
-    backfillDb,
-    resolveLocalSchemaContributions(staticDataExtensions),
-  )
-
-  let dbForRepo: PowerSyncDb = psDb as unknown as PowerSyncDb
+  const testDb = await createTestDb()
+  let dbForRepo: LocalDb = testDb.db
   let counters: DbCounters | null = null
   if (opts.instrumented) {
     const w = instrumentDb(dbForRepo)
@@ -106,8 +65,7 @@ export const setupBenchEnv = async (opts: SetupOptions = {}): Promise<BenchEnv> 
     repo,
     cleanup: async () => {
       repo.stopRowEventsTail()
-      await psDb.close()
-      rmSync(dbDir, {recursive: true, force: true})
+      await testDb.cleanup()
     },
   }
 }

@@ -23,7 +23,7 @@
  */
 
 import { v4 as uuidv4 } from 'uuid'
-import type { PowerSyncDb } from '@/data/internals/commitPipeline'
+import type { LocalDb } from '@/data/internals/commitPipeline'
 
 export const DEFAULT_WORKSPACE = 'ws-bench'
 export const DEFAULT_USER = 'bench-user'
@@ -47,7 +47,7 @@ interface InsertParams {
   updatedAt?: number
 }
 
-const insert = async (db: PowerSyncDb, p: InsertParams) =>
+const insert = async (db: LocalDb, p: InsertParams) =>
   db.execute(INSERT_BLOCK_SQL, [
     p.id,
     p.workspaceId,
@@ -93,7 +93,7 @@ export interface ChainResult {
  *  Wrapped in one writeTransaction so the entire population is a single
  *  SQL transaction (much faster than one per row). */
 export const populateLinearChain = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   depth: number,
   opts: {workspaceId?: string} = {},
 ): Promise<ChainResult> => {
@@ -125,7 +125,7 @@ export interface BalancedResult {
 /** Balanced k-ary tree of given depth (root counts as depth 0).
  *  totalNodes = (k^(depth+1) - 1) / (k - 1) for k > 1, depth+1 for k=1. */
 export const populateBalanced = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   branching: number,
   depth: number,
   opts: {workspaceId?: string; contentPrefix?: string} = {},
@@ -173,7 +173,7 @@ export interface FanOutResult {
 
 /** One parent + N siblings, all under workspace root. */
 export const populateFanOut = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   childCount: number,
   opts: {workspaceId?: string} = {},
 ): Promise<FanOutResult> => {
@@ -205,7 +205,7 @@ export interface FlatResult {
 
 /** N flat root rows in a workspace. Cheapest fill for big-DB baselines. */
 export const populateFlat = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   count: number,
   opts: {workspaceId?: string; batchSize?: number} = {},
 ): Promise<FlatResult> => {
@@ -240,7 +240,7 @@ export interface RealisticResult {
  *  `bulletsPerPage` direct children, each of those with `subBulletsPerBullet`
  *  leaves. Useful as a stand-in for a typical Workflowy/Roam corpus. */
 export const populateRealistic = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   args: {pages: number; bulletsPerPage: number; subBulletsPerBullet: number; workspaceId?: string},
 ): Promise<RealisticResult> => {
   const workspaceId = args.workspaceId ?? DEFAULT_WORKSPACE
@@ -289,7 +289,7 @@ export const buildReferencesJson = (refs: string[]): string =>
  *  meaningful. Does direct SQL UPDATE — bypasses repo.tx because we're
  *  pre-populating, not measuring writes. */
 export const seedReferences = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   args: {sourceIds: string[]; targetIds: string[]; refsPerSource: number},
 ): Promise<void> => {
   await db.writeTransaction(async (tx) => {
@@ -309,7 +309,7 @@ export const seedReferences = async (
 /** Set a property on N rows — used to seed `aliasesInWorkspace` /
  *  `findBlocksByType` benchmarks. */
 export const seedProperty = async (
-  db: PowerSyncDb,
+  db: LocalDb,
   args: {ids: string[]; key: string; valueFor: (id: string, ix: number) => unknown},
 ): Promise<void> => {
   await db.writeTransaction(async (tx) => {

@@ -21,7 +21,7 @@
  * write processors open their own `ctx.repo.tx(...)` when they decide to
  * write. This avoids holding a writer slot through read phases (the
  * shape that produced the §10 / `tasks/processor-tx-deadlock.md`
- * deadlock under PowerSync's serialized single-connection config) and
+ * deadlock under the old serialized single-connection config) and
  * lets pure-side-effect processors skip the writer cost entirely.
  *
  * Failures are caught + logged so a crashing processor can't poison
@@ -47,7 +47,7 @@ import {
 } from '@/data/api'
 import type { AfterCommitJob } from './txEngine'
 import type { SnapshotsMap } from './txSnapshots'
-import type { PowerSyncDb } from './commitPipeline'
+import type { LocalDb } from './commitPipeline'
 import type { Repo } from '../repo'
 
 /** Tx-grain inputs the runner needs to decide what fires + with which
@@ -112,14 +112,14 @@ const collectFieldMatches = (
 
 export class ProcessorRunner {
   private readonly repo: Repo
-  private readonly db: PowerSyncDb
+  private readonly db: LocalDb
   /** In-flight processor promises. Tracked so tests (and any caller
    *  who needs deterministic ordering) can `awaitIdle()` before
    *  assertions. Each promise removes itself from the set on
    *  settlement (success or failure). */
   private readonly pending: Set<Promise<void>> = new Set()
 
-  constructor(repo: Repo, db: PowerSyncDb) {
+  constructor(repo: Repo, db: LocalDb) {
     this.repo = repo
     this.db = db
   }

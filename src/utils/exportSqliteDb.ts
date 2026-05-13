@@ -1,13 +1,13 @@
 /**
- * Download / replace the raw `.db` snapshot of the live PowerSync
- * SQLite database.
+ * Download / replace the raw `.db` snapshot of the live local SQLite
+ * database.
  *
  * With OPFSCoopSyncVFS the database is a real file at OPFS root, so we
  * just read it directly. The journal mode is rollback (`delete`) — see
  * the WAL note in repoProvider.ts — so the .db file is the
  * authoritative state and nothing has to be checkpointed first.
  *
- * Import is the reverse: close the live PowerSync DB to release the
+ * Import is the reverse: close the live SQLite DB to release the
  * OPFS sync access handle, overwrite the user's .db file with the
  * supplied bytes, then ask the caller to reload so the new file is
  * opened cleanly. The simple "replace whole DB" semantics — same user
@@ -58,8 +58,8 @@ const SQLITE_MAGIC = new Uint8Array([
 /**
  * Replace the current user's OPFS .db file with the supplied bytes.
  * After this resolves the live `repo` is dead (its DB connection has
- * been closed); the caller must reload the page so a fresh PowerSync
- * init opens the new file.
+ * been closed); the caller must reload the page so a fresh SQLite init opens
+ * the new file.
  */
 export async function importRawSqliteDb(repo: Repo, file: File): Promise<void> {
   const buffer = await file.arrayBuffer()

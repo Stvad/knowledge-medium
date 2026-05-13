@@ -87,7 +87,7 @@ export interface CommittedEvent<ScheduledArgs = unknown> {
 /** Read-only SQL surface available to a processor outside any tx.
  *  Sees committed state at processor-fire time (the originating user
  *  tx is committed by the time `apply` fires). Intentionally narrower
- *  than `PowerSyncDatabase` — no `execute`, no `writeTransaction` — so
+ *  than `LocalDb` — no `execute`, no `writeTransaction` — so
  *  the type prevents accidental writes through this handle. Writes
  *  must go through a `repo.tx(...)` opened by the processor. */
 export interface ProcessorReadDb {

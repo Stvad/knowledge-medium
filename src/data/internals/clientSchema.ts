@@ -1,11 +1,11 @@
-/** Client-side SQLite schema additions on top of the PowerSync-managed
+/** Client-side SQLite schema additions on top of the Electric-materialized
  *  `blocks` table. None of these tables are synced — they're the local
  *  mechanism for tx context, per-row audit, per-tx audit, upload routing,
  *  and local side indexes. The client-only triggers live here too —
- *  server-side Postgres has no `powersync_crud` and no need for any of
+ *  server-side Postgres has no `outbox` and no need for any of
  *  them. See data-layer-redesign §4.2 / §4.3 / §4.4 / §4.5 / §4.1.1.
  *
- *  Run from `repoProvider.ts` after PowerSync's own schema initialization:
+ *  Run from `repoProvider.ts` after the base table DDL:
  *
  *      for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
  *        await db.execute(stmt)
@@ -19,21 +19,20 @@
 /** Single-row table. Triggers read it via
  *  `(SELECT … FROM tx_context WHERE id = 1)`. Why not a TEMP table:
  *  triggers in `main` schema cannot reference `temp.X` tables. The
- *  TxEngine sets all five fields at the start of `writeTransaction`
+ *  TxEngine sets all context fields at the start of `writeTransaction`
  *  and clears them (back to NULL) at the end.
  *
  *  `tx_seq` is the integer tx-grouping key the upload-routing triggers
- *  copy into `ps_crud.tx_id`. PowerSync's `getNextCrudTransaction()`
- *  groups CRUD entries by `ps_crud.tx_id`; without it, a multi-row
- *  `repo.tx` uploads as N separate server-side transactions. The text
- *  `tx_id` (above) is what `row_events` records — distinct because
- *  audit doesn't need integer grouping and the text form is friendlier
- *  for log inspection. */
+ *  copy into `outbox.tx_id`, so our upload loop can preserve multi-row
+ *  transaction boundaries. The text `tx_id` is what `row_events` records;
+ *  `write_id` is sent to Postgres and comes back through Electric so the
+ *  shape subscriber can skip local echoes while the outbox entry exists. */
 export const CREATE_TX_CONTEXT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tx_context (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     tx_id   TEXT,
     tx_seq  INTEGER,
+    write_id TEXT,
     user_id TEXT,
     scope   TEXT,
     source  TEXT
@@ -102,6 +101,25 @@ export const CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL = `
   ON command_events (workspace_id, created_at DESC)
 `
 
+/** Durable outgoing write queue. Local user writes append JSON envelopes here
+ *  via the upload triggers below. The Electric migration keeps this table
+ *  deliberately small and explicit instead of depending on a sync engine's
+ *  internal queue shape. */
+export const CREATE_OUTBOX_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS outbox (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    tx_id      INTEGER NOT NULL,
+    write_id   TEXT NOT NULL,
+    data       TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )
+`
+
+export const CREATE_OUTBOX_TX_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_outbox_tx
+  ON outbox (tx_id, id)
+`
+
 /** Trigger-maintained side index of `(workspace_id, alias) → block_id`,
  *  derived from the `alias` entry in each live block's `properties_json`.
  *
@@ -113,10 +131,9 @@ export const CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL = `
  *  cost of three triggers and one extra row per (block, alias) pair.
  *
  *  Local-only: the table is fully derivable from `blocks.properties_json`
- *  so it is not synced — PowerSync's CRUD-apply path writes through
- *  `BLOCKS_RAW_TABLE.put` (an `INSERT … ON CONFLICT DO UPDATE`) which
- *  fires our INSERT/UPDATE triggers, populating this table on incoming
- *  sync the same way local writes do.
+ *  so it is not synced — Electric shape apply writes through
+ *  `UPSERT_BLOCK_SQL`, which fires our INSERT/UPDATE triggers, populating
+ *  this table on incoming sync the same way local writes do.
  *
  *  Soft-delete: triggers keep block_aliases empty for blocks where
  *  `deleted = 1`. Hard-delete (the DELETE row_event trigger on blocks
@@ -221,9 +238,9 @@ const blockJsonObjectSql = (rowRef: 'NEW' | 'OLD') => `
 
 /** Belt-and-suspenders: tx_id is the active local tx_id only when source
  *  IS NOT NULL. Sync-applied writes leave source = NULL (no `repo.tx` is
- *  open during PowerSync's CRUD apply); without this guard a stale tx_id
+ *  open during Electric shape apply); without this guard a stale tx_id
  *  left in `tx_context` from the previous local tx would leak into the
- *  sync-applied row_events row. The TxEngine clears all four fields at
+ *  sync-applied row_events row. The TxEngine clears all context fields at
  *  end-of-tx; the trigger logic is the load-bearing correctness check. */
 const triggerTxIdSql = `
       CASE
@@ -234,6 +251,24 @@ const triggerTxIdSql = `
 `.trim()
 
 const triggerSourceSql = `COALESCE((SELECT source FROM tx_context WHERE id = 1), 'sync')`
+
+const BLOCK_EVENT_COLUMNS = [
+  'workspace_id',
+  'parent_id',
+  'order_key',
+  'content',
+  'properties_json',
+  'references_json',
+  'created_at',
+  'updated_at',
+  'created_by',
+  'updated_by',
+  'deleted',
+] as const
+
+const blockEventDiffPredicateSql = BLOCK_EVENT_COLUMNS
+  .map(column => `OLD.${column} IS NOT NEW.${column}`)
+  .join('\n    OR ')
 
 // ============================================================================
 // row_events triggers (3) — fire for both local AND sync writes; the
@@ -265,6 +300,9 @@ export const CREATE_BLOCKS_INSERT_ROW_EVENT_TRIGGER_SQL = `
 export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_update
   AFTER UPDATE ON blocks
+  WHEN (
+    ${blockEventDiffPredicateSql}
+    )
   BEGIN
     INSERT INTO row_events (
       tx_id, block_id, kind, before_json, after_json, source, created_at
@@ -286,7 +324,7 @@ export const CREATE_BLOCKS_UPDATE_ROW_EVENT_TRIGGER_SQL = `
 /** DELETE row_event writer is reserved for hard purges. v1 ships no purge
  *  mechanism; the trigger exists for future use (e.g. a job that purges
  *  soft-deleted rows older than N days). Hard deletes do not sync —
- *  PowerSync sees the row vanish locally; soft-delete via the synced
+ *  Electric sees the row vanish locally; soft-delete via the synced
  *  `deleted` column is what propagates "this row is gone" through sync. */
 export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_row_event_delete
@@ -317,10 +355,10 @@ export const CREATE_BLOCKS_DELETE_ROW_EVENT_TRIGGER_SQL = `
 // through tx.delete → UPDATE deleted = 1 → fires the UPDATE upload trigger
 // below, which forwards correctly. See §4.5.
 //
-// The upload SQL writes through PowerSync's standard powersync_crud queue:
-//   ps_crud (tx_id INTEGER, data TEXT)
-// where data is a JSON envelope { op, type, id, data }. PowerSync picks
-// rows out of ps_crud and uploads them via the configured connector.
+// The upload SQL writes through our standard outbox queue:
+//   outbox (tx_id INTEGER, write_id TEXT, data TEXT)
+// where data is a JSON envelope { op, type, id, data }. The upload loop
+// drains these rows through Supabase.
 // ============================================================================
 
 interface UploadColumnSpec {
@@ -367,26 +405,29 @@ ${BLOCK_UPLOAD_COLUMNS.map(column =>
       )
 `.trim()
 
-// tx_id on ps_crud is what PowerSync's `getNextCrudTransaction()` groups
-// by, so a multi-row repo.tx uploads as a single server-side transaction.
+// tx_id on outbox is what the upload loop groups by, so a multi-row repo.tx
+// uploads as a single server-side transaction.
 // Read it from `tx_context.tx_seq` (a non-null INTEGER set by the engine
 // at tx start). Without this, every row in a multi-write tx ships as its
-// own CrudTransaction and atomicity intent is lost on the server.
+// own upload transaction and atomicity intent is lost on the server.
 const triggerTxSeqSql = `(SELECT tx_seq FROM tx_context WHERE id = 1)`
+const triggerWriteIdSql = `(SELECT write_id FROM tx_context WHERE id = 1)`
 
 export const CREATE_BLOCKS_UPLOAD_INSERT_TRIGGER_SQL = `
   CREATE TRIGGER IF NOT EXISTS blocks_upload_insert
   AFTER INSERT ON blocks
   WHEN (SELECT source FROM tx_context WHERE id = 1) = 'user'
   BEGIN
-    INSERT INTO ps_crud (tx_id, data) VALUES (
+    INSERT INTO outbox (tx_id, write_id, data, created_at) VALUES (
       ${triggerTxSeqSql},
+      ${triggerWriteIdSql},
       json_object(
         'op', 'PUT',
         'type', 'blocks',
         'id', NEW.id,
         'data', ${blockUploadJsonSql('NEW')}
-      )
+      ),
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
     );
   END
 `
@@ -399,14 +440,16 @@ export const CREATE_BLOCKS_UPLOAD_UPDATE_TRIGGER_SQL = `
     ${blockUploadDiffPredicateSql}
     )
   BEGIN
-    INSERT INTO ps_crud (tx_id, data) VALUES (
+    INSERT INTO outbox (tx_id, write_id, data, created_at) VALUES (
       ${triggerTxSeqSql},
+      ${triggerWriteIdSql},
       json_object(
         'op', 'PATCH',
         'type', 'blocks',
         'id', NEW.id,
         'data', ${blockUploadPatchJsonSql()}
-      )
+      ),
+      CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
     );
   END
 `
@@ -465,7 +508,7 @@ export const CREATE_BLOCKS_WORKSPACE_INVARIANT_UPDATE_TRIGGER_SQL = `
 // preflight) into the schema so every path — `tx.create`, `tx.move`,
 // `tx.restore`, future plugins — gets the check by construction.
 //
-// Skipped when `tx_context.source IS NULL` so PowerSync sync-apply doesn't
+// Skipped when `tx_context.source IS NULL` so Electric shape apply doesn't
 // fail on the transient "child arrives before parent's tombstone" cross-
 // client ordering. Spec §4.1.1: server FK accepts tombstoned parents;
 // strict-local / permissive-sync is the documented asymmetry.
@@ -623,7 +666,7 @@ export const CREATE_BLOCKS_ALIAS_DELETE_TRIGGER_SQL = `
  *  the existing claimant to construct
  *  `ProcessorRejection('alias.collision', meta)`.
  *
- *  Skipped when `tx_context.source IS NULL` so PowerSync sync-apply
+ *  Skipped when `tx_context.source IS NULL` so Electric shape apply
  *  doesn't fail on dupes propagating from other clients (mirrors the
  *  workspace-invariant trigger's policy). V1 leaves cross-client
  *  alias merges as latent; the user-facing merge flow is V2.
@@ -780,8 +823,8 @@ export const CLEAR_REPROJECT_REF_MARKER_SQL = `
 `
 
 // ============================================================================
-// Bulk-apply ordered list. Run after `blocks` exists (PowerSync's schema
-// initialization creates it). Idempotent (`IF NOT EXISTS`).
+// Bulk-apply ordered list. Run after `blocks` exists. Idempotent
+// (`IF NOT EXISTS`).
 // ============================================================================
 
 export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
@@ -795,6 +838,8 @@ export const CLIENT_SCHEMA_STATEMENTS: readonly string[] = [
   CREATE_COMMAND_EVENTS_TABLE_SQL,
   CREATE_COMMAND_EVENTS_CREATED_INDEX_SQL,
   CREATE_COMMAND_EVENTS_WORKSPACE_INDEX_SQL,
+  CREATE_OUTBOX_TABLE_SQL,
+  CREATE_OUTBOX_TX_INDEX_SQL,
   CREATE_BLOCK_ALIASES_TABLE_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_INDEX_SQL,
   CREATE_BLOCK_ALIASES_WS_ALIAS_LOWER_INDEX_SQL,
@@ -855,7 +900,7 @@ interface ClientSchemaBootstrapDb {
  *  read because triggers maintain the table from then on.
  *
  *  Tests open a fresh database with no blocks → noop. Production
- *  picks up the existing PowerSync-synced blocks → one large INSERT
+ *  picks up the existing Electric-synced blocks → one large INSERT
  *  on the first start, then noop on every start after. */
 export const backfillBlockAliasesIfEmpty = async (
   db: ClientSchemaBootstrapDb,

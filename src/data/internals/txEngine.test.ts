@@ -2,7 +2,7 @@
 /**
  * Tx engine tests (spec §5.3 / §10 / §4.7).
  *
- * Every test runs against a real `@powersync/node` PowerSyncDatabase via
+ * Every test runs against a real SQLite database via
  * the `createTestDb` harness — same `db.execute` / `db.writeTransaction`
  * surface as production, real SQLite, real triggers. So:
  *   - row_events fire when primitives write, with the correct
@@ -83,7 +83,7 @@ interface Harness {
   /** Counter snapshot helpers. */
   rowEventsFor(blockId: string): Promise<Array<{kind: string; source: string; tx_id: string | null}>>
   commandEvents(): Promise<Array<{tx_id: string; scope: string; workspace_id: string | null; source: string}>>
-  psCrud(): Promise<Array<{data: string}>>
+  outbox(): Promise<Array<{data: string}>>
 }
 
 const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
@@ -119,7 +119,7 @@ const setup = async (overrides?: {isReadOnly?: boolean}): Promise<Harness> => {
       h.db.getAll('SELECT kind, source, tx_id FROM row_events WHERE block_id = ? ORDER BY id', [blockId]),
     commandEvents: () =>
       h.db.getAll('SELECT tx_id, scope, workspace_id, source FROM command_events ORDER BY created_at'),
-    psCrud: () => h.db.getAll('SELECT data FROM ps_crud ORDER BY id'),
+    outbox: () => h.db.getAll('SELECT data FROM outbox ORDER BY id'),
   }
 }
 
@@ -158,8 +158,8 @@ describe('tx.create', () => {
     expect(cmds[0]).toMatchObject({scope: 'block-default', workspace_id: 'ws-1', source: 'user'})
     expect(events[0].tx_id).toBe(cmds[0].tx_id)
 
-    // Upload routing: ps_crud has the PUT envelope.
-    const crud = await env.psCrud()
+    // Upload routing: outbox has the PUT envelope.
+    const crud = await env.outbox()
     expect(crud.length).toBe(1)
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id})
   })
@@ -637,7 +637,7 @@ describe('read-only mode', () => {
 
       const cmds = await ro.commandEvents()
       expect(cmds.at(-1)).toMatchObject({scope: ChangeScope.UserPrefs, source: 'local-ephemeral'})
-      expect(await ro.psCrud()).toEqual([])
+      expect(await ro.outbox()).toEqual([])
     } finally {
       await ro.h.cleanup()
     }
@@ -750,7 +750,7 @@ describe('commit pipeline bookkeeping', () => {
     const cmds = await env.commandEvents()
     expect(cmds.at(-1)!.source).toBe('local-ephemeral')
     // Upload trigger gates on source = 'user'; UiState writes don't enqueue.
-    const crud = await env.psCrud()
+    const crud = await env.outbox()
     expect(crud).toEqual([])
   })
 
@@ -761,23 +761,23 @@ describe('commit pipeline bookkeeping', () => {
 
     const cmds = await env.commandEvents()
     expect(cmds.at(-1)).toMatchObject({scope: ChangeScope.UserPrefs, source: 'user'})
-    const crud = await env.psCrud()
+    const crud = await env.outbox()
     expect(crud).toHaveLength(1)
     expect(JSON.parse(crud[0].data)).toMatchObject({op: 'PUT', type: 'blocks', id: 'prefs-1'})
   })
 
-  it('multi-create tx ships as one CrudTransaction (ps_crud.tx_id groups across rows)', async () => {
-    // Two creates inside one repo.tx must share ps_crud.tx_id so
-    // PowerSync's getNextCrudTransaction() emits them as one
-    // CrudTransaction. NULL tx_id (or distinct per-row tx_id) would
-    // ship them as separate server-side txs — atomicity intent lost.
+  it('multi-create tx ships as one upload transaction (outbox.tx_id groups across rows)', async () => {
+    // Two creates inside one repo.tx must share outbox.tx_id so
+    // the upload loop drains them as one upload transaction. NULL tx_id
+    // (or distinct per-row tx_id) would ship them as separate server-side
+    // txs — atomicity intent lost.
     await env.repo.tx(async tx => {
       await tx.create({id: 'gx-1', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'})
       await tx.create({id: 'gx-2', workspaceId: 'ws-1', parentId: null, orderKey: 'a1'})
     }, {scope: ChangeScope.BlockDefault})
 
     const crud = await env.h.db.getAll<{id: number; tx_id: number | null; data: string}>(
-      'SELECT id, tx_id, data FROM ps_crud ORDER BY id',
+      'SELECT id, tx_id, data FROM outbox ORDER BY id',
     )
     expect(crud).toHaveLength(2)
     // Both rows non-null tx_id and matching.
@@ -787,12 +787,12 @@ describe('commit pipeline bookkeeping', () => {
     expect(new Set(crud.map(r => JSON.parse(r.data).id))).toEqual(new Set(['gx-1', 'gx-2']))
 
     // Run a second tx — its rows must get a different tx_id (so the
-    // server treats them as a separate CrudTransaction).
+    // server treats them as a separate upload transaction).
     await env.repo.tx(async tx => {
       await tx.create({id: 'gx-3', workspaceId: 'ws-1', parentId: null, orderKey: 'a2'})
     }, {scope: ChangeScope.BlockDefault})
     const allCrud = await env.h.db.getAll<{tx_id: number | null}>(
-      'SELECT tx_id FROM ps_crud ORDER BY id',
+      'SELECT tx_id FROM outbox ORDER BY id',
     )
     expect(allCrud[2].tx_id).not.toBeNull()
     expect(allCrud[2].tx_id).not.toBe(crud[0].tx_id)

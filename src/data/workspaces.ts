@@ -106,7 +106,7 @@ const parseRpcWorkspaceMemberWithEmail = (
 // ---------------------------------------------------------------------------
 
 // Server-side, RLS-gated access check. We use this at bootstrap to decide
-// whether to trust a URL hash workspace id BEFORE relying on PowerSync's
+// whether to trust a URL hash workspace id BEFORE relying on Electric's
 // local replication — `waitForFirstSync` returns instantly on subsequent
 // visits (first sync already done, persistent IndexedDB), so polling for
 // the local row to "appear" is unreliable as an access check.
@@ -317,7 +317,7 @@ export const listWorkspaceMembersWithEmails = async (
 }
 
 // ---------------------------------------------------------------------------
-// Local PowerSync SQLite reads
+// Local SQLite reads
 // ---------------------------------------------------------------------------
 
 const SELECT_LOCAL_WORKSPACES_SQL = `
@@ -380,7 +380,7 @@ export const listLocalMembershipsForUser = async (
 
 // Returns null when the membership hasn't synced locally yet (rare — happens
 // only when the workspace itself just became accessible via URL hop and
-// PowerSync hasn't replicated the membership row yet). Caller decides the
+// Electric hasn't replicated the membership row yet). Caller decides the
 // default behavior in that case.
 export const getLocalMemberRole = async (
   repo: Repo,
@@ -397,9 +397,9 @@ export const getLocalMemberRole = async (
 // ---------------------------------------------------------------------------
 // Optimistic local seeding (after RPC returns, before sync replicates).
 //
-// The workspaces / workspace_members raw tables have no powersync_crud trigger,
-// so direct INSERT OR REPLACE is local-only. PowerSync will overwrite with
-// the canonical row when sync replicates.
+// Workspace tables have no outbox triggers, so direct INSERT OR REPLACE is
+// local-only. Electric will overwrite with the canonical row when sync
+// replicates.
 // ---------------------------------------------------------------------------
 
 // Module-private — call sites should use primeLocalWorkspaceAndMember so
@@ -433,7 +433,7 @@ const primeLocalMembership = async (
 // Optimistic-prime convenience for "I just got a workspace + canonical
 // member back from create_workspace / ensure_personal_workspace": writes
 // both rows to local SQLite so the switcher renders immediately, before
-// PowerSync replicates them.
+// Electric replicates them.
 //
 // Both call sites (App.tsx ensure-personal-workspace bootstrap and
 // CreateWorkspaceDialog create flow) used to inline this two-step prime

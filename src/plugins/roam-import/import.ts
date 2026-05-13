@@ -72,7 +72,7 @@ type AliasIdMap = ReadonlyMap<string, string>
  *  - Smaller chunks → smaller TxEngine snapshot Map per commit and
  *    faster handle-invalidation pass after each commit, but more
  *    per-tx overhead (BEGIN/COMMIT, command_events row, undo entry,
- *    one PowerSync upload tx per chunk).
+ *    one remote upload batch per chunk).
  *  - Larger chunks → fewer commit-time costs amortised over more
  *    rows, but the snapshot Map and the post-commit O(snapshots)
  *    work blow up on huge imports.
@@ -963,7 +963,7 @@ interface AliasResolution {
  *
  * Why not open per-alias txs anymore: a 5K-alias Roam export spawned
  * 5K side-txs, each firing post-commit processors, row-events tail,
- * handle invalidation, and (in production) one PowerSync upload
+ * handle invalidation, and (in production) one remote upload
  * round-trip. The deterministic-seat scheme matches what
  * references.parseReferences produces, so the seats unify with any
  * pre-existing typed `[[alias]]` stubs and the main-tx

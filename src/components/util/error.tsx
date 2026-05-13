@@ -18,7 +18,7 @@ export function FallbackComponent({error}: FallbackProps) {
 // hatch when state is genuinely poisoned (auth, per-user db corruption).
 // We don't clear localStorage here — `recallRememberedWorkspace` already
 // falls through cleanly when the remembered id no longer resolves locally,
-// and PowerSync removes rows the user lost access to, so localStorage is
+// and sync removes rows the user lost access to, so localStorage is
 // almost always self-healing.
 export function BootstrapErrorFallback({error}: FallbackProps) {
   const signOut = useSignOut()

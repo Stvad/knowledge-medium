@@ -126,7 +126,7 @@ export class BlockCache {
   /** LWW-gated snapshot write for sync-arrival paths (row_events tail,
    *  re-reads from SQL inside `repo.load`, query hydrate-rows). Rejects
    *  an incoming snapshot whose `updatedAt` is NOT STRICTLY NEWER than
-   *  what's already cached — PowerSync can deliver an older row state
+   *  what's already cached — Electric can deliver an older row state
    *  during the upload window while the local commit pipeline has
    *  already advanced the cache, and re-reading the SQLite row after a
    *  sync-clobber would otherwise reintroduce the stale state.

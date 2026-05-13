@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { listMyPendingInvitations } from '@/data/workspaces'
 import type { WorkspaceInvitation } from '@/types'
 
-// Pending invitations don't sync via PowerSync (the email-claim filter would
-// require threading the JWT into PowerSync sync rules; keeping the path REST-
+// Pending invitations don't sync via Electric (the email-claim filter would
+// require a dedicated shape predicate; keeping the path REST-
 // only is simpler). Fetch on mount, refresh on demand.
 export const usePendingInvitations = () => {
   const [invitations, setInvitations] = useState<WorkspaceInvitation[]>([])

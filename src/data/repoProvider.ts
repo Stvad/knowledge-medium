@@ -1,38 +1,17 @@
 /**
- * Production bootstrap for the new data layer (replaces
- * `src/data/repoInstance.ts`).
+ * Production bootstrap for the data layer.
  *
- * Per-user PowerSync database — the database itself is the user
- * isolation boundary (no shared CRUD queue, no shared cache, no risk
- * of one session's pending uploads being retried under another user's
- * JWT). Sign-out clears the Supabase session but leaves the local DB
- * intact; sign-in as the same user reopens the same DB and unsynced
- * edits resume uploading. Sign-in as a different user opens a fresh
- * DB.
- *
- * What this DOES:
- *   - Open a `PowerSyncDatabase` keyed by user id
- *   - Run PowerSync's `init()` (sets up powersync_crud + ps_oplog)
- *   - Run the new client-side DDL: `blocks` + core indexes,
- *     workspaces + workspace_members tables/indexes,
- *     `CLIENT_SCHEMA_STATEMENTS` (tx_context, row_events,
- *     command_events, core side indexes, and triggers), then static
- *     data-plugin local schema contributions
- *   - Connect to the PowerSync server when `hasRemoteSyncConfig`
- *
- * What this does NOT do (vs. legacy):
- *   - No `block_event_context` / `block_events` tables (replaced by
- *     `tx_context` + `row_events` from clientSchema.ts)
- *   - No legacy CRUD-routing triggers (replaced by the 5 audit/upload
- *     triggers in clientSchema.ts that key on `tx_context.source`)
- *   - No `UndoRedoManager` (undo lands in a future stage; engine
- *     doesn't depend on it)
+ * Per-user SQLite database — the database itself is the user isolation
+ * boundary (no shared outbox, no shared cache, no risk of one session's
+ * pending uploads being retried under another user's JWT). Sign-out clears
+ * the Supabase session but leaves the local DB intact; sign-in as the same
+ * user reopens the same DB and unsynced edits resume uploading. Sign-in as
+ * a different user opens a fresh DB.
  */
 
-import { PowerSyncDatabase, Schema, WASQLiteOpenFactory, WASQLiteVFS } from '@powersync/web'
-import { createPowerSyncConnector, hasRemoteSyncConfig } from '@/services/powersync.ts'
+import { BrowserSqliteDb } from '@/data/sqliteDb'
+import { hasRemoteSyncConfig } from '@/services/electric.ts'
 import {
-  BLOCKS_RAW_TABLE,
   CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL,
   CREATE_BLOCKS_TABLE_SQL,
   CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL,
@@ -41,8 +20,6 @@ import {
   CREATE_WORKSPACES_TABLE_SQL,
   CREATE_WORKSPACE_MEMBERS_INDEX_SQL,
   CREATE_WORKSPACE_MEMBERS_TABLE_SQL,
-  WORKSPACES_RAW_TABLE,
-  WORKSPACE_MEMBERS_RAW_TABLE,
 } from '@/data/workspaceSchema'
 import {
   CLIENT_SCHEMA_STATEMENTS,
@@ -54,13 +31,11 @@ import {
   resolveLocalSchemaContributions,
 } from '@/data/localSchema.ts'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions.ts'
-
-const appSchema = new Schema({})
-appSchema.withRawTables({
-  blocks: BLOCKS_RAW_TABLE,
-  workspaces: WORKSPACES_RAW_TABLE,
-  workspace_members: WORKSPACE_MEMBERS_RAW_TABLE,
-})
+import { startUploadLoop, type UploadLoop } from '@/services/upload'
+import {
+  startShapeSubscriber,
+  type ShapeSubscriber,
+} from '@/services/sync/shapeSubscriber'
 
 // wa-sqlite's VFS caps pathnames at 64 chars (mxPathname in
 // node_modules/@journeyapps/wa-sqlite/src/VFS.js). SQLite derives
@@ -70,27 +45,23 @@ appSchema.withRawTables({
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
-// v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.0).
-// History: v3 was the original IDB layout; v4 introduced OPFS; v5
-// reverted to IDB to test whether the bucket-wipe pattern was
-// OPFS-specific (it wasn't — wipes reproduce identically on both, so
-// the cause is upstream of storage). v6 returns to the intended
-// production setup: OPFSCoopSync for fast sync access handles + multi-
-// tabs enabled. Each VFS bump gets a fresh filename so we don't reuse
-// storage across backends.
+// v7 = direct wa-sqlite + Electric shape materialization. v6 was managed by
+// the previous sync engine; bumping gives the Electric path a fresh local
+// file and avoids reusing obsolete internal tables.
 export const dbFilenameForUser = (userId: string) => {
   const sanitized = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, MAX_USER_SEGMENT)
-  return `kmp-v6-${sanitized}.db`
+  return `kmp-v7-${sanitized}.db`
 }
 
-const dbsByUser = new Map<string, PowerSyncDatabase>()
+const dbsByUser = new Map<string, BrowserSqliteDb>()
 const initPromises = new Map<string, Promise<void>>()
+const uploadLoopsByUser = new Map<string, UploadLoop>()
+const subscribersByUser = new Map<string, ShapeSubscriber>()
 let activeUserId: string | null = null
-let connectChain: Promise<void> = Promise.resolve()
 
 // Firefox and Safari block OPFS in private browsing — `getDirectory()`
 // throws SecurityError. Probe once and surface a useful message before
-// PowerSync gets to fail with the opaque internal error.
+// wa-sqlite gets to fail with an opaque internal error.
 let opfsProbe: Promise<void> | null = null
 const assertOpfsAvailable = (): Promise<void> => {
   if (!opfsProbe) {
@@ -113,24 +84,16 @@ const assertOpfsAvailable = (): Promise<void> => {
   return opfsProbe
 }
 
-// OPFSCoopSyncVFS gives fast sync access handles (much faster than IDB
-// transactions); enableMultiTabs lets the SharedSync worker coordinate
-// one sync stream across all open tabs of the same workspace.
-const buildPowerSyncDb = (userId: string) => new PowerSyncDatabase({
-  schema: appSchema,
-  database: new WASQLiteOpenFactory({
-    dbFilename: dbFilenameForUser(userId),
-    vfs: WASQLiteVFS.OPFSCoopSyncVFS,
-  }),
-  flags: {
-    enableMultiTabs: true,
-  },
-})
-
-export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
+export const getRepoDb = (userId: string): BrowserSqliteDb => {
   const existing = dbsByUser.get(userId)
   if (existing) return existing
-  const db = buildPowerSyncDb(userId)
+  throw new Error(`SQLite database for user ${userId} has not been opened yet`)
+}
+
+const getOrOpenDb = async (userId: string): Promise<BrowserSqliteDb> => {
+  const existing = dbsByUser.get(userId)
+  if (existing) return existing
+  const db = await BrowserSqliteDb.open(dbFilenameForUser(userId))
   dbsByUser.set(userId, db)
   return db
 }
@@ -138,18 +101,17 @@ export const getPowerSyncDb = (userId: string): PowerSyncDatabase => {
 // `useRemoteSync` is the runtime gate (defaults to the build-time
 // `hasRemoteSyncConfig`). Callers pass `false` when the user opted into
 // local-only mode at login — in that case we still init the local DB +
-// triggers but skip `db.connect()` so we never make a Supabase auth or
-// PowerSync sync request from this session.
-export const ensurePowerSyncReady = async (
+// triggers but skip Electric subscription/upload.
+export const ensureRepoReady = async (
   userId: string,
   useRemoteSync: boolean = hasRemoteSyncConfig,
 ) => {
   await assertOpfsAvailable()
-  const db = getPowerSyncDb(userId)
+  const db = await getOrOpenDb(userId)
 
   let initPromise = initPromises.get(userId)
   if (!initPromise) {
-    initPromise = initializePowerSyncDb(db)
+    initPromise = initializeSqliteDb(db)
     initPromises.set(userId, initPromise)
   }
   await initPromise
@@ -158,90 +120,51 @@ export const ensurePowerSyncReady = async (
     return
   }
 
-  if (activeUserId === userId) {
-    return
+  if (activeUserId && activeUserId !== userId) {
+    subscribersByUser.get(activeUserId)?.stop()
+    subscribersByUser.delete(activeUserId)
+    uploadLoopsByUser.get(activeUserId)?.stop()
+    uploadLoopsByUser.delete(activeUserId)
   }
 
-  const previousUserId = activeUserId
   activeUserId = userId
 
-  // Run disconnect+connect serially so we don't race two connect
-  // attempts. Don't await the chain — connect can take a while and
-  // we want render to proceed against the local cache.
-  connectChain = connectChain
-    .then(async () => {
-      if (previousUserId && previousUserId !== userId) {
-        const previousDb = dbsByUser.get(previousUserId)
-        if (previousDb) {
-          await previousDb.disconnect()
-        }
-      }
-      await db.connect(createPowerSyncConnector())
-    })
-    .catch((error) => {
-      console.error(`PowerSync background connect failed for ${userId}:`, error)
-    })
+  if (!uploadLoopsByUser.has(userId)) {
+    uploadLoopsByUser.set(userId, startUploadLoop(db))
+  }
+  if (!subscribersByUser.has(userId)) {
+    subscribersByUser.set(userId, startShapeSubscriber(userId, db))
+  }
 }
 
-const initializePowerSyncDb = async (powerSyncDb: PowerSyncDatabase) => {
-  await powerSyncDb.init()
-
-  // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's PowerSync-bundled
-  // VFSes implement xShmMap (the wal-index shared-memory primitive
-  // SQLite needs for native WAL), so SQLite silently keeps rollback
-  // journal mode. Re-evaluate if PowerSync ever ships a WAL-capable
-  // browser VFS.
-
-  // Cache + temp-store tuning. SQLite's default `cache_size` is 2000
-  // pages = ~8 MB — fine for tiny DBs, catastrophic for users with
-  // import-heavy workspaces (250k blocks ≈ 700 MB on-disk). Each cold
-  // page becomes a synchronous OPFS read on the worker thread, so a
-  // page-open's load + ancestors + children + backlinks queries all
-  // serialize behind cold-page I/O. Raising the cache to 256 MiB lets
-  // the hot index + active-page footprint live in worker RAM, dropping
-  // most reads to memory speed after a brief warmup.
-  //
-  // Negative value = absolute KiB (positive = page count, which depends
-  // on page_size). 262144 KiB = 256 MiB.
-  //
-  // Trade: ~256 MiB resident browser memory while the app is open. On
-  // small DBs SQLite only allocates pages it touches, so steady-state
-  // memory tracks the actual working set (much less than the cap).
-  //
-  // `temp_store = MEMORY` keeps temp B-trees (DISTINCT, ORDER BY,
-  // recursive CTEs) off OPFS — they're transient and don't need to
-  // survive a crash, and the OPFS VFS doesn't perform well as a temp
-  // store anyway.
-  await powerSyncDb.execute('PRAGMA cache_size = -262144')
-  await powerSyncDb.execute('PRAGMA temp_store = MEMORY')
+const initializeSqliteDb = async (db: BrowserSqliteDb) => {
+  // No `PRAGMA journal_mode=WAL`: none of wa-sqlite's OPFS VFSes implement
+  // xShmMap (the wal-index shared-memory primitive SQLite needs for native
+  // WAL), so SQLite silently keeps rollback journal mode.
+  await db.execute('PRAGMA cache_size = -262144')
+  await db.execute('PRAGMA temp_store = MEMORY')
 
   // ── blocks + its indexes ──
-  await powerSyncDb.execute(CREATE_BLOCKS_TABLE_SQL)
-  await powerSyncDb.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
-  await powerSyncDb.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_TABLE_SQL)
+  await db.execute(CREATE_BLOCKS_PARENT_ORDER_INDEX_SQL)
+  await db.execute(CREATE_BLOCKS_WORKSPACE_ACTIVE_INDEX_SQL)
 
   // ── workspaces + workspace_members ──
-  await powerSyncDb.execute(CREATE_WORKSPACES_TABLE_SQL)
-  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
-  await powerSyncDb.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
+  await db.execute(CREATE_WORKSPACES_TABLE_SQL)
+  await db.execute(CREATE_WORKSPACE_MEMBERS_TABLE_SQL)
+  await db.execute(CREATE_WORKSPACE_MEMBERS_INDEX_SQL)
 
-  // ── tx_context, row_events, command_events, block_aliases + core
-  // triggers ── (5 audit/upload, 2 workspace-invariant, 3 alias-index.)
-  // Statements include
-  // CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS / CREATE
-  // TRIGGER IF NOT EXISTS so re-running is a no-op against an
-  // already-bootstrapped dev database.
+  // ── tx_context, row_events, command_events, outbox, block_aliases + core
+  // triggers ── Statements include CREATE TABLE IF NOT EXISTS / CREATE INDEX
+  // IF NOT EXISTS / CREATE TRIGGER IF NOT EXISTS so re-running is a no-op.
   for (const stmt of CLIENT_SCHEMA_STATEMENTS) {
-    await powerSyncDb.execute(stmt)
+    await db.execute(stmt)
   }
 
-  // One-shot side-index backfills for users upgrading from a
-  // pre-index schema. Steady-state startups noop on a single LIMIT 1
-  // probe of `client_schema_state`.
   const backfillDb = {
-    execute: (sql: string) => powerSyncDb.execute(sql),
+    execute: (sql: string) => db.execute(sql),
     getOptional: async <T,>(sql: string) => {
-      const row = await powerSyncDb.getOptional<T>(sql)
+      const row = await db.getOptional<T>(sql)
       return row ?? null
     },
   }

@@ -3,7 +3,7 @@
 //
 // Lives in localStorage rather than Repo state so the value survives sign-out
 // (so the user lands back where they were when they sign back in) and is
-// readable before the Repo / PowerSync are initialized.
+// readable before the Repo / sync pipeline are initialized.
 
 const LAST_WORKSPACE_STORAGE_KEY = 'ftm.lastWorkspaceId'
 

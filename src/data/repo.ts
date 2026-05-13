@@ -48,7 +48,7 @@ import {
   isRefCodec,
   isRefListCodec,
 } from '@/data/api'
-import { runTx, type PowerSyncDb } from './internals/commitPipeline'
+import { runTx, type LocalDb } from './internals/commitPipeline'
 import type { BlockCache } from '@/data/blockCache'
 import { buildQualifiedBlockColumnsSql, parseBlockRow, type BlockRow } from '@/data/blockSchema'
 import { KERNEL_MUTATORS } from './internals/kernelMutators'
@@ -290,7 +290,7 @@ interface RebuildStep {
 }
 
 export interface RepoOptions {
-  db: PowerSyncDb
+  db: LocalDb
   cache: BlockCache
   user: User
   /** Read-only mode disables `BlockDefault` / `References` writes.
@@ -303,7 +303,7 @@ export interface RepoOptions {
    *  that want deterministic ids. */
   newId?: () => string
   /** Monotonic INTEGER tx-grouping key provider, written into
-   *  `tx_context.tx_seq` and copied to `ps_crud.tx_id` by the upload
+   *  `tx_context.tx_seq` and copied to `outbox.tx_id` by the upload
    *  triggers. Default: a counter seeded from `Date.now()` so values
    *  never collide with anything from a prior run. Tests can inject a
    *  deterministic counter. */
@@ -403,7 +403,7 @@ const parseParentDeletedError = (err: unknown): {parentId: string} | null => {
 }
 
 /** Recognise the trigger-raised alias-collision error inside whatever
- *  wrapping SQLite + better-sqlite3 + PowerSync layer it on. Returns
+ *  wrapping SQLite adapter raised it. Returns
  *  parsed fields when matched, `null` otherwise (the caller falls
  *  back to its existing error handling). The three field values are
  *  hex-encoded in the RAISE message so the unit-separator can be
@@ -446,7 +446,7 @@ const parseAliasCollisionError = (err: unknown): ParsedAliasCollision | null => 
 }
 
 export class Repo {
-  readonly db: PowerSyncDb
+  readonly db: LocalDb
   readonly cache: BlockCache
   user: User
   /** Read-only mode disables `BlockDefault` / `References` writes;
@@ -543,7 +543,7 @@ export class Repo {
    *  call `handleStore.invalidate({…})` to fan out to dep-matching
    *  handles. */
   readonly handleStore: HandleStore = new HandleStore()
-  /** Per-PowerSyncDb-call timings (getAll / getOptional / get /
+  /** Per-LocalDb-call timings (getAll / getOptional / get /
    *  execute / writeTransaction). Populated by the metrics-wrapping
    *  proxy installed around `this.db` at construction. */
   readonly dbMetrics = new DbMetrics()
@@ -691,7 +691,7 @@ export class Repo {
   readonly query: QueryProxy
 
   constructor(opts: RepoOptions) {
-    // Wrap the raw PowerSyncDb so every read/write call goes through
+    // Wrap the raw LocalDb so every read/write call goes through
     // the timing proxy. Internal Repo code, processors, runTx, and the
     // row_events tail all consume `this.db` — they all get the wrapped
     // surface for free. External callers that hold the original
@@ -699,7 +699,7 @@ export class Repo {
     // want timings (or use `repo.runQuery` / `repo.tx` which already
     // route through it). The wrapper has the same shape, so existing
     // type contracts hold.
-    this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as PowerSyncDb
+    this.db = wrapDbWithMetrics(opts.db, this.dbMetrics) as LocalDb
     this.cache = opts.cache
     this.user = opts.user
     this.isReadOnly = opts.isReadOnly ?? false
@@ -828,7 +828,7 @@ export class Repo {
    *      name (e.g. `core.subtree`, `plugin:tasks/dueSoon`). Each
    *      entry is a `TimingSnapshot` with `calls`, mean, p50/p95/p99,
    *      min/max, and totalMs. Empty until a query runs.
-   *    - `db` — aggregate PowerSyncDb call timings split by method
+   *    - `db` — aggregate LocalDb call timings split by method
    *      (`getAll`, `getOptional`, `get`, `execute`, `writeTransaction`).
    *      `writeTransaction` records full wall-clock for the tx; the
    *      tx-internal SQL calls also count against their respective

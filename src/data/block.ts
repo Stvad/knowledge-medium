@@ -99,7 +99,7 @@ export class Block implements Handle<BlockData | null> {
    *  truth post-tx (`repo.tx`'s commit pipeline writes it) and post-
    *  sync (`rowEventsTail`'s `applySyncSnapshot` keeps it current), so
    *  a redundant SQL read just costs a connection round-trip that
-   *  contends with PowerSync's upload/download work. The hot path
+   *  contends with sync upload/download work. The hot path
    *  (keyboard navigation through `nextVisibleBlock` /
    *  `previousVisibleBlock`) does 2-3 of these per arrow press —
    *  occasionally blocked behind a slow sync drain (p99 ~600 ms in a
