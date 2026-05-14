@@ -20,7 +20,7 @@ interface CalendarCell {
 const CALENDAR_CELL_COUNT = 42
 const PANEL_WIDTH = 352
 const PANEL_MARGIN = 8
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 const monthLabel = (date: Date): string =>
   date.toLocaleString('en-US', {month: 'long'})
@@ -47,7 +47,7 @@ const addMonths = (date: Date, months: number): Date =>
 const buildCells = (visibleMonth: Date): CalendarCell[] => {
   const year = visibleMonth.getFullYear()
   const month = visibleMonth.getMonth()
-  const leadingEmptyCells = new Date(year, month, 1).getDay()
+  const leadingEmptyCells = (new Date(year, month, 1).getDay() + 6) % 7
   const daysInMonth = new Date(year, month + 1, 0).getDate()
 
   return Array.from({length: CALENDAR_CELL_COUNT}, (_, index) => {

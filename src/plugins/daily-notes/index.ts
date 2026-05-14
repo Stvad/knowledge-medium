@@ -57,6 +57,8 @@ import { openDailyNotePicker } from './events.ts'
 import { todayDailyNoteLanding } from './landing.ts'
 export {
   APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
+  OPEN_NEXT_DAILY_NOTE_ACTION_ID,
+  OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
   OPEN_TODAY_ACTION_ID,
 } from './actions.ts'
 export {

@@ -47,6 +47,8 @@ import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
 
 export const OPEN_TODAY_ACTION_ID = 'open_today'
 export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
+export const OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID = 'open_previous_daily_note'
+export const OPEN_NEXT_DAILY_NOTE_ACTION_ID = 'open_next_daily_note'
 
 const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -148,7 +150,7 @@ export const dailyNotesActions = (
     },
   },
   {
-    id: 'open_previous_daily_note',
+    id: OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
     description: 'Open previous daily note',
     context: ActionContextTypes.GLOBAL,
     handler: async () => {
@@ -159,7 +161,7 @@ export const dailyNotesActions = (
     },
   },
   {
-    id: 'open_next_daily_note',
+    id: OPEN_NEXT_DAILY_NOTE_ACTION_ID,
     description: 'Open next daily note',
     context: ActionContextTypes.GLOBAL,
     handler: async () => {
