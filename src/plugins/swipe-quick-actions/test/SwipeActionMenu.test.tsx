@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -152,6 +152,17 @@ describe('SwipeActionMenu', () => {
     expect(await screen.findByRole('button', {name: 'Copy'})).toBeTruthy()
   })
 
+  it('renders iconless action labels visibly and omits the dedicated close button', async () => {
+    renderMenu()
+
+    act(() => {
+      blockElement().dispatchEvent(menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT))
+    })
+
+    expect(await screen.findByRole('button', {name: 'Copy'})).toHaveTextContent('Copy')
+    expect(screen.queryByRole('button', {name: 'Close'})).toBeNull()
+  })
+
   it('closes from a same-block panel-local swipe event', async () => {
     renderMenu()
 
@@ -167,6 +178,29 @@ describe('SwipeActionMenu', () => {
     })
 
     expect(close?.defaultPrevented).toBe(true)
+    await waitFor(() => {
+      expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
+    })
+  })
+
+  it('closes from a rightward swipe on the open toolbar', async () => {
+    renderMenu()
+
+    act(() => {
+      blockElement().dispatchEvent(menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT))
+    })
+    expect(await screen.findByRole('button', {name: 'Copy'})).toBeTruthy()
+
+    const menu = document.querySelector<HTMLElement>('.swipe-action-menu')
+    if (!menu) throw new Error('missing swipe action menu')
+
+    fireEvent.touchStart(menu, {
+      changedTouches: [{identifier: 1, clientX: 40, clientY: 100}],
+    })
+    fireEvent.touchEnd(menu, {
+      changedTouches: [{identifier: 1, clientX: 110, clientY: 102}],
+    })
+
     await waitFor(() => {
       expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
     })

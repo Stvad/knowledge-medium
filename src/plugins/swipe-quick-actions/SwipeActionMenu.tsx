@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useState, useRef, useMemo, type MouseEvent, type TouchEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Circle, MoreHorizontal, X } from 'lucide-react'
+import { MoreHorizontal } from 'lucide-react'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useUIStateBlock } from '@/data/globalState'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
@@ -23,6 +23,7 @@ import {
   getSwipeActionAnchorRect,
   type AnchorRect,
 } from './anchor.ts'
+import { SWIPE_TRIGGER_PX } from './swipeGesture.ts'
 
 /** Track the swiped block content's bounding rect so the floating bar
  *  follows the visible text row, not the full block shell with open
@@ -100,11 +101,9 @@ interface ResolvedQuickAction {
    *  (mis-configured plugin reference). The button still renders so the
    *  miss is visible — clicking surfaces the same console error. */
   action: ActionConfig | undefined
-  Icon: ActionIcon
+  Icon: ActionIcon | undefined
   label: string
 }
-
-const FallbackIcon: ActionIcon = (props) => <Circle {...props}/>
 
 const TOOLBAR_ROW_HEIGHT_PX = 28
 
@@ -118,10 +117,21 @@ const resolveActions = (
   return {
     item,
     action,
-    Icon: action?.icon ?? FallbackIcon,
+    Icon: action?.icon,
     label: item.label ?? action?.description ?? item.actionId,
   }
 })
+
+interface MenuTouchStart {
+  x: number
+  y: number
+  identifier: number
+}
+
+type MenuTouchPoint = Pick<MenuTouchStart, 'identifier'> & {
+  clientX: number
+  clientY: number
+}
 
 interface ActionButtonProps {
   resolved: ResolvedQuickAction
@@ -130,6 +140,7 @@ interface ActionButtonProps {
 
 const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
   const {Icon, label, item} = resolved
+  const hasIcon = Boolean(Icon)
   // Single onClick: a touch tap synthesizes touchend → pointerup → click,
   // so listening on both `pointerup` and `click` would fire the action
   // twice (and toggle-style state would cancel itself out — see commit
@@ -147,13 +158,21 @@ const ActionButton = ({resolved, onRun}: ActionButtonProps) => {
       title={label}
       data-block-interaction="ignore"
       onClick={handleClick}
-      className={`flex h-7 w-7 items-center justify-center rounded transition-colors active:bg-accent ${
+      className={`flex h-7 items-center justify-center rounded transition-colors active:bg-accent ${
+        hasIcon
+          ? 'w-7'
+          : 'min-w-11 max-w-[5.5rem] px-2 text-[11px] font-medium leading-none'
+      } ${
         item.destructive
           ? 'text-destructive hover:bg-destructive/10 active:bg-destructive/20'
           : 'text-foreground hover:bg-muted'
       }`}
     >
-      <Icon className="h-4 w-4"/>
+      {Icon ? (
+        <Icon className="h-4 w-4"/>
+      ) : (
+        <span className="overflow-hidden text-ellipsis whitespace-nowrap">{label}</span>
+      )}
     </button>
   )
 }
@@ -193,6 +212,7 @@ export const SwipeActionMenu = () => {
   )
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const menuTouchStartRef = useRef<MenuTouchStart | null>(null)
   const dismiss = useCallback((): void => {
     setActiveBlockId(undefined)
   }, [])
@@ -349,11 +369,53 @@ export const SwipeActionMenu = () => {
     dismiss()
   }
 
+  const trackedMenuTouch = (event: TouchEvent): MenuTouchPoint | null => {
+    const start = menuTouchStartRef.current
+    if (!start) return null
+    for (let i = 0; i < event.changedTouches.length; i++) {
+      const touch = event.changedTouches[i]
+      if (touch.identifier === start.identifier) return touch
+    }
+    return null
+  }
+
   // Block touch events from bubbling to the underlying block so the
   // gesture contribution doesn't see a touch on the menu and reopen /
-  // re-trigger anything.
-  const swallowTouch = (event: { stopPropagation: () => void }) => {
+  // re-trigger anything. A rightward swipe on the menu mirrors the
+  // block-surface close gesture.
+  const handleMenuTouchStart = (event: TouchEvent) => {
     event.stopPropagation()
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    menuTouchStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      identifier: touch.identifier,
+    }
+  }
+
+  const handleMenuTouchMove = (event: TouchEvent) => {
+    event.stopPropagation()
+  }
+
+  const handleMenuTouchEnd = (event: TouchEvent) => {
+    event.stopPropagation()
+    const touch = trackedMenuTouch(event)
+    const start = menuTouchStartRef.current
+    if (!touch || !start) return
+
+    menuTouchStartRef.current = null
+    const dx = touch.clientX - start.x
+    const dy = touch.clientY - start.y
+    if (dx < SWIPE_TRIGGER_PX || Math.abs(dx) <= Math.abs(dy)) return
+
+    event.preventDefault()
+    dismiss()
+  }
+
+  const handleMenuTouchCancel = (event: TouchEvent) => {
+    event.stopPropagation()
+    if (trackedMenuTouch(event)) menuTouchStartRef.current = null
   }
 
   // Align the strip's vertical center to the swiped row's center so it
@@ -375,9 +437,10 @@ export const SwipeActionMenu = () => {
           className="swipe-action-menu fixed left-0 right-0 z-50 -translate-y-1/2"
           style={{top: `${toolbarTop}px`}}
           data-block-interaction="ignore"
-          onTouchStart={swallowTouch}
-          onTouchMove={swallowTouch}
-          onTouchEnd={swallowTouch}
+          onTouchStart={handleMenuTouchStart}
+          onTouchMove={handleMenuTouchMove}
+          onTouchEnd={handleMenuTouchEnd}
+          onTouchCancel={handleMenuTouchCancel}
         >
           <div className="w-full border-y border-border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85">
             {primaryRowsResolved.map((rowResolved, rowIndex) => (
@@ -409,22 +472,6 @@ export const SwipeActionMenu = () => {
                     <MoreHorizontal className="h-4 w-4"/>
                   </button>
                 )}
-                {rowIndex === 0 && (
-                  <button
-                    type="button"
-                    aria-label="Close"
-                    title="Close"
-                    data-block-interaction="ignore"
-                    onClick={event => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      dismiss()
-                    }}
-                    className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
-                  >
-                    <X className="h-4 w-4"/>
-                  </button>
-                )}
               </div>
             ))}
           </div>
@@ -453,7 +500,7 @@ export const SwipeActionMenu = () => {
                     }}
                     className="flex items-center gap-2 rounded-md px-2 py-2 text-sm text-foreground hover:bg-muted active:bg-accent"
                   >
-                    <Icon className="h-4 w-4"/>
+                    {Icon && <Icon className="h-4 w-4"/>}
                     <span>{label}</span>
                   </button>
                 )

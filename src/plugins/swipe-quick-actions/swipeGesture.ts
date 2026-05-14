@@ -48,7 +48,7 @@ const findTrackedTouch = (
 /** Min horizontal travel before we commit to "this is a swipe" and reveal
  *  the menu. Below this we leave the gesture alone so vertical scrolls and
  *  taps behave normally. */
-const SWIPE_TRIGGER_PX = 50
+export const SWIPE_TRIGGER_PX = 50
 
 /** Once dx exceeds this small threshold AND |dx| > |dy|, lock direction
  *  to horizontal. Picked low enough to feel responsive; the trigger

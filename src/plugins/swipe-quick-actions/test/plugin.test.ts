@@ -25,10 +25,10 @@ describe('swipeQuickActionsPlugin', () => {
       ['copy_block', false, 1],
       ['copy_block_ref', false, 1],
       ['open_focused_in_panel', false, 1],
+      ['toggle_properties', false, 1],
       ['delete_block', false, 1],
       ['zoom_in', true, 1],
       ['toggle_collapse', true, 1],
-      ['toggle_properties', true, 1],
       ['copy_block_embed', true, 1],
     ])
   })

@@ -61,12 +61,12 @@ export const DEFAULT_QUICK_ACTION_ITEMS: readonly QuickActionItem[] = [
   {actionId: 'copy_block', label: 'Copy'},
   {actionId: 'copy_block_ref', label: 'Copy Ref'},
   {actionId: 'open_focused_in_panel', label: 'Open'},
+  {actionId: 'toggle_properties', label: 'Properties'},
   {actionId: 'delete_block', label: 'Delete', destructive: true},
   // Overflow items. Note: no separate "Copy ID" entry — Copy Ref
   // produces `((id))`, which is what users almost always want when they
   // think "give me a reference to this block".
   {actionId: 'zoom_in', label: 'Zoom In', overflow: true},
   {actionId: 'toggle_collapse', label: 'Collapse', overflow: true},
-  {actionId: 'toggle_properties', label: 'Properties', overflow: true},
   {actionId: 'copy_block_embed', label: 'Copy Embed', overflow: true},
 ]

@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from 'vitest'
+import { Check, ClockArrowDown, Gauge, RotateCcw, Sparkles } from 'lucide-react'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -78,6 +79,20 @@ describe('srsReschedulingPlugin', () => {
       ['ctrl+shift+3', 'ctrl+shift+alt+cmd+3'],
       ['ctrl+shift+4', 'ctrl+shift+alt+cmd+4'],
       ['ctrl+shift+5', 'ctrl+shift+alt+cmd+5'],
+    ])
+    expect(actions.slice(0, 5).map(action => action.icon)).toEqual([
+      RotateCcw,
+      Gauge,
+      Check,
+      Sparkles,
+      ClockArrowDown,
+    ])
+    expect(actions.slice(5).map(action => action.icon)).toEqual([
+      RotateCcw,
+      Gauge,
+      Check,
+      Sparkles,
+      ClockArrowDown,
     ])
   })
 

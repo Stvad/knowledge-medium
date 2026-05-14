@@ -1,3 +1,4 @@
+import { Check, ClockArrowDown, Gauge, RotateCcw, Sparkles } from 'lucide-react'
 import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
@@ -10,6 +11,7 @@ import { formatIsoDate } from '@/utils/dailyPage'
 import {
   ActionConfig,
   ActionContextTypes,
+  ActionIcon,
   BlockShortcutDependencies,
 } from '@/shortcuts/types.ts'
 import {
@@ -57,6 +59,21 @@ const gradeForSignal = (signal: SrsSignal): number => {
       return 5
     case SrsSignal.SOONER:
       return 3
+  }
+}
+
+const iconForSignal = (signal: SrsSignal): ActionIcon => {
+  switch (signal) {
+    case SrsSignal.AGAIN:
+      return RotateCcw
+    case SrsSignal.HARD:
+      return Gauge
+    case SrsSignal.GOOD:
+      return Check
+    case SrsSignal.EASY:
+      return Sparkles
+    case SrsSignal.SOONER:
+      return ClockArrowDown
   }
 }
 
@@ -155,6 +172,7 @@ const createRescheduleAction = <T extends SrsActionContext>(
     id: `${idPrefix}srs.reschedule.${name.toLowerCase()}`,
     description: `SRS: ${name}${descriptionSuffix}`,
     context,
+    icon: iconForSignal(signal),
     handler: (async ({block}: BlockShortcutDependencies) => {
       await rescheduleBlock(block, signal)
     }) as ActionConfig<T>['handler'],
