@@ -47,9 +47,18 @@ export function useCommandPaletteActions(): CommandPaletteActionsResult {
   return useMemo(() => {
     const allActions = runtime.read(actionsFacet)
 
-    const actions = allActions.filter(
-      action => active.has(action.context) && action.id !== COMMAND_PALETTE_ACTION_ID,
-    )
+    const actions = allActions.filter(action => {
+      if (!active.has(action.context)) return false
+      if (action.id === COMMAND_PALETTE_ACTION_ID) return false
+      if (!action.canRun) return true
+      // The shortcut system stores the active context's dependencies
+      // exactly as the handler will receive them, so canRun can run
+      // against them directly. An action whose canRun returns false
+      // would silently no-op if shown — hide it instead.
+      const deps = active.get(action.context)
+      if (!deps) return true
+      return action.canRun(deps as never)
+    })
 
     const activeContexts: ActiveContextInfo[] = Array.from(active.entries()).flatMap(
       ([type, dependencies]) => {

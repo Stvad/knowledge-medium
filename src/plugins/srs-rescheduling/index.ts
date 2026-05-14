@@ -196,10 +196,13 @@ const srsCutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Cut state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Scissors,
+  canRun: ({block}) => {
+    const data = block.peek()
+    return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
+  },
   handler: async ({block}: BlockShortcutDependencies) => {
     const data = block.peek() ?? await block.load()
     if (!data) return
-    if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return
     setSrsClipboard({
       sourceBlockId: block.id,
       sourceWorkspaceId: data.workspaceId,
@@ -212,6 +215,10 @@ const srsPasteAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   description: 'SRS: Paste state',
   context: ActionContextTypes.NORMAL_MODE,
   icon: ClipboardPaste,
+  canRun: ({block}) => {
+    const entry = getSrsClipboard()
+    return entry !== null && entry.sourceBlockId !== block.id
+  },
   handler: async ({block}: BlockShortcutDependencies) => {
     const entry = getSrsClipboard()
     if (!entry) return
@@ -240,27 +247,21 @@ const srsQuickActionItems = srsSignals.map(signal => ({
   row: 2 as const,
 }))
 
-// Cut shows only on blocks that have SRS state; paste shows only when
-// something is stashed and the target isn't the same block. Overflow
-// keeps them out of the primary strip — these are rarer than reschedule.
+// Overflow keeps them out of the primary strip — these are rarer than
+// reschedule. Visibility (cut only on SRS blocks; paste only when
+// something is stashed and the target isn't the same block) is gated by
+// the `canRun` predicate on the actions themselves, so the same gating
+// applies to the command palette.
 const srsCutQuickAction = {
   actionId: 'srs.cut',
   label: 'Cut SRS',
   overflow: true,
-  canRun: ({block}: {block: Block}) => {
-    const data = block.peek()
-    return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
-  },
 }
 
 const srsPasteQuickAction = {
   actionId: 'srs.paste',
   label: 'Paste SRS',
   overflow: true,
-  canRun: ({block}: {block: Block}) => {
-    const entry = getSrsClipboard()
-    return entry !== null && entry.sourceBlockId !== block.id
-  },
 }
 
 const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) => {

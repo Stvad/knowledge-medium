@@ -9,14 +9,6 @@ export interface QuickActionContext {
   workspaceId: string
 }
 
-/** Context for the per-item `canRun` predicate. Subset of the surface
- *  the menu can supply at filter time — enough to look at the swiped
- *  block and any module-level state the plugin owns. */
-export interface QuickActionCanRunContext {
-  block: Block
-  uiStateBlock: Block
-}
-
 /** A swipe-menu entry references a registered action by id and adds the
  *  bits of presentation that don't belong in the action itself: a short
  *  label that fits a 40px icon button, and whether to render with the
@@ -41,12 +33,6 @@ export interface QuickActionItem {
    *  Ignored for overflow items. Rows are grouped and rendered in
    *  ascending order, so plugins can add row 3+ without core changes. */
   row?: number
-  /** Optional predicate evaluated when the menu opens. Returning `false`
-   *  hides the item for that target block. Omit to keep the item always
-   *  visible (the previous behaviour). The predicate runs at menu-open
-   *  time, not reactively — if its inputs change while the menu is open
-   *  the user must reopen to see the update. */
-  canRun?: (ctx: QuickActionCanRunContext) => boolean
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -59,8 +45,7 @@ export const isQuickActionItem = (value: unknown): value is QuickActionItem =>
   (value.destructive === undefined || typeof value.destructive === 'boolean') &&
   (value.overflow === undefined || typeof value.overflow === 'boolean') &&
   (value.row === undefined ||
-    (typeof value.row === 'number' && Number.isInteger(value.row) && value.row >= 1)) &&
-  (value.canRun === undefined || typeof value.canRun === 'function')
+    (typeof value.row === 'number' && Number.isInteger(value.row) && value.row >= 1))
 
 export const quickActionItemsFacet = defineFacet<QuickActionItem, readonly QuickActionItem[]>({
   id: 'swipe-quick-actions.items',

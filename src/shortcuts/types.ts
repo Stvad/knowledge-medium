@@ -101,6 +101,10 @@ export type ActionHandler<T extends ActionContextType = ActionContextType> = {
   bivarianceHack(dependencies: ShortcutDependenciesMap[T], trigger: ActionTrigger): void | Promise<void>
 }['bivarianceHack']
 
+export type ActionCanRun<T extends ActionContextType = ActionContextType> = {
+  bivarianceHack(dependencies: ShortcutDependenciesMap[T]): boolean
+}['bivarianceHack']
+
 export interface Action<T extends ActionContextType = ActionContextType> {
   id: string;
   description: string;
@@ -111,6 +115,15 @@ export interface Action<T extends ActionContextType = ActionContextType> {
    *  swipe menus, eventual command-palette icon column). Surfaces that
    *  don't render icons just ignore the field. */
   icon?: ActionIcon;
+  /** Optional synchronous predicate for "is this action meaningfully
+   *  applicable to its current dependencies?". Surfaces that list
+   *  actions (command palette, swipe menu) hide the action when this
+   *  returns false, so the user doesn't see an entry that would silently
+   *  no-op. It is NOT a security gate on `handler` — direct callers can
+   *  still invoke a handler whose `canRun` is false; the contract is
+   *  presentational. Omit to mean "always applicable when the context is
+   *  active". */
+  canRun?: ActionCanRun<T>;
 }
 
 export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>

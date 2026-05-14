@@ -122,7 +122,13 @@ describe('srsReschedulingPlugin', () => {
     ])
     expect(items.slice(0, 5).every(item => item.row === 2 && !item.overflow)).toBe(true)
     expect(items.slice(5).every(item => item.overflow === true)).toBe(true)
-    expect(items.slice(5).every(item => typeof item.canRun === 'function')).toBe(true)
+
+    const actions = runtime.read(actionsFacet)
+    const cutAction = actions.find(it => it.id === 'srs.cut')
+    const pasteAction = actions.find(it => it.id === 'srs.paste')
+    expect(typeof cutAction?.canRun).toBe('function')
+    expect(typeof pasteAction?.canRun).toBe('function')
+
     expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
   })
 
@@ -220,22 +226,10 @@ describe('srsReschedulingPlugin', () => {
       }
     })
 
-    it('cut is a no-op when source has no SRS type', async () => {
-      const {h, repo, runtime} = await setupRepo()
-      try {
-        await seedPlainBlock(repo, 'plain')
-
-        const cut = runtime.read(actionsFacet).find(it => it.id === 'srs.cut') as
-          ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
-        const block = repo.block('plain')
-        await block.load()
-        await cut.handler({block, uiStateBlock: block} as never, {} as KeyboardEvent)
-
-        expect(getSrsClipboard()).toBeNull()
-      } finally {
-        await h.cleanup()
-      }
-    })
+    // "cut on a non-SRS block is a no-op" is enforced by surfaces via
+    // `canRun` (the gating test below) — the handler itself no longer
+    // re-checks. Direct programmatic invocation that bypasses canRun is
+    // out of contract.
 
     it('paste is a no-op when nothing is stashed', async () => {
       const {h, repo, runtime} = await setupRepo()
@@ -261,9 +255,11 @@ describe('srsReschedulingPlugin', () => {
         await seedSrsBlock(repo, 'src', 5)
         await seedPlainBlock(repo, 'plain')
 
-        const items = runtime.read(quickActionItemsFacet)
-        const cutItem = items.find(it => it.actionId === 'srs.cut')!
-        const pasteItem = items.find(it => it.actionId === 'srs.paste')!
+        const actions = runtime.read(actionsFacet)
+        const cutAction = actions.find(it => it.id === 'srs.cut') as
+          ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
+        const pasteAction = actions.find(it => it.id === 'srs.paste') as
+          ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
 
         const srcBlock = repo.block('src')
         const plainBlock = repo.block('plain')
@@ -271,16 +267,16 @@ describe('srsReschedulingPlugin', () => {
         await plainBlock.load()
 
         // Cut visible on SRS blocks only.
-        expect(cutItem.canRun!({block: srcBlock, uiStateBlock: srcBlock})).toBe(true)
-        expect(cutItem.canRun!({block: plainBlock, uiStateBlock: plainBlock})).toBe(false)
+        expect(cutAction.canRun!({block: srcBlock, uiStateBlock: srcBlock} as never)).toBe(true)
+        expect(cutAction.canRun!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(false)
 
         // Paste hidden until something is cut.
-        expect(pasteItem.canRun!({block: plainBlock, uiStateBlock: plainBlock})).toBe(false)
+        expect(pasteAction.canRun!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(false)
 
         setSrsClipboard({sourceBlockId: 'src', sourceWorkspaceId: 'ws-1'})
-        expect(pasteItem.canRun!({block: plainBlock, uiStateBlock: plainBlock})).toBe(true)
+        expect(pasteAction.canRun!({block: plainBlock, uiStateBlock: plainBlock} as never)).toBe(true)
         // Paste hidden on the source block itself.
-        expect(pasteItem.canRun!({block: srcBlock, uiStateBlock: srcBlock})).toBe(false)
+        expect(pasteAction.canRun!({block: srcBlock, uiStateBlock: srcBlock} as never)).toBe(false)
       } finally {
         await h.cleanup()
       }

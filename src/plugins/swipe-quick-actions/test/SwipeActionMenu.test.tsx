@@ -10,7 +10,7 @@ import type { Block } from '@/data/block'
 import { actionsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
-import { ActionContextTypes } from '@/shortcuts/types'
+import { type ActionConfig, ActionContextTypes } from '@/shortcuts/types'
 import { topLevelBlockIdProp } from '@/data/properties'
 import { quickActionItemsFacet } from '../actions'
 import {
@@ -225,26 +225,25 @@ describe('SwipeActionMenu', () => {
     })
   })
 
-  it('hides items whose canRun returns false for the swiped block', async () => {
+  it('hides items whose action.canRun returns false for the swiped block', async () => {
+    const alwaysAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+      id: 'always',
+      description: 'Always',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: vi.fn(),
+    }
+    const gatedAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+      id: 'gated',
+      description: 'Gated',
+      context: ActionContextTypes.NORMAL_MODE,
+      canRun: ({block}) => block.id !== 'block-1',
+      handler: vi.fn(),
+    }
     runtime = resolveFacetRuntimeSync([
-      actionsFacet.of({
-        id: 'always',
-        description: 'Always',
-        context: ActionContextTypes.NORMAL_MODE,
-        handler: vi.fn(),
-      }, {source: 'test'}),
-      actionsFacet.of({
-        id: 'gated',
-        description: 'Gated',
-        context: ActionContextTypes.NORMAL_MODE,
-        handler: vi.fn(),
-      }, {source: 'test'}),
+      actionsFacet.of(alwaysAction, {source: 'test'}),
+      actionsFacet.of(gatedAction, {source: 'test'}),
       quickActionItemsFacet.of({actionId: 'always', label: 'Always'}, {source: 'test'}),
-      quickActionItemsFacet.of({
-        actionId: 'gated',
-        label: 'Gated',
-        canRun: ({block}) => block.id !== 'block-1',
-      }, {source: 'test'}),
+      quickActionItemsFacet.of({actionId: 'gated', label: 'Gated'}, {source: 'test'}),
     ])
     renderMenu()
 
