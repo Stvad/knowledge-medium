@@ -1,13 +1,44 @@
 import { useIsMobile } from '@/utils/react.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
+import { actionsFacet } from '@/extensions/core.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { ActionContextTypes } from '@/shortcuts/types.ts'
+import { useRunAction } from '@/shortcuts/runAction.ts'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { mobileBottomNavItemsFacet } from './facet.ts'
+import { MobileBottomNavButton } from './Button.tsx'
+
+function MobileBottomNavActionButton({
+  action,
+  disabled,
+}: {
+  action: ActionConfig
+  disabled: boolean
+}) {
+  const runAction = useRunAction()
+  const handleClick = () => {
+    void runAction(
+      action.id,
+      new CustomEvent('mobile-bottom-nav-action', {detail: {actionId: action.id}}),
+    )
+  }
+
+  if (!action.icon) return null
+
+  return (
+    <MobileBottomNavButton
+      label={action.description}
+      icon={action.icon}
+      onClick={handleClick}
+      disabled={disabled}
+    />
+  )
+}
 
 function MobileBottomNavSurface() {
   const runtime = useAppRuntime()
   const items = runtime.read(mobileBottomNavItemsFacet)
+  const actionsById = new Map(runtime.read(actionsFacet).map(action => [action.id, action]))
+  const activeContexts = useActiveContextsState()
 
   if (items.length === 0) return null
 
@@ -19,11 +50,17 @@ function MobileBottomNavSurface() {
       data-block-interaction="ignore"
     >
       <div className="mx-auto flex h-16 max-w-md items-center justify-around">
-        {items.map(({id, component: Item}) => (
-          <ExtensionRenderBoundary key={id}>
-            <Item/>
-          </ExtensionRenderBoundary>
-        ))}
+        {items.map(({id, actionId}) => {
+          const action = actionsById.get(actionId)
+          if (!action) return null
+          return (
+            <MobileBottomNavActionButton
+              key={id}
+              action={action}
+              disabled={!activeContexts.has(action.context)}
+            />
+          )
+        })}
       </div>
     </nav>
   )

@@ -1,7 +1,23 @@
-import { Suspense } from 'react'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { Suspense, useEffect, type ReactNode } from 'react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { LeftSidebarShortcutsSection } from '../LeftSidebar.tsx'
+import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
+import {
+  ActiveContextsProvider,
+  useActiveContextsDispatch,
+} from '@/shortcuts/ActiveContexts.tsx'
+import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.ts'
+import {
+  type ActionContextConfig,
+  ActionContextTypes,
+  type ActionConfig,
+  type BaseShortcutDependencies,
+} from '@/shortcuts/types.ts'
+import { Plus } from 'lucide-react'
+import { LeftSidebar, LeftSidebarShortcutsSection } from '../LeftSidebar.tsx'
+import { openLeftSidebarEvent } from '../events.ts'
 
 const mocks = vi.hoisted(() => {
   const repo = {id: 'repo'}
@@ -11,7 +27,6 @@ const mocks = vi.hoisted(() => {
 
   return {
     closeSidebar: vi.fn(),
-    createNodeInActivePanel: vi.fn(),
     getOrCreateShortcutsBlock: vi.fn(() => shortcutsBlockPromise),
     navigateFromGlobalCommand: vi.fn(),
     repo,
@@ -38,11 +53,9 @@ vi.mock('@/utils/navigation.ts', () => ({
 }))
 
 vi.mock('../panelTarget.tsx', () => ({
-  createNodeInActivePanel: mocks.createNodeInActivePanel,
   useActivePanelNodeTarget: () => ({
     activeTopLevelBlockId: 'active-block',
     canCreateNode: true,
-    parentId: 'active-block',
   }),
 }))
 
@@ -50,10 +63,45 @@ vi.mock('../shortcuts.ts', () => ({
   getOrCreateShortcutsBlock: mocks.getOrCreateShortcutsBlock,
 }))
 
+const globalContext: ActionContextConfig<typeof ActionContextTypes.GLOBAL> = {
+  type: ActionContextTypes.GLOBAL,
+  displayName: 'Global',
+  validateDependencies: (deps: unknown): deps is BaseShortcutDependencies =>
+    typeof deps === 'object' && deps !== null && 'uiStateBlock' in deps,
+}
+
+const globalDeps = {uiStateBlock: {}} as BaseShortcutDependencies
+
+function GlobalContextActivator() {
+  const {activate, deactivate} = useActiveContextsDispatch()
+  useEffect(() => {
+    activate(ActionContextTypes.GLOBAL, globalDeps)
+    return () => deactivate(ActionContextTypes.GLOBAL)
+  }, [activate, deactivate])
+  return null
+}
+
+function renderWithActions(
+  actions: readonly ActionConfig[],
+  children: ReactNode,
+) {
+  const runtime = resolveFacetRuntimeSync([
+    actionContextsFacet.of(globalContext),
+    ...actions.map(action => actionsFacet.of(action)),
+  ])
+  return render(
+    <AppRuntimeContextProvider value={runtime}>
+      <ActiveContextsProvider>
+        <GlobalContextActivator/>
+        {children}
+      </ActiveContextsProvider>
+    </AppRuntimeContextProvider>,
+  )
+}
+
 afterEach(() => {
   cleanup()
   mocks.closeSidebar.mockClear()
-  mocks.createNodeInActivePanel.mockClear()
   mocks.getOrCreateShortcutsBlock.mockClear()
   mocks.navigateFromGlobalCommand.mockClear()
 })
@@ -75,6 +123,36 @@ describe('LeftSidebarShortcutsSection', () => {
     expect(mocks.navigateFromGlobalCommand).toHaveBeenCalledExactlyOnceWith(
       mocks.repo,
       {blockId: mocks.shortcutsBlock.id},
+    )
+  })
+
+  it('runs the shared active-panel create action from the footer', async () => {
+    const handler = vi.fn()
+    const createNodeAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
+      id: CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
+      description: 'New node',
+      context: ActionContextTypes.GLOBAL,
+      icon: Plus,
+      handler,
+    }
+
+    renderWithActions([createNodeAction], <LeftSidebar/>)
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(openLeftSidebarEvent))
+    })
+
+    const button = await screen.findByRole('button', {name: 'New node'})
+    await waitFor(() => {
+      expect((button as HTMLButtonElement).disabled).toBe(false)
+    })
+    fireEvent.click(button)
+
+    expect(handler).toHaveBeenCalledExactlyOnceWith(
+      globalDeps,
+      expect.objectContaining({
+        type: 'left-sidebar-action',
+      }),
     )
   })
 })

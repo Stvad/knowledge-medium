@@ -40,6 +40,10 @@ import { actionsFacet, workspaceLandingFacet } from '@/extensions/core.ts'
 import { dailyNotesActions } from './actions.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { todayDailyNoteLanding } from './landing.ts'
+export {
+  APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
+  OPEN_TODAY_ACTION_ID,
+} from './actions.ts'
 
 // Factory rather than a const because the action handlers close over
 // `repo` (they call `repo.activeWorkspaceId` and `getOrCreateDailyNote`

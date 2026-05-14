@@ -1,4 +1,5 @@
 import {
+  actionsFacet,
   appMountsFacet,
   headerItemsFacet,
   type AppMountContribution,
@@ -8,6 +9,7 @@ import type { AppExtension } from '@/extensions/facet.ts'
 import { LeftSidebar, LeftSidebarCoreSection, LeftSidebarShortcutsSection } from './LeftSidebar.tsx'
 import { LeftSidebarHeaderItem } from './HeaderItem.tsx'
 import { leftSidebarSectionsFacet, type LeftSidebarSectionContribution } from './facet.ts'
+import { leftSidebarActions } from './actions.ts'
 
 export { LeftSidebar } from './LeftSidebar.tsx'
 export { LeftSidebarHeaderItem } from './HeaderItem.tsx'
@@ -25,10 +27,14 @@ export {
   type LeftSidebarSectionProps,
 } from './facet.ts'
 export {
-  createNodeInActivePanel,
   useActivePanelNodeTarget,
   type ActivePanelNodeTarget,
 } from './panelTarget.tsx'
+export {
+  OPEN_LEFT_SIDEBAR_ACTION_ID,
+  leftSidebarActions,
+  openLeftSidebarAction,
+} from './actions.ts'
 
 export const leftSidebarMount: AppMountContribution = {
   id: 'left-sidebar.mount',
@@ -52,6 +58,7 @@ export const leftSidebarShortcutsSection: LeftSidebarSectionContribution = {
 }
 
 export const leftSidebarPlugin: AppExtension = [
+  leftSidebarActions.map(action => actionsFacet.of(action, {source: 'left-sidebar'})),
   appMountsFacet.of(leftSidebarMount, {source: 'left-sidebar'}),
   headerItemsFacet.of(leftSidebarHeaderItem, {
     source: 'left-sidebar',

@@ -1,9 +1,8 @@
-import type { ComponentType } from 'react'
 import { defineFacet } from '@/extensions/facet.ts'
 
 export interface MobileBottomNavItemContribution {
   id: string
-  component: ComponentType
+  actionId: string
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -14,7 +13,7 @@ export const isMobileBottomNavItemContribution = (
 ): value is MobileBottomNavItemContribution =>
   isRecord(value) &&
   typeof value.id === 'string' &&
-  typeof value.component === 'function'
+  typeof value.actionId === 'string'
 
 export const mobileBottomNavItemsFacet = defineFacet<
   MobileBottomNavItemContribution,

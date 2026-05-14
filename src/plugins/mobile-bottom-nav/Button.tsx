@@ -1,6 +1,6 @@
-import type { ComponentType, SVGProps } from 'react'
+import type { ActionIcon } from '@/shortcuts/types.ts'
 
-export type MobileBottomNavIcon = ComponentType<SVGProps<SVGSVGElement>>
+export type MobileBottomNavIcon = ActionIcon
 
 export function MobileBottomNavButton({
   label,

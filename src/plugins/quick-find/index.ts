@@ -8,6 +8,7 @@ import {
 import { propertySchemasFacet } from '@/data/facets.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { Search } from 'lucide-react'
 import { QuickFindHeaderItem } from './HeaderItem.tsx'
 import { QuickFind } from './QuickFind.tsx'
 import { toggleQuickFindEvent } from './events.ts'
@@ -23,10 +24,13 @@ export const quickFindMount: AppMountContribution = {
   component: QuickFind,
 }
 
+export const QUICK_FIND_ACTION_ID = 'quick_find'
+
 export const quickFindAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
-  id: 'quick_find',
+  id: QUICK_FIND_ACTION_ID,
   description: 'Find or create page or block',
   context: ActionContextTypes.GLOBAL,
+  icon: Search,
   handler: () => {
     window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
   },

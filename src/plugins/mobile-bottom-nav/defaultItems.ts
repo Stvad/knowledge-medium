@@ -1,39 +1,41 @@
 import type { MobileBottomNavItemContribution } from './facet.ts'
+import { COMMAND_PALETTE_ACTION_ID } from '@/plugins/command-palette'
 import {
-  AppendTodayDailyBlockBottomNavItem,
-  CommandPaletteBottomNavItem,
-  NewNodeBottomNavItem,
-  OpenSidebarBottomNavItem,
-  SearchBottomNavItem,
-  TodayBottomNavItem,
-} from './DefaultItems.tsx'
+  APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
+  OPEN_TODAY_ACTION_ID,
+} from '@/plugins/daily-notes'
+import {
+  OPEN_LEFT_SIDEBAR_ACTION_ID,
+} from '@/plugins/left-sidebar'
+import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
+import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.ts'
 
 export const openSidebarBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.open-sidebar',
-  component: OpenSidebarBottomNavItem,
+  actionId: OPEN_LEFT_SIDEBAR_ACTION_ID,
 }
 
 export const newNodeBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.new-node',
-  component: NewNodeBottomNavItem,
+  actionId: CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
 }
 
 export const appendTodayDailyBlockBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.append-today-daily-block',
-  component: AppendTodayDailyBlockBottomNavItem,
+  actionId: APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
 }
 
 export const todayBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.today',
-  component: TodayBottomNavItem,
+  actionId: OPEN_TODAY_ACTION_ID,
 }
 
 export const searchBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.search',
-  component: SearchBottomNavItem,
+  actionId: QUICK_FIND_ACTION_ID,
 }
 
 export const commandPaletteBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.command-palette',
-  component: CommandPaletteBottomNavItem,
+  actionId: COMMAND_PALETTE_ACTION_ID,
 }

@@ -35,6 +35,7 @@ import {
   ActionConfig,
   ActionContextTypes,
 } from '@/shortcuts/types.ts'
+import { CalendarDays, CalendarPlus } from 'lucide-react'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import {
@@ -43,6 +44,9 @@ import {
 } from '@/utils/navigation.ts'
 import { insertSidebarStackedPanel } from '@/utils/panelLayoutProjection.ts'
 import { addDaysIso, getOrCreateDailyNote, todayIso } from './dailyNotes.ts'
+
+export const OPEN_TODAY_ACTION_ID = 'open_today'
+export const APPEND_TODAY_DAILY_BLOCK_ACTION_ID = 'append_today_daily_block'
 
 const ISO_ALIAS_RE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -114,9 +118,10 @@ export const dailyNotesActions = (
     // `open_today_daily_note`. User-customised key bindings persist
     // under the action id; renaming would silently break them on
     // upgrade. (Prev/next never had a shorter id, so they keep theirs.)
-    id: 'open_today',
+    id: OPEN_TODAY_ACTION_ID,
     description: "Open today's daily note",
     context: ActionContextTypes.GLOBAL,
+    icon: CalendarDays,
     handler: async () => {
       const workspaceId = repo.activeWorkspaceId
       if (!workspaceId) return
@@ -128,9 +133,10 @@ export const dailyNotesActions = (
     },
   },
   {
-    id: 'append_today_daily_block',
-    description: "Append a block to today's daily note",
+    id: APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
+    description: 'New daily block',
     context: ActionContextTypes.GLOBAL,
+    icon: CalendarPlus,
     handler: async ({uiStateBlock}) => {
       await appendTodayDailyBlockInStack(repo, uiStateBlock)
     },

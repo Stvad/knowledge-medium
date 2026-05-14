@@ -1,10 +1,7 @@
 import { Suspense, use, useCallback, useEffect, useState } from 'react'
 import {
   ArrowLeft,
-  CalendarDays,
   ChevronRight,
-  Plus,
-  Search,
 } from 'lucide-react'
 import type { Block } from '@/data/block.ts'
 import type { BlockData } from '@/data/api'
@@ -12,21 +9,23 @@ import { aliasesProp } from '@/data/properties.ts'
 import { useUserBlock } from '@/data/globalState.ts'
 import { useChildren, useHandle } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import { actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 import { cn } from '@/lib/utils.ts'
-import { getOrCreateDailyNote, todayIso } from '@/plugins/daily-notes'
+import { OPEN_TODAY_ACTION_ID } from '@/plugins/daily-notes'
+import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
 import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
-import { toggleQuickFindEvent } from '@/plugins/quick-find/events.ts'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
+import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.ts'
+import { useRunAction } from '@/shortcuts/runAction.ts'
+import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
 import {
   closeLeftSidebarEvent,
   openLeftSidebarEvent,
   toggleLeftSidebarEvent,
 } from './events.ts'
-import {
-  createNodeInActivePanel,
-  useActivePanelNodeTarget,
-} from './panelTarget.tsx'
+import { useActivePanelNodeTarget } from './panelTarget.tsx'
 import {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,
@@ -57,59 +56,102 @@ function useShortcutsBlock(): Block {
   return use(getOrCreateShortcutsBlock(useUserBlock()))
 }
 
-function SidebarAction({
-  label,
-  icon: Icon,
-  onClick,
+const LEFT_SIDEBAR_ACTION_EVENT = 'left-sidebar-action'
+
+function useRegisteredAction(actionId: string): ActionConfig | undefined {
+  const runtime = useAppRuntime()
+  return runtime.read(actionsFacet).find(action => action.id === actionId)
+}
+
+function useSidebarActionRunner({
+  actionId,
+  closeSidebar,
 }: {
-  label: string
-  icon: typeof CalendarDays
-  onClick: () => void
+  actionId: string
+  closeSidebar: () => void
 }) {
+  const action = useRegisteredAction(actionId)
+  const activeContexts = useActiveContextsState()
+  const runAction = useRunAction()
+  const Icon: ActionIcon | undefined = action?.icon
+
+  const run = useCallback(() => {
+    if (!action) return
+    closeSidebar()
+    void runAction(
+      action.id,
+      new CustomEvent(LEFT_SIDEBAR_ACTION_EVENT, {detail: {actionId: action.id}}),
+    )
+  }, [action, closeSidebar, runAction])
+
+  return {
+    action,
+    disabled: !action || !activeContexts.has(action.context),
+    Icon,
+    run,
+  }
+}
+
+function SidebarAction({
+  actionId,
+  closeSidebar,
+  label,
+}: {
+  actionId: string
+  closeSidebar: () => void
+  label?: string
+}) {
+  const {action, disabled, Icon, run} = useSidebarActionRunner({actionId, closeSidebar})
+
+  if (!action || !Icon) return null
+
   return (
     <button
       type="button"
-      className="flex h-11 w-full items-center gap-3 rounded-md px-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
-      onClick={onClick}
+      className="flex h-11 w-full items-center gap-3 rounded-md px-2 text-left text-sm text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
+      onClick={run}
+      disabled={disabled}
     >
       <Icon className="h-5 w-5 shrink-0 text-muted-foreground"/>
-      <span className="min-w-0 truncate">{label}</span>
+      <span className="min-w-0 truncate">{label ?? action.description}</span>
+    </button>
+  )
+}
+
+function SearchSidebarAction({
+  closeSidebar,
+}: {
+  closeSidebar: () => void
+}) {
+  const {action, disabled, Icon, run} = useSidebarActionRunner({
+    actionId: QUICK_FIND_ACTION_ID,
+    closeSidebar,
+  })
+
+  if (!action || !Icon) return null
+
+  return (
+    <button
+      type="button"
+      className="flex h-12 w-full items-center gap-3 rounded-full border border-border px-4 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+      onClick={run}
+      disabled={disabled}
+    >
+      <Icon className="h-5 w-5 shrink-0"/>
+      <span>Jump to...</span>
     </button>
   )
 }
 
 export function LeftSidebarCoreSection({closeSidebar}: LeftSidebarSectionProps) {
-  const repo = useRepo()
-
-  const openSearch = useCallback(() => {
-    closeSidebar()
-    window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
-  }, [closeSidebar])
-
-  const openToday = useCallback(async () => {
-    const workspaceId = repo.activeWorkspaceId
-    if (!workspaceId) return
-    closeSidebar()
-    const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
-    navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
-  }, [closeSidebar, repo])
-
   return (
     <section className="space-y-5">
-      <button
-        type="button"
-        className="flex h-12 w-full items-center gap-3 rounded-full border border-border px-4 text-left text-sm text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground"
-        onClick={openSearch}
-      >
-        <Search className="h-5 w-5 shrink-0"/>
-        <span>Jump to...</span>
-      </button>
-
+      <SearchSidebarAction closeSidebar={closeSidebar}/>
       <div className="space-y-1">
         <SidebarAction
+          actionId={OPEN_TODAY_ACTION_ID}
+          closeSidebar={closeSidebar}
           label="Today"
-          icon={CalendarDays}
-          onClick={() => { void openToday() }}
         />
       </div>
     </section>
@@ -242,13 +284,13 @@ function NewNodeFooter({
 }: {
   closeSidebar: () => void
 }) {
-  const repo = useRepo()
   const target = useActivePanelNodeTarget()
+  const {action, disabled, Icon, run} = useSidebarActionRunner({
+    actionId: CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
+    closeSidebar,
+  })
 
-  const createNode = useCallback(async () => {
-    closeSidebar()
-    await createNodeInActivePanel({repo, ...target})
-  }, [closeSidebar, repo, target])
+  if (!action || !Icon) return null
 
   return (
     <div
@@ -258,11 +300,11 @@ function NewNodeFooter({
       <button
         type="button"
         className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-muted px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
-        onClick={() => { void createNode() }}
-        disabled={!target.canCreateNode}
+        onClick={run}
+        disabled={!target.canCreateNode || disabled}
       >
-        <Plus className="h-5 w-5"/>
-        <span>New node</span>
+        <Icon className="h-5 w-5"/>
+        <span>{action.description}</span>
       </button>
     </div>
   )

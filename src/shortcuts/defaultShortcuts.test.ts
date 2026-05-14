@@ -8,10 +8,20 @@ import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   editorSelection,
+  isEditingProp,
   focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { getDefaultActions } from '@/shortcuts/defaultShortcuts'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
+import {
+  CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
+  getDefaultActions,
+} from '@/shortcuts/defaultShortcuts'
+import {
+  __resetLayoutSessionIdForTesting,
+  getLayoutSessionId,
+} from '@/utils/layoutSessionId'
+import { insertPanelRow } from '@/utils/panelLayoutProjection'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -121,6 +131,18 @@ const findNormalModeAction = (
   return action
 }
 
+const findGlobalAction = (
+  repo: Repo,
+  id: string,
+): ActionConfig<typeof ActionContextTypes.GLOBAL> => {
+  const action = getDefaultActions({repo}).find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.GLOBAL> =>
+      candidate.id === id && candidate.context === ActionContextTypes.GLOBAL,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
 const seedPanelAndContent = async (): Promise<{uiStateBlock: ReturnType<Repo['block']>; block: ReturnType<Repo['block']>}> => {
   await env.repo.tx(async tx => {
     await tx.create({
@@ -150,7 +172,10 @@ const isDeleted = async (id: string): Promise<boolean> => {
 }
 
 let env: Harness
-beforeEach(async () => { env = await setup() })
+beforeEach(async () => {
+  __resetLayoutSessionIdForTesting()
+  env = await setup()
+})
 afterEach(async () => { await env.h.cleanup() })
 
 describe('default CodeMirror shortcuts', () => {
@@ -203,6 +228,45 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isDeleted('panel')).toBe(true)
+  })
+
+  it('creates a new editable child in the active panel from the global action', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'root',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Root',
+      })
+      await tx.create({
+        id: 'existing-child',
+        workspaceId: WS,
+        parentId: 'root',
+        orderKey: 'a0',
+        content: 'Existing',
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const panelId = await insertPanelRow(env.repo, layoutSession, 'root')
+    const action = findGlobalAction(env.repo, CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID)
+
+    await action.handler(
+      {uiStateBlock: rootUiState},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    const rootChildren = await childIds('root')
+    expect(rootChildren[0]).toBe('existing-child')
+    expect(rootChildren).toHaveLength(2)
+    const newNodeId = rootChildren[1]
+
+    const panelBlock = env.repo.block(panelId)
+    await panelBlock.load()
+    expect(panelBlock.peekProperty(focusedBlockIdProp)).toBe(newNodeId)
+    expect(panelBlock.peekProperty(isEditingProp)).toBe(true)
   })
 
   it('places the cursor at the beginning of the next block after pressing right at block end', async () => {

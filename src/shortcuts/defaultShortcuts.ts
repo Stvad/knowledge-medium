@@ -1,4 +1,4 @@
-import { PanelRightOpen, ZoomIn } from 'lucide-react'
+import { PanelRightOpen, Plus, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -21,6 +21,8 @@ import {
 import { importState } from '@/utils/state.ts'
 import {
   focusedBlockIdProp,
+  activePanelIdProp,
+  isEditingProp,
   isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
@@ -51,12 +53,18 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
+import { getLayoutSessionBlock } from '@/data/globalState.ts'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
   navigate,
   navigateFromGlobalCommand,
 } from '@/utils/navigation.ts'
 import { navigateInPanel } from '@/utils/panelHistory.ts'
-import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
+import {
+  deletePanelRow,
+  panelBlockId,
+  panelRowsInLayoutOrder,
+} from '@/utils/panelLayoutProjection.ts'
 import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
 import { showProgress } from '@/utils/toast.ts'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
@@ -92,6 +100,37 @@ const splitCodeMirrorBlockAtCursor = async (
     after: afterCursor,
   })
   return block
+}
+
+export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
+
+const createNodeInActivePanelFromGlobalContext = async (
+  uiStateBlock: Block,
+): Promise<void> => {
+  const repo = uiStateBlock.repo
+  if (repo.isReadOnly) return
+
+  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+  await layoutSessionBlock.load()
+  const rows = await repo.query.subtree({id: layoutSessionBlock.id}).load()
+  const panelRows = panelRowsInLayoutOrder(layoutSessionBlock.id, rows)
+  const activePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
+  const activePanelRow =
+    (activePanelId ? panelRows.find(row => row.id === activePanelId) : undefined) ??
+    panelRows.at(-1)
+  if (!activePanelRow) return
+
+  const activeTopLevelBlockId = panelBlockId(activePanelRow)
+  if (!activeTopLevelBlockId) return
+
+  const newId = await repo.mutate.createChild({
+    parentId: activeTopLevelBlockId,
+    position: {kind: 'last'},
+  })
+  await repo.tx(async tx => {
+    await tx.setProperty(activePanelRow.id, focusedBlockIdProp, newId)
+    await tx.setProperty(activePanelRow.id, isEditingProp, true)
+  }, {scope: ChangeScope.UiState, description: 'create node in active panel'})
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
@@ -245,6 +284,15 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // UndoRedoManager bindings used).
         keys: ['cmd+shift+z', 'ctrl+shift+z', 'ctrl+y'],
         eventOptions: {preventDefault: true},
+      },
+    },
+    {
+      id: CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
+      description: 'New node',
+      context: ActionContextTypes.GLOBAL,
+      icon: Plus,
+      handler: async ({uiStateBlock}: BaseShortcutDependencies) => {
+        await createNodeInActivePanelFromGlobalContext(uiStateBlock)
       },
     },
     {

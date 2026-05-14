@@ -8,6 +8,7 @@ import {
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { Command } from 'lucide-react'
 import { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 import { CommandPalette } from './CommandPalette.tsx'
 import { toggleCommandPaletteEvent } from './events.ts'
@@ -31,6 +32,7 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
   id: COMMAND_PALETTE_ACTION_ID,
   description: 'Open command palette',
   context: ActionContextTypes.GLOBAL,
+  icon: Command,
   handler: () => {
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
