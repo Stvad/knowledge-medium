@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
 import { actionsFacet } from '@/extensions/core.ts'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
+import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   SRS_SM25_TYPE,
   srsArchivedProp,
@@ -69,6 +71,20 @@ describe('srsReschedulingPlugin', () => {
       ['ctrl+shift+4', 'ctrl+shift+alt+cmd+4'],
       ['ctrl+shift+5', 'ctrl+shift+alt+cmd+5'],
     ])
+  })
+
+  it('contributes swipe quick actions and block decoration hook for SRS blocks', () => {
+    const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
+    const items = runtime.read(quickActionItemsFacet)
+
+    expect(items.map(item => [item.actionId, item.row ?? 1])).toEqual([
+      ['srs.reschedule.again', 2],
+      ['srs.reschedule.hard', 2],
+      ['srs.reschedule.good', 2],
+      ['srs.reschedule.easy', 2],
+      ['srs.reschedule.sooner', 2],
+    ])
+    expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
   })
 
   it('does not rewrite legacy inline SRS content from edit mode', async () => {

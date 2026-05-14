@@ -106,14 +106,14 @@ interface ResolvedQuickAction {
 
 const FallbackIcon: ActionIcon = (props) => <Circle {...props}/>
 
-const TOOLBAR_HEIGHT_PX = 28
+const TOOLBAR_ROW_HEIGHT_PX = 28
 
 /** Build a render-ready view for the toolbar from `(items, registry)`,
  *  so the JSX below stays focused on layout. */
-const useResolvedActions = (
+const resolveActions = (
   items: readonly QuickActionItem[],
   registry: readonly ActionConfig[],
-): readonly ResolvedQuickAction[] => useMemo(() => items.map(item => {
+): readonly ResolvedQuickAction[] => items.map(item => {
   const action = registry.find(a => a.id === item.actionId)
   return {
     item,
@@ -121,7 +121,7 @@ const useResolvedActions = (
     Icon: action?.icon ?? FallbackIcon,
     label: item.label ?? action?.description ?? item.actionId,
   }
-}), [items, registry])
+})
 
 interface ActionButtonProps {
   resolved: ResolvedQuickAction
@@ -202,17 +202,31 @@ export const SwipeActionMenu = () => {
   // every render re-use the same icon / label.
   const allActions = runtime.read(actionsFacet)
   const actionItems = runtime.read(quickActionItemsFacet)
-  const [primaryItems, overflowItems] = useMemo(() => {
-    const primary: QuickActionItem[] = []
+  const [primaryRows, overflowItems] = useMemo(() => {
+    const rows = new Map<number, QuickActionItem[]>()
     const overflow: QuickActionItem[] = []
     for (const item of actionItems) {
       if (item.overflow) overflow.push(item)
-      else primary.push(item)
+      else {
+        const row = item.row ?? 1
+        const existing = rows.get(row)
+        if (existing) existing.push(item)
+        else rows.set(row, [item])
+      }
     }
-    return [primary, overflow] as const
+    return [
+      [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([, items]) => items),
+      overflow,
+    ] as const
   }, [actionItems])
-  const primaryResolved = useResolvedActions(primaryItems, allActions)
-  const overflowResolved = useResolvedActions(overflowItems, allActions)
+  const primaryRowsResolved = useMemo(
+    () => primaryRows.map(items => resolveActions(items, allActions)),
+    [primaryRows, allActions],
+  )
+  const overflowResolved = useMemo(
+    () => resolveActions(overflowItems, allActions),
+    [overflowItems, allActions],
+  )
 
   // Close the overflow popout whenever the active block changes, so a
   // re-swipe on a different row doesn't carry stale popout state. Done
@@ -345,10 +359,11 @@ export const SwipeActionMenu = () => {
   // Align the strip's vertical center to the swiped row's center so it
   // replaces one normal text row (Workflowy-style), while spanning the
   // viewport horizontally.
+  const toolbarHeight = Math.max(primaryRowsResolved.length, 1) * TOOLBAR_ROW_HEIGHT_PX
   const centerY = anchor.top + anchor.height / 2
   const toolbarTop = Math.min(
-    Math.max(centerY, TOOLBAR_HEIGHT_PX / 2),
-    window.innerHeight - TOOLBAR_HEIGHT_PX / 2,
+    Math.max(centerY, toolbarHeight / 2),
+    window.innerHeight - toolbarHeight / 2,
   )
 
   return (
@@ -364,47 +379,54 @@ export const SwipeActionMenu = () => {
           onTouchMove={swallowTouch}
           onTouchEnd={swallowTouch}
         >
-          <div
-            className="flex h-7 w-full items-center justify-around border-y border-border bg-background/95 px-4 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85"
-          >
-            {primaryResolved.map(resolved => (
-              <ActionButton
-                key={resolved.item.actionId}
-                resolved={resolved}
-                onRun={handleRun}
-              />
-            ))}
-            {overflowResolved.length > 0 && (
-              <button
-                type="button"
-                aria-label="More actions"
-                title="More actions"
-                aria-expanded={showOverflow}
-                data-block-interaction="ignore"
-                onClick={event => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setShowOverflow(prev => !prev)
-                }}
-                className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
+          <div className="w-full border-y border-border bg-background/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/85">
+            {primaryRowsResolved.map((rowResolved, rowIndex) => (
+              <div
+                key={`row-${rowIndex}`}
+                className={`flex h-7 items-center justify-around px-4 ${rowIndex > 0 ? 'border-t border-border/80' : ''}`}
               >
-                <MoreHorizontal className="h-4 w-4"/>
-              </button>
-            )}
-            <button
-              type="button"
-              aria-label="Close"
-              title="Close"
-              data-block-interaction="ignore"
-              onClick={event => {
-                event.preventDefault()
-                event.stopPropagation()
-                dismiss()
-              }}
-              className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
-            >
-              <X className="h-4 w-4"/>
-            </button>
+                {rowResolved.map(resolved => (
+                  <ActionButton
+                    key={resolved.item.actionId}
+                    resolved={resolved}
+                    onRun={handleRun}
+                  />
+                ))}
+                {rowIndex === 0 && overflowResolved.length > 0 && (
+                  <button
+                    type="button"
+                    aria-label="More actions"
+                    title="More actions"
+                    aria-expanded={showOverflow}
+                    data-block-interaction="ignore"
+                    onClick={event => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      setShowOverflow(prev => !prev)
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded text-foreground hover:bg-muted active:bg-accent"
+                  >
+                    <MoreHorizontal className="h-4 w-4"/>
+                  </button>
+                )}
+                {rowIndex === 0 && (
+                  <button
+                    type="button"
+                    aria-label="Close"
+                    title="Close"
+                    data-block-interaction="ignore"
+                    onClick={event => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      dismiss()
+                    }}
+                    className="flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:bg-muted active:bg-accent"
+                  >
+                    <X className="h-4 w-4"/>
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
 
           {showOverflow && overflowResolved.length > 0 && (

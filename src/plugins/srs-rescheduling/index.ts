@@ -1,6 +1,8 @@
 import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
+import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.ts'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { ChangeScope, type PropertySchema } from '@/data/api'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.ts'
@@ -28,6 +30,7 @@ import {
   srsReviewCountProp,
   srsSnapshotHistoryProp,
 } from './schema.ts'
+import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
   const key = String(signal)
@@ -168,8 +171,27 @@ export const srsReschedulingActions: readonly ActionConfig[] = [
   })),
 ]
 
+const srsQuickActionItems = srsSignals.map(signal => ({
+  actionId: `srs.reschedule.${signalName(signal).toLowerCase()}`,
+  label: signalName(signal),
+  row: 2 as const,
+}))
+
+const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) => {
+  const data = block.peek()
+  if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return null
+  return {
+    className: 'srs-review-block border-l-2 border-primary/40 pl-2 before:mr-1 before:text-[10px] before:font-semibold before:uppercase before:tracking-wide before:text-primary/70 before:content-["srs"]',
+    title: 'Space Repetition block (SM-2.5 metadata present)',
+  }
+}
+
 export const srsReschedulingPlugin: AppExtension = [
   srsReschedulingDataExtension,
+  srsQuickActionItems.map(item =>
+    quickActionItemsFacet.of(item, {source: 'srs-rescheduling'}),
+  ),
+  blockContentSurfacePropsFacet.of(srsContentSurfaceDecoration, {source: 'srs-rescheduling'}),
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
   ),

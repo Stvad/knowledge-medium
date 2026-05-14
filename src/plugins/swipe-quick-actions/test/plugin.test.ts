@@ -21,15 +21,15 @@ describe('swipeQuickActionsPlugin', () => {
         component: SwipeActionMenu,
       },
     ])
-    expect(items.map(item => [item.actionId, item.overflow === true])).toEqual([
-      ['copy_block', false],
-      ['copy_block_ref', false],
-      ['open_focused_in_panel', false],
-      ['delete_block', false],
-      ['zoom_in', true],
-      ['toggle_collapse', true],
-      ['toggle_properties', true],
-      ['copy_block_embed', true],
+    expect(items.map(item => [item.actionId, item.overflow === true, item.row ?? 1])).toEqual([
+      ['copy_block', false, 1],
+      ['copy_block_ref', false, 1],
+      ['open_focused_in_panel', false, 1],
+      ['delete_block', false, 1],
+      ['zoom_in', true, 1],
+      ['toggle_collapse', true, 1],
+      ['toggle_properties', true, 1],
+      ['copy_block_embed', true, 1],
     ])
   })
 })
