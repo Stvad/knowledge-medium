@@ -201,15 +201,24 @@ function ShortcutItem({
 }
 
 export function LeftSidebarShortcutsSection({closeSidebar}: LeftSidebarSectionProps) {
+  const repo = useRepo()
   const shortcutsBlock = useShortcutsBlock()
   const shortcuts = useChildren(shortcutsBlock)
   const {activeTopLevelBlockId} = useActivePanelNodeTarget()
+  const openShortcutsBlock = useCallback(() => {
+    closeSidebar()
+    navigateFromGlobalCommand(repo, {blockId: shortcutsBlock.id})
+  }, [closeSidebar, repo, shortcutsBlock.id])
 
   return (
     <section>
-      <div className="flex h-9 items-center gap-2 text-sm font-medium text-foreground">
-        <span>Shortcuts</span>
-      </div>
+      <button
+        type="button"
+        className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm font-medium text-foreground transition-colors hover:bg-accent"
+        onClick={openShortcutsBlock}
+      >
+        <span className="min-w-0 truncate">Shortcuts</span>
+      </button>
       <div className="mt-1 space-y-0.5">
         {shortcuts.length === 0 ? (
           <div className="px-2 py-2 text-sm text-muted-foreground">
