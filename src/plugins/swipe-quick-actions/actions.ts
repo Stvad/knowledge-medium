@@ -44,7 +44,8 @@ export const isQuickActionItem = (value: unknown): value is QuickActionItem =>
   (value.label === undefined || typeof value.label === 'string') &&
   (value.destructive === undefined || typeof value.destructive === 'boolean') &&
   (value.overflow === undefined || typeof value.overflow === 'boolean') &&
-  (value.row === undefined || (Number.isInteger(value.row) && value.row >= 1))
+  (value.row === undefined ||
+    (typeof value.row === 'number' && Number.isInteger(value.row) && value.row >= 1))
 
 export const quickActionItemsFacet = defineFacet<QuickActionItem, readonly QuickActionItem[]>({
   id: 'swipe-quick-actions.items',
