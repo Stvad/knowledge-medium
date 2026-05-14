@@ -224,4 +224,35 @@ describe('SwipeActionMenu', () => {
       expect(screen.queryByRole('button', {name: 'Copy'})).toBeNull()
     })
   })
+
+  it('hides items whose canRun returns false for the swiped block', async () => {
+    runtime = resolveFacetRuntimeSync([
+      actionsFacet.of({
+        id: 'always',
+        description: 'Always',
+        context: ActionContextTypes.NORMAL_MODE,
+        handler: vi.fn(),
+      }, {source: 'test'}),
+      actionsFacet.of({
+        id: 'gated',
+        description: 'Gated',
+        context: ActionContextTypes.NORMAL_MODE,
+        handler: vi.fn(),
+      }, {source: 'test'}),
+      quickActionItemsFacet.of({actionId: 'always', label: 'Always'}, {source: 'test'}),
+      quickActionItemsFacet.of({
+        actionId: 'gated',
+        label: 'Gated',
+        canRun: ({block}) => block.id !== 'block-1',
+      }, {source: 'test'}),
+    ])
+    renderMenu()
+
+    act(() => {
+      blockElement().dispatchEvent(menuEvent(SWIPE_QUICK_ACTION_OPEN_EVENT))
+    })
+
+    expect(await screen.findByRole('button', {name: 'Always'})).toBeTruthy()
+    expect(screen.queryByRole('button', {name: 'Gated'})).toBeNull()
+  })
 })

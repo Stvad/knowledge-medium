@@ -1,4 +1,4 @@
-import { Check, ClockArrowDown, Gauge, RotateCcw, Sparkles } from 'lucide-react'
+import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
 import { actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
@@ -34,6 +34,12 @@ import {
   srsSnapshotHistoryProp,
 } from './schema.ts'
 import { srsBarClass, srsIndicatorTitle } from './indicator.ts'
+import { moveSrsState } from './moveSrsState.ts'
+import {
+  clearSrsClipboard,
+  getSrsClipboard,
+  setSrsClipboard,
+} from './srsClipboard.ts'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
@@ -185,6 +191,36 @@ const createRescheduleAction = <T extends SrsActionContext>(
   }
 }
 
+const srsCutAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+  id: 'srs.cut',
+  description: 'SRS: Cut state',
+  context: ActionContextTypes.NORMAL_MODE,
+  icon: Scissors,
+  handler: async ({block}: BlockShortcutDependencies) => {
+    const data = block.peek() ?? await block.load()
+    if (!data) return
+    if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return
+    setSrsClipboard({
+      sourceBlockId: block.id,
+      sourceWorkspaceId: data.workspaceId,
+    })
+  },
+}
+
+const srsPasteAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+  id: 'srs.paste',
+  description: 'SRS: Paste state',
+  context: ActionContextTypes.NORMAL_MODE,
+  icon: ClipboardPaste,
+  handler: async ({block}: BlockShortcutDependencies) => {
+    const entry = getSrsClipboard()
+    if (!entry) return
+    if (entry.sourceBlockId === block.id) return
+    await moveSrsState(block.repo, entry.sourceBlockId, block.id)
+    clearSrsClipboard()
+  },
+}
+
 export const srsReschedulingActions: readonly ActionConfig[] = [
   ...srsSignals.map(signal => createRescheduleAction(signal, {
     context: ActionContextTypes.NORMAL_MODE,
@@ -194,6 +230,8 @@ export const srsReschedulingActions: readonly ActionConfig[] = [
     idPrefix: 'edit.cm.',
     descriptionSuffix: ' (Edit Mode)',
   })),
+  srsCutAction,
+  srsPasteAction,
 ]
 
 const srsQuickActionItems = srsSignals.map(signal => ({
@@ -201,6 +239,29 @@ const srsQuickActionItems = srsSignals.map(signal => ({
   label: signalName(signal),
   row: 2 as const,
 }))
+
+// Cut shows only on blocks that have SRS state; paste shows only when
+// something is stashed and the target isn't the same block. Overflow
+// keeps them out of the primary strip — these are rarer than reschedule.
+const srsCutQuickAction = {
+  actionId: 'srs.cut',
+  label: 'Cut SRS',
+  overflow: true,
+  canRun: ({block}: {block: Block}) => {
+    const data = block.peek()
+    return !!data && getBlockTypes(data).includes(SRS_SM25_TYPE)
+  },
+}
+
+const srsPasteQuickAction = {
+  actionId: 'srs.paste',
+  label: 'Paste SRS',
+  overflow: true,
+  canRun: ({block}: {block: Block}) => {
+    const entry = getSrsClipboard()
+    return entry !== null && entry.sourceBlockId !== block.id
+  },
+}
 
 const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) => {
   const data = block.peek()
@@ -222,6 +283,8 @@ export const srsReschedulingPlugin: AppExtension = [
   srsQuickActionItems.map(item =>
     quickActionItemsFacet.of(item, {source: 'srs-rescheduling'}),
   ),
+  quickActionItemsFacet.of(srsCutQuickAction, {source: 'srs-rescheduling'}),
+  quickActionItemsFacet.of(srsPasteQuickAction, {source: 'srs-rescheduling'}),
   blockContentSurfacePropsFacet.of(srsContentSurfaceDecoration, {source: 'srs-rescheduling'}),
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),

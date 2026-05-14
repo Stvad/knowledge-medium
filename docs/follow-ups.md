@@ -177,6 +177,34 @@ Cleanup once a release containing the fix is on npm (verify by checking that the
 
 The patch is intentionally minimal (touches only `dist/bundle.mjs`, the file the browser actually loads) so re-applying it against a different `@powersync/common` patch version is straightforward if upstream slips — see the `injectable` function around line 10835 of the bundle and the [PR diff](https://github.com/powersync-ja/powersync-js/pull/960/files).
 
+## Generic "move type" / "move property" primitive
+
+SRS now has a dedicated cut/paste swipe action ([src/plugins/srs-rescheduling/moveSrsState.ts](src/plugins/srs-rescheduling/moveSrsState.ts) + [srsClipboard.ts](src/plugins/srs-rescheduling/srsClipboard.ts), wired through `srs.cut` / `srs.paste` in [index.ts](src/plugins/srs-rescheduling/index.ts)). The shape generalises: every `TypeContribution` declares its own field list via `properties` ([src/data/api/blockType.ts](src/data/api/blockType.ts)), so a kernel-or-shared-util "move type with fields" operation could subsume the SRS case once a second caller appears.
+
+Sketch:
+
+```ts
+// Plugin- or kernel-land; the only piece that needs the type registry
+// is enumerating `TypeContribution.properties`.
+moveTypeInTx(tx, { typeId, sourceId, targetId, mode: 'move' | 'copy' })
+```
+
+Semantics, drawn from the SRS implementation:
+
+- Enumerate the type's declared property schemas; copy each encoded value present on source into target.
+- Add the type to target if absent. Clear any target field that the type declares but source did not set, so target ends with exactly source's state (move-not-merge).
+- On `mode: 'move'`, remove the type from source and delete each declared property — *but only if no other type still on source declares that property* (the collision rule SRS gets for free because it owns its field namespace; the generic version doesn't).
+- Don't run `TypeContribution.setup` on the target — values are transplanted verbatim, not freshly initialised.
+- Skip if `sourceId === targetId` or source lacks the type.
+
+Likely callers after SRS: `todo` (move a task's done/snoozed state between blocks), any future structured-data type. A generic primitive only earns its keep once one of those actually wants it — the SRS-only path was deliberately picked to validate the cut/paste UX before paying the generic-API tax. The bigger open question is whether "move type" is even the right framing for the second caller, or whether they want "swap state between these two blocks" instead.
+
+A "move property" primitive (one field, no type) is intentionally **not** part of this — a property usually exists because some type put it there, and moving it without the type leaves the target with an orphan field that nothing renders or interprets. Hold off until a real free-floating-annotation case shows up.
+
+Where the work lives is also a decision deferred to that point. The `mutatorsFacet` path ([src/data/facets.ts](src/data/facets.ts)) is preferred over a `Repo` method if it can read the type registry from extension context — that keeps it plugin-contributable rather than baking another type-aware operation into the kernel. The current `repo.addTypeInTx` / `repo.removeTypeInTx` are kernel methods only because they need privileged registry access, but a `moveType` mutator could just compose them.
+
+UX: the SRS cut/paste swipe pattern (per-type actions filtered by `QuickActionItem.canRun`) is the working model. For multiple types coexisting on a block, do not build a generic "which type to cut?" submenu — register `<type>.cut` / `<type>.paste` action pairs per contributing plugin and let the canRun filter sort visibility. This is what the SRS implementation already does for itself.
+
 ## Investigate `referencesProcessor.test.ts` schema-swap flake
 
 `src/plugins/references/test/referencesProcessor.test.ts > parseReferences — schema-swap reprojection > removes stale field refs when a property stops being ref-typed` fails intermittently in the full suite but passes in isolation (`yarn test --run src/plugins/references/test/referencesProcessor.test.ts` is green). Observed once during the navigation refactor on master @ cf397f0; my edits don't import any backlinks code, and the failing assertion checks `references_json` for a stale `target-a` ref that should have been removed when the `reviewer` property was retyped away from `block-ref`.

@@ -222,10 +222,21 @@ export const SwipeActionMenu = () => {
   // every render re-use the same icon / label.
   const allActions = runtime.read(actionsFacet)
   const actionItems = runtime.read(quickActionItemsFacet)
+  // Filter happens here (after activeBlockId is known) rather than in the
+  // memo above because `canRun` predicates read the swiped block; the
+  // memo would have stale results otherwise. The filter runs once per
+  // menu open, not reactively — that's the contract advertised on
+  // `QuickActionItem.canRun`.
+  const visibleItems = useMemo(() => {
+    if (!activeBlockId) return actionItems
+    const block = repo.block(activeBlockId)
+    if (!block.peek()) return actionItems
+    return actionItems.filter(item => item.canRun?.({block, uiStateBlock}) ?? true)
+  }, [actionItems, activeBlockId, repo, uiStateBlock])
   const [primaryRows, overflowItems] = useMemo(() => {
     const rows = new Map<number, QuickActionItem[]>()
     const overflow: QuickActionItem[] = []
-    for (const item of actionItems) {
+    for (const item of visibleItems) {
       if (item.overflow) overflow.push(item)
       else {
         const row = item.row ?? 1
@@ -238,7 +249,7 @@ export const SwipeActionMenu = () => {
       [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([, items]) => items),
       overflow,
     ] as const
-  }, [actionItems])
+  }, [visibleItems])
   const primaryRowsResolved = useMemo(
     () => primaryRows.map(items => resolveActions(items, allActions)),
     [primaryRows, allActions],
