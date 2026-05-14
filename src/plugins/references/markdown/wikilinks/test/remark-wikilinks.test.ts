@@ -314,6 +314,30 @@ describe('remarkWikilinks', () => {
       expect(links.map(l => l.data.hProperties.blockId)).toEqual(['p', 'u'])
     })
 
+    it('does not reassemble across a regular markdown link inside [[…]]', () => {
+      // `[foo](foo)` is a regular markdown link, NOT a GFM autolink-literal,
+      // even though its url happens to equal its display text. Reassembling
+      // here would silently rewrite the alias and lose the link.
+      const tree = transformWithGfm('[[a [foo](foo) b]]', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      // The inline `[foo](foo)` link should survive intact.
+      const linkUrls: string[] = []
+      visit(tree, 'link', (node) => {
+        linkUrls.push((node as {url: string}).url)
+      })
+      expect(linkUrls).toEqual(['foo'])
+    })
+
+    it('does not reassemble across a `<…>` markdown autolink inside [[…]]', () => {
+      const tree = transformWithGfm('[[before <https://example.com> after]]', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      const linkUrls: string[] = []
+      visit(tree, 'link', (node) => {
+        linkUrls.push((node as {url: string}).url)
+      })
+      expect(linkUrls).toEqual(['https://example.com'])
+    })
+
     it('leaves a bare email autolink alone when it is not wrapped in [[…]]', () => {
       const tree = transformWithGfm('contact foo@example.com here', {})
       expect(collectWikilinks(tree)).toHaveLength(0)
