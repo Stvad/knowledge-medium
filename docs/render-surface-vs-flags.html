@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Render surface vs. context flag bag — decision aid</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 980px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1rem; margin-top: 1.25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  .pro { color: #1a7f37; }
+  .con { color: #cf222e; }
+  .meh { color: #9a6700; }
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .twocol pre { margin: 0; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .axes { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  .scorecard td:first-child { font-weight: 600; width: 28%; }
+  .scorecard td.A { background: #fff1f0; }
+  .scorecard td.B { background: #f0fdf4; }
+  .scorecard td.C { background: #eff6ff; }
+  .scorecard td.D { background: #fdf4ff; }
+  small { color: #57606a; }
+</style>
+</head>
+<body>
+
+<h1>Render surface vs. context flag bag</h1>
+<small>Decision aid for the embed/backlinks rendering bug — 2026-05-14</small>
+
+<h2>The bug, restated</h2>
+<p>When a block embed targets the panel's focal block (id collision), the embed inherits the
+"top-level" designation and renders backlinks/breadcrumbs/force-open/no-bullet. Symptom is the
+backlinks list, but the same id-equality check drives four other affordances.</p>
+
+<div class="axes">
+<strong>Three axes are currently tangled together. Any clean fix needs to name them separately.</strong>
+<ol>
+  <li><strong>Layout dispatch</strong> — "should the renderer pick <code>TopLevelRenderer</code>,
+      <code>PanelRenderer</code>, or <code>DefaultBlockRenderer</code> here?"</li>
+  <li><strong>Focal-block identity</strong> — "is this the block the panel is currently zoomed to?"</li>
+  <li><strong>Render surface / mount role</strong> — "am I being mounted as the document body, as an
+      embed, as a backlink entry, as a breadcrumb segment?"</li>
+</ol>
+</div>
+
+<h2>How each axis is encoded today</h2>
+
+<table>
+<tr><th>Axis</th><th>Encoded as</th><th>Set at</th><th>Read at</th></tr>
+<tr>
+  <td>1. Layout dispatch</td>
+  <td><code>BlockContext.topLevel: boolean</code> + <code>panelId</code></td>
+  <td><a href="../src/App.tsx">App.tsx:376</a> (true),
+      <a href="../src/components/renderer/TopLevelRenderer.tsx">TopLevelRenderer.tsx:35</a> (→false),
+      <a href="../src/components/renderer/LayoutRenderer.tsx">LayoutRenderer.tsx:74</a> (→true),
+      <a href="../src/components/renderer/PanelRenderer.tsx">PanelRenderer.tsx:179</a> (→false)</td>
+  <td><code>canRender</code> predicates of TopLevelRenderer / PanelRenderer</td>
+</tr>
+<tr>
+  <td>2. Focal-block identity</td>
+  <td><code>topLevelBlockIdProp</code> on the panel block, compared at render</td>
+  <td>Panel state (URL/DB)</td>
+  <td><a href="../src/components/renderer/DefaultBlockRenderer.tsx">DefaultBlockRenderer.tsx:246, :295, :492</a></td>
+</tr>
+<tr>
+  <td>3. Render surface</td>
+  <td>Scattered booleans: <code>isBacklink</code>, <code>isBreadcrumb</code> (no <code>isEmbedded</code> yet)</td>
+  <td><a href="../src/plugins/backlinks/BacklinkEntry.tsx">BacklinkEntry.tsx:12</a></td>
+  <td>(currently nothing reads them — set but unused)</td>
+</tr>
+</table>
+
+<div class="note">
+<strong>The conflation you flagged:</strong> the name <code>topLevel</code> is overloaded between
+axis 1 (layout dispatch) and the intuition of axis 2 (focal block). They look like the same thing
+but aren't — <code>BlockContext.topLevel</code> is already <code>false</code> for the focal block by
+the time <code>DefaultBlockRenderer</code> runs (PanelRenderer flips it before recursing). The flag
+is really "this mount point is a layout-dispatch boundary," nothing about focal-ness.
+</div>
+
+<h2>The five affected sites</h2>
+<p>All five collapse to the same conceptual check: <em>"this is the focal block, rendered as the
+document body."</em> They differ only in what affordance they gate.</p>
+
+<table>
+<tr><th>Site</th><th>File:line</th><th>Affordance</th></tr>
+<tr><td>Backlinks footer</td><td><a href="../src/plugins/backlinks-view/BacklinksViewSection.tsx">BacklinksViewSection.tsx:95</a></td><td>Show the backlinks list under the block</td></tr>
+<tr><td>Breadcrumbs header</td><td><a href="../src/plugins/breadcrumbs/index.ts">breadcrumbs/index.ts:22</a></td><td>Show the ancestor chain above the block</td></tr>
+<tr><td>Force-open</td><td><a href="../src/components/renderer/DefaultBlockRenderer.tsx">DefaultBlockRenderer.tsx:246</a></td><td><code>open={!isCollapsed || isTopLevel}</code></td></tr>
+<tr><td>top-level CSS class</td><td><a href="../src/components/renderer/DefaultBlockRenderer.tsx">DefaultBlockRenderer.tsx:256</a></td><td>Styling hook</td></tr>
+<tr><td>Hide bullet</td><td><a href="../src/components/renderer/DefaultBlockRenderer.tsx">DefaultBlockRenderer.tsx:492</a></td><td>No navigable bullet on the zoom target</td></tr>
+</table>
+
+<h2>Option A — Add another boolean (<code>isEmbedded</code>)</h2>
+<p>Smallest diff. Extend the existing flag bag; combine with the id check at every site.</p>
+
+<pre><code>// BlockContextType
+interface BlockContextType {
+  topLevel?: boolean        // layout dispatch (unchanged, still confusingly named)
+  panelId?: string
+  isBacklink?: boolean
+  isBreadcrumb?: boolean
+  isEmbedded?: boolean      // NEW
+}
+
+// BlockEmbed.tsx
+&lt;NestedBlockContextProvider overrides={{isEmbedded: true}}&gt;
+  &lt;BlockComponent blockId={blockId}/&gt;
+&lt;/NestedBlockContextProvider&gt;
+
+// Each of the 5 sites:
+const isFocal = block.id === topLevelBlockId
+              && !ctx.isEmbedded
+              && !ctx.isBacklink
+              && !ctx.isBreadcrumb
+</code></pre>
+
+<p><span class="pro">+ Minimal churn (one new flag).</span><br>
+<span class="con">− Doesn't fix the <code>topLevel</code> naming conflation.</span><br>
+<span class="con">− Every consumer has to remember the full conjunction <code>!isEmbedded && !isBacklink && !isBreadcrumb</code>. Each new mount role adds a term everywhere.</span><br>
+<span class="con">− Models mutually-exclusive states as orthogonal booleans (a render can't be both a backlink AND an embed at the same nesting level — the booleans pretend it could).</span></p>
+
+<h2>Option B — Single <code>renderSurface</code> enum</h2>
+<p>Replace the surface booleans with one tagged field. Default <code>'document'</code>.</p>
+
+<pre><code>type BlockRenderSurface = 'document' | 'embed' | 'backlink' | 'breadcrumb'
+
+interface BlockContextType {
+  topLevel?: boolean        // layout dispatch (still confusingly named)
+  panelId?: string
+  renderSurface?: BlockRenderSurface  // default 'document'
+}
+
+// BlockEmbed.tsx
+&lt;NestedBlockContextProvider overrides={{renderSurface: 'embed'}}&gt;...&lt;/&gt;
+
+// BacklinkEntry.tsx
+&lt;NestedBlockContextProvider overrides={{renderSurface: 'backlink'}}&gt;...&lt;/&gt;
+
+// useIsFocalRender hook centralizes the policy:
+const useIsFocalRender = (block: Block) =&gt; {
+  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+  const {renderSurface = 'document'} = useBlockContext()
+  return block.id === topLevelBlockId && renderSurface === 'document'
+}
+
+// All 5 sites:
+const isFocal = useIsFocalRender(block)
+</code></pre>
+
+<p><span class="pro">+ One axis, one field. New surfaces (preview pane, sidebar peek) cost a string, not a flag-conjunction-update.</span><br>
+<span class="pro">+ Mutually-exclusive states modeled as mutually exclusive.</span><br>
+<span class="pro">+ Aligns with the direction in <a href="renderer-resolution.md">renderer-resolution.md</a> (explicit mount intent).</span><br>
+<span class="pro">+ Centralizing in <code>useIsFocalRender</code> means the rule lives in one place.</span><br>
+<span class="meh">○ Migration touches the two existing surface-flag setters + adds <code>isEmbedded</code>-equivalent. Still small.</span><br>
+<span class="con">− Doesn't fix the <code>topLevel</code> naming conflation either.</span><br>
+<span class="con">− Nesting question: backlink containing an embed — surface is <code>'embed'</code> or <code>'backlink'</code>? Innermost-wins is natural React-context semantics and fine if no consumer cares about specific outer surface (current code only cares about truthiness).</span></p>
+
+<h2>Option C — Option B + rename <code>topLevel</code></h2>
+<p>Same as B, plus fix the axis-1 naming. <code>topLevel</code> becomes
+<code>layoutBoundary</code> (or similar): a flag whose only job is gating which top-level renderer
+fires. Now the three axes have three names with no overlap.</p>
+
+<pre><code>interface BlockContextType {
+  layoutBoundary?: boolean             // was: topLevel
+  panelId?: string
+  renderSurface?: BlockRenderSurface   // default 'document'
+}
+
+// TopLevelRenderer.canRender:
+({context}) =&gt; !!(context?.layoutBoundary && !context.panelId)
+</code></pre>
+
+<p><span class="pro">+ Resolves the conflation directly. After this, "top-level" in code means exactly one thing in each place: <code>id === topLevelBlockId</code> (focal) vs. <code>layoutBoundary</code> (dispatch).</span><br>
+<span class="pro">+ Future readers don't have to learn the gotcha that <code>context.topLevel</code> isn't what they think.</span><br>
+<span class="meh">○ Rename touches ~6 setter/reader sites. Mechanical.</span><br>
+<span class="con">− Bundles two concerns in one PR (surface refactor + rename). Could be split.</span></p>
+
+<h2>Option D — Flag bag + derived hook helpers (with umbrella flag)</h2>
+<p>Keep the bag of context flags open and additive, but move the policy ("what counts as document-
+surface?") into hooks so consumers ask the <em>question</em>, not the implementation. Each non-
+document mount also sets an umbrella <code>isNestedSurface</code> flag, so the hook has nothing to
+forget when new surfaces are added.</p>
+
+<pre><code>interface BlockContextType {
+  topLevel?: boolean         // layout dispatch (still mis-named — orthogonal)
+  panelId?: string
+  isNestedSurface?: boolean  // umbrella: set by every non-document mount
+  isEmbedded?: boolean       // specific descriptors, for consumers that discriminate
+  isBacklink?: boolean
+  isBreadcrumb?: boolean
+}
+
+// BlockEmbed.tsx
+&lt;NestedBlockContextProvider overrides={{isNestedSurface: true, isEmbedded: true}}&gt;...&lt;/&gt;
+
+// BacklinkEntry.tsx
+&lt;NestedBlockContextProvider overrides={{isNestedSurface: true, isBacklink: true}}&gt;...&lt;/&gt;
+
+// Policy lives in one hook:
+const useIsFocalRender = (block: Block) =&gt; {
+  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+  const ctx = useBlockContext()
+  return block.id === topLevelBlockId && !ctx.isNestedSurface
+}
+
+// All 5 sites:
+const isFocal = useIsFocalRender(block)</code></pre>
+
+<p><span class="pro">+ Open surface set — new mount role = new flag, no closed union to amend.</span><br>
+<span class="pro">+ Composes in nested cases — backlink containing embed has BOTH specific flags true; either consumer asks its specific question correctly. Enum forces innermost-wins and loses info.</span><br>
+<span class="pro">+ Consumer code reads as the question (<code>useIsFocalRender</code>), not the implementation. Policy is in one hook; all 5 sites inherit changes automatically.</span><br>
+<span class="pro">+ Umbrella flag (<code>isNestedSurface</code>) eliminates the disjunction footgun of a naive flag bag — adding a new surface only requires setting the umbrella, the gate hook needs no update.</span><br>
+<span class="meh">○ Two flags per setter (umbrella + specific). Mild redundancy, but each carries different info.</span><br>
+<span class="con">− Discoverability slightly worse than enum: "what surfaces exist?" means grepping setters rather than reading a union type.</span><br>
+<span class="con">− Doesn't fix the <code>topLevel</code> conflation either (compatible with the rename from C if desired).</span></p>
+
+<h2>Scorecard</h2>
+<table class="scorecard">
+<tr>
+  <th></th>
+  <th>A — add boolean</th>
+  <th>B — surface enum</th>
+  <th>C — B + rename</th>
+  <th>D — flags + hooks</th>
+</tr>
+<tr>
+  <td>Fixes the bug</td>
+  <td class="A">✓</td><td class="B">✓</td><td class="C">✓</td><td class="D">✓</td>
+</tr>
+<tr>
+  <td>Fixes the 4 latent siblings</td>
+  <td class="A">✓ (if you remember the conjunction)</td>
+  <td class="B">✓ (via shared hook)</td>
+  <td class="C">✓</td>
+  <td class="D">✓ (via shared hook)</td>
+</tr>
+<tr>
+  <td>Resolves <code>topLevel</code> conflation</td>
+  <td class="A">✗</td><td class="B">✗</td><td class="C">✓</td><td class="D">✗ (compatible with C-style rename)</td>
+</tr>
+<tr>
+  <td>Cost of adding a new mount role later</td>
+  <td class="A">Update every consumer's conjunction</td>
+  <td class="B">One string in the union; touch consumers that discriminate</td>
+  <td class="C">Same as B</td>
+  <td class="D">One flag setter; umbrella means hook needs no update</td>
+</tr>
+<tr>
+  <td>Composes in nested cases (backlink ⊃ embed)</td>
+  <td class="A">✓ (booleans accumulate)</td>
+  <td class="B">✗ (enum forces single value, loses info)</td>
+  <td class="C">✗ (same as B)</td>
+  <td class="D">✓ (booleans accumulate; both descriptors true)</td>
+</tr>
+<tr>
+  <td>Surface set is</td>
+  <td class="A">Open</td>
+  <td class="B">Closed</td>
+  <td class="C">Closed</td>
+  <td class="D">Open</td>
+</tr>
+<tr>
+  <td>Discoverability of surfaces</td>
+  <td class="A">Grep flags</td>
+  <td class="B">Read union type</td>
+  <td class="C">Read union type</td>
+  <td class="D">Grep flags</td>
+</tr>
+<tr>
+  <td>Diff size</td>
+  <td class="A">~1 file</td>
+  <td class="B">~5 files</td>
+  <td class="C">~10 files</td>
+  <td class="D">~5 files</td>
+</tr>
+<tr>
+  <td>Reversibility</td>
+  <td class="A">Easy</td><td class="B">Easy</td><td class="C">Easy (mechanical rename)</td><td class="D">Easy</td>
+</tr>
+</table>
+
+<div class="verdict">
+<strong>Updated read:</strong> D wins on the merits. The enum's main "feature" (mutual exclusivity)
+turns into a bug in nested cases like a backlink-containing-embed, where you actually want both
+descriptors true; D's umbrella+specific flags compose naturally. D's hook layer gives consumers the
+same ergonomics as B (one call, no conjunction visible at the site), but the surface set stays open
+and adding new ones doesn't require type amendments or hook updates.<br><br>
+If the <code>topLevel</code> naming conflation also bothers you, D is compatible with C's rename —
+they're orthogonal changes.
+</div>
+
+<h2>Open questions before committing</h2>
+<ul>
+  <li><strong>Nesting policy for surface:</strong> innermost-wins (simple, matches context semantics)
+      vs. a stack (preserves outer context). Innermost-wins works iff no future consumer needs to
+      ask "am I anywhere inside a backlink, even if also inside an embed?"</li>
+  <li><strong>Do we want <code>'document'</code> to be explicit or implicit?</strong> Explicit
+      (default empty, sites check <code>=== 'document'</code>) reads cleaner; implicit (<code>!surface</code>
+      means document) is one less field at root. Lean explicit.</li>
+  <li><strong>Should <code>useIsFocalRender</code> live with the other render hooks or with the
+      context module?</strong> Doesn't matter much; co-locating with context module keeps the policy
+      next to the type it depends on.</li>
+</ul>
+
+</body>
+</html>
