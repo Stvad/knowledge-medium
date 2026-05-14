@@ -267,7 +267,10 @@ const CanvasView = ({ block }) => {
           position: 'absolute',
           top: 8,
           left: 8,
-          padding: '4px 10px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 6px 4px 10px',
           background: 'var(--surface-2, #f6f8fa)',
           border: '1px solid var(--border, #d0d7de)',
           borderRadius: 6,
@@ -276,7 +279,35 @@ const CanvasView = ({ block }) => {
           userSelect: 'none',
         }}
       >
-        canvas layout — {panelRows.length} panel(s)
+        <span>canvas layout — {panelRows.length} panel(s)</span>
+        <button
+          type="button"
+          onClick={() => {
+            writePersistedMode(false)
+            window.dispatchEvent(
+              new CustomEvent(CANVAS_SET_EVENT, { detail: false }),
+            )
+          }}
+          title="Exit canvas layout"
+          aria-label="Exit canvas layout"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 20,
+            height: 20,
+            padding: 0,
+            border: '1px solid var(--border, #d0d7de)',
+            borderRadius: 4,
+            background: 'var(--background, #fff)',
+            cursor: 'pointer',
+            fontSize: 14,
+            lineHeight: 1,
+            color: 'var(--foreground, #24292f)',
+          }}
+        >
+          ×
+        </button>
       </div>
       {panelRows.map((row, i) => {
         const panelBlock = block.repo.block(row.id)
