@@ -1,5 +1,6 @@
 import type { MobileBottomNavItemContribution } from './facet.ts'
 import {
+  AppendTodayDailyBlockBottomNavItem,
   CommandPaletteBottomNavItem,
   NewNodeBottomNavItem,
   OpenSidebarBottomNavItem,
@@ -15,6 +16,11 @@ export const openSidebarBottomNavItem: MobileBottomNavItemContribution = {
 export const newNodeBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.new-node',
   component: NewNodeBottomNavItem,
+}
+
+export const appendTodayDailyBlockBottomNavItem: MobileBottomNavItemContribution = {
+  id: 'mobile-bottom-nav.append-today-daily-block',
+  component: AppendTodayDailyBlockBottomNavItem,
 }
 
 export const todayBottomNavItem: MobileBottomNavItemContribution = {

@@ -3,6 +3,7 @@ import type { AppExtension } from '@/extensions/facet.ts'
 import { MobileBottomNav } from './MobileBottomNav.tsx'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import {
+  appendTodayDailyBlockBottomNavItem,
   commandPaletteBottomNavItem,
   newNodeBottomNavItem,
   openSidebarBottomNavItem,
@@ -17,6 +18,7 @@ export {
   type MobileBottomNavItemContribution,
 } from './facet.ts'
 export {
+  appendTodayDailyBlockBottomNavItem,
   commandPaletteBottomNavItem,
   newNodeBottomNavItem,
   openSidebarBottomNavItem,
@@ -38,6 +40,10 @@ export const mobileBottomNavPlugin: AppExtension = [
   mobileBottomNavItemsFacet.of(newNodeBottomNavItem, {
     source: 'mobile-bottom-nav',
     precedence: -30,
+  }),
+  mobileBottomNavItemsFacet.of(appendTodayDailyBlockBottomNavItem, {
+    source: 'mobile-bottom-nav',
+    precedence: -25,
   }),
   mobileBottomNavItemsFacet.of(todayBottomNavItem, {
     source: 'mobile-bottom-nav',

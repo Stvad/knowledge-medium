@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { appMountsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import {
+  appendTodayDailyBlockBottomNavItem,
   commandPaletteBottomNavItem,
   MobileBottomNav,
   mobileBottomNavItemsFacet,
@@ -27,6 +28,7 @@ describe('mobileBottomNavPlugin', () => {
     expect(runtime.read(mobileBottomNavItemsFacet)).toEqual([
       openSidebarBottomNavItem,
       newNodeBottomNavItem,
+      appendTodayDailyBlockBottomNavItem,
       todayBottomNavItem,
       searchBottomNavItem,
       commandPaletteBottomNavItem,

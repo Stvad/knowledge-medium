@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import {
   CalendarDays,
+  CalendarPlus,
   Command,
   Menu,
   Plus,
@@ -12,6 +13,9 @@ import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { toggleQuickFindEvent } from '@/plugins/quick-find/events.ts'
 import { toggleCommandPaletteEvent } from '@/plugins/command-palette/events.ts'
 import { openLeftSidebar } from '@/plugins/left-sidebar/events.ts'
+import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
+import { useRunAction } from '@/shortcuts/runAction.ts'
+import { ActionContextTypes } from '@/shortcuts/types.ts'
 import {
   createNodeInActivePanel,
   useActivePanelNodeTarget,
@@ -42,6 +46,29 @@ export function NewNodeBottomNavItem() {
       icon={Plus}
       onClick={() => { void createNode() }}
       disabled={!activePanelTarget.canCreateNode}
+    />
+  )
+}
+
+export function AppendTodayDailyBlockBottomNavItem() {
+  const repo = useRepo()
+  const runAction = useRunAction()
+  const activeContexts = useActiveContextsState()
+  const hasGlobalContext = activeContexts.has(ActionContextTypes.GLOBAL)
+
+  const appendTodayDailyBlock = useCallback(() => {
+    void runAction(
+      'append_today_daily_block',
+      new CustomEvent('mobile-bottom-nav.append-today-daily-block'),
+    )
+  }, [runAction])
+
+  return (
+    <MobileBottomNavButton
+      label="New daily block"
+      icon={CalendarPlus}
+      onClick={appendTodayDailyBlock}
+      disabled={!hasGlobalContext || !repo.activeWorkspaceId || repo.isReadOnly}
     />
   )
 }
