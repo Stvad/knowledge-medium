@@ -29,6 +29,10 @@ export interface QuickActionItem {
   /** True renders under the overflow menu; false/omitted renders in
    *  the primary one-row strip. */
   overflow?: boolean
+  /** Optional toolbar row in the primary strip on mobile. Defaults to 1.
+   *  Ignored for overflow items. Rows are grouped and rendered in
+   *  ascending order, so plugins can add row 3+ without core changes. */
+  row?: number
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -39,7 +43,8 @@ export const isQuickActionItem = (value: unknown): value is QuickActionItem =>
   typeof value.actionId === 'string' &&
   (value.label === undefined || typeof value.label === 'string') &&
   (value.destructive === undefined || typeof value.destructive === 'boolean') &&
-  (value.overflow === undefined || typeof value.overflow === 'boolean')
+  (value.overflow === undefined || typeof value.overflow === 'boolean') &&
+  (value.row === undefined || (Number.isInteger(value.row) && value.row >= 1))
 
 export const quickActionItemsFacet = defineFacet<QuickActionItem, readonly QuickActionItem[]>({
   id: 'swipe-quick-actions.items',
