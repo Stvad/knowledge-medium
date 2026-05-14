@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
+import remarkGfm from 'remark-gfm'
 import { visit } from 'unist-util-visit'
 import type { Root, RootContent } from 'mdast'
 import { remarkWikilinks } from '../remark-wikilinks.ts'
@@ -18,6 +19,19 @@ interface WikilinkNode {
 const transform = (md: string, refs: Record<string, string> = {}) => {
   const processor = unified()
     .use(remarkParse)
+    .use(remarkWikilinks, {resolveAlias: (alias: string) => refs[alias]})
+  const tree = processor.parse(md) as Root
+  return processor.runSync(tree) as Root
+}
+
+// Runs the full real pipeline (parse + remark-gfm + remarkWikilinks) so the
+// tests cover the GFM autolink-literal interaction. remark-gfm splits emails
+// and URLs inside `[[…]]` into `link` siblings during parsing, which the
+// fourth pass in remarkWikilinks reassembles.
+const transformWithGfm = (md: string, refs: Record<string, string> = {}) => {
+  const processor = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
     .use(remarkWikilinks, {resolveAlias: (alias: string) => refs[alias]})
   const tree = processor.parse(md) as Root
   return processor.runSync(tree) as Root
@@ -203,6 +217,113 @@ describe('remarkWikilinks', () => {
       const links = collectWikilinks(tree)
       expect(embeds).toEqual([{alias: 'A', blockId: 'a', raw: '![[A]]'}])
       expect(links.map(l => l.data.hProperties.alias)).toEqual(['B'])
+    })
+  })
+
+  describe('GFM autolink-literal interaction', () => {
+    const collectEmbeds = (tree: Root) => {
+      const out: Array<{alias: string; blockId: string; raw: string}> = []
+      visit(tree, (node) => {
+        if ((node as {type: string}).type === 'pageembed') {
+          const props = (node as unknown as {data: {hProperties: {alias: string; blockId: string}}; value: string})
+          out.push({
+            alias: props.data.hProperties.alias,
+            blockId: props.data.hProperties.blockId,
+            raw: props.value,
+          })
+        }
+      })
+      return out
+    }
+
+    it('reassembles [[email@host]] split into text + link + text by gfm', () => {
+      const tree = transformWithGfm('[[foo@example.com]]', {'foo@example.com': 'block-foo'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('foo@example.com')
+      expect(links[0].data.hProperties.blockId).toBe('block-foo')
+      expect(wikilinkChildText(links[0])).toBe('foo@example.com')
+    })
+
+    it('reassembles [[https://url]] split by gfm autolink-literal', () => {
+      const tree = transformWithGfm('[[https://example.com]]', {'https://example.com': 'block-url'})
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('https://example.com')
+      expect(links[0].data.hProperties.blockId).toBe('block-url')
+    })
+
+    it('preserves surrounding text around a reassembled email wikilink', () => {
+      const tree = transformWithGfm(
+        'before [[foo@example.com]] after',
+        {'foo@example.com': 'x'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      const texts = collectText(tree)
+      expect(texts).toContain('before ')
+      expect(texts).toContain(' after')
+    })
+
+    it('reassembles multiple email wikilinks in one paragraph', () => {
+      const tree = transformWithGfm(
+        'See [[a@x.com]] and [[b@y.com]] please.',
+        {'a@x.com': '1', 'b@y.com': '2'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links.map(l => l.data.hProperties.alias)).toEqual(['a@x.com', 'b@y.com'])
+      expect(links.map(l => l.data.hProperties.blockId)).toEqual(['1', '2'])
+      const texts = collectText(tree)
+      expect(texts).toContain('See ')
+      expect(texts).toContain(' and ')
+      expect(texts).toContain(' please.')
+    })
+
+    it('reassembles an alias whose interior also contains an email', () => {
+      // GFM autolinks `john@example.com` inside the brackets; the alias is the
+      // whole bracketed phrase.
+      const tree = transformWithGfm(
+        '[[meet john@example.com soon]]',
+        {'meet john@example.com soon': 'block-y'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links).toHaveLength(1)
+      expect(links[0].data.hProperties.alias).toBe('meet john@example.com soon')
+      expect(links[0].data.hProperties.blockId).toBe('block-y')
+    })
+
+    it('reassembles ![[email@host]] as a pageembed', () => {
+      const tree = transformWithGfm(
+        '![[user@example.com]]',
+        {'user@example.com': 'block-x'},
+      )
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      const embeds = collectEmbeds(tree)
+      expect(embeds).toEqual([
+        {alias: 'user@example.com', blockId: 'block-x', raw: '![[user@example.com]]'},
+      ])
+    })
+
+    it('mixes simple bare and email wikilinks in one paragraph', () => {
+      const tree = transformWithGfm(
+        '[[plain]] and [[user@x.com]] together',
+        {plain: 'p', 'user@x.com': 'u'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links.map(l => l.data.hProperties.alias)).toEqual(['plain', 'user@x.com'])
+      expect(links.map(l => l.data.hProperties.blockId)).toEqual(['p', 'u'])
+    })
+
+    it('leaves a bare email autolink alone when it is not wrapped in [[…]]', () => {
+      const tree = transformWithGfm('contact foo@example.com here', {})
+      expect(collectWikilinks(tree)).toHaveLength(0)
+      // The autolink itself should still be present.
+      const links: Array<{url: string}> = []
+      visit(tree, 'link', (node) => {
+        links.push({url: (node as {url: string}).url})
+      })
+      expect(links).toHaveLength(1)
+      expect(links[0].url).toBe('mailto:foo@example.com')
     })
   })
 })
