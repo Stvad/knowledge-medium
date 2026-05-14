@@ -10,7 +10,7 @@ import {
 
 export type StoredBacklinksFilter = Required<BacklinksFilter>
 
-const EMPTY_BACKLINKS_FILTER: StoredBacklinksFilter = {
+export const EMPTY_BACKLINKS_FILTER: StoredBacklinksFilter = {
   includeIds: [],
   removeIds: [],
 }
@@ -28,7 +28,7 @@ const parseBacklinksFilter = (value: unknown): BacklinksFilter => {
   }
 }
 
-const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
+export const backlinksFilterCodec: Codec<StoredBacklinksFilter> = {
   type: 'backlinks:filter',
   encode: value => normalizeBacklinksFilter(value),
   decode: value => normalizeBacklinksFilter(parseBacklinksFilter(value)),

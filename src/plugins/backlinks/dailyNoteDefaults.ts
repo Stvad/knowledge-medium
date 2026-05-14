@@ -1,0 +1,52 @@
+import {
+  ChangeScope,
+  defineProperty,
+  type BlockData,
+} from '@/data/api'
+import { hasBlockType } from '@/data/properties.ts'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
+import {
+  EMPTY_BACKLINKS_FILTER,
+  backlinksFilterCodec,
+  type StoredBacklinksFilter,
+} from './filterProperty.ts'
+import {
+  mergeBacklinksFilters,
+  normalizeBacklinksFilter,
+  type BacklinksFilter,
+} from './query.ts'
+
+export const INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS: StoredBacklinksFilter = {
+  includeIds: [],
+  removeIds: [],
+}
+
+export const dailyNoteBacklinksDefaultsProp = defineProperty<StoredBacklinksFilter>(
+  'dailyNotes:backlinksDefaults',
+  {
+    codec: backlinksFilterCodec,
+    defaultValue: EMPTY_BACKLINKS_FILTER,
+    changeScope: ChangeScope.UserPrefs,
+  },
+)
+
+export const isDailyNoteBlockData = (
+  data: Pick<BlockData, 'properties'> | null | undefined,
+): boolean => Boolean(data && hasBlockType(data, DAILY_NOTE_TYPE))
+
+export const defaultBacklinksFilterForBlock = (
+  data: Pick<BlockData, 'properties'> | null | undefined,
+  dailyNoteDefaults: BacklinksFilter | undefined,
+): StoredBacklinksFilter =>
+  isDailyNoteBlockData(data)
+    ? normalizeBacklinksFilter(dailyNoteDefaults)
+    : EMPTY_BACKLINKS_FILTER
+
+export const effectiveBacklinksFilterForBlock = (
+  data: Pick<BlockData, 'properties'> | null | undefined,
+  localFilter: BacklinksFilter | undefined,
+  dailyNoteDefaults: BacklinksFilter | undefined,
+): StoredBacklinksFilter =>
+  isDailyNoteBlockData(data)
+    ? mergeBacklinksFilters(dailyNoteDefaults, localFilter)
+    : normalizeBacklinksFilter(localFilter)

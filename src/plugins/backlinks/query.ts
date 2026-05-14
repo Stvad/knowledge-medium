@@ -162,6 +162,27 @@ export const normalizeBacklinksFilter = (
   removeIds: uniqueNonEmpty(filter?.removeIds),
 })
 
+export const mergeBacklinksFilters = (
+  defaults: BacklinksFilter | undefined,
+  overrides: BacklinksFilter | undefined,
+): Required<BacklinksFilter> => {
+  const normalizedDefaults = normalizeBacklinksFilter(defaults)
+  const normalizedOverrides = normalizeBacklinksFilter(overrides)
+  const overrideIncludeIds = new Set(normalizedOverrides.includeIds)
+  const overrideRemoveIds = new Set(normalizedOverrides.removeIds)
+
+  return normalizeBacklinksFilter({
+    includeIds: [
+      ...normalizedOverrides.includeIds,
+      ...normalizedDefaults.includeIds.filter(id => !overrideRemoveIds.has(id)),
+    ],
+    removeIds: [
+      ...normalizedOverrides.removeIds,
+      ...normalizedDefaults.removeIds.filter(id => !overrideIncludeIds.has(id)),
+    ],
+  })
+}
+
 export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean => {
   const normalized = normalizeBacklinksFilter(filter)
   return normalized.includeIds.length > 0 || normalized.removeIds.length > 0

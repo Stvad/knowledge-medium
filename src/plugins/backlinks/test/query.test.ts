@@ -5,21 +5,38 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
-import { aliasesProp } from '@/data/properties'
+import { aliasesProp, typesProp } from '@/data/properties'
+import { getUserPrefsBlock } from '@/data/globalState.ts'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import {
   invalidationRulesFacet,
+  propertyEditorOverridesFacet,
   propertySchemasFacet,
   queriesFacet,
+  valuePresetsFacet,
 } from '@/data/facets.ts'
+import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
+import { backlinksPlugin } from '../index.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
 import {
   REFERENCES_TARGET_INVALIDATION_CHANNEL,
   referencesInvalidationRule,
 } from '@/plugins/references/invalidation.ts'
-import { BACKLINKS_FOR_BLOCK_QUERY, backlinksForBlockQuery } from '../query.ts'
+import {
+  BACKLINKS_FOR_BLOCK_QUERY,
+  backlinksForBlockQuery,
+  mergeBacklinksFilters,
+} from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
+import {
+  INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,
+  dailyNoteBacklinksDefaultsProp,
+  effectiveBacklinksFilterForBlock,
+} from '../dailyNoteDefaults.ts'
+import { dailyNoteBacklinksDefaultsUi } from '../propertyEditorOverride.ts'
+import { initializeDailyNoteBacklinksPreferences } from '../preferences.ts'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -103,6 +120,60 @@ describe('backlinksDataExtension query', () => {
   it('contributes its backlink filter property schema', () => {
     const runtime = resolveFacetRuntimeSync(backlinksDataExtension)
     expect(runtime.read(propertySchemasFacet).get(backlinksFilterProp.name)).toBe(backlinksFilterProp)
+    expect(runtime.read(propertySchemasFacet).get(dailyNoteBacklinksDefaultsProp.name))
+      .toBe(dailyNoteBacklinksDefaultsProp)
+  })
+
+  it('contributes a custom property UI for daily note backlink defaults', () => {
+    const runtime = resolveFacetRuntimeSync(backlinksPlugin)
+    const schemas = runtime.read(propertySchemasFacet)
+    const uis = runtime.read(propertyEditorOverridesFacet)
+
+    expect(uis.get(dailyNoteBacklinksDefaultsProp.name)).toBe(dailyNoteBacklinksDefaultsUi)
+    expect(resolvePropertyDisplay({
+      name: dailyNoteBacklinksDefaultsProp.name,
+      encodedValue: INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,
+      schemas,
+      uis,
+      presets: runtime.read(valuePresetsFacet),
+    }).Editor).toBe(dailyNoteBacklinksDefaultsUi.Editor)
+  })
+
+  it('initializes daily note backlink defaults on the user prefs block', async () => {
+    await initializeDailyNoteBacklinksPreferences(env.repo, WS)
+    const prefsBlock = await getUserPrefsBlock(env.repo, WS, env.repo.user)
+
+    expect(prefsBlock.peekProperty(dailyNoteBacklinksDefaultsProp)).toEqual(
+      INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,
+    )
+  })
+
+  it('merges default filters with page-local conflict overrides', () => {
+    expect(mergeBacklinksFilters(
+      {includeIds: ['project', 'inbox'], removeIds: ['done', 'someday']},
+      {includeIds: ['done', 'local'], removeIds: ['inbox']},
+    )).toEqual({
+      includeIds: ['done', 'local', 'project'],
+      removeIds: ['inbox', 'someday'],
+    })
+  })
+
+  it('applies daily note defaults only to daily-note block data', () => {
+    const dailyNoteData = {
+      properties: {[typesProp.name]: typesProp.codec.encode([DAILY_NOTE_TYPE])},
+    }
+    const regularData = {properties: {}}
+    const defaults = {removeIds: ['done']}
+    const local = {includeIds: ['project']}
+
+    expect(effectiveBacklinksFilterForBlock(dailyNoteData, local, defaults)).toEqual({
+      includeIds: ['project'],
+      removeIds: ['done'],
+    })
+    expect(effectiveBacklinksFilterForBlock(regularData, local, defaults)).toEqual({
+      includeIds: ['project'],
+      removeIds: [],
+    })
   })
 
   it('is identity-stable across calls', () => {

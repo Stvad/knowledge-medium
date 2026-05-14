@@ -32,6 +32,9 @@ interface BacklinkFiltersProps {
   workspaceId: string
   filter: BacklinksFilter
   onChange: (filter: BacklinksFilter) => void
+  baseFilter?: BacklinksFilter
+  baseLabel?: string
+  readOnly?: boolean
 }
 
 const truncate = (text: string, max = 72): string =>
@@ -40,10 +43,12 @@ const truncate = (text: string, max = 72): string =>
 const FilterChip = ({
   id,
   mode,
+  readOnly = false,
   onRemove,
 }: {
   id: string
   mode: FilterMode
+  readOnly?: boolean
   onRemove: (id: string) => void
 }) => {
   const repo = useRepo()
@@ -61,14 +66,16 @@ const FilterChip = ({
       title={label}
     >
       <span className="truncate max-w-[18ch]">{label}</span>
-      <button
-        type="button"
-        onClick={() => onRemove(id)}
-        className="shrink-0 rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-        aria-label={`Remove ${label}`}
-      >
-        <X className="h-3 w-3" />
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          onClick={() => onRemove(id)}
+          className="shrink-0 rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          aria-label={`Remove ${label}`}
+        >
+          <X className="h-3 w-3" />
+        </button>
+      )}
     </span>
   )
 }
@@ -77,11 +84,13 @@ const BacklinkFilterInput = ({
   workspaceId,
   mode,
   currentIds,
+  readOnly = false,
   onAdd,
 }: {
   workspaceId: string
   mode: FilterMode
   currentIds: readonly string[]
+  readOnly?: boolean
   onAdd: (id: string) => void
 }) => {
   const repo = useRepo()
@@ -122,6 +131,7 @@ const BacklinkFilterInput = ({
   }, [currentIdSet, repo, trimmed, workspaceId])
 
   const add = async (id?: string) => {
+    if (readOnly) return
     const nextId = id ?? results[0]?.id
     if (nextId) {
       onAdd(nextId)
@@ -190,6 +200,7 @@ const BacklinkFilterInput = ({
         onKeyDown={handleKeyDown}
         placeholder={mode === 'include' ? 'Include reference' : 'Remove reference'}
         className="h-8 min-w-0 text-xs"
+        disabled={readOnly}
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={Boolean(popupOpen)}
@@ -203,6 +214,7 @@ const BacklinkFilterInput = ({
         variant="ghost"
         size="icon"
         className="h-8 w-8 shrink-0"
+        disabled={readOnly}
         title={mode === 'include' ? 'Add include filter' : 'Add remove filter'}
         aria-label={mode === 'include' ? 'Add include filter' : 'Add remove filter'}
       >
@@ -248,11 +260,17 @@ export function BacklinkFilters({
   workspaceId,
   filter,
   onChange,
+  baseFilter,
+  baseLabel = 'Defaults',
+  readOnly = false,
 }: BacklinkFiltersProps) {
   const normalized = useMemo(() => normalizeBacklinksFilter(filter), [filter])
+  const normalizedBase = useMemo(() => normalizeBacklinksFilter(baseFilter), [baseFilter])
   const active = normalized.includeIds.length > 0 || normalized.removeIds.length > 0
+  const baseActive = normalizedBase.includeIds.length > 0 || normalizedBase.removeIds.length > 0
 
   const addFilter = (mode: FilterMode, id: string) => {
+    if (readOnly) return
     const includeIds = mode === 'include'
       ? [id, ...normalized.includeIds.filter(existing => existing !== id)]
       : normalized.includeIds.filter(existing => existing !== id)
@@ -263,6 +281,7 @@ export function BacklinkFilters({
   }
 
   const removeFilter = (mode: FilterMode, id: string) => {
+    if (readOnly) return
     onChange({
       includeIds: mode === 'include'
         ? normalized.includeIds.filter(existing => existing !== id)
@@ -275,12 +294,42 @@ export function BacklinkFilters({
 
   return (
     <div className="mt-3 flex flex-col gap-2 border-l border-border/80 pl-3">
+      {baseActive && (
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <div className="text-xs font-medium text-muted-foreground">{baseLabel}</div>
+          <div className="grid gap-2 md:grid-cols-2">
+            <div className="flex min-w-0 flex-wrap gap-1">
+              {normalizedBase.includeIds.map(id => (
+                <FilterChip
+                  key={id}
+                  id={id}
+                  mode="include"
+                  readOnly
+                  onRemove={() => undefined}
+                />
+              ))}
+            </div>
+            <div className="flex min-w-0 flex-wrap gap-1">
+              {normalizedBase.removeIds.map(id => (
+                <FilterChip
+                  key={id}
+                  id={id}
+                  mode="remove"
+                  readOnly
+                  onRemove={() => undefined}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="grid gap-2 md:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1.5">
           <BacklinkFilterInput
             workspaceId={workspaceId}
             mode="include"
             currentIds={normalized.includeIds}
+            readOnly={readOnly}
             onAdd={id => addFilter('include', id)}
           />
           {normalized.includeIds.length > 0 && (
@@ -290,6 +339,7 @@ export function BacklinkFilters({
                   key={id}
                   id={id}
                   mode="include"
+                  readOnly={readOnly}
                   onRemove={() => removeFilter('include', id)}
                 />
               ))}
@@ -301,6 +351,7 @@ export function BacklinkFilters({
             workspaceId={workspaceId}
             mode="remove"
             currentIds={normalized.removeIds}
+            readOnly={readOnly}
             onAdd={id => addFilter('remove', id)}
           />
           {normalized.removeIds.length > 0 && (
@@ -310,6 +361,7 @@ export function BacklinkFilters({
                   key={id}
                   id={id}
                   mode="remove"
+                  readOnly={readOnly}
                   onRemove={() => removeFilter('remove', id)}
                 />
               ))}
@@ -324,6 +376,7 @@ export function BacklinkFilters({
             variant="ghost"
             size="sm"
             className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+            disabled={readOnly}
             onClick={() => onChange({})}
           >
             <FilterX className="h-3.5 w-3.5" />

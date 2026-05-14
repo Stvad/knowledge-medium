@@ -10,7 +10,7 @@ import {
   hasBacklinksFilter,
   type BacklinksFilter,
 } from './query.ts'
-import { useStoredBacklinkFilter } from './useStoredBacklinkFilter.ts'
+import { useBacklinkFilterState } from './useStoredBacklinkFilter.ts'
 import { LazyBacklinkItem } from './BacklinkEntry.tsx'
 
 export function LinkedReferences({block}: BlockRendererProps) {
@@ -33,10 +33,19 @@ function LinkedReferencesInner({
   block: Block
   workspaceId: string
 }) {
-  const [filter, setStoredFilter] = useStoredBacklinkFilter(block)
-  const filterActive = hasBacklinksFilter(filter)
+  const {
+    filter,
+    defaultFilter,
+    effectiveFilter,
+    setFilter: setStoredFilter,
+  } = useBacklinkFilterState(block)
+  const filterActive = hasBacklinksFilter(effectiveFilter)
   const unfilteredBacklinks = useBacklinks(block, workspaceId)
-  const filteredBacklinks = useBacklinks(block, workspaceId, filterActive ? filter : undefined)
+  const filteredBacklinks = useBacklinks(
+    block,
+    workspaceId,
+    filterActive ? effectiveFilter : undefined,
+  )
   const backlinks = filterActive ? filteredBacklinks : unfilteredBacklinks
   // Prefetch ancestors for every visible backlink in one batched
   // query, instead of N concurrent `useParents` calls. Each entry's
@@ -45,11 +54,12 @@ function LinkedReferencesInner({
   // shownBlock to one we didn't prefetch).
   const initialParentsByBacklinkId = useManyParents(backlinks)
   const [open, setOpen] = useState(true)
-  const [filtersOpen, setFiltersOpen] = useState(filterActive)
+  const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
+  const filtersOpen = filtersOpenOverride ?? filterActive
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     setStoredFilter(next)
-    if (hasBacklinksFilter(next)) setFiltersOpen(true)
+    if (hasBacklinksFilter(next)) setFiltersOpenOverride(true)
   }, [setStoredFilter])
 
   if (unfilteredBacklinks.length === 0) return null
@@ -72,7 +82,7 @@ function LinkedReferencesInner({
         </button>
         <button
           type="button"
-          onClick={() => setFiltersOpen(prev => !prev)}
+          onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
           className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
             filterActive ? 'bg-accent text-foreground' : ''
           }`}
@@ -90,6 +100,8 @@ function LinkedReferencesInner({
             <BacklinkFilters
               workspaceId={workspaceId}
               filter={filter}
+              baseFilter={defaultFilter}
+              baseLabel="Daily note defaults"
               onChange={setFilter}
             />
           )}

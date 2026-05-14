@@ -11,7 +11,7 @@ import {
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
 import { useBacklinks } from '@/plugins/backlinks/useBacklinks.ts'
-import { useStoredBacklinkFilter } from '@/plugins/backlinks/useStoredBacklinkFilter.ts'
+import { useBacklinkFilterState } from '@/plugins/backlinks/useStoredBacklinkFilter.ts'
 import type { GroupedBacklinkGroup } from './grouping.ts'
 import { useGroupedBacklinksConfig } from './useGroupedBacklinksConfig.ts'
 import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
@@ -89,15 +89,20 @@ function GroupedLinkedReferencesInner({
   block: Block
   workspaceId: string
 }) {
-  const [filter, setStoredFilter] = useStoredBacklinkFilter(block)
-  const filterActive = hasBacklinksFilter(filter)
+  const {
+    filter,
+    defaultFilter,
+    effectiveFilter,
+    setFilter: setStoredFilter,
+  } = useBacklinkFilterState(block)
+  const filterActive = hasBacklinksFilter(effectiveFilter)
   const groupingConfig = useGroupedBacklinksConfig(block)
   const unfilteredBacklinks = useBacklinks(block, workspaceId)
   const grouped = useGroupedBacklinks(
     block,
     workspaceId,
     groupingConfig,
-    filterActive ? filter : undefined,
+    filterActive ? effectiveFilter : undefined,
   )
   // Same prefetch as `LinkedReferences` — one batched manyAncestors
   // covering every visible source so per-entry breadcrumbs don't each
@@ -106,11 +111,12 @@ function GroupedLinkedReferencesInner({
   // toggles.
   const initialParentsByBacklinkId = useManyParents(unfilteredBacklinks)
   const [open, setOpen] = useState(true)
-  const [filtersOpen, setFiltersOpen] = useState(filterActive)
+  const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
+  const filtersOpen = filtersOpenOverride ?? filterActive
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     setStoredFilter(next)
-    if (hasBacklinksFilter(next)) setFiltersOpen(true)
+    if (hasBacklinksFilter(next)) setFiltersOpenOverride(true)
   }, [setStoredFilter])
 
   if (unfilteredBacklinks.length === 0) return null
@@ -133,7 +139,7 @@ function GroupedLinkedReferencesInner({
         </button>
         <button
           type="button"
-          onClick={() => setFiltersOpen(prev => !prev)}
+          onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
           className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
             filterActive ? 'bg-accent text-foreground' : ''
           }`}
@@ -151,6 +157,8 @@ function GroupedLinkedReferencesInner({
             <BacklinkFilters
               workspaceId={workspaceId}
               filter={filter}
+              baseFilter={defaultFilter}
+              baseLabel="Daily note defaults"
               onChange={setFilter}
             />
           )}
