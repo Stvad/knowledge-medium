@@ -189,6 +189,7 @@ const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) =
   if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return null
   const indicatorState = {
     interval: readProperty(data.properties, srsIntervalProp, DEFAULT_INTERVAL),
+    factor: readProperty(data.properties, srsFactorProp, DEFAULT_FACTOR),
     reviewCount: readProperty(data.properties, srsReviewCountProp, 0),
     archived: readProperty(data.properties, srsArchivedProp, false),
   }

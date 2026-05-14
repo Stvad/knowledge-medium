@@ -1,5 +1,6 @@
 export interface SrsIndicatorState {
   interval: number
+  factor: number
   reviewCount: number
   archived: boolean
 }
@@ -22,9 +23,14 @@ const formatInterval = (interval: number): string => {
   return rounded.toString()
 }
 
+const formatFactor = (factor: number): string => {
+  const rounded = Math.round(factor * 100) / 100
+  return rounded.toString()
+}
+
 export const srsIndicatorTitle = (state: SrsIndicatorState): string => {
   if (state.archived) return 'SRS · archived'
   if (state.reviewCount === 0) return 'SRS · new (not yet reviewed)'
   const reviews = `${state.reviewCount} review${state.reviewCount === 1 ? '' : 's'}`
-  return `SRS · ${formatInterval(state.interval)}d interval · ${reviews}`
+  return `SRS · ${formatInterval(state.interval)}d interval · ${formatFactor(state.factor)} factor · ${reviews}`
 }

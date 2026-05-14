@@ -3,6 +3,7 @@ import { srsBarClass, srsIndicatorTitle, type SrsIndicatorState } from '../indic
 
 const state = (overrides: Partial<SrsIndicatorState> = {}): SrsIndicatorState => ({
   interval: 2,
+  factor: 2.5,
   reviewCount: 0,
   archived: false,
   ...overrides,
@@ -57,19 +58,26 @@ describe('srsIndicatorTitle', () => {
   })
 
   it('rounds fractional intervals to one decimal place', () => {
-    expect(srsIndicatorTitle(state({reviewCount: 1, interval: 4.830283949637418})))
-      .toBe('SRS · 4.8d interval · 1 review')
+    expect(srsIndicatorTitle(state({reviewCount: 1, interval: 4.830283949637418, factor: 2.5})))
+      .toBe('SRS · 4.8d interval · 2.5 factor · 1 review')
   })
 
   it('drops trailing zero for whole-day intervals', () => {
-    expect(srsIndicatorTitle(state({reviewCount: 3, interval: 7})))
-      .toBe('SRS · 7d interval · 3 reviews')
+    expect(srsIndicatorTitle(state({reviewCount: 3, interval: 7, factor: 2.5})))
+      .toBe('SRS · 7d interval · 2.5 factor · 3 reviews')
   })
 
-  it('shows interval and singular vs plural review count', () => {
-    expect(srsIndicatorTitle(state({reviewCount: 1, interval: 4})))
-      .toBe('SRS · 4d interval · 1 review')
-    expect(srsIndicatorTitle(state({reviewCount: 7, interval: 45})))
-      .toBe('SRS · 45d interval · 7 reviews')
+  it('rounds factor to two decimal places', () => {
+    expect(srsIndicatorTitle(state({reviewCount: 2, interval: 6, factor: 2.456789})))
+      .toBe('SRS · 6d interval · 2.46 factor · 2 reviews')
+    expect(srsIndicatorTitle(state({reviewCount: 2, interval: 6, factor: 1.3})))
+      .toBe('SRS · 6d interval · 1.3 factor · 2 reviews')
+  })
+
+  it('shows interval, factor, and singular vs plural review count', () => {
+    expect(srsIndicatorTitle(state({reviewCount: 1, interval: 4, factor: 2.5})))
+      .toBe('SRS · 4d interval · 2.5 factor · 1 review')
+    expect(srsIndicatorTitle(state({reviewCount: 7, interval: 45, factor: 2.8})))
+      .toBe('SRS · 45d interval · 2.8 factor · 7 reviews')
   })
 })
