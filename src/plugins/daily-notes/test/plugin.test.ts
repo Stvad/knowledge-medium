@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
+import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { typesFacet } from '@/data/facets.ts'
-import { DAILY_NOTE_TYPE, dailyNotesPlugin } from '../index.ts'
+import {
+  DAILY_NOTE_TYPE,
+  OPEN_DAILY_NOTE_PICKER_ACTION_ID,
+  dailyNotePickerHeaderItem,
+  dailyNotePickerMount,
+  dailyNotesPlugin,
+  openDailyNotePickerAction,
+} from '../index.ts'
 
 describe('dailyNotesPlugin', () => {
   it('contributes the daily-note TypeContribution through the app-side plugin', () => {
@@ -18,5 +26,15 @@ describe('dailyNotesPlugin', () => {
     const types = runtime.read(typesFacet)
 
     expect(types.has(DAILY_NOTE_TYPE)).toBe(true)
+  })
+
+  it('contributes the daily note picker mount, action, and header item', () => {
+    const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
+    const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))
+
+    expect(runtime.read(appMountsFacet)).toContain(dailyNotePickerMount)
+    expect(runtime.read(headerItemsFacet)).toContain(dailyNotePickerHeaderItem)
+    expect(runtime.read(actionsFacet)).toContain(openDailyNotePickerAction)
+    expect(openDailyNotePickerAction.id).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
   })
 })
