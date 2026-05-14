@@ -1,5 +1,5 @@
 import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
-import { actionsFacet } from '@/extensions/core.ts'
+import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import type { Block } from '@/data/block'
 import type { BlockContentSurfaceContribution } from '@/extensions/blockInteraction.ts'
@@ -40,6 +40,7 @@ import {
   getSrsClipboard,
   setSrsClipboard,
 } from './srsClipboard.ts'
+import { srsDateShiftDecorators } from './dateShiftDecorator.ts'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
@@ -289,6 +290,9 @@ export const srsReschedulingPlugin: AppExtension = [
   blockContentSurfacePropsFacet.of(srsContentSurfaceDecoration, {source: 'srs-rescheduling'}),
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
+  ),
+  srsDateShiftDecorators.map(decorator =>
+    actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
   ),
 ]
 

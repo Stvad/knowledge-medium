@@ -50,6 +50,7 @@ import {
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { CalendarDays } from 'lucide-react'
 import { dailyNotesActions } from './actions.ts'
+import { dateReferenceShiftActions } from './dateShift.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
@@ -109,6 +110,9 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   dailyNotesActions({repo}).map(action =>
     actionsFacet.of(action, {source: 'daily-notes'}),
   ),
+  dateReferenceShiftActions.map(action =>
+    actionsFacet.of(action, {source: 'daily-notes'}),
+  ),
   actionsFacet.of(openDailyNotePickerAction, {source: 'daily-notes'}),
   headerItemsFacet.of(dailyNotePickerHeaderItem, {
     source: 'daily-notes',
@@ -119,6 +123,16 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
 
 export { DAILY_NOTE_TYPE, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'
+export {
+  DATE_SHIFT_BACKWARD_DAY_ACTION_ID,
+  DATE_SHIFT_BACKWARD_WEEK_ACTION_ID,
+  DATE_SHIFT_FORWARD_DAY_ACTION_ID,
+  DATE_SHIFT_FORWARD_WEEK_ACTION_ID,
+  dateReferenceShiftActions,
+  shiftSingleDateReferenceContent,
+  shiftSingleDateReferenceForBlock,
+  canShiftSingleDateReference,
+} from './dateShift.ts'
 export {
   DAILY_NOTE_NS,
   JOURNAL_NS,

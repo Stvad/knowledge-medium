@@ -7,7 +7,7 @@ import {
   useActiveContextsDispatch,
 } from '@/shortcuts/ActiveContexts.tsx'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
+import { actionContextsFacet, actionDecoratorsFacet, actionsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import {
   ActionConfig,
@@ -70,16 +70,19 @@ const Activator = ({context}: {context: ActionContextType}) => {
 
 const Harness = ({
   actions,
+  decorators = [],
   contexts,
   children,
 }: {
   actions: readonly ActionConfig[]
+  decorators?: Parameters<typeof actionDecoratorsFacet.of>[0][]
   contexts: readonly ActionContextConfig[]
   children?: ReactNode
 }) => {
   const runtime = resolveFacetRuntimeSync([
     ...contexts.map(c => actionContextsFacet.of(c)),
     ...actions.map(a => actionsFacet.of(a)),
+    ...decorators.map(d => actionDecoratorsFacet.of(d)),
   ])
 
   return (
@@ -121,6 +124,40 @@ describe('HotkeyReconciler', () => {
     act(() => dispatchKeydown('k'))
     expect(handler).toHaveBeenCalledTimes(1)
     expect(handler).toHaveBeenCalledWith(mockDeps, expect.any(KeyboardEvent))
+  })
+
+  it('fires the decorated action handler for installed hotkeys', () => {
+    const calls: string[] = []
+    const action = buildAction({
+      id: 'test.decorated',
+      handler: () => {
+        calls.push('base')
+      },
+      defaultBinding: {keys: 'k'},
+    })
+
+    render(
+      <Harness
+        actions={[action]}
+        decorators={[{
+          actionId: action.id,
+          context: TEST_CONTEXT,
+          decorate: current => ({
+            ...current,
+            handler: (deps, trigger) => {
+              calls.push('decorated')
+              return current.handler(deps as never, trigger)
+            },
+          }),
+        }]}
+        contexts={[testContextConfig]}
+      >
+        <Activator context={TEST_CONTEXT}/>
+      </Harness>,
+    )
+
+    act(() => dispatchKeydown('k'))
+    expect(calls).toEqual(['decorated', 'base'])
   })
 
   it.each(['h', 'i', 'k', 'o'])(

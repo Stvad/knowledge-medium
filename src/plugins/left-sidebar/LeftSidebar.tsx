@@ -9,13 +9,13 @@ import { aliasesProp } from '@/data/properties.ts'
 import { useUserBlock } from '@/data/globalState.ts'
 import { useChildren, useHandle } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
-import { actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 import { OPEN_TODAY_ACTION_ID } from '@/plugins/daily-notes'
 import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
 import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import { CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID } from '@/shortcuts/defaultShortcuts.ts'
 import { useRunAction } from '@/shortcuts/runAction.ts'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
@@ -58,7 +58,7 @@ const LEFT_SIDEBAR_ACTION_EVENT = 'left-sidebar-action'
 
 function useRegisteredAction(actionId: string): ActionConfig | undefined {
   const runtime = useAppRuntime()
-  return runtime.read(actionsFacet).find(action => action.id === actionId)
+  return getEffectiveActions(runtime).find(action => action.id === actionId)
 }
 
 function useSidebarActionRunner({

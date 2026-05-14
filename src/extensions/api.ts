@@ -37,7 +37,9 @@ export {
 
 // --- Blessed core facets ---
 export {
+  actionDecoratorsFacet,
   actionsFacet,
+  actionOverridesFacet,
   actionContextsFacet,
   appEffectsFacet,
   appMountsFacet,
@@ -109,9 +111,16 @@ export {
   type ActionContextConfig,
   type ActionContextType,
   type Action,
+  type ActionDecorator,
+  type ActionOverride,
   type ShortcutBinding,
   type KeyCombination,
 } from '@/shortcuts/types.ts'
+export {
+  actionRuntimeKey,
+  getActiveActionById,
+  getEffectiveActions,
+} from '@/shortcuts/effectiveActions.ts'
 export {
   bindBlockActionContext,
   createSharedBlockActions,

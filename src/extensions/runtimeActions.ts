@@ -1,7 +1,7 @@
-import { actionsFacet } from '@/extensions/core.ts'
 import { FacetRuntime } from '@/extensions/facet.ts'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
 
 export const readRuntimeActions = (
   runtime: FacetRuntime,
-): readonly ActionConfig[] => runtime.read(actionsFacet)
+): readonly ActionConfig[] => getEffectiveActions(runtime)

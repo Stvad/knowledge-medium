@@ -2,7 +2,13 @@ import { defineFacet } from '@/extensions/facet.ts'
 import type { FacetRuntime } from '@/extensions/facet.ts'
 import type { Repo } from '../data/repo'
 import type { Block } from '../data/block'
-import { ActionConfig, ActionContextConfig, ActionContextType } from '@/shortcuts/types.ts'
+import {
+  ActionConfig,
+  ActionContextConfig,
+  ActionContextType,
+  type ActionDecorator,
+  type ActionOverride,
+} from '@/shortcuts/types.ts'
 import { BlockRenderer, RendererRegistry } from '@/types.ts'
 import type { ComponentType } from 'react'
 
@@ -115,6 +121,18 @@ export const isActionConfig = (value: unknown): value is ActionConfig =>
   typeof value.handler === 'function' &&
   (value.defaultBinding === undefined || isShortcutBindingInput(value.defaultBinding))
 
+const isActionOverride = (value: unknown): value is ActionOverride =>
+  isRecord(value) &&
+  typeof value.actionId === 'string' &&
+  (value.context === undefined || isActionContextType(value.context)) &&
+  typeof value.apply === 'function'
+
+const isActionDecorator = (value: unknown): value is ActionDecorator =>
+  isRecord(value) &&
+  typeof value.actionId === 'string' &&
+  (value.context === undefined || isActionContextType(value.context)) &&
+  typeof value.decorate === 'function'
+
 export const createRendererRegistry = (
   contributions: readonly RendererContribution[],
 ): RendererRegistry => {
@@ -140,6 +158,16 @@ export const blockRenderersFacet = defineFacet<RendererContribution, RendererReg
 export const actionsFacet = defineFacet<ActionConfig, readonly ActionConfig[]>({
   id: 'core.actions',
   validate: isActionConfig,
+})
+
+export const actionOverridesFacet = defineFacet<ActionOverride, readonly ActionOverride[]>({
+  id: 'core.action-overrides',
+  validate: isActionOverride,
+})
+
+export const actionDecoratorsFacet = defineFacet<ActionDecorator, readonly ActionDecorator[]>({
+  id: 'core.action-decorators',
+  validate: isActionDecorator,
 })
 
 export const isAppEffect = (value: unknown): value is AppEffect =>

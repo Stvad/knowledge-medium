@@ -83,7 +83,7 @@ export function CommandPalette() {
           return (
             <CommandGroup key={contextType} heading={groupHeading}>
               {actionsInGroup.map((action: ActionConfig) => {
-                const bindings = bindingsFor(action.id)
+                const bindings = bindingsFor(action)
                 const shortcutKeys = formatShortcutKeys(bindings)
                 return (
                   <CommandItem

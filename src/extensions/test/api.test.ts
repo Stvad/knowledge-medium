@@ -13,8 +13,10 @@ describe('@/extensions/api — public surface', () => {
     // Facet primitives
     'defineFacet',
     // Blessed core facets
+    'actionDecoratorsFacet',
     'actionsFacet',
     'actionContextsFacet',
+    'actionOverridesFacet',
     'appEffectsFacet',
     'appMountsFacet',
     'blockRenderersFacet',
@@ -35,6 +37,7 @@ describe('@/extensions/api — public surface', () => {
     'ActionContextTypes',
     'bindBlockActionContext',
     'createSharedBlockActions',
+    'getEffectiveActions',
     // Block / data primitives
     'Block',
     'Repo',

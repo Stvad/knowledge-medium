@@ -1,9 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import hotkeys from 'hotkeys-js'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
+import { actionContextsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useActiveContextsState, ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
 import { setRunActionDispatcher } from '@/shortcuts/runAction.ts'
+import {
+  actionRuntimeKey,
+  getActiveActionById,
+  getEffectiveActions,
+} from './effectiveActions.ts'
 import {
   ActionConfig,
   ActionContextConfig,
@@ -53,7 +58,7 @@ export function HotkeyReconciler(): null {
   const runtime = useAppRuntime()
   const active = useActiveContextsState()
 
-  const actions = useMemo(() => runtime.read(actionsFacet), [runtime])
+  const actions = useMemo(() => getEffectiveActions(runtime), [runtime])
   const contextConfigs = useMemo(() => runtime.read(actionContextsFacet), [runtime])
   const contextConfigsByType = useMemo<ReadonlyMap<ActionContextType, ActionContextConfig>>(
     () => new Map(contextConfigs.map(c => [c.type, c])),
@@ -91,17 +96,12 @@ export function HotkeyReconciler(): null {
   // always current. Torn down on unmount so stray callers fail loudly.
   useEffect(() => {
     setRunActionDispatcher((actionId: string, trigger: ActionTrigger) => {
-      const currentActions = runtime.read(actionsFacet)
-      const action = currentActions.find(a => a.id === actionId)
+      const action = getActiveActionById(getEffectiveActions(runtime), activeRef.current, actionId)
       if (!action) {
-        throw new Error(`[HotkeyReconciler] Action with ID "${actionId}" not found.`)
+        throw new Error(`[HotkeyReconciler] Active action with ID "${actionId}" not found.`)
       }
       const deps = activeRef.current.get(action.context)
-      if (!deps) {
-        throw new Error(
-          `[HotkeyReconciler] Cannot run action "${actionId}". Context "${action.context}" is not active.`,
-        )
-      }
+      if (!deps) throw new Error(`[HotkeyReconciler] Context "${action.context}" is not active.`)
       return action.handler(deps, trigger)
     })
     return () => setRunActionDispatcher(null)
@@ -140,9 +140,10 @@ export function HotkeyReconciler(): null {
     for (const action of actions) {
       if (!action.defaultBinding) continue
       if (!active.has(action.context)) continue
-      desiredActionIds.add(action.id)
+      const actionKey = actionRuntimeKey(action)
+      desiredActionIds.add(actionKey)
 
-      if (state.byActionId.has(action.id)) continue
+      if (state.byActionId.has(actionKey)) continue
 
       const binding: ShortcutBinding = {
         ...action.defaultBinding,
@@ -152,7 +153,7 @@ export function HotkeyReconciler(): null {
       const handler = makeHandler(action, binding, activeRef, contextConfigsByTypeRef)
 
       for (const key of keys) hotkeys(key, handler)
-      state.byActionId.set(action.id, {keys, handler})
+      state.byActionId.set(actionKey, {keys, handler})
     }
 
     // Uninstall actions whose context deactivated (or that disappeared).

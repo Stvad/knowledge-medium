@@ -128,6 +128,18 @@ export interface Action<T extends ActionContextType = ActionContextType> {
 
 export type ActionConfig<T extends ActionContextType = ActionContextType> = Action<T>
 
+export interface ActionOverride<T extends ActionContextType = ActionContextType> {
+  actionId: string;
+  context?: T;
+  apply: (action: ActionConfig<T>) => ActionConfig<T> | null;
+}
+
+export interface ActionDecorator<T extends ActionContextType = ActionContextType> {
+  actionId: string;
+  context?: T;
+  decorate: (action: ActionConfig<T>) => ActionConfig<T>;
+}
+
 
 export interface ShortcutBinding {
   action: string;

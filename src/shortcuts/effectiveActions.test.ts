@@ -1,0 +1,156 @@
+import { describe, expect, it, vi } from 'vitest'
+import {
+  actionDecoratorsFacet,
+  actionOverridesFacet,
+  actionsFacet,
+} from '@/extensions/core.ts'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+import {
+  ActionConfig,
+  ActionContextTypes,
+  type BlockShortcutDependencies,
+} from '@/shortcuts/types.ts'
+
+const baseAction = (overrides: Partial<ActionConfig> = {}): ActionConfig => ({
+  id: 'test.action',
+  description: 'Base action',
+  context: ActionContextTypes.NORMAL_MODE,
+  handler: vi.fn(),
+  defaultBinding: {keys: 'x'},
+  ...overrides,
+} as ActionConfig)
+
+describe('getEffectiveActions', () => {
+  it('decorates a matching action handler without changing the raw action registry', async () => {
+    const calls: string[] = []
+    const action = baseAction({
+      handler: async () => {
+        calls.push('base')
+      },
+    })
+    const runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(action),
+      actionDecoratorsFacet.of({
+        actionId: action.id,
+        context: ActionContextTypes.NORMAL_MODE,
+        decorate: current => ({
+          ...current,
+          handler: async (deps, trigger) => {
+            calls.push('before')
+            await current.handler(deps as never, trigger)
+            calls.push('after')
+          },
+        }),
+      }),
+    ])
+
+    const effective = getEffectiveActions(runtime)
+    await effective[0].handler({} as BlockShortcutDependencies, {} as KeyboardEvent)
+
+    expect(runtime.read(actionsFacet)[0]).toBe(action)
+    expect(calls).toEqual(['before', 'base', 'after'])
+  })
+
+  it('applies lower-precedence decorators innermost and higher-precedence decorators outermost', async () => {
+    const calls: string[] = []
+    const action = baseAction({
+      handler: async () => {
+        calls.push('base')
+      },
+    })
+    const runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(action),
+      actionDecoratorsFacet.of({
+        actionId: action.id,
+        decorate: current => ({
+          ...current,
+          handler: async (deps, trigger) => {
+            calls.push('low-before')
+            await current.handler(deps as never, trigger)
+            calls.push('low-after')
+          },
+        }),
+      }, {precedence: 0}),
+      actionDecoratorsFacet.of({
+        actionId: action.id,
+        decorate: current => ({
+          ...current,
+          handler: async (deps, trigger) => {
+            calls.push('high-before')
+            await current.handler(deps as never, trigger)
+            calls.push('high-after')
+          },
+        }),
+      }, {precedence: 10}),
+    ])
+
+    await getEffectiveActions(runtime)[0].handler({} as BlockShortcutDependencies, {} as KeyboardEvent)
+
+    expect(calls).toEqual([
+      'high-before',
+      'low-before',
+      'base',
+      'low-after',
+      'high-after',
+    ])
+  })
+
+  it('lets overrides replace metadata and remove actions', () => {
+    const kept = baseAction()
+    const removed = baseAction({id: 'test.removed'})
+    const runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(kept),
+      actionsFacet.of(removed),
+      actionOverridesFacet.of({
+        actionId: kept.id,
+        apply: action => ({
+          ...action,
+          description: 'Overridden action',
+          defaultBinding: {keys: 'y'},
+        }),
+      }),
+      actionOverridesFacet.of({
+        actionId: removed.id,
+        apply: () => null,
+      }),
+    ])
+
+    expect(getEffectiveActions(runtime).map(action => ({
+      id: action.id,
+      description: action.description,
+      binding: action.defaultBinding?.keys,
+    }))).toEqual([{
+      id: kept.id,
+      description: 'Overridden action',
+      binding: 'y',
+    }])
+  })
+
+  it('matches context-specific decorators only against that action context', async () => {
+    const normal = baseAction({
+      handler: async () => undefined,
+    })
+    const edit = baseAction({
+      context: ActionContextTypes.EDIT_MODE_CM,
+      handler: async () => undefined,
+    })
+    const runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(normal),
+      actionsFacet.of(edit),
+      actionDecoratorsFacet.of({
+        actionId: normal.id,
+        context: ActionContextTypes.EDIT_MODE_CM,
+        decorate: action => ({
+          ...action,
+          description: 'Decorated edit action',
+        }),
+      }),
+    ])
+
+    expect(getEffectiveActions(runtime).map(action => action.description)).toEqual([
+      'Base action',
+      'Decorated edit action',
+    ])
+  })
+})

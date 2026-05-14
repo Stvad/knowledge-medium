@@ -4,8 +4,8 @@ import { MoreHorizontal } from 'lucide-react'
 import { useIsMobile } from '@/utils/react.tsx'
 import { useUIStateBlock } from '@/data/globalState'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { actionsFacet } from '@/extensions/core.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import type { ActionConfig, ActionIcon } from '@/shortcuts/types.ts'
 import { topLevelBlockIdProp } from '@/data/properties.ts'
 import {
@@ -97,7 +97,7 @@ const useAnchorRect = (
 
 interface ResolvedQuickAction {
   item: QuickActionItem
-  /** The matched action from `actionsFacet`, or undefined if unknown
+  /** The matched effective action, or undefined if unknown
    *  (mis-configured plugin reference). The button still renders so the
    *  miss is visible — clicking surfaces the same console error. */
   action: ActionConfig | undefined
@@ -220,7 +220,7 @@ export const SwipeActionMenu = () => {
   // Resolve action metadata once per runtime — the registries are stable
   // across renders so this is effectively a one-time lookup that lets
   // every render re-use the same icon / label.
-  const allActions = runtime.read(actionsFacet)
+  const allActions = getEffectiveActions(runtime)
   const actionItems = runtime.read(quickActionItemsFacet)
   // Filter via the referenced action's `canRun` (the swipe surface is
   // presentational — semantic availability lives on the action). The

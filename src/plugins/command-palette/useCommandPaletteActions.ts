@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
+import { actionContextsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
+import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import type {
   ActionConfig,
   ActionContextType,
@@ -13,7 +14,7 @@ import { COMMAND_PALETTE_ACTION_ID } from './context.ts'
 export interface CommandPaletteActionsResult {
   actions: readonly ActionConfig[]
   activeContexts: ActiveContextInfo[]
-  bindingsFor: (actionId: string) => readonly ShortcutBinding[]
+  bindingsFor: (action: Pick<ActionConfig, 'context' | 'id'>) => readonly ShortcutBinding[]
 }
 
 const NO_BINDINGS: readonly ShortcutBinding[] = []
@@ -28,24 +29,24 @@ export function useCommandPaletteActions(): CommandPaletteActionsResult {
       contextConfigs.map(c => [c.type, c]),
     )
 
-    const allActions = runtime.read(actionsFacet)
+    const allActions = getEffectiveActions(runtime)
     const bindingsByActionId = new Map<string, ShortcutBinding[]>()
     for (const action of allActions) {
       if (!action.defaultBinding) continue
-      bindingsByActionId.set(action.id, [{
+      bindingsByActionId.set(actionRuntimeKey(action), [{
         ...action.defaultBinding,
         action: action.id,
       }])
     }
 
-    const getBindings = (actionId: string): readonly ShortcutBinding[] =>
-      bindingsByActionId.get(actionId) ?? NO_BINDINGS
+    const getBindings = (action: Pick<ActionConfig, 'context' | 'id'>): readonly ShortcutBinding[] =>
+      bindingsByActionId.get(actionRuntimeKey(action)) ?? NO_BINDINGS
 
     return {contextConfigsByType: configsByType, bindingsFor: getBindings}
   }, [runtime])
 
   return useMemo(() => {
-    const allActions = runtime.read(actionsFacet)
+    const allActions = getEffectiveActions(runtime)
 
     const actions = allActions.filter(action => {
       if (!active.has(action.context)) return false
