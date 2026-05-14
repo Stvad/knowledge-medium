@@ -23,6 +23,7 @@ import { srsReschedulingDataExtension } from './dataExtension.ts'
 import {
   SRS_SM25_TYPE,
   type SrsReviewSnapshot,
+  srsArchivedProp,
   srsFactorProp,
   srsGradeProp,
   srsIntervalProp,
@@ -30,6 +31,7 @@ import {
   srsReviewCountProp,
   srsSnapshotHistoryProp,
 } from './schema.ts'
+import { srsBarClass, srsIndicatorTitle } from './indicator.ts'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
@@ -185,9 +187,14 @@ const srsQuickActionItems = srsSignals.map(signal => ({
 const srsContentSurfaceDecoration: BlockContentSurfaceContribution = ({block}) => {
   const data = block.peek()
   if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return null
+  const indicatorState = {
+    interval: readProperty(data.properties, srsIntervalProp, DEFAULT_INTERVAL),
+    reviewCount: readProperty(data.properties, srsReviewCountProp, 0),
+    archived: readProperty(data.properties, srsArchivedProp, false),
+  }
   return {
-    className: 'srs-review-block border-l-2 border-primary/40 pl-2 before:mr-1 before:text-[10px] before:font-semibold before:uppercase before:tracking-wide before:text-primary/70 before:content-["srs"]',
-    title: 'Space Repetition block (SM-2.5 metadata present)',
+    className: srsBarClass(indicatorState),
+    title: srsIndicatorTitle(indicatorState),
   }
 }
 
