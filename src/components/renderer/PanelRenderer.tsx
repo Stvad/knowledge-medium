@@ -133,9 +133,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
   }
 
   return (
-    <div className={`panel min-w-0 max-w-full flex flex-col relative ${
-      stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
-    }`}>
+    <div
+      data-panel-id={block.id}
+      className={`panel min-w-0 max-w-full flex flex-col relative ${
+        stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
+      }`}
+    >
       <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
         <Button
           variant="ghost"

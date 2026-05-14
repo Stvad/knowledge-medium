@@ -69,6 +69,7 @@ import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
 import { showProgress } from '@/utils/toast.ts'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
 import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
+import { stepInDirection, type Direction } from '@/utils/spatialNavigation.ts'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -238,12 +239,76 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     },
   }
 
+  /** Geometric focus move: pick the on-screen block visually adjacent
+   *  to the current anchor (DOM activeElement, falling back to the
+   *  active panel's focused block) in `dir`. Commits the new focus to
+   *  both the target panel's UIStateBlock and the layout-session's
+   *  activePanelIdProp, and calls `element.focus()` so DOM focus
+   *  follows immediately. */
+  const moveFocusDirectional = (dir: Direction): BlockAction => ({
+    id: `move_focus_${dir}`,
+    description: `Move focus ${dir}`,
+    handler: async ({uiStateBlock}: BlockShortcutDependencies) => {
+      if (typeof document === 'undefined') return
+      const focusedBlockId = uiStateBlock.peekProperty(focusedBlockIdProp)
+      const fallback = focusedBlockId
+        ? {panelId: uiStateBlock.id, blockId: focusedBlockId}
+        : null
+      const result = stepInDirection(document, dir, fallback)
+      if (!result) return
+
+      // Commit focus state. If the winning candidate lives in a
+      // different panel, also flip activePanelIdProp on the
+      // layout-session block so subsequent global actions (new node,
+      // close panel) target the new panel.
+      const targetPanelId = result.panelId
+      if (targetPanelId && targetPanelId !== uiStateBlock.id) {
+        const layoutSessionBlock = await getLayoutSessionBlock(
+          uiStateBlock,
+          getLayoutSessionId(),
+        )
+        await layoutSessionBlock.load()
+        if (layoutSessionBlock.peekProperty(activePanelIdProp) !== targetPanelId) {
+          await layoutSessionBlock.set(activePanelIdProp, targetPanelId)
+        }
+        const targetPanelBlock = repo.block(targetPanelId)
+        await targetPanelBlock.load()
+        await targetPanelBlock.set(focusedBlockIdProp, result.blockId)
+      } else {
+        setFocusedBlockId(uiStateBlock, result.blockId)
+      }
+
+      result.element.focus({preventScroll: false})
+    },
+  })
+
+  const moveFocusUpAction: BlockAction = {
+    ...moveFocusDirectional('up'),
+    defaultBinding: {keys: 'k', eventOptions: {preventDefault: true}},
+  }
+  const moveFocusDownAction: BlockAction = {
+    ...moveFocusDirectional('down'),
+    defaultBinding: {keys: 'j', eventOptions: {preventDefault: true}},
+  }
+  const moveFocusLeftAction: BlockAction = {
+    ...moveFocusDirectional('left'),
+    defaultBinding: {keys: 'h', eventOptions: {preventDefault: true}},
+  }
+  const moveFocusRightAction: BlockAction = {
+    ...moveFocusDirectional('right'),
+    defaultBinding: {keys: 'l', eventOptions: {preventDefault: true}},
+  }
+
   const normalModeActions: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] = [
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomInBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, zoomOutBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, openFocusedInPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, closeCurrentPanelBlock),
     bindBlockActionContext(ActionContextTypes.NORMAL_MODE, insertExampleExtensionsBlock),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveFocusUpAction),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveFocusDownAction),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveFocusLeftAction),
+    bindBlockActionContext(ActionContextTypes.NORMAL_MODE, moveFocusRightAction),
     copyBlockAction,
     copyBlockRefAction,
     copyBlockEmbedAction,
