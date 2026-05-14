@@ -38,7 +38,9 @@ Commands:
   yarn agent ping
   yarn agent status
   yarn agent runtime-summary      show compact agent-oriented runtime context
-  yarn agent describe-runtime [--actions <text>] [--facets <text>]
+  yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>]
+                               [--modules <text>] [--components <text>] [--storage]
+                               [--scheduled-tasks [text]]
                                   show full or targeted runtime diagnostics
   yarn agent sql <all|get|optional|execute> <sql> [paramsJson]
   yarn agent get-block <id>
@@ -70,13 +72,27 @@ const parseJson = (value, label) => {
 }
 
 const parseDescribeRuntimeArgs = args => {
-  const filters = {actions: [], facets: []}
+  const filters = {
+    actions: [],
+    facets: [],
+    guides: [],
+    modules: [],
+    components: [],
+    scheduledTasks: [],
+    storage: false,
+  }
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
     const readValue = flag => {
       const value = args[i + 1]
       if (!value) throw new Error(`${flag} requires a value`)
+      i += 1
+      return value
+    }
+    const readOptionalValue = () => {
+      const value = args[i + 1]
+      if (!value || value.startsWith('--')) return null
       i += 1
       return value
     }
@@ -97,6 +113,47 @@ const parseDescribeRuntimeArgs = args => {
       filters.facets.push(arg.slice('--facets='.length))
       continue
     }
+    if (arg === '--guide' || arg === '--guides') {
+      filters.guides.push(readValue(arg))
+      continue
+    }
+    if (arg.startsWith('--guide=')) {
+      filters.guides.push(arg.slice('--guide='.length))
+      continue
+    }
+    if (arg.startsWith('--guides=')) {
+      filters.guides.push(arg.slice('--guides='.length))
+      continue
+    }
+    if (arg === '--modules') {
+      filters.modules.push(readValue(arg))
+      continue
+    }
+    if (arg.startsWith('--modules=')) {
+      filters.modules.push(arg.slice('--modules='.length))
+      continue
+    }
+    if (arg === '--components') {
+      filters.components.push(readValue(arg))
+      continue
+    }
+    if (arg.startsWith('--components=')) {
+      filters.components.push(arg.slice('--components='.length))
+      continue
+    }
+    if (arg === '--storage') {
+      filters.storage = true
+      continue
+    }
+    if (arg === '--scheduled-tasks') {
+      const value = readOptionalValue()
+      if (value) filters.scheduledTasks.push(value)
+      continue
+    }
+    if (arg.startsWith('--scheduled-tasks=')) {
+      filters.scheduledTasks.push(arg.slice('--scheduled-tasks='.length))
+      continue
+    }
 
     throw new Error(`Unknown describe-runtime option: ${arg}`)
   }
@@ -104,6 +161,11 @@ const parseDescribeRuntimeArgs = args => {
   return {
     ...(filters.actions.length > 0 ? {actions: filters.actions} : {}),
     ...(filters.facets.length > 0 ? {facets: filters.facets} : {}),
+    ...(filters.guides.length > 0 ? {guides: filters.guides} : {}),
+    ...(filters.modules.length > 0 ? {modules: filters.modules} : {}),
+    ...(filters.components.length > 0 ? {components: filters.components} : {}),
+    ...(filters.scheduledTasks.length > 0 ? {scheduledTasks: filters.scheduledTasks} : {}),
+    ...(filters.storage ? {storage: true} : {}),
   }
 }
 

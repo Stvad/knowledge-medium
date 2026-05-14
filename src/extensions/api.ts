@@ -45,6 +45,7 @@ export {
   createRendererRegistry,
   headerItemsFacet,
   panelMountsFacet,
+  scheduledTasksFacet,
   type AppEffect,
   type AppEffectCleanup,
   type AppEffectContext,
@@ -53,6 +54,10 @@ export {
   type HeaderItemRegion,
   type PanelMountContribution,
   type RendererContribution,
+  type ScheduledTaskConcurrency,
+  type ScheduledTaskContribution,
+  type ScheduledTaskContext,
+  type ScheduledTaskSchedule,
 } from '@/extensions/core.ts'
 
 // DefaultBlockRenderer (the default block chrome — bullet, children,
@@ -122,7 +127,7 @@ export {
 // --- Block / data primitives ---
 export { Block } from '../data/block'
 export { Repo } from '../data/repo'
-export { getLayoutSessionBlock } from '@/data/globalState.ts'
+export { getLayoutSessionBlock, getUserBlock, getUserPrefsBlock } from '@/data/globalState.ts'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.
 export { defineBlockType, defineProperty, definePropertyEditorOverride, codecs, ChangeScope } from '@/data/api'

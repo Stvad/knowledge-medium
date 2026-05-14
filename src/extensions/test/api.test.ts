@@ -19,6 +19,7 @@ describe('@/extensions/api — public surface', () => {
     'appMountsFacet',
     'blockRenderersFacet',
     'headerItemsFacet',
+    'scheduledTasksFacet',
     // Block-interaction facets
     'blockChildrenFooterFacet',
     'blockClickHandlersFacet',
@@ -38,6 +39,8 @@ describe('@/extensions/api — public surface', () => {
     // Block / data primitives
     'Block',
     'Repo',
+    'getUserBlock',
+    'getUserPrefsBlock',
     // PropertySchema authoring surface (replaces legacy boolProp /
     // numberProperty / stringProperty / uiChangeScope)
     'defineBlockType',

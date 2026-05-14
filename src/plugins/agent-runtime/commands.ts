@@ -42,6 +42,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isStringArray = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every(isString)
 
+const optionalStringArray = (value: unknown): string[] | undefined =>
+  isStringArray(value) ? value : undefined
+
 const isBlockPosition = (value: unknown): value is BlockPosition =>
   value === undefined ||
   value === 'first' ||
@@ -487,6 +490,11 @@ export const executeCommand = async (
       return describeRuntime(context, {
         actions: isStringArray(command.actions) ? command.actions : undefined,
         facets: isStringArray(command.facets) ? command.facets : undefined,
+        guides: optionalStringArray(command.guides ?? command.guide),
+        modules: optionalStringArray(command.modules),
+        components: optionalStringArray(command.components),
+        scheduledTasks: optionalStringArray(command.scheduledTasks),
+        storage: command.storage === true,
       })
 
     case 'sql': {

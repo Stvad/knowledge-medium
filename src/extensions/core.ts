@@ -50,6 +50,37 @@ export interface AppEffect {
   ) => void | AppEffectCleanup | Promise<void | AppEffectCleanup>
 }
 
+export type ScheduledTaskConcurrency = 'skip' | 'queue' | 'replace'
+
+export type ScheduledTaskSchedule =
+  | {
+      type: 'interval'
+      everyMs: number
+      runOnStart?: boolean
+    }
+  | {
+      type: 'daily'
+      time: string
+      timezone?: string
+    }
+  | {
+      type: 'cron'
+      expression: string
+      timezone?: string
+    }
+
+export interface ScheduledTaskContext extends AppEffectContext {
+  signal?: AbortSignal
+}
+
+export interface ScheduledTaskContribution {
+  id: string
+  description: string
+  schedule: ScheduledTaskSchedule
+  run: (context: ScheduledTaskContext) => void | Promise<void>
+  concurrency?: ScheduledTaskConcurrency
+}
+
 export interface AppMountContribution {
   id: string
   component: ComponentType
@@ -107,6 +138,41 @@ const isShortcutBindingInput = (value: unknown): value is NonNullable<ActionConf
   isShortcutKeys(value.keys) &&
   (value.eventOptions === undefined || isRecord(value.eventOptions))
 
+const isPositiveNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0
+
+const isScheduledTaskSchedule = (value: unknown): value is ScheduledTaskSchedule => {
+  if (!isRecord(value) || typeof value.type !== 'string') return false
+
+  if (value.type === 'interval') {
+    return isPositiveNumber(value.everyMs) &&
+      (value.runOnStart === undefined || typeof value.runOnStart === 'boolean')
+  }
+
+  if (value.type === 'daily') {
+    return typeof value.time === 'string' &&
+      (value.timezone === undefined || typeof value.timezone === 'string')
+  }
+
+  if (value.type === 'cron') {
+    return typeof value.expression === 'string' &&
+      (value.timezone === undefined || typeof value.timezone === 'string')
+  }
+
+  return false
+}
+
+const isScheduledTaskConcurrency = (value: unknown): value is ScheduledTaskConcurrency =>
+  value === 'skip' || value === 'queue' || value === 'replace'
+
+export const isScheduledTaskContribution = (value: unknown): value is ScheduledTaskContribution =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.description === 'string' &&
+  isScheduledTaskSchedule(value.schedule) &&
+  typeof value.run === 'function' &&
+  (value.concurrency === undefined || isScheduledTaskConcurrency(value.concurrency))
+
 export const isActionConfig = (value: unknown): value is ActionConfig =>
   isRecord(value) &&
   typeof value.id === 'string' &&
@@ -150,6 +216,11 @@ export const isAppEffect = (value: unknown): value is AppEffect =>
 export const appEffectsFacet = defineFacet<AppEffect, readonly AppEffect[]>({
   id: 'core.app-effects',
   validate: isAppEffect,
+})
+
+export const scheduledTasksFacet = defineFacet<ScheduledTaskContribution, readonly ScheduledTaskContribution[]>({
+  id: 'core.scheduled-tasks',
+  validate: isScheduledTaskContribution,
 })
 
 export const isAppMountContribution = (value: unknown): value is AppMountContribution =>

@@ -1,6 +1,15 @@
 import { FacetRuntime } from '@/extensions/facet.ts'
+import {
+  scheduledTasksFacet,
+  type ScheduledTaskContribution,
+  type ScheduledTaskSchedule,
+} from '@/extensions/core.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
 import { Repo } from '@/data/repo'
+import {
+  describeAuthoringCatalog,
+  type AuthoringCatalog,
+} from './authoringCatalog.ts'
 
 export interface DescribeRuntimeContext {
   repo: Repo
@@ -8,6 +17,7 @@ export interface DescribeRuntimeContext {
   safeMode: boolean
   actions: readonly ActionConfig[]
   renderers: Record<string, unknown>
+  document?: Document
 }
 
 export interface FacetContributionSummary {
@@ -40,11 +50,18 @@ export interface RuntimeDescription {
   renderers: string[]
   facets: FacetSummary[]
   apiSurface: ApiSurfaceSummary
+  authoring: AuthoringCatalog
+  scheduledTasks: ScheduledTaskSummary[]
 }
 
 export interface RuntimeDescriptionFilters {
   actions?: string[]
   facets?: string[]
+  guides?: string[]
+  modules?: string[]
+  components?: string[]
+  scheduledTasks?: string[]
+  storage?: boolean
 }
 
 export interface RuntimePing {
@@ -90,11 +107,32 @@ export interface RuntimeSummary {
       exportCount: number
       examples: string[]
     }
+    authoring: {
+      guideCount: number
+      moduleCount: number
+      componentCount: number
+      guides: string[]
+    }
+    scheduledTasks: {
+      count: number
+      examples: Array<{
+        id: string
+        description: string
+        schedule: string
+      }>
+    }
   }
   more: Array<{
     need: string
     command: string
   }>
+}
+
+export interface ScheduledTaskSummary {
+  id: string
+  description: string
+  schedule: string
+  concurrency: NonNullable<ScheduledTaskContribution['concurrency']>
 }
 
 const runtimeCommandHints = {
@@ -112,7 +150,7 @@ const runtimeCommandHints = {
   ],
   diagnostics: [
     'yarn agent status',
-    'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
+    'yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage] [--scheduled-tasks [text]]',
     'yarn agent raw <json>',
   ],
 }
@@ -201,6 +239,29 @@ const summarizeFacetCounts = (runtime: FacetRuntime) => {
   }
 }
 
+const summarizeSchedule = (schedule: ScheduledTaskSchedule): string => {
+  if (schedule.type === 'interval') {
+    return `interval every ${schedule.everyMs}ms${schedule.runOnStart ? ' with runOnStart' : ''}`
+  }
+  if (schedule.type === 'daily') {
+    return `daily at ${schedule.time}${schedule.timezone ? ` ${schedule.timezone}` : ''}`
+  }
+  return `cron ${schedule.expression}${schedule.timezone ? ` ${schedule.timezone}` : ''}`
+}
+
+export const describeScheduledTasks = (
+  runtime: FacetRuntime,
+  filters?: string[],
+): ScheduledTaskSummary[] =>
+  runtime.read(scheduledTasksFacet)
+    .filter(task => matchesAnyFilter(filters, task.id, task.description, summarizeSchedule(task.schedule)))
+    .map(task => ({
+      id: task.id,
+      description: task.description,
+      schedule: summarizeSchedule(task.schedule),
+      concurrency: task.concurrency ?? 'skip',
+    }))
+
 // Curated public surface for extension authors. Memoize once per
 // session — `Object.keys` of an ESM module is constant.
 let cachedApiSurface: ApiSurfaceSummary | null = null
@@ -223,23 +284,33 @@ export const __resetApiSurfaceCacheForTest = () => {
 export const describeRuntime = async (
   context: DescribeRuntimeContext,
   filters: RuntimeDescriptionFilters = {},
-): Promise<RuntimeDescription> => ({
-  activeWorkspaceId: context.repo.activeWorkspaceId,
-  currentUser: context.repo.user,
-  safeMode: context.safeMode,
-  actions: context.actions
-    .filter(action => matchesAnyFilter(filters.actions, action.id, action.description, action.context))
-    .map(action => ({
-      id: action.id,
-      description: action.description,
-      context: action.context,
-      hasDefaultBinding: Boolean(action.defaultBinding),
-    })),
-  renderers: Object.keys(context.renderers),
-  facets: describeFacets(context.runtime)
-    .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
-  apiSurface: await getApiSurface(),
-})
+): Promise<RuntimeDescription> => {
+  const apiSurface = await getApiSurface()
+
+  return {
+    activeWorkspaceId: context.repo.activeWorkspaceId,
+    currentUser: context.repo.user,
+    safeMode: context.safeMode,
+    actions: context.actions
+      .filter(action => matchesAnyFilter(filters.actions, action.id, action.description, action.context))
+      .map(action => ({
+        id: action.id,
+        description: action.description,
+        context: action.context,
+        hasDefaultBinding: Boolean(action.defaultBinding),
+      })),
+    renderers: Object.keys(context.renderers),
+    facets: describeFacets(context.runtime)
+      .filter(facet => matchesAnyFilter(filters.facets, facet.id)),
+    apiSurface,
+    authoring: describeAuthoringCatalog(apiSurface, {
+      guides: filters.guides,
+      modules: filters.modules,
+      components: filters.components,
+    }, context.document),
+    scheduledTasks: describeScheduledTasks(context.runtime, filters.scheduledTasks),
+  }
+}
 
 export const pingRuntime = (context: DescribeRuntimeContext): RuntimePing => ({
   ok: true,
@@ -253,6 +324,8 @@ export const describeRuntimeSummary = async (
 ): Promise<RuntimeSummary> => {
   const apiSurface = await getApiSurface()
   const renderers = Object.keys(context.renderers)
+  const authoring = describeAuthoringCatalog(apiSurface, {}, context.document)
+  const scheduledTasks = describeScheduledTasks(context.runtime)
 
   return {
     activeWorkspaceId: context.repo.activeWorkspaceId,
@@ -279,11 +352,37 @@ export const describeRuntimeSummary = async (
         exportCount: apiSurface.exports.length,
         examples: apiSurface.exports.slice(0, 10),
       },
+      authoring: {
+        guideCount: authoring.guides.length,
+        moduleCount: authoring.modules.length,
+        componentCount: authoring.components.length,
+        guides: authoring.guides.map(guide => guide.id),
+      },
+      scheduledTasks: {
+        count: scheduledTasks.length,
+        examples: scheduledTasks.slice(0, 5).map(task => ({
+          id: task.id,
+          description: task.description,
+          schedule: task.schedule,
+        })),
+      },
     },
     more: [
       {
         need: 'Full runtime diagnostic dump with action, facet, renderer, and API export details',
         command: 'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
+      },
+      {
+        need: 'Guided extension authoring paths for sync plugins, dialogs, block-backed config, and scheduled tasks',
+        command: 'yarn agent describe-runtime --guide external-sync-plugin --storage',
+      },
+      {
+        need: 'Discover extension-safe modules and UI components',
+        command: 'yarn agent describe-runtime --modules dialog --components dialog,input,button',
+      },
+      {
+        need: 'Scheduled task contributions currently active in the app runtime',
+        command: 'yarn agent describe-runtime --scheduled-tasks',
       },
       {
         need: 'Bridge clients and pending command queue',

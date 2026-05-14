@@ -18,6 +18,7 @@ import { defineFacet, resolveFacetRuntime } from '@/extensions/facet.ts'
 import '@/extensions/api.ts'
 import type { Repo } from '@/data/repo'
 import type { ActionConfig } from '@/shortcuts/types.ts'
+import { scheduledTasksFacet } from '@/extensions/core.ts'
 
 beforeEach(() => {
   __resetApiSurfaceCacheForTest()
@@ -95,6 +96,8 @@ describe('getApiSurface', () => {
     expect(surface.exports).toContain('defineFacet')
     expect(surface.exports).toContain('actionsFacet')
     expect(surface.exports).toContain('blockRenderersFacet')
+    expect(surface.exports).toContain('scheduledTasksFacet')
+    expect(surface.exports).toContain('getUserPrefsBlock')
   })
 
   it('memoizes — subsequent calls return the same array reference', async () => {
@@ -184,14 +187,24 @@ describe('describeRuntime', () => {
     })
     expect(summary.capabilities.apiSurface.module).toBe('@/extensions/api')
     expect(summary.capabilities.apiSurface.exportCount).toBeGreaterThan(0)
+    expect(summary.capabilities.authoring.guides).toContain('external-sync-plugin')
+    expect(summary.capabilities.authoring.moduleCount).toBeGreaterThan(0)
+    expect(summary.capabilities.authoring.componentCount).toBeGreaterThan(0)
+    expect(summary.capabilities.scheduledTasks).toEqual({count: 0, examples: []})
     expect(summary.more.map(hint => hint.command)).toContain('yarn agent status')
     expect(JSON.stringify(summary)).not.toContain('valueSummary')
   })
 
-  it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface', async () => {
+  it('produces a payload with activeWorkspaceId, currentUser, safeMode, actions, renderers, facets, apiSurface, authoring, scheduledTasks', async () => {
     const facet = defineFacet({id: 'desc.full'})
     const runtime = await resolveFacetRuntime([
       facet.of('contribution', {source: 'src-1'}),
+      scheduledTasksFacet.of({
+        id: 'readwise.sync',
+        description: 'Sync Readwise highlights',
+        schedule: {type: 'interval', everyMs: 3_600_000, runOnStart: true},
+        run: () => {},
+      }),
     ])
 
     const description = await describeRuntime({
@@ -221,14 +234,29 @@ describe('describeRuntime', () => {
 
     expect(description.apiSurface.module).toBe('@/extensions/api')
     expect(description.apiSurface.exports).toContain('defineFacet')
+    expect(description.authoring.guides.map(guide => guide.id)).toContain('external-sync-plugin')
+    expect(description.authoring.modules.some(module => module.importPath === '@/extensions/api.js')).toBe(true)
+    expect(description.authoring.components.some(component => component.importPath === '@/components/ui/dialog.js')).toBe(true)
+    expect(description.scheduledTasks).toEqual([{
+      id: 'readwise.sync',
+      description: 'Sync Readwise highlights',
+      schedule: 'interval every 3600000ms with runOnStart',
+      concurrency: 'skip',
+    }])
   })
 
-  it('filters full diagnostics by action and facet text', async () => {
+  it('filters full diagnostics by action, facet, authoring, and scheduled task text', async () => {
     const readwiseFacet = defineFacet({id: 'data.propertySchemas'})
     const otherFacet = defineFacet({id: 'core.actions'})
     const runtime = await resolveFacetRuntime([
       readwiseFacet.of({name: 'readwise:book-id'}),
       otherFacet.of('other'),
+      scheduledTasksFacet.of({
+        id: 'readwise.sync',
+        description: 'Sync Readwise highlights',
+        schedule: {type: 'cron', expression: '0 * * * *'},
+        run: () => {},
+      }),
     ])
 
     const description = await describeRuntime({
@@ -243,10 +271,61 @@ describe('describeRuntime', () => {
     }, {
       actions: ['user.readwise'],
       facets: ['data.propertySchemas'],
+      guides: ['external-sync-plugin'],
+      modules: ['dialog'],
+      components: ['input'],
+      scheduledTasks: ['readwise'],
     })
 
     expect(description.actions.map(action => action.id)).toEqual(['user.readwise.sync-now'])
     expect(description.facets.map(facet => facet.id)).toEqual(['data.propertySchemas'])
+    expect(description.authoring.guides.map(guide => guide.id)).toEqual(['external-sync-plugin'])
+    expect(description.authoring.modules.every(module =>
+      [module.importPath, module.category, module.description].join(' ').toLowerCase().includes('dialog'),
+    )).toBe(true)
+    expect(description.authoring.components.map(component => component.name)).toEqual(['Token input'])
+    expect(description.scheduledTasks.map(task => task.id)).toEqual(['readwise.sync'])
+  })
+
+  it('includes modules discovered from the current document import map and module preload links', async () => {
+    const runtime = await resolveFacetRuntime([])
+    const doc = document.implementation.createHTMLDocument('agent runtime')
+    const base = doc.createElement('base')
+    base.href = 'http://example.test/'
+    doc.head.append(base)
+    const importMap = doc.createElement('script')
+    importMap.type = 'importmap'
+    importMap.textContent = JSON.stringify({
+      imports: {
+        '@/': './src/',
+        react: 'https://esm.sh/react@19.2.5?dev',
+      },
+    })
+    doc.head.append(importMap)
+    const preload = doc.createElement('link')
+    preload.rel = 'modulepreload'
+    preload.href = '/src/plugins/readwise/index.js'
+    doc.head.append(preload)
+
+    const description = await describeRuntime({
+      repo: fakeRepo,
+      runtime,
+      safeMode: false,
+      actions: [],
+      renderers: {},
+      document: doc,
+    }, {
+      modules: ['readwise'],
+    })
+
+    expect(description.authoring.modules).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          importPath: '@/plugins/readwise/index.js',
+          source: 'html-preload',
+        }),
+      ]),
+    )
   })
 
   it('reports safeMode=true when set', async () => {
