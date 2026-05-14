@@ -493,7 +493,6 @@ export const executeCommand = async (
         guides: optionalStringArray(command.guides ?? command.guide),
         modules: optionalStringArray(command.modules),
         components: optionalStringArray(command.components),
-        scheduledTasks: optionalStringArray(command.scheduledTasks),
         storage: command.storage === true,
       })
 

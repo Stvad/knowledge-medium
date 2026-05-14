@@ -1,4 +1,9 @@
-export type AuthoringCatalogSource = 'curated' | 'html-importmap' | 'html-preload' | 'html-entry'
+export type AuthoringCatalogSource =
+  | 'generated-api'
+  | 'generated-module-glob'
+  | 'html-importmap'
+  | 'html-preload'
+  | 'html-entry'
 
 export interface AuthoringModuleSummary {
   importPath: string
@@ -63,132 +68,24 @@ interface ApiSurfaceLike {
   exports: string[]
 }
 
-const curatedModules = (apiSurface: ApiSurfaceLike): AuthoringModuleSummary[] => [
-  {
-    importPath: '@/extensions/api.js',
-    category: 'public-api',
-    description: 'Curated extension authoring barrel for facets, actions, data primitives, codecs, block types, and user preference helpers.',
-    exports: apiSurface.exports,
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/ui/dialog.js',
-    category: 'ui-component',
-    description: 'Dialog primitives for setup/configuration flows. Prefer this over prompt/alert for plugin setup.',
-    exports: [
-      'Dialog',
-      'DialogContent',
-      'DialogDescription',
-      'DialogFooter',
-      'DialogHeader',
-      'DialogTitle',
-      'DialogTrigger',
-      'DialogClose',
-    ],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/ui/button.js',
-    category: 'ui-component',
-    description: 'System button component for command and dialog actions.',
-    exports: ['Button'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/ui/input.js',
-    category: 'ui-component',
-    description: 'System input component for short form fields such as tokens, URLs, and labels.',
-    exports: ['Input'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/ui/label.js',
-    category: 'ui-component',
-    description: 'System label component for accessible form fields.',
-    exports: ['Label'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/ui/checkbox.js',
-    category: 'ui-component',
-    description: 'System checkbox component for boolean settings.',
-    exports: ['Checkbox'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/ui/textarea.js',
-    category: 'ui-component',
-    description: 'System textarea component for longer configuration fields.',
-    exports: ['Textarea'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/data/globalState.js',
-    category: 'storage',
-    description: 'Block-backed per-user state helpers. Use getUserPrefsBlock for synced user preferences and plugin config pointers.',
-    exports: ['getUserBlock', 'getUserPrefsBlock', 'getLayoutSessionBlock'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/data/properties.js',
-    category: 'storage',
-    description: 'Kernel property descriptors such as aliases, types, renderer, and extension lifecycle properties.',
-    exports: ['aliasesProp', 'typesProp', 'rendererProp', 'extensionDisabledProp'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-  {
-    importPath: '@/components/renderer/DefaultBlockRenderer.js',
-    category: 'renderer',
-    description: 'Default block chrome. Import directly when a renderer should preserve bullets, children, properties, and edit affordances.',
-    exports: ['DefaultBlockRenderer'],
-    source: 'curated',
-    safeForExtensions: true,
-  },
-]
+type RuntimeModule = Record<string, unknown>
 
-const curatedComponents: AuthoringComponentSummary[] = [
-  {
-    name: 'Dialog setup form',
-    importPath: '@/components/ui/dialog.js',
-    category: 'dialog',
-    description: 'Use Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, and DialogFooter for guided setup flows.',
-    exports: ['Dialog', 'DialogContent', 'DialogHeader', 'DialogTitle', 'DialogDescription', 'DialogFooter', 'DialogClose'],
-    source: 'curated',
-  },
-  {
-    name: 'Token input',
-    importPath: '@/components/ui/input.js',
-    category: 'form',
-    description: 'Use Input with Label inside a dialog for credential setup. Do not ask for tokens through prompt().',
-    exports: ['Input'],
-    source: 'curated',
-  },
-  {
-    name: 'Action button',
-    importPath: '@/components/ui/button.js',
-    category: 'form',
-    description: 'Use Button for setup, save, cancel, and sync-now actions.',
-    exports: ['Button'],
-    source: 'curated',
-  },
-  {
-    name: 'Boolean setting',
-    importPath: '@/components/ui/checkbox.js',
-    category: 'form',
-    description: 'Use Checkbox for enabled/disabled flags and binary sync settings.',
-    exports: ['Checkbox'],
-    source: 'curated',
-  },
-]
+const internalModuleIndex = import.meta.glob([
+  '/src/components/**/*.{ts,tsx}',
+  '/src/data/**/*.{ts,tsx}',
+  '/src/extensions/**/*.{ts,tsx}',
+  '/src/hooks/**/*.{ts,tsx}',
+  '/src/markdown/**/*.{ts,tsx}',
+  '/src/plugins/**/*.{ts,tsx}',
+  '/src/shortcuts/**/*.{ts,tsx}',
+  '/src/utils/**/*.{ts,tsx}',
+  '!/src/**/*.test.{ts,tsx}',
+  '!/src/**/test/**/*.{ts,tsx}',
+])
+
+const eagerUiModules = import.meta.glob('/src/components/ui/*.{ts,tsx}', {
+  eager: true,
+}) as Record<string, RuntimeModule>
 
 const storageGuide: AuthoringStorageGuide = {
   principles: [
@@ -202,7 +99,7 @@ const storageGuide: AuthoringStorageGuide = {
       id: 'user-prefs-config',
       when: 'Per-user plugin settings, defaults, and lightweight sync checkpoints.',
       use: 'Import getUserPrefsBlock and define typed properties. Read/write them on the user prefs block with ChangeScope.UserPrefs.',
-      modules: ['@/extensions/api.js', '@/data/globalState.js'],
+      modules: ['@/extensions/api.js'],
     },
     {
       id: 'workspace-config-block',
@@ -227,7 +124,7 @@ const guides: AuthoringGuide[] = [
   {
     id: 'external-sync-plugin',
     title: 'External Sync Plugin',
-    when: ['imports external API data', 'needs setup/config', 'needs manual or scheduled sync'],
+    when: ['imports external API data', 'needs setup/config', 'needs manual sync'],
     principles: [
       'Use block-backed config and sync checkpoints.',
       'Use a setup dialog instead of prompt/alert.',
@@ -240,7 +137,6 @@ const guides: AuthoringGuide[] = [
       'Add a manual sync action through actionsFacet.',
       'Store non-secret settings and checkpoints on a user prefs or workspace config block.',
       'Upsert imported records as blocks and update existing blocks when the external id is already present.',
-      'If background sync is desired, contribute to scheduledTasksFacet and keep runtime state block-backed.',
     ],
     preferredModules: [
       '@/extensions/api.js',
@@ -248,9 +144,8 @@ const guides: AuthoringGuide[] = [
       '@/components/ui/input.js',
       '@/components/ui/button.js',
       '@/components/ui/label.js',
-      '@/data/globalState.js',
     ],
-    relatedFacets: ['core.actions', 'core.app-mounts', 'core.scheduled-tasks', 'data.propertySchemas'],
+    relatedFacets: ['core.actions', 'core.app-mounts', 'data.propertySchemas'],
     commands: [
       'yarn agent describe-runtime --guide external-sync-plugin',
       'yarn agent describe-runtime --components dialog,input,button,label',
@@ -297,32 +192,11 @@ const guides: AuthoringGuide[] = [
       'Store config on a deterministic block or user prefs block.',
       'Store large or user-visible imported data as child/content blocks.',
     ],
-    preferredModules: ['@/extensions/api.js', '@/data/globalState.js', '@/data/properties.js'],
+    preferredModules: ['@/extensions/api.js'],
     relatedFacets: ['data.propertySchemas', 'data.types'],
     commands: [
       'yarn agent describe-runtime --storage',
       'yarn agent describe-runtime --facets data.propertySchemas',
-    ],
-  },
-  {
-    id: 'scheduled-task',
-    title: 'Scheduled Task Contribution',
-    when: ['background sync', 'periodic refresh', 'cron-like plugin work'],
-    principles: [
-      'Use scheduledTasksFacet to declare task intent.',
-      'Store task enabled state, lastRunAt, cursors, and errors in blocks.',
-      'Make the task idempotent because the app may reload while work is pending.',
-    ],
-    steps: [
-      'Contribute a ScheduledTaskContribution with id, description, schedule, and run handler.',
-      'Expose a manual action for the same work so users and agents can run it directly.',
-      'Record sync checkpoints in block-backed config after successful runs.',
-    ],
-    preferredModules: ['@/extensions/api.js', '@/data/globalState.js'],
-    relatedFacets: ['core.scheduled-tasks', 'core.actions'],
-    commands: [
-      'yarn agent describe-runtime --scheduled-tasks',
-      'yarn agent describe-runtime --facets core.scheduled-tasks',
     ],
   },
 ]
@@ -349,7 +223,28 @@ const matchesTerms = (
   )
 }
 
+const sourcePriority = (source: AuthoringCatalogSource): number => {
+  if (source === 'generated-api') return 4
+  if (source === 'generated-module-glob') return 3
+  if (source === 'html-entry') return 2
+  if (source === 'html-preload') return 1
+  return 0
+}
+
+const stripExtension = (path: string): string =>
+  path.replace(/\.(ts|tsx|js|jsx|mjs)$/, '')
+
+const toImportPath = (path: string): string =>
+  stripExtension(path)
+    .replace(/^\/src\//, '@/')
+    .replace(/^src\//, '@/')
+    .replace(/$/, '.js')
+
+const basename = (path: string): string =>
+  stripExtension(path).split('/').at(-1) ?? path
+
 const categoryForPath = (importPath: string): string => {
+  if (importPath === '@/extensions/api.js') return 'public-api'
   if (importPath.includes('/components/ui/')) return 'ui-component'
   if (importPath.includes('/components/')) return 'component'
   if (importPath.includes('/extensions/')) return 'extension-system'
@@ -359,11 +254,115 @@ const categoryForPath = (importPath: string): string => {
   return 'module'
 }
 
+const generatedDescription = (importPath: string, exports: string[] | undefined): string => {
+  if (importPath === '@/extensions/api.js') {
+    return 'Generated from the live public extension API barrel.'
+  }
+  if (exports && exports.length > 0) {
+    return `Generated from the module graph; runtime exports: ${exports.slice(0, 8).join(', ')}.`
+  }
+  return 'Generated from the module graph; export names are not loaded for this module.'
+}
+
 const moduleDescriptionForPath = (source: AuthoringCatalogSource): string => {
   if (source === 'html-importmap') return 'Import-map entry visible to dynamic extension modules.'
   if (source === 'html-entry') return 'Module entry script loaded by the current app document.'
   if (source === 'html-preload') return 'Module preload discovered from the current app document.'
-  return 'Curated extension authoring module.'
+  return 'Generated from the module graph.'
+}
+
+const exportNames = (module: RuntimeModule | undefined): string[] | undefined => {
+  if (!module) return undefined
+  return Object.keys(module).sort()
+}
+
+const generatedExportMap = (apiSurface: ApiSurfaceLike): Map<string, string[]> => {
+  const map = new Map<string, string[]>([
+    ['@/extensions/api.js', apiSurface.exports],
+  ])
+
+  for (const [path, module] of Object.entries(eagerUiModules)) {
+    map.set(toImportPath(path), exportNames(module) ?? [])
+  }
+
+  return map
+}
+
+const generatedModules = (apiSurface: ApiSurfaceLike): AuthoringModuleSummary[] => {
+  const exportsByImportPath = generatedExportMap(apiSurface)
+  const modules = Object.keys(internalModuleIndex).map(path => {
+    const importPath = toImportPath(path)
+    const exports = exportsByImportPath.get(importPath)
+    return {
+      importPath,
+      category: categoryForPath(importPath),
+      description: generatedDescription(importPath, exports),
+      ...(exports ? {exports} : {}),
+      source: importPath === '@/extensions/api.js' ? 'generated-api' : 'generated-module-glob',
+      safeForExtensions: true,
+    } satisfies AuthoringModuleSummary
+  })
+
+  if (!modules.some(module => module.importPath === '@/extensions/api.js')) {
+    modules.push({
+      importPath: '@/extensions/api.js',
+      category: 'public-api',
+      description: generatedDescription('@/extensions/api.js', apiSurface.exports),
+      exports: apiSurface.exports,
+      source: 'generated-api',
+      safeForExtensions: true,
+    })
+  }
+
+  return modules
+}
+
+const isComponentExport = (name: string): boolean =>
+  /^[A-Z]/.test(name)
+
+const generatedComponents = (): AuthoringComponentSummary[] => {
+  const out: AuthoringComponentSummary[] = []
+  const seen = new Set<string>()
+
+  const push = (component: AuthoringComponentSummary) => {
+    const key = `${component.importPath}:${component.name}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(component)
+  }
+
+  for (const [path, module] of Object.entries(eagerUiModules)) {
+    const importPath = toImportPath(path)
+    for (const name of exportNames(module)?.filter(isComponentExport) ?? []) {
+      push({
+        name,
+        importPath,
+        category: categoryForPath(importPath),
+        description: `Generated from runtime export ${name}.`,
+        exports: [name],
+        source: 'generated-module-glob',
+      })
+    }
+  }
+
+  for (const path of Object.keys(internalModuleIndex)) {
+    if (!path.endsWith('.tsx')) continue
+    const name = basename(path)
+    if (!isComponentExport(name)) continue
+    const importPath = toImportPath(path)
+    push({
+      name,
+      importPath,
+      category: categoryForPath(importPath),
+      description: `Inferred from component module ${importPath}.`,
+      exports: [name],
+      source: 'generated-module-glob',
+    })
+  }
+
+  return out.sort((a, b) =>
+    a.importPath.localeCompare(b.importPath) || a.name.localeCompare(b.name),
+  )
 }
 
 const normalizeDocumentModulePath = (raw: string, baseURI: string | undefined): string => {
@@ -371,7 +370,7 @@ const normalizeDocumentModulePath = (raw: string, baseURI: string | undefined): 
     const url = new URL(raw, baseURI || 'http://agent-runtime.local/')
     const pathname = url.pathname
     const srcIndex = pathname.indexOf('/src/')
-    if (srcIndex >= 0) return `@/${pathname.slice(srcIndex + '/src/'.length)}`
+    if (srcIndex >= 0) return `@/${stripExtension(pathname.slice(srcIndex + '/src/'.length))}.js`
     const nodeIndex = pathname.indexOf('/node_modules/')
     if (nodeIndex >= 0) return pathname.slice(nodeIndex + 1)
     return pathname || raw
@@ -444,7 +443,7 @@ const mergeModules = (modules: AuthoringModuleSummary[]): AuthoringModuleSummary
   const seen = new Map<string, AuthoringModuleSummary>()
   for (const module of modules) {
     const existing = seen.get(module.importPath)
-    if (!existing || existing.source !== 'curated') {
+    if (!existing || sourcePriority(module.source) > sourcePriority(existing.source)) {
       seen.set(module.importPath, module)
     }
   }
@@ -457,13 +456,13 @@ export const describeAuthoringCatalog = (
   document?: Document,
 ): AuthoringCatalog => {
   const modules = mergeModules([
-    ...curatedModules(apiSurface),
+    ...generatedModules(apiSurface),
     ...documentModules(document),
   ]).filter(module =>
     matchesTerms(filters.modules, module.importPath, module.category, module.description, module.exports),
   )
 
-  const components = curatedComponents.filter(component =>
+  const components = generatedComponents().filter(component =>
     matchesTerms(filters.components, component.name, component.importPath, component.category, component.description, component.exports),
   )
 

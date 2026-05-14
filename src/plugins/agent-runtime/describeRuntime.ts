@@ -1,9 +1,4 @@
 import { FacetRuntime } from '@/extensions/facet.ts'
-import {
-  scheduledTasksFacet,
-  type ScheduledTaskContribution,
-  type ScheduledTaskSchedule,
-} from '@/extensions/core.ts'
 import { ActionConfig } from '@/shortcuts/types.ts'
 import { Repo } from '@/data/repo'
 import {
@@ -51,7 +46,6 @@ export interface RuntimeDescription {
   facets: FacetSummary[]
   apiSurface: ApiSurfaceSummary
   authoring: AuthoringCatalog
-  scheduledTasks: ScheduledTaskSummary[]
 }
 
 export interface RuntimeDescriptionFilters {
@@ -60,7 +54,6 @@ export interface RuntimeDescriptionFilters {
   guides?: string[]
   modules?: string[]
   components?: string[]
-  scheduledTasks?: string[]
   storage?: boolean
 }
 
@@ -113,26 +106,11 @@ export interface RuntimeSummary {
       componentCount: number
       guides: string[]
     }
-    scheduledTasks: {
-      count: number
-      examples: Array<{
-        id: string
-        description: string
-        schedule: string
-      }>
-    }
   }
   more: Array<{
     need: string
     command: string
   }>
-}
-
-export interface ScheduledTaskSummary {
-  id: string
-  description: string
-  schedule: string
-  concurrency: NonNullable<ScheduledTaskContribution['concurrency']>
 }
 
 const runtimeCommandHints = {
@@ -150,7 +128,7 @@ const runtimeCommandHints = {
   ],
   diagnostics: [
     'yarn agent status',
-    'yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage] [--scheduled-tasks [text]]',
+    'yarn agent describe-runtime [--actions <text>] [--facets <text>] [--guide <id>] [--modules <text>] [--components <text>] [--storage]',
     'yarn agent raw <json>',
   ],
 }
@@ -239,29 +217,6 @@ const summarizeFacetCounts = (runtime: FacetRuntime) => {
   }
 }
 
-const summarizeSchedule = (schedule: ScheduledTaskSchedule): string => {
-  if (schedule.type === 'interval') {
-    return `interval every ${schedule.everyMs}ms${schedule.runOnStart ? ' with runOnStart' : ''}`
-  }
-  if (schedule.type === 'daily') {
-    return `daily at ${schedule.time}${schedule.timezone ? ` ${schedule.timezone}` : ''}`
-  }
-  return `cron ${schedule.expression}${schedule.timezone ? ` ${schedule.timezone}` : ''}`
-}
-
-export const describeScheduledTasks = (
-  runtime: FacetRuntime,
-  filters?: string[],
-): ScheduledTaskSummary[] =>
-  runtime.read(scheduledTasksFacet)
-    .filter(task => matchesAnyFilter(filters, task.id, task.description, summarizeSchedule(task.schedule)))
-    .map(task => ({
-      id: task.id,
-      description: task.description,
-      schedule: summarizeSchedule(task.schedule),
-      concurrency: task.concurrency ?? 'skip',
-    }))
-
 // Curated public surface for extension authors. Memoize once per
 // session — `Object.keys` of an ESM module is constant.
 let cachedApiSurface: ApiSurfaceSummary | null = null
@@ -308,7 +263,6 @@ export const describeRuntime = async (
       modules: filters.modules,
       components: filters.components,
     }, context.document),
-    scheduledTasks: describeScheduledTasks(context.runtime, filters.scheduledTasks),
   }
 }
 
@@ -325,7 +279,6 @@ export const describeRuntimeSummary = async (
   const apiSurface = await getApiSurface()
   const renderers = Object.keys(context.renderers)
   const authoring = describeAuthoringCatalog(apiSurface, {}, context.document)
-  const scheduledTasks = describeScheduledTasks(context.runtime)
 
   return {
     activeWorkspaceId: context.repo.activeWorkspaceId,
@@ -358,14 +311,6 @@ export const describeRuntimeSummary = async (
         componentCount: authoring.components.length,
         guides: authoring.guides.map(guide => guide.id),
       },
-      scheduledTasks: {
-        count: scheduledTasks.length,
-        examples: scheduledTasks.slice(0, 5).map(task => ({
-          id: task.id,
-          description: task.description,
-          schedule: task.schedule,
-        })),
-      },
     },
     more: [
       {
@@ -373,16 +318,12 @@ export const describeRuntimeSummary = async (
         command: 'yarn agent describe-runtime [--actions <text>] [--facets <text>]',
       },
       {
-        need: 'Guided extension authoring paths for sync plugins, dialogs, block-backed config, and scheduled tasks',
+        need: 'Guided extension authoring paths for sync plugins, dialogs, and block-backed config',
         command: 'yarn agent describe-runtime --guide external-sync-plugin --storage',
       },
       {
         need: 'Discover extension-safe modules and UI components',
         command: 'yarn agent describe-runtime --modules dialog --components dialog,input,button',
-      },
-      {
-        need: 'Scheduled task contributions currently active in the app runtime',
-        command: 'yarn agent describe-runtime --scheduled-tasks',
       },
       {
         need: 'Bridge clients and pending command queue',

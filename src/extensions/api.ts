@@ -45,7 +45,6 @@ export {
   createRendererRegistry,
   headerItemsFacet,
   panelMountsFacet,
-  scheduledTasksFacet,
   type AppEffect,
   type AppEffectCleanup,
   type AppEffectContext,
@@ -54,10 +53,6 @@ export {
   type HeaderItemRegion,
   type PanelMountContribution,
   type RendererContribution,
-  type ScheduledTaskConcurrency,
-  type ScheduledTaskContribution,
-  type ScheduledTaskContext,
-  type ScheduledTaskSchedule,
 } from '@/extensions/core.ts'
 
 // DefaultBlockRenderer (the default block chrome — bullet, children,
