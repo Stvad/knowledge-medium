@@ -4,6 +4,7 @@ import { Block } from '../../data/block'
 import { BlockRendererProps } from '@/types.ts'
 import { useManyParents, useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import { useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { useBacklinks } from './useBacklinks.ts'
 import { BacklinkFilters } from './BacklinkFilters.tsx'
 import {
@@ -37,8 +38,10 @@ function LinkedReferencesInner({
     filter,
     defaultFilter,
     effectiveFilter,
+    defaultFilterConfigBlock,
     setFilter: setStoredFilter,
   } = useBacklinkFilterState(block)
+  const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
   const filterActive = hasBacklinksFilter(effectiveFilter)
   const unfilteredBacklinks = useBacklinks(block, workspaceId)
   const filteredBacklinks = useBacklinks(
@@ -61,6 +64,9 @@ function LinkedReferencesInner({
     setStoredFilter(next)
     if (hasBacklinksFilter(next)) setFiltersOpenOverride(true)
   }, [setStoredFilter])
+  const openDefaultFilterConfig = useCallback(() => {
+    navigateFromGlobalCommand({blockId: defaultFilterConfigBlock.id, workspaceId})
+  }, [defaultFilterConfigBlock.id, navigateFromGlobalCommand, workspaceId])
 
   if (unfilteredBacklinks.length === 0) return null
 
@@ -102,6 +108,8 @@ function LinkedReferencesInner({
               filter={filter}
               baseFilter={defaultFilter}
               baseLabel="Daily note defaults"
+              baseConfigLabel="Open daily note defaults"
+              onBaseConfigClick={openDefaultFilterConfig}
               onChange={setFilter}
             />
           )}

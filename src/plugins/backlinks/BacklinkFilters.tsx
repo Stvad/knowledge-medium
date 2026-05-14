@@ -6,7 +6,7 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { FilterX, Plus, X } from 'lucide-react'
+import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { useRepo } from '@/context/repo.tsx'
 import { useHandle } from '@/hooks/block.ts'
 import { Button } from '@/components/ui/button.tsx'
@@ -34,6 +34,8 @@ interface BacklinkFiltersProps {
   onChange: (filter: BacklinksFilter) => void
   baseFilter?: BacklinksFilter
   baseLabel?: string
+  baseConfigLabel?: string
+  onBaseConfigClick?: () => void
   readOnly?: boolean
 }
 
@@ -262,6 +264,8 @@ export function BacklinkFilters({
   onChange,
   baseFilter,
   baseLabel = 'Defaults',
+  baseConfigLabel = 'Open defaults config',
+  onBaseConfigClick,
   readOnly = false,
 }: BacklinkFiltersProps) {
   const normalized = useMemo(() => normalizeBacklinksFilter(filter), [filter])
@@ -296,7 +300,20 @@ export function BacklinkFilters({
     <div className="mt-3 flex flex-col gap-2 border-l border-border/80 pl-3">
       {baseActive && (
         <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="text-xs font-medium text-muted-foreground">{baseLabel}</div>
+          <div className="flex min-w-0 items-center gap-1.5">
+            <div className="text-xs font-medium text-muted-foreground">{baseLabel}</div>
+            {onBaseConfigClick && (
+              <button
+                type="button"
+                onClick={onBaseConfigClick}
+                className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                title={baseConfigLabel}
+                aria-label={baseConfigLabel}
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
           <div className="grid gap-2 md:grid-cols-2">
             <div className="flex min-w-0 flex-wrap gap-1">
               {normalizedBase.includeIds.map(id => (
