@@ -88,15 +88,14 @@ export const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<
   const data = block.peek() ?? await block.load()
   if (!data) return
 
-  if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) {
-    return
-  }
+  const hasSrsType = getBlockTypes(data).includes(SRS_SM25_TYPE)
+  const sourceProperties = hasSrsType ? data.properties : {}
 
   const now = new Date()
-  const interval = readProperty(data.properties, srsIntervalProp, DEFAULT_INTERVAL)
-  const factor = readProperty(data.properties, srsFactorProp, DEFAULT_FACTOR)
-  const reviewCount = readProperty(data.properties, srsReviewCountProp, 0)
-  const history = readProperty(data.properties, srsSnapshotHistoryProp, [])
+  const interval = readProperty(sourceProperties, srsIntervalProp, DEFAULT_INTERVAL)
+  const factor = readProperty(sourceProperties, srsFactorProp, DEFAULT_FACTOR)
+  const reviewCount = readProperty(sourceProperties, srsReviewCountProp, 0)
+  const history = readProperty(sourceProperties, srsSnapshotHistoryProp, [])
   const grade = gradeForSignal(signal)
   const scheduled = scheduleSrsProperties({interval, factor}, signal, {now})
   const nextReviewDaily = await getOrCreateDailyNote(
@@ -117,10 +116,16 @@ export const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<
     factor: scheduled.factor,
     reviewCount: nextReviewCount,
   }
+  const typeSnapshot = block.repo.snapshotTypeRegistries()
 
   await block.repo.tx(async tx => {
-    const row = await tx.get(block.id)
+    let row = await tx.get(block.id)
     if (!row) return
+    if (!getBlockTypes(row).includes(SRS_SM25_TYPE)) {
+      await block.repo.addTypeInTx(tx, block.id, SRS_SM25_TYPE, {}, typeSnapshot)
+      row = await tx.get(block.id)
+      if (!row) return
+    }
     await tx.update(block.id, {
       properties: {
         ...row.properties,

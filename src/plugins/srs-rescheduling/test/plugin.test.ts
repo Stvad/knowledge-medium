@@ -1,9 +1,17 @@
+// @vitest-environment node
+
 import { describe, expect, it, vi } from 'vitest'
+import { ChangeScope } from '@/data/api'
+import { BlockCache } from '@/data/blockCache'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
+import { Repo } from '@/data/repo'
+import { createTestDb } from '@/data/test/createTestDb'
 import { actionsFacet } from '@/extensions/core.ts'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
+import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   SRS_SM25_TYPE,
@@ -88,26 +96,52 @@ describe('srsReschedulingPlugin', () => {
   })
 
   it('does not rewrite legacy inline SRS content from edit mode', async () => {
-    const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
-    const action = runtime.read(actionsFacet).find(it =>
-      it.id === 'edit.cm.srs.reschedule.good',
-    ) as ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>
-    const setContent = vi.fn()
-    const block = {
-      repo: {isReadOnly: false},
-      peek: () => ({content: 'Review [[May 1st, 2026]]', properties: {}}),
-      load: vi.fn(),
-      setContent,
+    const h = await createTestDb()
+    try {
+      let now = 1700_000_000_000
+      let id = 0
+      const repo = new Repo({
+        db: h.db,
+        cache: new BlockCache(),
+        user: {id: 'user-1'},
+        now: () => ++now,
+        newId: () => `generated-${++id}`,
+        registerKernelProcessors: false,
+      })
+      const runtime = resolveFacetRuntimeSync([
+        kernelDataExtension,
+        dailyNotesDataExtension,
+        srsReschedulingPlugin,
+      ])
+      repo.setFacetRuntime(runtime)
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'legacy-inline-srs',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a0',
+          content: 'Review [[May 1st, 2026]]',
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'seed legacy inline srs'})
+
+      const action = runtime.read(actionsFacet).find(it =>
+        it.id === 'edit.cm.srs.reschedule.good',
+      ) as ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM>
+      const block = repo.block('legacy-inline-srs')
+      await block.load()
+      const editorView = {dispatch: vi.fn()}
+
+      await action.handler({
+        block,
+        uiStateBlock: block,
+        editorView,
+      } as never, {} as KeyboardEvent)
+
+      expect(editorView.dispatch).not.toHaveBeenCalled()
+      expect(block.data.content).toBe('Review [[May 1st, 2026]]')
+      expect(block.types).toContain(SRS_SM25_TYPE)
+    } finally {
+      await h.cleanup()
     }
-    const editorView = {dispatch: vi.fn()}
-
-    await action.handler({
-      block,
-      uiStateBlock: block,
-      editorView,
-    } as never, new KeyboardEvent('keydown'))
-
-    expect(editorView.dispatch).not.toHaveBeenCalled()
-    expect(setContent).not.toHaveBeenCalled()
   })
 })
