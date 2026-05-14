@@ -27,10 +27,6 @@ export {
   type LeftSidebarSectionProps,
 } from './facet.ts'
 export {
-  useActivePanelNodeTarget,
-  type ActivePanelNodeTarget,
-} from './panelTarget.tsx'
-export {
   OPEN_LEFT_SIDEBAR_ACTION_ID,
   leftSidebarActions,
   openLeftSidebarAction,

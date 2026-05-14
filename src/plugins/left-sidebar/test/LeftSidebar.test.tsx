@@ -52,13 +52,6 @@ vi.mock('@/utils/navigation.ts', () => ({
   navigateFromGlobalCommand: mocks.navigateFromGlobalCommand,
 }))
 
-vi.mock('../panelTarget.tsx', () => ({
-  useActivePanelNodeTarget: () => ({
-    activeTopLevelBlockId: 'active-block',
-    canCreateNode: true,
-  }),
-}))
-
 vi.mock('../shortcuts.ts', () => ({
   getOrCreateShortcutsBlock: mocks.getOrCreateShortcutsBlock,
 }))

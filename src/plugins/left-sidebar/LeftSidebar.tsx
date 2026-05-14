@@ -12,7 +12,6 @@ import { useRepo } from '@/context/repo.tsx'
 import { actionsFacet } from '@/extensions/core.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
-import { cn } from '@/lib/utils.ts'
 import { OPEN_TODAY_ACTION_ID } from '@/plugins/daily-notes'
 import { QUICK_FIND_ACTION_ID } from '@/plugins/quick-find'
 import { navigateFromGlobalCommand } from '@/utils/navigation.ts'
@@ -25,7 +24,6 @@ import {
   openLeftSidebarEvent,
   toggleLeftSidebarEvent,
 } from './events.ts'
-import { useActivePanelNodeTarget } from './panelTarget.tsx'
 import {
   leftSidebarSectionsFacet,
   type LeftSidebarSectionContribution,
@@ -161,12 +159,10 @@ export function LeftSidebarCoreSection({closeSidebar}: LeftSidebarSectionProps) 
 function ShortcutTargetItem({
   targetId,
   fallbackLabel,
-  currentTopLevelBlockId,
   closeSidebar,
 }: {
   targetId: string
   fallbackLabel: string
-  currentTopLevelBlockId: string | undefined
   closeSidebar: () => void
 }) {
   const repo = useRepo()
@@ -178,7 +174,6 @@ function ShortcutTargetItem({
       }
       : undefined,
   })
-  const isCurrent = targetId === currentTopLevelBlockId
   const label = blockLabel(targetData, fallbackLabel)
 
   const openShortcut = useCallback(() => {
@@ -189,11 +184,7 @@ function ShortcutTargetItem({
   return (
     <button
       type="button"
-      className={cn(
-        'flex h-10 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-accent',
-        isCurrent ? 'bg-accent text-foreground' : 'text-muted-foreground',
-      )}
-      aria-current={isCurrent ? 'page' : undefined}
+      className="flex h-10 w-full items-center gap-2 rounded-md px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent"
       onClick={openShortcut}
     >
       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/70"/>
@@ -204,11 +195,9 @@ function ShortcutTargetItem({
 
 function ShortcutItem({
   block,
-  currentTopLevelBlockId,
   closeSidebar,
 }: {
   block: Block
-  currentTopLevelBlockId: string | undefined
   closeSidebar: () => void
 }) {
   const data = useHandle(block, {
@@ -236,7 +225,6 @@ function ShortcutItem({
     <ShortcutTargetItem
       targetId={targetRef.id}
       fallbackLabel={targetRef.alias}
-      currentTopLevelBlockId={currentTopLevelBlockId}
       closeSidebar={closeSidebar}
     />
   )
@@ -246,7 +234,6 @@ export function LeftSidebarShortcutsSection({closeSidebar}: LeftSidebarSectionPr
   const repo = useRepo()
   const shortcutsBlock = useShortcutsBlock()
   const shortcuts = useChildren(shortcutsBlock)
-  const {activeTopLevelBlockId} = useActivePanelNodeTarget()
   const openShortcutsBlock = useCallback(() => {
     closeSidebar()
     navigateFromGlobalCommand(repo, {blockId: shortcutsBlock.id})
@@ -270,7 +257,6 @@ export function LeftSidebarShortcutsSection({closeSidebar}: LeftSidebarSectionPr
           <ShortcutItem
             key={shortcut.id}
             block={shortcut}
-            currentTopLevelBlockId={activeTopLevelBlockId}
             closeSidebar={closeSidebar}
           />
         ))}
@@ -284,7 +270,6 @@ function NewNodeFooter({
 }: {
   closeSidebar: () => void
 }) {
-  const target = useActivePanelNodeTarget()
   const {action, disabled, Icon, run} = useSidebarActionRunner({
     actionId: CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
     closeSidebar,
@@ -301,7 +286,7 @@ function NewNodeFooter({
         type="button"
         className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-muted px-4 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:pointer-events-none disabled:opacity-40"
         onClick={run}
-        disabled={!target.canCreateNode || disabled}
+        disabled={disabled}
       >
         <Icon className="h-5 w-5"/>
         <span>{action.description}</span>
