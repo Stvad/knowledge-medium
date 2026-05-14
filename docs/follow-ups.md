@@ -162,6 +162,21 @@ Cold-start traces show this matters when the page mounts dozens of concurrent re
 
 **Trigger to build.** Estimated 1–2 weeks of careful work for path 2. Worth it only if a future regression makes single-connection serialization the dominant cold-start cost again, *and* path 1 hasn't materialized. Concrete signal: `db.getAll.maxMs` consistently above ~200 ms with `writeTransaction` activity correlated, *and* batching/deferral can't eliminate the contention at the call-site level. Until then: continue cutting reads at the call site (batched queries, prefetch) and writes off the critical path (`scheduleIdle`, fast-path before opening a tx). Re-check PowerSync's changelog at each major version bump.
 
+## Remove `@powersync/common` patch once 1.53.1+ is released
+
+`patches/@powersync+common+1.53.0.patch` backports [powersync-ja/powersync-js#960](https://github.com/powersync-ja/powersync-js/pull/960) — a race in the `injectable` async iterator wrapper that drops sync lines when a local write completes concurrently with an upstream `data` frame. Without it, ~1 in 3 user edits triggered a checksum mismatch and a full bucket re-download (see [`docs/powersync-bucket-wipe-bug-report.md`](powersync-bucket-wipe-bug-report.md) and [issue #954](https://github.com/powersync-ja/powersync-js/issues/954)). The fix is merged to powersync-js `main` and bundled in `@powersync/common@1.53.1`, which had not yet shipped to npm when the patch went in.
+
+Cleanup once a release containing the fix is on npm (verify by checking that the published `dist/bundle.mjs` contains `sourceFetchInFlight`):
+
+1. `yarn upgrade @powersync/common@<new-version>` (and bump `@powersync/web` / `@powersync/react` together if their pinned `@powersync/common` peer needs it).
+2. `rm patches/@powersync+common+1.53.0.patch`
+3. Drop `"postinstall": "patch-package"` from `package.json` scripts.
+4. `yarn remove patch-package` (only direct devDep that was added for this).
+5. Run `yarn install` — the `patches/` directory should now be empty (or gone) and `node_modules/@powersync/common/dist/bundle.mjs` should match the upstream tarball.
+6. Smoke-test by running the burst-edit scenario from the bug report; checksum mismatches should remain at zero and `ps_crud` should drain after each batch.
+
+The patch is intentionally minimal (touches only `dist/bundle.mjs`, the file the browser actually loads) so re-applying it against a different `@powersync/common` patch version is straightforward if upstream slips — see the `injectable` function around line 10835 of the bundle and the [PR diff](https://github.com/powersync-ja/powersync-js/pull/960/files).
+
 ## Investigate `referencesProcessor.test.ts` schema-swap flake
 
 `src/plugins/references/test/referencesProcessor.test.ts > parseReferences — schema-swap reprojection > removes stale field refs when a property stops being ref-typed` fails intermittently in the full suite but passes in isolation (`yarn test --run src/plugins/references/test/referencesProcessor.test.ts` is green). Observed once during the navigation refactor on master @ cf397f0; my edits don't import any backlinks code, and the failing assertion checks `references_json` for a stale `target-a` ref that should have been removed when the `reviewer` property was retyped away from `block-ref`.
