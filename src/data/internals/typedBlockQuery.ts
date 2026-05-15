@@ -168,6 +168,21 @@ export const normalizeTypedBlockQuery = (
 const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
   predicates.some(p => p.scope === 'ancestor')
 
+const isSelfScope = (predicate: BlockPredicate): boolean =>
+  (predicate.scope ?? 'self') === 'self'
+
+const hasNonNullWhere = (where: Readonly<Record<string, unknown>> | undefined): boolean =>
+  where !== undefined && Object.values(where).some(v => v !== null)
+
+/** Does this self-scope predicate actually bound the candidate set
+ *  (vs. just match-anything)? Used by the ancestor-walk safety gate
+ *  — a predicate that matches every row provides no candidate
+ *  bounding even though it's "set". */
+const selfPredicateNarrows = (predicate: BlockPredicate): boolean =>
+  predicate.id !== undefined ||
+  predicate.referencedBy !== undefined ||
+  hasNonNullWhere(predicate.where)
+
 /** Recursive ancestor-chain CTE keyed off `candidates`. One row per
  *  (candidate id, ancestor id), with depth and a path guard against
  *  cycles. Hard depth cap of 100 mirrors the existing backlinks SQL. */
@@ -204,28 +219,36 @@ export const compileTypedBlockQuery = (
     hasAncestorScope(matchPredicates) || hasAncestorScope(excludePredicates)
 
   if (needsAncestorChain) {
-    // Selectivity gate: ancestor walks without a candidate filter
-    // would chain-walk every block in the workspace. Require at least
-    // one filter that narrows the candidate set first.
+    // Selectivity gate: ancestor walks without a candidate-bounding
+    // filter would chain-walk every block in the workspace. Require
+    // at least one filter that actually narrows the candidate set.
+    // Top-level `where` and self-scope match predicates count
+    // because they're folded into the candidates CTE below; pure
+    // self-scope `exclude` does NOT count because it only subtracts
+    // from the live set.
     const hasGate =
       normalized.referencedBy !== undefined ||
       types.length > 0 ||
-      (normalized.where !== undefined && Object.values(normalized.where).some(v => v !== null))
+      hasNonNullWhere(normalized.where) ||
+      matchPredicates.some(p => isSelfScope(p) && selfPredicateNarrows(p))
     if (!hasGate) {
       throw new Error(
         '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
-        '(types, referencedBy, or a non-null self where) to bound the recursive walk',
+        '(types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
       )
     }
   }
 
   const params: unknown[] = []
 
-  // Candidate-set CTE. Driven by the most selective filter:
+  // Candidate-set CTE — the fully self-filtered result set. Driven
+  // by the most selective filter:
   //   1. `referencedBy` shorthand → indexed lookup on block_references
   //   2. else → workspace's live blocks
-  // Other filters (types, where, additional match/exclude predicates)
-  // apply later as WHERE clauses against b.
+  // All self-scope filters (types, top-level where, self-scope
+  // match/exclude predicates) fold in here so the recursive
+  // ancestor walk seeds from the narrow set, not from every live
+  // block.
   const candidateClauses: string[] = []
   let candidateFrom: string
   if (normalized.referencedBy !== undefined) {
@@ -258,6 +281,31 @@ export const compileTypedBlockQuery = (
     params.push(...types)
   }
 
+  if (normalized.where !== undefined) {
+    for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json')
+      candidateClauses.push(compiled.sql)
+      params.push(...compiled.params)
+    }
+  }
+
+  // Self-scope match/exclude fold into candidates so the narrowing
+  // is real (and the ancestor walk seeds from the right set).
+  // Ancestor-scope predicates stay in the outer WHERE — they need
+  // the ancestor_chain CTE which is keyed off `candidates`.
+  for (const predicate of matchPredicates) {
+    if (!isSelfScope(predicate)) continue
+    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
+    candidateClauses.push(compiled.sql)
+    params.push(...compiled.params)
+  }
+  for (const predicate of excludePredicates) {
+    if (!isSelfScope(predicate)) continue
+    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
+    candidateClauses.push(`NOT (${compiled.sql})`)
+    params.push(...compiled.params)
+  }
+
   const candidatesCte = `
     candidates AS (
       SELECT DISTINCT b.id
@@ -266,24 +314,18 @@ export const compileTypedBlockQuery = (
     )
   `.trim()
 
-  // Final WHERE clauses against the result row b (joined to candidates).
+  // Outer WHERE — ancestor-scope predicates only.
   const filterClauses: string[] = []
 
-  if (normalized.where !== undefined) {
-    for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json')
-      filterClauses.push(compiled.sql)
-      params.push(...compiled.params)
-    }
-  }
-
   for (const predicate of matchPredicates) {
+    if (isSelfScope(predicate)) continue
     const compiled = compileScopedPredicate(predicate, propertySchemas)
     filterClauses.push(compiled.sql)
     params.push(...compiled.params)
   }
 
   for (const predicate of excludePredicates) {
+    if (isSelfScope(predicate)) continue
     const compiled = compileScopedPredicate(predicate, propertySchemas)
     filterClauses.push(`NOT (${compiled.sql})`)
     params.push(...compiled.params)

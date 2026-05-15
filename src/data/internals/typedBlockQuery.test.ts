@@ -191,6 +191,73 @@ describe('repo.queryBlocks', () => {
     await expect(env.repo.queryBlocks({where: {status: undefined}}))
       .rejects.toThrow('is undefined')
   })
+
+  it('rejects ancestor-scope predicates without a candidate-narrowing filter', async () => {
+    // No referencedBy, no types, no top-level where, no narrowing
+    // self-scope match → would chain-walk every block in the ws.
+    await expect(env.repo.queryBlocks({
+      match: [{scope: 'ancestor', where: {status: 'done'}}],
+    })).rejects.toThrow('require at least one candidate filter')
+  })
+
+  it('null-only where does not pass the ancestor gate', async () => {
+    // Top-level where: {status: null} matches every row that doesn't
+    // have status set — does not narrow the candidate set in any
+    // meaningful way for the recursive walk.
+    await expect(env.repo.queryBlocks({
+      where: {status: null},
+      match: [{scope: 'ancestor', where: {status: 'done'}}],
+    })).rejects.toThrow('require at least one candidate filter')
+  })
+
+  it('self-scope match predicate counts as a candidate filter for the gate', async () => {
+    // create() hardcodes parentId: null, so use tx.create directly to
+    // build a parent-child chain.
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'parent', workspaceId: WS, parentId: null, orderKey: 'a',
+        properties: {[typesProp.name]: typesProp.codec.encode(['todo']), status: 'open'},
+      })
+      await tx.create({
+        id: 'child', workspaceId: WS, parentId: 'parent', orderKey: 'b',
+        properties: {[typesProp.name]: typesProp.codec.encode(['todo']), status: 'open'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+    await create({id: 'unrelated', properties: {status: 'open'}})
+
+    // Self-scope `status=open` predicate folds into candidates →
+    // the recursive walk only seeds from rows that match it.
+    const out = await env.repo.queryBlocks({
+      match: [
+        {scope: 'self', where: {status: 'open'}},
+        {scope: 'ancestor', id: 'parent'},
+      ],
+    })
+    expect(ids(out).sort()).toEqual(['child', 'parent'])
+  })
+
+  it('top-level where folds into candidates and applies before ancestor walk', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'parent', workspaceId: WS, parentId: null, orderKey: 'a',
+        properties: {[typesProp.name]: typesProp.codec.encode(['todo'])},
+      })
+      await tx.create({
+        id: 'open-child', workspaceId: WS, parentId: 'parent', orderKey: 'b',
+        properties: {[typesProp.name]: typesProp.codec.encode(['todo']), status: 'open'},
+      })
+      await tx.create({
+        id: 'done-child', workspaceId: WS, parentId: 'parent', orderKey: 'c',
+        properties: {[typesProp.name]: typesProp.codec.encode(['todo']), status: 'done'},
+      })
+    }, {scope: ChangeScope.BlockDefault})
+
+    const out = await env.repo.queryBlocks({
+      where: {status: 'open'},
+      match: [{scope: 'ancestor', id: 'parent'}],
+    })
+    expect(ids(out)).toEqual(['open-child'])
+  })
 })
 
 describe('repo.subscribeBlocks', () => {

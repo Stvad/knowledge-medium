@@ -347,7 +347,7 @@ const PropertyPredicateInput = ({
           className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
           aria-label="value"
         >
-          <option value="">— value —</option>
+          <option value="">(unset)</option>
           <option value="true">true</option>
           <option value="false">false</option>
         </select>
@@ -356,7 +356,7 @@ const PropertyPredicateInput = ({
           value={value}
           onChange={e => setValue(e.target.value)}
           disabled={readOnly || !schema}
-          placeholder={schema ? `${schema.codec.type} value` : 'value'}
+          placeholder={schema ? `${schema.codec.type} (empty = unset)` : 'value'}
           className="h-8 min-w-0 flex-1 text-xs"
           aria-label="value"
         />
@@ -366,7 +366,7 @@ const PropertyPredicateInput = ({
         variant="ghost"
         size="icon"
         className="h-8 w-8 shrink-0"
-        disabled={readOnly || !schema || !value}
+        disabled={readOnly || !schema}
         title={mode === 'include' ? 'Add include property filter' : 'Add exclude property filter'}
         aria-label={mode === 'include' ? 'Add include property filter' : 'Add exclude property filter'}
       >
