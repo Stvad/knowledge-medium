@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Unified block query / backlinks filter</title>
+<style>
+  body { font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.15rem; margin: 2rem 0 .4rem; border-bottom: 1px solid #ddd; padding-bottom: .2rem; }
+  h3 { font-size: 1rem; margin: 1.2rem 0 .3rem; }
+  code, pre { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { background: #f5f5f5; padding: .75rem 1rem; border-radius: 4px; overflow-x: auto; }
+  code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  .lede { color: #555; margin-top: .25rem; }
+  .option { border: 1px solid #ddd; border-radius: 6px; padding: .75rem 1rem; margin: .75rem 0; }
+  .option h3 { margin-top: 0; }
+  .recommend { border-color: #2a7; background: #f4faf6; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 10px; background: #2a7; color: white; margin-left: .4rem; vertical-align: middle; }
+  .field { color: #06a; }
+  .comment { color: #777; }
+  ul.tight li { margin: .2rem 0; }
+</style>
+</head>
+<body>
+
+<h1>Unified block query / backlinks filter</h1>
+<p class="lede">One query language. Backlinks becomes a thin wrapper. Predicates can target the block itself or any ancestor.</p>
+
+<h2>The bug we're fixing</h2>
+<p>A backlinks panel showed a block even after the user added <code>DONE</code> to "Remove reference". The block had <code>status: done</code> set.</p>
+<p><b>Root cause:</b> the backlink filter matches against the reference graph (<code>block_references</code>). <code>status</code> is stored as a scalar property, not a reference, so there's no <code>[[DONE]]</code> ref to match against. Same problem for <code>srs:archived</code>.</p>
+
+<h2>The decision</h2>
+<p>Don't invent fake refs for property values. Instead, extend the existing <code>TypedBlockQuery</code> to express two new things:</p>
+<ul class="tight">
+  <li><b>Property predicates</b> (already partially there as <code>where</code>) usable as positive <i>or</i> negative filters.</li>
+  <li><b>Scope</b>: a predicate matches against the block itself, or against the block <i>or any ancestor</i>.</li>
+</ul>
+<p>Backlinks then becomes: <i>"<code>queryBlocks</code> for sources that reference target X, plus whatever extra predicates the user added."</i></p>
+
+<h2>The predicate shape</h2>
+<pre><code>interface BlockPredicate {
+  scope?: 'self' | 'ancestor'             <span class="comment">// default: 'self'. 'ancestor' = block-or-any-ancestor</span>
+  where?: Record&lt;string, unknown&gt;          <span class="comment">// scalar equality, codec.where.encode</span>
+  referencedBy?: {id: string; sourceField?: string}
+}</code></pre>
+<p>No operators beyond equality. Negation comes from list membership (<code>exclude</code> vs <code>match</code>), not from the predicate itself.</p>
+
+<h2>The TypedBlockQuery extension</h2>
+<pre><code>interface TypedBlockQuery {
+  workspaceId?: string
+  types?: readonly string[]
+  <span class="comment">// Existing fields — shorthand for {scope:'self', ...}. Unchanged.</span>
+  where?: Record&lt;string, unknown&gt;
+  referencedBy?: {id: string; sourceField?: string}
+  <span class="comment">// New: ANDed predicates. Each carries its own scope.</span>
+  match?: readonly BlockPredicate[]
+  <span class="comment">// New: NORed predicates. Block matches iff none of these match.</span>
+  exclude?: readonly BlockPredicate[]
+}</code></pre>
+
+<h2>Examples</h2>
+
+<h3>1. Existing typed query (unchanged)</h3>
+<pre><code><span class="comment">// All open todos.</span>
+repo.queryBlocks({types: ['todo'], where: {status: 'open'}})</code></pre>
+
+<h3>2. Backlinks with property + ref filters</h3>
+<p>"Sources referencing today's daily note. Exclude any whose source-or-ancestor has <code>status=done</code> or references <code>[[archived]]</code>. Require source-or-ancestor to reference <code>[[work]]</code>."</p>
+<pre><code>repo.queryBlocks({
+  referencedBy: {id: dailyNoteId},                              <span class="comment">// self-scope shorthand</span>
+  match: [
+    {scope: 'ancestor', referencedBy: {id: workId}},
+  ],
+  exclude: [
+    {scope: 'ancestor', where: {status: 'done'}},
+    {scope: 'ancestor', referencedBy: {id: archivedId}},
+  ],
+})</code></pre>
+
+<h3>3. Backlinks as a thin wrapper</h3>
+<pre><code>backlinks(targetId, filter) = repo.queryBlocks({
+  referencedBy: {id: targetId},
+  match: filter.include,
+  exclude: filter.exclude,
+}).filter(b =&gt; b.id !== targetId)   <span class="comment">// drop self-reference</span></code></pre>
+<p>The backlinks-specific SQL goes away. The ancestor-chain CTE moves into the typed query compiler, used only when a predicate has <code>scope: 'ancestor'</code>.</p>
+
+<h2>Why this shape (vs. alternatives)</h2>
+<p>I considered three shapes and recommend the one above (Option A). Open question — see below — is whether to keep the shorthand <code>where</code>/<code>referencedBy</code> at all, or force everything through <code>match</code>/<code>exclude</code>.</p>
+
+<div class="option recommend">
+  <h3>Option A: keep <code>where</code>/<code>referencedBy</code> + add <code>match</code>/<code>exclude</code><span class="tag">Recommended</span></h3>
+  <p>Shorthand for self-scope stays. Scoped predicates go in arrays. ~15 existing call sites untouched.</p>
+  <pre><code>queryBlocks({types:['todo'], where:{status:'open'}})    <span class="comment">// stays</span>
+queryBlocks({referencedBy:{id:target}, exclude:[{scope:'ancestor', where:{status:'done'}}]})</code></pre>
+</div>
+
+<div class="option">
+  <h3>Option B: uniform <code>match</code>/<code>exclude</code> only, no shorthand</h3>
+  <p>Every predicate is a <code>BlockPredicate</code> with explicit scope. More uniform mental model. Rewrite every existing call site (hooks, services, ~10 test cases).</p>
+  <pre><code>queryBlocks({types:['todo'], match:[{scope:'self', where:{status:'open'}}]})</code></pre>
+</div>
+
+<div class="option">
+  <h3>Option C: parallel <code>ancestorWhere</code> / <code>ancestorReferencedBy</code> fields <span class="tag" style="background:#a44">Falls over</span></h3>
+  <p>Each scope gets its own pair of fields. But: only one <code>referencedBy</code> per scope, and exclude/include need duplicate <code>*Not</code> fields. Six fields and still can't express "exclude (<code>status=done</code> OR refs <code>[[archived]]</code>)". Discarded.</p>
+</div>
+
+<h2>SQL implementation sketch</h2>
+<p>The typed query compiler grows one CTE that runs <i>only</i> when an ancestor-scoped predicate is present:</p>
+<pre><code><span class="comment">-- emitted only if any predicate has scope:'ancestor'</span>
+WITH RECURSIVE ancestor_chain(block_id, anc_id, anc_props, depth, path) AS (
+  SELECT b.id, b.id, b.properties_json, 0, '!' || hex(b.id) || '/'
+  FROM blocks b WHERE b.workspace_id = ? AND b.deleted = 0
+  UNION ALL
+  SELECT ac.block_id, parent.id, parent.properties_json, ac.depth + 1, ac.path || '!' || hex(parent.id) || '/'
+  FROM ancestor_chain ac
+  JOIN blocks parent ON parent.id = (SELECT parent_id FROM blocks WHERE id = ac.anc_id)
+  WHERE parent.deleted = 0 AND ac.depth &lt; 100 AND INSTR(ac.path, '!' || hex(parent.id) || '/') = 0
+)</code></pre>
+<p>Each ancestor-scoped predicate becomes:</p>
+<pre><code>EXISTS (
+  SELECT 1 FROM ancestor_chain ac
+  WHERE ac.block_id = b.id
+    AND &lt;compiled predicate against ac.anc_id / ac.anc_props&gt;
+)</code></pre>
+<p>Self-scoped predicates compile the same as today (no CTE involvement). Excludes wrap their EXISTS in <code>NOT</code>.</p>
+
+<h2>Files touched</h2>
+<ul class="tight">
+  <li><code>src/data/api/typedBlockQuery.ts</code> — <code>BlockPredicate</code> + extended <code>TypedBlockQuery</code></li>
+  <li><code>src/data/internals/typedBlockQuery.ts</code> — compile <code>match</code>/<code>exclude</code> + ancestor CTE</li>
+  <li><code>src/data/internals/kernelQueries.ts</code> — dep declarations for new predicates</li>
+  <li><code>src/plugins/backlinks/query.ts</code> — wrap typed query, drop dedicated SQL</li>
+  <li><code>src/plugins/backlinks/filterProperty.ts</code> — new filter shape (<code>include</code>/<code>exclude</code> of <code>BlockPredicate</code>)</li>
+  <li><code>src/plugins/backlinks/BacklinkFilters.tsx</code> — chip UI: ref + property predicate, scope toggle</li>
+  <li>tests for both query layers</li>
+</ul>
+
+<h2>Migration</h2>
+<p>None. Old stored filters (<code>{includeIds, removeIds}</code>) are discarded; old daily-note defaults reset. Property name can be renamed to make the discard explicit.</p>
+
+<h2>Decisions locked in</h2>
+<ul class="tight">
+  <li>Property predicates are real SQL predicates, not synthetic refs.</li>
+  <li>Per-predicate <code>scope</code> ('self' or 'ancestor'); 'ancestor' includes self.</li>
+  <li>Negation = list membership (<code>exclude</code> vs <code>match</code>), no operator on the predicate.</li>
+  <li>Backlinks wraps <code>queryBlocks</code>. The dedicated backlinks SQL goes away.</li>
+  <li>Chip UI: autocomplete from registered property schemas, value editor from the codec's preset.</li>
+  <li>No data migration — discard old filter values.</li>
+</ul>
+
+<h2>Open question</h2>
+<p><b>Should we go with Option A (shorthand + new arrays) or Option B (uniform arrays only)?</b></p>
+<p>Option A is backwards-compatible and keeps the common case terse — the existing <code>{where: {status: 'open'}}</code> shape stays. Option B is more uniform but rewrites ~15 call sites for no functional gain.</p>
+
+</body>
+</html>

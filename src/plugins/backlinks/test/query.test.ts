@@ -19,10 +19,11 @@ import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.ts
 import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
 import { backlinksPlugin } from '../index.ts'
 import { backlinksDataExtension } from '../dataExtension.ts'
+import { referencesInvalidationRule } from '@/plugins/references/invalidation.ts'
 import {
-  REFERENCES_TARGET_INVALIDATION_CHANNEL,
-  referencesInvalidationRule,
-} from '@/plugins/references/invalidation.ts'
+  TYPED_BLOCKS_REFERENCE_CHANNEL,
+  typedBlocksReferenceKey,
+} from '@/data/internals/kernelInvalidation.ts'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
   backlinksForBlockQuery,
@@ -137,12 +138,18 @@ describe('backlinksDataExtension query', () => {
   })
 
   it('merges default filters with page-local conflict overrides', () => {
+    const projectRef = {scope: 'ancestor' as const, referencedBy: {id: 'project'}}
+    const inboxRef = {scope: 'ancestor' as const, referencedBy: {id: 'inbox'}}
+    const doneRef = {scope: 'ancestor' as const, referencedBy: {id: 'done'}}
+    const somedayRef = {scope: 'ancestor' as const, referencedBy: {id: 'someday'}}
+    const localRef = {scope: 'ancestor' as const, referencedBy: {id: 'local'}}
+
     expect(mergeBacklinksFilters(
-      {includeIds: ['project', 'inbox'], removeIds: ['done', 'someday']},
-      {includeIds: ['done', 'local'], removeIds: ['inbox']},
+      {include: [projectRef, inboxRef], exclude: [doneRef, somedayRef]},
+      {include: [doneRef, localRef], exclude: [inboxRef]},
     )).toEqual({
-      includeIds: ['done', 'local', 'project'],
-      removeIds: ['inbox', 'someday'],
+      include: [doneRef, localRef, projectRef],
+      exclude: [inboxRef, somedayRef],
     })
   })
 
@@ -151,16 +158,18 @@ describe('backlinksDataExtension query', () => {
       properties: {[typesProp.name]: typesProp.codec.encode([DAILY_NOTE_TYPE])},
     }
     const regularData = {properties: {}}
-    const defaults = {removeIds: ['done']}
-    const local = {includeIds: ['project']}
+    const doneRef = {scope: 'ancestor' as const, referencedBy: {id: 'done'}}
+    const projectRef = {scope: 'ancestor' as const, referencedBy: {id: 'project'}}
+    const defaults = {exclude: [doneRef]}
+    const local = {include: [projectRef]}
 
     expect(effectiveBacklinksFilterForBlock(dailyNoteData, local, defaults)).toEqual({
-      includeIds: ['project'],
-      removeIds: ['done'],
+      include: [projectRef],
+      exclude: [doneRef],
     })
     expect(effectiveBacklinksFilterForBlock(regularData, local, defaults)).toEqual({
-      includeIds: ['project'],
-      removeIds: [],
+      include: [projectRef],
+      exclude: [],
     })
   })
 
@@ -246,7 +255,7 @@ describe('backlinksDataExtension query', () => {
     const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['tag']},
+      filter: {include: [{scope: 'self', referencedBy: {id: 'tag'}}]},
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['src1'])
@@ -270,7 +279,7 @@ describe('backlinksDataExtension query', () => {
     const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['tag']},
+      filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['src-new', 'src-old'])
@@ -290,13 +299,13 @@ describe('backlinksDataExtension query', () => {
     const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['tag']},
+      filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['child'])
   })
 
-  it('filters backlinks by their containing root page', async () => {
+  it('filters backlinks by their containing root page (ancestor id predicate)', async () => {
     await create({id: 'target'})
     await create({id: 'page-a'})
     await create({id: 'page-b'})
@@ -314,7 +323,7 @@ describe('backlinksDataExtension query', () => {
     const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['page-a']},
+      filter: {include: [{scope: 'ancestor', id: 'page-a'}]},
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['child-a'])
@@ -332,7 +341,7 @@ describe('backlinksDataExtension query', () => {
     const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {removeIds: ['done']},
+      filter: {exclude: [{scope: 'ancestor', referencedBy: {id: 'done'}}]},
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['keep'])
@@ -358,7 +367,12 @@ describe('backlinksDataExtension query', () => {
     const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['tag-a', 'tag-b']},
+      filter: {
+        include: [
+          {scope: 'ancestor', referencedBy: {id: 'tag-a'}},
+          {scope: 'ancestor', referencedBy: {id: 'tag-b'}},
+        ],
+      },
     }).load())
 
     expect(out.map(row => row.id)).toEqual(['full'])
@@ -373,7 +387,7 @@ describe('backlinksDataExtension query', () => {
     ).resolves.toEqual([])
   })
 
-  it('declares target row, plugin target, and source row deps', async () => {
+  it('declares target row, typed-blocks reference channel, and source row deps', async () => {
     await create({id: 't', workspaceId: WS})
     await create({id: 'linker', workspaceId: WS})
     await env.h.db.execute(
@@ -387,7 +401,9 @@ describe('backlinksDataExtension query', () => {
     const deps = handle.__depsForTest()
 
     expect(depIds(deps, 'row')).toEqual(['linker', 't'])
-    expect(depIds(deps, 'plugin')).toEqual([`${REFERENCES_TARGET_INVALIDATION_CHANNEL}:t`])
+    expect(depIds(deps, 'plugin')).toContain(
+      `${TYPED_BLOCKS_REFERENCE_CHANNEL}:${typedBlocksReferenceKey(WS, 't')}`,
+    )
     expect(deps.some(d => d.kind === 'table')).toBe(false)
     expect(deps.some(d => d.kind === 'workspace')).toBe(false)
   })
@@ -405,12 +421,15 @@ describe('backlinksDataExtension query', () => {
     const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['tag']},
+      filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     })
     await handle.load()
 
     expect(handle.peek()).toEqual([])
-    expect(depIds(handle.__depsForTest(), 'row')).toEqual(['child', 'parent', 'target'])
+    // Ancestor walk registers row deps on every traversed ancestor id.
+    // 'child' is the candidate (refs target), 'parent' is its ancestor;
+    // 'target' is registered by the wrapper.
+    expect(depIds(handle.__depsForTest(), 'row').sort()).toEqual(['child', 'parent', 'target'])
   })
 
   it('re-resolves only when sources gain or lose references to the target', async () => {
@@ -483,7 +502,7 @@ describe('backlinksDataExtension query', () => {
     const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['tag']},
+      filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     })
     const fired: BlockData[][] = []
     handle.subscribe((value) => { fired.push(value as BlockData[]) })

@@ -17,6 +17,10 @@ vi.mock('@/hooks/block.ts', () => ({
   ) => opts.selector({content: block.id, properties: {}}),
 }))
 
+vi.mock('@/hooks/propertySchemas.ts', () => ({
+  usePropertySchemas: () => new Map(),
+}))
+
 describe('BacklinkFilters', () => {
   it('shows a config action for displayed default filters', () => {
     const openConfig = vi.fn()
@@ -25,7 +29,7 @@ describe('BacklinkFilters', () => {
       <BacklinkFilters
         workspaceId="ws-1"
         filter={{}}
-        baseFilter={{removeIds: ['done']}}
+        baseFilter={{exclude: [{scope: 'ancestor', referencedBy: {id: 'done'}}]}}
         baseLabel="Daily note defaults"
         baseConfigLabel="Open daily note defaults"
         onBaseConfigClick={openConfig}

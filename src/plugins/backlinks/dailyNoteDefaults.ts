@@ -16,13 +16,10 @@ import {
   type BacklinksFilter,
 } from './query.ts'
 
-export const INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS: StoredBacklinksFilter = {
-  includeIds: [],
-  removeIds: [],
-}
+export const INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS: StoredBacklinksFilter = EMPTY_BACKLINKS_FILTER
 
 export const dailyNoteBacklinksDefaultsProp = defineProperty<StoredBacklinksFilter>(
-  'dailyNotes:backlinksDefaults',
+  'dailyNotes:backlinksPredicates',
   {
     codec: backlinksFilterCodec,
     defaultValue: EMPTY_BACKLINKS_FILTER,

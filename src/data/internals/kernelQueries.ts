@@ -22,12 +22,16 @@ import {
   defineQuery,
   type AnyQuery,
   type BlockData,
+  type BlockPredicate,
+  type QueryCtx,
   type ResolvedTypedBlockQuery,
   type Schema,
 } from '@/data/api'
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
 import {
+  assertAncestorWalkBounded,
+  buildCandidatesCte,
   compileTypedBlockQuery,
   normalizeTypedBlockQuery,
 } from './typedBlockQuery'
@@ -385,15 +389,212 @@ export const byTypeQuery = defineQuery<{workspaceId: string; type: string}, Bloc
   },
 })
 
+const referenceFilterSchema = z.object({
+  id: z.string(),
+  sourceField: z.string().optional(),
+})
+
+const blockPredicateSchema = z.object({
+  scope: z.enum(['self', 'ancestor']).optional(),
+  id: z.string().optional(),
+  where: z.record(z.string(), z.unknown()).optional(),
+  referencedBy: referenceFilterSchema.optional(),
+})
+
 const typedBlocksArgsSchema = z.object({
   workspaceId: z.string(),
   types: z.array(z.string()).optional(),
   where: z.record(z.string(), z.unknown()).optional(),
-  referencedBy: z.object({
-    id: z.string(),
-    sourceField: z.string().optional(),
-  }).optional(),
+  referencedBy: referenceFilterSchema.optional(),
+  match: z.array(blockPredicateSchema).optional(),
+  exclude: z.array(blockPredicateSchema).optional(),
+  order: z.enum(['created-asc', 'created-desc']).optional(),
 })
+
+/** SQL that materializes every (block_id, anc_id) pair the typed query
+ *  considers when an ancestor-scoped predicate is present. Returns the
+ *  full set of ancestor ids touched so the resolver can register row
+ *  deps on them — content / property / parent_id changes on any
+ *  ancestor can flip membership and we need to wake. Mirrors the
+ *  ancestor_chain CTE the compiler emits, but materializes only the
+ *  candidate seed (no per-predicate filtering) since we want every
+ *  potentially-relevant ancestor in the dep set. */
+const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string) => `
+  WITH RECURSIVE
+    ${candidatesCte},
+    walk(anc_id, anc_parent_id, depth, path) AS (
+      SELECT seed.id, seed.parent_id, 0, '!' || hex(seed.id) || '/'
+      FROM candidates c
+      JOIN blocks seed ON seed.id = c.id
+      WHERE seed.deleted = 0
+      UNION ALL
+      SELECT
+        parent.id,
+        parent.parent_id,
+        walk.depth + 1,
+        walk.path || '!' || hex(parent.id) || '/'
+      FROM walk
+      JOIN blocks parent ON parent.id = walk.anc_parent_id
+      WHERE parent.deleted = 0
+        AND walk.depth < 100
+        AND INSTR(walk.path, '!' || hex(parent.id) || '/') = 0
+    )
+  SELECT DISTINCT anc_id FROM walk
+`
+
+
+const collectPredicateDeps = (
+  predicates: readonly BlockPredicate[],
+  workspaceId: string,
+  ctx: QueryCtx,
+): void => {
+  for (const predicate of predicates) {
+    if (predicate.where !== undefined) {
+      for (const name of Object.keys(predicate.where)) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
+          key: typedBlocksPropertyKey(workspaceId, name),
+        })
+      }
+    }
+    if (predicate.referencedBy !== undefined) {
+      const ref = predicate.referencedBy
+      if (ref.sourceField !== undefined) {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+          key: typedBlocksReferenceFieldKey(workspaceId, ref.id, ref.sourceField),
+        })
+      } else {
+        ctx.depend({
+          kind: 'plugin',
+          channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
+          key: typedBlocksReferenceKey(workspaceId, ref.id),
+        })
+      }
+    }
+  }
+}
+
+/** Resolve a typed block query against the given context. Used both
+ *  by `typedBlocksQuery` and by thin wrappers like `backlinksForBlockQuery`
+ *  that compose typed-query semantics — sharing this resolver keeps
+ *  the dep declarations and SQL in one place. */
+export const resolveTypedBlocks = async (
+  query: ResolvedTypedBlockQuery,
+  ctx: QueryCtx,
+): Promise<BlockData[]> => {
+  if (!query.workspaceId) return []
+  const normalized = normalizeTypedBlockQuery(query)
+  const workspaceId = normalized.workspaceId
+  const types = normalized.types ?? []
+  const whereNames = Object.keys(normalized.where ?? {})
+  const referencedBy = normalized.referencedBy
+  const matchPredicates = normalized.match ?? []
+  const excludePredicates = normalized.exclude ?? []
+
+  for (const t of types) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_TYPE_CHANNEL,
+      key: typedBlocksTypeKey(workspaceId, t),
+    })
+  }
+  for (const name of whereNames) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
+      key: typedBlocksPropertyKey(workspaceId, name),
+    })
+  }
+  if (referencedBy !== undefined) {
+    if (referencedBy.sourceField !== undefined) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+        key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
+      })
+    } else {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
+        key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
+      })
+    }
+  }
+  collectPredicateDeps(matchPredicates, workspaceId, ctx)
+  collectPredicateDeps(excludePredicates, workspaceId, ctx)
+
+  // Live channel — only when there's no positive membership axis to
+  // catch "fresh row could enter the result". A type/referencedBy
+  // filter or a non-null where predicate already implies the new row
+  // had to fire one of those channels to match, so live would be
+  // pure fan-out. Required for:
+  //   - no filters at all (degenerate "all live blocks" query)
+  //   - where with only null predicates (e.g. `{status: null}`) —
+  //     a row created without `status` set never fires the property
+  //     channel, so live is the only signal that a candidate
+  //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
+  //     don't need live: matching rows must set `foo='bar'` to
+  //     match, which fires the foo property channel.)
+  const hasNonNullWhere = whereNames.some(
+    name => (normalized.where as Record<string, unknown>)[name] !== null,
+  )
+  const hasMatchAxis = matchPredicates.some(p =>
+    p.referencedBy !== undefined ||
+    (p.where !== undefined && Object.values(p.where).some(v => v !== null)),
+  )
+  const hasPositiveAxis =
+    types.length > 0 || referencedBy !== undefined || hasNonNullWhere || hasMatchAxis
+  if (!hasPositiveAxis) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_LIVE_CHANNEL,
+      key: typedBlocksLiveKey(workspaceId),
+    })
+  }
+
+  const needsAncestorChain =
+    matchPredicates.some(p => p.scope === 'ancestor') ||
+    excludePredicates.some(p => p.scope === 'ancestor')
+
+  // Ancestor-scope predicates inspect rows up the parent chain.
+  // Register row deps on every ancestor id touched so a property /
+  // content / parent_id change on any ancestor wakes the handle.
+  if (needsAncestorChain) {
+    // Gate before the dep walk — same selectivity check the compiler
+    // will run later. Without this, an unbounded ancestor query would
+    // trigger the full recursive scan in the dep-seed step before
+    // bailing out in compile.
+    assertAncestorWalkBounded(normalized)
+    const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
+    const ancestorRows = await ctx.db.getAll<{anc_id: string}>(
+      ANCESTOR_DEP_NODES_SQL(candidatesCte.sql),
+      candidatesCte.params,
+    )
+    for (const row of ancestorRows) {
+      ctx.depend({kind: 'row', id: row.anc_id})
+    }
+  }
+
+  if (
+    types.length === 1 &&
+    normalized.where === undefined &&
+    referencedBy === undefined &&
+    matchPredicates.length === 0 &&
+    excludePredicates.length === 0 &&
+    normalized.order !== 'created-desc'
+  ) {
+    const rows = await ctx.db.getAll<BlockRow>(
+      SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, types[0]],
+    )
+    return ctx.hydrateBlocks(asBlockRows(rows))
+  }
+  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
+  const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
+  return ctx.hydrateBlocks(asBlockRows(rows))
+}
 
 /** SQLite-backed typed block query. Repo.queryBlocks / subscribeBlocks
  *  default workspaceId before dispatching here; direct query callers
@@ -407,6 +608,9 @@ const typedBlocksArgsSchema = z.object({
  *    - per name in `where`        → `typedBlocks.property` channel
  *    - `referencedBy.id` (no field) → `typedBlocks.reference` channel
  *    - `referencedBy.id + sourceField` → `typedBlocks.referenceField` channel
+ *    - per name in any `match`/`exclude` predicate's `where` → `typedBlocks.property`
+ *    - per `referencedBy` in any `match`/`exclude` predicate → reference channels
+ *    - any ancestor-scope predicate → row deps on every walked ancestor id
  *    - no filter at all           → `typedBlocks.live` channel
  *
  *  Per-row deps from `hydrateBlocks` cover edits to rows already in the
@@ -417,83 +621,7 @@ export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]
   name: 'core.typedBlocks',
   argsSchema: typedBlocksArgsSchema,
   resultSchema: blockDataArraySchema,
-  resolve: async (query, ctx) => {
-    if (!query.workspaceId) return []
-    const normalized = normalizeTypedBlockQuery(query)
-    const workspaceId = normalized.workspaceId
-    const types = normalized.types ?? []
-    const whereNames = Object.keys(normalized.where ?? {})
-    const referencedBy = normalized.referencedBy
-
-    for (const t of types) {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_TYPE_CHANNEL,
-        key: typedBlocksTypeKey(workspaceId, t),
-      })
-    }
-    for (const name of whereNames) {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-        key: typedBlocksPropertyKey(workspaceId, name),
-      })
-    }
-    if (referencedBy !== undefined) {
-      if (referencedBy.sourceField !== undefined) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
-          key: typedBlocksReferenceFieldKey(workspaceId, referencedBy.id, referencedBy.sourceField),
-        })
-      } else {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_REFERENCE_CHANNEL,
-          key: typedBlocksReferenceKey(workspaceId, referencedBy.id),
-        })
-      }
-    }
-
-    // Live channel — only when there's no positive membership axis to
-    // catch "fresh row could enter the result". A type/referencedBy
-    // filter or a non-null where predicate already implies the new row
-    // had to fire one of those channels to match, so live would be
-    // pure fan-out. Required for:
-    //   - no filters at all (degenerate "all live blocks" query)
-    //   - where with only null predicates (e.g. `{status: null}`) —
-    //     a row created without `status` set never fires the property
-    //     channel, so live is the only signal that a candidate
-    //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
-    //     don't need live: matching rows must set `foo='bar'` to
-    //     match, which fires the foo property channel.)
-    const hasNonNullWhere = whereNames.some(
-      name => (normalized.where as Record<string, unknown>)[name] !== null,
-    )
-    const hasPositiveAxis =
-      types.length > 0 || referencedBy !== undefined || hasNonNullWhere
-    if (!hasPositiveAxis) {
-      ctx.depend({
-        kind: 'plugin',
-        channel: TYPED_BLOCKS_LIVE_CHANNEL,
-        key: typedBlocksLiveKey(workspaceId),
-      })
-    }
-
-    if (
-      types.length === 1 &&
-      normalized.where === undefined &&
-      referencedBy === undefined
-    ) {
-      const rows = await ctx.db.getAll<BlockRow>(
-        SELECT_BLOCKS_BY_TYPE_SQL, [workspaceId, types[0]],
-      )
-      return ctx.hydrateBlocks(asBlockRows(rows))
-    }
-    const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
-    const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
-    return ctx.hydrateBlocks(asBlockRows(rows))
-  },
+  resolve: (query, ctx) => resolveTypedBlocks(query, ctx),
 })
 
 /** Substring-match content search. Empty `query` returns []. */
