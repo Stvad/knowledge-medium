@@ -158,6 +158,21 @@ describe('swipe-quick-actions gesture', () => {
     expect(opened).toEqual(['b-link-source'])
   })
 
+  it('opens the menu when the swipe starts on a video element', () => {
+    const surface = document.createElement('div')
+    const opened = recordOpenEvents(surface)
+    const props = handlers(makeContext('b-video-source'))
+    const video = document.createElement('video')
+    video.controls = true
+    surface.append(video)
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), video, surface))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102), video, surface))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), video, surface))
+
+    expect(opened).toEqual(['b-video-source'])
+  })
+
   it('keeps non-link interactive controls out of the swipe gesture', () => {
     const surface = document.createElement('div')
     const opened = recordOpenEvents(surface)
