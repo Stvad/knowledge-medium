@@ -28,6 +28,15 @@
           border-radius: 4px; margin: 1rem 0; }
   small { color: #57606a; }
   ul.tight li, ol.tight li { margin: .2rem 0; }
+  .tldr { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+          padding: .85rem 1rem; margin: 1rem 0 1.5rem; }
+  .tldr strong { color: #0969da; }
+  .scenario { background: #fbfbfb; border: 1px solid #d0d7de; border-radius: 6px;
+              padding: .75rem 1rem; margin: 1rem 0; }
+  .scenario h4 { margin-top: .25rem; }
+  figure { margin: 1.25rem 0; }
+  figcaption { font-size: 12px; color: #57606a; text-align: center; margin-top: .35rem; }
+  svg.diagram { width: 100%; height: auto; display: block; margin: 0 auto; }
 </style>
 </head>
 <body>
@@ -35,6 +44,23 @@
 <h1>Shares + API tokens</h1>
 <small>Design for scoped programmatic access. 2026-05-15. Standalone — supersedes
   <a href="./subtree-sharing.md">subtree-sharing.md</a> (historical reference only).</small>
+
+<div class="tldr">
+<strong>TL;DR.</strong> Agents and third parties need to read/write specific notes via an API. The
+right primitive is a <em>share</em>: a workspace-or-subtree scope plus an audience. An API token is
+the same shape as a future human invite &mdash; it puts a principal (a per-token service user) into a
+share's audience. <em>One</em> RLS predicate on <code>blocks</code> then covers everyone &mdash;
+workspace members, share recipients, and API tokens alike. PostgREST is the v1 API surface; an edge
+function swaps a token for a short-lived JWT and clients use Supabase as normal. The non-trivial
+piece is materializing "which subtree shares reach this block" onto a
+<code>blocks.effective_share_ids</code> column &mdash; workspaces can be 300k+ blocks and we can't
+walk parent pointers on every read.
+</div>
+
+<p><small><strong>Reading guide:</strong> &sect;1&ndash;3 are the conceptual picture; &sect;3a is a
+  concrete end-to-end walkthrough; &sect;4&ndash;7 are the schema/RLS/sync mechanics; &sect;8 is the
+  API-token lifecycle; &sect;9&ndash;14 are operational (UI, phasing, tests, tradeoffs).
+  If you only read three things: the TL;DR, &sect;3a, and &sect;6 with its tree picture.</small></p>
 
 <h2>1. What we have today</h2>
 
@@ -80,7 +106,51 @@ query time" RLS or sync predicate &mdash; access decisions on the read path must
 <h2>3. The unifying primitive</h2>
 
 <p>A <em>share</em> is the access primitive. Everything else is a way of putting a principal into a
-  share's audience.</p>
+  share's audience. The diagram below shows how three different "ways of joining a share" all funnel
+  into the same audience table, which a single RLS predicate then evaluates against.</p>
+
+<figure>
+<svg viewBox="0 0 720 290" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Three authentication paths (human invite, link redemption, API token exchange) funnel into block_share_members, which is read by one RLS predicate on blocks."
+     class="diagram" style="max-width:720px;">
+  <defs>
+    <marker id="arrowU" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 0, 9 4.5, 0 9" fill="#57606a"/>
+    </marker>
+  </defs>
+  <style>
+    .u-card { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.2; }
+    .u-blue { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.4; }
+    .u-yel  { fill: #fff8c5; stroke: #d4a72c; stroke-width: 1.4; }
+    .u-grn  { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.4; }
+    .u-arr  { stroke: #57606a; stroke-width: 1.4; fill: none; marker-end: url(#arrowU); }
+    .u-tt   { font: 600 12px -apple-system, sans-serif; fill: #1f2328; }
+    .u-sub  { font: 11px -apple-system, sans-serif; fill: #57606a; }
+    .u-code { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #1f2328; }
+  </style>
+  <rect class="u-card" x="20"  y="20" width="200" height="60" rx="6"/>
+  <text x="120" y="44" text-anchor="middle" class="u-tt">Human invite (email)</text>
+  <text x="120" y="64" text-anchor="middle" class="u-code">accept_share_invitation</text>
+  <rect class="u-card" x="260" y="20" width="200" height="60" rx="6"/>
+  <text x="360" y="44" text-anchor="middle" class="u-tt">Link redemption</text>
+  <text x="360" y="64" text-anchor="middle" class="u-code">redeem_share_link</text>
+  <rect class="u-blue" x="500" y="20" width="200" height="60" rx="6"/>
+  <text x="600" y="44" text-anchor="middle" class="u-tt">API token exchange</text>
+  <text x="600" y="64" text-anchor="middle" class="u-code">/api-token-exchange</text>
+  <path class="u-arr" d="M 120 80 Q 120 110 280 132"/>
+  <path class="u-arr" d="M 360 80 L 360 132"/>
+  <path class="u-arr" d="M 600 80 Q 600 110 440 132"/>
+  <rect class="u-yel" x="180" y="135" width="360" height="68" rx="6"/>
+  <text x="360" y="158" text-anchor="middle" class="u-tt">block_share_members</text>
+  <text x="360" y="178" text-anchor="middle" class="u-code">(share_id, user_id, role, source)</text>
+  <text x="360" y="194" text-anchor="middle" class="u-sub">user_id is a human OR a per-token service user</text>
+  <path class="u-arr" d="M 360 203 L 360 230"/>
+  <rect class="u-grn" x="180" y="232" width="360" height="46" rx="6"/>
+  <text x="360" y="255" text-anchor="middle" class="u-tt">One RLS predicate on public.blocks</text>
+  <text x="360" y="270" text-anchor="middle" class="u-sub">workspace member &nbsp;OR&nbsp; share recipient</text>
+</svg>
+<figcaption>Three audience-entry paths, one audience table, one access rule.</figcaption>
+</figure>
 
 <pre><code>Share
   workspace_id    text                          // always lives inside one workspace
@@ -106,9 +176,145 @@ members, workspace-scope shares, subtree-scope shares, human invites, link redem
 tokens. Adding a "future" share type (e.g. by-tag) doesn't disturb anything.
 </div>
 
+<h2>3a. End-to-end: what happens when you create an API token</h2>
+
+<p>The rest of this doc gets into schema and triggers. To make the picture concrete first, here is
+  one full scenario from token creation through a single API call to revocation.</p>
+
+<div class="scenario">
+<h4>The setup</h4>
+<p>You want to let Claude (an agent) read and write three project pages in your workspace. You open
+  <em>Settings &rarr; API tokens</em>, click "Create token", and fill in:
+  scope = <em>subtree</em>, roots = those three pages, role = <em>editor</em>,
+  name = "Claude on laptop", expiry = 90 days.</p>
+
+<h4>What the server does (one transaction)</h4>
+<ol class="tight">
+  <li>Inserts a <code>block_shares</code> row: <code>scope='subtree'</code>,
+    <code>purpose='api'</code>, <code>default_role='editor'</code>.</li>
+  <li>Inserts three <code>block_share_roots</code> rows, one per chosen page.</li>
+  <li>An <code>AFTER INSERT</code> trigger on <code>block_share_roots</code> fires
+    <code>recompute_share_ids_subtree</code> for each root &mdash; this stamps the share's id onto
+    <code>blocks.effective_share_ids</code> for the root <em>and every descendant</em>. The
+    materialization picture in &sect;6 shows what this looks like.</li>
+  <li>Creates a dedicated <em>service user</em> (a <code>auth.users</code> row whose only purpose is
+    to authenticate this token). This is the only step that needs <code>service_role</code>; it lives
+    inside the edge function.</li>
+  <li>Inserts a <code>block_share_members</code> row tying the service user to the share with
+    <code>role='editor'</code>, <code>source='api_token'</code>.</li>
+  <li>Generates a token, <code>km_live_&lt;43 chars&gt;</code>, stores
+    <code>sha256(token)</code> in <code>share_link_secrets</code>, stores
+    <code>share_links</code> metadata pointing at the service user.</li>
+  <li>Returns the plaintext token to your browser <em>exactly once</em>. You paste it into Claude's
+    config.</li>
+</ol>
+
+<h4>What every Claude API call does</h4>
+<ol class="tight">
+  <li>Claude <code>POST</code>s the token in <code>Authorization: Bearer</code> to
+    <code>/functions/v1/api-token-exchange</code>.</li>
+  <li>The edge function hashes the bearer, looks up the row in <code>share_link_secrets</code>,
+    checks the share/link aren't revoked or expired, mints a 15-minute Supabase JWT signed with
+    <code>sub = service_user_id</code>.</li>
+  <li>Claude calls <code>/rest/v1/blocks?id=eq.&lt;some_block_id&gt;</code> with that JWT.</li>
+  <li>Postgres evaluates the RLS predicate as the service user: <em>is there a
+    <code>block_share_members</code> row whose share covers this block?</em>
+    <ul class="tight">
+      <li>For blocks in the three chosen subtrees and their descendants: yes &mdash; matched because
+        the share id appears in that block's <code>effective_share_ids</code>. Row returned.</li>
+      <li>For any other block in the workspace: no &mdash; the service user has no
+        <code>workspace_members</code> row and no other share grant. Row denied.</li>
+    </ul>
+  </li>
+</ol>
+
+<h4>Revoking</h4>
+<p>You click "Revoke" in the UI. <code>revoke_api_token</code> sets <code>revoked_at</code> on the
+  share and the link. The RLS predicate filters revoked shares out automatically &mdash; new requests
+  fail. JWTs that were already issued continue to work until their 15-minute TTL expires.</p>
+</div>
+
+<p>That's the entire feature in one trace. Everything below is either the precise schema/RLS to make
+  the trace work, or operational concerns (UI, phases, tests, tradeoffs).</p>
+
 <h2>4. Schema</h2>
 
-<p>All additive. Existing tables and migrations are not touched destructively.</p>
+<p>All additive. Existing tables and migrations are not touched destructively. The picture below is
+  the at-a-glance shape of the new tables; SQL details follow.</p>
+
+<figure>
+<svg viewBox="0 0 980 380" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Schema ERD. block_shares is the center; block_share_roots, block_share_members, and share_links hang off it. share_link_secrets is locked behind share_links. The existing blocks table gains an effective_share_ids array column that references block_shares.id."
+     class="diagram" style="max-width:980px;">
+  <defs>
+    <marker id="arrowE" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 0, 9 4.5, 0 9" fill="#57606a"/>
+    </marker>
+  </defs>
+  <style>
+    .e-new   { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.4; }
+    .e-exist { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.2; }
+    .e-lock  { fill: #ffebe9; stroke: #cf222e; stroke-width: 1.4; }
+    .e-line  { stroke: #57606a; stroke-width: 1.2; fill: none; }
+    .e-line-dash { stroke: #0969da; stroke-width: 1.2; fill: none; stroke-dasharray: 4,3; }
+    .e-tt    { font: 600 13px ui-monospace, "SF Mono", Menlo, monospace; fill: #1f2328; }
+    .e-sub   { font: 10.5px -apple-system, sans-serif; fill: #57606a; }
+    .e-col   { font: 10.5px ui-monospace, "SF Mono", Menlo, monospace; fill: #1f2328; }
+    .e-hi    { font: 600 10.5px ui-monospace, "SF Mono", Menlo, monospace; fill: #cf222e; }
+    .e-newcol{ font: 600 10.5px ui-monospace, "SF Mono", Menlo, monospace; fill: #0969da; }
+  </style>
+  <!-- block_shares (center) -->
+  <rect class="e-new" x="370" y="20" width="240" height="124" rx="6"/>
+  <text x="490" y="40" text-anchor="middle" class="e-tt">block_shares</text>
+  <text x="380" y="60" class="e-col">id</text>
+  <text x="380" y="76" class="e-col">workspace_id</text>
+  <text x="380" y="92" class="e-col">scope: 'workspace'|'subtree'</text>
+  <text x="380" y="108" class="e-col">purpose: 'human'|'api'</text>
+  <text x="380" y="124" class="e-col">default_role, revoked_at</text>
+  <text x="380" y="138" class="e-sub">the share definition</text>
+  <!-- block_share_roots (left) -->
+  <rect class="e-new" x="20" y="180" width="240" height="84" rx="6"/>
+  <text x="140" y="200" text-anchor="middle" class="e-tt">block_share_roots</text>
+  <text x="30" y="220" class="e-col">share_id  →  block_shares</text>
+  <text x="30" y="236" class="e-col">root_block_id  →  blocks</text>
+  <text x="30" y="256" class="e-sub">only for scope='subtree'; one row per root</text>
+  <!-- block_share_members (center bottom) -->
+  <rect class="e-new" x="370" y="180" width="240" height="84" rx="6"/>
+  <text x="490" y="200" text-anchor="middle" class="e-tt">block_share_members</text>
+  <text x="380" y="220" class="e-col">share_id, user_id, role</text>
+  <text x="380" y="236" class="e-col">source: invite|link|api_token</text>
+  <text x="380" y="256" class="e-sub">audience &mdash; humans OR service users</text>
+  <!-- share_links (right) -->
+  <rect class="e-new" x="720" y="180" width="240" height="84" rx="6"/>
+  <text x="840" y="200" text-anchor="middle" class="e-tt">share_links</text>
+  <text x="730" y="220" class="e-col">share_id, role, expires_at</text>
+  <text x="730" y="236" class="e-col">purpose, service_user_id</text>
+  <text x="730" y="252" class="e-col">last_used_at, revoked_at</text>
+  <!-- share_link_secrets (right, locked) -->
+  <rect class="e-lock" x="720" y="296" width="240" height="56" rx="6"/>
+  <text x="840" y="316" text-anchor="middle" class="e-tt">share_link_secrets</text>
+  <text x="730" y="332" class="e-col">link_id, token_hash (sha256)</text>
+  <text x="730" y="346" class="e-hi">creator-only · never synced</text>
+  <!-- blocks (existing) -->
+  <rect class="e-exist" x="20" y="296" width="500" height="56" rx="6"/>
+  <text x="270" y="316" text-anchor="middle" class="e-tt">blocks  <tspan class="e-sub">(existing table)</tspan></text>
+  <text x="30" y="332" class="e-col">id, parent_id, workspace_id, content, …</text>
+  <text x="30" y="346" class="e-newcol">+ effective_share_ids text[]   (new; GIN-indexed)</text>
+  <!-- Lines from block_shares to its three relatives -->
+  <path class="e-line" d="M 410 144 L 200 180"/>
+  <path class="e-line" d="M 490 144 L 490 180"/>
+  <path class="e-line" d="M 580 144 L 800 180"/>
+  <!-- share_links -> secrets -->
+  <path class="e-line" d="M 840 264 L 840 296"/>
+  <!-- effective_share_ids array references block_shares.id -->
+  <path class="e-line-dash" d="M 270 296 L 270 270 L 370 220"/>
+  <text x="278" y="288" class="e-newcol">array-of-ids ↗</text>
+</svg>
+<figcaption>The new tables in dark blue, the existing <code>blocks</code> table in gray with its new
+  column highlighted, and <code>share_link_secrets</code> in red as the strictly-isolated token
+  store. The dashed line is not a real foreign key &mdash; it's the array of share ids stamped on each
+  block.</figcaption>
+</figure>
 
 <h3>4.1 New column on <code>blocks</code></h3>
 
@@ -293,7 +499,88 @@ update on every share create/revoke. The RLS branch on <code>workspace_id</code>
 already indexed.
 </div>
 
+<p>The picture is the easiest way to grasp this. When share <code>s1</code> is created with one of
+  its roots set to block <code>A</code>, a trigger walks the descendants of <code>A</code> and
+  stamps <code>s1</code> onto every block's <code>effective_share_ids</code> array. RLS later just
+  asks "is any share id in this block's array one I'm a member of?"</p>
+
+<figure>
+<svg viewBox="0 0 720 340" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="A tree of blocks. Share s1 is rooted at block A. The share's id is stamped on A, C, D, G (A and its descendants). Sibling B and its descendant E are unaffected."
+     class="diagram" style="max-width:720px;">
+  <style>
+    .m-edge  { stroke: #57606a; stroke-width: 1.4; fill: none; }
+    .m-node  { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.4; }
+    .m-root  { fill: #ddf4ff; stroke: #0969da; stroke-width: 2.4; }
+    .m-in    { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.6; }
+    .m-lbl   { font: 600 13px -apple-system, sans-serif; fill: #1f2328; }
+    .m-ann   { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #57606a; }
+    .m-stamp { font: 600 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #1a7f37; }
+    .m-share { font: 600 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #0969da; }
+    .m-title { font: 600 13px -apple-system, sans-serif; fill: #1f2328; }
+  </style>
+  <text x="20" y="22" class="m-title">Share s1 rooted at A &rarr; trigger stamps s1 onto A and every descendant.</text>
+  <!-- Edges first so nodes overlay -->
+  <path class="m-edge" d="M 360 78 L 200 144"/>
+  <path class="m-edge" d="M 360 78 L 520 144"/>
+  <path class="m-edge" d="M 200 144 L 120 218"/>
+  <path class="m-edge" d="M 200 144 L 280 218"/>
+  <path class="m-edge" d="M 520 144 L 520 218"/>
+  <path class="m-edge" d="M 280 218 L 280 290"/>
+  <!-- W (workspace root) -->
+  <circle class="m-node" cx="360" cy="60" r="22"/>
+  <text x="360" y="65" text-anchor="middle" class="m-lbl">W</text>
+  <text x="392" y="48" class="m-ann">[ ]</text>
+  <!-- A (share root) -->
+  <circle class="m-root" cx="200" cy="146" r="22"/>
+  <text x="200" y="151" text-anchor="middle" class="m-lbl">A</text>
+  <text x="232" y="138" class="m-stamp">[s1]</text>
+  <text x="232" y="154" class="m-share">&larr; root of s1</text>
+  <!-- B (unshared sibling) -->
+  <circle class="m-node" cx="520" cy="146" r="22"/>
+  <text x="520" y="151" text-anchor="middle" class="m-lbl">B</text>
+  <text x="552" y="146" class="m-ann">[ ]</text>
+  <!-- C (descendant of A) -->
+  <circle class="m-in" cx="120" cy="222" r="22"/>
+  <text x="120" y="227" text-anchor="middle" class="m-lbl">C</text>
+  <text x="62" y="222" text-anchor="end" class="m-stamp">[s1]</text>
+  <!-- D (descendant of A) -->
+  <circle class="m-in" cx="280" cy="222" r="22"/>
+  <text x="280" y="227" text-anchor="middle" class="m-lbl">D</text>
+  <text x="312" y="222" class="m-stamp">[s1]</text>
+  <!-- E (descendant of B, unshared) -->
+  <circle class="m-node" cx="520" cy="222" r="22"/>
+  <text x="520" y="227" text-anchor="middle" class="m-lbl">E</text>
+  <text x="552" y="222" class="m-ann">[ ]</text>
+  <!-- G (descendant of D) -->
+  <circle class="m-in" cx="280" cy="294" r="22"/>
+  <text x="280" y="299" text-anchor="middle" class="m-lbl">G</text>
+  <text x="312" y="299" class="m-stamp">[s1]</text>
+  <!-- Legend -->
+  <g transform="translate(20, 320)">
+    <circle class="m-root" cx="10" cy="0" r="8"/>
+    <text x="24" y="4" class="m-ann">share root</text>
+    <circle class="m-in" cx="120" cy="0" r="8"/>
+    <text x="134" y="4" class="m-ann">stamped (in share's subtree)</text>
+    <circle class="m-node" cx="340" cy="0" r="8"/>
+    <text x="354" y="4" class="m-ann">untouched (empty array)</text>
+  </g>
+</svg>
+<figcaption>What the recompute function (&sect;6.1) produces. <code>effective_share_ids</code> shown
+  in brackets next to each block.</figcaption>
+</figure>
+
+<p>A second share <code>s2</code> nested at, say, block <code>D</code> would result in
+  <code>D</code> and <code>G</code> carrying <code>[s1, s2]</code>. Different audiences can be granted
+  to <code>s1</code> and <code>s2</code> &mdash; effective access becomes the union, role becomes
+  the max. The array shape (rather than a scalar nearest-ancestor) is what makes nesting work without
+  losing the outer audience.</p>
+
 <h3>6.1 Recompute function</h3>
+
+<p>One function, one recursive CTE. Walks descendants from a root, unioning each block's existing
+  <code>effective_share_ids</code> contribution from the parent with any new share ids anchored at
+  the block itself. The result is an O(subtree-size) <code>UPDATE</code> on <code>public.blocks</code>.</p>
 
 <pre><code>create or replace function public.recompute_share_ids_subtree(p_root_block_id text)
 returns void
@@ -434,6 +721,83 @@ the same triggers; only the storage shape changes, all RLS / RPC logic carries o
 </div>
 
 <h2>8. API tokens</h2>
+
+<p>An API call has two hops: first the client trades its long-lived bearer token for a short-lived
+  Supabase JWT, then it uses that JWT against PostgREST exactly like the in-app client would. The
+  diagram below shows the full round trip; subsections below give the details.</p>
+
+<figure>
+<svg viewBox="0 0 880 420" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Sequence diagram. Agent posts the bearer token to the exchange edge function, which validates against share_link_secrets and mints a 15-minute JWT. The agent then calls PostgREST with the JWT; RLS enforces scope; rows are returned."
+     class="diagram" style="max-width:880px;">
+  <defs>
+    <marker id="arrowS" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 0, 9 4.5, 0 9" fill="#0969da"/>
+    </marker>
+  </defs>
+  <style>
+    .s-head  { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.4; }
+    .s-svc   { fill: #fff8c5; stroke: #d4a72c; stroke-width: 1.4; }
+    .s-line  { stroke: #d0d7de; stroke-width: 1; stroke-dasharray: 4,3; }
+    .s-msg   { stroke: #0969da; stroke-width: 1.6; fill: none; marker-end: url(#arrowS); }
+    .s-label { font: 600 12px -apple-system, sans-serif; fill: #1f2328; }
+    .s-msg-l { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #1f2328; }
+    .s-annot { font: 10.5px -apple-system, sans-serif; fill: #57606a; font-style: italic; }
+    .s-phase { font: 600 11px -apple-system, sans-serif; fill: #0969da; }
+  </style>
+  <!-- Lifelines headers -->
+  <rect class="s-head" x="20"  y="20" width="140" height="36" rx="6"/>
+  <text x="90"  y="44" text-anchor="middle" class="s-label">Agent (client)</text>
+  <rect class="s-head" x="200" y="20" width="170" height="36" rx="6"/>
+  <text x="285" y="44" text-anchor="middle" class="s-label">/api-token-exchange</text>
+  <rect class="s-svc"  x="410" y="20" width="160" height="36" rx="6"/>
+  <text x="490" y="44" text-anchor="middle" class="s-label">share_link_secrets</text>
+  <rect class="s-head" x="610" y="20" width="120" height="36" rx="6"/>
+  <text x="670" y="44" text-anchor="middle" class="s-label">PostgREST</text>
+  <rect class="s-svc"  x="770" y="20" width="100" height="36" rx="6"/>
+  <text x="820" y="44" text-anchor="middle" class="s-label">RLS / blocks</text>
+  <!-- Lifelines -->
+  <line class="s-line" x1="90"  y1="56" x2="90"  y2="400"/>
+  <line class="s-line" x1="285" y1="56" x2="285" y2="400"/>
+  <line class="s-line" x1="490" y1="56" x2="490" y2="400"/>
+  <line class="s-line" x1="670" y1="56" x2="670" y2="400"/>
+  <line class="s-line" x1="820" y1="56" x2="820" y2="400"/>
+  <!-- Phase label: exchange -->
+  <text x="20" y="80" class="s-phase">① EXCHANGE (once per ~15 min)</text>
+  <!-- 1: agent -> exchange -->
+  <path class="s-msg" d="M 90 100 L 280 100"/>
+  <text x="185" y="94" text-anchor="middle" class="s-msg-l">POST  Authorization: Bearer km_live_…</text>
+  <!-- 2: exchange -> secrets -->
+  <path class="s-msg" d="M 285 134 L 485 134"/>
+  <text x="385" y="128" text-anchor="middle" class="s-msg-l">SELECT … WHERE token_hash = sha256(bearer)</text>
+  <!-- 3: secrets -> exchange -->
+  <path class="s-msg" d="M 490 162 L 290 162"/>
+  <text x="390" y="156" text-anchor="middle" class="s-msg-l">link_id, service_user_id, expires_at, …</text>
+  <!-- validation note -->
+  <text x="285" y="184" class="s-annot">validate (not revoked, not expired) · mint JWT { sub: service_user_id, exp: now + 15m }</text>
+  <!-- 4: exchange -> agent -->
+  <path class="s-msg" d="M 285 212 L 95 212"/>
+  <text x="190" y="206" text-anchor="middle" class="s-msg-l">access_token (JWT)</text>
+  <!-- Phase label: use -->
+  <text x="20" y="244" class="s-phase">② USE (every API call, JWT until expiry)</text>
+  <!-- 5: agent -> postgrest -->
+  <path class="s-msg" d="M 90 268 L 665 268"/>
+  <text x="377" y="262" text-anchor="middle" class="s-msg-l">GET /rest/v1/blocks?…    Bearer &lt;JWT&gt;</text>
+  <!-- 6: postgrest -> RLS -->
+  <path class="s-msg" d="M 670 302 L 815 302"/>
+  <text x="742" y="296" text-anchor="middle" class="s-msg-l">SELECT * FROM blocks WHERE …</text>
+  <text x="820" y="324" text-anchor="middle" class="s-annot">policy: workspace member</text>
+  <text x="820" y="338" text-anchor="middle" class="s-annot">OR share covers this row</text>
+  <!-- 7: RLS -> PostgREST -->
+  <path class="s-msg" d="M 820 362 L 675 362"/>
+  <text x="747" y="356" text-anchor="middle" class="s-msg-l">filtered rows</text>
+  <!-- 8: PostgREST -> agent -->
+  <path class="s-msg" d="M 670 392 L 95 392"/>
+  <text x="380" y="386" text-anchor="middle" class="s-msg-l">200 OK + rows</text>
+</svg>
+<figcaption>Phase ① runs once per JWT lifetime; phase ② runs on every API call with the cached JWT.
+  No service_role secrets ever leave the edge function.</figcaption>
+</figure>
 
 <h3>8.1 Why service-users-per-token</h3>
 
