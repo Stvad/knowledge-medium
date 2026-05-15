@@ -34,7 +34,10 @@ describe('dailyNotesPlugin', () => {
 
     expect(runtime.read(appMountsFacet)).toContain(dailyNotePickerMount)
     expect(runtime.read(headerItemsFacet)).toContain(dailyNotePickerHeaderItem)
-    expect(runtime.read(actionsFacet)).toContain(openDailyNotePickerAction)
-    expect(openDailyNotePickerAction.id).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
+
+    const actions = runtime.read(actionsFacet)
+    const pickerAction = actions.find(action => action.id === OPEN_DAILY_NOTE_PICKER_ACTION_ID)
+    expect(pickerAction).toBeTruthy()
+    expect(openDailyNotePickerAction({repo: fakeRepo}).id).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
   })
 })

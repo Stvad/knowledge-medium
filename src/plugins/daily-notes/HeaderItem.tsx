@@ -1,23 +1,33 @@
 import type { MouseEvent } from 'react'
 import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useRepo } from '@/context/repo.tsx'
 import { useRunAction } from '@/shortcuts/runAction.ts'
 import { openDailyNotePicker } from './events.ts'
 import {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
   OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
+  resolveCurrentDailyNoteIso,
 } from './actions.ts'
 
 const runHeaderActionEvent = (actionId: string) =>
   new CustomEvent('daily-note-header-action', {detail: {actionId}})
 
 export function DailyNotePickerHeaderItem() {
+  const repo = useRepo()
   const runAction = useRunAction()
 
-  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+  const handleClick = async (event: MouseEvent<HTMLButtonElement>) => {
+    // Capture the rect synchronously — `event.currentTarget` is nulled
+    // after the handler yields once we await below.
     const {bottom, height, left, right, top, width} =
       event.currentTarget.getBoundingClientRect()
+    const workspaceId = repo.activeWorkspaceId
+    const initialIso = workspaceId
+      ? (await resolveCurrentDailyNoteIso(repo, workspaceId)) ?? undefined
+      : undefined
     openDailyNotePicker({
       anchorRect: {bottom, height, left, right, top, width},
+      initialIso,
     })
   }
 
@@ -43,7 +53,11 @@ export function DailyNotePickerHeaderItem() {
       </button>
       <button
         className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:text-foreground"
-        onClick={handleClick}
+        onClick={event => {
+          void handleClick(event).catch(error => {
+            console.error('[DailyNotePickerHeaderItem] Open picker failed', error)
+          })
+        }}
         title="Open daily note picker"
         aria-label="Open daily note picker"
       >

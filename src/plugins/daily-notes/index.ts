@@ -48,8 +48,9 @@ import {
   type HeaderItemContribution,
 } from '@/extensions/core.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
+import { parseAppHash } from '@/utils/routing.ts'
 import { CalendarDays } from 'lucide-react'
-import { dailyNotesActions } from './actions.ts'
+import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import { dateReferenceShiftActions } from './dateShift.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
@@ -61,6 +62,7 @@ export {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
   OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
   OPEN_TODAY_ACTION_ID,
+  resolveCurrentDailyNoteIso,
 } from './actions.ts'
 export {
   openDailyNotePicker,
@@ -82,13 +84,27 @@ export const dailyNotePickerHeaderItem: HeaderItemContribution = {
   component: DailyNotePickerHeaderItem,
 }
 
-export const openDailyNotePickerAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
+// Factory — handler resolves the currently-viewed daily note's ISO
+// (via `resolveCurrentDailyNoteIso`) so the picker opens on that
+// month with the day pre-selected, matching the header-button path.
+// Falls back to `repo.activeWorkspaceId` when the hash hasn't set a
+// workspace yet (parity with `openDailyNoteByOffset`).
+export const openDailyNotePickerAction = (
+  {repo}: {repo: Repo},
+): ActionConfig<typeof ActionContextTypes.GLOBAL> => ({
   id: OPEN_DAILY_NOTE_PICKER_ACTION_ID,
   description: 'Open daily note picker',
   context: ActionContextTypes.GLOBAL,
   icon: CalendarDays,
-  handler: () => openDailyNotePicker(),
-}
+  handler: async () => {
+    const route = parseAppHash(window.location.hash)
+    const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
+    const initialIso = workspaceId
+      ? (await resolveCurrentDailyNoteIso(repo, workspaceId)) ?? undefined
+      : undefined
+    openDailyNotePicker({initialIso})
+  },
+})
 
 // Factory rather than a const because the action handlers close over
 // `repo` (they call `repo.activeWorkspaceId` and `getOrCreateDailyNote`
@@ -113,7 +129,7 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   dateReferenceShiftActions.map(action =>
     actionsFacet.of(action, {source: 'daily-notes'}),
   ),
-  actionsFacet.of(openDailyNotePickerAction, {source: 'daily-notes'}),
+  actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
   headerItemsFacet.of(dailyNotePickerHeaderItem, {
     source: 'daily-notes',
     precedence: 5,
