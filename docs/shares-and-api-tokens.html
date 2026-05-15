@@ -697,11 +697,20 @@ end $$;</code></pre>
 
 <table>
 <tr><th>Trigger</th><th>Behavior</th></tr>
+<tr><td><code>blocks BEFORE INSERT</code></td>
+    <td>Set <code>NEW.effective_share_ids := coalesce(parent.effective_share_ids, '{}')</code>.
+      <strong>Must be BEFORE, not AFTER:</strong> RLS <code>WITH CHECK</code> on
+      <code>blocks_write</code> is evaluated against <code>NEW</code> immediately after row-level
+      triggers but before statement-level ones, and an AFTER trigger can't modify the row anyway. A
+      subtree-scoped editor inserting a child block needs the array populated <em>before</em> the
+      policy check so the share-membership branch can match. (Workspace writers pass the policy
+      regardless.)</td></tr>
 <tr><td><code>blocks AFTER INSERT</code></td>
-    <td>Set <code>NEW.effective_share_ids</code> to <code>parent.effective_share_ids</code> (or
-      <code>'{}'</code> if no parent). One-row update, no recursion. Also fire a fix-up for
-      pre-existing children of <code>NEW</code> whose array is empty &mdash; handles PowerSync
-      uploading child rows before their parent.</td></tr>
+    <td>Fix-up: if the inserted row has any pre-existing children whose
+      <code>effective_share_ids</code> is empty, recompute the subtree from <code>NEW.id</code>.
+      Handles the PowerSync replay case where a child arrives before its parent &mdash; the child's
+      BEFORE trigger saw no parent and stamped <code>'{}'</code>; this AFTER trigger backfills once
+      the parent lands.</td></tr>
 <tr><td><code>blocks AFTER UPDATE OF parent_id</code></td>
     <td>Call <code>recompute_share_ids_subtree(NEW.id)</code>. The moved subtree gets reconsidered
       against its new ancestor chain.</td></tr>
@@ -924,7 +933,7 @@ Authorization: Bearer &lt;caller's Supabase JWT&gt;
 
 <h4>Database RPC contract (called from inside the edge function only)</h4>
 
-<pre><code>_create_api_token_records(
+<pre><code>private.create_api_token_records(
   p_caller_user_id   text,    -- issuing user, already verified by the edge function
   p_scope            text,
   p_workspace_id     text,
@@ -938,7 +947,22 @@ Authorization: Bearer &lt;caller's Supabase JWT&gt;
   share  public.block_shares,
   link   public.share_links   -- metadata only; no token columns
 )
-language plpgsql security definer set search_path = public</code></pre>
+language plpgsql security definer set search_path = public, private;
+
+-- Belt-and-braces: even though `private` schema is not exposed via PostgREST by
+-- default, explicitly deny client roles from calling this function.
+revoke execute on function private.create_api_token_records(
+  text, text, text, text[], text, text, bigint, text, bytea
+) from public, anon, authenticated;</code></pre>
+
+<p>The RPC lives in the <code>private</code> schema (alongside <code>private.is_workspace_member</code>,
+  <code>private.is_workspace_writer</code>, and the new <code>private.role_max</code>). Supabase's
+  PostgREST only exposes the <code>public</code> schema, so client roles cannot reach this function
+  via REST at all. The explicit <code>REVOKE</code> is there as a second line of defense: if the
+  schema-exposure setting is ever changed, the function still rejects calls from
+  <code>anon</code> / <code>authenticated</code>. Only the edge function (running with
+  <code>service_role</code>) can invoke it. This is the boundary that prevents a workspace viewer
+  from minting themselves an editor token by calling the RPC directly.</p>
 
 <p>Edge-function flow:</p>
 
@@ -952,7 +976,7 @@ language plpgsql security definer set search_path = public</code></pre>
 <pre><code>const plaintext = 'km_live_' + crypto.randomBytes(32).toString('base64url')
 const hash      = crypto.createHash('sha256').update(plaintext).digest()</code></pre>
   </li>
-  <li>Call <code>_create_api_token_records(..., p_service_user_id, p_token_hash = hash)</code>.
+  <li>Call <code>private.create_api_token_records(..., p_service_user_id, p_token_hash = hash)</code>.
     Inside that RPC, in one transaction:
     <ul class="tight">
       <li>Insert <code>block_shares</code> + <code>block_share_roots</code> rows. Recompute trigger
@@ -1023,15 +1047,21 @@ build it speculatively.
 
 <h3>8.5 Revocation, rotation, list</h3>
 
-<pre><code>revoke_api_token(p_link_id text) returns void;
+<pre><code>-- Public, authenticated-callable.
+public.revoke_api_token(p_link_id text) returns void;
   -- Sets share_links.revoked_at and block_shares.revoked_at.
-  -- Service user is NOT deleted -- preserves audit trail for past writes.
+  -- Authorization: caller must be the link creator OR a workspace writer for the share's
+  -- workspace. Service user is NOT deleted -- preserves audit trail for past writes.
 
-rotate_api_token(p_link_id text) returns text;
-  -- New plaintext token; updates share_link_secrets.token_hash; old token stops working.
+public.list_my_api_tokens() returns table (... no token, no hash ...);
+  -- For settings UI.
 
-list_my_api_tokens() returns table (... no token, no hash ...);
-  -- For settings UI.</code></pre>
+-- Rotation goes through the edge function (same boundary as creation in 8.2):
+-- the edge function generates new plaintext + hash, then calls a private hash-only RPC.
+private.rotate_api_token_hash(p_link_id text, p_new_token_hash bytea) returns void;
+  -- Updates share_link_secrets.token_hash for the link. Authorization is done in the
+  -- edge function (caller must own the link); execute is REVOKEd from anon/authenticated.
+  -- Returns void: plaintext is in the edge function's HTTP response only.</code></pre>
 
 <div class="warn">
 <strong>Revocation lag.</strong> Issued JWTs live for the configured TTL (default 15 minutes &mdash;
