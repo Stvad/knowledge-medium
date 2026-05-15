@@ -486,4 +486,77 @@ describe('groupedBacklinksDataExtension query', () => {
       expect(fired).toEqual([['parent'], ['Project']])
     })
   })
+
+  it('re-resolves when an intermediate (non-root, non-group) ancestor gains a reference', async () => {
+    // Three-level chain: root → mid (intermediate) → src1/src2.
+    // mid is neither the root (so not emitted as a 'root' group)
+    // nor does it have refs initially (so not a 'ref' group).
+    // Two sources share the same chain so 'Tag' is a multi-source
+    // group when mid gains the ref — avoids the singleton→Other merge
+    // that would obscure the invalidation signal.
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'tag', content: 'Tag'})
+    await create({id: 'root'})
+    await create({id: 'mid', parentId: 'root'})
+    await create({
+      id: 'src1',
+      parentId: 'mid',
+      references: [{id: 'target', alias: 'T'}],
+    })
+    await create({
+      id: 'src2',
+      parentId: 'mid',
+      references: [{id: 'target', alias: 'T'}],
+    })
+
+    const handle = env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    })
+    const fired: string[][] = []
+    handle.subscribe((value) => {
+      fired.push(value.groups.map(group => group.label))
+    })
+    await vi.waitFor(() => expect(fired.length).toBeGreaterThan(0))
+    const initialGroups = fired[fired.length - 1]
+    expect(initialGroups).not.toContain('Tag')
+
+    await env.repo.tx(tx => tx.update('mid', {
+      references: [{id: 'tag', alias: 'Tag'}],
+    }), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => {
+      // 'Tag' is now in mid's refs and applies to both sources → appears as a group.
+      expect(fired[fired.length - 1]).toContain('Tag')
+    })
+  })
+
+  it('re-resolves when a new source gains a reference to the target', async () => {
+    // Verifies the typed-blocks reference channel dep is registered
+    // on THIS handle, not lost in a sub-query call. A fresh block
+    // that didn't exist at resolve time must wake the handle when it
+    // adds a ref to the target.
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'tag', content: 'Tag'})
+    await create({id: 'orphan', references: [{id: 'tag', alias: 'Tag'}]})
+
+    const handle = env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    })
+    const fired: number[] = []
+    handle.subscribe((value) => { fired.push(value.total) })
+    await vi.waitFor(() => expect(fired).toEqual([0]))
+
+    await env.repo.tx(tx => tx.update('orphan', {
+      references: [
+        {id: 'target', alias: 'T'},
+        {id: 'tag', alias: 'Tag'},
+      ],
+    }), {scope: ChangeScope.BlockDefault})
+
+    await vi.waitFor(() => {
+      expect(fired[fired.length - 1]).toBe(1)
+    })
+  })
 })

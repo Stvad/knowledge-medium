@@ -6,11 +6,11 @@ import {
 } from '@/data/blockSchema'
 import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
 import {
-  BACKLINKS_FOR_BLOCK_QUERY,
   hasBacklinksFilter,
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
+import { resolveTypedBlocks } from '@/data/internals/kernelQueries.ts'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -142,6 +142,37 @@ export const selectGroupedBacklinkFieldCandidatesSql = (sourceCount: number): st
   ORDER BY refs.source_id, refs.source_field
 `
 
+/** Materialize every (block_id, ancestor_id) pair the grouping CTE
+ *  would visit, so the resolver can register row deps on every
+ *  walked ancestor. Without these deps, an intermediate ancestor
+ *  (one that isn't itself a group block) gaining or losing a
+ *  reference wouldn't invalidate the grouped handle, leaving
+ *  groupings stale. Same recursion shape as the grouping CTE — just
+ *  emits the ids without the join to block_references. */
+export const selectGroupedBacklinkAncestorIdsSql = (sourceCount: number): string => `
+  WITH RECURSIVE
+    ${sourceIdsCte(sourceCount)},
+    walk(source_id, anc_id, anc_parent_id, depth, path) AS (
+      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
+      FROM source_ids s
+      JOIN blocks b ON b.id = s.id
+      WHERE b.deleted = 0
+      UNION ALL
+      SELECT
+        walk.source_id,
+        parent.id,
+        parent.parent_id,
+        walk.depth + 1,
+        walk.path || '!' || hex(parent.id) || '/'
+      FROM walk
+      JOIN blocks parent ON parent.id = walk.anc_parent_id
+      WHERE parent.deleted = 0
+        AND walk.depth < 100
+        AND INSTR(walk.path, '!' || hex(parent.id) || '/') = 0
+    )
+  SELECT DISTINCT anc_id FROM walk
+`
+
 export const groupedBacklinksForBlockQuery = defineQuery<
   {
     workspaceId: string
@@ -166,15 +197,41 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     const normalizedGroupingConfig = normalizeGroupedBacklinksConfig(
       groupingConfig ?? EMPTY_GROUPED_BACKLINKS_CONFIG,
     )
-    const backlinkArgs = hasBacklinksFilter(normalizedFilter)
-      ? {workspaceId, id, filter: normalizedFilter}
-      : {workspaceId, id}
-    // Forwards target row dep, typed-blocks reference channel dep,
-    // and per-source row deps via the wrapper.
-    const sources = await ctx.repo.query[BACKLINKS_FOR_BLOCK_QUERY](backlinkArgs).load()
-    if (sources.length === 0) return {groups: [], total: 0}
 
-    const sourceIds = sources.map(source => source.id)
+    // Target row dep — mirrors the backlinks wrapper. Re-resolve if
+    // the target row itself changes (e.g. soft-delete).
+    ctx.depend({kind: 'row', id})
+
+    // Inline-resolve the typed-blocks call so its deps (typed-blocks
+    // reference channel, per-source row deps via hydrateBlocks, etc.)
+    // register against THIS handle, not the sub-query's handle. A
+    // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
+    // execute correctly but leave the grouped handle without the
+    // invalidation triggers that wake the backlinks handle.
+    const sourceData = (await resolveTypedBlocks({
+      workspaceId,
+      referencedBy: {id},
+      match: hasBacklinksFilter(normalizedFilter) ? normalizedFilter.include : undefined,
+      exclude: hasBacklinksFilter(normalizedFilter) ? normalizedFilter.exclude : undefined,
+      order: 'created-desc',
+    }, ctx)).filter(r => r.id !== id)
+    if (sourceData.length === 0) return {groups: [], total: 0}
+
+    const sourceIds = sourceData.map(source => source.id)
+
+    // Walk every ancestor of every source up-front so intermediate
+    // ancestors (rows that aren't themselves emitted as groups, but
+    // whose references shape what groups exist) wake the handle when
+    // their refs / parent_id change. Without this, an intermediate
+    // ancestor gaining a ref wouldn't invalidate this handle —
+    // grouped output would go stale.
+    const ancestorIdRows = await ctx.db.getAll<{anc_id: string}>(
+      selectGroupedBacklinkAncestorIdsSql(sourceIds.length),
+      sourceIds,
+    )
+    for (const row of ancestorIdRows) {
+      ctx.depend({kind: 'row', id: row.anc_id})
+    }
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       selectGroupedBacklinkCandidatesSql(sourceIds.length),
@@ -210,11 +267,11 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     return {
       groups: buildGroupedBacklinks({
         targetId: id,
-        sourceOrder: sources.map(source => source.id),
+        sourceOrder: sourceIds,
         candidates,
         groupingConfig: normalizedGroupingConfig,
       }),
-      total: sources.length,
+      total: sourceData.length,
     }
   },
 })
