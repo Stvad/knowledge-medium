@@ -394,9 +394,28 @@ supports it.
 create index idx_block_share_members_user_id  on public.block_share_members(user_id);
 create index idx_block_share_members_share_id on public.block_share_members(share_id);</code></pre>
 
-<p>Inserts use <code>GREATEST(existing.role, new.role)</code> semantics on the unique constraint &mdash;
-  granting the same share at a lower role does not silently demote. The one place that may lower a
-  role is the explicit <code>update_share_member_role</code> RPC.</p>
+<p>Inserts use <strong>explicit role precedence</strong> on upsert so a re-grant at a lower role
+  cannot silently demote. Roles are stored as <code>text</code>, so the natural lexicographic order
+  is <em>wrong</em> (<code>'editor' &lt; 'viewer'</code>); we encode the precedence directly:</p>
+
+<pre><code>-- One helper, used everywhere a role merge happens (RPCs, redeem, accept).
+create or replace function private.role_max(a text, b text) returns text
+  language sql immutable as $$
+    select case
+      when a = 'editor' or b = 'editor' then 'editor'
+      else 'viewer'
+    end
+  $$;
+
+-- Upsert pattern:
+insert into public.block_share_members (share_id, user_id, role, ...)
+values (...)
+on conflict (share_id, user_id) do update
+  set role = private.role_max(public.block_share_members.role, excluded.role);</code></pre>
+
+<p>The one place that may lower a role is the explicit <code>update_share_member_role</code> RPC,
+  which sets the role unconditionally after authorization checks. If a third role
+  (<code>'admin'</code>, future) is ever added, <code>role_max</code> is the one site to update.</p>
 
 <h3>4.4 Credential surface</h3>
 
