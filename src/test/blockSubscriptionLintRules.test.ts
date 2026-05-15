@@ -245,8 +245,8 @@ describe('block subscription ESLint rules', () => {
   )
 
   ruleTester.run(
-    'prefer-focus-block',
-    blockSubscriptions.rules['prefer-focus-block'],
+    'prefer-set-block-focus',
+    blockSubscriptions.rules['prefer-set-block-focus'],
     {
       valid: [
         {
@@ -293,9 +293,9 @@ describe('block subscription ESLint rules', () => {
         {
           // Already migrated.
           code: `
-            import { focusBlock } from '@/data/properties'
+            import { setBlockFocus } from '@/data/properties'
             async function handler({uiStateBlock, block}) {
-              await focusBlock(uiStateBlock, block.id, {edit: true})
+              await setBlockFocus(uiStateBlock, block.id, {edit: true})
             }
           `,
         },
@@ -310,8 +310,8 @@ describe('block subscription ESLint rules', () => {
             }
           `,
           errors: [
-            {messageId: 'preferFocusBlock'},
-            {messageId: 'preferFocusBlock'},
+            {messageId: 'preferSetBlockFocus'},
+            {messageId: 'preferSetBlockFocus'},
           ],
         },
         {
@@ -325,8 +325,8 @@ describe('block subscription ESLint rules', () => {
             }
           `,
           errors: [
-            {messageId: 'preferFocusBlock'},
-            {messageId: 'preferFocusBlock'},
+            {messageId: 'preferSetBlockFocus'},
+            {messageId: 'preferSetBlockFocus'},
           ],
         },
         {
@@ -339,8 +339,8 @@ describe('block subscription ESLint rules', () => {
             }
           `,
           errors: [
-            {messageId: 'preferFocusBlock'},
-            {messageId: 'preferFocusBlock'},
+            {messageId: 'preferSetBlockFocus'},
+            {messageId: 'preferSetBlockFocus'},
           ],
         },
       ],

@@ -16,8 +16,8 @@ import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
 import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
 import {
   editorSelection,
-  focusBlock,
   requestEditorFocus,
+  setBlockFocus,
   topLevelBlockIdProp,
 } from '@/data/properties.ts'
 import { Button } from './ui/button'
@@ -154,7 +154,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
       blockId: target.id,
       ...selection,
     })
-    await focusBlock(uiStateBlock, target.id, {edit: true})
+    await setBlockFocus(uiStateBlock, target.id, {edit: true})
     requestEditorFocus(uiStateBlock)
   }
 

@@ -330,7 +330,7 @@ const noBroadBlockSubscriptions = {
 /** `setFocusedBlockId` + `setIsEditing` written in sequence produce a
  *  brief intermediate state where the newly-focused block inherits the
  *  previous holder's editing flag — exactly the race condition that bit
- *  the command-palette quick action. `focusBlock(uiStateBlock, id,
+ *  the command-palette quick action. `setBlockFocus(uiStateBlock, id,
  *  {edit})` writes both in one tx and returns the awaitable promise.
  *
  *  Heuristic: within a single function body, if a call to
@@ -339,17 +339,17 @@ const noBroadBlockSubscriptions = {
  *  We only look at direct children of the same BlockStatement to keep
  *  the rule cheap and false-positive-free; cases that need cross-block
  *  reasoning aren't this rule's job. */
-const preferFocusBlock = {
+const preferSetBlockFocus = {
   meta: {
     type: 'suggestion',
     docs: {
-      description: 'Suggest focusBlock over a setFocusedBlockId + setIsEditing pair.',
+      description: 'Suggest setBlockFocus over a setFocusedBlockId + setIsEditing pair.',
     },
     schema: [],
     messages: {
-      preferFocusBlock:
+      preferSetBlockFocus:
         'Pair `setFocusedBlockId` + `setIsEditing` produces a stale intermediate state '
-        + '(`useInEditMode` reads both props). Use `focusBlock(uiStateBlock, id, {edit})` '
+        + '(`useInEditMode` reads both props). Use `setBlockFocus(uiStateBlock, id, {edit})` '
         + 'from `@/data/properties` for one atomic write + an awaitable promise.',
     },
   },
@@ -402,7 +402,7 @@ const preferFocusBlock = {
         }
         if (focusCalls.length === 0 || editCalls.length === 0) return
         for (const call of [...focusCalls, ...editCalls]) {
-          context.report({node: call, messageId: 'preferFocusBlock'})
+          context.report({node: call, messageId: 'preferSetBlockFocus'})
         }
       },
     }
@@ -461,6 +461,6 @@ export default {
     'no-direct-types-prop-writes': noDirectTypesPropWrites,
     'no-broad-block-subscriptions': noBroadBlockSubscriptions,
     'prefer-semantic-block-hooks': preferSemanticBlockHooks,
-    'prefer-focus-block': preferFocusBlock,
+    'prefer-set-block-focus': preferSetBlockFocus,
   },
 }

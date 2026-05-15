@@ -231,7 +231,7 @@ export const setFocusedBlockId = (uiStateBlock: Block, id: string): void => {
  *  tx (no intermediate "focused but editing the wrong way" state), and
  *  the returned promise lets callers `await` before reading any state
  *  derived from focus/edit. */
-export const focusBlock = async (
+export const setBlockFocus = async (
   uiStateBlock: Block,
   blockId: string,
   options: {edit?: boolean} = {},

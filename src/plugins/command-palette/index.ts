@@ -9,7 +9,7 @@ import {
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Command } from 'lucide-react'
-import { focusBlock } from '@/data/properties.ts'
+import { setBlockFocus } from '@/data/properties.ts'
 import {
   quickActionItemsFacet,
   type QuickActionItem,
@@ -55,7 +55,7 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
  *  palette. The palette renders against the live `useActiveContextsState`,
  *  so making this block the focused-and-not-editing one ensures
  *  NORMAL_MODE for it is active and the palette lists block-context
- *  actions for it. `focusBlock` writes both `focusedBlockId` and
+ *  actions for it. `setBlockFocus` writes both `focusedBlockId` and
  *  `isEditing=false` in one tx and returns the promise we await — if we
  *  fired the toggle before that resolved, the palette would render
  *  against the previously-focused block's NORMAL_MODE deps and any
@@ -66,7 +66,7 @@ export const commandPaletteForBlockAction: ActionConfig<typeof ActionContextType
   context: ActionContextTypes.NORMAL_MODE,
   icon: Command,
   handler: async ({block, uiStateBlock}) => {
-    await focusBlock(uiStateBlock, block.id)
+    await setBlockFocus(uiStateBlock, block.id)
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
 }
