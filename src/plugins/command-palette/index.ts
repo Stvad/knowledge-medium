@@ -9,7 +9,7 @@ import {
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Command } from 'lucide-react'
-import { setFocusedBlockId } from '@/data/properties.ts'
+import { focusedBlockIdProp } from '@/data/properties.ts'
 import {
   quickActionItemsFacet,
   type QuickActionItem,
@@ -54,14 +54,19 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
 /** Quick-action variant that focuses the swiped block before opening the
  *  palette. The palette renders against the live `useActiveContextsState`,
  *  so making this block the focused one ensures NORMAL_MODE for it is
- *  active and the palette lists block-context actions for it. */
+ *  active and the palette lists block-context actions for it. We `await`
+ *  the focus write before dispatching the toggle: the focus update goes
+ *  through an async block mutation, and firing the event before it
+ *  resolves leaves a window where the palette renders against the
+ *  previously-focused block's NORMAL_MODE deps — selecting a command
+ *  during that window would run it against the wrong block. */
 export const commandPaletteForBlockAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
   description: 'Open command palette',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Command,
-  handler: ({block, uiStateBlock}) => {
-    setFocusedBlockId(uiStateBlock, block.id)
+  handler: async ({block, uiStateBlock}) => {
+    await uiStateBlock.set(focusedBlockIdProp, block.id)
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
 }
