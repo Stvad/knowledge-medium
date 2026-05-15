@@ -165,7 +165,7 @@ export const normalizeTypedBlockQuery = (
   order: query.order,
 })
 
-const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
+export const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean =>
   predicates.some(p => p.scope === 'ancestor')
 
 const isSelfScope = (predicate: BlockPredicate): boolean =>
@@ -182,6 +182,33 @@ const selfPredicateNarrows = (predicate: BlockPredicate): boolean =>
   predicate.id !== undefined ||
   predicate.referencedBy !== undefined ||
   hasNonNullWhere(predicate.where)
+
+/** Ancestor-scope predicates require at least one candidate-bounding
+ *  filter; otherwise the recursive walk seeds from every live block
+ *  in the workspace. Throw before the walk runs — callers that
+ *  pre-fetch ancestor dep nodes (e.g. `resolveTypedBlocks`) call this
+ *  before issuing the dep SQL so an invalid query doesn't trigger
+ *  exactly the expensive walk the gate is meant to prevent. */
+export const assertAncestorWalkBounded = (query: ResolvedTypedBlockQuery): void => {
+  const matchPredicates = query.match ?? []
+  const excludePredicates = query.exclude ?? []
+  const needsAncestorChain =
+    hasAncestorScope(matchPredicates) || hasAncestorScope(excludePredicates)
+  if (!needsAncestorChain) return
+
+  const types = query.types ?? []
+  const hasGate =
+    query.referencedBy !== undefined ||
+    types.length > 0 ||
+    hasNonNullWhere(query.where) ||
+    matchPredicates.some(p => isSelfScope(p) && selfPredicateNarrows(p))
+  if (!hasGate) {
+    throw new Error(
+      '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
+      '(types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
+    )
+  }
+}
 
 /** Build the `candidates AS (...)` CTE body that selects the
  *  fully self-filtered result set for a typed-block query. Shared
@@ -291,32 +318,12 @@ export const compileTypedBlockQuery = (
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query)
-  const types = normalized.types ?? []
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
   const needsAncestorChain =
     hasAncestorScope(matchPredicates) || hasAncestorScope(excludePredicates)
 
-  if (needsAncestorChain) {
-    // Selectivity gate: ancestor walks without a candidate-bounding
-    // filter would chain-walk every block in the workspace. Require
-    // at least one filter that actually narrows the candidate set.
-    // Top-level `where` and self-scope match predicates count
-    // because they're folded into the candidates CTE below; pure
-    // self-scope `exclude` does NOT count because it only subtracts
-    // from the live set.
-    const hasGate =
-      normalized.referencedBy !== undefined ||
-      types.length > 0 ||
-      hasNonNullWhere(normalized.where) ||
-      matchPredicates.some(p => isSelfScope(p) && selfPredicateNarrows(p))
-    if (!hasGate) {
-      throw new Error(
-        '[queryBlocks] ancestor-scoped predicates require at least one candidate filter ' +
-        '(types, referencedBy, or a non-null self where / match predicate) to bound the recursive walk',
-      )
-    }
-  }
+  assertAncestorWalkBounded(normalized)
 
   const candidatesCte = buildCandidatesCte(normalized, propertySchemas)
   const params: unknown[] = [...candidatesCte.params]

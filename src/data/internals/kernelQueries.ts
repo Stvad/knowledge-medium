@@ -30,6 +30,7 @@ import {
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
 import {
+  assertAncestorWalkBounded,
   buildCandidatesCte,
   compileTypedBlockQuery,
   normalizeTypedBlockQuery,
@@ -562,6 +563,11 @@ export const resolveTypedBlocks = async (
   // Register row deps on every ancestor id touched so a property /
   // content / parent_id change on any ancestor wakes the handle.
   if (needsAncestorChain) {
+    // Gate before the dep walk — same selectivity check the compiler
+    // will run later. Without this, an unbounded ancestor query would
+    // trigger the full recursive scan in the dep-seed step before
+    // bailing out in compile.
+    assertAncestorWalkBounded(normalized)
     const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
     const ancestorRows = await ctx.db.getAll<{anc_id: string}>(
       ANCESTOR_DEP_NODES_SQL(candidatesCte.sql),
