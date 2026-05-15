@@ -74,15 +74,26 @@ const findContainingDailyNoteIso = async (
   return null
 }
 
+/** Resolve the ISO date of the daily note currently visible in the
+ *  primary (or active, on mobile) panel. Returns null when the panel's
+ *  top-level block isn't a daily note or no panel is open. Used by both
+ *  the prev/next offset actions and the date picker to open with the
+ *  correct month + selected day. */
+export const resolveCurrentDailyNoteIso = async (
+  repo: Repo,
+  workspaceId: string,
+): Promise<string | null> => {
+  const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
+  if (!topLevelBlockId) return null
+  return findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
+}
+
 const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
   const route = parseAppHash(window.location.hash)
   const workspaceId = route.workspaceId ?? repo.activeWorkspaceId
   if (!workspaceId) return
 
-  const topLevelBlockId = await resolveGlobalCommandTopLevelBlockId(repo, workspaceId)
-  const currentIso = topLevelBlockId
-    ? await findContainingDailyNoteIso(repo, topLevelBlockId, workspaceId)
-    : null
+  const currentIso = await resolveCurrentDailyNoteIso(repo, workspaceId)
   const targetIso = addDaysIso(currentIso ?? todayIso(), offsetDays)
   const note = await getOrCreateDailyNote(repo, workspaceId, targetIso)
   navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
