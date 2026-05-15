@@ -21,7 +21,12 @@ const isObjectRecord = (v: unknown): v is Record<string, unknown> =>
 
 const parsePredicate = (value: unknown): BlockPredicate | null => {
   if (!isObjectRecord(value)) return null
-  const out: BlockPredicate = {}
+  const out: {
+    scope?: 'self' | 'ancestor'
+    id?: string
+    where?: Readonly<Record<string, unknown>>
+    referencedBy?: {id: string; sourceField?: string}
+  } = {}
   if (value.scope === 'self' || value.scope === 'ancestor') {
     out.scope = value.scope
   }

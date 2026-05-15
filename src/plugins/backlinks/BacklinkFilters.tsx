@@ -1,6 +1,7 @@
 import {
   FormEvent,
   KeyboardEvent,
+  ReactElement,
   useEffect,
   useId,
   useMemo,
@@ -9,6 +10,8 @@ import {
 import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { useRepo } from '@/context/repo.tsx'
 import { useHandle } from '@/hooks/block.ts'
+import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
+import { type BlockPredicate } from '@/data/api'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
@@ -26,7 +29,7 @@ import {
 const SEARCH_LIMIT = 6
 const DEBOUNCE_MS = 80
 
-type FilterMode = 'include' | 'remove'
+type FilterMode = 'include' | 'exclude'
 
 interface BacklinkFiltersProps {
   workspaceId: string
@@ -42,21 +45,51 @@ interface BacklinkFiltersProps {
 const truncate = (text: string, max = 72): string =>
   text.length > max ? `${text.slice(0, max - 1)}…` : text
 
-const FilterChip = ({
-  id,
+const predicateKey = (p: BlockPredicate): string => JSON.stringify(p)
+
+const RefChipBody = ({id}: {id: string}) => {
+  const repo = useRepo()
+  const block = useMemo(() => repo.block(id), [repo, id])
+  const label = useHandle(block, {selector: data => labelForBlockData(data, id)})
+  return <span className="truncate max-w-[18ch]" title={label}>{label}</span>
+}
+
+const ContainmentChipBody = ({id}: {id: string}) => {
+  const repo = useRepo()
+  const block = useMemo(() => repo.block(id), [repo, id])
+  const label = useHandle(block, {selector: data => labelForBlockData(data, id)})
+  const text = `in ${label}`
+  return <span className="truncate max-w-[18ch]" title={text}>{text}</span>
+}
+
+const WhereChipBody = ({where}: {where: Readonly<Record<string, unknown>>}) => {
+  const text = Object.entries(where)
+    .map(([name, value]) => `${name}=${value === null ? '∅' : String(value)}`)
+    .join(', ')
+  return <span className="truncate max-w-[24ch]" title={text}>{text}</span>
+}
+
+const PredicateChip = ({
+  predicate,
   mode,
   readOnly = false,
   onRemove,
 }: {
-  id: string
+  predicate: BlockPredicate
   mode: FilterMode
   readOnly?: boolean
-  onRemove: (id: string) => void
+  onRemove: () => void
 }) => {
-  const repo = useRepo()
-  const block = useMemo(() => repo.block(id), [repo, id])
-  const label = useHandle(block, {selector: data => labelForBlockData(data, id)})
-
+  let body: ReactElement
+  if (predicate.referencedBy) {
+    body = <RefChipBody id={predicate.referencedBy.id} />
+  } else if (predicate.id !== undefined) {
+    body = <ContainmentChipBody id={predicate.id} />
+  } else if (predicate.where) {
+    body = <WhereChipBody where={predicate.where} />
+  } else {
+    body = <span>?</span>
+  }
   return (
     <span
       className={cn(
@@ -65,15 +98,14 @@ const FilterChip = ({
           ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-900 dark:text-emerald-200'
           : 'border-rose-500/30 bg-rose-500/10 text-rose-900 dark:text-rose-200',
       )}
-      title={label}
     >
-      <span className="truncate max-w-[18ch]">{label}</span>
+      {body}
       {!readOnly && (
         <button
           type="button"
-          onClick={() => onRemove(id)}
+          onClick={onRemove}
           className="shrink-0 rounded-sm opacity-70 hover:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          aria-label={`Remove ${label}`}
+          aria-label="Remove filter"
         >
           <X className="h-3 w-3" />
         </button>
@@ -82,16 +114,16 @@ const FilterChip = ({
   )
 }
 
-const BacklinkFilterInput = ({
+const RefPredicateInput = ({
   workspaceId,
   mode,
-  currentIds,
+  excludeIds,
   readOnly = false,
   onAdd,
 }: {
   workspaceId: string
   mode: FilterMode
-  currentIds: readonly string[]
+  excludeIds: ReadonlySet<string>
   readOnly?: boolean
   onAdd: (id: string) => void
 }) => {
@@ -103,14 +135,11 @@ const BacklinkFilterInput = ({
   const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
   const [activeIndex, setActiveIndex] = useState(-1)
   const trimmed = query.trim()
-  const currentIdSet = useMemo(() => new Set(currentIds), [currentIds])
   const popupOpen = focused && trimmed.length > 0 && results.length > 0
   const activeCandidate = activeIndex >= 0 ? results[activeIndex] : undefined
 
   useEffect(() => {
-    if (!workspaceId || !trimmed) {
-      return
-    }
+    if (!workspaceId || !trimmed) return
 
     let cancelled = false
     const timer = setTimeout(async () => {
@@ -118,7 +147,7 @@ const BacklinkFilterInput = ({
         workspaceId,
         query: trimmed,
         limit: SEARCH_LIMIT,
-        excludeIds: currentIdSet,
+        excludeIds,
       })
       if (cancelled) return
 
@@ -130,7 +159,7 @@ const BacklinkFilterInput = ({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [currentIdSet, repo, trimmed, workspaceId])
+  }, [excludeIds, repo, trimmed, workspaceId])
 
   const add = async (id?: string) => {
     if (readOnly) return
@@ -160,17 +189,13 @@ const BacklinkFilterInput = ({
     if (event.key === 'ArrowDown' && results.length > 0) {
       event.preventDefault()
       setFocused(true)
-      setActiveIndex(index => (
-        index < 0 ? 0 : (index + 1) % results.length
-      ))
+      setActiveIndex(index => (index < 0 ? 0 : (index + 1) % results.length))
       return
     }
     if (event.key === 'ArrowUp' && results.length > 0) {
       event.preventDefault()
       setFocused(true)
-      setActiveIndex(index => (
-        index <= 0 ? results.length - 1 : index - 1
-      ))
+      setActiveIndex(index => (index <= 0 ? results.length - 1 : index - 1))
       return
     }
     if (event.key === 'Enter' && popupOpen && activeCandidate) {
@@ -200,7 +225,7 @@ const BacklinkFilterInput = ({
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onKeyDown={handleKeyDown}
-        placeholder={mode === 'include' ? 'Include reference' : 'Remove reference'}
+        placeholder={mode === 'include' ? 'Include reference' : 'Exclude reference'}
         className="h-8 min-w-0 text-xs"
         disabled={readOnly}
         role="combobox"
@@ -217,8 +242,8 @@ const BacklinkFilterInput = ({
         size="icon"
         className="h-8 w-8 shrink-0"
         disabled={readOnly}
-        title={mode === 'include' ? 'Add include filter' : 'Add remove filter'}
-        aria-label={mode === 'include' ? 'Add include filter' : 'Add remove filter'}
+        title={mode === 'include' ? 'Add include filter' : 'Add exclude filter'}
+        aria-label={mode === 'include' ? 'Add include filter' : 'Add exclude filter'}
       >
         <Plus className="h-4 w-4" />
       </Button>
@@ -258,6 +283,99 @@ const BacklinkFilterInput = ({
   )
 }
 
+const PropertyPredicateInput = ({
+  mode,
+  readOnly = false,
+  onAdd,
+}: {
+  mode: FilterMode
+  readOnly?: boolean
+  onAdd: (predicate: BlockPredicate) => void
+}) => {
+  const schemas = usePropertySchemas()
+  const queryable = useMemo(() => {
+    return Array.from(schemas.values())
+      .filter(s => s.codec.where !== undefined)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [schemas])
+  const [name, setName] = useState('')
+  const [value, setValue] = useState('')
+  const schema = useMemo(() => schemas.get(name), [schemas, name])
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    if (readOnly || !schema) return
+    let coerced: unknown = value
+    if (value === '') {
+      coerced = null
+    } else if (schema.codec.type === 'number') {
+      const n = Number(value)
+      if (!Number.isFinite(n)) return
+      coerced = n
+    } else if (schema.codec.type === 'boolean') {
+      coerced = value === 'true'
+    }
+    onAdd({scope: 'ancestor', where: {[name]: coerced}})
+    setName('')
+    setValue('')
+  }
+
+  if (queryable.length === 0) return null
+
+  return (
+    <form className="flex min-w-0 gap-1" onSubmit={submit}>
+      <select
+        value={name}
+        onChange={e => {
+          setName(e.target.value)
+          setValue('')
+        }}
+        disabled={readOnly}
+        className="h-8 min-w-0 rounded-md border bg-background px-2 text-xs"
+        aria-label={mode === 'include' ? 'Include property' : 'Exclude property'}
+      >
+        <option value="">— property —</option>
+        {queryable.map(s => (
+          <option key={s.name} value={s.name}>{s.name}</option>
+        ))}
+      </select>
+      {schema?.codec.type === 'boolean' ? (
+        <select
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          disabled={readOnly}
+          className="h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs"
+          aria-label="value"
+        >
+          <option value="">— value —</option>
+          <option value="true">true</option>
+          <option value="false">false</option>
+        </select>
+      ) : (
+        <Input
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          disabled={readOnly || !schema}
+          placeholder={schema ? `${schema.codec.type} value` : 'value'}
+          className="h-8 min-w-0 flex-1 text-xs"
+          aria-label="value"
+        />
+      )}
+      <Button
+        type="submit"
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8 shrink-0"
+        disabled={readOnly || !schema || !value}
+        title={mode === 'include' ? 'Add include property filter' : 'Add exclude property filter'}
+        aria-label={mode === 'include' ? 'Add include property filter' : 'Add exclude property filter'}
+      >
+        <Plus className="h-4 w-4" />
+      </Button>
+    </form>
+  )
+}
+
 export function BacklinkFilters({
   workspaceId,
   filter,
@@ -270,29 +388,42 @@ export function BacklinkFilters({
 }: BacklinkFiltersProps) {
   const normalized = useMemo(() => normalizeBacklinksFilter(filter), [filter])
   const normalizedBase = useMemo(() => normalizeBacklinksFilter(baseFilter), [baseFilter])
-  const active = normalized.includeIds.length > 0 || normalized.removeIds.length > 0
-  const baseActive = normalizedBase.includeIds.length > 0 || normalizedBase.removeIds.length > 0
+  const active = normalized.include.length > 0 || normalized.exclude.length > 0
+  const baseActive = normalizedBase.include.length > 0 || normalizedBase.exclude.length > 0
 
-  const addFilter = (mode: FilterMode, id: string) => {
+  const refIdsInList = (predicates: readonly BlockPredicate[]): Set<string> => {
+    const out = new Set<string>()
+    for (const p of predicates) {
+      if (p.referencedBy) out.add(p.referencedBy.id)
+      if (p.id !== undefined) out.add(p.id)
+    }
+    return out
+  }
+  const includeRefIds = useMemo(() => refIdsInList(normalized.include), [normalized.include])
+  const excludeRefIds = useMemo(() => refIdsInList(normalized.exclude), [normalized.exclude])
+
+  const addPredicate = (mode: FilterMode, predicate: BlockPredicate) => {
     if (readOnly) return
-    const includeIds = mode === 'include'
-      ? [id, ...normalized.includeIds.filter(existing => existing !== id)]
-      : normalized.includeIds.filter(existing => existing !== id)
-    const removeIds = mode === 'remove'
-      ? [id, ...normalized.removeIds.filter(existing => existing !== id)]
-      : normalized.removeIds.filter(existing => existing !== id)
-    onChange({includeIds, removeIds})
+    const key = predicateKey(predicate)
+    const include = mode === 'include'
+      ? [predicate, ...normalized.include.filter(p => predicateKey(p) !== key)]
+      : normalized.include.filter(p => predicateKey(p) !== key)
+    const exclude = mode === 'exclude'
+      ? [predicate, ...normalized.exclude.filter(p => predicateKey(p) !== key)]
+      : normalized.exclude.filter(p => predicateKey(p) !== key)
+    onChange({include, exclude})
   }
 
-  const removeFilter = (mode: FilterMode, id: string) => {
+  const removePredicate = (mode: FilterMode, predicate: BlockPredicate) => {
     if (readOnly) return
+    const key = predicateKey(predicate)
     onChange({
-      includeIds: mode === 'include'
-        ? normalized.includeIds.filter(existing => existing !== id)
-        : normalized.includeIds,
-      removeIds: mode === 'remove'
-        ? normalized.removeIds.filter(existing => existing !== id)
-        : normalized.removeIds,
+      include: mode === 'include'
+        ? normalized.include.filter(p => predicateKey(p) !== key)
+        : normalized.include,
+      exclude: mode === 'exclude'
+        ? normalized.exclude.filter(p => predicateKey(p) !== key)
+        : normalized.exclude,
     })
   }
 
@@ -316,10 +447,10 @@ export function BacklinkFilters({
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             <div className="flex min-w-0 flex-wrap gap-1">
-              {normalizedBase.includeIds.map(id => (
-                <FilterChip
-                  key={id}
-                  id={id}
+              {normalizedBase.include.map(p => (
+                <PredicateChip
+                  key={`base-inc-${predicateKey(p)}`}
+                  predicate={p}
                   mode="include"
                   readOnly
                   onRemove={() => undefined}
@@ -327,11 +458,11 @@ export function BacklinkFilters({
               ))}
             </div>
             <div className="flex min-w-0 flex-wrap gap-1">
-              {normalizedBase.removeIds.map(id => (
-                <FilterChip
-                  key={id}
-                  id={id}
-                  mode="remove"
+              {normalizedBase.exclude.map(p => (
+                <PredicateChip
+                  key={`base-exc-${predicateKey(p)}`}
+                  predicate={p}
+                  mode="exclude"
                   readOnly
                   onRemove={() => undefined}
                 />
@@ -342,44 +473,54 @@ export function BacklinkFilters({
       )}
       <div className="grid gap-2 md:grid-cols-2">
         <div className="flex min-w-0 flex-col gap-1.5">
-          <BacklinkFilterInput
+          <RefPredicateInput
             workspaceId={workspaceId}
             mode="include"
-            currentIds={normalized.includeIds}
+            excludeIds={includeRefIds}
             readOnly={readOnly}
-            onAdd={id => addFilter('include', id)}
+            onAdd={id => addPredicate('include', {scope: 'ancestor', referencedBy: {id}})}
           />
-          {normalized.includeIds.length > 0 && (
+          <PropertyPredicateInput
+            mode="include"
+            readOnly={readOnly}
+            onAdd={p => addPredicate('include', p)}
+          />
+          {normalized.include.length > 0 && (
             <div className="flex min-w-0 flex-wrap gap-1">
-              {normalized.includeIds.map(id => (
-                <FilterChip
-                  key={id}
-                  id={id}
+              {normalized.include.map(p => (
+                <PredicateChip
+                  key={`inc-${predicateKey(p)}`}
+                  predicate={p}
                   mode="include"
                   readOnly={readOnly}
-                  onRemove={() => removeFilter('include', id)}
+                  onRemove={() => removePredicate('include', p)}
                 />
               ))}
             </div>
           )}
         </div>
         <div className="flex min-w-0 flex-col gap-1.5">
-          <BacklinkFilterInput
+          <RefPredicateInput
             workspaceId={workspaceId}
-            mode="remove"
-            currentIds={normalized.removeIds}
+            mode="exclude"
+            excludeIds={excludeRefIds}
             readOnly={readOnly}
-            onAdd={id => addFilter('remove', id)}
+            onAdd={id => addPredicate('exclude', {scope: 'ancestor', referencedBy: {id}})}
           />
-          {normalized.removeIds.length > 0 && (
+          <PropertyPredicateInput
+            mode="exclude"
+            readOnly={readOnly}
+            onAdd={p => addPredicate('exclude', p)}
+          />
+          {normalized.exclude.length > 0 && (
             <div className="flex min-w-0 flex-wrap gap-1">
-              {normalized.removeIds.map(id => (
-                <FilterChip
-                  key={id}
-                  id={id}
-                  mode="remove"
+              {normalized.exclude.map(p => (
+                <PredicateChip
+                  key={`exc-${predicateKey(p)}`}
+                  predicate={p}
+                  mode="exclude"
                   readOnly={readOnly}
-                  onRemove={() => removeFilter('remove', id)}
+                  onRemove={() => removePredicate('exclude', p)}
                 />
               ))}
             </div>
