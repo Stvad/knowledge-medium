@@ -1,7 +1,7 @@
 import { EditorSelection } from '@codemirror/state'
 import { EditorView } from '@codemirror/view'
 import { Block } from '../../data/block'
-import { setFocusedBlockId } from '@/data/properties.ts'
+import { focusBlock } from '@/data/properties.ts'
 import type { ShortcutActivationContribution } from '@/extensions/blockInteraction.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
@@ -88,7 +88,7 @@ const createTimestampNote = async (
     position: {kind: 'first'},
   }) as string
 
-  if (newId) setFocusedBlockId(uiStateBlock, newId)
+  if (newId) void focusBlock(uiStateBlock, newId)
 }
 
 const insertVideoTimestamp: ActionConfig = {

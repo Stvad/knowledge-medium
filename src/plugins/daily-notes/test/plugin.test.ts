@@ -2,12 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { typesFacet } from '@/data/facets.ts'
+import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   DAILY_NOTE_TYPE,
+  DATE_SHIFT_BACKWARD_DAY_ACTION_ID,
+  DATE_SHIFT_BACKWARD_WEEK_ACTION_ID,
+  DATE_SHIFT_FORWARD_DAY_ACTION_ID,
+  DATE_SHIFT_FORWARD_WEEK_ACTION_ID,
   OPEN_DAILY_NOTE_PICKER_ACTION_ID,
   dailyNotePickerHeaderItem,
   dailyNotePickerMount,
   dailyNotesPlugin,
+  dateShiftQuickActions,
   openDailyNotePickerAction,
 } from '../index.ts'
 
@@ -39,5 +45,19 @@ describe('dailyNotesPlugin', () => {
     const pickerAction = actions.find(action => action.id === OPEN_DAILY_NOTE_PICKER_ACTION_ID)
     expect(pickerAction).toBeTruthy()
     expect(openDailyNotePickerAction({repo: fakeRepo}).id).toBe(OPEN_DAILY_NOTE_PICKER_ACTION_ID)
+  })
+
+  it('contributes a row-3 quick-action set for the date-shift actions', () => {
+    const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
+    const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))
+    const items = runtime.read(quickActionItemsFacet)
+
+    expect(items).toEqual(dateShiftQuickActions)
+    expect(items.map(item => [item.actionId, item.row, item.label])).toEqual([
+      [DATE_SHIFT_BACKWARD_WEEK_ACTION_ID, 3, '-1w'],
+      [DATE_SHIFT_BACKWARD_DAY_ACTION_ID, 3, '-1d'],
+      [DATE_SHIFT_FORWARD_DAY_ACTION_ID, 3, '+1d'],
+      [DATE_SHIFT_FORWARD_WEEK_ACTION_ID, 3, '+1w'],
+    ])
   })
 })

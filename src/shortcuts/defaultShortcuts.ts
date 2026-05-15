@@ -20,14 +20,12 @@ import {
 } from '@/utils/selection.ts'
 import { importState } from '@/utils/state.ts'
 import {
-  focusedBlockIdProp,
   activePanelIdProp,
-  isEditingProp,
+  focusBlock,
   isCollapsedProp,
   topLevelBlockIdProp,
   editorSelection,
   setIsEditing,
-  setFocusedBlockId,
 } from '@/data/properties.ts'
 import { insertExampleExtensionsUnder } from '@/extensions/exampleExtensions.ts'
 import { selectionStateProp } from '@/data/properties'
@@ -127,10 +125,7 @@ const createNodeInActivePanelFromGlobalContext = async (
     parentId: activeTopLevelBlockId,
     position: {kind: 'last'},
   })
-  await repo.tx(async tx => {
-    await tx.setProperty(activePanelRow.id, focusedBlockIdProp, newId)
-    await tx.setProperty(activePanelRow.id, isEditingProp, true)
-  }, {scope: ChangeScope.UiState, description: 'create node in active panel'})
+  await focusBlock(repo.block(activePanelRow.id), newId, {edit: true})
 }
 
 export function getDefaultActionGroups({repo}: { repo: Repo }) {
@@ -234,7 +229,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
     description: 'Insert example extensions under current block',
     handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
       const created = await insertExampleExtensionsUnder(block)
-      if (created[0]) await uiStateBlock.set(focusedBlockIdProp, created[0].id)
+      if (created[0]) await focusBlock(uiStateBlock, created[0].id)
     },
   }
 
@@ -484,7 +479,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
 
         const createSiblingBelow = async () => {
           const newId = await repo.mutate.createSiblingBelow({siblingId: block.id})
-          if (newId) setFocusedBlockId(uiStateBlock, newId)
+          if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
         }
 
         const blockHasChildren = childIds.length > 0
@@ -496,7 +491,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             blockId: blockInFocus.id,
             start: 0,
           })
-          setFocusedBlockId(uiStateBlock, blockInFocus.id)
+          await focusBlock(uiStateBlock, blockInFocus.id, {edit: true})
         }
         // Case 2: Cursor is at end of text and block has children
         else if (cursorPos === doc.length &&
@@ -505,7 +500,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
             parentId: block.id,
             position: {kind: 'first'},
           })
-          if (newId) setFocusedBlockId(uiStateBlock, newId)
+          if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
         }
         // Repeated empty blocks creation - outdents the new block.
         // outdent returns false if the block is at the view boundary
@@ -567,7 +562,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           x: caretX,
         })
 
-        setFocusedBlockId(uiStateBlock, prevVisible.id)
+        await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
       },
       defaultBinding: {
         keys: 'up',
@@ -610,7 +605,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           x: caretX,
         })
 
-        setFocusedBlockId(uiStateBlock, nextVisible.id)
+        await focusBlock(uiStateBlock, nextVisible.id, {edit: true})
       },
       defaultBinding: {
         keys: 'down',
@@ -641,7 +636,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           start: prevData?.content.length ?? 0,
         })
 
-        await uiStateBlock.set(focusedBlockIdProp, prevVisible.id)
+        await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
       },
       defaultBinding: {
         keys: 'left',
@@ -671,7 +666,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           start: 0,
         })
 
-        await uiStateBlock.set(focusedBlockIdProp, nextVisible.id)
+        await focusBlock(uiStateBlock, nextVisible.id, {edit: true})
       },
       defaultBinding: {
         keys: 'right',
@@ -706,7 +701,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
               blockId: prevVisible.id,
               start: prevData?.content.length ?? 0,
             })
-            await uiStateBlock.set(focusedBlockIdProp, prevVisible.id)
+            await focusBlock(uiStateBlock, prevVisible.id, {edit: true})
           }
           await block.delete()
           return
@@ -747,7 +742,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
           blockId: prevId,
           start: joinOffset,
         })
-        setFocusedBlockId(uiStateBlock, prevId)
+        await focusBlock(uiStateBlock, prevId, {edit: true})
       },
       defaultBinding: {
         keys: 'backspace',
@@ -832,7 +827,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const pasted = await pasteFromClipboard(target, repo, {position: 'after'})
         if (pasted[0]) {
           await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          setFocusedBlockId(uiStateBlock, pasted[0].id)
+          void focusBlock(uiStateBlock, pasted[0].id)
         }
       },
       defaultBinding: {
@@ -851,7 +846,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         const pasted = await pasteFromClipboard(target, repo, {position: 'before'})
         if (pasted[0]) {
           await uiStateBlock.set(selectionStateProp, selectionStateProp.defaultValue)
-          setFocusedBlockId(uiStateBlock, pasted[0].id)
+          void focusBlock(uiStateBlock, pasted[0].id)
         }
       },
       defaultBinding: {

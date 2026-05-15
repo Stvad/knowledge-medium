@@ -12,7 +12,10 @@ import {
   type BaseShortcutDependencies,
 } from '@/shortcuts/types.ts'
 import { useCommandPaletteActions } from '../useCommandPaletteActions.ts'
-import { commandPaletteAction } from '../index.ts'
+import {
+  commandPaletteAction,
+  commandPaletteForBlockAction,
+} from '../index.ts'
 
 vi.mock('@/shortcuts/ActiveContexts.tsx', () => ({
   useActiveContextsState: () => activeContextsMock,
@@ -68,6 +71,25 @@ describe('useCommandPaletteActions canRun filter', () => {
     ])
     result = renderHookWithRuntime(runtime).result.current
     expect(result.actions.map(a => a.id).sort()).toEqual(['always', 'gated'])
+  })
+
+  it('hides both palette-opening actions from the palette list', () => {
+    const runtime = resolveFacetRuntimeSync([
+      defaultActionContextConfigs.map(c => actionContextsFacet.of(c)),
+      actionsFacet.of(commandPaletteAction, {source: 'test'}),
+      actionsFacet.of(commandPaletteForBlockAction, {source: 'test'}),
+    ])
+
+    activeContextsMock = new Map<string, BaseShortcutDependencies>([
+      [ActionContextTypes.NORMAL_MODE, {
+        block: {id: 'b'},
+        uiStateBlock: {id: 'b'},
+      } as never],
+    ])
+    const {result} = renderHookWithRuntime(runtime)
+    const ids = result.current.actions.map(a => a.id)
+    expect(ids).not.toContain(commandPaletteAction.id)
+    expect(ids).not.toContain(commandPaletteForBlockAction.id)
   })
 
   it('passes through actions without a canRun predicate (default visible)', () => {

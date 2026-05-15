@@ -5,10 +5,10 @@ import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
 import type { ComponentType } from 'react'
 import {
+  focusBlock,
   showPropertiesProp,
   isCollapsedProp,
   topLevelBlockIdProp,
-  setFocusedBlockId,
   typesProp,
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
@@ -416,7 +416,7 @@ export function DefaultBlockRenderer(
 
       const pasted = await pasteMultilineText(pastedText, block, repo)
       if (pasted[0]) {
-        setFocusedBlockId(uiStateBlock, pasted[0].id)
+        void focusBlock(uiStateBlock, pasted[0].id)
       }
     },
     [block, repo, uiStateBlock],
