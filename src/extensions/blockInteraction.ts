@@ -9,9 +9,9 @@ import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
 import {
   editorSelection,
+  focusBlock,
   selectionStateProp,
   setFocusedBlockId,
-  setIsEditing,
   requestEditorFocus,
 } from '@/data/properties.ts'
 import {
@@ -360,7 +360,12 @@ export const shortcutSurfaceActivationsFacet = defineFacet<
   validate: isFunction<ShortcutActivationContribution>,
 })
 
-export const focusBlock = ({block, uiStateBlock}: BlockResolveContext) => {
+/** Mark a block as the focus target without touching `isEditing`. Used
+ *  by the click handler in non-edit click branches — kept distinct from
+ *  `focusBlock` in `data/properties.ts` (which clears edit mode by
+ *  design) because some click paths need to preserve the in-flight edit
+ *  state on another block. */
+export const markBlockFocused = ({block, uiStateBlock}: BlockResolveContext) => {
   setFocusedBlockId(uiStateBlock, block.id)
 }
 
@@ -413,8 +418,7 @@ export const enterBlockEditMode = async (
   }
 
   await resetBlockSelection(uiStateBlock)
-  setFocusedBlockId(uiStateBlock, block.id)
-  setIsEditing(uiStateBlock, true)
+  await focusBlock(uiStateBlock, block.id, {edit: true})
 
   if (selection) {
     void uiStateBlock.set(editorSelection, {
@@ -458,7 +462,7 @@ export const handleBlockSelectionClick = async (
     await resetBlockSelection(uiStateBlock)
   }
 
-  focusBlock(context)
+  markBlockFocused(context)
 }
 
 export const isSelectionClick = (event: MouseEvent) =>

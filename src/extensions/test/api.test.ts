@@ -29,7 +29,7 @@ describe('@/extensions/api — public surface', () => {
     'blockContentSurfacePropsFacet',
     'shortcutSurfaceActivationsFacet',
     'enterBlockEditMode',
-    'focusBlock',
+    'markBlockFocused',
     'getBlockContentRendererSlot',
     // Markdown
     'markdownExtensionsFacet',

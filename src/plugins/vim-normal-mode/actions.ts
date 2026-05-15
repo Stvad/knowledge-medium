@@ -1,8 +1,8 @@
 import { Repo } from '../../data/repo'
 import {
+  focusBlock,
   isCollapsedProp,
   setFocusedBlockId,
-  setIsEditing,
   topLevelBlockIdProp,
   selectionStateProp,
 } from '@/data/properties.ts'
@@ -146,10 +146,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const newId = hasUncollapsedChildren || isTopLevel
           ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}})
           : await repo.mutate.createSiblingBelow({siblingId: block.id})
-        if (newId) {
-          setFocusedBlockId(uiStateBlock, newId)
-          setIsEditing(uiStateBlock, true)
-        }
+        if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
       },
       defaultBinding: {
         keys: 'o',
@@ -238,8 +235,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
         const newId = await repo.mutate.createSiblingAbove({siblingId: block.id})
         if (!newId) return
-        setFocusedBlockId(uiStateBlock, newId)
-        setIsEditing(uiStateBlock, true)
+        await focusBlock(uiStateBlock, newId, {edit: true})
       },
       defaultBinding: {
         keys: 'shift+o',

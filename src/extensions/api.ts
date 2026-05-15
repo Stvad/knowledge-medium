@@ -78,7 +78,7 @@ export {
   blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
   enterBlockEditMode,
-  focusBlock,
+  markBlockFocused,
   getBlockContentRendererSlot,
   handleBlockSelectionClick,
   isSelectionClick,

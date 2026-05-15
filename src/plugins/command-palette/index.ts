@@ -9,7 +9,7 @@ import {
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Command } from 'lucide-react'
-import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
+import { focusBlock } from '@/data/properties.ts'
 import {
   quickActionItemsFacet,
   type QuickActionItem,
@@ -53,30 +53,20 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
 
 /** Quick-action variant that focuses the swiped block before opening the
  *  palette. The palette renders against the live `useActiveContextsState`,
- *  so making this block the focused one ensures NORMAL_MODE for it is
- *  active and the palette lists block-context actions for it. We `await`
- *  the focus write before dispatching the toggle: the focus update goes
- *  through an async block mutation, and firing the event before it
- *  resolves leaves a window where the palette renders against the
- *  previously-focused block's NORMAL_MODE deps — selecting a command
- *  during that window would run it against the wrong block.
- *
- *  We also clear `isEditing` in the same tx. `useInEditMode(B)` is
- *  `focusedBlockId === B && isEditing`, so swiping B while another block
- *  was being edited would, after we point focus at B, make B count as
- *  in-edit-mode — and `vimNormalModeActivation` opts out of activating
- *  NORMAL_MODE when `context.inEditMode` is true, leaving the palette
- *  without block-context actions for B. */
+ *  so making this block the focused-and-not-editing one ensures
+ *  NORMAL_MODE for it is active and the palette lists block-context
+ *  actions for it. `focusBlock` writes both `focusedBlockId` and
+ *  `isEditing=false` in one tx and returns the promise we await — if we
+ *  fired the toggle before that resolved, the palette would render
+ *  against the previously-focused block's NORMAL_MODE deps and any
+ *  command picked during that window would run on the wrong block. */
 export const commandPaletteForBlockAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
   description: 'Open command palette',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Command,
   handler: async ({block, uiStateBlock}) => {
-    await Promise.all([
-      uiStateBlock.set(focusedBlockIdProp, block.id),
-      uiStateBlock.set(isEditingProp, false),
-    ])
+    await focusBlock(uiStateBlock, block.id)
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
 }
