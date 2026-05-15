@@ -29,6 +29,14 @@ interface TouchStart {
 
 const touchStartByBlockId = new Map<string, TouchStart>()
 
+/** Allow another gesture handler that owns the same touch (e.g. the
+ *  date-scrub long-press in `daily-notes/dateScrubGesture.ts`) to take
+ *  over by clearing our candidate. Without this, the touchend would
+ *  still open the swipe menu after the user has been scrubbing for
+ *  several seconds. Returns true if a candidate was actually cleared. */
+export const cancelSwipeCandidate = (blockId: string): boolean =>
+  touchStartByBlockId.delete(blockId)
+
 /** Find the Touch in a TouchList whose identifier matches the gesture's
  *  starting finger. Returns null if the gesture's finger isn't in the
  *  list (e.g. a different finger fired this event), in which case the

@@ -41,6 +41,9 @@ import {
   setSrsClipboard,
 } from './srsClipboard.ts'
 import { srsDateShiftDecorators } from './dateShiftDecorator.ts'
+import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
+import { srsRescheduleDecorator } from './rescheduleDecorator.ts'
+import { blockDateAdapterFacet } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
@@ -294,9 +297,20 @@ export const srsReschedulingPlugin: AppExtension = [
   srsDateShiftDecorators.map(decorator =>
     actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
   ),
+  actionDecoratorsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
+  // Negative precedence: SRS adapter sorts before the generic reference
+  // adapter so a block that is BOTH an SRS card AND has an inline date
+  // reference reschedules its `srsNextReviewDateProp` rather than
+  // rewriting its content (matches the dual-dispatch precedence in
+  // `dateShiftDecorator.ts`).
+  blockDateAdapterFacet.of(srsBlockDateAdapter, {
+    source: 'srs-rescheduling',
+    precedence: -1,
+  }),
 ]
 
 export { srsReschedulingDataExtension } from './dataExtension.ts'
+export { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 export {
   SRS_SM25_TYPE,
   srsArchivedProp,

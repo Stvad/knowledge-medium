@@ -18,6 +18,7 @@ export {
   quickActionItemsFacet,
   type QuickActionItem,
 } from './actions.ts'
+export { cancelSwipeCandidate } from './swipeGesture.ts'
 
 const swipeActionMenuPanelMount: PanelMountContribution = {
   id: 'swipe-quick-actions.panel-menu',

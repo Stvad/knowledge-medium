@@ -1,0 +1,84 @@
+/**
+ * BlockDateAdapter that targets `srsNextReviewDateProp` on SRS blocks.
+ * Mirrors the read+write of `dateShiftDecorator.ts` but in absolute-ISO
+ * form so the calendar sheet and the long-press scrub gesture can drive
+ * SRS rescheduling without going through the per-day shift action.
+ */
+import type { Block } from '@/data/block'
+import { ChangeScope } from '@/data/api'
+import { aliasesProp, getBlockTypes } from '@/data/properties.ts'
+import { getOrCreateDailyNote, isDateAlias } from '@/plugins/daily-notes'
+import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.ts'
+import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
+
+const decodeNextReviewDateId = (properties: Record<string, unknown>): string | null => {
+  const stored = properties[srsNextReviewDateProp.name]
+  if (stored === undefined) return null
+  try {
+    const value = srsNextReviewDateProp.codec.decode(stored)
+    return value || null
+  } catch {
+    return null
+  }
+}
+
+const decodeAliases = (properties: Record<string, unknown>): readonly string[] => {
+  const stored = properties[aliasesProp.name]
+  if (stored === undefined) return []
+  try {
+    return aliasesProp.codec.decode(stored)
+  } catch {
+    return []
+  }
+}
+
+const dailyNoteIsoFromBlockId = async (
+  block: Block,
+  dailyNoteId: string,
+): Promise<string | null> => {
+  const data = await block.repo.load(dailyNoteId)
+  if (!data) return null
+  const aliasIso = decodeAliases(data.properties).find(isDateAlias)
+  if (aliasIso) return aliasIso
+  const content = data.content.trim()
+  return isDateAlias(content) ? content : null
+}
+
+export const srsBlockDateAdapter: BlockDateAdapter = {
+  id: 'srs-rescheduling.next-review-date',
+  canHandle: (block: Block) => {
+    const data = block.peek()
+    if (!data) return false
+    if (!getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
+    return decodeNextReviewDateId(data.properties) !== null
+  },
+  getCurrentIso: async (block: Block) => {
+    const data = block.peek() ?? await block.load()
+    if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return null
+    const dailyId = decodeNextReviewDateId(data.properties)
+    if (!dailyId) return null
+    return dailyNoteIsoFromBlockId(block, dailyId)
+  },
+  setIso: async (block: Block, iso: string) => {
+    if (block.repo.isReadOnly) return false
+    const data = block.peek() ?? await block.load()
+    if (!data || !getBlockTypes(data).includes(SRS_SM25_TYPE)) return false
+
+    const targetDaily = await getOrCreateDailyNote(block.repo, data.workspaceId, iso)
+
+    let written = false
+    await block.repo.tx(async tx => {
+      const row = await tx.get(block.id)
+      if (!row || !getBlockTypes(row).includes(SRS_SM25_TYPE)) return
+      await tx.update(block.id, {
+        properties: {
+          ...row.properties,
+          [srsNextReviewDateProp.name]: srsNextReviewDateProp.codec.encode(targetDaily.id),
+        },
+      })
+      written = true
+    }, {scope: ChangeScope.BlockDefault, description: 'set srs next review date'})
+
+    return written
+  },
+}

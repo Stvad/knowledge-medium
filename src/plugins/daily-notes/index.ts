@@ -130,7 +130,11 @@ export const openDailyNotePickerAction = (
  *  action's `canRun` — the base predicate requires content with a single
  *  date reference (unwrapped), and the `srs-rescheduling` decorator
  *  extends it to SRS blocks with a resolvable next-review date
- *  (wrapped). */
+ *  (wrapped).
+ *
+ *  The companion "Reschedule" item — calendar+strip sheet — is registered
+ *  separately by `dailyNotesDateUxPlugin` so it isn't pulled into the
+ *  static-data bootstrap module graph. */
 export const dateShiftQuickActions: readonly QuickActionItem[] = [
   {actionId: DATE_SHIFT_BACKWARD_WEEK_ACTION_ID, label: '-1w', row: 3},
   {actionId: DATE_SHIFT_BACKWARD_DAY_ACTION_ID, label: '-1d', row: 3},
@@ -197,3 +201,21 @@ export {
   journalBlockId,
   todayIso,
 } from './dailyNotes.ts'
+export {
+  blockDateAdapterFacet,
+  pickBlockDateAdapter,
+  hasAnyBlockDateAdapter,
+  type BlockDateAdapter,
+} from './blockDateAdapter.ts'
+export { referenceDateAdapter } from './referenceDateAdapter.ts'
+export {
+  RESCHEDULE_BLOCK_DATE_ACTION_ID,
+  rescheduleBlockDateAction,
+  rescheduleQuickActionItem,
+} from './rescheduleAction.ts'
+export {
+  openReschedulePicker,
+  openReschedulePickerEvent,
+  type OpenReschedulePickerEventDetail,
+  type ReschedulePickerAnchorRect,
+} from './rescheduleEvents.ts'
