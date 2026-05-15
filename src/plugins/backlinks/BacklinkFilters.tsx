@@ -114,6 +114,8 @@ const PredicateChip = ({
   )
 }
 
+type RefPredicateKind = 'refs' | 'contains'
+
 const RefPredicateInput = ({
   workspaceId,
   mode,
@@ -125,12 +127,13 @@ const RefPredicateInput = ({
   mode: FilterMode
   excludeIds: ReadonlySet<string>
   readOnly?: boolean
-  onAdd: (id: string) => void
+  onAdd: (kind: RefPredicateKind, id: string) => void
 }) => {
   const repo = useRepo()
   const listboxId = useId()
   const [formElement, setFormElement] = useState<HTMLFormElement | null>(null)
   const [query, setQuery] = useState('')
+  const [kind, setKind] = useState<RefPredicateKind>('refs')
   const [focused, setFocused] = useState(false)
   const [results, setResults] = useState<LinkTargetIdCandidate[]>([])
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -165,7 +168,7 @@ const RefPredicateInput = ({
     if (readOnly) return
     const nextId = id ?? results[0]?.id
     if (nextId) {
-      onAdd(nextId)
+      onAdd(kind, nextId)
       setQuery('')
       setResults([])
       setActiveIndex(-1)
@@ -174,7 +177,7 @@ const RefPredicateInput = ({
     if (!trimmed) return
     const exact = await repo.query.aliasLookup({workspaceId, alias: trimmed}).load()
     if (!exact) return
-    onAdd(exact.id)
+    onAdd(kind, exact.id)
     setQuery('')
     setResults([])
     setActiveIndex(-1)
@@ -212,6 +215,21 @@ const RefPredicateInput = ({
 
   return (
     <form ref={setFormElement} className="flex min-w-0 flex-1 gap-1" onSubmit={handleSubmit}>
+      <select
+        value={kind}
+        onChange={e => setKind(e.target.value as RefPredicateKind)}
+        disabled={readOnly}
+        className="h-8 shrink-0 rounded-md border bg-background px-1 text-xs"
+        aria-label="Predicate kind"
+        title={
+          kind === 'refs'
+            ? 'Match blocks whose context references the selected block'
+            : 'Match blocks contained within the selected block'
+        }
+      >
+        <option value="refs">refs</option>
+        <option value="contains">in</option>
+      </select>
       <Input
         value={query}
         onChange={event => {
@@ -478,7 +496,11 @@ export function BacklinkFilters({
             mode="include"
             excludeIds={includeRefIds}
             readOnly={readOnly}
-            onAdd={id => addPredicate('include', {scope: 'ancestor', referencedBy: {id}})}
+            onAdd={(kind, id) => addPredicate('include',
+              kind === 'refs'
+                ? {scope: 'ancestor', referencedBy: {id}}
+                : {scope: 'ancestor', id},
+            )}
           />
           <PropertyPredicateInput
             mode="include"
@@ -505,7 +527,11 @@ export function BacklinkFilters({
             mode="exclude"
             excludeIds={excludeRefIds}
             readOnly={readOnly}
-            onAdd={id => addPredicate('exclude', {scope: 'ancestor', referencedBy: {id}})}
+            onAdd={(kind, id) => addPredicate('exclude',
+              kind === 'refs'
+                ? {scope: 'ancestor', referencedBy: {id}}
+                : {scope: 'ancestor', id},
+            )}
           />
           <PropertyPredicateInput
             mode="exclude"

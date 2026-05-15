@@ -30,6 +30,7 @@ import {
 import { SELECT_BLOCK_COLUMNS_SQL, buildQualifiedBlockColumnsSql, type BlockRow } from '@/data/blockSchema'
 import { ANCESTORS_SQL, CHILDREN_IDS_SQL, CHILDREN_SQL, manyAncestorsSql, SUBTREE_SQL } from './treeQueries'
 import {
+  buildCandidatesCte,
   compileTypedBlockQuery,
   normalizeTypedBlockQuery,
 } from './typedBlockQuery'
@@ -440,40 +441,6 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string) => `
   SELECT DISTINCT anc_id FROM walk
 `
 
-/** Build the candidate-CTE body that mirrors compileTypedBlockQuery's
- *  selection. Used by the ancestor-row-dep walk so it scopes to the
- *  same starting set the main query does. */
-const buildCandidatesCteForDeps = (query: ResolvedTypedBlockQuery): {sql: string; params: unknown[]} => {
-  const params: unknown[] = []
-  const clauses: string[] = []
-  let from: string
-  if (query.referencedBy !== undefined) {
-    from = 'FROM block_references br JOIN blocks b ON b.id = br.source_id'
-    clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
-    params.push(query.workspaceId, query.referencedBy.id)
-    if (query.referencedBy.sourceField !== undefined) {
-      clauses.push('br.source_field = ?')
-      params.push(query.referencedBy.sourceField)
-    }
-  } else {
-    from = 'FROM blocks b'
-    clauses.push('b.workspace_id = ?', 'b.deleted = 0')
-    params.push(query.workspaceId)
-  }
-  const types = query.types ?? []
-  if (types.length > 0) {
-    clauses.push(`EXISTS (
-      SELECT 1 FROM block_types bt
-      WHERE bt.block_id = b.id AND bt.workspace_id = b.workspace_id
-        AND bt.type IN (${types.map(() => '?').join(', ')})
-    )`)
-    params.push(...types)
-  }
-  return {
-    sql: `candidates AS (SELECT DISTINCT b.id ${from} WHERE ${clauses.join(' AND ')})`,
-    params,
-  }
-}
 
 const collectPredicateDeps = (
   predicates: readonly BlockPredicate[],
@@ -595,7 +562,7 @@ export const resolveTypedBlocks = async (
   // Register row deps on every ancestor id touched so a property /
   // content / parent_id change on any ancestor wakes the handle.
   if (needsAncestorChain) {
-    const candidatesCte = buildCandidatesCteForDeps(normalized)
+    const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
     const ancestorRows = await ctx.db.getAll<{anc_id: string}>(
       ANCESTOR_DEP_NODES_SQL(candidatesCte.sql),
       candidatesCte.params,

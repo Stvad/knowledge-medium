@@ -183,6 +183,85 @@ const selfPredicateNarrows = (predicate: BlockPredicate): boolean =>
   predicate.referencedBy !== undefined ||
   hasNonNullWhere(predicate.where)
 
+/** Build the `candidates AS (...)` CTE body that selects the
+ *  fully self-filtered result set for a typed-block query. Shared
+ *  between the main SQL compiler and the ancestor-dep seed walk in
+ *  `resolveTypedBlocks` so both observe the SAME candidate set —
+ *  the row-dep declarations stay scoped to rows that actually feed
+ *  into the result. */
+export const buildCandidatesCte = (
+  query: ResolvedTypedBlockQuery,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+): {sql: string; params: unknown[]} => {
+  const normalized = normalizeTypedBlockQuery(query)
+  const types = normalized.types ?? []
+  const matchPredicates = normalized.match ?? []
+  const excludePredicates = normalized.exclude ?? []
+  const params: unknown[] = []
+  const clauses: string[] = []
+  let from: string
+
+  if (normalized.referencedBy !== undefined) {
+    from = `
+      FROM block_references br
+      JOIN blocks b ON b.id = br.source_id
+    `.trim()
+    clauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
+    params.push(normalized.workspaceId, normalized.referencedBy.id)
+    if (normalized.referencedBy.sourceField !== undefined) {
+      clauses.push('br.source_field = ?')
+      params.push(normalized.referencedBy.sourceField)
+    }
+  } else {
+    from = 'FROM blocks b'
+    clauses.push('b.workspace_id = ?', 'b.deleted = 0')
+    params.push(normalized.workspaceId)
+  }
+
+  if (types.length > 0) {
+    clauses.push(`
+      EXISTS (
+        SELECT 1
+        FROM block_types bt
+        WHERE bt.block_id = b.id
+          AND bt.workspace_id = b.workspace_id
+          AND bt.type IN (${types.map(() => '?').join(', ')})
+      )
+    `.trim())
+    params.push(...types)
+  }
+
+  if (normalized.where !== undefined) {
+    for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json')
+      clauses.push(compiled.sql)
+      params.push(...compiled.params)
+    }
+  }
+
+  for (const predicate of matchPredicates) {
+    if (!isSelfScope(predicate)) continue
+    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
+    clauses.push(compiled.sql)
+    params.push(...compiled.params)
+  }
+  for (const predicate of excludePredicates) {
+    if (!isSelfScope(predicate)) continue
+    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
+    clauses.push(`NOT (${compiled.sql})`)
+    params.push(...compiled.params)
+  }
+
+  return {
+    sql: `candidates AS (
+      SELECT DISTINCT b.id
+      ${from}
+      WHERE ${clauses.join('\n        AND ')}
+    )`,
+    params,
+  }
+}
+
 /** Recursive ancestor-chain CTE keyed off `candidates`. One row per
  *  (candidate id, ancestor id), with depth and a path guard against
  *  cycles. Hard depth cap of 100 mirrors the existing backlinks SQL. */
@@ -239,80 +318,8 @@ export const compileTypedBlockQuery = (
     }
   }
 
-  const params: unknown[] = []
-
-  // Candidate-set CTE — the fully self-filtered result set. Driven
-  // by the most selective filter:
-  //   1. `referencedBy` shorthand → indexed lookup on block_references
-  //   2. else → workspace's live blocks
-  // All self-scope filters (types, top-level where, self-scope
-  // match/exclude predicates) fold in here so the recursive
-  // ancestor walk seeds from the narrow set, not from every live
-  // block.
-  const candidateClauses: string[] = []
-  let candidateFrom: string
-  if (normalized.referencedBy !== undefined) {
-    candidateFrom = `
-      FROM block_references br
-      JOIN blocks b ON b.id = br.source_id
-    `.trim()
-    candidateClauses.push('br.workspace_id = ?', 'br.target_id = ?', 'b.deleted = 0')
-    params.push(normalized.workspaceId, normalized.referencedBy.id)
-    if (normalized.referencedBy.sourceField !== undefined) {
-      candidateClauses.push('br.source_field = ?')
-      params.push(normalized.referencedBy.sourceField)
-    }
-  } else {
-    candidateFrom = 'FROM blocks b'
-    candidateClauses.push('b.workspace_id = ?', 'b.deleted = 0')
-    params.push(normalized.workspaceId)
-  }
-
-  if (types.length > 0) {
-    candidateClauses.push(`
-      EXISTS (
-        SELECT 1
-        FROM block_types bt
-        WHERE bt.block_id = b.id
-          AND bt.workspace_id = b.workspace_id
-          AND bt.type IN (${types.map(() => '?').join(', ')})
-      )
-    `.trim())
-    params.push(...types)
-  }
-
-  if (normalized.where !== undefined) {
-    for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json')
-      candidateClauses.push(compiled.sql)
-      params.push(...compiled.params)
-    }
-  }
-
-  // Self-scope match/exclude fold into candidates so the narrowing
-  // is real (and the ancestor walk seeds from the right set).
-  // Ancestor-scope predicates stay in the outer WHERE — they need
-  // the ancestor_chain CTE which is keyed off `candidates`.
-  for (const predicate of matchPredicates) {
-    if (!isSelfScope(predicate)) continue
-    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
-    candidateClauses.push(compiled.sql)
-    params.push(...compiled.params)
-  }
-  for (const predicate of excludePredicates) {
-    if (!isSelfScope(predicate)) continue
-    const compiled = compilePredicateAgainstRow(predicate, 'b', propertySchemas)
-    candidateClauses.push(`NOT (${compiled.sql})`)
-    params.push(...compiled.params)
-  }
-
-  const candidatesCte = `
-    candidates AS (
-      SELECT DISTINCT b.id
-      ${candidateFrom}
-      WHERE ${candidateClauses.join('\n        AND ')}
-    )
-  `.trim()
+  const candidatesCte = buildCandidatesCte(normalized, propertySchemas)
+  const params: unknown[] = [...candidatesCte.params]
 
   // Outer WHERE — ancestor-scope predicates only.
   const filterClauses: string[] = []
@@ -332,8 +339,8 @@ export const compileTypedBlockQuery = (
   }
 
   const ctes = needsAncestorChain
-    ? `WITH RECURSIVE ${candidatesCte}, ${ANCESTOR_CHAIN_CTE_SQL}`
-    : `WITH ${candidatesCte}`
+    ? `WITH RECURSIVE ${candidatesCte.sql}, ${ANCESTOR_CHAIN_CTE_SQL}`
+    : `WITH ${candidatesCte.sql}`
 
   const orderClause = normalized.order === 'created-desc'
     ? 'ORDER BY b.created_at DESC, b.id'

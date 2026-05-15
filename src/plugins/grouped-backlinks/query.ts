@@ -70,10 +70,11 @@ const groupedBacklinksConfigSchema = z.object({
 const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
   rows as unknown as ReadonlyArray<Record<string, unknown>>
 
-const sourceIdsCte = (count: number): string =>
-  count === 0
-    ? 'source_ids(id) AS (SELECT NULL WHERE 0)'
-    : `source_ids(id) AS (VALUES ${Array(count).fill('(?)').join(', ')})`
+/** Source ids ride in a single JSON-array bind parameter and unpack
+ *  via `json_each`. One bind regardless of source count — avoids
+ *  the SQLite parameter ceiling that would have been hit by a
+ *  per-id `VALUES (?)` list on heavily-linked targets. */
+const SOURCE_IDS_CTE = `source_ids(id) AS (SELECT value FROM json_each(?))`
 
 /** Group context = (refs from source + each ancestor) UNION (root
  *  ancestor's own id). Roam-style: "what context is each backlink
@@ -81,9 +82,9 @@ const sourceIdsCte = (count: number): string =>
  *  chain. Source ids come pre-filtered from the backlinks wrapper
  *  (which delegates to typed-blocks predicates), so this SQL is now
  *  filter-free and just walks ancestors for the given source set. */
-export const selectGroupedBacklinkCandidatesSql = (sourceCount: number): string => `
+export const SELECT_GROUPED_BACKLINK_CANDIDATES_SQL = `
   WITH RECURSIVE
-    ${sourceIdsCte(sourceCount)},
+    ${SOURCE_IDS_CTE},
     ancestor_chain(source_id, anc_id, anc_parent_id, depth, path) AS (
       SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
       FROM source_ids s
@@ -129,8 +130,8 @@ export const selectGroupedBacklinkCandidatesSql = (sourceCount: number): string 
   ORDER BY cr.source_id, group_block.updated_at DESC, group_block.id
 `
 
-export const selectGroupedBacklinkFieldCandidatesSql = (sourceCount: number): string => `
-  WITH ${sourceIdsCte(sourceCount)}
+export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
+  WITH ${SOURCE_IDS_CTE}
   SELECT DISTINCT
     refs.source_id AS source_id,
     refs.source_field AS source_field
@@ -149,9 +150,9 @@ export const selectGroupedBacklinkFieldCandidatesSql = (sourceCount: number): st
  *  reference wouldn't invalidate the grouped handle, leaving
  *  groupings stale. Same recursion shape as the grouping CTE — just
  *  emits the ids without the join to block_references. */
-export const selectGroupedBacklinkAncestorIdsSql = (sourceCount: number): string => `
+export const SELECT_GROUPED_BACKLINK_ANCESTOR_IDS_SQL = `
   WITH RECURSIVE
-    ${sourceIdsCte(sourceCount)},
+    ${SOURCE_IDS_CTE},
     walk(source_id, anc_id, anc_parent_id, depth, path) AS (
       SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
       FROM source_ids s
@@ -218,6 +219,9 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     if (sourceData.length === 0) return {groups: [], total: 0}
 
     const sourceIds = sourceData.map(source => source.id)
+    // One JSON-array bind for the source-ids CTE (vs one per id).
+    // Avoids the SQLite parameter ceiling on heavily-linked targets.
+    const sourceIdsJson = JSON.stringify(sourceIds)
 
     // Walk every ancestor of every source up-front so intermediate
     // ancestors (rows that aren't themselves emitted as groups, but
@@ -226,20 +230,20 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // ancestor gaining a ref wouldn't invalidate this handle —
     // grouped output would go stale.
     const ancestorIdRows = await ctx.db.getAll<{anc_id: string}>(
-      selectGroupedBacklinkAncestorIdsSql(sourceIds.length),
-      sourceIds,
+      SELECT_GROUPED_BACKLINK_ANCESTOR_IDS_SQL,
+      [sourceIdsJson],
     )
     for (const row of ancestorIdRows) {
       ctx.depend({kind: 'row', id: row.anc_id})
     }
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
-      selectGroupedBacklinkCandidatesSql(sourceIds.length),
-      [...sourceIds, workspaceId, id],
+      SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
+      [sourceIdsJson, workspaceId, id],
     )
     const fieldCandidateRows = await ctx.db.getAll<FieldCandidateRow>(
-      selectGroupedBacklinkFieldCandidatesSql(sourceIds.length),
-      [...sourceIds, workspaceId, id],
+      SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL,
+      [sourceIdsJson, workspaceId, id],
     )
 
     const groupRowsById = new Map<string, BlockRow>()
