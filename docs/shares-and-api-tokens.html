@@ -364,6 +364,16 @@ would add ambiguity (which mode are they in?) for no real win. Enforce:
   add constraint workspace_scope_is_api_only
   check (scope = 'subtree' or purpose = 'api');</code></pre>
 
+<strong>Where this is enforced, in decreasing order of authority:</strong>
+<ol class="tight">
+  <li><strong>Database <code>check</code> constraint</strong> above &mdash; the canonical boundary.
+    Holds regardless of which code path tries to violate it. Any drift in higher layers fails loudly
+    at <code>INSERT</code>.</li>
+  <li><strong><code>create_api_token</code> / future <code>create_block_share</code> RPCs</strong>
+    pre-validate scope + purpose and return a clean error message before the constraint fires.</li>
+  <li><strong>Settings UI</strong> filters the scope picker to "subtree only" for human shares so the
+    invalid combination isn't offered.</li>
+</ol>
 Drop the constraint if a real human use case for workspace-wide guest access appears. RLS already
 supports it.
 </div>
@@ -869,9 +879,15 @@ service_role inside the function and never on the client is the security boundar
   <li>Bumps <code>last_used_at</code> / <code>last_used_ip</code>.</li>
   <li>Mints a Supabase JWT signed with the project secret. Claims:
     <code>sub = service_user_id</code>, <code>role = 'authenticated'</code>,
-    <code>aud = 'authenticated'</code>, TTL 15 minutes.</li>
+    <code>aud = 'authenticated'</code>, TTL set by env (see below).</li>
   <li>Returns the JWT plus a small <code>share</code> stanza so the client knows scope/workspace.</li>
 </ol>
+
+<p><strong>TTL is a deployment-level setting</strong>, read from
+  <code>API_TOKEN_JWT_TTL_SECONDS</code> in the edge function's environment. Default: 900 (15 minutes).
+  Higher-security deployments can lower it (e.g. 60s &mdash; effectively per-request); the cost is one
+  extra exchange round-trip per API call. v1 keeps it global; per-token override is a future
+  addition (column on <code>share_links</code>) if the use case appears.</p>
 
 <h3>8.4 What 3rd parties use the JWT for</h3>
 
@@ -908,10 +924,11 @@ list_my_api_tokens() returns table (... no token, no hash ...);
   -- For settings UI.</code></pre>
 
 <div class="warn">
-<strong>Revocation lag.</strong> Issued JWTs live 15 minutes. Revoking a token does not invalidate an
-already-issued JWT until it expires. Acceptable for v1; if a strict revocation requirement appears,
-shorten the TTL or add a per-request check against <code>share_links.revoked_at</code> in an
-RLS-callable function.
+<strong>Revocation lag.</strong> Issued JWTs live for the configured TTL (default 15 minutes &mdash;
+see &sect;8.3). Revoking a token does not invalidate an already-issued JWT until it expires.
+Acceptable for v1; lower <code>API_TOKEN_JWT_TTL_SECONDS</code> for strict-revocation deployments, or
+add a per-request check against <code>share_links.revoked_at</code> in an RLS-callable function for
+near-zero-lag revocation at the cost of one extra row read per request.
 </div>
 
 <h2>9. UI surface</h2>
@@ -926,6 +943,14 @@ RLS-callable function.
   <li>Per-token: rotate, revoke.</li>
   <li>Subtree picker is the same component that will later back the share dialog &mdash; build it
     once.</li>
+  <li><strong>Expiration reminders.</strong> Rows for tokens within 14 days of expiry show a warning
+    badge in the list and surface an in-app notification on app load. Rows past expiry show a
+    distinct "expired" badge and stop being usable (the exchange function already refuses them; the
+    UI just makes the state visible so a token doesn't silently lock out an integration). Email
+    reminders are a follow-up &mdash; in-app is enough for v1.</li>
+  <li><strong>Last-used telemetry</strong> from <code>share_links.last_used_at</code> /
+    <code>last_used_ip</code> is shown per row, so the user can spot unused tokens to revoke and
+    notice unexpected activity.</li>
 </ul>
 
 <p>Human subtree-sharing UX (share dialog on a block bullet, invite by email, redeemable link URLs,
