@@ -450,12 +450,35 @@ create table public.share_link_secrets (
 );
 create index idx_share_link_secrets_token_hash on public.share_link_secrets(token_hash);</code></pre>
 
-<h3>4.5 PowerSync publication</h3>
+<h3>4.5 Coverage junction (for sync rules)</h3>
+
+<p>PowerSync stream JOINs only accept simple equality predicates &mdash; <code>ON a.col = b.col</code>.
+  Neither <code>OR</code> nor <code>x = ANY(array)</code> are allowed in a stream JOIN. To express
+  "this block is covered by one of my subtree shares" we maintain a flat <code>(block_id, share_id)</code>
+  junction alongside <code>effective_share_ids</code>:</p>
+
+<pre><code>create table public.block_share_coverage (
+  block_id      text not null references public.blocks(id)       on delete cascade,
+  share_id      text not null references public.block_shares(id) on delete cascade,
+  workspace_id  text not null,
+  primary key (block_id, share_id)
+);
+create index idx_block_share_coverage_share on public.block_share_coverage(share_id);
+-- block_id is the leading PK column so per-block lookups are also cheap.</code></pre>
+
+<p>The recompute function (&sect;6.1) maintains this table as a side-effect: whenever a block's
+  <code>effective_share_ids</code> changes, the corresponding rows in
+  <code>block_share_coverage</code> are inserted/deleted in the same transaction. The array stays
+  canonical for RLS (which supports <code>ANY(array)</code> just fine); the junction is the
+  flattened view PowerSync needs.</p>
+
+<h3>4.6 PowerSync publication</h3>
 
 <pre><code>alter publication powersync add table
   public.block_shares,
   public.block_share_roots,
   public.block_share_members,
+  public.block_share_coverage,
   public.share_links;</code></pre>
 
 <p><code>share_link_secrets</code> is intentionally NOT published. Tokens never appear in any sync
@@ -609,7 +632,11 @@ already indexed.
 
 <p>One function, one recursive CTE. Walks descendants from a root, unioning each block's existing
   <code>effective_share_ids</code> contribution from the parent with any new share ids anchored at
-  the block itself. The result is an O(subtree-size) <code>UPDATE</code> on <code>public.blocks</code>.</p>
+  the block itself. The result is an O(subtree-size) <code>UPDATE</code> on <code>public.blocks</code>.
+  In the same transaction it also keeps <code>block_share_coverage</code> (&sect;4.5) in sync &mdash;
+  delete rows whose <code>share_id</code> is no longer in the array, insert rows for share ids that
+  are now present. The advisory lock at the top of the function serializes both writes against
+  concurrent recomputes on the same root.</p>
 
 <pre><code>create or replace function public.recompute_share_ids_subtree(p_root_block_id text)
 returns void
@@ -714,20 +741,33 @@ property test from &sect;11 to catch divergence.
   <a href="../powersync/sync-config.yaml">powersync/sync-config.yaml</a> via
   <a href="../scripts/gen-sync-config.ts">scripts/gen-sync-config.ts</a>:</p>
 
+<p>One stream with <strong>two query entries</strong> &mdash; one for each scope kind. Each uses only
+  equality predicates and <code>IN parameter_cte</code> filters, which PowerSync supports natively:</p>
+
 <pre><code>shared_blocks:
   auto_subscribe: true
   with:
-    user_share_grants: |
-      SELECT
-        block_share_members.share_id,
-        block_shares.workspace_id,
-        block_shares.scope
+    # Workspaces I have a workspace-scope share on (typically empty for humans;
+    # populated for API token service users with workspace scope).
+    workspace_share_workspace_ids: |
+      SELECT block_shares.workspace_id
       FROM public.block_share_members
       JOIN public.block_shares
         ON block_shares.id = block_share_members.share_id
+       AND block_shares.scope = 'workspace'
+       AND block_shares.revoked_at IS NULL
+      WHERE block_share_members.user_id = auth.user_id()
+    # Subtree-scope share ids I'm a member of.
+    subtree_share_ids: |
+      SELECT block_share_members.share_id
+      FROM public.block_share_members
+      JOIN public.block_shares
+        ON block_shares.id = block_share_members.share_id
+       AND block_shares.scope = 'subtree'
        AND block_shares.revoked_at IS NULL
       WHERE block_share_members.user_id = auth.user_id()
   queries:
+    # 1. Workspace-scope shares -> every block in the workspace.
     - |
       SELECT blocks.id, blocks.workspace_id, blocks.parent_id,
              blocks.order_key, blocks.content,
@@ -736,17 +776,28 @@ property test from &sect;11 to catch divergence.
              blocks.created_by, blocks.updated_by,
              blocks.deleted, blocks.effective_share_ids
       FROM public.blocks
-      JOIN user_share_grants g
-        ON (g.scope = 'workspace' AND g.workspace_id = blocks.workspace_id)
-        OR (g.scope = 'subtree'   AND g.share_id   = ANY(blocks.effective_share_ids))</code></pre>
+      WHERE blocks.workspace_id IN workspace_share_workspace_ids
+    # 2. Subtree-scope shares -> blocks the share covers, via the junction.
+    #    Equality JOIN on block_id; share_id filtered through the parameter CTE.
+    - |
+      SELECT blocks.id, blocks.workspace_id, blocks.parent_id,
+             blocks.order_key, blocks.content,
+             blocks.properties_json, blocks.references_json,
+             blocks.created_at, blocks.updated_at,
+             blocks.created_by, blocks.updated_by,
+             blocks.deleted, blocks.effective_share_ids
+      FROM public.blocks
+      JOIN public.block_share_coverage c ON c.block_id = blocks.id
+      WHERE c.share_id IN subtree_share_ids</code></pre>
 
 <p>And add <code>effective_share_ids</code> to the existing <code>workspace_data</code> stream's
   blocks SELECT, so members see it for share-badge UI.</p>
 
-<div class="warn">
-Verify <code>ANY(array)</code> support in PowerSync stream queries before merging. If unsupported,
-fall back to a junction table <code>block_share_coverage(block_id, share_id)</code> maintained by
-the same triggers; only the storage shape changes, all RLS / RPC logic carries over unchanged.
+<div class="note">
+The two query entries fan into the same client-side <code>blocks</code> table; PowerSync deduplicates
+on primary key, so a row covered by both a workspace share and a subtree share isn't synced twice.
+RLS continues to use <code>= ANY(blocks.effective_share_ids)</code> directly (RLS predicates accept
+that operator); only stream JOINs need the flattened junction.
 </div>
 
 <h2>8. API tokens</h2>
@@ -845,54 +896,86 @@ the same triggers; only the storage shape changes, all RLS / RPC logic carries o
 
 <h3>8.2 Creation</h3>
 
-<p>One server-side RPC, called from the in-app settings UI:</p>
+<p>Creation runs entirely inside one edge function,
+  <code>supabase/functions/create-api-token</code>. The edge function holds
+  <code>service_role</code> (needed for creating service users), generates the token plaintext (so
+  it never enters Postgres), and then calls a database RPC with only the token <em>hash</em>. The
+  plaintext lives in a single response back to the caller and is never persisted anywhere.</p>
 
-<pre><code>create_api_token(
-  p_scope         text,           -- 'workspace' | 'subtree'
-  p_workspace_id  text,           -- required
-  p_roots         text[],         -- required for subtree; empty for workspace
-  p_role          text,           -- 'viewer' | 'editor'
-  p_name          text,           -- human label
-  p_expires_at    bigint          -- ms epoch, null = never
+<h4>Edge-function contract (called by the in-app client)</h4>
+
+<pre><code>POST /functions/v1/create-api-token
+Authorization: Bearer &lt;caller's Supabase JWT&gt;
+{
+  "scope":        "workspace" | "subtree",
+  "workspace_id": "&lt;ws&gt;",
+  "roots":        ["&lt;block&gt;", ...],     // required for subtree; empty for workspace
+  "role":         "viewer" | "editor",
+  "name":         "Claude on laptop",
+  "expires_at":   1730000000000          // ms epoch; null = never
+}
+
+200 OK
+{
+  "share":       { ... block_shares row ... },
+  "link":        { ... share_links row (no token, no hash) ... },
+  "token_plain": "km_live_..."           // shown exactly once; never persisted
+}</code></pre>
+
+<h4>Database RPC contract (called from inside the edge function only)</h4>
+
+<pre><code>_create_api_token_records(
+  p_caller_user_id   text,    -- issuing user, already verified by the edge function
+  p_scope            text,
+  p_workspace_id     text,
+  p_roots            text[],
+  p_role             text,
+  p_name             text,
+  p_expires_at       bigint,
+  p_service_user_id  text,    -- service user already created by the edge function
+  p_token_hash       bytea    -- sha256(plaintext); plaintext is NEVER passed in
 ) returns table (
-  share        public.block_shares,
-  link         public.share_links,
-  token_plain  text                -- shown exactly once
+  share  public.block_shares,
+  link   public.share_links   -- metadata only; no token columns
 )
 language plpgsql security definer set search_path = public</code></pre>
 
-<p>Inside the RPC:</p>
+<p>Edge-function flow:</p>
 
 <ol class="tight">
-  <li>Verify caller is a workspace writer for <code>p_workspace_id</code>.</li>
-  <li>For subtree scope, verify caller can write each root block.</li>
-  <li>Insert <code>block_shares</code> + <code>block_share_roots</code> rows. Recompute trigger
-    stamps <code>effective_share_ids</code> for subtree case.</li>
-  <li><strong>Service user creation</strong> is the one step that needs
-    <code>service_role</code>: call out to
-    <code>POST /auth/v1/admin/users</code> via a Supabase Edge Function wrapping this RPC, or
-    register an extension. The service user gets an opaque generated email
+  <li>Verify the caller's Supabase JWT and pull out their <code>user_id</code>.</li>
+  <li>Verify the caller is a workspace writer for <code>workspace_id</code> (and, for subtree scope,
+    that they can write each requested root block).</li>
+  <li>Create the service user via <code>POST /auth/v1/admin/users</code>. Opaque generated email
     (<code>svc-&lt;random&gt;@knowledge-medium.local</code>) and a random unrecoverable password.</li>
-  <li>Insert <code>block_share_members(share_id, user_id = service_user_id, role, source='api_token')</code>.</li>
-  <li>Generate the token <strong>in the edge function</strong> (not in SQL &mdash; Postgres'
-    <code>encode()</code> only supports <code>'base64' | 'hex' | 'escape'</code>, not
-    <code>'base64url'</code>, and keeping plaintext out of the database avoids it appearing in
-    <code>pg_stat_statements</code> or replication logs):
+  <li>Generate the token in the edge function. Plaintext stays in this function's memory only:
 <pre><code>const plaintext = 'km_live_' + crypto.randomBytes(32).toString('base64url')
 const hash      = crypto.createHash('sha256').update(plaintext).digest()</code></pre>
   </li>
-  <li>Pass only <code>hash</code> into the SQL RPC; insert <code>share_links</code> +
-    <code>share_link_secrets(token_hash = hash)</code>.</li>
-  <li>Return <code>plaintext</code> from the edge function to the caller, once. Postgres never sees
-    the plaintext.</li>
+  <li>Call <code>_create_api_token_records(..., p_service_user_id, p_token_hash = hash)</code>.
+    Inside that RPC, in one transaction:
+    <ul class="tight">
+      <li>Insert <code>block_shares</code> + <code>block_share_roots</code> rows. Recompute trigger
+        stamps <code>effective_share_ids</code> and <code>block_share_coverage</code> for the
+        subtree case.</li>
+      <li>Insert <code>block_share_members(share_id, user_id = p_service_user_id, role,
+        source='api_token')</code>.</li>
+      <li>Insert <code>share_links</code> + <code>share_link_secrets(token_hash = p_token_hash)</code>.</li>
+      <li>Return <code>(share, link)</code>. The RPC's signature does not contain a plaintext
+        column &mdash; there's no SQL code path that could return one.</li>
+    </ul>
+  </li>
+  <li>Return <code>{ share, link, token_plain: plaintext }</code> from the edge function to the
+    caller, once.</li>
 </ol>
 
 <div class="note">
-<strong>Practical packaging.</strong> Because step 4 needs <code>service_role</code>, the cleanest
-shape is a single Edge Function <code>supabase/functions/create-api-token</code> that the in-app
-client calls. The function authenticates the caller (their Supabase JWT), validates with RLS-style
-SECURITY DEFINER helpers, creates the service user, and then runs the rest of the RPC. Keeping
-service_role inside the function and never on the client is the security boundary.
+<strong>The security boundary.</strong> Plaintext exists only in the edge function's request memory
+and the single HTTP response back to the caller. The SQL RPC contract takes a <code>bytea</code>
+hash and returns no token-shaped column, so plaintext cannot appear in
+<code>pg_stat_statements</code>, replication, or any audit log on the database side. Rotation
+(&sect;8.5) generates a fresh plaintext/hash pair in the edge function the same way and updates
+<code>share_link_secrets.token_hash</code> via a parallel hash-only RPC.
 </div>
 
 <h3>8.3 Exchange (every API call)</h3>
