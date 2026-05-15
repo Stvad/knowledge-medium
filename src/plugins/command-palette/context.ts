@@ -6,6 +6,7 @@ import type {
 
 export const COMMAND_PALETTE_CONTEXT = 'command-palette'
 export const COMMAND_PALETTE_ACTION_ID = 'command_palette'
+export const COMMAND_PALETTE_FOR_BLOCK_ACTION_ID = 'command_palette_for_block'
 
 export type CommandPaletteDependencies = BaseShortcutDependencies
 

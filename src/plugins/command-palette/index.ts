@@ -17,7 +17,11 @@ import {
 import { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 import { CommandPalette } from './CommandPalette.tsx'
 import { toggleCommandPaletteEvent } from './events.ts'
-import { COMMAND_PALETTE_ACTION_ID, commandPaletteActionContext } from './context.ts'
+import {
+  COMMAND_PALETTE_ACTION_ID,
+  COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
+  commandPaletteActionContext,
+} from './context.ts'
 
 export { CommandPaletteHeaderItem } from './HeaderItem.tsx'
 export { CommandPalette } from './CommandPalette.tsx'
@@ -25,10 +29,9 @@ export { toggleCommandPaletteEvent } from './events.ts'
 export {
   COMMAND_PALETTE_ACTION_ID,
   COMMAND_PALETTE_CONTEXT,
+  COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
   commandPaletteActionContext,
 } from './context.ts'
-
-export const COMMAND_PALETTE_FOR_BLOCK_ACTION_ID = 'command_palette_for_block'
 
 export const commandPaletteMount: AppMountContribution = {
   id: 'command-palette.dialog',
