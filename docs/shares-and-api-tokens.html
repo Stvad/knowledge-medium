@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Shares + API tokens — unified access model</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 1040px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.6rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.18rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1.02rem; margin-top: 1.4rem; }
+  h4 { font-size: .96rem; margin-top: 1rem; margin-bottom: .25rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .delta { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+           border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  .warn { background: #ffebe9; border-left: 4px solid #cf222e; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  small { color: #57606a; }
+  .kbd { background: #f6f8fa; border: 1px solid #d0d7de; border-bottom-width: 2px;
+         border-radius: 4px; padding: 0 .35em; font-size: 11.5px; }
+  ul.tight li, ol.tight li { margin: .2rem 0; }
+  .colcompare { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .colcompare > div { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+                      padding: .6rem .8rem; }
+  .colcompare h4 { margin-top: 0; }
+</style>
+</head>
+<body>
+
+<h1>Shares + API tokens — unified access model</h1>
+<small>Supersedes the &ldquo;single-root subtree share&rdquo; framing in
+  <a href="./subtree-sharing.md">subtree-sharing.md</a>. Draft, 2026-05-15.</small>
+
+<h2>1. Why a new doc</h2>
+
+<p>The existing <a href="./subtree-sharing.md">subtree-sharing.md</a> nails the hard parts:
+  RLS unification via <code>blocks.effective_share_ids</code>, role monotonicity, token isolation,
+  trigger-maintained access materialization, and a single-mode-per-session bootstrap. We're keeping all
+  of that. What's changed since it was written:</p>
+
+<ol class="tight">
+  <li><strong>API access is now a first-class requirement.</strong> Programmatic agents and third-party
+    integrations need stable scoped access without a browser session. Treating an API token as a kind of
+    share grant collapses two designs into one.</li>
+  <li><strong>A single share should cover multiple subtrees</strong> &mdash; &ldquo;share these three
+    projects with my contractor&rdquo; or &ldquo;the agent gets read access to <em>this</em> page and
+    <em>that</em> page.&rdquo;</li>
+  <li><strong>Workspace-scoped tokens are valuable.</strong> Both for &ldquo;give my agent the whole
+    workspace&rdquo; and as the natural ceiling of the subtree model.</li>
+</ol>
+
+<p>This doc is the diff against
+  <a href="./subtree-sharing.md">subtree-sharing.md</a>. Sections that aren't re-litigated here
+  (read-only snapshot RPC, presentation root clipping, advisory locks in the recompute, the
+  &ldquo;workspace member overrides share grant&rdquo; rule, the test plan, the guardrails) remain
+  authoritative in the original doc.</p>
+
+<h2>2. The unifying primitive</h2>
+
+<p>A <em>share</em> is the access primitive. Everything else &mdash; human invites, link URLs, API
+  tokens &mdash; is a way of putting some principal into a share's audience.</p>
+
+<pre><code>Share = {
+  workspace_id,                       // a share always lives inside one workspace
+  scope:    'workspace' | 'subtree',  // entire workspace, or a set of subtree roots
+  roots:    text[]                    // only meaningful for scope='subtree'; one or more block ids
+  role:     'viewer' | 'editor',      // default role for new audience members
+  purpose:  'human' | 'api',          // who this share is for; drives UI/listing only
+}
+
+ShareMember = (share_id, principal_id, role, source)
+  // principal_id is auth.users.id, whether human or API service user
+  // source is one of: 'invite' | 'link' | 'api_token'
+
+ShareLink = a redeemable URL fragment (one-shot per user) for humans
+ApiToken  = a long-lived credential (re-usable, single service principal) for integrations
+</code></pre>
+
+<p>The two are the same shape: an opaque secret stored in a tightest-RLS sidecar table, validated by a
+  SECURITY DEFINER RPC, which then upserts a row into <code>block_share_members</code> for the redeeming
+  principal. The differences are operational: lifecycle (one-shot human redeem vs. long-lived API
+  exchange), audit fields, and UI surface.</p>
+
+<div class="verdict">
+<strong>Mental model:</strong> a workspace member is just a built-in &ldquo;workspace-scope share with
+the user as a member.&rdquo; A subtree share is the same idea narrowed to N roots. An API token is a
+share whose audience is a per-token service user. <em>One RLS predicate handles all four cases.</em>
+</div>
+
+<h2>3. Schema deltas vs. the existing doc</h2>
+
+<p>Same migration posture as <a href="./subtree-sharing.md">subtree-sharing.md</a> &sect;1: existing
+  tables (<code>blocks</code>, <code>workspaces</code>, <code>workspace_members</code>,
+  <code>workspace_invitations</code>) are not touched destructively. The delta below changes only the
+  <em>new</em> tables introduced by the share design, plus one additional column on
+  <code>blocks</code>.</p>
+
+<h3>3.1 <code>block_shares</code> — multi-root + scope kind</h3>
+
+<table>
+<tr><th>Column</th><th>Original (subtree-sharing.md &sect;4.2)</th><th>New</th></tr>
+<tr><td><code>root_block_id</code></td>
+    <td>scalar <code>text</code>, immutable</td>
+    <td><strong>removed</strong> — moved to <code>block_share_roots</code></td></tr>
+<tr><td><code>scope</code></td>
+    <td>(implicit: always subtree)</td>
+    <td><strong>new:</strong> <code>text not null check (scope in ('workspace','subtree'))</code></td></tr>
+<tr><td><code>purpose</code></td>
+    <td>(not present)</td>
+    <td><strong>new:</strong> <code>text not null default 'human' check (purpose in ('human','api'))</code></td></tr>
+<tr><td><code>workspace_id</code></td>
+    <td>denormalized + stamped at insert, immutable</td>
+    <td>unchanged</td></tr>
+<tr><td><code>default_role</code>, <code>created_by_user_id</code>, <code>create_time</code>, <code>revoked_at</code></td>
+    <td>as before</td>
+    <td>unchanged</td></tr>
+</table>
+
+<pre><code>create table public.block_shares (
+  id                   text primary key,
+  workspace_id         text not null references public.workspaces(id) on delete cascade,
+  scope                text not null check (scope in ('workspace','subtree')),
+  purpose              text not null default 'human' check (purpose in ('human','api')),
+  default_role         text not null check (default_role in ('viewer','editor')),
+  created_by_user_id   text not null,
+  create_time          bigint not null,
+  revoked_at           bigint
+);</code></pre>
+
+<h3>3.2 <code>block_share_roots</code> — new junction table</h3>
+
+<p>One row per (share, root) pair. Only populated for shares with <code>scope='subtree'</code>; enforced
+  by trigger.</p>
+
+<pre><code>create table public.block_share_roots (
+  share_id       text not null references public.block_shares(id) on delete cascade,
+  root_block_id  text not null references public.blocks(id)        on delete cascade,
+  workspace_id   text not null,  -- stamped + checked equal to block_shares.workspace_id and blocks.workspace_id
+  create_time    bigint not null,
+  primary key (share_id, root_block_id)
+);
+create index idx_block_share_roots_root_block_id on public.block_share_roots(root_block_id);</code></pre>
+
+<div class="delta">
+<strong>Why a junction table instead of <code>text[]</code> on <code>block_shares</code>:</strong>
+roots get added/removed over time, and we want a per-root foreign key with cascade-on-delete so
+deleting a block that's a share root cleanly removes that scope without leaving a dangling id in an
+array. The same reasoning that made <code>workspace_members</code> a table rather than an array on
+<code>workspaces</code> applies here.
+</div>
+
+<h3>3.3 <code>blocks.effective_share_ids</code> — unchanged shape, narrower scope</h3>
+
+<p>The column stays as designed in <a href="./subtree-sharing.md">subtree-sharing.md &sect;4.1</a>,
+  but with one rule change: <strong>it only carries <code>block_shares.id</code>s for shares with
+  <code>scope='subtree'</code>.</strong> Workspace-scope shares are matched by joining
+  <code>workspace_id</code> directly in RLS &mdash; cheaper than re-stamping every block in the
+  workspace whenever a workspace-scope share is created or revoked.</p>
+
+<p>This keeps the recompute function (<a href="./subtree-sharing.md">subtree-sharing.md &sect;5</a>)
+  unchanged: it still walks descendants from one root, unioning <code>block_share_roots</code> matches.
+  When a multi-root share is created, we just call <code>recompute_share_ids_subtree</code> once per
+  root. Adding/removing a root is one recompute on that root.</p>
+
+<h3>3.4 <code>share_links</code> — add <code>purpose</code> and audit fields</h3>
+
+<table>
+<tr><th>Column</th><th>Original</th><th>New</th></tr>
+<tr><td><code>purpose</code></td>
+    <td>n/a</td>
+    <td><strong>new:</strong> <code>text not null default 'human_link' check (purpose in ('human_link','api_token'))</code></td></tr>
+<tr><td><code>name</code></td>
+    <td>n/a</td>
+    <td><strong>new:</strong> <code>text</code> &mdash; human label for API tokens (&ldquo;laptop CLI&rdquo;, &ldquo;Readwise sync&rdquo;)</td></tr>
+<tr><td><code>last_used_at</code></td>
+    <td>n/a</td>
+    <td><strong>new:</strong> <code>bigint</code> &mdash; bumped on every exchange (API tokens) or redeem (human links)</td></tr>
+<tr><td><code>last_used_ip</code></td>
+    <td>n/a</td>
+    <td><strong>new:</strong> <code>text</code> &mdash; best-effort, may be null</td></tr>
+<tr><td><code>service_user_id</code></td>
+    <td>n/a</td>
+    <td><strong>new:</strong> <code>text</code> &mdash; for <code>purpose='api_token'</code>, the dedicated <code>auth.users</code> row that this token authenticates as. Null for human links. One-to-one with the link.</td></tr>
+<tr><td><code>expires_at</code>, <code>max_redemptions</code>, <code>redemption_count</code>, <code>revoked_at</code></td>
+    <td>as before</td>
+    <td>semantics unchanged; for API tokens, <code>redemption_count</code> increments on first exchange only (a single service user redeems once, then re-uses the JWT)</td></tr>
+</table>
+
+<h3>3.5 <code>share_link_secrets</code> — unchanged</h3>
+
+<p>Token storage table from <a href="./subtree-sharing.md">subtree-sharing.md &sect;4.2</a> is reused
+  as-is for both human links and API tokens. Same RLS (creator-only SELECT), same hash-not-plaintext
+  storage, same one-time-reveal-on-creation discipline.</p>
+
+<div class="note">
+For API tokens, we store the SHA-256 of the token in <code>share_link_secrets.token</code>. Human
+links can do the same (it was an open choice in the original doc); switching both to hashed storage
+makes the table genuinely &ldquo;a secret never escapes Postgres alive&rdquo;.
+</div>
+
+<h2>4. RLS — the unified <code>blocks</code> predicate</h2>
+
+<p>One read policy, one write policy, four cases covered:</p>
+
+<pre><code>create policy blocks_read on public.blocks
+for select using (
+  -- 1. Workspace member (existing behavior)
+  public.is_workspace_member(workspace_id, auth.uid()::text)
+
+  -- 2. Workspace-scope share recipient or API-token principal
+  or exists (
+    select 1
+    from public.block_share_members sm
+    join public.block_shares s on s.id = sm.share_id
+    where sm.user_id = auth.uid()::text
+      and s.revoked_at is null
+      and s.scope = 'workspace'
+      and s.workspace_id = blocks.workspace_id
+  )
+
+  -- 3. Subtree-scope share recipient or API-token principal
+  or exists (
+    select 1
+    from public.block_share_members sm
+    join public.block_shares s on s.id = sm.share_id
+    where sm.user_id = auth.uid()::text
+      and s.revoked_at is null
+      and s.scope = 'subtree'
+      and s.id = any (blocks.effective_share_ids)
+  )
+);</code></pre>
+
+<p>The <code>blocks_write</code> policy mirrors this with <code>sm.role = 'editor'</code> in both share
+  branches and a matching <code>with check</code>. (Same shape as
+  <a href="./subtree-sharing.md">subtree-sharing.md &sect;6.1</a>.)</p>
+
+<div class="delta">
+<strong>Notice what this buys us.</strong> An API token is just an <code>auth.uid()</code> with a
+<code>block_share_members</code> row. <em>The RLS predicate doesn't know it's an API call.</em> No
+&ldquo;is this a token request?&rdquo; branch in policy, no service-role bypass anywhere in the data
+path. PostgREST + Supabase auth handle it natively.
+</div>
+
+<h2>5. Recompute — what changes</h2>
+
+<p><a href="./subtree-sharing.md">subtree-sharing.md &sect;5.1</a>'s <code>recompute_share_ids_subtree(p_root_block_id)</code>
+  needs one small tweak: it currently joins <code>block_shares</code> on
+  <code>root_block_id = child.id</code>. With the junction table, that becomes:</p>
+
+<pre><code>-- inside the recursive CTE, replacing the existing join:
+coalesce((
+  select array_agg(s.id)
+  from public.block_share_roots r
+  join public.block_shares     s on s.id = r.share_id
+  where r.root_block_id = child.id
+    and s.scope = 'subtree'
+    and s.revoked_at is null
+), '{}'::text[])</code></pre>
+
+<p>Triggers calling the recompute (<a href="./subtree-sharing.md">subtree-sharing.md &sect;5.2</a>)
+  fan out one additional case:</p>
+
+<table>
+<tr><th>Trigger</th><th>Argument(s)</th></tr>
+<tr><td><code>blocks AFTER INSERT</code></td><td>parent's <code>effective_share_ids</code> (unchanged)</td></tr>
+<tr><td><code>blocks AFTER UPDATE OF parent_id</code></td><td><code>recompute(NEW.id)</code> (unchanged)</td></tr>
+<tr><td><code>block_share_roots AFTER INSERT or DELETE</code></td><td><code>recompute(NEW.root_block_id)</code> (or <code>OLD</code>)</td></tr>
+<tr><td><code>block_shares AFTER UPDATE OF revoked_at</code></td><td>for <code>scope='subtree'</code>: <code>recompute</code> on each root. For <code>scope='workspace'</code>: no recompute needed.</td></tr>
+</table>
+
+<p>Workspace-scope share creation/revocation does <em>not</em> trigger a recompute. It's RLS-only;
+  membership is checked against <code>blocks.workspace_id</code> directly.</p>
+
+<h2>6. PowerSync sync streams</h2>
+
+<p>Two changes to <a href="./subtree-sharing.md">subtree-sharing.md &sect;7</a>:</p>
+
+<h3>6.1 <code>shared_blocks</code> stream — multi-root, scope-aware</h3>
+
+<p>The original stream joins blocks via <code>block_share_members</code> &harr;
+  <code>effective_share_ids</code>. With workspace-scope shares, we union two predicates:</p>
+
+<pre><code>shared_blocks:
+  auto_subscribe: true
+  query: |
+    SELECT blocks.*
+    FROM public.blocks
+    JOIN public.block_share_members sm ON sm.user_id = auth.user_id()
+    JOIN public.block_shares          s ON s.id = sm.share_id AND s.revoked_at IS NULL
+    WHERE (
+      (s.scope = 'workspace' AND s.workspace_id = blocks.workspace_id)
+      OR (s.scope = 'subtree' AND s.id = ANY(blocks.effective_share_ids))
+    )</code></pre>
+
+<p>For API tokens this stream isn't reached because API consumers don't run PowerSync &mdash; they hit
+  PostgREST or a snapshot RPC. The stream exists for <em>human</em> share recipients. A workspace-scope
+  human share recipient (rare in v1 &mdash; see &sect;6.2) gets the entire workspace via this stream
+  without us having to put them in <code>workspace_members</code>.</p>
+
+<h3>6.2 V1 simplification: workspace-scope shares are API-only</h3>
+
+<div class="delta">
+For v1, <strong>only <code>purpose='api'</code> shares may have <code>scope='workspace'</code>.</strong>
+Human shares stay subtree-only. Rationale: the human flow for &ldquo;share my whole workspace with
+you&rdquo; is already covered by <code>invite_member_by_email</code> + workspace_members. Adding a
+parallel path for humans creates a fork in the share-mode bootstrap (which root do we land on?
+breadcrumbs to where?) for no real benefit.
+</div>
+
+<p>Enforced by check constraint:</p>
+
+<pre><code>alter table public.block_shares
+  add constraint workspace_scope_is_api_only
+  check (scope = 'subtree' or purpose = 'api');</code></pre>
+
+<p>If a real use case for &ldquo;guest with the whole workspace, not yet a member&rdquo; appears, drop
+  the constraint and finish the human bootstrap path. The RLS predicate already supports it.</p>
+
+<h2>7. API token lifecycle</h2>
+
+<h3>7.1 Creation (UI flow, in-app)</h3>
+
+<ol class="tight">
+  <li>User opens <em>Settings &rarr; API tokens</em> in the app, or invokes &ldquo;Create API
+    token&rdquo; from the existing share dialog (when context is a specific block).</li>
+  <li>User chooses:
+    <ul class="tight">
+      <li><strong>Scope</strong>: this block + descendants / these blocks (multi-select) / entire workspace</li>
+      <li><strong>Role</strong>: viewer or editor</li>
+      <li><strong>Name</strong>: e.g. &ldquo;Claude on laptop&rdquo;</li>
+      <li><strong>Expiry</strong>: 30/90/365 days / never</li>
+    </ul>
+  </li>
+  <li>Client calls one RPC: <code>create_api_token(p_scope, p_roots, p_role, p_name, p_expires_at)</code>.
+    Server-side it:
+    <ol class="tight">
+      <li>Creates a <code>block_shares</code> row with <code>purpose='api'</code> and the chosen scope.</li>
+      <li>For subtree scope, inserts <code>block_share_roots</code> rows.</li>
+      <li>Creates a dedicated service user (<code>auth.admin.createUser</code> with a generated email
+        like <code>svc+&lt;random&gt;@knowledge-medium.local</code> and a random password; user is
+        never used for password sign-in &mdash; the token <em>is</em> the credential).</li>
+      <li>Inserts <code>block_share_members(share_id, user_id=service_user_id, role)</code>.</li>
+      <li>Generates the token (<code>encode(gen_random_bytes(32), 'base64url')</code> = 43 chars
+        prefixed with <code>km_</code>).</li>
+      <li>Inserts <code>share_links(purpose='api_token', service_user_id, ...)</code> +
+        <code>share_link_secrets(token=sha256(plaintext))</code>.</li>
+      <li>Returns the share + the plaintext token <strong>once</strong>.</li>
+    </ol>
+  </li>
+  <li>Client surfaces the plaintext token with copy-to-clipboard and a &ldquo;you won't see this
+    again&rdquo; warning, then stores nothing.</li>
+</ol>
+
+<div class="note">
+The service user creation step is the only piece that needs a Supabase Edge Function or a
+<code>service_role</code>-keyed RPC &mdash; <code>auth.admin.createUser</code> isn't callable from
+client SQL. Everything else stays as regular <code>SECURITY DEFINER</code> RPCs callable by
+authenticated clients.
+</div>
+
+<h3>7.2 Exchange (every API call)</h3>
+
+<p>Third-party clients <code>POST</code> to a small edge function
+  <code>/functions/v1/api-token-exchange</code>:</p>
+
+<pre><code>POST /functions/v1/api-token-exchange
+Authorization: Bearer km_&lt;43 chars&gt;
+
+200 OK
+{
+  "access_token": "&lt;short-lived Supabase JWT, sub=service_user_id&gt;",
+  "expires_in": 900,
+  "share": { "id": "...", "scope": "subtree", "workspace_id": "..." }
+}</code></pre>
+
+<p>The edge function:</p>
+<ol class="tight">
+  <li>Hashes the bearer token, looks it up in <code>share_link_secrets</code>.</li>
+  <li>Validates: link not revoked, not past <code>expires_at</code>, share not revoked.</li>
+  <li>Bumps <code>last_used_at</code>, <code>last_used_ip</code> on <code>share_links</code>.</li>
+  <li>Signs a JWT with the project JWT secret claiming <code>sub = service_user_id</code>,
+    <code>role = 'authenticated'</code>, <code>aud = 'authenticated'</code>, short TTL (15 min).</li>
+  <li>Returns the JWT.</li>
+</ol>
+
+<p>The client now uses the JWT against PostgREST exactly like any Supabase client. RLS resolves
+  through the <code>block_share_members</code> row attached to the service user.</p>
+
+<h3>7.3 What 3rd parties get for free</h3>
+
+<ul class="tight">
+  <li><code>GET /rest/v1/blocks?workspace_id=eq.&lt;id&gt;&amp;deleted=eq.false</code></li>
+  <li><code>GET /rest/v1/blocks?parent_id=eq.&lt;id&gt;&amp;order=order_key.asc</code></li>
+  <li><code>POST /rest/v1/blocks</code> (editor role only; <code>workspace_id</code> trigger enforces
+    immutability, RLS enforces scope match)</li>
+  <li><code>PATCH /rest/v1/blocks?id=eq.&lt;id&gt;</code></li>
+</ul>
+
+<p>For ergonomic agent surfaces (subtree fetch in one round trip, search across
+  <code>properties_json</code>, batch tree creation), a separate <code>/functions/v1/api/&hellip;</code>
+  edge function exposes high-level endpoints over the same JWT. These wrap RPCs and are the layer that
+  shields third parties from schema churn. v1 can ship without this and rely on PostgREST; the
+  high-level surface is a follow-up.</p>
+
+<div class="delta">
+<strong>Read-only fast path.</strong> For tokens with <code>role='viewer'</code> the existing
+<a href="./subtree-sharing.md">subtree-sharing.md &sect;8.4</a> <code>get_shared_subtree(token)</code>
+RPC is already a perfectly good zero-state read endpoint. It validates the token, returns a flat
+snapshot, doesn't need the service user round-trip. <em>This is the v1 &ldquo;public read&rdquo;
+endpoint already designed.</em> Extend it to accept multi-root subtree shares and workspace shares
+(returns paginated blocks for workspace scope).
+</div>
+
+<h3>7.4 Revocation, rotation, list</h3>
+
+<ul class="tight">
+  <li><code>revoke_api_token(p_link_id)</code> &rarr; sets <code>share_links.revoked_at</code> and
+    revokes the share (cascades to membership). Service user kept around for audit (so blocks updated
+    by the token still resolve).</li>
+  <li><code>rotate_api_token(p_link_id)</code> &rarr; generates a new token, updates the secret row,
+    returns the new plaintext once. Old token stops working immediately.</li>
+  <li><code>list_my_api_tokens()</code> &rarr; returns rows with everything <em>except</em> the token.</li>
+</ul>
+
+<h2>8. Where this lands in the existing codebase</h2>
+
+<table>
+<tr><th>Concern</th><th>Touches</th></tr>
+<tr><td>Schema migration</td>
+    <td>new <code>supabase/migrations/&lt;ts&gt;_shares_and_api_tokens.sql</code>, alongside the original
+      sharing migration. (If the sharing work has not landed yet, fold both into one migration.)</td></tr>
+<tr><td>Sync rules</td>
+    <td><a href="../powersync/sync-config.yaml">powersync/sync-config.yaml</a> &mdash; one new stream
+      <code>shared_blocks</code> (replaces the original doc's version), plus
+      <code>block_shares</code>, <code>block_share_members</code>, <code>block_share_roots</code>,
+      <code>share_links</code>. Regenerate via <code>yarn gen:sync-config</code>.</td></tr>
+<tr><td>Client schema</td>
+    <td><a href="../src/data/blockSchema.ts">src/data/blockSchema.ts</a> adds
+      <code>effective_share_ids</code>; new <code>src/data/shareSchema.ts</code> covers the new tables;
+      <a href="../src/data/repoInstance.ts">src/data/repoInstance.ts</a> registers them.</td></tr>
+<tr><td>Repo guards</td>
+    <td><a href="../src/data/repo.ts">src/data/repo.ts:271</a> &mdash; add immutability guard for
+      <code>effectiveShareIds</code> next to the existing <code>workspace_id</code> one.</td></tr>
+<tr><td>Routing</td>
+    <td><a href="../src/utils/routing.ts">src/utils/routing.ts</a> &mdash; gains the
+      <code>#share/&lt;token&gt;</code> branch from the original doc; no change for API tokens (no
+      hash route).</td></tr>
+<tr><td>Share dialog</td>
+    <td>new <code>src/components/share/ShareDialog.tsx</code> with three tabs:
+      <em>People</em>, <em>Link</em>, <em>API tokens</em>. (Original doc had two tabs; we add the
+      third.) For workspace-scope tokens, surface from <em>Settings &rarr; API tokens</em>.</td></tr>
+<tr><td>Token exchange</td>
+    <td>new <code>supabase/functions/api-token-exchange/index.ts</code> &mdash; the only new edge
+      function for v1.</td></tr>
+<tr><td>Agent runtime bridge</td>
+    <td><a href="../README.md">README.md</a> &sect;&ldquo;Agent Runtime Access&rdquo; today uses a
+      local relay paired with the running browser. With API tokens, an agent that doesn't need a
+      browser can use <code>yarn agent</code> against the remote API instead. Add a
+      <code>yarn agent login-token &lt;km_&hellip;&gt;</code> command + a <code>--remote</code> mode that
+      hits the exchange endpoint and calls PostgREST/RPCs directly. Existing local-bridge path stays
+      intact.</td></tr>
+</table>
+
+<h2>9. Phased plan (rolled into the original 8 phases)</h2>
+
+<p>Phases 1&ndash;8 from <a href="./subtree-sharing.md">subtree-sharing.md &sect;10</a> stay, with the
+  deltas below folded in. Phase 9&ndash;10 are new.</p>
+
+<table>
+<tr><th>Phase</th><th>Delta vs. original</th></tr>
+<tr><td>1 (Schema + recompute + RLS)</td>
+    <td>Drop <code>block_shares.root_block_id</code>, add <code>scope</code> + <code>purpose</code>;
+      add <code>block_share_roots</code> table; tweak recompute to join through it; widen the
+      <code>blocks_read/write</code> policies with the workspace-scope branch.</td></tr>
+<tr><td>2 (RPCs)</td>
+    <td><code>create_block_share</code> now accepts <code>p_roots text[]</code> instead of a scalar;
+      <code>add_share_root</code> / <code>remove_share_root</code> are new; rest unchanged.</td></tr>
+<tr><td>3 (PowerSync rules)</td>
+    <td><code>shared_blocks</code> query changes to the union form. <code>block_share_roots</code>
+      added to publication; secrets table still not published.</td></tr>
+<tr><td>4 (Client schema/types)</td>
+    <td><code>BlockShare</code> type loses <code>rootBlockId</code>, gains <code>scope</code> /
+      <code>purpose</code>; new <code>BlockShareRoot</code> type; raw table registered.</td></tr>
+<tr><td>5 (Routing + share-mode bootstrap)</td>
+    <td>Bootstrap into a multi-root subtree share picks the first root for the initial
+      <code>activeBlockId</code> (or honors the optional <code>#share/&lt;token&gt;/&lt;blockId&gt;</code>
+      suffix). Presentation root clipping (&sect;6 of original) accepts <code>clipAt: Set&lt;string&gt;</code>
+      &mdash; the walk stops at any member of the set.</td></tr>
+<tr><td>6 (Presentation clipping)</td>
+    <td>Same as above &mdash; <code>getRootBlock(blockId, clipAt?: Set&lt;string&gt;)</code>.</td></tr>
+<tr><td>7 (Share dialog + indicators)</td>
+    <td>Dialog gains a roots list editor for subtree shares (add/remove roots).
+      <code>ShareBadge</code> renders on any block that's in <code>block_share_roots</code>.</td></tr>
+<tr><td>8 (Reference stubs + cleanup)</td>
+    <td>Unchanged.</td></tr>
+<tr><td><strong>9 (API tokens, new)</strong></td>
+    <td>Service-user creation edge function path; <code>create_api_token</code> / <code>revoke_api_token</code>
+      / <code>rotate_api_token</code> / <code>list_my_api_tokens</code> RPCs;
+      <code>api-token-exchange</code> edge function; Settings &rarr; API tokens UI.</td></tr>
+<tr><td><strong>10 (Agent ergonomics, new, optional)</strong></td>
+    <td><code>yarn agent</code> remote mode; <code>/functions/v1/api/&hellip;</code> high-level endpoints
+      (subtree fetch, property search); an MCP server wrapping the same.</td></tr>
+</table>
+
+<h2>10. Open questions</h2>
+
+<ol class="tight">
+  <li><strong>Service-user audit identity.</strong> Should <code>blocks.created_by</code> /
+    <code>updated_by</code> store the service user's id, or the issuing user's id with a side reference
+    to the token? Storing the service-user id is simpler and means the audit trail naturally reflects
+    &ldquo;this token did this&rdquo; (linkable via <code>share_links.service_user_id</code>). Recommended.</li>
+  <li><strong>Token prefix scheme.</strong> Proposing <code>km_live_</code> for production,
+    <code>km_test_</code> for any future dev/scratch instance. Trivial to extend.</li>
+  <li><strong>Per-token rate limits.</strong> Probably enforce in the exchange edge function (deny if
+    last 100 exchanges were within 60s) rather than at PostgREST. Out of scope for v1 but worth a
+    column on <code>share_links</code> if cheap.</li>
+  <li><strong>Workspace-scope human shares.</strong> Locked off in v1 by the
+    <code>workspace_scope_is_api_only</code> constraint. Re-open if a real use case shows up &mdash;
+    the RLS predicate is already ready.</li>
+  <li><strong>Snapshot RPC for workspace scope.</strong> <code>get_shared_subtree</code> works
+    naturally for subtree shares; the workspace-scope equivalent returns potentially the whole
+    workspace. Add pagination (<code>p_after_id</code>, <code>p_limit</code>) before exposing it.</li>
+  <li><strong>Token revocation lag.</strong> Issued JWTs live 15 min; an attacker with a stolen JWT
+    keeps access for that window even after token revocation. Acceptable for v1; if not, the exchange
+    function can mint shorter JWTs or we can move to a check-on-every-request model with a custom
+    PostgREST GUC. Default: live with 15 min.</li>
+</ol>
+
+<h2>11. What this doc is <em>not</em> changing</h2>
+
+<p>All of the following from <a href="./subtree-sharing.md">subtree-sharing.md</a> remain authoritative
+  and untouched by this proposal:</p>
+
+<ul class="tight">
+  <li>&sect;3.5 <strong>Role monotonicity</strong> &mdash; same rule, applied identically to API token
+    grants (you can't lower a service user's role by re-issuing a lower-role token; you have to
+    revoke).</li>
+  <li>&sect;3.7 <strong>Token isolation</strong> &mdash; same <code>share_link_secrets</code> table,
+    same RLS, same hash storage. Tokens never appear in any sync stream.</li>
+  <li>&sect;3.8 <strong>Presentation root clipping</strong> &mdash; generalized to a set instead of a
+    single id, but the principle is unchanged.</li>
+  <li>&sect;3.9 <strong>Single write chokepoint</strong> &mdash; all writes still go through
+    <code>Repo</code> client-side, all server writes still go through SECURITY DEFINER RPCs or
+    RLS-protected PostgREST.</li>
+  <li>&sect;5.2-5.3 <strong>Concurrency + cross-row insert order</strong> &mdash; advisory lock + the
+    &ldquo;parent's insert fixes orphaned children&rdquo; trick are unchanged.</li>
+  <li>&sect;11 <strong>Test plan</strong> &mdash; reused wholesale; add four new tests:
+    <ul class="tight">
+      <li>Multi-root recompute: a share with roots {R1, R2}; descendants under either are reachable;
+        revoking the share clears both subtrees.</li>
+      <li>Workspace-scope share: every block in W is visible to the recipient; blocks in a different
+        workspace are not.</li>
+      <li>API token exchange: token &rarr; JWT &rarr; PostgREST read/write succeeds within scope, fails
+        outside it.</li>
+      <li>Token rotation: old token stops working immediately; new token works.</li>
+    </ul>
+  </li>
+  <li>&sect;13 <strong>Guardrails</strong> &mdash; all 14 still apply; #1 (role monotonicity), #2
+    (token isolation), #7 (<code>effectiveShareIds</code> immutability), and #12 (idempotent redeem)
+    are load-bearing for API tokens.</li>
+</ul>
+
+<h2>12. Summary</h2>
+
+<div class="verdict">
+The sharing design and the API-access design are the same design. By generalizing
+<code>block_shares</code> to multi-root + scope-kind, and treating API tokens as
+<code>share_links</code> bound to per-token service users, we get:
+<ul class="tight">
+  <li><strong>One RLS predicate</strong> for humans-in-workspace, humans-via-subtree-share,
+    agents-via-workspace-token, and agents-via-subtree-token.</li>
+  <li><strong>One token-storage table</strong> with the same isolation invariants.</li>
+  <li><strong>One exchange RPC family</strong> &mdash; <code>redeem_share_link</code> for humans,
+    <code>api_token_exchange</code> for agents &mdash; sharing the same validation logic.</li>
+  <li><strong>One sync stream</strong> serving every human share recipient regardless of scope.</li>
+  <li><strong>Multi-root shares for free</strong> via the junction table; ergonomically valuable on the
+    human side too.</li>
+</ul>
+The cost on top of the existing sharing doc is small: one column (<code>scope</code>), one
+constraint, one junction table, one new edge function, one new UI surface. The big-ticket items
+(<code>effective_share_ids</code> materialization, the recompute, RLS, token isolation, presentation
+clipping) carry over unchanged.
+</div>
+
+</body>
+</html>
