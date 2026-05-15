@@ -9,7 +9,7 @@ import {
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Command } from 'lucide-react'
-import { focusedBlockIdProp } from '@/data/properties.ts'
+import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
 import {
   quickActionItemsFacet,
   type QuickActionItem,
@@ -59,14 +59,24 @@ export const commandPaletteAction: ActionConfig<typeof ActionContextTypes.GLOBAL
  *  through an async block mutation, and firing the event before it
  *  resolves leaves a window where the palette renders against the
  *  previously-focused block's NORMAL_MODE deps — selecting a command
- *  during that window would run it against the wrong block. */
+ *  during that window would run it against the wrong block.
+ *
+ *  We also clear `isEditing` in the same tx. `useInEditMode(B)` is
+ *  `focusedBlockId === B && isEditing`, so swiping B while another block
+ *  was being edited would, after we point focus at B, make B count as
+ *  in-edit-mode — and `vimNormalModeActivation` opts out of activating
+ *  NORMAL_MODE when `context.inEditMode` is true, leaving the palette
+ *  without block-context actions for B. */
 export const commandPaletteForBlockAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
   id: COMMAND_PALETTE_FOR_BLOCK_ACTION_ID,
   description: 'Open command palette',
   context: ActionContextTypes.NORMAL_MODE,
   icon: Command,
   handler: async ({block, uiStateBlock}) => {
-    await uiStateBlock.set(focusedBlockIdProp, block.id)
+    await Promise.all([
+      uiStateBlock.set(focusedBlockIdProp, block.id),
+      uiStateBlock.set(isEditingProp, false),
+    ])
     window.dispatchEvent(new CustomEvent(toggleCommandPaletteEvent))
   },
 }
