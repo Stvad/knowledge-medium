@@ -979,10 +979,16 @@ Authorization: Bearer &lt;caller's Supabase JWT&gt;
 language plpgsql security definer set search_path = public, private;
 
 -- Belt-and-braces: even though `private` schema is not exposed via PostgREST by
--- default, explicitly deny client roles from calling this function.
+-- default, explicitly deny client roles from calling this function. REVOKE FROM
+-- PUBLIC strips every role, so re-grant the edge function's role afterward --
+-- otherwise the edge function would also hit "permission denied".
 revoke execute on function private.create_api_token_records(
   text, text, text, text[], text, text, bigint, text, bytea
-) from public, anon, authenticated;</code></pre>
+) from public, anon, authenticated;
+
+grant execute on function private.create_api_token_records(
+  text, text, text, text[], text, text, bigint, text, bytea
+) to service_role;</code></pre>
 
 <p>The RPC lives in the <code>private</code> schema (alongside <code>private.is_workspace_member</code>,
   <code>private.is_workspace_writer</code>, and the new <code>private.role_max</code>). Supabase's
@@ -1089,8 +1095,12 @@ public.list_my_api_tokens() returns table (... no token, no hash ...);
 -- the edge function generates new plaintext + hash, then calls a private hash-only RPC.
 private.rotate_api_token_hash(p_link_id text, p_new_token_hash bytea) returns void;
   -- Updates share_link_secrets.token_hash for the link. Authorization is done in the
-  -- edge function (caller must own the link); execute is REVOKEd from anon/authenticated.
-  -- Returns void: plaintext is in the edge function's HTTP response only.</code></pre>
+  -- edge function (caller must own the link). Returns void: plaintext is in the edge
+  -- function's HTTP response only. Grants follow the same pattern as 8.2:
+  --   revoke execute on function private.rotate_api_token_hash(text, bytea)
+  --     from public, anon, authenticated;
+  --   grant  execute on function private.rotate_api_token_hash(text, bytea)
+  --     to service_role;</code></pre>
 
 <div class="warn">
 <strong>Revocation lag.</strong> Issued JWTs live for the configured TTL (default 15 minutes &mdash;
