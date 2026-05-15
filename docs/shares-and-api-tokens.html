@@ -855,9 +855,17 @@ language plpgsql security definer set search_path = public</code></pre>
     register an extension. The service user gets an opaque generated email
     (<code>svc-&lt;random&gt;@knowledge-medium.local</code>) and a random unrecoverable password.</li>
   <li>Insert <code>block_share_members(share_id, user_id = service_user_id, role, source='api_token')</code>.</li>
-  <li>Generate token: <code>'km_live_' || encode(gen_random_bytes(32), 'base64url')</code>.</li>
-  <li>Insert <code>share_links</code> + <code>share_link_secrets(token_hash = sha256(token))</code>.</li>
-  <li>Return <code>token_plain</code> to the caller, once.</li>
+  <li>Generate the token <strong>in the edge function</strong> (not in SQL &mdash; Postgres'
+    <code>encode()</code> only supports <code>'base64' | 'hex' | 'escape'</code>, not
+    <code>'base64url'</code>, and keeping plaintext out of the database avoids it appearing in
+    <code>pg_stat_statements</code> or replication logs):
+<pre><code>const plaintext = 'km_live_' + crypto.randomBytes(32).toString('base64url')
+const hash      = crypto.createHash('sha256').update(plaintext).digest()</code></pre>
+  </li>
+  <li>Pass only <code>hash</code> into the SQL RPC; insert <code>share_links</code> +
+    <code>share_link_secrets(token_hash = hash)</code>.</li>
+  <li>Return <code>plaintext</code> from the edge function to the caller, once. Postgres never sees
+    the plaintext.</li>
 </ol>
 
 <div class="note">
