@@ -683,15 +683,44 @@ begin
       from walk
       join public.blocks child on child.parent_id = walk.block_id
     )
-  update public.blocks
-  set effective_share_ids = (
-    select array(select distinct unnest(walk.share_ids) order by 1)
+  ,
+  -- 1. Refresh the dense array on each affected block.
+  upd as (
+    update public.blocks b
+    set effective_share_ids = (
+      select array(select distinct unnest(walk.share_ids) order by 1)
+      from walk where walk.block_id = b.id
+    )
     from walk
-    where walk.block_id = blocks.id
+    where b.id = walk.block_id
+    returning b.id, b.workspace_id, b.effective_share_ids
+  ),
+  -- 2. Re-derive the (block_id, share_id) target set from the new arrays.
+  target_coverage as (
+    select upd.id as block_id, upd.workspace_id, sid as share_id
+    from upd, unnest(upd.effective_share_ids) as sid
+  ),
+  -- 3. Delete junction rows that are no longer covered.
+  del as (
+    delete from public.block_share_coverage c
+    using upd
+    where c.block_id = upd.id
+      and not exists (
+        select 1 from target_coverage t
+        where t.block_id = c.block_id and t.share_id = c.share_id
+      )
+    returning 1
   )
-  from walk
-  where blocks.id = walk.block_id;
+  -- 4. Insert junction rows for newly-covered (block, share) pairs.
+  insert into public.block_share_coverage (block_id, share_id, workspace_id)
+  select t.block_id, t.share_id, t.workspace_id
+  from target_coverage t
+  on conflict (block_id, share_id) do nothing;
 end $$;</code></pre>
+
+<p>Steps (1)&ndash;(4) all execute inside the same transaction under the advisory lock taken at the
+  top of the function, so the array and the junction can never diverge under concurrent recomputes
+  on the same root.</p>
 
 <h3>6.2 Triggers calling it</h3>
 
