@@ -327,88 +327,6 @@ const noBroadBlockSubscriptions = {
   },
 }
 
-/** `setFocusedBlockId` + `setIsEditing` written in sequence produce a
- *  brief intermediate state where the newly-focused block inherits the
- *  previous holder's editing flag — exactly the race condition that bit
- *  the command-palette quick action. `setBlockFocus(uiStateBlock, id,
- *  {edit})` writes both in one tx and returns the awaitable promise.
- *
- *  Heuristic: within a single function body, if a call to
- *  `setFocusedBlockId` and a call to `setIsEditing` (both imported from
- *  `@/data/properties`) appear in the SAME containing block, flag them.
- *  We only look at direct children of the same BlockStatement to keep
- *  the rule cheap and false-positive-free; cases that need cross-block
- *  reasoning aren't this rule's job. */
-const preferSetBlockFocus = {
-  meta: {
-    type: 'suggestion',
-    docs: {
-      description: 'Suggest setBlockFocus over a setFocusedBlockId + setIsEditing pair.',
-    },
-    schema: [],
-    messages: {
-      preferSetBlockFocus:
-        'Pair `setFocusedBlockId` + `setIsEditing` produces a stale intermediate state '
-        + '(`useInEditMode` reads both props). Use `setBlockFocus(uiStateBlock, id, {edit})` '
-        + 'from `@/data/properties` for one atomic write + an awaitable promise.',
-    },
-  },
-  create(context) {
-    const setFocusedNames = new Set()
-    const setEditingNames = new Set()
-    const filename = getFilename(context)
-
-    const callCalleeName = (node) =>
-      node.type === 'CallExpression'
-      && node.callee.type === 'Identifier'
-        ? node.callee.name
-        : undefined
-
-    /** Find all direct-child CallExpression statements in a block, by
-     *  unwrapping `ExpressionStatement` (and the await form). Nested
-     *  blocks aren't followed — we don't want to compare a then-branch's
-     *  setFocused with an else-branch's setIsEditing. */
-    const directCallsInBlock = (block) => {
-      const calls = []
-      for (const statement of block.body) {
-        if (statement.type !== 'ExpressionStatement') continue
-        let expr = statement.expression
-        if (expr?.type === 'AwaitExpression') expr = expr.argument
-        if (expr?.type !== 'CallExpression') continue
-        calls.push(expr)
-      }
-      return calls
-    }
-
-    return {
-      ImportDeclaration(node) {
-        if (!isPropertiesSource(node.source.value, filename)) return
-        for (const specifier of node.specifiers) {
-          if (specifier.type !== 'ImportSpecifier') continue
-          const imported = importName(specifier)
-          if (imported === 'setFocusedBlockId') setFocusedNames.add(specifier.local.name)
-          if (imported === 'setIsEditing') setEditingNames.add(specifier.local.name)
-        }
-      },
-      BlockStatement(node) {
-        if (setFocusedNames.size === 0 || setEditingNames.size === 0) return
-        const calls = directCallsInBlock(node)
-        const focusCalls = []
-        const editCalls = []
-        for (const call of calls) {
-          const name = callCalleeName(call)
-          if (name && setFocusedNames.has(name)) focusCalls.push(call)
-          else if (name && setEditingNames.has(name)) editCalls.push(call)
-        }
-        if (focusCalls.length === 0 || editCalls.length === 0) return
-        for (const call of [...focusCalls, ...editCalls]) {
-          context.report({node: call, messageId: 'preferSetBlockFocus'})
-        }
-      },
-    }
-  },
-}
-
 const preferSemanticBlockHooks = {
   meta: {
     type: 'suggestion',
@@ -461,6 +379,5 @@ export default {
     'no-direct-types-prop-writes': noDirectTypesPropWrites,
     'no-broad-block-subscriptions': noBroadBlockSubscriptions,
     'prefer-semantic-block-hooks': preferSemanticBlockHooks,
-    'prefer-set-block-focus': preferSetBlockFocus,
   },
 }

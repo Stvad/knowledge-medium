@@ -78,7 +78,6 @@ export {
   blockLayoutFacet,
   shortcutSurfaceActivationsFacet,
   enterBlockEditMode,
-  focusBlock,
   getBlockContentRendererSlot,
   handleBlockSelectionClick,
   isSelectionClick,
@@ -150,6 +149,9 @@ export {
   showPropertiesProp,
   topLevelBlockIdProp,
   focusedBlockIdProp,
+  // Atomic focus + edit transition (single primitive — `setFocusedBlockId`
+  // and `setIsEditing` were removed in favor of this).
+  focusBlock,
   // Extension-lifecycle prop
   extensionDisabledProp,
 } from '@/data/properties.ts'

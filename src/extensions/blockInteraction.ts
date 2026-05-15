@@ -9,9 +9,8 @@ import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
 import {
   editorSelection,
+  focusBlock,
   selectionStateProp,
-  setBlockFocus,
-  setFocusedBlockId,
   requestEditorFocus,
 } from '@/data/properties.ts'
 import {
@@ -360,15 +359,6 @@ export const shortcutSurfaceActivationsFacet = defineFacet<
   validate: isFunction<ShortcutActivationContribution>,
 })
 
-/** Mark a block as the focus target without touching `isEditing`. Used
- *  by the click handler in non-edit click branches — kept distinct from
- *  `setBlockFocus` in `data/properties.ts` (which clears edit mode by
- *  design) because some click paths need to preserve the in-flight edit
- *  state on another block. */
-export const focusBlock = ({block, uiStateBlock}: BlockResolveContext) => {
-  setFocusedBlockId(uiStateBlock, block.id)
-}
-
 const interactiveContentSelector = [
   'a[href]',
   'button',
@@ -411,14 +401,16 @@ export const enterBlockEditMode = async (
 
   // Read-only workspace: clicks/keyboard shouldn't drop into edit mode, but
   // we still want the click target to register as focused so navigation
-  // affordances (highlight, keyboard nav anchor) work.
+  // affordances (highlight, keyboard nav anchor) work. `focusBlock` honors
+  // the read-only gate internally — `{edit: true}` here becomes a noop on
+  // the edit flag in read-only mode.
   if (uiStateBlock.repo.isReadOnly) {
-    setFocusedBlockId(uiStateBlock, block.id)
+    void focusBlock(uiStateBlock, block.id)
     return
   }
 
   await resetBlockSelection(uiStateBlock)
-  await setBlockFocus(uiStateBlock, block.id, {edit: true})
+  await focusBlock(uiStateBlock, block.id, {edit: true})
 
   if (selection) {
     void uiStateBlock.set(editorSelection, {
@@ -462,7 +454,7 @@ export const handleBlockSelectionClick = async (
     await resetBlockSelection(uiStateBlock)
   }
 
-  focusBlock(context)
+  void focusBlock(uiStateBlock, block.id)
 }
 
 export const isSelectionClick = (event: MouseEvent) =>

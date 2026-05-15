@@ -216,29 +216,28 @@ export const setIsEditing = (uiStateBlock: Block, editing: boolean): void => {
   void uiStateBlock.set(isEditingProp, editing)
 }
 
-export const setFocusedBlockId = (uiStateBlock: Block, id: string): void => {
-  void uiStateBlock.set(focusedBlockIdProp, id)
-}
-
 /** Atomically move focus to `blockId` and set the edit flag in one tx.
  *
  *  `useInEditMode(blockId)` is `focusedBlockId === blockId && isEditing`,
  *  so the pair behaves as one state — writing focus alone makes the
  *  newly-focused block inherit the previous holder's editing flag, and
  *  `vimNormalModeActivation` declines to put a block into NORMAL_MODE
- *  while its `inEditMode` is true. Prefer this over a pair of
- *  `setFocusedBlockId` + `setIsEditing` calls: the writes commit in one
- *  tx (no intermediate "focused but editing the wrong way" state), and
- *  the returned promise lets callers `await` before reading any state
- *  derived from focus/edit. */
-export const setBlockFocus = async (
+ *  while its `inEditMode` is true. This is the single primitive for
+ *  changing what block has focus: callers pass `{edit: true}` when they
+ *  want the new block in edit mode (cm navigation, vim's `o`, etc.)
+ *  and omit it (default `false`) to land on the block out of edit mode.
+ *
+ *  Returns the tx-commit promise so callers that need to observe
+ *  focus-derived state next can `await` instead of racing propagation. */
+export const focusBlock = async (
   uiStateBlock: Block,
   blockId: string,
   options: {edit?: boolean} = {},
 ): Promise<void> => {
   const {edit = false} = options
-  // Match `setIsEditing`'s read-only gate: a viewer can't transition
-  // into edit mode, but it can still mark focus (highlight, nav anchor).
+  // Match the legacy `setIsEditing` read-only gate: a viewer can't
+  // transition into edit mode, but it can still mark focus (highlight,
+  // nav anchor).
   const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
   await uiStateBlock.repo.tx(async tx => {
     await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)

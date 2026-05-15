@@ -1,8 +1,7 @@
 import { Repo } from '../../data/repo'
 import {
+  focusBlock,
   isCollapsedProp,
-  setBlockFocus,
-  setFocusedBlockId,
   topLevelBlockIdProp,
   selectionStateProp,
 } from '@/data/properties.ts'
@@ -82,7 +81,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!topLevelBlockId) return
 
         const next = await nextVisibleBlock(block, topLevelBlockId)
-        if (next) setFocusedBlockId(uiStateBlock, next.id)
+        if (next) void focusBlock(uiStateBlock, next.id)
       },
       defaultBinding: {
         keys: ['down', 'k'],
@@ -99,7 +98,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!topLevelBlockId) return
 
         const prev = await previousVisibleBlock(block, topLevelBlockId)
-        if (prev) setFocusedBlockId(uiStateBlock, prev.id)
+        if (prev) void focusBlock(uiStateBlock, prev.id)
       },
       defaultBinding: {
         keys: ['up', 'h'],
@@ -146,7 +145,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const newId = hasUncollapsedChildren || isTopLevel
           ? await repo.mutate.createChild({parentId: block.id, position: {kind: 'first'}})
           : await repo.mutate.createSiblingBelow({siblingId: block.id})
-        if (newId) await setBlockFocus(uiStateBlock, newId, {edit: true})
+        if (newId) await focusBlock(uiStateBlock, newId, {edit: true})
       },
       defaultBinding: {
         keys: 'o',
@@ -179,7 +178,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
 
-        setFocusedBlockId(uiStateBlock, topLevelBlockId)
+        void focusBlock(uiStateBlock, topLevelBlockId)
       },
       defaultBinding: {
         keys: 'g g',
@@ -195,7 +194,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         const lastBlock = await getLastVisibleDescendant(repo.block(topLevelBlockId))
         if (!lastBlock) return
 
-        setFocusedBlockId(uiStateBlock, lastBlock.id)
+        void focusBlock(uiStateBlock, lastBlock.id)
       },
       defaultBinding: {
         keys: 'shift+g',
@@ -209,7 +208,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!topLevelBlockId) return
 
         const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'down')
-        if (target) setFocusedBlockId(uiStateBlock, target.id)
+        if (target) void focusBlock(uiStateBlock, target.id)
       },
       defaultBinding: {
         keys: 'ctrl+d',
@@ -223,7 +222,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!topLevelBlockId) return
 
         const target = await jumpVisibleBlocks(block, topLevelBlockId, JUMP_BLOCK_COUNT, 'up')
-        if (target) setFocusedBlockId(uiStateBlock, target.id)
+        if (target) void focusBlock(uiStateBlock, target.id)
       },
       defaultBinding: {
         keys: 'ctrl+u',
@@ -235,7 +234,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
         const newId = await repo.mutate.createSiblingAbove({siblingId: block.id})
         if (!newId) return
-        await setBlockFocus(uiStateBlock, newId, {edit: true})
+        await focusBlock(uiStateBlock, newId, {edit: true})
       },
       defaultBinding: {
         keys: 'shift+o',
@@ -246,7 +245,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       description: 'Paste from clipboard after current block',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
         const pasted = await pasteFromClipboard(block, repo, {position: 'after'})
-        if (pasted[0]) setFocusedBlockId(uiStateBlock, pasted[0].id)
+        if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
       },
       defaultBinding: {
         keys: 'p',
@@ -257,7 +256,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       description: 'Paste from clipboard before current block',
       handler: async ({block, uiStateBlock}: BlockShortcutDependencies) => {
         const pasted = await pasteFromClipboard(block, repo, {position: 'before'})
-        if (pasted[0]) setFocusedBlockId(uiStateBlock, pasted[0].id)
+        if (pasted[0]) void focusBlock(uiStateBlock, pasted[0].id)
       },
       defaultBinding: {
         keys: 'shift+p',
@@ -291,7 +290,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         if (!parent || parent.id === topLevelBlockId) return
 
         await parent.set(isCollapsedProp, true)
-        setFocusedBlockId(uiStateBlock, parent.id)
+        void focusBlock(uiStateBlock, parent.id)
       },
       defaultBinding: {
         keys: 'shift+z',

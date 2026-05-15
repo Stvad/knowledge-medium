@@ -7,9 +7,9 @@ import {
   editorSelection,
   focusedBlockIdProp,
   isCollapsedProp,
+  focusBlock,
   isEditingProp,
   requestEditorFocus,
-  setFocusedBlockId,
   setIsEditing,
   showPropertiesProp,
   topLevelBlockIdProp,
@@ -225,7 +225,7 @@ export const createSharedBlockActions = ({repo}: { repo: Repo }): SharedBlockAct
 
       const prevVisible = await previousVisibleBlock(block, topLevelBlockId)
       await block.delete()
-      if (prevVisible) setFocusedBlockId(uiStateBlock, prevVisible.id)
+      if (prevVisible) void focusBlock(uiStateBlock, prevVisible.id)
     },
     defaultBinding: {
       keys: 'delete',
