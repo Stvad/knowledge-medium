@@ -1,200 +1,103 @@
 import { z } from 'zod'
-import { defineQuery, type BlockData, type Schema } from '@/data/api'
 import {
-  buildQualifiedBlockColumnsSql,
-  type BlockRow,
-} from '@/data/blockSchema'
-import { REFERENCES_TARGET_INVALIDATION_CHANNEL } from '@/plugins/references/invalidation.ts'
+  defineQuery,
+  type BlockData,
+  type BlockPredicate,
+  type Schema,
+} from '@/data/api'
+import { resolveTypedBlocks } from '@/data/internals/kernelQueries.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
+/** Filter applied on top of the base "blocks that reference target X"
+ *  set. Each entry is a `BlockPredicate` from the unified typed-query
+ *  language — same shape `repo.queryBlocks({match, exclude})` accepts.
+ *  Backlinks chips default `scope: 'ancestor'` (block-or-any-ancestor)
+ *  to match the historical filter semantics. */
 export interface BacklinksFilter {
-  includeIds?: string[]
-  removeIds?: string[]
+  include?: BlockPredicate[]
+  exclude?: BlockPredicate[]
 }
 
+const referenceFilterSchema = z.object({
+  id: z.string(),
+  sourceField: z.string().optional(),
+})
+
+const blockPredicateSchema = z.object({
+  scope: z.enum(['self', 'ancestor']).optional(),
+  id: z.string().optional(),
+  where: z.record(z.string(), z.unknown()).optional(),
+  referencedBy: referenceFilterSchema.optional(),
+})
+
 const backlinksFilterSchema = z.object({
-  includeIds: z.array(z.string()).optional(),
-  removeIds: z.array(z.string()).optional(),
+  include: z.array(blockPredicateSchema).optional(),
+  exclude: z.array(blockPredicateSchema).optional(),
 }).optional()
-
-/** Backlinks: blocks whose `references_json` array contains an entry
- *  with `id = ?`. Reads through the trigger-maintained
- *  `block_references` edge index, then hydrates the source rows. */
-export const SELECT_BACKLINKS_FOR_BLOCK_SQL = `
-  SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
-  FROM block_references br
-  JOIN blocks b ON b.id = br.source_id
-  WHERE br.workspace_id = ?
-    AND b.id != ?
-    AND br.target_id = ?
-    AND b.deleted = 0
-  ORDER BY b.created_at DESC, b.id
-`
-
-const filterValuesCteSql = (name: string, count: number): string =>
-  count === 0
-    ? `${name}(id) AS (SELECT NULL WHERE 0)`
-    : `${name}(id) AS (VALUES ${Array(count).fill('(?)').join(', ')})`
-
-export const selectFilteredBacklinksForBlockSql = (
-  includeCount: number,
-  removeCount: number,
-): string => `
-  WITH
-    backlink_sources AS (
-      SELECT DISTINCT br.source_id
-      FROM block_references br
-      JOIN blocks source ON source.id = br.source_id
-      WHERE br.workspace_id = ?
-        AND source.id != ?
-        AND br.target_id = ?
-        AND source.deleted = 0
-    ),
-    ${filterValuesCteSql('include_filter', includeCount)},
-    ${filterValuesCteSql('remove_filter', removeCount)},
-    ancestor_chain(source_id, id, parent_id, depth, path) AS (
-      SELECT
-        bs.source_id,
-        source.id,
-        source.parent_id,
-        0,
-        '!' || hex(source.id) || '/'
-      FROM backlink_sources bs
-      JOIN blocks source ON source.id = bs.source_id
-      WHERE source.deleted = 0
-      UNION ALL
-      SELECT
-        ancestor_chain.source_id,
-        parent.id,
-        parent.parent_id,
-        ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
-      FROM ancestor_chain
-      JOIN blocks parent ON parent.id = ancestor_chain.parent_id
-      WHERE parent.deleted = 0
-        AND ancestor_chain.depth < 100
-        AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
-    ),
-    context_refs AS (
-      SELECT DISTINCT ancestor_chain.source_id, refs.target_id AS context_id
-      FROM ancestor_chain
-      JOIN block_references refs ON refs.source_id = ancestor_chain.id
-      WHERE refs.workspace_id = ?
-      UNION
-      SELECT ancestor_chain.source_id, ancestor_chain.id AS context_id
-      FROM ancestor_chain
-      WHERE ancestor_chain.parent_id IS NULL
-    )
-  SELECT DISTINCT ${buildQualifiedBlockColumnsSql('b')}
-  FROM backlink_sources bs
-  JOIN blocks b ON b.id = bs.source_id
-  WHERE NOT EXISTS (
-      SELECT 1
-      FROM include_filter required
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM context_refs cr
-        WHERE cr.source_id = bs.source_id
-          AND cr.context_id = required.id
-      )
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM context_refs cr
-      JOIN remove_filter removed ON removed.id = cr.context_id
-      WHERE cr.source_id = bs.source_id
-    )
-  ORDER BY b.created_at DESC, b.id
-`
-
-export const SELECT_FILTERED_BACKLINK_CONTEXT_NODE_IDS_SQL = `
-  WITH
-    backlink_sources AS (
-      SELECT DISTINCT br.source_id
-      FROM block_references br
-      JOIN blocks source ON source.id = br.source_id
-      WHERE br.workspace_id = ?
-        AND source.id != ?
-        AND br.target_id = ?
-        AND source.deleted = 0
-    ),
-    ancestor_chain(source_id, id, parent_id, depth, path) AS (
-      SELECT
-        bs.source_id,
-        source.id,
-        source.parent_id,
-        0,
-        '!' || hex(source.id) || '/'
-      FROM backlink_sources bs
-      JOIN blocks source ON source.id = bs.source_id
-      WHERE source.deleted = 0
-      UNION ALL
-      SELECT
-        ancestor_chain.source_id,
-        parent.id,
-        parent.parent_id,
-        ancestor_chain.depth + 1,
-        ancestor_chain.path || '!' || hex(parent.id) || '/'
-      FROM ancestor_chain
-      JOIN blocks parent ON parent.id = ancestor_chain.parent_id
-      WHERE parent.deleted = 0
-        AND ancestor_chain.depth < 100
-        AND INSTR(ancestor_chain.path, '!' || hex(parent.id) || '/') = 0
-    )
-  SELECT DISTINCT id FROM ancestor_chain
-`
 
 const blockDataArraySchema: Schema<BlockData[]> = {
   parse: (input) => input as BlockData[],
 }
 
-const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
-  rows as unknown as ReadonlyArray<Record<string, unknown>>
+const isPredicateMeaningful = (p: BlockPredicate): boolean => {
+  const hasWhere = p.where !== undefined && Object.keys(p.where).length > 0
+  const hasRef = p.referencedBy !== undefined
+  const hasId = p.id !== undefined
+  return hasWhere || hasRef || hasId
+}
 
-const uniqueNonEmpty = (ids: readonly string[] | undefined): string[] =>
-  Array.from(new Set((ids ?? []).map(id => id.trim()).filter(Boolean)))
+const stripEmpty = (
+  predicates: readonly BlockPredicate[] | undefined,
+): BlockPredicate[] =>
+  (predicates ?? []).filter(isPredicateMeaningful)
 
 export const normalizeBacklinksFilter = (
   filter: BacklinksFilter | undefined,
 ): Required<BacklinksFilter> => ({
-  includeIds: uniqueNonEmpty(filter?.includeIds),
-  removeIds: uniqueNonEmpty(filter?.removeIds),
+  include: stripEmpty(filter?.include),
+  exclude: stripEmpty(filter?.exclude),
 })
 
+const samePredicate = (a: BlockPredicate, b: BlockPredicate): boolean =>
+  JSON.stringify(a) === JSON.stringify(b)
+
+/** Page-local filter overrides workspace defaults. The merge rules:
+ *   - everything the page added (include or exclude) wins outright
+ *   - default predicates carry through unless the page added the same
+ *     predicate to the opposite list (e.g. workspace removes [[done]],
+ *     this page wants to include it). */
 export const mergeBacklinksFilters = (
   defaults: BacklinksFilter | undefined,
   overrides: BacklinksFilter | undefined,
 ): Required<BacklinksFilter> => {
-  const normalizedDefaults = normalizeBacklinksFilter(defaults)
-  const normalizedOverrides = normalizeBacklinksFilter(overrides)
-  const overrideIncludeIds = new Set(normalizedOverrides.includeIds)
-  const overrideRemoveIds = new Set(normalizedOverrides.removeIds)
+  const d = normalizeBacklinksFilter(defaults)
+  const o = normalizeBacklinksFilter(overrides)
 
-  return normalizeBacklinksFilter({
-    includeIds: [
-      ...normalizedOverrides.includeIds,
-      ...normalizedDefaults.includeIds.filter(id => !overrideRemoveIds.has(id)),
-    ],
-    removeIds: [
-      ...normalizedOverrides.removeIds,
-      ...normalizedDefaults.removeIds.filter(id => !overrideIncludeIds.has(id)),
-    ],
-  })
+  const include = [
+    ...o.include,
+    ...d.include.filter(p => !o.exclude.some(other => samePredicate(p, other))),
+  ]
+  const exclude = [
+    ...o.exclude,
+    ...d.exclude.filter(p => !o.include.some(other => samePredicate(p, other))),
+  ]
+  return normalizeBacklinksFilter({include, exclude})
 }
 
 export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean => {
-  const normalized = normalizeBacklinksFilter(filter)
-  return normalized.includeIds.length > 0 || normalized.removeIds.length > 0
+  const n = normalizeBacklinksFilter(filter)
+  return n.include.length > 0 || n.exclude.length > 0
 }
 
-/** Every block in `workspaceId` whose references point at `id`.
+/** Backlinks: blocks whose references point at `id`. Thin wrapper
+ *  around `resolveTypedBlocks` — the typed-query compiler drives from
+ *  the indexed `block_references` lookup when `referencedBy` is set,
+ *  preserving the perf shape of the previous dedicated SQL.
  *
- *  Dep declaration:
- *    - `{kind:'row', id}` for the target row.
- *    - plugin dep on `backlinks.target:${id}` for the precise incoming-edge set.
- *    - Per-source row deps from `hydrateBlocks`, so content edits on
- *      existing source rows update the rendered backlinks list. */
+ *  Self-reference (the target block referencing itself) is filtered
+ *  out post-fetch — it's a one-line check, not worth a special SQL
+ *  predicate. */
 export const backlinksForBlockQuery = defineQuery<
   {workspaceId: string; id: string; filter?: BacklinksFilter},
   BlockData[]
@@ -207,44 +110,20 @@ export const backlinksForBlockQuery = defineQuery<
   }),
   resultSchema: blockDataArraySchema,
   resolve: async ({workspaceId, id, filter}, ctx) => {
-    ctx.depend({kind: 'row', id})
     if (!workspaceId || !id) return []
-    ctx.depend({
-      kind: 'plugin',
-      channel: REFERENCES_TARGET_INVALIDATION_CHANNEL,
-      key: id,
-    })
-    const normalizedFilter = normalizeBacklinksFilter(filter)
-    const filterActive = normalizedFilter.includeIds.length > 0 ||
-      normalizedFilter.removeIds.length > 0
-    if (filterActive) {
-      const contextNodes = await ctx.db.getAll<{id: string}>(
-        SELECT_FILTERED_BACKLINK_CONTEXT_NODE_IDS_SQL,
-        [workspaceId, id, id],
-      )
-      for (const node of contextNodes) {
-        ctx.depend({kind: 'row', id: node.id})
-      }
-      const rows = await ctx.db.getAll<BlockRow>(
-        selectFilteredBacklinksForBlockSql(
-          normalizedFilter.includeIds.length,
-          normalizedFilter.removeIds.length,
-        ),
-        [
-          workspaceId,
-          id,
-          id,
-          ...normalizedFilter.includeIds,
-          ...normalizedFilter.removeIds,
-          workspaceId,
-        ],
-      )
-      return ctx.hydrateBlocks(asBlockRows(rows))
-    }
-    const rows = await ctx.db.getAll<BlockRow>(
-      SELECT_BACKLINKS_FOR_BLOCK_SQL, [workspaceId, id, id],
-    )
-    return ctx.hydrateBlocks(asBlockRows(rows))
+    // Target row dep — re-resolve when the target itself changes
+    // (e.g. soft-delete). The typed-blocks reference channel only
+    // fires on incoming-edge diffs, not on target-row writes.
+    ctx.depend({kind: 'row', id})
+    const normalized = normalizeBacklinksFilter(filter)
+    const rows = await resolveTypedBlocks({
+      workspaceId,
+      referencedBy: {id},
+      match: normalized.include,
+      exclude: normalized.exclude,
+      order: 'created-desc',
+    }, ctx)
+    return rows.filter(r => r.id !== id)
   },
 })
 

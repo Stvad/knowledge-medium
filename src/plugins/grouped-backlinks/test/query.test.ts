@@ -345,7 +345,10 @@ describe('groupedBacklinksDataExtension query', () => {
     const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['project'], removeIds: ['done']},
+      filter: {
+        include: [{scope: 'ancestor', referencedBy: {id: 'project'}}],
+        exclude: [{scope: 'ancestor', referencedBy: {id: 'done'}}],
+      },
       groupingConfig: {
         highPriorityTags: ['Project'],
         lowPriorityTags: [],
@@ -383,7 +386,9 @@ describe('groupedBacklinksDataExtension query', () => {
     const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
-      filter: {includeIds: ['project']},
+      filter: {
+        include: [{scope: 'ancestor', referencedBy: {id: 'project'}}],
+      },
     }).load()
 
     expect(out.groups.map(group => group.label)).toEqual(['Topic'])

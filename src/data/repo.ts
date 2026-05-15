@@ -1218,6 +1218,9 @@ export class Repo {
       types: query.types,
       where: query.where,
       referencedBy: query.referencedBy,
+      match: query.match,
+      exclude: query.exclude,
+      order: query.order,
     })
   }
 
