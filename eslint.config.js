@@ -48,6 +48,7 @@ export default tseslint.config(
           'src/data/repo.ts',
         ],
       }],
+      'block/prefer-focus-block': 'error',
     },
   },
 )

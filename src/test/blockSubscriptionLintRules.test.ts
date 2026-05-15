@@ -243,4 +243,107 @@ describe('block subscription ESLint rules', () => {
       ],
     },
   )
+
+  ruleTester.run(
+    'prefer-focus-block',
+    blockSubscriptions.rules['prefer-focus-block'],
+    {
+      valid: [
+        {
+          // Lone setFocusedBlockId — fine on its own.
+          code: `
+            import { setFocusedBlockId } from '@/data/properties'
+            function handler({uiStateBlock, block}) {
+              setFocusedBlockId(uiStateBlock, block.id)
+            }
+          `,
+        },
+        {
+          // Lone setIsEditing — fine on its own.
+          code: `
+            import { setIsEditing } from '@/data/properties'
+            function handler({uiStateBlock}) {
+              setIsEditing(uiStateBlock, false)
+            }
+          `,
+        },
+        {
+          // Same scope but only one of the pair — no flag.
+          code: `
+            import { setFocusedBlockId, requestEditorFocus } from '@/data/properties'
+            function handler({uiStateBlock, target}) {
+              setFocusedBlockId(uiStateBlock, target.id)
+              requestEditorFocus(uiStateBlock)
+            }
+          `,
+        },
+        {
+          // Pair lives in separate sibling blocks — rule doesn't cross.
+          code: `
+            import { setFocusedBlockId, setIsEditing } from '@/data/properties'
+            function handler({uiStateBlock, block, cond}) {
+              if (cond) {
+                setFocusedBlockId(uiStateBlock, block.id)
+              } else {
+                setIsEditing(uiStateBlock, false)
+              }
+            }
+          `,
+        },
+        {
+          // Already migrated.
+          code: `
+            import { focusBlock } from '@/data/properties'
+            async function handler({uiStateBlock, block}) {
+              await focusBlock(uiStateBlock, block.id, {edit: true})
+            }
+          `,
+        },
+      ],
+      invalid: [
+        {
+          code: `
+            import { setFocusedBlockId, setIsEditing } from '@/data/properties'
+            function handler({uiStateBlock, block}) {
+              setFocusedBlockId(uiStateBlock, block.id)
+              setIsEditing(uiStateBlock, true)
+            }
+          `,
+          errors: [
+            {messageId: 'preferFocusBlock'},
+            {messageId: 'preferFocusBlock'},
+          ],
+        },
+        {
+          // Non-adjacent but still same scope.
+          code: `
+            import { setFocusedBlockId, setIsEditing, requestEditorFocus } from '@/data/properties'
+            function handler({uiStateBlock, target}) {
+              setFocusedBlockId(uiStateBlock, target.id)
+              requestEditorFocus(uiStateBlock)
+              setIsEditing(uiStateBlock, true)
+            }
+          `,
+          errors: [
+            {messageId: 'preferFocusBlock'},
+            {messageId: 'preferFocusBlock'},
+          ],
+        },
+        {
+          // Renamed imports still resolve.
+          code: `
+            import { setFocusedBlockId as setFocus, setIsEditing as setEdit } from '@/data/properties'
+            function handler({uiStateBlock, block}) {
+              setFocus(uiStateBlock, block.id)
+              setEdit(uiStateBlock, true)
+            }
+          `,
+          errors: [
+            {messageId: 'preferFocusBlock'},
+            {messageId: 'preferFocusBlock'},
+          ],
+        },
+      ],
+    },
+  )
 })
