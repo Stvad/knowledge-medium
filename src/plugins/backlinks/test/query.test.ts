@@ -6,7 +6,6 @@ import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Dependency } from '@/data/internals/handleStore'
 import { aliasesProp, typesProp } from '@/data/properties'
-import { getUserPrefsBlock } from '@/data/globalState.ts'
 import { resolveFacetRuntimeSync, type AppExtension } from '@/extensions/facet.ts'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import {
@@ -31,12 +30,10 @@ import {
 } from '../query.ts'
 import { backlinksFilterProp } from '../filterProperty.ts'
 import {
-  INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,
   dailyNoteBacklinksDefaultsProp,
   effectiveBacklinksFilterForBlock,
 } from '../dailyNoteDefaults.ts'
 import { dailyNoteBacklinksDefaultsUi } from '../propertyEditorOverride.ts'
-import { initializeDailyNoteBacklinksPreferences } from '../preferences.ts'
 
 const WS = 'ws-1'
 const OTHER_WS = 'ws-2'
@@ -132,20 +129,11 @@ describe('backlinksDataExtension query', () => {
     expect(uis.get(dailyNoteBacklinksDefaultsProp.name)).toBe(dailyNoteBacklinksDefaultsUi)
     expect(resolvePropertyDisplay({
       name: dailyNoteBacklinksDefaultsProp.name,
-      encodedValue: INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,
+      encodedValue: dailyNoteBacklinksDefaultsProp.defaultValue,
       schemas,
       uis,
       presets: runtime.read(valuePresetsFacet),
     }).Editor).toBe(dailyNoteBacklinksDefaultsUi.Editor)
-  })
-
-  it('initializes daily note backlink defaults on the user prefs block', async () => {
-    await initializeDailyNoteBacklinksPreferences(env.repo, WS)
-    const prefsBlock = await getUserPrefsBlock(env.repo, WS, env.repo.user)
-
-    expect(prefsBlock.peekProperty(dailyNoteBacklinksDefaultsProp)).toEqual(
-      INITIAL_DAILY_NOTE_BACKLINKS_DEFAULTS,
-    )
   })
 
   it('merges default filters with page-local conflict overrides', () => {

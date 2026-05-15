@@ -16,7 +16,6 @@ import {
 import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
 import { backlinksForBlockQuery } from '@/plugins/backlinks/query.ts'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.ts'
-import { getUserPrefsBlock } from '@/data/globalState.ts'
 import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
 } from '../query.ts'
@@ -29,7 +28,6 @@ import {
   INITIAL_GROUPED_BACKLINKS_CONFIG,
   mergeGroupedBacklinksConfig,
 } from '../config.ts'
-import { initializeGroupedBacklinksPreferences } from '../preferences.ts'
 
 const WS = 'ws-1'
 
@@ -103,6 +101,7 @@ describe('groupedBacklinksDataExtension query', () => {
 
     expect(schemas.get(groupedBacklinksDefaultsProp.name)).toBe(groupedBacklinksDefaultsProp)
     expect(schemas.get(groupedBacklinksOverridesProp.name)).toBe(groupedBacklinksOverridesProp)
+    expect(groupedBacklinksDefaultsProp.defaultValue).toEqual(INITIAL_GROUPED_BACKLINKS_CONFIG)
   })
 
   it('contributes a custom property UI for grouped backlinks defaults', () => {
@@ -118,15 +117,6 @@ describe('groupedBacklinksDataExtension query', () => {
       uis,
       presets: runtime.read(valuePresetsFacet),
     }).Editor).toBe(groupedBacklinksDefaultsUi.Editor)
-  })
-
-  it('initializes grouped backlinks defaults on the user prefs block', async () => {
-    await initializeGroupedBacklinksPreferences(env.repo, WS)
-    const prefsBlock = await getUserPrefsBlock(env.repo, WS, env.repo.user)
-
-    expect(prefsBlock.peekProperty(groupedBacklinksDefaultsProp)).toEqual(
-      INITIAL_GROUPED_BACKLINKS_CONFIG,
-    )
   })
 
   it('groups backlinks by common direct references and merges singletons into Other', async () => {

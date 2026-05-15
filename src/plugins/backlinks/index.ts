@@ -1,11 +1,9 @@
 import { AppExtension } from '@/extensions/facet.ts'
 import { propertyEditorOverridesFacet } from '@/data/facets.ts'
-import { appEffectsFacet } from '@/extensions/core.ts'
 import { backlinksViewFacet } from '@/plugins/backlinks-view/facet.ts'
 import { defineVariant } from '@/extensions/variantFacet.ts'
 import { LinkedReferences } from './LinkedReferences.tsx'
 import { backlinksDataExtension } from './dataExtension.ts'
-import { dailyNoteBacklinksPreferencesEffect } from './preferences.ts'
 import { dailyNoteBacklinksDefaultsUi } from './propertyEditorOverride.ts'
 
 // Show "Linked References" only when the block is the zoom-in target. Roam-
@@ -14,7 +12,6 @@ import { dailyNoteBacklinksDefaultsUi } from './propertyEditorOverride.ts'
 // coordinator's footer contribution; this variant always offers itself.
 export const backlinksPlugin: AppExtension = [
   backlinksDataExtension,
-  appEffectsFacet.of(dailyNoteBacklinksPreferencesEffect, {source: 'backlinks'}),
   propertyEditorOverridesFacet.of(dailyNoteBacklinksDefaultsUi, {source: 'backlinks'}),
   backlinksViewFacet.of(
     () => defineVariant('flat', 'Flat', LinkedReferences),

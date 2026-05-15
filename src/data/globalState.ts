@@ -35,6 +35,7 @@ import { Block } from './block'
 import type { Repo } from './repo'
 import type { BlockContextType } from '@/types'
 import {
+  addBlockTypeToProperties,
   aliasesProp,
   selectionStateProp,
   type BlockSelectionState,
@@ -43,6 +44,8 @@ import {
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
 import { getLayoutSessionId } from '@/utils/layoutSessionId'
+import { USER_PREFS_PATH_PART, USER_PREFS_TYPE } from '@/data/userPrefs.ts'
+export { USER_PREFS_PATH_PART, USER_PREFS_TYPE } from '@/data/userPrefs.ts'
 
 /**
  * One of core principles of the system is to store all state within the system.
@@ -97,6 +100,7 @@ const ensureStateChild = async (
   parent: Block,
   content: string,
   scope: ChangeScope,
+  initialProperties: Record<string, unknown> = {},
 ): Promise<Block> => {
   const parentData = parent.peek() ?? await parent.load()
   if (!parentData) throw new Error(`ensureStateChild: parent ${parent.id} not loaded`)
@@ -126,6 +130,7 @@ const ensureStateChild = async (
       parentId: parent.id,
       orderKey: 'a0',
       content,
+      properties: initialProperties,
     })
   }, {scope, description: `ensureStateChild ${content}`})
 
@@ -138,7 +143,13 @@ const ensureUiChild = (repo: Repo, parent: Block, content: string): Promise<Bloc
   ensureStateChild(repo, parent, content, ChangeScope.UiState)
 
 const ensureUserPrefsChild = (repo: Repo, parent: Block, content: string): Promise<Block> =>
-  ensureStateChild(repo, parent, content, ChangeScope.UserPrefs)
+  ensureStateChild(
+    repo,
+    parent,
+    content,
+    ChangeScope.UserPrefs,
+    addBlockTypeToProperties({}, USER_PREFS_TYPE),
+  )
 
 const requireSchemaScope = <T>(
   schema: PropertySchema<T>,
@@ -202,7 +213,6 @@ export const getUserBlock = memoize(
   (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}`,
 )
 
-const USER_PREFS_PATH_PART = 'user-prefs'
 export const getUserPrefsBlock = memoize(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const userBlock = await getUserBlock(repo, workspaceId, user)

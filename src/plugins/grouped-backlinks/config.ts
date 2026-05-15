@@ -129,7 +129,7 @@ export const groupedBacklinksDefaultsProp = defineProperty<GroupedBacklinksConfi
   'groupedBacklinks:defaults',
   {
     codec: groupedBacklinksConfigCodec,
-    defaultValue: EMPTY_GROUPED_BACKLINKS_CONFIG,
+    defaultValue: INITIAL_GROUPED_BACKLINKS_CONFIG,
     changeScope: ChangeScope.UserPrefs,
   },
 )

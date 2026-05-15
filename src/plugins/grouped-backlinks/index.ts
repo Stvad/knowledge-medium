@@ -1,11 +1,9 @@
 import { propertyEditorOverridesFacet } from '@/data/facets.ts'
-import { appEffectsFacet } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { backlinksViewFacet } from '@/plugins/backlinks-view/facet.ts'
 import { defineVariant } from '@/extensions/variantFacet.ts'
 import { GroupedLinkedReferences } from './GroupedLinkedReferences.tsx'
 import { groupedBacklinksDataExtension } from './dataExtension.ts'
-import { groupedBacklinksPreferencesEffect } from './preferences.ts'
 import { groupedBacklinksDefaultsUi } from './propertyEditorOverride.ts'
 
 // Registers a "Grouped" variant on the backlinks-view facet. The
@@ -13,7 +11,6 @@ import { groupedBacklinksDefaultsUi } from './propertyEditorOverride.ts'
 // actually mounts — top-level only, plus the user's saved choice.
 export const groupedBacklinksPlugin: AppExtension = [
   groupedBacklinksDataExtension,
-  appEffectsFacet.of(groupedBacklinksPreferencesEffect, {source: 'grouped-backlinks'}),
   propertyEditorOverridesFacet.of(groupedBacklinksDefaultsUi, {source: 'grouped-backlinks'}),
   backlinksViewFacet.of(
     () => defineVariant('grouped', 'Grouped', GroupedLinkedReferences),

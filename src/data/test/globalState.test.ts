@@ -30,8 +30,10 @@ import { Repo } from '../repo'
 import {
   aliasesProp,
   selectionStateProp,
+  typesProp,
 } from '@/data/properties'
 import {
+  USER_PREFS_TYPE,
   getLayoutSessionBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
@@ -128,6 +130,7 @@ describe('getUserPrefsBlock', () => {
 
     expect(prefs.peek()?.parentId).toBe(userBlock.id)
     expect(prefs.peek()?.content).toBe('user-prefs')
+    expect(prefs.peekProperty(typesProp)).toEqual([USER_PREFS_TYPE])
 
     const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
       'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',

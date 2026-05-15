@@ -10,6 +10,7 @@ import { Block } from '../data/block'
 import { useBlockContext } from '@/context/block'
 import { useChildIds, useHandle } from '@/hooks/block.ts'
 import { useUIStateBlock } from '@/data/globalState.ts'
+import { USER_PREFS_PATH_PART, USER_PREFS_TYPE } from '@/data/userPrefs.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
 import { propertyEditorOverridesFacet, typesFacet, valuePresetsFacet } from '../data/facets.ts'
@@ -57,6 +58,7 @@ export function BlockProperties({block}: BlockPropertiesProps) {
     selector: data => data
       ? {
         id: data.id,
+        content: data.content,
         properties: data.properties,
         updatedAt: data.updatedAt,
         updatedBy: data.updatedBy,
@@ -97,7 +99,8 @@ export function BlockProperties({block}: BlockPropertiesProps) {
   const properties = blockData?.properties ?? EMPTY_PROPERTIES
   const readOnly = block.repo.isReadOnly
   const syntheticRows = useMemo(
-    () => syntheticProperties
+    () => {
+      const rows = syntheticProperties
       .filter(ref =>
         ref.blockId === block.id
         && !hasOwn(properties, ref.name)
@@ -107,8 +110,24 @@ export function BlockProperties({block}: BlockPropertiesProps) {
         name: ref.name,
         encodedValue: undefined,
         isSet: false,
-      })),
-    [block.id, properties, schemas, syntheticProperties],
+      }))
+
+      if (blockData?.content === USER_PREFS_PATH_PART) {
+        const userPrefsType = typesRegistry.get(USER_PREFS_TYPE)
+        for (const schema of userPrefsType?.properties ?? []) {
+          if (hasOwn(properties, schema.name)) continue
+          if (!schemas.has(schema.name)) continue
+          rows.push({
+            name: schema.name,
+            encodedValue: undefined,
+            isSet: false,
+          })
+        }
+      }
+
+      return rows
+    },
+    [block.id, blockData?.content, properties, schemas, syntheticProperties, typesRegistry],
   )
 
   const model = useMemo(() => blockData
