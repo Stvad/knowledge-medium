@@ -38,5 +38,4 @@ export const rescheduleBlockDateAction: ActionConfig<typeof ActionContextTypes.N
 export const rescheduleQuickActionItem: QuickActionItem = {
   actionId: RESCHEDULE_BLOCK_DATE_ACTION_ID,
   label: 'Reschedule',
-  row: 3,
 }

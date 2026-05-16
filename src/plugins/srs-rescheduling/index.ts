@@ -247,11 +247,15 @@ export const srsReschedulingActions: readonly ActionConfig[] = [
   srsPasteAction,
 ]
 
-const srsQuickActionItems = srsSignals.map(signal => ({
-  actionId: `srs.reschedule.${signalName(signal).toLowerCase()}`,
-  label: signalName(signal),
-  row: 2 as const,
-}))
+// SOONER is intentionally omitted from the swipe strip — the
+// keyboard shortcut and command-palette entry remain for power users.
+const srsQuickActionItems = srsSignals
+  .filter(signal => signal !== SrsSignal.SOONER)
+  .map(signal => ({
+    actionId: `srs.reschedule.${signalName(signal).toLowerCase()}`,
+    label: signalName(signal),
+    row: 2 as const,
+  }))
 
 // Overflow keeps them out of the primary strip — these are rarer than
 // reschedule. Visibility (cut only on SRS blocks; paste only when
