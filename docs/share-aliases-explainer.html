@@ -347,14 +347,129 @@ and is what the share-recipient flow specifically relies on.
     a normal block named "Foo," now it shows with an indicator that there's a workspace-canonical
     "Foo" outside their view (e.g., a chip "Foo &middot; referenced from workspace"). Their
     children are still there, still editable, attached to <code>L</code>.</li>
-  <li>The <code>[[Foo]]</code> reference in <code>B</code> still renders as "Foo," but clicking
-    it now leads them to <code>L</code> (the annotation in their share) rather than canonical
-    (which they can't reach). The chip can offer "Foo (workspace) &middot; no access" as a
-    secondary affordance.</li>
+  <li>The <code>[[Foo]]</code> reference in <code>B</code> still renders as "Foo." Clicking it
+    navigates via the rule in &sect;8.1 below &mdash; in the share, that means landing on the
+    annotation <code>L</code>, since <code>L</code> is the only renderable thing the guest has
+    for this canonical.</li>
 </ol>
 
 <p>The key UX property: <strong>no work is lost on collision</strong>. The local block stays,
   its children stay, the reference still resolves to a renderable thing.</p>
+
+<h3>8.1 Navigation: how a reference id resolves to a destination</h3>
+
+<p>After reconciliation, <code>B.references_json</code> points at canonical <code>C</code>, but
+  the guest can't navigate to <code>C</code> directly (RLS hides it). The renderer needs a
+  redirect rule. A small client-side index does the job:</p>
+
+<pre><code>CREATE TABLE share_annotations (
+  share_id              TEXT,
+  canonical_block_id    TEXT,
+  annotation_block_id   TEXT,
+  PRIMARY KEY (share_id, canonical_block_id)
+);
+-- Populated whenever a reconciliation creates an annotation. One row per
+-- (share, canonical) pair so all references to the same canonical resolve
+-- to the same annotation block.</code></pre>
+
+<p>Click handler for a <code>[[name]]</code> reference whose target is <code>C</code>:</p>
+
+<ol class="tight">
+  <li>Is <code>C</code> in the local DB? <strong>Yes</strong> &rarr; navigate to <code>C</code>.</li>
+  <li>Else: is there a <code>share_annotations</code> row for the current share + <code>C</code>?
+    <strong>Yes</strong> &rarr; navigate to the annotation block <code>L</code>.</li>
+  <li>Else: stay put, render the chip as "no access" / "referenced from workspace."</li>
+</ol>
+
+<p>This decouples the <em>reference target</em> (canonical, stable across promotion) from the
+  <em>navigation destination</em> (whatever the guest can actually render in their current share).
+  Annotations from a different share the guest is also in resolve through the same rule &mdash;
+  when looking up <code>(some_other_share, C)</code>, the row may exist there too if the guest
+  annotated Foo in that share separately.</p>
+
+<h2>8.2 Subsequent <code>[[Foo]]</code> after reconciliation: the <code>alias_hints</code> cache</h2>
+
+<p>Without something else in place, the next time the guest types <code>[[Foo]]</code> the
+  lookup hits <code>block_aliases</code> (now empty for "Foo" since we stripped <code>L</code>'s
+  claim), and the optimistic-create-then-collide-then-reconcile dance repeats. That's pure
+  waste &mdash; the client already knows canonical's id from the first round.</p>
+
+<p>The fix is a small local-only cache:</p>
+
+<pre><code>CREATE TABLE alias_hints (
+  workspace_id        TEXT,
+  alias               TEXT,
+  canonical_block_id  TEXT,
+  PRIMARY KEY (workspace_id, alias)
+);
+-- Populated by the reconciliation step in §5 (canonical id from the
+-- server rejection payload). Never synced; local-only.</code></pre>
+
+<p>Alias lookup path becomes:</p>
+
+<ol class="tight">
+  <li>Look in <code>block_aliases</code> &rarr; hit means a locally-resident block claims it,
+    use that id. Done.</li>
+  <li>Else, look in <code>alias_hints</code> &rarr; hit means we know about a canonical we
+    can't see locally; set the reference to that id and skip block creation entirely.</li>
+  <li>Else, optimistic create with the alias (the original flow).</li>
+</ol>
+
+<p>Cache invalidation: when <code>peek_block(canonical_id)</code> ever reports
+  <code>exists: false</code>, evict the hint. The next type-event reverts to step 3, attempts a
+  fresh create, succeeds if the alias is truly free. Self-healing.</p>
+
+<h2>8.3 Deterministic alias-seat ids</h2>
+
+<p>This codebase uses
+  <a href="../src/data/targets.ts"><code>computeAliasSeatId(alias, workspaceId, index)</code></a>
+  &mdash; <code>uuidv5(${workspaceId}:${alias}:${index}, ALIAS_NS)</code> &mdash; so two clients
+  in the same workspace deterministically arrive at the same id for the same alias at index 0.
+  Convergence by construction.</p>
+
+<p>In share mode this has an interesting side-effect: when the guest probes "Foo" at slot 0,
+  the deterministic id <code>D0 = computeAliasSeatId("Foo", W, 0)</code> equals canonical's
+  existing id. The guest's local probe sees slot 0 "available" (no row at <code>D0</code> in
+  their local view) and claims it. The local block at <code>D0</code> uploads to Postgres,
+  where <code>D0</code> already exists as canonical &mdash; held by an owner the guest can't
+  write to. Two possible failure paths:</p>
+
+<ul class="tight">
+  <li><strong>PK conflict on INSERT</strong> if PowerSync treats new local rows as inserts only.</li>
+  <li><strong>RLS denial on UPDATE/UPSERT</strong> if PowerSync treats them as upserts &mdash;
+    the guest has no write coverage on canonical, WITH CHECK rejects.</li>
+</ul>
+
+<p>Either way the upload fails. <strong>Important property of the deterministic-id setup: the
+  canonical id is already known.</strong> It's the same as the id the guest just tried to
+  claim. No new information needs to come back in the rejection payload &mdash; the client
+  already has it.</p>
+
+<p>Reconciliation is slightly different from the random-id case:</p>
+
+<ol class="tight">
+  <li><strong>Rename the local block from <code>D0</code> to a fresh non-deterministic id
+    <code>D'</code></strong> (e.g., <code>gen_random_uuid</code>). Reparent any local children
+    from <code>D0</code> to <code>D'</code>. Pure local SQLite operation.</li>
+  <li><strong>Strip the alias claim from <code>D'</code></strong> &mdash; canonical owns it.</li>
+  <li><strong>Set <code>D'.references_json = [D0]</code></strong> &mdash; <code>D'</code> is
+    now the share's annotation block, pointing at canonical.</li>
+  <li><strong>Populate the <code>share_annotations</code> and <code>alias_hints</code> entries:</strong>
+    <code>(current_share, D0, D')</code> and <code>(W, "Foo", D0)</code>.</li>
+  <li><strong><code>B.references_json</code> stays untouched</strong> &mdash; it already points
+    at <code>D0</code>, which IS canonical. The deterministic id meant our optimistic refs were
+    "accidentally correct" all along. Lucky outcome.</li>
+</ol>
+
+<div class="note">
+<strong>Probe-escalation behavior in share mode.</strong> Today's <code>resolveAliasSeatId</code>
+walks to higher slot indices (1, 2, …) when slot 0 has a <em>different</em> alias claimed
+locally (post-rename probing). In share mode, the failure mode is <em>different</em>: slot 0
+exists remotely, claims the right alias, but the guest can't write to it. Escalating to higher
+indices would just create another doomed claim. The share-mode reconciliation should
+<strong>not</strong> retry at a higher seat; it should rename to a non-deterministic id and
+mark the local block as an annotation. Worth a separate code path or a flag on the probe.
+</div>
 
 <h2>9. The remote endpoint we still need (and the one we don't)</h2>
 

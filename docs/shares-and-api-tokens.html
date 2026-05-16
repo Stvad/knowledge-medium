@@ -1004,34 +1004,45 @@ grant execute on function private.create_api_token_records(
   <code>service_role</code>) can invoke it. This is the boundary that prevents a workspace viewer
   from minting themselves an editor token by calling the RPC directly.</p>
 
-<p>Edge-function flow:</p>
+<p>Edge-function flow. The order matters &mdash; service user creation comes <strong>after</strong>
+  the SQL transaction so a downstream failure can't orphan an <code>auth.users</code> row:</p>
 
 <ol class="tight">
   <li>Verify the caller's Supabase JWT and pull out their <code>user_id</code>.</li>
   <li>Verify the caller is a workspace writer for <code>workspace_id</code> (and, for subtree scope,
     that they can write each requested root block).</li>
-  <li>Create the service user via <code>POST /auth/v1/admin/users</code>. Opaque generated email
-    (<code>svc-&lt;random&gt;@knowledge-medium.local</code>) and a random unrecoverable password.</li>
   <li>Generate the token in the edge function. Plaintext stays in this function's memory only:
 <pre><code>const plaintext = 'km_live_' + crypto.randomBytes(32).toString('base64url')
 const hash      = crypto.createHash('sha256').update(plaintext).digest()</code></pre>
   </li>
-  <li>Call <code>private.create_api_token_records(..., p_service_user_id, p_token_hash = hash)</code>.
-    Inside that RPC, in one transaction:
-    <ul class="tight">
-      <li>Insert <code>block_shares</code> + <code>block_share_roots</code> rows. Recompute trigger
-        stamps <code>effective_share_ids</code> and <code>block_share_coverage</code> for the
-        subtree case.</li>
-      <li>Insert <code>block_share_members(share_id, user_id = p_service_user_id, role,
-        source='api_token')</code>.</li>
-      <li>Insert <code>share_links</code> + <code>share_link_secrets(token_hash = p_token_hash)</code>.</li>
-      <li>Return <code>(share, link)</code>. The RPC's signature does not contain a plaintext
-        column &mdash; there's no SQL code path that could return one.</li>
-    </ul>
-  </li>
+  <li>Call <code>private.create_api_token_records_phase1(..., p_token_hash = hash)</code>.
+    In one transaction: insert <code>block_shares</code> + <code>block_share_roots</code> rows
+    (recompute trigger stamps <code>effective_share_ids</code> / <code>block_share_coverage</code>),
+    insert <code>share_links</code> + <code>share_link_secrets(token_hash = p_token_hash)</code>.
+    <strong>No <code>block_share_members</code> row yet</strong> &mdash; that needs the service
+    user id. Returns <code>(share_id, link_id)</code>.</li>
+  <li>Create the service user via <code>POST /auth/v1/admin/users</code>. Opaque generated email
+    (<code>svc-&lt;random&gt;@knowledge-medium.local</code>) and a random unrecoverable password.
+    <strong>On failure:</strong> call <code>private.delete_api_token_records(share_id)</code>
+    (cascades to <code>block_share_roots</code>, <code>share_links</code>,
+    <code>share_link_secrets</code>). Return error to caller.</li>
+  <li>Call <code>private.create_api_token_records_phase2(share_id, p_service_user_id)</code>:
+    insert <code>block_share_members(share_id, user_id = p_service_user_id, role,
+    source='api_token')</code>. <strong>On failure:</strong> delete the service user via auth
+    admin AND call <code>private.delete_api_token_records(share_id)</code>. Return error.</li>
   <li>Return <code>{ share, link, token_plain: plaintext }</code> from the edge function to the
     caller, once.</li>
 </ol>
+
+<div class="note">
+<strong>Why two phases rather than one.</strong> The SQL RPC can't create the service user
+(needs service_role at the Supabase auth level, not just Postgres). The service user creation
+can't be inside the SQL transaction. Splitting the SQL work into "phase 1: everything that
+doesn't need the service user" + "phase 2: the membership row" gives a clean compensation point:
+service user creation sits between two SQL transactions, and a failure in either step has a
+defined cleanup. The same <code>delete_api_token_records</code> helper is also what
+<code>revoke_api_token</code> in &sect;8.5 calls when the user explicitly revokes.
+</div>
 
 <div class="note">
 <strong>The security boundary.</strong> Plaintext exists only in the edge function's request memory
