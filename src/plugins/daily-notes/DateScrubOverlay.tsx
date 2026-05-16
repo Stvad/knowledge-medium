@@ -49,6 +49,13 @@ const offsetLabel = (deltaDays: number, candidateIso: string): string => {
 
 interface ActiveScrub {
   blockId: string
+  /** Per-gesture token so a slow `getCurrentIso` from a previous
+   *  scrub of the SAME block can't overwrite the freshly-started
+   *  successor. `blockId` alone isn't enough: scrub A starts and
+   *  ends on block X (without resolving), scrub B starts on the
+   *  same block X — A's async resolve would otherwise patch B's
+   *  initialIso with X's-at-A-time value. */
+  session: number
   adapter: BlockDateAdapter
   initialIso: string
   startX: number
@@ -57,6 +64,12 @@ interface ActiveScrub {
   candidateIso: string
   cancelIntent: boolean
 }
+
+/** Monotonic gesture counter — module-scoped so it survives any
+ *  StrictMode-driven double-mount of the overlay. Each scrub start
+ *  takes the next id; async patches compare it against the still-
+ *  active session to reject stale resolves. */
+let nextScrubSession = 0
 
 export const DateScrubOverlay = () => {
   const runtime = useAppRuntime()
@@ -71,12 +84,14 @@ export const DateScrubOverlay = () => {
         const adapter = pickBlockDateAdapter(runtime, args.block)
         if (!adapter) return false
         const fallback = todayIso()
+        const session = ++nextScrubSession
         // Provisional show — render the pill at the start position
         // immediately with a placeholder ISO, then patch once the
         // adapter resolves the real current ISO. Without this the
         // first ~50ms of the scrub flickers blank.
         setActive({
           blockId: args.blockId,
+          session,
           adapter,
           initialIso: fallback,
           startX: args.startX,
@@ -89,14 +104,15 @@ export const DateScrubOverlay = () => {
         void (async () => {
           const iso = await adapter.getCurrentIso(args.block)
           if (!iso) return
-          // Patch only the still-active scrub for THIS block — a quick
-          // tap that ended before the adapter resolved should leave
-          // the next scrub alone. Re-anchor the candidate from the
-          // resolved ISO + the delta the user has already dragged
-          // through, so the pill doesn't snap back to "today" once
-          // the real value lands.
+          // Patch only the still-active scrub for THIS session — a
+          // quick tap that ended before the adapter resolved, or a
+          // fresh scrub on the same block, leaves this stale resolve
+          // a no-op. Re-anchor the candidate from the resolved ISO +
+          // the delta the user has already dragged through, so the
+          // pill doesn't snap back to "today" once the real value
+          // lands.
           setActive(current => {
-            if (!current || current.blockId !== args.blockId) return current
+            if (!current || current.session !== session) return current
             return {
               ...current,
               initialIso: iso,

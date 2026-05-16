@@ -128,8 +128,17 @@ export const ReschedulePicker = () => {
   const [pending, setPending] = useState(false)
   const stripRef = useRef<HTMLDivElement | null>(null)
   const stripDidScrollRef = useRef(false)
+  /** Monotonic request id — bumped on every open event. Async resolves
+   *  check it before writing state so two opens in quick succession
+   *  can't have the older `getCurrentIso` resolve last and replace
+   *  the newer session. Read+write in the event handler is safe;
+   *  React queues the setState that depends on it. */
+  const openRequestIdRef = useRef(0)
 
   const dismiss = useCallback(() => {
+    // Bump the counter so any in-flight resolves from this session
+    // become stale and won't reopen the sheet.
+    openRequestIdRef.current += 1
     setSession(null)
     setPreviewIso(null)
     stripDidScrollRef.current = false
@@ -149,8 +158,16 @@ export const ReschedulePicker = () => {
         return
       }
 
+      const requestId = ++openRequestIdRef.current
+
       void (async () => {
         const initialIso = (await adapter.getCurrentIso(block)) ?? todayIso()
+        // Drop the result if a newer open (or a dismiss) has bumped
+        // the counter — without this, two fast opens against blocks
+        // with different `getCurrentIso` latencies can land in the
+        // wrong order and the sheet ends up showing/committing for
+        // the wrong block.
+        if (openRequestIdRef.current !== requestId) return
         const initialDate = fromIso(initialIso) ?? new Date()
         setSession({
           blockId: detail.blockId,
@@ -160,6 +177,7 @@ export const ReschedulePicker = () => {
         })
         setVisibleMonth(firstOfMonth(initialDate))
         setPreviewIso(initialIso)
+        stripDidScrollRef.current = false
       })()
     }
 
