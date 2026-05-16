@@ -967,7 +967,12 @@ Authorization: Bearer &lt;caller's Supabase JWT&gt;
 
 <h4>Database RPC contract (called from inside the edge function only)</h4>
 
-<pre><code>private.create_api_token_records(
+<p>Three RPCs make up the two-phase create + compensation path. All in <code>private</code>,
+  all <code>security definer</code>, all granted only to <code>service_role</code>.</p>
+
+<pre><code>-- Phase 1: everything that doesn't need the service user id.
+-- Creates the share, roots, link, and secret in one transaction.
+private.create_api_token_records_phase1(
   p_caller_user_id   text,    -- issuing user, already verified by the edge function
   p_scope            text,
   p_workspace_id     text,
@@ -975,7 +980,6 @@ Authorization: Bearer &lt;caller's Supabase JWT&gt;
   p_role             text,
   p_name             text,
   p_expires_at       bigint,
-  p_service_user_id  text,    -- service user already created by the edge function
   p_token_hash       bytea    -- sha256(plaintext); plaintext is NEVER passed in
 ) returns table (
   share  public.block_shares,
@@ -983,26 +987,46 @@ Authorization: Bearer &lt;caller's Supabase JWT&gt;
 )
 language plpgsql security definer set search_path = public, private;
 
+-- Phase 2: attach the now-created service user to the share.
+-- Run after the edge function successfully creates the auth.users row.
+private.create_api_token_records_phase2(
+  p_share_id         text,
+  p_service_user_id  text,
+  p_role             text
+) returns public.block_share_members
+language plpgsql security definer set search_path = public, private;
+
+-- Compensation: hard delete on failure between phase 1 and phase 2 (or after).
+-- Cascades to block_share_roots, share_links, share_link_secrets, and any
+-- block_share_members rows already inserted. NOT used for normal revocation
+-- (see 8.5 -- that path is soft-delete via revoked_at).
+private.delete_api_token_records(p_share_id text) returns void
+language plpgsql security definer set search_path = public, private;
+
 -- Belt-and-braces: even though `private` schema is not exposed via PostgREST by
--- default, explicitly deny client roles from calling this function. REVOKE FROM
--- PUBLIC strips every role, so re-grant the edge function's role afterward --
--- otherwise the edge function would also hit "permission denied".
-revoke execute on function private.create_api_token_records(
-  text, text, text, text[], text, text, bigint, text, bytea
-) from public, anon, authenticated;
+-- default, explicitly deny client roles from calling these functions. REVOKE FROM
+-- PUBLIC strips every role, so re-grant service_role afterward -- otherwise the
+-- edge function would also hit "permission denied".
+revoke execute on function
+  private.create_api_token_records_phase1(text, text, text, text[], text, text, bigint, bytea),
+  private.create_api_token_records_phase2(text, text, text),
+  private.delete_api_token_records(text)
+from public, anon, authenticated;
 
-grant execute on function private.create_api_token_records(
-  text, text, text, text[], text, text, bigint, text, bytea
-) to service_role;</code></pre>
+grant execute on function
+  private.create_api_token_records_phase1(text, text, text, text[], text, text, bigint, bytea),
+  private.create_api_token_records_phase2(text, text, text),
+  private.delete_api_token_records(text)
+to service_role;</code></pre>
 
-<p>The RPC lives in the <code>private</code> schema (alongside <code>private.is_workspace_member</code>,
-  <code>private.is_workspace_writer</code>, and the new <code>private.role_max</code>). Supabase's
-  PostgREST only exposes the <code>public</code> schema, so client roles cannot reach this function
-  via REST at all. The explicit <code>REVOKE</code> is there as a second line of defense: if the
-  schema-exposure setting is ever changed, the function still rejects calls from
-  <code>anon</code> / <code>authenticated</code>. Only the edge function (running with
-  <code>service_role</code>) can invoke it. This is the boundary that prevents a workspace viewer
-  from minting themselves an editor token by calling the RPC directly.</p>
+<p>These RPCs live in the <code>private</code> schema (alongside
+  <code>private.is_workspace_member</code>, <code>private.is_workspace_writer</code>, and the new
+  <code>private.role_max</code>). Supabase's PostgREST only exposes the <code>public</code> schema,
+  so client roles cannot reach them via REST at all. The explicit <code>REVOKE</code> is there as
+  a second line of defense: if the schema-exposure setting is ever changed, the functions still
+  reject calls from <code>anon</code> / <code>authenticated</code>. Only the edge function
+  (running with <code>service_role</code>) can invoke them. This is the boundary that prevents a
+  workspace viewer from minting themselves an editor token by calling the RPCs directly.</p>
 
 <p>Edge-function flow. The order matters &mdash; service user creation comes <strong>after</strong>
   the SQL transaction so a downstream failure can't orphan an <code>auth.users</code> row:</p>
@@ -1040,8 +1064,17 @@ const hash      = crypto.createHash('sha256').update(plaintext).digest()</code><
 can't be inside the SQL transaction. Splitting the SQL work into "phase 1: everything that
 doesn't need the service user" + "phase 2: the membership row" gives a clean compensation point:
 service user creation sits between two SQL transactions, and a failure in either step has a
-defined cleanup. The same <code>delete_api_token_records</code> helper is also what
-<code>revoke_api_token</code> in &sect;8.5 calls when the user explicitly revokes.
+defined cleanup via <code>private.delete_api_token_records</code>.
+
+<br><br>
+
+<strong>Compensation vs. revocation are different paths.</strong>
+<code>private.delete_api_token_records</code> is <em>hard-delete</em> (cascade removes the share,
+roots, link, secret, and any member rows). It is used <em>only</em> as failure compensation
+during creation, when the token never successfully reached the caller. Normal revocation
+(&sect;8.5) is a separate <em>soft</em>-delete that sets <code>share_links.revoked_at</code> /
+<code>block_shares.revoked_at</code> while keeping all rows around for audit. The two paths don't
+share an implementation.
 </div>
 
 <div class="note">
