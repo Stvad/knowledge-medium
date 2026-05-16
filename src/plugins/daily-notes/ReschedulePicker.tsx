@@ -15,67 +15,22 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
-import { formatIsoDate } from '@/utils/dailyPage.ts'
 import { addDaysIso, todayIso } from './dailyNotes.ts'
 import { pickBlockDateAdapter, type BlockDateAdapter } from './blockDateAdapter.ts'
+import { CalendarGrid } from './CalendarGrid.tsx'
+import { firstOfMonth, formatDayLabel, fromIso } from './calendar.ts'
 import {
   openReschedulePickerEvent,
   type OpenReschedulePickerEventDetail,
 } from './rescheduleEvents.ts'
 
-const CALENDAR_CELL_COUNT = 42
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 const STRIP_PAST_DAYS = 7
 const STRIP_FUTURE_DAYS = 60
 const STRIP_CELL_WIDTH_PX = 48
-
-interface CalendarCell {
-  date: Date | null
-  iso: string | null
-}
-
-const monthLabel = (date: Date): string =>
-  date.toLocaleString('en-US', {month: 'long'})
-
-const firstOfMonth = (date: Date): Date =>
-  new Date(date.getFullYear(), date.getMonth(), 1)
-
-const fromIso = (iso: string): Date | null => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso)
-  if (!match) return null
-  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
-  if (Number.isNaN(date.getTime())) return null
-  return formatIsoDate(date) === iso ? date : null
-}
-
-const addMonths = (date: Date, months: number): Date =>
-  new Date(date.getFullYear(), date.getMonth() + months, 1)
-
-const buildCells = (visibleMonth: Date): CalendarCell[] => {
-  const year = visibleMonth.getFullYear()
-  const month = visibleMonth.getMonth()
-  const leadingEmptyCells = (new Date(year, month, 1).getDay() + 6) % 7
-  const daysInMonth = new Date(year, month + 1, 0).getDate()
-
-  return Array.from({length: CALENDAR_CELL_COUNT}, (_, index) => {
-    const day = index - leadingEmptyCells + 1
-    if (day < 1 || day > daysInMonth) return {date: null, iso: null}
-    const date = new Date(year, month, day)
-    return {date, iso: formatIsoDate(date)}
-  })
-}
-
-const formatDayLabel = (date: Date): string =>
-  date.toLocaleDateString('en-US', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  })
 
 const weekdayLetter = (date: Date): string =>
   date.toLocaleDateString('en-US', {weekday: 'narrow'})
@@ -198,7 +153,6 @@ export const ReschedulePicker = () => {
     return () => window.removeEventListener('keydown', handleKey)
   }, [session, dismiss])
 
-  const cells = useMemo(() => buildCells(visibleMonth), [visibleMonth])
   const stripCells = useMemo(
     () => session ? buildStripCells(session.initialIso) : [],
     [session],
@@ -316,65 +270,17 @@ export const ReschedulePicker = () => {
           })}
         </div>
 
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <button
-            type="button"
-            aria-label="Previous month"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-            onClick={() => setVisibleMonth(current => addMonths(current, -1))}
-          >
-            <ChevronLeft className="h-5 w-5"/>
-          </button>
-          <div className="text-base font-semibold">
-            {monthLabel(visibleMonth)} {visibleMonth.getFullYear()}
-          </div>
-          <button
-            type="button"
-            aria-label="Next month"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-            onClick={() => setVisibleMonth(current => addMonths(current, 1))}
-          >
-            <ChevronRight className="h-5 w-5"/>
-          </button>
-        </div>
-
-        <div className="mb-1 grid grid-cols-7 text-center text-xs font-medium text-muted-foreground">
-          {WEEKDAY_LABELS.map(day => (
-            <div key={day}>{day}</div>
-          ))}
-        </div>
-
-        <div className="grid grid-cols-7 gap-1">
-          {cells.map((cell, index) => {
-            if (!cell.date || !cell.iso) {
-              return <div key={`empty-${index}`} className="h-9"/>
-            }
-            const iso = cell.iso
-            const isToday = iso === today
-            const isSelected = iso === previewIso
-            return (
-              <button
-                key={iso}
-                type="button"
-                disabled={pending}
-                aria-label={formatDayLabel(cell.date)}
-                aria-current={isToday ? 'date' : undefined}
-                onClick={() => {
-                  setPreviewIso(iso)
-                  void commit(iso)
-                }}
-                className={cn(
-                  'inline-flex h-9 items-center justify-center rounded-md text-sm transition-colors active:scale-95',
-                  !isSelected && !isToday && 'text-foreground hover:bg-muted',
-                  isToday && !isSelected && 'font-semibold text-primary',
-                  isSelected && 'bg-primary text-primary-foreground',
-                )}
-              >
-                {cell.date.getDate()}
-              </button>
-            )
-          })}
-        </div>
+        <CalendarGrid
+          visibleMonth={visibleMonth}
+          onVisibleMonthChange={setVisibleMonth}
+          selectedIso={previewIso}
+          onSelect={iso => {
+            setPreviewIso(iso)
+            void commit(iso)
+          }}
+          disabled={pending}
+          variant="primary"
+        />
 
         <div className="mt-3 border-t pt-3">
           <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
