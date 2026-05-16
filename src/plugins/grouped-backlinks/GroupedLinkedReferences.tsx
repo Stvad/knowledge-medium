@@ -13,32 +13,58 @@ import {
 } from '@/plugins/backlinks/query.ts'
 import { useBacklinks } from '@/plugins/backlinks/useBacklinks.ts'
 import { useBacklinkFilterState } from '@/plugins/backlinks/useStoredBacklinkFilter.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import type { GroupedBacklinkGroup } from './grouping.ts'
 import { useGroupedBacklinksConfig } from './useGroupedBacklinksConfig.ts'
 import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
+import { groupedBacklinksGroupHeaderControlsFacet } from './facet.ts'
 
 const GroupItems = ({
+  targetBlock,
+  workspaceId,
   group,
   sourceBlocks,
   parentsBySourceId,
 }: {
+  targetBlock: Block
+  workspaceId: string
   group: GroupedBacklinkGroup
   sourceBlocks: Block[]
   parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
+  const runtime = useAppRuntime()
+  const headerControls = runtime.read(groupedBacklinksGroupHeaderControlsFacet)
   const [open, setOpen] = useState(true)
 
   return (
     <div className="border-l border-border/80 pl-3">
-      <button
-        type="button"
-        onClick={() => setOpen(prev => !prev)}
-        className="flex min-w-0 items-center gap-2 py-1 text-sm font-medium text-muted-foreground hover:text-foreground"
-      >
-        <span className="text-base leading-none">{open ? '▾' : '▸'}</span>
-        <span className="truncate">{group.label}</span>
-        <span className="text-xs text-muted-foreground/70">{group.sourceIds.length}</span>
-      </button>
+      <div className="flex min-w-0 items-center gap-1 py-1">
+        <button
+          type="button"
+          onClick={() => setOpen(prev => !prev)}
+          className="flex min-w-0 flex-1 items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+        >
+          <span className="text-base leading-none">{open ? '▾' : '▸'}</span>
+          <span className="truncate">{group.label}</span>
+          <span className="text-xs text-muted-foreground/70">{group.sourceIds.length}</span>
+        </button>
+        {headerControls.length > 0 && (
+          <div className="flex shrink-0 items-center gap-0.5">
+            {headerControls.map(control => {
+              const Control = control.component
+              return (
+                <Control
+                  key={control.id}
+                  targetBlock={targetBlock}
+                  workspaceId={workspaceId}
+                  group={group}
+                  sourceBlocks={sourceBlocks}
+                />
+              )
+            })}
+          </div>
+        )}
+      </div>
       {open && (
         <div className="mt-1 flex flex-col gap-2">
           {sourceBlocks.map(source => (
@@ -55,9 +81,13 @@ const GroupItems = ({
 }
 
 const GroupedReferencesGroup = ({
+  targetBlock,
+  workspaceId,
   group,
   parentsBySourceId,
 }: {
+  targetBlock: Block
+  workspaceId: string
   group: GroupedBacklinkGroup
   parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
@@ -67,7 +97,15 @@ const GroupedReferencesGroup = ({
     [group.sourceIds, repo],
   )
 
-  return <GroupItems group={group} sourceBlocks={sourceBlocks} parentsBySourceId={parentsBySourceId}/>
+  return (
+    <GroupItems
+      targetBlock={targetBlock}
+      workspaceId={workspaceId}
+      group={group}
+      sourceBlocks={sourceBlocks}
+      parentsBySourceId={parentsBySourceId}
+    />
+  )
 }
 
 export function GroupedLinkedReferences({block}: BlockRendererProps) {
@@ -179,6 +217,8 @@ function GroupedLinkedReferencesInner({
               {grouped.groups.map(group => (
                 <GroupedReferencesGroup
                   key={group.groupId}
+                  targetBlock={block}
+                  workspaceId={workspaceId}
                   group={group}
                   parentsBySourceId={initialParentsByBacklinkId}
                 />

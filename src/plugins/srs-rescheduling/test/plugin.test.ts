@@ -11,6 +11,7 @@ import { actionsFacet } from '@/extensions/core.ts'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+import { groupedBacklinksGroupHeaderControlsFacet } from '@/plugins/grouped-backlinks/facet.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
@@ -130,6 +131,13 @@ describe('srsReschedulingPlugin', () => {
     expect(typeof pasteAction?.canRun).toBe('function')
 
     expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
+  })
+
+  it('contributes a grouped-backlinks header control for spreading SRS reviews', () => {
+    const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
+    const controls = runtime.read(groupedBacklinksGroupHeaderControlsFacet)
+
+    expect(controls.map(control => control.id)).toContain('srs-rescheduling.spread-reviews')
   })
 
   describe('srs.cut / srs.paste flow', () => {

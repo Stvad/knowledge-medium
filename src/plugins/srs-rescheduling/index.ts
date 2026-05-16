@@ -45,6 +45,8 @@ import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 import { srsRescheduleDecorator } from './rescheduleDecorator.ts'
 import { blockDateAdapterFacet } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
+import { groupedBacklinksGroupHeaderControlsFacet } from '@/plugins/grouped-backlinks/facet.ts'
+import { srsSpreadReviewsGroupHeaderControl } from './spreadReviewsControl.ts'
 
 const shortcutKeysForSignal = (signal: SrsSignal): string[] => {
   const key = String(signal)
@@ -290,6 +292,10 @@ export const srsReschedulingPlugin: AppExtension = [
   ),
   quickActionItemsFacet.of(srsCutQuickAction, {source: 'srs-rescheduling'}),
   quickActionItemsFacet.of(srsPasteQuickAction, {source: 'srs-rescheduling'}),
+  groupedBacklinksGroupHeaderControlsFacet.of(
+    srsSpreadReviewsGroupHeaderControl,
+    {source: 'srs-rescheduling'},
+  ),
   blockContentSurfacePropsFacet.of(srsContentSurfaceDecoration, {source: 'srs-rescheduling'}),
   srsReschedulingActions.map(action =>
     actionsFacet.of(action, {source: 'srs-rescheduling'}),
