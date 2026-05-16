@@ -9,7 +9,6 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
 import { dailyNotesPlugin } from '@/plugins/daily-notes'
-import { dailyNotesDateUxPlugin } from '@/plugins/daily-notes/dateUxPlugin.ts'
 import { quickFindPlugin } from '@/plugins/quick-find'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
@@ -54,12 +53,6 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // facet's "last wins" arrangement does the right thing without an
   // explicit precedence number.
   dailyNotesPlugin({repo}),
-  // Mobile date-UX plugin lives in its own module so daily-notes/index.ts
-  // (which is loaded as part of the static-data graph via
-  // `referencesProcessor`) doesn't pull `@/extensions/blockInteraction.ts`
-  // into a load-time cycle. Order vs other plugins doesn't matter — the
-  // contributions are additive.
-  dailyNotesDateUxPlugin,
   leftSidebarPlugin,
   workspaceHeaderPlugin,
   commandPalettePlugin,
