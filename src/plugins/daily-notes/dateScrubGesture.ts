@@ -1,18 +1,24 @@
 /**
- * Long-press → drag-to-scrub gesture (option-2 prototype). The user
- * presses-and-holds on a block whose date can be shifted; after a short
- * threshold a floating preview tooltip appears, and horizontal drag
- * adjusts the date day-by-day. Release commits, vertical drag cancels.
+ * Two-finger horizontal drag → scrub-to-date gesture (option-2
+ * prototype). Long-press is intentionally NOT used: that gesture
+ * belongs to selection / bullet drag (Workflowy convention). A
+ * two-finger drag is rare enough to be unambiguously intentional and
+ * doesn't conflict with any single-finger gesture (tap, swipe,
+ * scroll, long-press selection).
  *
  * Coordination contract:
  *   - The React overlay (`DateScrubOverlay`) registers itself as the
  *     `ScrubHandler` on mount and unregisters on unmount. The overlay
  *     owns the runtime + adapter resolution + tooltip rendering.
- *   - This module owns the touch tracking: long-press timer, movement
- *     thresholds, sign of horizontal travel, scrub-active flag.
- *   - When the long-press fires, we ask the handler to start. If it
- *     accepts, we cancel the swipe-quick-actions candidate so the same
- *     touchend doesn't open the swipe menu.
+ *   - This module owns the touch tracking: per-block "two fingers
+ *     locked" state, midpoint motion thresholds, scrub-active flag.
+ *   - When midpoint horizontal travel crosses the activation
+ *     threshold (and dominates vertical travel — so a two-finger
+ *     vertical scroll doesn't trip it, and a pinch-zoom where the
+ *     midpoint stays put doesn't either), we ask the overlay to
+ *     start. If it accepts, we cancel the swipe-quick-actions
+ *     candidate so the same gesture doesn't also open the swipe menu.
+ *   - Either tracked finger lifting ends the scrub.
  */
 import type { TouchEvent } from 'react'
 import {
@@ -32,27 +38,29 @@ const isMobileViewport = (): boolean =>
   typeof window.matchMedia === 'function' &&
   window.matchMedia(MOBILE_BREAKPOINT_QUERY).matches
 
-const LONG_PRESS_MS = 350
-/** During the long-press wait, this much travel cancels the candidate
- *  and lets the swipe / scroll gesture take over. Higher than the
- *  swipe direction-lock so a tap that twitches a few pixels still
- *  enters scrub mode. */
-const LONG_PRESS_TOLERANCE_PX = 10
+/** Midpoint horizontal travel that distinguishes "user is scrubbing"
+ *  from "user is pinching / scrolling / just landed two fingers". A
+ *  pinch keeps the midpoint roughly stationary; a vertical scroll
+ *  moves it vertically; only a deliberate horizontal pan trips this. */
+const HORIZONTAL_LOCK_PX = 10
 /** Pixels of horizontal drag per ISO day. Picked so that ±2 weeks fits
  *  inside half a thumb-arc on a phone (~200px = 14 days). */
 const PIXELS_PER_DAY = 14
-/** Vertical travel above this — once scrub is active — snaps the
- *  gesture into "cancel" intent. Released past this point reverts. */
+/** Vertical midpoint travel above this — once scrub is active —
+ *  snaps the gesture into "cancel" intent. Released past this point
+ *  reverts. */
 const VERTICAL_CANCEL_PX = 60
 /** Caps so a wild horizontal swing across the screen doesn't put the
- *  date a year out by accident. The user can still tap calendar
- *  chips for big jumps. */
+ *  date a year out by accident. The user can still tap the calendar
+ *  chips in the swipe-menu Reschedule sheet for big jumps. */
 const MAX_OFFSET_DAYS = 90
 const MIN_OFFSET_DAYS = -90
 
 export interface ScrubStartArgs {
   block: Block
   blockId: string
+  /** Midpoint between the two locked fingers at activation time.
+   *  The overlay anchors its pill near this point. */
   startX: number
   startY: number
 }
@@ -60,7 +68,7 @@ export interface ScrubStartArgs {
 export interface ScrubHandler {
   /** Returns true if the overlay accepted the scrub (block is
    *  date-shiftable). Returning false makes the gesture revert as if
-   *  the long-press never fired. */
+   *  no activation happened. */
   start: (args: ScrubStartArgs) => boolean
   update: (deltaDays: number, intentCancel: boolean) => void
   end: (commit: boolean) => void
@@ -75,32 +83,36 @@ export const registerScrubHandler = (handler: ScrubHandler): (() => void) => {
   }
 }
 
-interface PressTracker {
+interface FingerSnapshot {
+  id: number
+  x: number
+  y: number
+}
+
+interface SingleFinger extends FingerSnapshot {
   blockId: string
-  identifier: number
-  startX: number
-  startY: number
-  /** Long-press timer id, or 0 once the timer has fired (or been
-   *  cancelled). */
-  timerId: number
-  /** True once `start` returned true and we're consuming touchmove for
-   *  date-scrubbing. */
+}
+
+interface MultiTouch {
+  blockId: string
+  a: FingerSnapshot
+  b: FingerSnapshot
+  startMidX: number
+  startMidY: number
+  /** Updated on each touchmove — touchend uses it to read final
+   *  midpoint position without recomputing from the (possibly
+   *  partial) `event.touches` list, since one of our fingers may
+   *  already be in `changedTouches`. */
+  lastMidX: number
+  lastMidY: number
   scrubbing: boolean
 }
 
-const pressByBlockId = new Map<string, PressTracker>()
-
-const findTrackedTouch = (
-  list: { length: number; [index: number]: { identifier: number } } | undefined | null,
-  identifier: number,
-): { clientX: number; clientY: number } | null => {
-  if (!list) return null
-  for (let i = 0; i < list.length; i++) {
-    const entry = list[i] as unknown as { identifier: number; clientX: number; clientY: number }
-    if (entry.identifier === identifier) return entry
-  }
-  return null
-}
+/** First finger landed on a block but the second hasn't arrived yet —
+ *  remember it so the eventual second-finger touchstart can promote
+ *  to a `MultiTouch` tracker. */
+const singleByBlockId = new Map<string, SingleFinger>()
+const multiByBlockId = new Map<string, MultiTouch>()
 
 const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
@@ -115,28 +127,16 @@ const isOnInteractiveSurface = (event: { target: EventTarget | null }): boolean 
   return Boolean(element?.closest('a[href],video'))
 }
 
-const clearTimer = (tracker: PressTracker): void => {
-  if (tracker.timerId !== 0) {
-    window.clearTimeout(tracker.timerId)
-    tracker.timerId = 0
+const findTouchById = (
+  list: { length: number; [index: number]: { identifier: number } } | undefined | null,
+  id: number,
+): { clientX: number; clientY: number } | null => {
+  if (!list) return null
+  for (let i = 0; i < list.length; i++) {
+    const entry = list[i] as unknown as { identifier: number; clientX: number; clientY: number }
+    if (entry.identifier === id) return entry
   }
-}
-
-const fireLongPress = (
-  tracker: PressTracker,
-  block: Block,
-): void => {
-  tracker.timerId = 0
-  if (!activeHandler) return
-  const accepted = activeHandler.start({
-    block,
-    blockId: tracker.blockId,
-    startX: tracker.startX,
-    startY: tracker.startY,
-  })
-  if (!accepted) return
-  tracker.scrubbing = true
-  cancelSwipeCandidate(tracker.blockId)
+  return null
 }
 
 const computeDeltaDays = (dx: number): number => {
@@ -146,6 +146,11 @@ const computeDeltaDays = (dx: number): number => {
   return raw
 }
 
+const clearAllForBlock = (blockId: string): void => {
+  singleByBlockId.delete(blockId)
+  multiByBlockId.delete(blockId)
+}
+
 export const dateScrubContentSurface: BlockContentSurfaceContribution = context => {
   const {block, uiStateBlock} = context
 
@@ -153,92 +158,142 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
     onTouchStart: (event: TouchEvent) => {
       if (!isMobileViewport()) return
       // Same exemption set as the swipe gesture — buttons / editor /
-      // links / video shouldn't co-opt their own touch handling.
+      // CodeMirror shouldn't co-opt their own touch handling. Links
+      // and video are allowed (a two-finger gesture there is still
+      // ours).
       if (!isOnInteractiveSurface(event) && isInteractiveContentEvent(event)) {
-        const stale = pressByBlockId.get(block.id)
-        if (stale) clearTimer(stale)
-        pressByBlockId.delete(block.id)
+        clearAllForBlock(block.id)
         return
       }
       if (isBlockEditing(block.id, uiStateBlock)) return
-      if (pressByBlockId.has(block.id)) return
 
-      const touch = event.changedTouches[0]
-      if (!touch) return
+      for (let i = 0; i < event.changedTouches.length; i++) {
+        const t = event.changedTouches[i]
+        const newFinger: FingerSnapshot = {id: t.identifier, x: t.clientX, y: t.clientY}
 
-      const tracker: PressTracker = {
-        blockId: block.id,
-        identifier: touch.identifier,
-        startX: touch.clientX,
-        startY: touch.clientY,
-        timerId: 0,
-        scrubbing: false,
+        // Already locked on two fingers — ignore any third+ finger
+        // landing on the block.
+        if (multiByBlockId.has(block.id)) continue
+
+        const single = singleByBlockId.get(block.id)
+        if (!single) {
+          singleByBlockId.set(block.id, {blockId: block.id, ...newFinger})
+        } else if (single.id !== newFinger.id) {
+          // Second finger arrived — promote to a multi-touch tracker.
+          const startMidX = (single.x + newFinger.x) / 2
+          const startMidY = (single.y + newFinger.y) / 2
+          multiByBlockId.set(block.id, {
+            blockId: block.id,
+            a: {id: single.id, x: single.x, y: single.y},
+            b: newFinger,
+            startMidX,
+            startMidY,
+            lastMidX: startMidX,
+            lastMidY: startMidY,
+            scrubbing: false,
+          })
+          singleByBlockId.delete(block.id)
+        }
       }
-      tracker.timerId = window.setTimeout(() => fireLongPress(tracker, block), LONG_PRESS_MS)
-      pressByBlockId.set(block.id, tracker)
     },
 
     onTouchMove: (event: TouchEvent) => {
-      const tracker = pressByBlockId.get(block.id)
-      if (!tracker) return
+      const multi = multiByBlockId.get(block.id)
+      if (!multi) return
 
-      const touch = findTrackedTouch(event.touches, tracker.identifier)
-      if (!touch) return
+      const aNow = findTouchById(event.touches, multi.a.id)
+      const bNow = findTouchById(event.touches, multi.b.id)
+      // Either tracked finger is missing from active touches (lifted
+      // between events) — leave the touchend handler to settle this.
+      if (!aNow || !bNow) return
 
-      const dx = touch.clientX - tracker.startX
-      const dy = touch.clientY - tracker.startY
+      const midX = (aNow.clientX + bNow.clientX) / 2
+      const midY = (aNow.clientY + bNow.clientY) / 2
+      multi.lastMidX = midX
+      multi.lastMidY = midY
 
-      // Pre-activation: too much movement → it's a swipe/scroll, not
-      // a press-and-hold. Drop the candidate so the long-press timer
-      // doesn't fire mid-gesture.
-      if (!tracker.scrubbing) {
-        if (Math.abs(dx) > LONG_PRESS_TOLERANCE_PX || Math.abs(dy) > LONG_PRESS_TOLERANCE_PX) {
-          clearTimer(tracker)
-          pressByBlockId.delete(block.id)
+      const dx = midX - multi.startMidX
+      const dy = midY - multi.startMidY
+
+      if (!multi.scrubbing) {
+        // Pre-activation gate. We require horizontal travel > the
+        // lock threshold AND > vertical travel. This naturally
+        // rejects pinch-zoom (midpoint stays near origin) and
+        // two-finger vertical scroll (dy dominates).
+        if (Math.abs(dx) <= HORIZONTAL_LOCK_PX) return
+        if (Math.abs(dx) <= Math.abs(dy)) return
+        if (!activeHandler) return
+        const accepted = activeHandler.start({
+          block,
+          blockId: block.id,
+          startX: multi.startMidX,
+          startY: multi.startMidY,
+        })
+        if (!accepted) {
+          // Block isn't date-shiftable — drop our state so we don't
+          // keep eating touches on it.
+          multiByBlockId.delete(block.id)
+          return
         }
-        return
+        multi.scrubbing = true
+        // The first finger is also being tracked by the swipe
+        // gesture; cancel its candidate so the eventual touchend
+        // doesn't open the swipe menu on top of our scrub.
+        cancelSwipeCandidate(block.id)
       }
 
       // Active scrub: feed the overlay the candidate offset and the
-      // cancel-intent flag. Suppress the default touch behavior so the
-      // page doesn't scroll under the user's drag.
+      // cancel-intent flag. preventDefault stops the page scrolling
+      // under the user's drag.
       event.preventDefault()
       const intentCancel = Math.abs(dy) > VERTICAL_CANCEL_PX
       activeHandler?.update(computeDeltaDays(dx), intentCancel)
     },
 
     onTouchEnd: (event: TouchEvent) => {
-      const tracker = pressByBlockId.get(block.id)
-      if (!tracker) return
+      // Clean up a single-finger candidate if its touch is ending and
+      // it never got promoted.
+      const single = singleByBlockId.get(block.id)
+      if (single && findTouchById(event.changedTouches, single.id)) {
+        singleByBlockId.delete(block.id)
+      }
 
-      const touch = findTrackedTouch(event.changedTouches, tracker.identifier)
-      // Different finger lifted while ours is still down — wait for
-      // ours.
-      if (!touch) return
+      const multi = multiByBlockId.get(block.id)
+      if (!multi) return
 
-      const wasScrubbing = tracker.scrubbing
-      clearTimer(tracker)
-      pressByBlockId.delete(block.id)
+      // Either of our two tracked fingers lifting ends the scrub —
+      // we lose the midpoint anchor once we don't have both.
+      const endedA = !!findTouchById(event.changedTouches, multi.a.id)
+      const endedB = !!findTouchById(event.changedTouches, multi.b.id)
+      if (!endedA && !endedB) return
 
+      const wasScrubbing = multi.scrubbing
+      multiByBlockId.delete(block.id)
       if (!wasScrubbing) return
 
-      const dy = touch.clientY - tracker.startY
+      const dy = multi.lastMidY - multi.startMidY
       const cancel = Math.abs(dy) > VERTICAL_CANCEL_PX
       activeHandler?.end(!cancel)
-      // Eat the touchend so synthesized click / focus on the underlying
-      // block doesn't fire after the scrub.
+      // Eat the touchend so synthesized click / focus on the
+      // underlying block doesn't fire after the scrub.
       event.preventDefault()
       event.stopPropagation()
     },
 
     onTouchCancel: (event: TouchEvent) => {
-      const tracker = pressByBlockId.get(block.id)
-      if (!tracker) return
-      if (!findTrackedTouch(event.changedTouches, tracker.identifier)) return
+      const single = singleByBlockId.get(block.id)
+      if (single && findTouchById(event.changedTouches, single.id)) {
+        singleByBlockId.delete(block.id)
+      }
 
-      const wasScrubbing = tracker.scrubbing
-      clearTimer(tracker)
-      pressByBlockId.delete(block.id)
+      const multi = multiByBlockId.get(block.id)
+      if (!multi) return
+      const endedA = !!findTouchById(event.changedTouches, multi.a.id)
+      const endedB = !!findTouchById(event.changedTouches, multi.b.id)
+      if (!endedA && !endedB) return
+
+      const wasScrubbing = multi.scrubbing
+      multiByBlockId.delete(block.id)
       if (wasScrubbing) activeHandler?.end(false)
     },
   }

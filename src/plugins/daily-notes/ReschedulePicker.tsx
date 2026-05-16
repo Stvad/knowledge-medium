@@ -169,6 +169,10 @@ export const ReschedulePicker = () => {
         // the wrong block.
         if (openRequestIdRef.current !== requestId) return
         const initialDate = fromIso(initialIso) ?? new Date()
+        // Clear any stranded `pending` from an earlier session whose
+        // commit hasn't resolved yet (its finally now no-ops because
+        // the request id has moved on).
+        setPending(false)
         setSession({
           blockId: detail.blockId,
           workspaceId: detail.workspaceId,
@@ -218,6 +222,13 @@ export const ReschedulePicker = () => {
 
   const commit = async (iso: string) => {
     if (!session || pending) return
+    // Scope completion to the open-request id that was current when
+    // we started the write. If the user dismisses and reopens (or
+    // opens for a different block) while `setIso` is in flight, the
+    // older promise's `finally` would otherwise dismiss the NEW
+    // sheet and leave it with `pending = true` (buttons disabled
+    // until the stale promise resolves).
+    const committingFor = openRequestIdRef.current
     setPending(true)
     try {
       const block = repo.block(session.blockId)
@@ -232,10 +243,15 @@ export const ReschedulePicker = () => {
       // visible to anyone with the console open. (No toast plumbing
       // in scope for the prototype.)
       console.error(`[reschedule] adapter ${session.adapter.id} threw on write`, error)
-    } finally {
-      setPending(false)
-      dismiss()
     }
+    if (openRequestIdRef.current !== committingFor) {
+      // A newer open happened between setPending(true) and now.
+      // Leave its state alone — its own commit/dismiss will manage
+      // pending and visibility.
+      return
+    }
+    setPending(false)
+    dismiss()
   }
 
   const previewDate = previewIso ? fromIso(previewIso) : null
