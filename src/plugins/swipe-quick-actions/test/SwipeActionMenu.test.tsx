@@ -7,16 +7,18 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
-import { actionsFacet } from '@/extensions/core'
+import { actionDecoratorsFacet, actionsFacet } from '@/extensions/core'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
-import { type ActionConfig, ActionContextTypes } from '@/shortcuts/types'
+import { type ActionConfig, ActionContextTypes, type BlockShortcutDependencies } from '@/shortcuts/types'
 import { topLevelBlockIdProp } from '@/data/properties'
-import { quickActionItemsFacet } from '../actions'
+import { quickActionItemsFacet, SWIPE_RIGHT_BLOCK_ACTION_ID } from '../actions'
 import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
+  SWIPE_QUICK_ACTION_RUN_EVENT,
   type SwipeQuickActionMenuEventDetail,
+  type SwipeQuickActionRunEventDetail,
 } from '../events'
 import { SwipeActionMenu } from '../SwipeActionMenu'
 
@@ -55,6 +57,16 @@ const menuEvent = (
     bubbles: true,
     cancelable: true,
     detail: {blockId},
+  })
+
+const runEvent = (
+  actionId = SWIPE_RIGHT_BLOCK_ACTION_ID,
+  blockId = 'block-1',
+): CustomEvent<SwipeQuickActionRunEventDetail> =>
+  new CustomEvent(SWIPE_QUICK_ACTION_RUN_EVENT, {
+    bubbles: true,
+    cancelable: true,
+    detail: {blockId, actionId},
   })
 
 describe('SwipeActionMenu', () => {
@@ -253,5 +265,42 @@ describe('SwipeActionMenu', () => {
 
     expect(await screen.findByRole('button', {name: 'Always'})).toBeTruthy()
     expect(screen.queryByRole('button', {name: 'Gated'})).toBeNull()
+  })
+
+  it('runs swipe-right action events through effective action decorators', async () => {
+    const calls: string[] = []
+    const baseAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+      id: SWIPE_RIGHT_BLOCK_ACTION_ID,
+      description: 'Swipe right',
+      context: ActionContextTypes.NORMAL_MODE,
+      handler: async ({block}) => {
+        calls.push(`base:${block.id}`)
+      },
+    }
+    runtime = resolveFacetRuntimeSync([
+      actionsFacet.of(baseAction, {source: 'test'}),
+      actionDecoratorsFacet.of({
+        actionId: SWIPE_RIGHT_BLOCK_ACTION_ID,
+        context: ActionContextTypes.NORMAL_MODE,
+        decorate: current => ({
+          ...current,
+          handler: async (deps, trigger) => {
+            const blockDeps = deps as BlockShortcutDependencies
+            calls.push(`decorated:${blockDeps.block.id}`)
+            await current.handler(blockDeps, trigger)
+          },
+        }),
+      }, {source: 'test'}),
+    ])
+    renderMenu()
+
+    let event: CustomEvent<SwipeQuickActionRunEventDetail> | undefined
+    await act(async () => {
+      event = runEvent()
+      blockElement().dispatchEvent(event)
+    })
+
+    expect(event?.defaultPrevented).toBe(true)
+    expect(calls).toEqual(['decorated:block-1', 'base:block-1'])
   })
 })

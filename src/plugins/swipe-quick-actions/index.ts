@@ -16,6 +16,7 @@ import { swipeQuickActionsContentSurface } from './swipeGesture.ts'
 export { SwipeActionMenu } from './SwipeActionMenu.tsx'
 export {
   quickActionItemsFacet,
+  SWIPE_RIGHT_BLOCK_ACTION_ID,
   type QuickActionItem,
 } from './actions.ts'
 export { cancelSwipeCandidate } from './swipeGesture.ts'

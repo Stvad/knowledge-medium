@@ -8,6 +8,7 @@ import {
   type ActionConfig,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.ts'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions/actions.ts'
 import { statusProp, TODO_TYPE } from './schema.ts'
 
 type TodoActionContext =
@@ -88,6 +89,14 @@ export const todoActions: readonly ActionConfig[] = [
     'edit.cm.todo.cycle',
     'Cycle todo state (Edit Mode)',
   ),
+  {
+    id: SWIPE_RIGHT_BLOCK_ACTION_ID,
+    description: 'Swipe right: cycle todo state',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: async ({block}: BlockShortcutDependencies) => {
+      await cycleTodoState(block)
+    },
+  },
 ]
 
 export const todoActionsExtension: AppExtension =

@@ -12,8 +12,11 @@ import { swipeQuickActionsContentSurface } from '../swipeGesture.ts'
 import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
+  SWIPE_QUICK_ACTION_RUN_EVENT,
   type SwipeQuickActionMenuEvent,
+  type SwipeQuickActionRunEvent,
 } from '../events.ts'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '../actions.ts'
 
 /** Minimal stand-in for the panel UI-state block. The gesture only reads
  *  focus/editing from it now; menu open state is local to SwipeActionMenu. */
@@ -94,6 +97,16 @@ const recordCloseEvents = (
     if (menuEvent.detail.blockId === activeBlockId) event.preventDefault()
   })
   return closed
+}
+
+const recordRunEvents = (target: EventTarget): Array<{blockId: string; actionId: string}> => {
+  const run: Array<{blockId: string; actionId: string}> = []
+  target.addEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, event => {
+    const runEvent = event as SwipeQuickActionRunEvent
+    run.push(runEvent.detail)
+    event.preventDefault()
+  })
+  return run
 }
 
 // jsdom defaults innerWidth to 1024; our gesture handler gates on the
@@ -229,6 +242,24 @@ describe('swipe-quick-actions gesture', () => {
     const end = touchEvent('changedTouches', touch(140, 100), surface)
     props.onTouchEnd?.(end)
     expect(closed).toEqual(['b4'])
+    expect(end.preventDefault).toHaveBeenCalled()
+    expect(end.stopPropagation).toHaveBeenCalled()
+  })
+
+  it('dispatches the swipe-right block action before falling back to close', () => {
+    const surface = document.createElement('div')
+    const run = recordRunEvents(surface)
+    const closed = recordCloseEvents(surface, 'b-right-action')
+    const props = handlers(makeContext('b-right-action'))
+    props.onTouchStart?.(touchEvent('changedTouches', touch(50, 100), surface))
+    const end = touchEvent('changedTouches', touch(140, 100), surface)
+    props.onTouchEnd?.(end)
+
+    expect(run).toEqual([{
+      blockId: 'b-right-action',
+      actionId: SWIPE_RIGHT_BLOCK_ACTION_ID,
+    }])
+    expect(closed).toEqual([])
     expect(end.preventDefault).toHaveBeenCalled()
     expect(end.stopPropagation).toHaveBeenCalled()
   })

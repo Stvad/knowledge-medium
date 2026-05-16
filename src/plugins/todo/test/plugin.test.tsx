@@ -6,6 +6,7 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import type { BlockRenderer } from '@/types.ts'
 import {
@@ -35,6 +36,8 @@ describe('todoPlugin', () => {
 
     expect(normal?.context).toBe(ActionContextTypes.NORMAL_MODE)
     expect(edit?.context).toBe(ActionContextTypes.EDIT_MODE_CM)
+    expect(actions.find(action => action.id === SWIPE_RIGHT_BLOCK_ACTION_ID)?.context)
+      .toBe(ActionContextTypes.NORMAL_MODE)
     expect(normal?.defaultBinding?.keys).toEqual(['cmd+enter', 'ctrl+enter'])
     expect(edit?.defaultBinding?.keys).toEqual(['cmd+enter', 'ctrl+enter'])
   })

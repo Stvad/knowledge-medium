@@ -13,9 +13,11 @@ import {
   type QuickActionItem,
 } from './actions.ts'
 import {
+  isSwipeQuickActionRunEvent,
   isSwipeQuickActionMenuEvent,
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
+  SWIPE_QUICK_ACTION_RUN_EVENT,
 } from './events.ts'
 import {
   findSwipeActionBlockElement,
@@ -220,7 +222,19 @@ export const SwipeActionMenu = () => {
   // Resolve action metadata once per runtime — the registries are stable
   // across renders so this is effectively a one-time lookup that lets
   // every render re-use the same icon / label.
-  const allActions = getEffectiveActions(runtime)
+  const allActions = useMemo(() => getEffectiveActions(runtime), [runtime])
+  const runBlockAction = useCallback((actionId: string, blockId: string, trigger: CustomEvent): boolean => {
+    const action = allActions.find(a => a.id === actionId)
+    if (!action) return false
+
+    const block = repo.block(blockId)
+    if (action.canRun && !action.canRun({block, uiStateBlock})) return false
+
+    void Promise.resolve(action.handler({block, uiStateBlock}, trigger)).catch(error => {
+      console.error(`[swipe-quick-actions] Action "${actionId}" failed`, error)
+    })
+    return true
+  }, [allActions, repo, uiStateBlock])
   const actionItems = runtime.read(quickActionItemsFacet)
   // Filter via the referenced action's `canRun` (the swipe surface is
   // presentational — semantic availability lives on the action). The
@@ -296,13 +310,21 @@ export const SwipeActionMenu = () => {
       setActiveBlockId(undefined)
     }
 
+    const handleRun = (event: Event): void => {
+      if (!isSwipeQuickActionRunEvent(event)) return
+      if (!runBlockAction(event.detail.actionId, event.detail.blockId, event)) return
+      event.preventDefault()
+    }
+
     panelRoot.addEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, handleOpen)
     panelRoot.addEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, handleClose)
+    panelRoot.addEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, handleRun)
     return () => {
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, handleOpen)
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, handleClose)
+      panelRoot.removeEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, handleRun)
     }
-  }, [activeBlockId, panelRoot])
+  }, [activeBlockId, panelRoot, runBlockAction])
 
   useEffect(() => {
     if (!activeBlockId || !isMobile || !panelRoot) return
@@ -379,9 +401,7 @@ export const SwipeActionMenu = () => {
     const trigger = new CustomEvent('swipe-quick-action', {
       detail: {actionId: item.actionId},
     })
-    void Promise.resolve(action.handler({block, uiStateBlock}, trigger)).catch(error => {
-      console.error(`[swipe-quick-actions] Action "${item.actionId}" failed`, error)
-    })
+    runBlockAction(item.actionId, block.id, trigger)
     dismiss()
   }
 

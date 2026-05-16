@@ -11,7 +11,9 @@ import { actionsFacet } from '@/extensions/core.ts'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
@@ -129,6 +131,69 @@ describe('srsReschedulingPlugin', () => {
     expect(typeof pasteAction?.canRun).toBe('function')
 
     expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
+  })
+
+  it('decorates the swipe-right block action to archive SRS blocks', async () => {
+    const h = await createTestDb()
+    try {
+      let txSeq = 0
+      const repo = new Repo({
+        db: h.db,
+        cache: new BlockCache(),
+        user: {id: 'user-1'},
+        newTxSeq: () => ++txSeq,
+        startRowEventsTail: false,
+      })
+      const baseSwipeRight = vi.fn(async () => undefined)
+      const runtime = resolveFacetRuntimeSync([
+        kernelDataExtension,
+        dailyNotesDataExtension,
+        srsReschedulingPlugin,
+        actionsFacet.of({
+          id: SWIPE_RIGHT_BLOCK_ACTION_ID,
+          description: 'Swipe right',
+          context: ActionContextTypes.NORMAL_MODE,
+          handler: baseSwipeRight,
+        }, {source: 'test'}),
+      ])
+      repo.setFacetRuntime(runtime)
+
+      const snapshot = repo.snapshotTypeRegistries()
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'srs-block',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a0',
+          content: 'SRS',
+        })
+        await repo.addTypeInTx(tx, 'srs-block', SRS_SM25_TYPE, {}, snapshot)
+        await tx.create({
+          id: 'plain-block',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a1',
+          content: 'Plain',
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'seed swipe-right blocks'})
+
+      const action = getEffectiveActions(runtime).find(it => it.id === SWIPE_RIGHT_BLOCK_ACTION_ID) as
+        ActionConfig<typeof ActionContextTypes.NORMAL_MODE> | undefined
+      expect(action).toBeDefined()
+
+      const srsBlock = repo.block('srs-block')
+      await srsBlock.load()
+      await action!.handler({block: srsBlock, uiStateBlock: srsBlock}, {} as CustomEvent)
+      expect(srsBlock.get(srsArchivedProp)).toBe(true)
+      expect(baseSwipeRight).not.toHaveBeenCalled()
+
+      const plainBlock = repo.block('plain-block')
+      await plainBlock.load()
+      await action!.handler({block: plainBlock, uiStateBlock: plainBlock}, {} as CustomEvent)
+      expect(baseSwipeRight).toHaveBeenCalledOnce()
+    } finally {
+      await h.cleanup()
+    }
   })
 
   describe('srs.cut / srs.paste flow', () => {

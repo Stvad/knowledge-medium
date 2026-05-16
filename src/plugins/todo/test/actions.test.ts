@@ -8,7 +8,9 @@ import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { cycleTodoState } from '../actions'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '@/plugins/swipe-quick-actions'
+import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types'
+import { cycleTodoState, todoActions } from '../actions'
 import { todoDataExtension } from '../dataExtension'
 import { statusProp, TODO_TYPE } from '../schema'
 
@@ -73,6 +75,18 @@ describe('cycleTodoState', () => {
 
     const block = repo.block('block-1')
     await cycleTodoState(block)
+
+    expect(block.types).toContain(TODO_TYPE)
+    expect(block.get(statusProp)).toBe('open')
+  })
+
+  it('uses todo cycling as the baseline swipe-right block action', async () => {
+    const action = todoActions.find(it => it.id === SWIPE_RIGHT_BLOCK_ACTION_ID) as
+      ActionConfig<typeof ActionContextTypes.NORMAL_MODE> | undefined
+    expect(action?.context).toBe(ActionContextTypes.NORMAL_MODE)
+
+    const block = repo.block('block-1')
+    await action?.handler({block, uiStateBlock: block}, {} as CustomEvent)
 
     expect(block.types).toContain(TODO_TYPE)
     expect(block.get(statusProp)).toBe('open')

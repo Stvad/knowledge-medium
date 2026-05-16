@@ -7,9 +7,11 @@ import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
 import type { Block } from '@/data/block'
 import {
   dispatchSwipeQuickActionMenuEvent,
+  dispatchSwipeQuickActionRunEvent,
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
 } from './events.ts'
+import { SWIPE_RIGHT_BLOCK_ACTION_ID } from './actions.ts'
 
 interface TouchStart {
   x: number
@@ -176,11 +178,12 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // Horizontal-only — vertical scrolls and taps are someone else's job.
       if (Math.abs(dx) <= Math.abs(dy)) return
 
-      // Swipe-left opens this block's menu in this panel. Swipe-right asks
-      // the panel menu to dismiss only if it is currently anchored here.
-      // The menu owns active state locally; it cancels the custom event
-      // only when it handled the request, which tells us whether to
-      // consume the original touch.
+      // Swipe-left opens this block's menu in this panel. Swipe-right on
+      // the block surface runs the semantic block action; if no mounted
+      // runtime handles that action, we preserve the old fallback of
+      // asking the panel menu to dismiss when anchored here. A rightward
+      // swipe directly on the open menu/toolbar is handled inside
+      // SwipeActionMenu itself and remains the close gesture.
       if (dx <= -SWIPE_TRIGGER_PX) {
         if (isBlockEditing(block.id, uiStateBlock)) return
         const handled = !dispatchSwipeQuickActionMenuEvent(
@@ -193,6 +196,17 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
           event.stopPropagation()
         }
       } else if (dx >= SWIPE_TRIGGER_PX) {
+        const actionHandled = !dispatchSwipeQuickActionRunEvent(
+          event.currentTarget,
+          SWIPE_RIGHT_BLOCK_ACTION_ID,
+          block.id,
+        )
+        if (actionHandled) {
+          event.preventDefault()
+          event.stopPropagation()
+          return
+        }
+
         const handled = !dispatchSwipeQuickActionMenuEvent(
           event.currentTarget,
           SWIPE_QUICK_ACTION_CLOSE_EVENT,
