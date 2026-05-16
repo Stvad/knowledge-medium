@@ -53,6 +53,11 @@ export interface BlockResolveContext {
   uiStateBlock: Block
   types: readonly string[]
   topLevelBlockId?: string
+  /** Focal-on-document — `block.id === topLevelBlockId` AND the current
+   *  mount is the document surface (not an embed, backlink entry, or
+   *  breadcrumb preview). Populated by `useIsFocalRender(block)`; the
+   *  pure helper `isFocalRender(ctx)` answers the same question for
+   *  facet contributions that receive a `BlockResolveContext`. */
   isTopLevel: boolean
   blockContext?: BlockContextType
   contentRenderers?: readonly BlockContentRendererSlot[]

@@ -92,6 +92,19 @@ Apply uniformly across every name-keyed facet — the convention should be consi
 
 Fix shape: when `rendererKey` is set but absent from the registry, `console.warn` with the offending id + the available ids, and either (a) render `MissingDataRenderer`-style "renderer not found" placeholder so the lost override is visible, or (b) fall through with the warning. Pick (b) for now — less disruptive — but at least surface it. Independent of any larger renderer-resolution redesign; cheap fix.
 
+## Tighten render-surface model — enum + ideas from `renderer-resolution.md`
+
+The current render-surface model on `BlockContextType` ([src/types.ts:79](src/types.ts:79)) is an open flag bag: `isNestedSurface` (umbrella) + specific descriptors `isEmbedded` / `isBacklink` / `isBreadcrumb`, set by each non-document mount and consulted via `useIsFocalRender(block)` / `isFocalRender(ctx)` ([src/hooks/useIsFocalRender.ts](src/hooks/useIsFocalRender.ts)). This shape was picked as the smaller initial fix for the embed-of-focal-block bug ([docs/render-surface-vs-flags.html](render-surface-vs-flags.html) Option D + C) — it composes in nested cases, doesn't require a closed union, and adding a new surface only means setting the umbrella.
+
+Tighter shape worth considering when a third surface lands or when the open flag bag bites: replace the umbrella+descriptor flags with a single `renderSurface: 'document' | 'embed' | 'backlink' | 'breadcrumb'` enum (Option B in the design doc). Pros: real type-system enforcement on the surface set, mutually-exclusive states modeled as mutually exclusive, surfaces discoverable by reading a union rather than greping setters. Cons: closed set requires amending the union when a new surface lands, and nested cases (a backlink containing an embed) collapse to innermost-wins rather than composing. The composition concern is theoretical today — none of the five focal-affordance sites discriminates outer surface.
+
+[docs/renderer-resolution.md](renderer-resolution.md) is currently *not* on the roadmap, but it has adjacent ideas worth pulling in if/when this gets revisited:
+- The **mount site already knows** insight — `BlockEmbed` deciding "I'm an embed" at the mount site is the same shape as the doc's `frame` prop on `BlockComponent`. If the enum migration happens, passing `renderSurface` (or a frame slot) as an explicit `BlockComponent` prop is more honest than the current context-override sandwich.
+- **Separating dispatch metadata from React component identity** — the static-field `canRender` / `priority` shape on renderer components ([TopLevelRenderer.canRender](src/components/renderer/TopLevelRenderer.tsx), etc.) is the same legibility problem this redesign solves at the context-flag layer. Worth doing together if either gets touched.
+- **Explainability / reason chains** — orthogonal to surfaces but cheap to bolt on once dispatch metadata is structured.
+
+Trigger to revisit: a fourth render surface shows up (preview pane, sidebar peek), OR the flag-bag's open-set ergonomics produces a real bug (someone forgets to set `isNestedSurface` on a new mount).
+
 ## Block facade soft-delete contract drift between `peek` / `data` / `load`
 
 `Block`'s three read surfaces disagree on what a soft-deleted (`deleted: true`) row means:

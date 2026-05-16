@@ -77,13 +77,32 @@ export interface RendererRegistry {
 export type { EditorSelectionState } from '@/data/properties'
 
 export interface BlockContextType {
-    topLevel?: boolean
+    /** Layout-dispatch boundary — gates which top-level renderer fires
+     *  (`TopLevelRenderer` / `LayoutRenderer` / `PanelRenderer`). Reset
+     *  by every layout boundary as it descends, so by the time
+     *  `DefaultBlockRenderer` runs this is always `false`. Orthogonal
+     *  to focal-block identity (`block.id === topLevelBlockId`) and to
+     *  render surface (`isNestedSurface` and friends below). */
+    layoutBoundary?: boolean
     safeMode?: boolean
     user?: {
         id: string
         name: string
     }
     panelId?: string
+    /** Umbrella surface flag — set by every non-document mount
+     *  (`BlockEmbed`, `BacklinkEntry`, breadcrumb list). Consulted by
+     *  `useIsFocalRender` / `isFocalRender` so a new surface only has
+     *  to set the umbrella to be excluded from focal affordances. */
+    isNestedSurface?: boolean
+    /** Specific descriptors — set alongside `isNestedSurface` so
+     *  consumers that need to discriminate the surface (e.g. a future
+     *  embed-only header decoration) can ask the specific question.
+     *  Composes in nested cases (a backlink containing an embed has
+     *  both `isBacklink` and `isEmbedded` true). */
+    isEmbedded?: boolean
+    isBacklink?: boolean
+    isBreadcrumb?: boolean
     [key: string]: unknown
 }
 

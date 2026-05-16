@@ -9,7 +9,7 @@ import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewpor
 import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 
-const NESTED_OVERRIDES = {topLevel: false, isBacklink: true}
+const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
 const BACKLINK_ESTIMATED_HEIGHT_PX = 96
 const BACKLINK_OVERSCAN_PX = 600

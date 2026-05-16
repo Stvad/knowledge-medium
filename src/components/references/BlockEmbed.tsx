@@ -1,8 +1,11 @@
 import { BlockComponent } from '@/components/BlockComponent'
+import { NestedBlockContextProvider } from '@/context/block.tsx'
 import { useRepo } from '@/context/repo'
 import { useBlockExists } from '@/hooks/block'
 import { BlockRefAncestorsProvider } from './cycleGuard'
 import { useBlockRefAncestors } from './useBlockRefAncestors'
+
+const EMBED_CONTEXT_OVERRIDES = {isNestedSurface: true, isEmbedded: true}
 
 export function BlockEmbed({blockId}: {blockId: string}) {
   const repo = useRepo()
@@ -31,7 +34,9 @@ export function BlockEmbed({blockId}: {blockId: string}) {
   return (
     <BlockRefAncestorsProvider ancestor={blockId}>
       <div className="blockembed border-l-2 border-muted pl-2 my-1 bg-muted/30 rounded-r">
-        <BlockComponent blockId={blockId}/>
+        <NestedBlockContextProvider overrides={EMBED_CONTEXT_OVERRIDES}>
+          <BlockComponent blockId={blockId}/>
+        </NestedBlockContextProvider>
       </div>
     </BlockRefAncestorsProvider>
   )

@@ -6,7 +6,7 @@ import { useBlockContext } from '@/context/block.tsx'
 import { useNavigate } from '@/utils/navigation.ts'
 import { BreadcrumbList } from './BreadcrumbList.tsx'
 
-const OVERRIDES = {isBreadcrumb: true}
+const OVERRIDES = {isNestedSurface: true, isBreadcrumb: true}
 
 export const Breadcrumbs = ({block}: { block: Block }) => {
   const repo = useRepo()
