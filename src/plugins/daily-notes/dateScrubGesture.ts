@@ -180,11 +180,22 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
           singleByBlockId.set(block.id, {blockId: block.id, ...newFinger})
         } else if (single.id !== newFinger.id) {
           // Second finger arrived — promote to a multi-touch tracker.
-          const startMidX = (single.x + newFinger.x) / 2
-          const startMidY = (single.y + newFinger.y) / 2
+          // Look up the first finger's CURRENT position (not its
+          // stored touchstart snapshot). If finger A had drifted
+          // between landing and finger B arriving — common when the
+          // user was mid-scroll / repositioning — anchoring on the
+          // stale snapshot would put the midpoint somewhere finger A
+          // no longer is. The very next touchmove would then produce
+          // a fake `dx` against that stale anchor and falsely
+          // activate scrub.
+          const liveA = findTouchById(event.touches, single.id)
+          const ax = liveA?.clientX ?? single.x
+          const ay = liveA?.clientY ?? single.y
+          const startMidX = (ax + newFinger.x) / 2
+          const startMidY = (ay + newFinger.y) / 2
           multiByBlockId.set(block.id, {
             blockId: block.id,
-            a: {id: single.id, x: single.x, y: single.y},
+            a: {id: single.id, x: ax, y: ay},
             b: newFinger,
             startMidX,
             startMidY,
