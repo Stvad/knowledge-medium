@@ -1,5 +1,5 @@
 /**
- * Floating preview rendered while the long-press scrub gesture is
+ * Floating preview rendered while the two-finger scrub gesture is
  * active. Owns the runtime + adapter resolution + commit; the gesture
  * module (`dateScrubGesture.ts`) just feeds it day deltas.
  *
@@ -8,13 +8,16 @@
  * appears when the user has dragged far enough vertically that
  * releasing would revert.
  *
- * State strategy: gesture callbacks always go through functional
- * `setActive` so they read the latest scrub state through React's
- * updater rather than a snapshot closed over at registration time. The
- * `start` async-resolve patch is keyed on `blockId` so a stale resolve
- * from an aborted scrub can't poison the next one.
+ * State strategy: the live scrub lives in a mutable ref so the
+ * gesture callbacks can read the latest value across rapid touchmove
+ * events without going through React state batching. A parallel
+ * `setActive` mirrors the ref for rendering. Persisted-data writes
+ * (the adapter `setIso` commit) happen OUTSIDE any state-updater
+ * closure — Strict Mode / render-retry would otherwise re-run the
+ * updater and fire duplicate reschedule writes for a single gesture
+ * release.
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useRepo } from '@/context/repo.tsx'
@@ -81,8 +84,18 @@ export const DateScrubOverlay = () => {
   const runtime = useAppRuntime()
   const repo = useRepo()
   const [active, setActive] = useState<ActiveScrub | null>(null)
+  // Source of truth read by gesture callbacks. Kept in lockstep with
+  // React state via `writeActive` so callbacks observe the freshest
+  // value (touchend fires synchronously after touchmove without
+  // waiting for a render) AND renders still get a normal state path.
+  const activeRef = useRef<ActiveScrub | null>(null)
 
-  const dismiss = useCallback(() => setActive(null), [])
+  const writeActive = useCallback((next: ActiveScrub | null): void => {
+    activeRef.current = next
+    setActive(next)
+  }, [])
+
+  const dismiss = useCallback(() => writeActive(null), [writeActive])
 
   useEffect(() => {
     return registerScrubHandler({
@@ -95,7 +108,7 @@ export const DateScrubOverlay = () => {
         // immediately with a placeholder ISO, then patch once the
         // adapter resolves the real current ISO. Without this the
         // first ~50ms of the scrub flickers blank.
-        setActive({
+        writeActive({
           blockId: args.blockId,
           session,
           adapter,
@@ -129,59 +142,55 @@ export const DateScrubOverlay = () => {
           // the delta the user has already dragged through, so the
           // pill doesn't snap back to "today" once the real value
           // lands.
-          setActive(current => {
-            if (!current || current.session !== session) return current
-            return {
-              ...current,
-              initialIso: iso,
-              candidateIso: addDaysIso(iso, current.deltaDays),
-              resolved: true,
-            }
+          const current = activeRef.current
+          if (!current || current.session !== session) return
+          writeActive({
+            ...current,
+            initialIso: iso,
+            candidateIso: addDaysIso(iso, current.deltaDays),
+            resolved: true,
           })
         })()
         return true
       },
       update: (deltaDays: number, intentCancel: boolean) => {
-        setActive(current => {
-          if (!current) return current
-          const candidateIso = addDaysIso(current.initialIso, deltaDays)
-          if (
-            deltaDays === current.deltaDays &&
-            intentCancel === current.cancelIntent &&
-            candidateIso === current.candidateIso
-          ) return current
-          return {...current, deltaDays, candidateIso, cancelIntent: intentCancel}
-        })
+        const current = activeRef.current
+        if (!current) return
+        const candidateIso = addDaysIso(current.initialIso, deltaDays)
+        if (
+          deltaDays === current.deltaDays &&
+          intentCancel === current.cancelIntent &&
+          candidateIso === current.candidateIso
+        ) return
+        writeActive({...current, deltaDays, candidateIso, cancelIntent: intentCancel})
       },
       end: (commit: boolean) => {
-        // Perform the commit side-effect inside the updater so we read
-        // the freshest scrub state without a separate ref. Returning
-        // null clears the overlay in the same render the commit fires.
-        setActive(current => {
-          if (
-            current &&
-            commit &&
-            !current.cancelIntent &&
-            // Gate commit on the adapter having resolved the block's
-            // real ISO. Without this, a fast drag-and-release before
-            // `getCurrentIso` returns (especially likely for SRS
-            // cards, whose adapter does a DB read) would commit
-            // `today + delta` instead of `actual + delta`.
-            current.resolved &&
-            current.candidateIso !== current.initialIso
-          ) {
-            const block = repo.block(current.blockId)
-            void current.adapter.setIso(block, current.candidateIso).catch(error => {
-              console.error('[date-scrub] commit failed', error)
-            })
-          } else if (current && commit && !current.cancelIntent && !current.resolved) {
-            console.warn('[date-scrub] released before initial ISO resolved; skipped commit')
-          }
-          return null
+        // Snapshot the current scrub first, then clear state, then
+        // perform the persisted-data write OUTSIDE any setState
+        // updater. Doing the write inside a `setActive(current => …)`
+        // would expose it to Strict Mode / render-retry double-
+        // invocation, producing duplicate reschedules for one
+        // gesture release.
+        const current = activeRef.current
+        writeActive(null)
+        if (!current) return
+        if (!commit || current.cancelIntent) return
+        if (!current.resolved) {
+          // The user released before `getCurrentIso` resolved — we
+          // don't know the block's real date, so we can't safely
+          // compute `actual + delta`. Skipping is preferable to
+          // committing the wrong date.
+          console.warn('[date-scrub] released before initial ISO resolved; skipped commit')
+          return
+        }
+        if (current.candidateIso === current.initialIso) return
+        const block = repo.block(current.blockId)
+        void current.adapter.setIso(block, current.candidateIso).catch(error => {
+          console.error('[date-scrub] commit failed', error)
         })
       },
     })
-  }, [repo, runtime])
+  }, [repo, runtime, writeActive])
 
   // Esc to bail out from the keyboard (touch-laptop / debugging path).
   useEffect(() => {
