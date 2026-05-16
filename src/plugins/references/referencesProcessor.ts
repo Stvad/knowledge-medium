@@ -64,7 +64,7 @@ import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
   isDateAlias,
-} from '@/plugins/daily-notes'
+} from '@/plugins/daily-notes/dailyNotes.ts'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'

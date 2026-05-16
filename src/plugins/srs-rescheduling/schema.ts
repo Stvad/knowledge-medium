@@ -1,5 +1,10 @@
 import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
-import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes'
+// Sub-path import (not the barrel) — `schema.ts` is loaded from
+// `srsReschedulingDataExtension`, which is in the static-data graph.
+// Importing the barrel would force daily-notes/index.ts to evaluate
+// before React boots, dragging `@/extensions/blockInteraction` and
+// closing a load-time cycle through globalState → repoProvider.
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
 
 export const SRS_SM25_TYPE = 'srs-sm2.5'
 

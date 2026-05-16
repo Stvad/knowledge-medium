@@ -47,19 +47,14 @@ import {
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.ts'
+import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import { CalendarDays } from 'lucide-react'
-// Import the facet from the actions module directly to avoid pulling
-// swipe-quick-actions/index.ts (and through it `@/extensions/blockInteraction`)
-// into daily-notes' module graph. daily-notes/index.ts is loaded via
-// `referencesProcessor` from inside `staticDataExtensions`, and
-// `blockInteraction → globalState → repoProvider → staticDataExtensions`
-// closes a cycle that leaves the surface facets uninitialised on load.
 import {
   quickActionItemsFacet,
   type QuickActionItem,
-} from '@/plugins/swipe-quick-actions/actions.ts'
+} from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
 import {
   DATE_SHIFT_BACKWARD_DAY_ACTION_ID,
@@ -73,6 +68,15 @@ import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
 import { openDailyNotePicker } from './events.ts'
 import { todayDailyNoteLanding } from './landing.ts'
+import { blockDateAdapterFacet } from './blockDateAdapter.ts'
+import { referenceDateAdapter } from './referenceDateAdapter.ts'
+import { ReschedulePicker } from './ReschedulePicker.tsx'
+import { DateScrubOverlay } from './DateScrubOverlay.tsx'
+import { dateScrubContentSurface } from './dateScrubGesture.ts'
+import {
+  rescheduleBlockDateAction,
+  rescheduleQuickActionItem,
+} from './rescheduleAction.ts'
 export {
   APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
@@ -92,6 +96,16 @@ export const OPEN_DAILY_NOTE_PICKER_ACTION_ID = 'open_daily_note_picker'
 export const dailyNotePickerMount: AppMountContribution = {
   id: 'daily-notes.date-picker',
   component: DailyNotePicker,
+}
+
+export const reschedulePickerMount: AppMountContribution = {
+  id: 'daily-notes.reschedule-picker',
+  component: ReschedulePicker,
+}
+
+export const dateScrubOverlayMount: AppMountContribution = {
+  id: 'daily-notes.date-scrub-overlay',
+  component: DateScrubOverlay,
 }
 
 export const dailyNotePickerHeaderItem: HeaderItemContribution = {
@@ -136,6 +150,7 @@ export const dateShiftQuickActions: readonly QuickActionItem[] = [
   {actionId: DATE_SHIFT_BACKWARD_DAY_ACTION_ID, label: '-1d', row: 3},
   {actionId: DATE_SHIFT_FORWARD_DAY_ACTION_ID, label: '+1d', row: 3},
   {actionId: DATE_SHIFT_FORWARD_WEEK_ACTION_ID, label: '+1w', row: 3},
+  rescheduleQuickActionItem,
 ]
 
 // Factory rather than a const because the action handlers close over
@@ -155,15 +170,20 @@ export const dateShiftQuickActions: readonly QuickActionItem[] = [
 export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   dailyNotesDataExtension,
   appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
+  appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
+  appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),
   dailyNotesActions({repo}).map(action =>
     actionsFacet.of(action, {source: 'daily-notes'}),
   ),
   dateReferenceShiftActions.map(action =>
     actionsFacet.of(action, {source: 'daily-notes'}),
   ),
+  actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
   dateShiftQuickActions.map(item =>
     quickActionItemsFacet.of(item, {source: 'daily-notes'}),
   ),
+  blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
+  blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
   actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
   headerItemsFacet.of(dailyNotePickerHeaderItem, {
     source: 'daily-notes',
@@ -197,3 +217,21 @@ export {
   journalBlockId,
   todayIso,
 } from './dailyNotes.ts'
+export {
+  blockDateAdapterFacet,
+  pickBlockDateAdapter,
+  hasAnyBlockDateAdapter,
+  type BlockDateAdapter,
+} from './blockDateAdapter.ts'
+export { referenceDateAdapter } from './referenceDateAdapter.ts'
+export {
+  RESCHEDULE_BLOCK_DATE_ACTION_ID,
+  rescheduleBlockDateAction,
+  rescheduleQuickActionItem,
+} from './rescheduleAction.ts'
+export {
+  openReschedulePicker,
+  openReschedulePickerEvent,
+  type OpenReschedulePickerEventDetail,
+  type ReschedulePickerAnchorRect,
+} from './rescheduleEvents.ts'
