@@ -46,14 +46,16 @@ in the workspace but they can't see it. 2026-05-15.</small>
 <strong>TL;DR.</strong> Reference creation in a share stays local-first. The guest types
 <code>[[Foo]]</code>, the client creates a local block claiming alias "Foo" (just like today),
 and syncs. The <em>only</em> new thing is what happens if Postgres rejects the upload because
-the workspace already has a "Foo": the existing
-<a href="https://github.com/Stvad/knowledge-medium/blob/main/src/data/repo.ts#L1085"><code>ProcessorRejection('alias.collision')</code></a>
-machinery hands us the canonical block id, and we use that to (1) rewrite any references that
-pointed at the local block to point at canonical instead, and (2) remove the failed alias claim
-from the local block. The local block stays put with its children intact &mdash; it just stops
-claiming the alias. No pre-flight remote calls. The remote endpoint we <em>do</em> need is a
-small <code>peek_block(id)</code> for rendering chips when a reference target isn't in local view
-&mdash; same shape as resolving any cross-scope reference.
+the workspace already has a "Foo": a Phase-B-prereq server-side trigger raises a structured
+rejection that includes the <em>canonical</em> block id (the existing client-side
+<a href="https://github.com/Stvad/knowledge-medium/blob/main/src/data/internals/clientSchema.ts#L639"><code>alias_collision</code></a>
+trigger only knows the attempting id, and the client-side rejection builder can't find the
+canonical via local lookup because it lives outside the share — see &sect;5.1). With canonical
+in hand, the client (1) rewrites any references that pointed at the local block to point at
+canonical instead, and (2) removes the failed alias claim from the local block. The local block
+stays put with its children intact &mdash; it just stops claiming the alias. No pre-flight
+remote calls. A small <code>peek_block(id)</code> RPC handles rendering chips when a reference
+target isn't in local view &mdash; same shape as resolving any cross-scope reference.
 </div>
 
 <h2>1. What I got wrong in the design discussion</h2>
@@ -128,10 +130,11 @@ small <code>peek_block(id)</code> for rendering chips when a reference target is
 <tr><td><strong>Collision</strong></td>
     <td>A block with id <code>C</code> already claims "Foo" somewhere in the workspace, possibly
       outside the share recipient's view.</td>
-    <td><code>alias_collision</code> rejection, payload includes <code>C</code> (the canonical
-      id). The client's existing
-      <code>ProcessorRejection('alias.collision', meta)</code>
-      handler in <code>repo.ts:1085</code> receives this.</td></tr>
+    <td>Rejection emitted by the <em>server-side</em> alias trigger (Phase B prereq), shaped
+      so it carries <code>C</code> alongside the existing payload. See &sect;5.1 for why this
+      can't reuse the current client-side trigger as-is. Client receives a
+      <code>ProcessorRejection('alias.collision', { canonicalId: C, ... })</code> via the
+      existing rejection-handling path in <code>repo.ts:1085</code>.</td></tr>
 </table>
 
 <p>The non-collision case is the typical one for fresh page names &mdash; nothing more to discuss.
@@ -170,6 +173,73 @@ small <code>peek_block(id)</code> for rendering chips when a reference target is
   them collide with the workspace (we removed the alias claim; <code>L</code> is now just a
   share-local block with some references; <code>B</code>'s updated references_json is just an
   ordinary edit).</p>
+
+<h3>5.1 The rejection has to come from the server, with the canonical id in it</h3>
+
+<p>Important caveat: the reconciliation above depends on having <code>C</code> &mdash; the
+  canonical block id &mdash; in hand at T3. The <em>current</em> alias-collision machinery
+  doesn't supply it for share-mode collisions:</p>
+
+<ul class="tight">
+  <li>The SQLite trigger in
+    <a href="../src/data/internals/clientSchema.ts"><code>clientSchema.ts:639</code></a>
+    raises <code>'alias_collision' || hex(workspace_id) || hex(alias) || hex(attempted_block_id)</code>.
+    Three fields; the canonical/existing claimant is <em>not</em> in the payload.</li>
+  <li><code>Repo.buildAliasCollisionRejection</code> in <code>repo.ts</code> currently derives
+    <code>conflictingBlockId</code> by querying the local <code>block_aliases</code> table for
+    the alias. In share-mode collisions, <em>the canonical lives outside the local view</em>,
+    so the lookup returns null and <code>conflictingBlockId</code> is empty.</li>
+  <li>So as-is, a share-recipient's reconciliation has the alias name, knows the upload was
+    rejected, but doesn't have <code>C</code> to rewrite references to.</li>
+</ul>
+
+<p>The fix is part of the Phase B prereq (server-side alias uniqueness in Postgres). The new
+  Postgres-side trigger has full workspace visibility and can include canonical in the rejection:</p>
+
+<pre><code>-- inside a server-side BEFORE INSERT/UPDATE trigger on public.blocks
+-- that maintains public.block_aliases and enforces uniqueness:
+declare
+  v_canonical text;
+begin
+  if new_alias_for_row is not null then
+    select block_id into v_canonical
+    from public.block_aliases
+    where workspace_id = NEW.workspace_id
+      and alias = new_alias_for_row
+      and block_id &lt;&gt; NEW.id;
+
+    if v_canonical is not null then
+      -- Structured rejection. PowerSync surfaces this back to the client
+      -- via its upload-rejection channel; the client's existing alias-collision
+      -- handler is extended to read `canonical` from the payload (or from the
+      -- DETAIL field, depending on how PowerSync forwards Postgres errors).
+      raise exception 'alias_collision'
+        using errcode = 'unique_violation',
+              detail  = format('workspace=%s alias=%s attempted=%s canonical=%s',
+                               NEW.workspace_id, new_alias_for_row, NEW.id, v_canonical);
+    end if;
+  end if;
+  ...
+end;</code></pre>
+
+<p>Client changes that follow:</p>
+
+<ul class="tight">
+  <li>Extend the SQLite-side trigger to also include a canonical lookup (it works for local-only
+    collisions where canonical <em>is</em> in the local view; still null for share-mode cases
+    until the server's rejection comes back).</li>
+  <li>Extend <code>buildAliasCollisionRejection</code> to read canonical from the server's
+    rejection payload (parsing the structured DETAIL or whatever PowerSync surfaces).</li>
+  <li>Extend the rejection's <code>meta</code> shape to carry <code>canonicalId</code>
+    explicitly. The reconciliation in &sect;5 then has what it needs.</li>
+</ul>
+
+<div class="note">
+The existing client-side trigger isn't redundant &mdash; it catches local-only collisions
+optimistically, which is faster (no round-trip) and keeps the existing UX. It just can't see
+outside the share. The server-side trigger is the authoritative check for cross-share collisions
+and is what the share-recipient flow specifically relies on.
+</div>
 
 <h2>6. Timeline diagram</h2>
 

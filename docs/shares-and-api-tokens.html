@@ -735,11 +735,16 @@ end $$;</code></pre>
       policy check so the share-membership branch can match. (Workspace writers pass the policy
       regardless.)</td></tr>
 <tr><td><code>blocks AFTER INSERT</code></td>
-    <td>Fix-up: if the inserted row has any pre-existing children whose
-      <code>effective_share_ids</code> is empty, recompute the subtree from <code>NEW.id</code>.
-      Handles the PowerSync replay case where a child arrives before its parent &mdash; the child's
-      BEFORE trigger saw no parent and stamped <code>'{}'</code>; this AFTER trigger backfills once
-      the parent lands.</td></tr>
+    <td>Fix-up: if any pre-existing rows have <code>parent_id = NEW.id</code>, call
+      <code>recompute_share_ids_subtree(NEW.id)</code> <em>unconditionally</em>. Handles the
+      PowerSync replay case where a child arrived before its parent &mdash; the child's BEFORE
+      trigger saw no parent and stamped <code>'{}'</code>, OR the child already had a non-empty
+      array (e.g., from a <code>block_share_roots</code> row anchored at the child itself) but
+      is still missing inherited share ids that should arrive through the newly inserted parent.
+      The unconditional recompute is idempotent: if the existing arrays are already correct, the
+      <code>UPDATE … SET effective_share_ids = …</code> writes the same values and the
+      <code>block_share_coverage</code> sync resolves to a no-op (the existing rows match
+      <code>target_coverage</code>).</td></tr>
 <tr><td><code>blocks AFTER UPDATE OF parent_id</code></td>
     <td>Call <code>recompute_share_ids_subtree(NEW.id)</code>. The moved subtree gets reconsidered
       against its new ancestor chain.</td></tr>
