@@ -51,18 +51,9 @@ import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { parseAppHash } from '@/utils/routing.ts'
 import { CalendarDays } from 'lucide-react'
-import {
-  quickActionItemsFacet,
-  type QuickActionItem,
-} from '@/plugins/swipe-quick-actions'
+import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import { dailyNotesActions, resolveCurrentDailyNoteIso } from './actions.ts'
-import {
-  DATE_SHIFT_BACKWARD_DAY_ACTION_ID,
-  DATE_SHIFT_BACKWARD_WEEK_ACTION_ID,
-  DATE_SHIFT_FORWARD_DAY_ACTION_ID,
-  DATE_SHIFT_FORWARD_WEEK_ACTION_ID,
-  dateReferenceShiftActions,
-} from './dateShift.ts'
+import { dateReferenceShiftActions } from './dateShift.ts'
 import { dailyNotesDataExtension } from './dataExtension.ts'
 import { DailyNotePicker } from './DailyNotePicker.tsx'
 import { DailyNotePickerHeaderItem } from './HeaderItem.tsx'
@@ -136,23 +127,6 @@ export const openDailyNotePickerAction = (
   },
 })
 
-/** Date-shift quick actions on a dedicated row. Order matches a reading
- *  number line: oldest-first → newest-last. Each entry references its
- *  NORMAL_MODE shortcut action (the swipe menu prefers the first match,
- *  and the NORMAL_MODE variants are registered before the EDIT_MODE_CM
- *  ones in `dateReferenceShiftActions`). Visibility is gated by the
- *  action's `canRun` — the base predicate requires content with a single
- *  date reference (unwrapped), and the `srs-rescheduling` decorator
- *  extends it to SRS blocks with a resolvable next-review date
- *  (wrapped). */
-export const dateShiftQuickActions: readonly QuickActionItem[] = [
-  {actionId: DATE_SHIFT_BACKWARD_WEEK_ACTION_ID, label: '-1w', row: 3},
-  {actionId: DATE_SHIFT_BACKWARD_DAY_ACTION_ID, label: '-1d', row: 3},
-  {actionId: DATE_SHIFT_FORWARD_DAY_ACTION_ID, label: '+1d', row: 3},
-  {actionId: DATE_SHIFT_FORWARD_WEEK_ACTION_ID, label: '+1w', row: 3},
-  rescheduleQuickActionItem,
-]
-
 // Factory rather than a const because the action handlers close over
 // `repo` (they call `repo.activeWorkspaceId` and `getOrCreateDailyNote`
 // without going through React context). Same shape as
@@ -179,9 +153,7 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
     actionsFacet.of(action, {source: 'daily-notes'}),
   ),
   actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
-  dateShiftQuickActions.map(item =>
-    quickActionItemsFacet.of(item, {source: 'daily-notes'}),
-  ),
+  quickActionItemsFacet.of(rescheduleQuickActionItem, {source: 'daily-notes'}),
   blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
   blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
   actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),

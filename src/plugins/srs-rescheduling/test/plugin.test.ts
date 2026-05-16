@@ -117,12 +117,11 @@ describe('srsReschedulingPlugin', () => {
       'srs.reschedule.hard',
       'srs.reschedule.good',
       'srs.reschedule.easy',
-      'srs.reschedule.sooner',
       'srs.cut',
       'srs.paste',
     ])
-    expect(items.slice(0, 5).every(item => item.row === 2 && !item.overflow)).toBe(true)
-    expect(items.slice(5).every(item => item.overflow === true)).toBe(true)
+    expect(items.slice(0, 4).every(item => item.row === 2 && !item.overflow)).toBe(true)
+    expect(items.slice(4).every(item => item.overflow === true)).toBe(true)
 
     const actions = runtime.read(actionsFacet)
     const cutAction = actions.find(it => it.id === 'srs.cut')
