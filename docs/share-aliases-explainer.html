@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Share-mode aliases & references — explainer</title>
+<style>
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 1040px; margin: 2rem auto; padding: 0 1.25rem; color: #1f2328; }
+  h1 { font-size: 1.55rem; margin-bottom: .25rem; }
+  h2 { font-size: 1.15rem; margin-top: 2rem; border-bottom: 1px solid #d0d7de; padding-bottom: .25rem; }
+  h3 { font-size: 1.02rem; margin-top: 1.4rem; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
+  pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+        padding: .75rem .9rem; overflow-x: auto; }
+  code { background: #f6f8fa; padding: .1em .3em; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d0d7de; padding: .5rem .65rem; vertical-align: top; text-align: left; }
+  th { background: #f6f8fa; }
+  .tldr { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px;
+          padding: .85rem 1rem; margin: 1rem 0 1.5rem; }
+  .tldr strong { color: #0969da; }
+  .note { background: #fff8c5; border-left: 4px solid #d4a72c; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  .insight { background: #ddf4ff; border-left: 4px solid #0969da; padding: .6rem .85rem;
+             border-radius: 4px; margin: 1rem 0; }
+  .verdict { background: #dafbe1; border-left: 4px solid #1a7f37; padding: .75rem 1rem;
+             border-radius: 4px; margin: 1.5rem 0; }
+  .warn { background: #ffebe9; border-left: 4px solid #cf222e; padding: .6rem .85rem;
+          border-radius: 4px; margin: 1rem 0; }
+  small { color: #57606a; }
+  ul.tight li, ol.tight li { margin: .2rem 0; }
+  figure { margin: 1.25rem 0; }
+  figcaption { font-size: 12px; color: #57606a; text-align: center; margin-top: .35rem; }
+  svg.diagram { width: 100%; height: auto; display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+
+<h1>Share-mode aliases &amp; references — explainer</h1>
+<small>Companion to <a href="./shares-and-api-tokens.html">shares-and-api-tokens.html</a>.
+Focuses on what happens when a share recipient types <code>[[Foo]]</code> and Foo already exists
+in the workspace but they can't see it. 2026-05-15.</small>
+
+<div class="tldr">
+<strong>TL;DR.</strong> Reference creation in a share stays local-first. The guest types
+<code>[[Foo]]</code>, the client creates a local block claiming alias "Foo" (just like today),
+and syncs. The <em>only</em> new thing is what happens if Postgres rejects the upload because
+the workspace already has a "Foo": the existing
+<a href="https://github.com/Stvad/knowledge-medium/blob/main/src/data/repo.ts#L1085"><code>ProcessorRejection('alias.collision')</code></a>
+machinery hands us the canonical block id, and we use that to (1) rewrite any references that
+pointed at the local block to point at canonical instead, and (2) remove the failed alias claim
+from the local block. The local block stays put with its children intact &mdash; it just stops
+claiming the alias. No pre-flight remote calls. The remote endpoint we <em>do</em> need is a
+small <code>peek_block(id)</code> for rendering chips when a reference target isn't in local view
+&mdash; same shape as resolving any cross-scope reference.
+</div>
+
+<h2>1. What I got wrong in the design discussion</h2>
+
+<p>Earlier I described a flow with a <code>resolve_workspace_alias</code> RPC the client would
+  call <em>before</em> creating a reference. That breaks the local-first model: every keystroke
+  that produces a <code>[[name]]</code> would require a remote round-trip before the local block
+  exists.</p>
+
+<p>It's also unnecessary. The information that RPC would return (canonical id for an alias) is
+  exactly what the server already includes in the
+  <code>alias_collision</code> rejection payload when an optimistic local write collides at sync
+  time. So we can run the happy path entirely locally and only do remote work in the (rare)
+  collision case.</p>
+
+<p>The "annotation block" concept I introduced is also less novel than I made it sound. An
+  annotation is just <em>what a share-local block looks like after its alias claim got rejected
+  on sync</em>. It's a state of a normal block, not a new schema concept.</p>
+
+<h2>2. What's in the local DB for a share recipient</h2>
+
+<p>Recap the data architecture so the rest of the doc has the right vocabulary:</p>
+
+<ul class="tight">
+  <li>Each device has a local SQLite, populated by PowerSync streams keyed off the user's grants.</li>
+  <li>For a workspace member: the <code>workspace_data</code> stream gives them every non-deleted
+    block in their workspaces.</li>
+  <li>For a share recipient (whether human or API token): the <code>shared_blocks</code> stream
+    gives them only the blocks their share covers &mdash; the subtree (or the workspace, if it's
+    a workspace-scope share).</li>
+  <li>The client maintains a derived <code>block_aliases(workspace_id, alias, block_id)</code>
+    table locally, updated by triggers as blocks change. <strong>It only contains aliases of
+    blocks present in the local DB.</strong></li>
+</ul>
+
+<p>So a share recipient's local alias index sees only aliases of blocks <em>inside their share</em>.
+  Aliases anywhere else in the workspace are invisible to them.</p>
+
+<h2>3. The optimistic flow for <code>[[Foo]]</code></h2>
+
+<p>When the share recipient types <code>[[Foo]]</code> in some block <code>B</code> inside the
+  share, the client does what it does today:</p>
+
+<ol class="tight">
+  <li>Look up <code>"Foo"</code> in the local <code>block_aliases</code> table.</li>
+  <li>If found, set <code>B.references_json</code> to include that local block's id. Done.</li>
+  <li>If not found:
+    <ul class="tight">
+      <li>Create a new block locally: id <code>L</code>, alias <code>"Foo"</code>, parent =
+        wherever new pages go in the share (the share root, by default).</li>
+      <li>Set <code>B.references_json</code> to include <code>L</code>.</li>
+    </ul>
+  </li>
+  <li>Queue both writes for sync.</li>
+</ol>
+
+<p>This is identical to the workspace-member flow. No new code path on the "type and create" side.</p>
+
+<h2>4. What can go wrong at sync time</h2>
+
+<p>The local block <code>L</code> uploads to Postgres. The Postgres-side
+  <code>block_aliases (workspace_id, alias) UNIQUE</code> constraint (the Phase B prereq from
+  the main doc) checks for a collision in the workspace's namespace. Two outcomes:</p>
+
+<table>
+<tr><th>Outcome</th><th>Meaning</th><th>Server response</th></tr>
+<tr><td><strong>No collision</strong></td>
+    <td>No block in the workspace claims "Foo" anywhere.</td>
+    <td>Upload succeeds. <code>L</code> becomes the canonical "Foo" of the workspace. Whether
+      it's currently inside or outside any share doesn't matter &mdash; it's the only claimant.
+      Done.</td></tr>
+<tr><td><strong>Collision</strong></td>
+    <td>A block with id <code>C</code> already claims "Foo" somewhere in the workspace, possibly
+      outside the share recipient's view.</td>
+    <td><code>alias_collision</code> rejection, payload includes <code>C</code> (the canonical
+      id). The client's existing
+      <code>ProcessorRejection('alias.collision', meta)</code>
+      handler in <code>repo.ts:1085</code> receives this.</td></tr>
+</table>
+
+<p>The non-collision case is the typical one for fresh page names &mdash; nothing more to discuss.
+  Everything below is about handling collisions.</p>
+
+<h2>5. Reconciliation on collision (this is Case C)</h2>
+
+<p>The rejection tells the client that <code>L</code> can't claim the alias because canonical
+  <code>C</code> already does. The client's job: get to a consistent state where:</p>
+
+<ul class="tight">
+  <li>No local block claims <code>"Foo"</code> as an alias (the canonical does, and we can't
+    duplicate it).</li>
+  <li>Any references that pointed at <code>L</code> instead point at <code>C</code>.</li>
+  <li>The user's typed work (the block <code>L</code> itself, any children they typed under it)
+    is preserved.</li>
+</ul>
+
+<p>The reconciliation has three steps:</p>
+
+<ol class="tight">
+  <li><strong>Demote <code>L</code> from canonical to annotation.</strong>
+    Remove the <code>alias = "Foo"</code> entry from <code>L.properties_json</code>. The block
+    keeps its id, its other content, and its children. It's now a normal share-local block.</li>
+  <li><strong>Add a reference from <code>L</code> to canonical <code>C</code>.</strong>
+    Append <code>C</code> to <code>L.references_json</code>. <code>L</code> is now an "annotation
+    of C" &mdash; a share-local outline node whose content is associated with the workspace's
+    canonical Foo.</li>
+  <li><strong>Rewrite references that pointed at <code>L</code> to point at <code>C</code>.</strong>
+    In particular, <code>B.references_json</code> entry for <code>L</code> gets replaced with
+    <code>C</code>. (Other blocks in the share that also reference <code>L</code> get the same
+    rewrite.) The references now resolve to canonical, which is the right answer semantically.</li>
+</ol>
+
+<p>All three steps are local writes against the local SQLite. They're enqueued for sync. None of
+  them collide with the workspace (we removed the alias claim; <code>L</code> is now just a
+  share-local block with some references; <code>B</code>'s updated references_json is just an
+  ordinary edit).</p>
+
+<h2>6. Timeline diagram</h2>
+
+<figure>
+<svg viewBox="0 0 980 460" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="Timeline showing local and server state through optimistic create, sync collision, and reconciliation."
+     class="diagram" style="max-width:980px;">
+  <defs>
+    <marker id="aMrk" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <polygon points="0 0, 9 4.5, 0 9" fill="#0969da"/>
+    </marker>
+  </defs>
+  <style>
+    .t-row { fill: #f6f8fa; stroke: #57606a; stroke-width: 1.2; }
+    .t-srv { fill: #fff8c5; stroke: #d4a72c; stroke-width: 1.2; }
+    .t-loc { fill: #ddf4ff; stroke: #0969da; stroke-width: 1.2; }
+    .t-ann { fill: #dafbe1; stroke: #1a7f37; stroke-width: 1.2; }
+    .t-msg { stroke: #0969da; stroke-width: 1.4; fill: none; marker-end: url(#aMrk); }
+    .t-lbl { font: 600 12px -apple-system, sans-serif; fill: #1f2328; }
+    .t-mono{ font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #1f2328; }
+    .t-sub { font: 10.5px -apple-system, sans-serif; fill: #57606a; }
+    .t-time{ font: 600 12px -apple-system, sans-serif; fill: #0969da; }
+  </style>
+  <!-- Column headers -->
+  <rect class="t-loc" x="20"  y="20" width="220" height="32" rx="6"/>
+  <text x="130" y="40" text-anchor="middle" class="t-lbl">Local DB (guest's device)</text>
+  <rect class="t-srv" x="260" y="20" width="220" height="32" rx="6"/>
+  <text x="370" y="40" text-anchor="middle" class="t-lbl">PowerSync upload</text>
+  <rect class="t-srv" x="500" y="20" width="220" height="32" rx="6"/>
+  <text x="610" y="40" text-anchor="middle" class="t-lbl">Postgres (server)</text>
+  <rect class="t-loc" x="740" y="20" width="220" height="32" rx="6"/>
+  <text x="850" y="40" text-anchor="middle" class="t-lbl">Local DB (after reconcile)</text>
+  <!-- T0 -->
+  <text x="20" y="78" class="t-time">T0  Initial state</text>
+  <rect class="t-row" x="20"  y="84" width="220" height="58" rx="4"/>
+  <text x="30" y="100" class="t-mono">B: { content: "..." }</text>
+  <text x="30" y="116" class="t-mono">refs_json: []</text>
+  <text x="30" y="132" class="t-sub">(no local block aliased "Foo")</text>
+  <rect class="t-row" x="500" y="84" width="220" height="58" rx="4"/>
+  <text x="510" y="100" class="t-mono">C: { alias: "Foo", ... }</text>
+  <text x="510" y="116" class="t-mono">(outside guest's share)</text>
+  <text x="510" y="132" class="t-sub">canonical exists, guest can't see it</text>
+  <!-- T1 -->
+  <text x="20" y="170" class="t-time">T1  Guest types [[Foo]] in B</text>
+  <rect class="t-row" x="20"  y="176" width="220" height="74" rx="4"/>
+  <text x="30" y="192" class="t-mono">B: { content: "…[[Foo]]…" }</text>
+  <text x="30" y="208" class="t-mono">refs_json: [L]</text>
+  <text x="30" y="224" class="t-mono">L: { alias: "Foo", ... }</text>
+  <text x="30" y="240" class="t-sub">L created locally, claims alias</text>
+  <rect class="t-row" x="500" y="176" width="220" height="74" rx="4"/>
+  <text x="510" y="192" class="t-mono">C: { alias: "Foo", ... }</text>
+  <text x="510" y="224" class="t-sub">unchanged</text>
+  <!-- T2 -->
+  <text x="20" y="270" class="t-time">T2  Sync attempts to upload L</text>
+  <path class="t-msg" d="M 240 296 L 480 296"/>
+  <text x="360" y="290" text-anchor="middle" class="t-mono">INSERT L (alias = "Foo")</text>
+  <path class="t-msg" d="M 480 322 L 245 322" marker-end="url(#aMrk)"/>
+  <text x="362" y="316" text-anchor="middle" class="t-mono">REJECT: alias_collision { canonical = C }</text>
+  <text x="362" y="338" text-anchor="middle" class="t-sub">block_aliases UNIQUE(workspace_id, alias) fires</text>
+  <!-- T3 -->
+  <text x="20" y="368" class="t-time">T3  Client reconciles locally</text>
+  <rect class="t-row" x="740" y="374" width="220" height="80" rx="4"/>
+  <text x="750" y="390" class="t-mono">B: { content: "…[[Foo]]…" }</text>
+  <text x="750" y="406" class="t-mono">refs_json: [C]   ← rewritten</text>
+  <text x="750" y="422" class="t-mono">L: { (no alias) }</text>
+  <text x="750" y="438" class="t-mono">    refs_json: [C]   ← annotates C</text>
+</svg>
+<figcaption>Local-first happy-path is on the left. Sync hits the alias-uniqueness constraint
+  server-side at T2; the rejection carries the canonical id; the client rewrites local state at
+  T3 entirely from local memory using the value in the rejection payload.</figcaption>
+</figure>
+
+<h2>7. What does <code>references_json</code> end up pointing to</h2>
+
+<p>This was the second part of your question. The answer changes across the timeline:</p>
+
+<table>
+<tr><th>When</th><th><code>B.references_json</code></th><th><code>L.references_json</code></th></tr>
+<tr><td>T1, just after typing</td>
+    <td><code>[L]</code> &mdash; points at the local block we just made</td>
+    <td><code>[]</code></td></tr>
+<tr><td>T3, after reconcile</td>
+    <td><code>[C]</code> &mdash; rewritten to canonical</td>
+    <td><code>[C]</code> &mdash; L now annotates C</td></tr>
+</table>
+
+<p>So <strong>references in the share converge to canonical block ids</strong>, even though the
+  client never had to ask the server "what's the canonical id for this alias" up front. The
+  collision rejection is what conveys the canonical id to the client, lazily.</p>
+
+<p>Why is this important? Because the "append from share into the main workspace" flow requires
+  that references inside the share already resolve to the right workspace blocks. If the owner
+  promotes a guest-authored subtree out of the share, the references inside it work without
+  rewriting.</p>
+
+<h2>8. What the user sees</h2>
+
+<p>From the guest's perspective:</p>
+
+<ol class="tight">
+  <li>They type <code>[[Foo]]</code>. <code>L</code> appears locally with its label "Foo." They
+    can outline under it (Tab/Enter). Their children land under <code>L</code>'s id, share-local.</li>
+  <li>Sync runs in the background. If no collision, nothing changes visually.</li>
+  <li>If collision, the renderer's view of <code>L</code> updates: where before it looked like
+    a normal block named "Foo," now it shows with an indicator that there's a workspace-canonical
+    "Foo" outside their view (e.g., a chip "Foo &middot; referenced from workspace"). Their
+    children are still there, still editable, attached to <code>L</code>.</li>
+  <li>The <code>[[Foo]]</code> reference in <code>B</code> still renders as "Foo," but clicking
+    it now leads them to <code>L</code> (the annotation in their share) rather than canonical
+    (which they can't reach). The chip can offer "Foo (workspace) &middot; no access" as a
+    secondary affordance.</li>
+</ol>
+
+<p>The key UX property: <strong>no work is lost on collision</strong>. The local block stays,
+  its children stay, the reference still resolves to a renderable thing.</p>
+
+<h2>9. The remote endpoint we still need (and the one we don't)</h2>
+
+<h3>Needed: <code>peek_block(id) → {exists, accessible, label}</code></h3>
+
+<p>For the renderer to display "Foo &middot; referenced from workspace" on the chip after
+  reconciliation, it needs to know <em>something</em> about canonical <code>C</code>: at
+  minimum that <code>C</code> exists and isn't accessible. Optionally a label.</p>
+
+<p>This is a small SECURITY DEFINER RPC. It bypasses RLS for the existence/accessibility check,
+  but only returns metadata derivable without exposing content (e.g., the alias). It's called
+  lazily by the renderer when it encounters a reference id not present in the local DB. Results
+  can be cached per session.</p>
+
+<p>This is the <em>same</em> RPC needed for cross-workspace references (a separate but related
+  feature). One helper, two use cases.</p>
+
+<h3>Not needed: a pre-flight <code>resolve_workspace_alias</code></h3>
+
+<p>I described this earlier. It's redundant. The information it would convey (canonical id for
+  an alias) is already in the <code>alias_collision</code> rejection. Adding a pre-flight RPC
+  would mean every <code>[[Foo]]</code> keystroke costs a remote round-trip on the synchronous
+  write path, which is exactly what the local-first model was designed to avoid.</p>
+
+<p>An <em>optional</em> background-prefetch of "aliases in this workspace I might want to
+  reference" could exist as a perf tweak (warm a local hint table), but it's not part of the
+  correctness model.</p>
+
+<h2>10. Putting it all together</h2>
+
+<div class="verdict">
+The model that keeps the architecture local-first while supporting subtree shares with workspace-
+canonical aliases:
+<ol class="tight">
+  <li>Type-and-create stays local, with optimistic alias claim.</li>
+  <li>Server-side <code>block_aliases UNIQUE(workspace_id, alias)</code> is the source of truth
+    for uniqueness. On collision, it rejects loudly.</li>
+  <li>The rejection's payload carries the canonical id.</li>
+  <li>The client demotes its local block to an annotation (drops the alias claim, references
+    canonical) and rewrites in-share references to canonical. All locally.</li>
+  <li>Subsequent rendering uses <code>peek_block</code> to display references to inaccessible
+    canonicals.</li>
+</ol>
+The "annotation block" is just the post-collision state of an ordinary block. No new schema
+concept, no synchronous remote calls in the typing path.
+</div>
+
+<h2>11. Open questions worth being explicit about</h2>
+
+<ol class="tight">
+  <li><strong>Collision-handling latency.</strong> Between T1 (type) and T3 (reconcile), the
+    local state has <code>L</code> claiming "Foo" and <code>B</code> referencing <code>L</code>.
+    If the user types more references to "Foo" in this window, those too point at <code>L</code>.
+    The reconciliation step rewrites <em>all</em> of them at once. Manageable, but tests should
+    cover the "five quick refs before sync completes" case.</li>
+  <li><strong>Concurrent shares both first-creating "Foo".</strong> Two share recipients in
+    different shares both type <code>[[Foo]]</code> at the same time, neither sees any canonical
+    yet. Both create local <code>L1</code> and <code>L2</code>. Both upload. First one wins;
+    second gets <code>alias_collision</code> with the winner's id as canonical. Self-healing via
+    the same reconciliation.</li>
+  <li><strong>What does <code>peek_block</code> reveal?</strong> Returning the alias as
+    <code>label</code> is harmless (the guest already typed it). Returning content snippets is
+    a leak; default to alias-only.</li>
+  <li><strong>What if the guest deletes their annotation block <code>L</code>?</strong>
+    Annotations are normal blocks; delete cascades to children. References to <code>L</code>
+    elsewhere become stale (point to a deleted block). After T3, though, references should
+    point to <code>C</code> &mdash; not <code>L</code> &mdash; so deletion of <code>L</code>
+    affects only its children, not other refs.</li>
+  <li><strong>Aliases on non-share-leaf blocks.</strong> The flow above describes
+    <em>creating</em> an alias via reference auto-create. The guest could also try to alias an
+    existing block in the share (set its properties_json to include an alias). Same code path:
+    optimistic local claim, server-side uniqueness check, collision handled identically. No new
+    machinery.</li>
+</ol>
+
+</body>
+</html>
