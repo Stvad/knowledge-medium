@@ -63,6 +63,12 @@ interface ActiveScrub {
   deltaDays: number
   candidateIso: string
   cancelIntent: boolean
+  /** False until `getCurrentIso` resolves and `initialIso/candidateIso`
+   *  reflect the block's real date. Commit is gated on this — without
+   *  it a fast drag-and-release on an SRS card (where the read does a
+   *  daily-note row load) would commit `today + delta` instead of
+   *  `actual + delta`. */
+  resolved: boolean
 }
 
 /** Monotonic gesture counter — module-scoped so it survives any
@@ -99,6 +105,7 @@ export const DateScrubOverlay = () => {
           deltaDays: 0,
           candidateIso: fallback,
           cancelIntent: false,
+          resolved: false,
         })
 
         void (async () => {
@@ -117,6 +124,7 @@ export const DateScrubOverlay = () => {
               ...current,
               initialIso: iso,
               candidateIso: addDaysIso(iso, current.deltaDays),
+              resolved: true,
             }
           })
         })()
@@ -143,12 +151,20 @@ export const DateScrubOverlay = () => {
             current &&
             commit &&
             !current.cancelIntent &&
+            // Gate commit on the adapter having resolved the block's
+            // real ISO. Without this, a fast drag-and-release before
+            // `getCurrentIso` returns (especially likely for SRS
+            // cards, whose adapter does a DB read) would commit
+            // `today + delta` instead of `actual + delta`.
+            current.resolved &&
             current.candidateIso !== current.initialIso
           ) {
             const block = repo.block(current.blockId)
             void current.adapter.setIso(block, current.candidateIso).catch(error => {
               console.error('[date-scrub] commit failed', error)
             })
+          } else if (current && commit && !current.cancelIntent && !current.resolved) {
+            console.warn('[date-scrub] released before initial ISO resolved; skipped commit')
           }
           return null
         })
@@ -193,13 +209,19 @@ export const DateScrubOverlay = () => {
         }`}
       >
         <div className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          {active.cancelIntent ? 'Release to cancel' : 'Scrub date'}
+          {active.cancelIntent
+            ? 'Release to cancel'
+            : active.resolved
+              ? 'Scrub date'
+              : 'Loading current date…'}
         </div>
-        <div className="text-lg font-semibold leading-none">
+        <div className={`text-lg font-semibold leading-none ${active.resolved ? '' : 'opacity-60'}`}>
           {formatPretty(active.candidateIso)}
         </div>
         <div className="text-xs text-muted-foreground">
-          {offsetLabel(active.deltaDays, active.candidateIso)}
+          {active.resolved
+            ? offsetLabel(active.deltaDays, active.candidateIso)
+            : 'release will cancel'}
         </div>
       </div>
     </div>,

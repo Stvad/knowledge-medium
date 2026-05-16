@@ -225,6 +225,13 @@ export const ReschedulePicker = () => {
       if (!ok) {
         console.warn(`[reschedule] adapter ${session.adapter.id} refused write`)
       }
+    } catch (error) {
+      // Callers fire commit with `void commit(...)`, so a throw here
+      // would surface only as an unhandled rejection while the sheet
+      // dismisses silently. Catch + log so the failure is at least
+      // visible to anyone with the console open. (No toast plumbing
+      // in scope for the prototype.)
+      console.error(`[reschedule] adapter ${session.adapter.id} threw on write`, error)
     } finally {
       setPending(false)
       dismiss()
