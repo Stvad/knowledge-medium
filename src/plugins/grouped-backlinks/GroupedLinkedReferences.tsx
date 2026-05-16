@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react'
-import { Filter } from 'lucide-react'
+import { Filter, Pause, Play } from 'lucide-react'
 import type { BlockRendererProps } from '@/types.ts'
 import { Block } from '@/data/block'
 import { useManyParents, useWorkspaceId } from '@/hooks/block.ts'
@@ -17,7 +17,14 @@ import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import type { GroupedBacklinkGroup } from './grouping.ts'
 import { useGroupedBacklinksConfig } from './useGroupedBacklinksConfig.ts'
 import { useGroupedBacklinks } from './useGroupedBacklinks.ts'
+import type { GroupedBacklinksResult } from './query.ts'
 import { groupedBacklinksGroupHeaderControlsFacet } from './facet.ts'
+
+interface GroupedBacklinksSnapshot {
+  unfilteredBacklinks: Block[]
+  grouped: GroupedBacklinksResult
+  initialParentsByBacklinkId: ReadonlyMap<string, Block[]>
+}
 
 const GroupItems = ({
   targetBlock,
@@ -154,6 +161,8 @@ function GroupedLinkedReferencesInner({
   const [open, setOpen] = useState(true)
   const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
   const filtersOpen = filtersOpenOverride ?? filterActive
+  const [liveUpdates, setLiveUpdates] = useState(true)
+  const [snapshot, setSnapshot] = useState<GroupedBacklinksSnapshot | null>(null)
 
   const setFilter = useCallback((next: BacklinksFilter) => {
     setStoredFilter(next)
@@ -163,11 +172,23 @@ function GroupedLinkedReferencesInner({
     navigateFromGlobalCommand({blockId: defaultFilterConfigBlock.id, workspaceId})
   }, [defaultFilterConfigBlock.id, navigateFromGlobalCommand, workspaceId])
 
-  if (unfilteredBacklinks.length === 0) return null
+  const toggleLiveUpdates = useCallback(() => {
+    if (liveUpdates) {
+      setSnapshot({unfilteredBacklinks, grouped, initialParentsByBacklinkId})
+      setLiveUpdates(false)
+    } else {
+      setSnapshot(null)
+      setLiveUpdates(true)
+    }
+  }, [liveUpdates, unfilteredBacklinks, grouped, initialParentsByBacklinkId])
+
+  const displayed = snapshot ?? {unfilteredBacklinks, grouped, initialParentsByBacklinkId}
+
+  if (displayed.unfilteredBacklinks.length === 0) return null
 
   const countLabel = filterActive
-    ? `${grouped.total} / ${unfilteredBacklinks.length}`
-    : String(grouped.total)
+    ? `${displayed.grouped.total} / ${displayed.unfilteredBacklinks.length}`
+    : String(displayed.grouped.total)
 
   return (
     <div className="mt-4 pt-3 border-t border-border">
@@ -181,18 +202,32 @@ function GroupedLinkedReferencesInner({
           <span>Grouped References</span>
           <span className="text-xs text-muted-foreground/70">{countLabel}</span>
         </button>
-        <button
-          type="button"
-          onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
-          className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-            filterActive ? 'bg-accent text-foreground' : ''
-          }`}
-          title="Filters"
-          aria-label="Filters"
-          aria-pressed={filtersOpen}
-        >
-          <Filter className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={toggleLiveUpdates}
+            className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+              !liveUpdates ? 'bg-accent text-foreground' : ''
+            }`}
+            title={liveUpdates ? 'Pause live updates' : 'Resume live updates'}
+            aria-label={liveUpdates ? 'Pause live updates' : 'Resume live updates'}
+            aria-pressed={!liveUpdates}
+          >
+            {liveUpdates ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
+            className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+              filterActive ? 'bg-accent text-foreground' : ''
+            }`}
+            title="Filters"
+            aria-label="Filters"
+            aria-pressed={filtersOpen}
+          >
+            <Filter className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       {open && (
@@ -208,19 +243,19 @@ function GroupedLinkedReferencesInner({
               onChange={setFilter}
             />
           )}
-          {grouped.total === 0 ? (
+          {displayed.grouped.total === 0 ? (
             <div className="mt-3 text-xs text-muted-foreground">
               No matching references.
             </div>
           ) : (
             <div className="mt-3 flex flex-col gap-4">
-              {grouped.groups.map(group => (
+              {displayed.grouped.groups.map(group => (
                 <GroupedReferencesGroup
                   key={group.groupId}
                   targetBlock={block}
                   workspaceId={workspaceId}
                   group={group}
-                  parentsBySourceId={initialParentsByBacklinkId}
+                  parentsBySourceId={displayed.initialParentsByBacklinkId}
                 />
               ))}
             </div>
