@@ -9,7 +9,7 @@ import { ActionContextTypes } from '@/shortcuts/types.ts'
  * This is like this to avoid re-rending on context changing bc of new object creation
  * Plausibly over-optimizing, but wanted to keep an example/reminder on this.
  */
-const CONTEXT_OVERRIDE = {topLevel: false}
+const CONTEXT_OVERRIDE = {layoutBoundary: false}
 
 export function TopLevelRenderer({block}: BlockRendererProps) {
   /**
@@ -40,5 +40,5 @@ export function TopLevelRenderer({block}: BlockRendererProps) {
   )
 }
 
-TopLevelRenderer.canRender = ({context}: BlockRendererProps) => !!(context && context.topLevel && !context.panelId)
+TopLevelRenderer.canRender = ({context}: BlockRendererProps) => !!(context && context.layoutBoundary && !context.panelId)
 TopLevelRenderer.priority = () => 20

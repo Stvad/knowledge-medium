@@ -71,7 +71,7 @@ function PanelSlotView({
 
   return (
     <NestedBlockContextProvider
-      overrides={{topLevel: true, panelId: slot.id, canClosePanel, stackedPanel: stacked}}
+      overrides={{layoutBoundary: true, panelId: slot.id, canClosePanel, stackedPanel: stacked}}
       key={slot.id}
     >
       <div
@@ -175,5 +175,5 @@ export function LayoutRenderer({block}: BlockRendererProps) {
 }
 
 LayoutRenderer.canRender = ({context}: BlockRendererProps) =>
-  !!(context && !context.topLevel && !context.panelId)
+  !!(context && !context.layoutBoundary && !context.panelId)
 LayoutRenderer.priority = () => 20

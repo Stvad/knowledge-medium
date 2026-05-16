@@ -40,6 +40,7 @@ import {
 import { useBlockContext } from '@/context/block.tsx'
 import { isElementProperlyVisible } from '@/utils/dom.ts'
 import { useHasChildren, usePropertyValue } from '@/hooks/block.ts'
+import { useIsFocalRender } from '@/hooks/useIsFocalRender.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import {
   blockChildrenFooterFacet,
@@ -242,8 +243,7 @@ export const DefaultBlockLayout: BlockLayout = ({
 }) => {
   const inFocus = useInFocus(block.id)
   const isSelected = useIsSelected(block.id)
-  const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
-  const isTopLevel = topLevelBlockId === block.id
+  const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
 
   return (
@@ -292,7 +292,7 @@ export function DefaultBlockRenderer(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
-  const isTopLevel = block.id === topLevelBlockId
+  const isTopLevel = useIsFocalRender(block)
 
   // Scroll-into-view on focus (effect below). The `data-editing` attr
   // on shellProps wants `inEditMode`. Other reactive state is read by
@@ -485,11 +485,11 @@ export function DefaultBlockRenderer(
   // because mobile screens don't have desktop's horizontal real estate).
   const ControlsSlot = useMemo<ComponentType>(() => {
     return function BlockControlsSlot() {
-      const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
+      const isFocal = useIsFocalRender(block)
       const isMobile = useIsMobile()
       const hasChildren = useHasChildren(block)
 
-      if (topLevelBlockId === block.id) return null
+      if (isFocal) return null
 
       return (
         <>

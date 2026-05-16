@@ -64,7 +64,7 @@ export function useShortcutSurfaceActivations(
       uiStateBlock,
       types,
       topLevelBlockId,
-      isTopLevel: block.id === topLevelBlockId,
+      isTopLevel: block.id === topLevelBlockId && !blockContext.isNestedSurface,
       blockContext,
       inFocus,
       inEditMode,

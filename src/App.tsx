@@ -373,7 +373,7 @@ const App = () => {
   }, [activeRole, repo])
 
   return (
-    <BlockContextProvider initialValue={{topLevel: true, safeMode}}>
+    <BlockContextProvider initialValue={{layoutBoundary: true, safeMode}}>
       <AppRuntimeProvider safeMode={safeMode}>
         <BlockComponent blockId={layoutSessionBlock.id}/>
       </AppRuntimeProvider>

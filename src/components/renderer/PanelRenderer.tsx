@@ -176,7 +176,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
         className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none'}
         onScroll={scheduleScrollTopWrite}
       >
-        <NestedBlockContextProvider overrides={{topLevel: false}}>
+        <NestedBlockContextProvider overrides={{layoutBoundary: false}}>
           <BlockComponent blockId={topLevelBlockId}/>
         </NestedBlockContextProvider>
       </div>
@@ -195,5 +195,5 @@ export function PanelRenderer({block}: BlockRendererProps) {
   )
 }
 
-PanelRenderer.canRender = ({context}: BlockRendererProps) => !!(context?.topLevel && context.panelId)
+PanelRenderer.canRender = ({context}: BlockRendererProps) => !!(context?.layoutBoundary && context.panelId)
 PanelRenderer.priority = () => 5
