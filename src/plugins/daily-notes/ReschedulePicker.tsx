@@ -116,7 +116,20 @@ export const ReschedulePicker = () => {
       const requestId = ++openRequestIdRef.current
 
       void (async () => {
-        const initialIso = (await adapter.getCurrentIso(block)) ?? todayIso()
+        let resolvedIso: string | null
+        try {
+          resolvedIso = await adapter.getCurrentIso(block)
+        } catch (error) {
+          // Fire-and-forget would surface only as an unhandled
+          // rejection AND leave the picker hidden (session never set,
+          // user thinks the tap did nothing). Catch + log + fall back
+          // to "today" so the sheet opens; the user can still pick
+          // their date and the eventual `setIso` will either succeed
+          // or report its own error in commit.
+          console.error(`[reschedule] adapter ${adapter.id} read failed`, error)
+          resolvedIso = null
+        }
+        const initialIso = resolvedIso ?? todayIso()
         // Drop the result if a newer open (or a dismiss) has bumped
         // the counter — without this, two fast opens against blocks
         // with different `getCurrentIso` latencies can land in the

@@ -109,7 +109,18 @@ export const DateScrubOverlay = () => {
         })
 
         void (async () => {
-          const iso = await adapter.getCurrentIso(args.block)
+          let iso: string | null
+          try {
+            iso = await adapter.getCurrentIso(args.block)
+          } catch (error) {
+            // Fire-and-forget would surface only as an unhandled
+            // rejection. Catch + log so the failure is visible; leave
+            // `resolved` false so the commit gate in `end` skips the
+            // write (no-op rather than commit against a placeholder
+            // `today`).
+            console.error('[date-scrub] adapter read failed', error)
+            return
+          }
           if (!iso) return
           // Patch only the still-active scrub for THIS session — a
           // quick tap that ended before the adapter resolved, or a
