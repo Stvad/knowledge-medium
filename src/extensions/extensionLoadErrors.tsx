@@ -5,6 +5,7 @@ import {
   useMemo,
   useSyncExternalStore,
 } from 'react'
+import { CallbackSet } from '@/utils/callbackSet'
 
 export type ExtensionLoadErrorsMap = ReadonlyMap<string, Error>
 
@@ -15,20 +16,17 @@ export type ExtensionLoadErrorsMap = ReadonlyMap<string, Error>
  */
 export class ExtensionLoadErrorStore {
   private errors: ReadonlyMap<string, Error> = new Map()
-  private readonly listeners = new Set<() => void>()
+  private readonly listeners = new CallbackSet<[]>('ExtensionLoadErrors')
 
   getSnapshot = (): ExtensionLoadErrorsMap => this.errors
 
-  subscribe = (listener: () => void): (() => void) => {
-    this.listeners.add(listener)
-    return () => this.listeners.delete(listener)
-  }
+  subscribe = (listener: () => void): (() => void) => this.listeners.add(listener)
 
   reportError = (blockId: string, error: Error): void => {
     const next = new Map(this.errors)
     next.set(blockId, error)
     this.errors = next
-    this.notify()
+    this.listeners.notify()
   }
 
   clearError = (blockId: string): void => {
@@ -36,17 +34,13 @@ export class ExtensionLoadErrorStore {
     const next = new Map(this.errors)
     next.delete(blockId)
     this.errors = next
-    this.notify()
+    this.listeners.notify()
   }
 
   reset = (): void => {
     if (this.errors.size === 0) return
     this.errors = new Map()
-    this.notify()
-  }
-
-  private notify(): void {
-    for (const listener of this.listeners) listener()
+    this.listeners.notify()
   }
 }
 

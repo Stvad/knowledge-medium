@@ -17,6 +17,7 @@ import {
   type LayoutSlot,
 } from '@/utils/routing'
 import { panelHistory } from '@/utils/panelHistory'
+import { CallbackSet } from '@/utils/callbackSet'
 
 export interface ApplyLayoutResult {
   kind: 'applied' | 'empty' | 'ignored' | 'noop' | 'normalized'
@@ -551,7 +552,7 @@ export class PanelLayoutProjection {
   private readonly pushHash: (hash: string) => void
   private readonly replaceHash: (hash: string) => void
   private readonly subscribeToUrl: (listener: () => void) => Unsubscribe
-  private readonly listeners = new Set<() => void>()
+  private readonly listeners = new CallbackSet<[]>('PanelLayoutProjection')
   private unsubscribeRows: Unsubscribe | null = null
   private unsubscribeUrl: Unsubscribe | null = null
   private inboundQueue: Promise<void> = Promise.resolve()
@@ -589,10 +590,7 @@ export class PanelLayoutProjection {
   }
 
   subscribe(listener: () => void): Unsubscribe {
-    this.listeners.add(listener)
-    return () => {
-      this.listeners.delete(listener)
-    }
+    return this.listeners.add(listener)
   }
 
   applyCurrentUrl(): Promise<void> {
@@ -606,11 +604,11 @@ export class PanelLayoutProjection {
           hash: this.getHash(),
           replaceHash: hash => {
             this.replaceHash(hash)
-            this.notify()
+            this.listeners.notify()
           },
         })
         if (result.kind === 'applied' || result.kind === 'normalized' || result.kind === 'ignored') {
-          this.notify()
+          this.listeners.notify()
         }
       })
     return this.inboundQueue
@@ -624,10 +622,6 @@ export class PanelLayoutProjection {
     const nextHash = buildLayoutFromSlots(this.workspaceId, slots)
     if (this.getHash() === nextHash) return
     this.pushHash(nextHash)
-    this.notify()
-  }
-
-  private notify(): void {
-    for (const listener of [...this.listeners]) listener()
+    this.listeners.notify()
   }
 }
