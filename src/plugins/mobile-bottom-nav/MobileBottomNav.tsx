@@ -37,7 +37,11 @@ function MobileBottomNavActionButton({
 function MobileBottomNavSurface() {
   const runtime = useAppRuntime()
   const items = runtime.read(mobileBottomNavItemsFacet)
-  const actionsById = new Map(getEffectiveActions(runtime).map(action => [action.id, action]))
+  const actionsById = new Map(
+    getEffectiveActions(runtime)
+      .filter(action => action.context === ActionContextTypes.GLOBAL)
+      .map(action => [action.id, action]),
+  )
   const activeContexts = useActiveContextsState()
 
   if (items.length === 0) return null
