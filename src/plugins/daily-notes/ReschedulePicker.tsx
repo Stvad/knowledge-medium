@@ -326,7 +326,7 @@ export const ReschedulePicker = () => {
                     isSelected
                       ? 'border-primary bg-primary text-primary-foreground'
                       : cell.isToday
-                        ? 'border-primary bg-primary/10 text-primary'
+                        ? 'border-2 border-primary bg-primary/20 font-semibold text-primary shadow-sm ring-1 ring-primary/40'
                         : 'border-border bg-background text-foreground hover:bg-muted',
                   )}
                 >
