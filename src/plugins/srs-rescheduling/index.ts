@@ -8,6 +8,7 @@ import { ChangeScope, type PropertySchema } from '@/data/api'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.ts'
 import { formatIsoDate } from '@/utils/dailyPage'
+import { showSuccess } from '@/utils/toast.ts'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -111,11 +112,26 @@ const readProperty = <T,>(
   }
 }
 
-export const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<void> => {
-  if (block.repo.isReadOnly) return
+export interface RescheduleResult {
+  signal: SrsSignal
+  previousInterval: number
+  newInterval: number
+  nextReviewDate: Date
+  previousReviewCount: number
+  /** Pre-reschedule snapshot of the block's `properties` bag. Used by
+   *  `undoReschedule` to restore both the SRS values and (if the block
+   *  wasn't typed before) drop the type that was just added. */
+  previousProperties: Record<string, unknown>
+}
+
+export const rescheduleBlock = async (
+  block: Block,
+  signal: SrsSignal,
+): Promise<RescheduleResult | null> => {
+  if (block.repo.isReadOnly) return null
 
   const data = block.peek() ?? await block.load()
-  if (!data) return
+  if (!data) return null
 
   const hasSrsType = getBlockTypes(data).includes(SRS_SM25_TYPE)
   const sourceProperties = hasSrsType ? data.properties : {}
@@ -147,6 +163,11 @@ export const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<
   }
   const typeSnapshot = block.repo.snapshotTypeRegistries()
 
+  // Captured before tx so undo restores the pre-action state even if
+  // tx.update ends up merging with concurrent edits. Frozen clone so the
+  // closure isn't tied to mutable repo internals.
+  const previousProperties = {...data.properties}
+
   await block.repo.tx(async tx => {
     let row = await tx.get(block.id)
     if (!row) return
@@ -167,6 +188,62 @@ export const rescheduleBlock = async (block: Block, signal: SrsSignal): Promise<
       },
     })
   }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
+
+  return {
+    signal,
+    previousInterval: interval,
+    newInterval: scheduled.interval,
+    nextReviewDate: scheduled.nextReviewDate,
+    previousReviewCount: reviewCount,
+    previousProperties,
+  }
+}
+
+export const undoReschedule = async (
+  block: Block,
+  result: RescheduleResult,
+): Promise<void> => {
+  if (block.repo.isReadOnly) return
+  await block.repo.tx(async tx => {
+    const row = await tx.get(block.id)
+    if (!row) return
+    await tx.update(block.id, {properties: result.previousProperties})
+  }, {scope: ChangeScope.BlockDefault, description: 'srs undo reschedule'})
+}
+
+const formatIntervalDays = (days: number): string => {
+  const rounded = Math.max(1, Math.round(days))
+  if (rounded < 30) return `${rounded}d`
+  if (rounded < 365) return `${Math.round(rounded / 30)}mo`
+  return `${Math.round(rounded / 365)}y`
+}
+
+const formatShortDate = (date: Date): string =>
+  date.toLocaleString('en-US', {month: 'short', day: 'numeric'})
+
+export const formatRescheduleToastMessage = (result: RescheduleResult): string => {
+  const name = signalName(result.signal)
+  const next = formatIntervalDays(result.newInterval)
+  const when = formatShortDate(result.nextReviewDate)
+  if (result.previousReviewCount > 0) {
+    const prev = formatIntervalDays(result.previousInterval)
+    return `${name} · ${prev} → ${next} (${when})`
+  }
+  return `${name} · ${next} (${when})`
+}
+
+const runRescheduleWithFeedback = async (
+  block: Block,
+  signal: SrsSignal,
+): Promise<void> => {
+  const result = await rescheduleBlock(block, signal)
+  if (!result) return
+  showSuccess(formatRescheduleToastMessage(result), {
+    action: {
+      label: 'Undo',
+      onClick: () => { void undoReschedule(block, result) },
+    },
+  })
 }
 
 const createRescheduleAction = <T extends SrsActionContext>(
@@ -184,7 +261,7 @@ const createRescheduleAction = <T extends SrsActionContext>(
     context,
     icon: iconForSignal(signal),
     handler: (async ({block}: BlockShortcutDependencies) => {
-      await rescheduleBlock(block, signal)
+      await runRescheduleWithFeedback(block, signal)
     }) as ActionConfig<T>['handler'],
     defaultBinding: {
       keys: shortcutKeysForSignal(signal),

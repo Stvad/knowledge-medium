@@ -10,7 +10,11 @@ import { typesProp } from '@/data/properties'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { rescheduleBlock } from '../index.ts'
+import {
+  formatRescheduleToastMessage,
+  rescheduleBlock,
+  undoReschedule,
+} from '../index.ts'
 import { SrsSignal } from '../scheduler.ts'
 import { srsReschedulingDataExtension } from '../dataExtension.ts'
 import {
@@ -103,6 +107,59 @@ describe('rescheduleBlock', () => {
     },
   )
 
+  it('returns reschedule metadata for toast feedback', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 5))
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'srs-block',
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Review this card',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+          [srsIntervalProp.name]: srsIntervalProp.codec.encode(10),
+          [srsFactorProp.name]: srsFactorProp.codec.encode(2),
+          [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(3),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed srs block'})
+
+    const block = repo.block('srs-block')
+    await block.load()
+    const result = await rescheduleBlock(block, SrsSignal.GOOD)
+
+    expect(result).not.toBeNull()
+    expect(result!.signal).toBe(SrsSignal.GOOD)
+    expect(result!.previousInterval).toBe(10)
+    expect(result!.newInterval).toBe(20)
+    expect(result!.previousReviewCount).toBe(3)
+    expect(result!.nextReviewDate.getFullYear()).toBe(2026)
+    expect(result!.nextReviewDate.getMonth()).toBe(4)
+    expect(result!.nextReviewDate.getDate()).toBe(25)
+  })
+
+  it('returns null when the repo is read-only', async () => {
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'srs-block',
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Review',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed'})
+
+    const block = repo.block('srs-block')
+    await block.load()
+    vi.spyOn(block.repo, 'isReadOnly', 'get').mockReturnValue(true)
+
+    expect(await rescheduleBlock(block, SrsSignal.GOOD)).toBeNull()
+  })
+
   it('updates SRS typed properties without rewriting content', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 4, 5))
@@ -146,5 +203,111 @@ describe('rescheduleBlock', () => {
     }])
     expect(await repo.load(nextReviewId)).not.toBeNull()
     expect(await repo.load(reviewedAtId)).not.toBeNull()
+  })
+})
+
+describe('undoReschedule', () => {
+  it('reverts SRS properties on a previously typed block', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 5))
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'srs-block',
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Card',
+        properties: {
+          [typesProp.name]: typesProp.codec.encode([SRS_SM25_TYPE]),
+          [srsIntervalProp.name]: srsIntervalProp.codec.encode(10),
+          [srsFactorProp.name]: srsFactorProp.codec.encode(2),
+          [srsReviewCountProp.name]: srsReviewCountProp.codec.encode(3),
+        },
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed srs block'})
+
+    const block = repo.block('srs-block')
+    await block.load()
+    const result = await rescheduleBlock(block, SrsSignal.GOOD)
+    expect(result).not.toBeNull()
+    expect(block.get(srsIntervalProp)).toBe(20)
+    expect(block.get(srsReviewCountProp)).toBe(4)
+
+    await undoReschedule(block, result!)
+    await block.load()
+
+    expect(block.types).toContain(SRS_SM25_TYPE)
+    expect(block.get(srsIntervalProp)).toBe(10)
+    expect(block.get(srsFactorProp)).toBe(2)
+    expect(block.get(srsReviewCountProp)).toBe(3)
+    expect(block.get(srsSnapshotHistoryProp)).toEqual([])
+  })
+
+  it('drops the SRS type when the block was untyped before reschedule', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 4, 5))
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    await repo.tx(async tx => {
+      await tx.create({
+        id: 'plain-block',
+        workspaceId: WORKSPACE,
+        parentId: null,
+        orderKey: 'a0',
+        content: 'Plain',
+      })
+    }, {scope: ChangeScope.BlockDefault, description: 'seed plain block'})
+
+    const block = repo.block('plain-block')
+    await block.load()
+    const result = await rescheduleBlock(block, SrsSignal.GOOD)
+    expect(result).not.toBeNull()
+    expect(block.types).toContain(SRS_SM25_TYPE)
+
+    await undoReschedule(block, result!)
+    await block.load()
+
+    expect(block.types).not.toContain(SRS_SM25_TYPE)
+    expect(block.data.content).toBe('Plain')
+  })
+})
+
+describe('formatRescheduleToastMessage', () => {
+  it('shows just the new interval and date for a first review', () => {
+    const msg = formatRescheduleToastMessage({
+      signal: SrsSignal.GOOD,
+      previousInterval: 2,
+      newInterval: 5,
+      nextReviewDate: new Date(2026, 4, 10),
+      previousReviewCount: 0,
+      previousProperties: {},
+    })
+    expect(msg).toBe('GOOD · 5d (May 10)')
+  })
+
+  it('shows previous → new interval delta for subsequent reviews', () => {
+    const msg = formatRescheduleToastMessage({
+      signal: SrsSignal.GOOD,
+      previousInterval: 3,
+      newInterval: 7.4,
+      nextReviewDate: new Date(2026, 4, 24),
+      previousReviewCount: 4,
+      previousProperties: {},
+    })
+    expect(msg).toBe('GOOD · 3d → 7d (May 24)')
+  })
+
+  it('renders long intervals in months', () => {
+    const msg = formatRescheduleToastMessage({
+      signal: SrsSignal.EASY,
+      previousInterval: 30,
+      newInterval: 90,
+      nextReviewDate: new Date(2026, 7, 3),
+      previousReviewCount: 6,
+      previousProperties: {},
+    })
+    expect(msg).toBe('EASY · 1mo → 3mo (Aug 3)')
   })
 })
