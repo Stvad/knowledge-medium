@@ -159,6 +159,7 @@ export const rescheduleBlock = async (
   }
   const typeSnapshot = block.repo.snapshotTypeRegistries()
 
+  let written = false
   await block.repo.tx(async tx => {
     let row = await tx.get(block.id)
     if (!row) return
@@ -178,8 +179,10 @@ export const rescheduleBlock = async (
         [srsSnapshotHistoryProp.name]: srsSnapshotHistoryProp.codec.encode([...history, snapshot]),
       },
     })
+    written = true
   }, {scope: ChangeScope.BlockDefault, description: 'srs reschedule'})
 
+  if (!written) return null
   return {
     signal,
     previousInterval: interval,
