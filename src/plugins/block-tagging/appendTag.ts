@@ -1,6 +1,6 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
-import { parseReferences } from '@/plugins/references/referenceParser.ts'
+import { parseReferences, renderWikilink } from '@/plugins/references/referenceParser.ts'
 
 export interface AppendTagResult {
   /** Total blocks considered. */
@@ -16,11 +16,14 @@ const hasTagReference = (content: string, name: string): boolean =>
 
 /** Compose the next content. Preserves whatever trailing whitespace
  *  already exists; only inserts a separating space when the existing
- *  content is non-empty and doesn't already end with whitespace. */
+ *  content is non-empty and doesn't already end with whitespace.
+ *  Uses `renderWikilink` so a `]]`-containing tag name still emits
+ *  syntactically valid wikilink text (the visible label is munged,
+ *  see the helper's doc). */
 export const appendTagToContent = (content: string, name: string): string => {
   if (hasTagReference(content, name)) return content
   const separator = content.length === 0 || /\s$/.test(content) ? '' : ' '
-  return `${content}${separator}[[${name}]]`
+  return `${content}${separator}${renderWikilink(name)}`
 }
 
 /** Append ` [[name]]` to every block's content (skipping blocks that
