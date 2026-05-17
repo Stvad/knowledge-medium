@@ -1278,6 +1278,15 @@ export class Repo {
    *  per-facet `setRuntimeContributions` change path. Kernel mutators
    *  must be present in the runtime if the caller wants them — pass
    *  them in via the static-facet bundle the kernel ships. */
+  /** Read-only handle on the currently-installed FacetRuntime. Used by
+   *  non-React callers that need to consult facets at action-handler
+   *  time (e.g. `pickBlockDateAdapter` from a multi-select handler
+   *  where `useAppRuntime()` isn't available). Returns null before the
+   *  first `setFacetRuntime` call. */
+  get facetRuntime(): FacetRuntime | null {
+    return this.runtime
+  }
+
   setFacetRuntime(runtime: FacetRuntime): void {
     // Drop any per-facet change subscriptions on the previous runtime —
     // we're about to rewire to a fresh one. Subscriptions live on the

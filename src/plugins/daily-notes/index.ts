@@ -68,6 +68,11 @@ import {
   rescheduleBlockDateAction,
   rescheduleQuickActionItem,
 } from './rescheduleAction.ts'
+import {
+  spreadBlockDatesAction,
+  spreadBlockDatesGroupHeaderEntry,
+} from './spreadDatesAction.ts'
+import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
 export {
   APPEND_TODAY_DAILY_BLOCK_ACTION_ID,
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
@@ -154,6 +159,11 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   ),
   actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
   quickActionItemsFacet.of(rescheduleQuickActionItem, {source: 'daily-notes'}),
+  actionsFacet.of(spreadBlockDatesAction, {source: 'daily-notes'}),
+  groupedBacklinksGroupHeaderActionsFacet.of(
+    spreadBlockDatesGroupHeaderEntry,
+    {source: 'daily-notes'},
+  ),
   blockDateAdapterFacet.of(referenceDateAdapter, {source: 'daily-notes'}),
   blockContentSurfacePropsFacet.of(dateScrubContentSurface, {source: 'daily-notes'}),
   actionsFacet.of(openDailyNotePickerAction({repo}), {source: 'daily-notes'}),
@@ -201,6 +211,17 @@ export {
   rescheduleBlockDateAction,
   rescheduleQuickActionItem,
 } from './rescheduleAction.ts'
+export {
+  SPREAD_BLOCK_DATES_ACTION_ID,
+  spreadBlockDatesAction,
+  spreadBlockDatesGroupHeaderEntry,
+} from './spreadDatesAction.ts'
+export {
+  randomUpcomingDateOffset,
+  spreadBlockDates,
+  type SpreadBlockDatesOptions,
+  type SpreadBlockDatesResult,
+} from './spreadBlockDates.ts'
 export {
   openReschedulePicker,
   openReschedulePickerEvent,

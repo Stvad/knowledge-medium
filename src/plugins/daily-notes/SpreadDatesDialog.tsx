@@ -11,11 +11,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { DialogContextProps } from '@/utils/dialogs.ts'
 
-export interface SpreadDaysDialogProps {
+export interface SpreadDatesDialogProps {
   defaultDays?: number
 }
 
-export interface SpreadDaysDialogResult {
+export interface SpreadDatesDialogResult {
   days: number
 }
 
@@ -27,11 +27,11 @@ const parseDays = (value: string): number | null => {
   return Math.floor(parsed)
 }
 
-export const SpreadDaysDialog = ({
+export const SpreadDatesDialog = ({
   defaultDays = DEFAULT_SPREAD_DAYS,
   resolve,
   cancel,
-}: SpreadDaysDialogProps & DialogContextProps<SpreadDaysDialogResult>) => {
+}: SpreadDatesDialogProps & DialogContextProps<SpreadDatesDialogResult>) => {
   const [days, setDays] = useState(String(defaultDays))
   const [error, setError] = useState<string | null>(null)
 
@@ -54,13 +54,13 @@ export const SpreadDaysDialog = ({
     >
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Spread SRS reviews</DialogTitle>
+          <DialogTitle>Spread dates</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="srs-spread-days">Days</Label>
+            <Label htmlFor="spread-dates-days">Days</Label>
             <Input
-              id="srs-spread-days"
+              id="spread-dates-days"
               type="number"
               min={1}
               step={1}

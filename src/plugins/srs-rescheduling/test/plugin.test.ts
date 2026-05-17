@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Shuffle, Sparkles } from 'lucide-react'
+import { Check, ClipboardPaste, ClockArrowDown, Gauge, RotateCcw, Scissors, Sparkles } from 'lucide-react'
 import { ChangeScope } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -11,7 +11,6 @@ import { actionsFacet } from '@/extensions/core.ts'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
-import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
@@ -60,7 +59,7 @@ describe('srsReschedulingPlugin', () => {
     const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
     const actions = runtime.read(actionsFacet)
 
-    expect(actions).toHaveLength(13)
+    expect(actions).toHaveLength(12)
     expect(actions.map(action => action.context)).toEqual([
       ActionContextTypes.NORMAL_MODE,
       ActionContextTypes.NORMAL_MODE,
@@ -74,7 +73,6 @@ describe('srsReschedulingPlugin', () => {
       ActionContextTypes.EDIT_MODE_CM,
       ActionContextTypes.NORMAL_MODE,
       ActionContextTypes.NORMAL_MODE,
-      ActionContextTypes.MULTI_SELECT_MODE,
     ])
 
     expect(actions.map(action => action.defaultBinding?.keys)).toEqual([
@@ -88,7 +86,6 @@ describe('srsReschedulingPlugin', () => {
       ['ctrl+shift+3', 'ctrl+shift+alt+cmd+3'],
       ['ctrl+shift+4', 'ctrl+shift+alt+cmd+4'],
       ['ctrl+shift+5', 'ctrl+shift+alt+cmd+5'],
-      undefined,
       undefined,
       undefined,
     ])
@@ -106,10 +103,8 @@ describe('srsReschedulingPlugin', () => {
       Sparkles,
       ClockArrowDown,
     ])
-    expect(actions.slice(10, 12).map(action => action.id)).toEqual(['srs.cut', 'srs.paste'])
-    expect(actions.slice(10, 12).map(action => action.icon)).toEqual([Scissors, ClipboardPaste])
-    expect(actions[12].id).toBe('srs.spread.reviews')
-    expect(actions[12].icon).toBe(Shuffle)
+    expect(actions.slice(10).map(action => action.id)).toEqual(['srs.cut', 'srs.paste'])
+    expect(actions.slice(10).map(action => action.icon)).toEqual([Scissors, ClipboardPaste])
   })
 
   it('contributes swipe quick actions and block decoration hook for SRS blocks', () => {
@@ -134,13 +129,6 @@ describe('srsReschedulingPlugin', () => {
     expect(typeof pasteAction?.canRun).toBe('function')
 
     expect(runtime.contributions(blockContentSurfacePropsFacet)).toHaveLength(1)
-  })
-
-  it('contributes a grouped-backlinks header entry that points at the spread action', () => {
-    const runtime = resolveFacetRuntimeSync(srsReschedulingPlugin)
-    const entries = runtime.read(groupedBacklinksGroupHeaderActionsFacet)
-
-    expect(entries.map(entry => entry.actionId)).toContain('srs.spread.reviews')
   })
 
   describe('srs.cut / srs.paste flow', () => {
