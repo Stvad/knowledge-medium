@@ -111,12 +111,6 @@ interface ResolvedQuickAction {
 
 const TOOLBAR_ROW_HEIGHT_PX = 28
 
-/** Drag distance at which the toolbar is fully revealed during a
- *  preview. Intentionally larger than `SWIPE_TRIGGER_PX` so releasing
- *  at the commit threshold still has room for a satisfying "complete
- *  the appearance" snap (think the Workflowy left-swipe pull-out). */
-const PREVIEW_FULL_REVEAL_PX = 100
-
 /** Duration of the snap-to-resting-state animation after the finger
  *  lifts. Long enough to read, short enough to feel responsive. */
 const SETTLE_DURATION_MS = 200
@@ -124,14 +118,21 @@ const SETTLE_DURATION_MS = 200
 const clamp = (value: number, min: number, max: number): number =>
   Math.max(min, Math.min(max, value))
 
-/** Map an opening-drag delta (dx ≤ 0) to the toolbar's hide percent —
- *  0 = fully visible, 100 = parked off-screen right. */
-const computeOpenHidePercent = (dx: number): number =>
-  clamp(100 + (dx / PREVIEW_FULL_REVEAL_PX) * 100, 0, 100)
+/** Map an opening-drag delta (dx ≤ 0) to the toolbar's hide offset in
+ *  pixels — 0 = fully visible, `viewportWidth` = parked off-screen
+ *  right. We use 1:1 finger tracking so the toolbar visually slides
+ *  in by exactly the number of pixels the finger has travelled, which
+ *  reads as the Workflowy-style "pull it out by hand" feel. The full-
+ *  reveal point is therefore a full viewport drag; in practice users
+ *  release at the commit threshold and the settle animation completes
+ *  the rest. */
+const computeOpenHidePx = (dx: number, viewportWidth: number): number =>
+  clamp(viewportWidth + dx, 0, viewportWidth)
 
-/** Same mapping for a close-drag on an already-open menu (dx ≥ 0). */
-const computeCloseHidePercent = (dx: number): number =>
-  clamp((dx / PREVIEW_FULL_REVEAL_PX) * 100, 0, 100)
+/** Same mapping for a close-drag on an already-open menu (dx ≥ 0):
+ *  each pixel right slides the toolbar one pixel off the screen. */
+const computeCloseHidePx = (dx: number, viewportWidth: number): number =>
+  clamp(dx, 0, viewportWidth)
 
 /** Build a render-ready view for the toolbar from `(items, registry)`,
  *  so the JSX below stays focused on layout. */
@@ -237,11 +238,13 @@ export const SwipeActionMenu = () => {
   // gesture hasn't committed yet. Set independently of activeBlockId so
   // we can anchor and render the toolbar before commit.
   const [previewBlockId, setPreviewBlockId] = useState<string | null>(null)
-  // Live hide percent (0..100). `null` means "use the resting position
-  // for the current activeBlockId" — i.e. 0 if open, 100 if not. While
-  // a drag is in flight or the menu is settling, this carries the
-  // intermediate value so the toolbar can track the finger / animate.
-  const [dragOffsetPercent, setDragOffsetPercent] = useState<number | null>(null)
+  // Live hide offset in pixels — 0 means fully visible, `viewportWidth`
+  // means parked off-screen right. `null` means "use the resting
+  // position for the current activeBlockId" — i.e. 0 if open, hidden
+  // if not. While a drag is in flight or the menu is settling, this
+  // carries the intermediate value so the toolbar can track the finger
+  // / animate.
+  const [dragOffsetPx, setDragOffsetPx] = useState<number | null>(null)
   // True while the toolbar is animating to its resting position
   // (released without commit, committed mid-preview, dismissing). The
   // CSS transition is gated on this flag — during the drag itself it
@@ -274,21 +277,23 @@ export const SwipeActionMenu = () => {
 
   // Kick off a settle animation toward the given resting state. On
   // timer end we tear down preview state and, for 'closed', drop the
-  // active block so the menu unmounts.
+  // active block so the menu unmounts. The 'closed' target uses
+  // `window.innerWidth` so the toolbar finishes its slide all the way
+  // off-screen regardless of where the drag left it.
   const startSettle = useCallback((target: 'open' | 'closed'): void => {
     if (settleTimerRef.current !== null) {
       window.clearTimeout(settleTimerRef.current)
     }
     settleTargetRef.current = target
     setIsSettling(true)
-    setDragOffsetPercent(target === 'open' ? 0 : 100)
+    setDragOffsetPx(target === 'open' ? 0 : window.innerWidth)
     settleTimerRef.current = window.setTimeout(() => {
       settleTimerRef.current = null
       const finalTarget = settleTargetRef.current
       settleTargetRef.current = null
       setIsSettling(false)
       setPreviewBlockId(null)
-      setDragOffsetPercent(null)
+      setDragOffsetPx(null)
       if (finalTarget === 'closed') {
         setActiveBlockId(undefined)
       }
@@ -306,7 +311,7 @@ export const SwipeActionMenu = () => {
     clearSettleTimer()
     setActiveBlockId(undefined)
     setPreviewBlockId(null)
-    setDragOffsetPercent(null)
+    setDragOffsetPx(null)
     setIsSettling(false)
   }, [clearSettleTimer])
 
@@ -392,7 +397,7 @@ export const SwipeActionMenu = () => {
     // already cleared, so we don't reach into the ref from render.
     if (activeBlockId) setActiveBlockId(undefined)
     if (previewBlockId !== null) setPreviewBlockId(null)
-    if (dragOffsetPercent !== null) setDragOffsetPercent(null)
+    if (dragOffsetPx !== null) setDragOffsetPx(null)
     if (isSettling) setIsSettling(false)
   }
 
@@ -409,12 +414,12 @@ export const SwipeActionMenu = () => {
       // "completes appearing" snap. Otherwise no animation is needed:
       // either we weren't previewing or we were previewing a different
       // block (rare), and the menu should just appear at rest.
-      if (previewBlockId === blockId && dragOffsetPercent !== null) {
+      if (previewBlockId === blockId && dragOffsetPx !== null) {
         startSettle('open')
       } else {
         clearSettleTimer()
         setPreviewBlockId(null)
-        setDragOffsetPercent(null)
+        setDragOffsetPx(null)
         setIsSettling(false)
       }
     }
@@ -441,7 +446,7 @@ export const SwipeActionMenu = () => {
         clearSettleTimer()
         setIsSettling(false)
         setPreviewBlockId(blockId)
-        setDragOffsetPercent(computeOpenHidePercent(dx))
+        setDragOffsetPx(computeOpenHidePx(dx, window.innerWidth))
       } else if (phase === 'cancel' && previewBlockId === blockId) {
         // Released without commit — animate the toolbar back to hidden.
         startSettle('closed')
@@ -458,7 +463,7 @@ export const SwipeActionMenu = () => {
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, handleRun)
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_PROGRESS_EVENT, handleProgress)
     }
-  }, [activeBlockId, dragOffsetPercent, panelRoot, previewBlockId, runBlockAction, startSettle, clearSettleTimer])
+  }, [activeBlockId, dragOffsetPx, panelRoot, previewBlockId, runBlockAction, startSettle, clearSettleTimer])
 
   useEffect(() => {
     if (!activeBlockId || !isMobile || !panelRoot) return
@@ -586,7 +591,7 @@ export const SwipeActionMenu = () => {
     if (dx > 0 && Math.abs(dx) > Math.abs(dy)) {
       clearSettleTimer()
       setIsSettling(false)
-      setDragOffsetPercent(computeCloseHidePercent(dx))
+      setDragOffsetPx(computeCloseHidePx(dx, window.innerWidth))
     }
   }
 
@@ -607,7 +612,7 @@ export const SwipeActionMenu = () => {
     if (dx >= SWIPE_TRIGGER_PX && Math.abs(dx) > Math.abs(dy)) {
       event.preventDefault()
       startSettle('closed')
-    } else if (dragOffsetPercent !== null) {
+    } else if (dragOffsetPx !== null) {
       startSettle('open')
     }
   }
@@ -617,7 +622,7 @@ export const SwipeActionMenu = () => {
     if (trackedMenuTouch(event)) {
       menuTouchStartRef.current = null
       // If the drag put the menu mid-way out, recover to fully open.
-      if (dragOffsetPercent !== null) startSettle('open')
+      if (dragOffsetPx !== null) startSettle('open')
     }
   }
 
@@ -632,11 +637,14 @@ export const SwipeActionMenu = () => {
   )
 
   // Compose translateY(-50%) for vertical-row centering with translateX
-  // for the swipe reveal. The hide percent is 0 when the menu is at
-  // rest open, 100 when fully parked off-screen right, and a live value
-  // in between while dragging or settling.
-  const hidePercent = dragOffsetPercent ?? (activeBlockId ? 0 : 100)
-  const toolbarTransform = `translate(${hidePercent}%, -50%)`
+  // for the swipe reveal. Hide offset is 0 when the menu is at rest
+  // open; while dragging or settling, dragOffsetPx carries the live
+  // value (each pixel = one pixel of finger travel). When the resting
+  // state would be hidden but we have no live offset, fall back to
+  // the viewport width — this branch only runs in the transient frame
+  // between activeBlockId clearing and unmount.
+  const hidePx = dragOffsetPx ?? (activeBlockId ? 0 : window.innerWidth)
+  const toolbarTransform = `translate(${hidePx}px, -50%)`
   const toolbarTransition = isSettling
     ? `transform ${SETTLE_DURATION_MS}ms ease-out`
     : undefined
@@ -655,7 +663,7 @@ export const SwipeActionMenu = () => {
             // Hint the compositor while a drag is in flight; once
             // settled we drop the hint so the browser can recycle the
             // layer.
-            willChange: dragOffsetPercent !== null ? 'transform' : undefined,
+            willChange: dragOffsetPx !== null ? 'transform' : undefined,
           }}
           data-block-interaction="ignore"
           onTouchStart={handleMenuTouchStart}
