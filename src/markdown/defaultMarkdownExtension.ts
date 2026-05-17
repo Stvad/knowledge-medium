@@ -1,4 +1,5 @@
 import type { MarkdownExtension } from '@/markdown/extensions.ts'
+import { MarkdownImage } from '@/markdown/MarkdownImage.tsx'
 import { createElement } from 'react'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -52,5 +53,6 @@ export const gfmMarkdownExtension: MarkdownExtension = () => ({
   remarkPlugins: [remarkGfm],
   components: {
     a: MarkdownAnchor,
+    img: MarkdownImage,
   },
 })
