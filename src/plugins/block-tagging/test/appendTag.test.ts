@@ -37,14 +37,20 @@ describe('appendTagToContent', () => {
     )
   })
 
-  it('is idempotent for names whose canonical form differs from the input', () => {
-    // `]]` inside an alias is rewritten by renderWikilink so the
-    // output is parseable. The dedup check must run against that
-    // canonical form, otherwise a second invocation would append a
-    // duplicate.
-    const once = appendTagToContent('hello', 'weird]]name')
-    expect(once).not.toBe('hello')
-    expect(appendTagToContent(once, 'weird]]name')).toBe(once)
+  it('rejects names containing wikilink delimiters as a no-op', () => {
+    // `[[` is left alone by renderWikilink, so `foo[[bar` would
+    // parse to alias `bar` and corrupt subsequent dedup checks.
+    // `]]` has the symmetric problem at the closing side. Both are
+    // rejected at the entry point.
+    expect(appendTagToContent('hello', 'foo[[bar')).toBe('hello')
+    expect(appendTagToContent('hello', 'foo]]bar')).toBe('hello')
+    expect(appendTagToContent('hello', '   ')).toBe('hello')
+  })
+
+  it('is idempotent for benign tag names', () => {
+    const once = appendTagToContent('hello', 'srs')
+    expect(once).toBe('hello [[srs]]')
+    expect(appendTagToContent(once, 'srs')).toBe(once)
   })
 })
 

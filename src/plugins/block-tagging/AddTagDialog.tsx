@@ -10,7 +10,11 @@ import {
 import { Input } from '@/components/ui/input'
 import { useUserPrefsProperty } from '@/data/globalState.ts'
 import type { DialogContextProps } from '@/utils/dialogs.ts'
-import { blockTagsConfigProp, normalizeBlockTagsConfig } from './config.ts'
+import {
+  blockTagsConfigProp,
+  isValidTagName,
+  normalizeBlockTagsConfig,
+} from './config.ts'
 
 export interface AddTagDialogResult {
   tagName: string
@@ -39,11 +43,12 @@ export const AddTagDialog = ({
   const trimmedQuery = query.trim()
   const exactQueryMatch = trimmedQuery.length > 0
     && tags.some(tag => tag.toLowerCase() === trimmedQuery.toLowerCase())
-  const canCreateCustom = trimmedQuery.length > 0 && !exactQueryMatch
+  const queryInvalid = trimmedQuery.length > 0 && !isValidTagName(trimmedQuery)
+  const canCreateCustom = trimmedQuery.length > 0 && !exactQueryMatch && !queryInvalid
 
   const submitTag = (tagName: string): void => {
     const next = tagName.trim()
-    if (!next) return
+    if (!isValidTagName(next)) return
     resolve({tagName: next})
   }
 
@@ -81,6 +86,11 @@ export const AddTagDialog = ({
             <p className="text-xs text-muted-foreground">
               No tags configured yet. Type a name to apply it once, or add
               defaults under the user-prefs &quot;Block tags&quot; entry.
+            </p>
+          )}
+          {queryInvalid && (
+            <p className="text-xs text-destructive">
+              Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
             </p>
           )}
           {filteredTags.length > 0 && (

@@ -3,7 +3,7 @@ import { Plus, X } from 'lucide-react'
 import { type PropertyEditorProps } from '@/data/api'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
-import { normalizeBlockTagsConfig } from './config.ts'
+import { isValidTagName, normalizeBlockTagsConfig } from './config.ts'
 
 const isReadOnlyBlock = (block: unknown): boolean => {
   if (!block || typeof block !== 'object') return false
@@ -22,13 +22,12 @@ export const BlockTagsConfigEditor = ({
 
   const commitDraft = (): void => {
     const trimmed = draft.trim()
-    if (!trimmed || tags.includes(trimmed)) {
-      setDraft('')
-      return
-    }
+    if (!isValidTagName(trimmed) || tags.includes(trimmed)) return
     onChange(normalizeBlockTagsConfig([...tags, trimmed]))
     setDraft('')
   }
+
+  const draftInvalid = draft.trim().length > 0 && !isValidTagName(draft)
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
     if (event.key === 'Enter') {
@@ -65,25 +64,32 @@ export const BlockTagsConfigEditor = ({
         ))}
       </div>
       {!readOnly && (
-        <div className="flex items-center gap-1">
-          <Input
-            value={draft}
-            placeholder="Add tag"
-            onChange={event => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-            onBlur={commitDraft}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={commitDraft}
-            disabled={!draft.trim()}
-            title="Add tag"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-        </div>
+        <>
+          <div className="flex items-center gap-1">
+            <Input
+              value={draft}
+              placeholder="Add tag"
+              onChange={event => setDraft(event.target.value)}
+              onKeyDown={handleKeyDown}
+              onBlur={commitDraft}
+            />
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={commitDraft}
+              disabled={!isValidTagName(draft)}
+              title="Add tag"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          {draftInvalid && (
+            <p className="text-xs text-destructive">
+              Tag names can&apos;t contain <code>[[</code> or <code>]]</code>.
+            </p>
+          )}
+        </>
       )}
     </div>
   )
