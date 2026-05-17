@@ -31,7 +31,7 @@ export const RescheduleToast = ({toastId, message, txId, repo}: RescheduleToastP
   }
 
   return (
-    <div className="flex w-[var(--width)] min-w-[260px] items-center gap-3 rounded-md border bg-background px-4 py-3 text-sm shadow-lg">
+    <div className="flex w-full min-w-[260px] items-center gap-3 rounded-md border bg-background px-4 py-3 text-sm shadow-lg">
       <span className="flex-1">{message}</span>
       <Button
         variant="ghost"
