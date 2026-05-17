@@ -1,23 +1,25 @@
 import { useIsMobile } from '@/utils/react.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { useRunAction } from '@/shortcuts/runAction.ts'
-import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
+import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { mobileBottomNavItemsFacet } from './facet.ts'
 import { MobileBottomNavButton } from './Button.tsx'
 
 function MobileBottomNavActionButton({
   action,
+  activeContexts,
   disabled,
 }: {
   action: ActionConfig
+  activeContexts: ActiveContextsMap
   disabled: boolean
 }) {
-  const runAction = useRunAction()
   const handleClick = () => {
-    void runAction(
-      action.id,
+    const deps = activeContexts.get(action.context)
+    if (!deps) return
+    void action.handler(
+      deps as never,
       new CustomEvent('mobile-bottom-nav-action', {detail: {actionId: action.id}}),
     )
   }
@@ -37,7 +39,9 @@ function MobileBottomNavActionButton({
 function MobileBottomNavSurface() {
   const runtime = useAppRuntime()
   const items = runtime.read(mobileBottomNavItemsFacet)
-  const actionsById = new Map(getEffectiveActions(runtime).map(action => [action.id, action]))
+  const actionsByKey = new Map(
+    getEffectiveActions(runtime).map(action => [actionRuntimeKey(action), action]),
+  )
   const activeContexts = useActiveContextsState()
 
   if (items.length === 0) return null
@@ -50,13 +54,16 @@ function MobileBottomNavSurface() {
       data-block-interaction="ignore"
     >
       <div className="mx-auto flex h-16 max-w-md items-center justify-around">
-        {items.map(({id, actionId}) => {
-          const action = actionsById.get(actionId)
+        {items.map(({id, actionId, context}) => {
+          const action = actionsByKey.get(
+            actionRuntimeKey({id: actionId, context: context ?? ActionContextTypes.GLOBAL}),
+          )
           if (!action) return null
           return (
             <MobileBottomNavActionButton
               key={id}
               action={action}
+              activeContexts={activeContexts}
               disabled={!activeContexts.has(action.context)}
             />
           )

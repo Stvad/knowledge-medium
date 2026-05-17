@@ -1,4 +1,4 @@
-import { PanelRightOpen, Plus, ZoomIn } from 'lucide-react'
+import { PanelRightOpen, Plus, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -262,6 +262,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       id: 'undo',
       description: 'Undo',
       context: ActionContextTypes.GLOBAL,
+      icon: Undo2,
       handler: async () => { await repo.undo() },
       defaultBinding: {
         keys: ['cmd+z', 'ctrl+z'],

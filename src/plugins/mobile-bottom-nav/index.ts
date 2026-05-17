@@ -9,6 +9,7 @@ import {
   openSidebarBottomNavItem,
   searchBottomNavItem,
   todayBottomNavItem,
+  undoBottomNavItem,
 } from './defaultItems.ts'
 
 export { MobileBottomNav } from './MobileBottomNav.tsx'
@@ -24,6 +25,7 @@ export {
   openSidebarBottomNavItem,
   searchBottomNavItem,
   todayBottomNavItem,
+  undoBottomNavItem,
 } from './defaultItems.ts'
 
 export const mobileBottomNavMount: AppMountContribution = {
@@ -52,6 +54,10 @@ export const mobileBottomNavPlugin: AppExtension = [
   mobileBottomNavItemsFacet.of(searchBottomNavItem, {
     source: 'mobile-bottom-nav',
     precedence: -10,
+  }),
+  mobileBottomNavItemsFacet.of(undoBottomNavItem, {
+    source: 'mobile-bottom-nav',
+    precedence: -5,
   }),
   mobileBottomNavItemsFacet.of(commandPaletteBottomNavItem, {
     source: 'mobile-bottom-nav',
