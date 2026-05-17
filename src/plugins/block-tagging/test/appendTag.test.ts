@@ -36,6 +36,16 @@ describe('appendTagToContent', () => {
       'foo [[SRS]] bar [[srs]]',
     )
   })
+
+  it('is idempotent for names whose canonical form differs from the input', () => {
+    // `]]` inside an alias is rewritten by renderWikilink so the
+    // output is parseable. The dedup check must run against that
+    // canonical form, otherwise a second invocation would append a
+    // duplicate.
+    const once = appendTagToContent('hello', 'weird]]name')
+    expect(once).not.toBe('hello')
+    expect(appendTagToContent(once, 'weird]]name')).toBe(once)
+  })
 })
 
 describe('appendTagToBlocks', () => {
