@@ -94,6 +94,7 @@ import {
   SELECT_REPROJECT_REF_MARKERS_SQL,
 } from './internals/clientSchema'
 import { UndoManager, type UndoEntry } from './internals/undoManager'
+import { CallbackSet } from '@/utils/callbackSet'
 import type { TxImpl } from './internals/txEngine'
 import { ANCESTORS_SQL, CHILDREN_SQL, SUBTREE_SQL } from './internals/treeQueries'
 import {
@@ -498,16 +499,16 @@ export class Repo {
   /** Listeners for property-schema map changes (full rebuild OR
    *  runtime-bucket update). Used by `usePropertySchemas` to drive
    *  React reruns. */
-  private readonly propertySchemasListeners = new Set<() => void>()
+  private readonly propertySchemasListeners = new CallbackSet<[]>('Repo.propertySchemas')
   /** Listeners for property-editor-override map changes. */
-  private readonly propertyEditorOverridesListeners = new Set<() => void>()
+  private readonly propertyEditorOverridesListeners = new CallbackSet<[]>('Repo.propertyEditorOverrides')
   /** Listeners for value-preset map changes. */
-  private readonly valuePresetsListeners = new Set<() => void>()
+  private readonly valuePresetsListeners = new CallbackSet<[]>('Repo.valuePresets')
   /** Listeners for user-surfaceable errors thrown from inside a
    *  `repo.tx` — currently `ProcessorRejection` from same-tx
    *  processors. Subscribers are responsible for the UI side
    *  (toast routing); the data layer stays UI-agnostic. */
-  private readonly userErrorListeners = new Set<(error: ProcessorRejection) => void>()
+  private readonly userErrorListeners = new CallbackSet<[ProcessorRejection]>('Repo.userErrors')
   /** Rebuild step descriptors. Defined once per Repo at construction;
    *  each step declares which facets it reads. `setFacetRuntime` runs
    *  every step; `setRuntimeContributions` runs only the steps whose
@@ -1118,14 +1119,14 @@ export class Repo {
       const collision = parseAliasCollisionError(err)
       if (collision !== null) {
         const rejection = await this.buildAliasCollisionRejection(collision)
-        this.fireUserErrorListeners(rejection)
+        this.userErrorListeners.notify(rejection)
         throw rejection
       }
       const parentDeleted = parseParentDeletedError(err)
       if (parentDeleted !== null) {
         throw new ParentDeletedError(parentDeleted.parentId)
       }
-      if (err instanceof ProcessorRejection) this.fireUserErrorListeners(err)
+      if (err instanceof ProcessorRejection) this.userErrorListeners.notify(err)
       throw err
     }
     // Track the slowest tx by description so cold-start metrics can
@@ -1371,8 +1372,7 @@ export class Repo {
    *  user-data bucket. Used by `usePropertySchemas` so React rerenders
    *  on user-schema add/edit/remove without a runtime swap. */
   onPropertySchemasChange(listener: () => void): () => void {
-    this.propertySchemasListeners.add(listener)
-    return () => { this.propertySchemasListeners.delete(listener) }
+    return this.propertySchemasListeners.add(listener)
   }
 
   /** Subscribe to changes on the merged `propertyEditorOverrides` map
@@ -1380,36 +1380,22 @@ export class Repo {
    *  but exposed as a Repo-level event so future runtime-contribution
    *  paths layer on without changing the consumer surface). */
   onPropertyEditorOverridesChange(listener: () => void): () => void {
-    this.propertyEditorOverridesListeners.add(listener)
-    return () => { this.propertyEditorOverridesListeners.delete(listener) }
+    return this.propertyEditorOverridesListeners.add(listener)
   }
 
   /** Subscribe to changes on the value-preset map. */
   onValuePresetsChange(listener: () => void): () => void {
-    this.valuePresetsListeners.add(listener)
-    return () => { this.valuePresetsListeners.delete(listener) }
+    return this.valuePresetsListeners.add(listener)
   }
 
   /** Subscribe to user-surfaceable errors thrown from `repo.tx`
    *  (currently `ProcessorRejection` from same-tx processors). The
    *  data layer fires; the UI layer (e.g. toast) listens. Returns an
-   *  unsubscribe fn. Listeners that throw are caught and logged so
-   *  one bad listener can't poison the others or break the
-   *  underlying `repo.tx` error propagation. */
+   *  unsubscribe fn. Listener exception isolation is handled by
+   *  `CallbackSet.notify` — one bad listener can't poison the others
+   *  or break the underlying `repo.tx` error propagation. */
   onUserError(listener: (error: ProcessorRejection) => void): () => void {
-    this.userErrorListeners.add(listener)
-    return () => { this.userErrorListeners.delete(listener) }
-  }
-
-  /** Notify all subscribed user-error listeners. Each listener's
-   *  exception is caught + logged so one bad listener can't break
-   *  the others or interrupt error propagation back to the caller. */
-  private fireUserErrorListeners(err: ProcessorRejection): void {
-    for (const listener of [...this.userErrorListeners]) {
-      try { listener(err) } catch (e) {
-        console.warn('[repo.userErrorListeners] listener threw:', e)
-      }
-    }
+    return this.userErrorListeners.add(listener)
   }
 
   /** Translate a parsed alias-collision RAISE into a fully-populated
@@ -1814,9 +1800,7 @@ export class Repo {
           }
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
-          for (const l of [...this.propertySchemasListeners]) {
-            try { l() } catch (err) { console.error('[Repo] propertySchemas listener threw', err) }
-          }
+          this.propertySchemasListeners.notify()
         },
       },
       {
@@ -1824,9 +1808,7 @@ export class Repo {
         inputs: [propertyEditorOverridesFacet as Facet<unknown, unknown>],
         run: (rt) => {
           this._propertyEditorOverrides = rt.read(propertyEditorOverridesFacet)
-          for (const l of [...this.propertyEditorOverridesListeners]) {
-            try { l() } catch (err) { console.error('[Repo] propertyEditorOverrides listener threw', err) }
-          }
+          this.propertyEditorOverridesListeners.notify()
         },
       },
       {
@@ -1834,9 +1816,7 @@ export class Repo {
         inputs: [valuePresetsFacet as Facet<unknown, unknown>],
         run: (rt) => {
           this._valuePresets = rt.read(valuePresetsFacet)
-          for (const l of [...this.valuePresetsListeners]) {
-            try { l() } catch (err) { console.error('[Repo] valuePresets listener threw', err) }
-          }
+          this.valuePresetsListeners.notify()
         },
       },
       {

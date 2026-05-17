@@ -191,6 +191,19 @@ describe('UndoManager.subscribe', () => {
     expect(idleListener).not.toHaveBeenCalled()
   })
 
+  it('fires record listeners only after redo has been cleared', () => {
+    const m = new UndoManager()
+    m.pushRedo(ChangeScope.BlockDefault, entry('stale-redo', ChangeScope.BlockDefault))
+    const observed: Array<{undo: number; redo: number}> = []
+    m.subscribe(ChangeScope.BlockDefault, () => {
+      observed.push(m.depths(ChangeScope.BlockDefault))
+    })
+
+    m.record(entry('t1', ChangeScope.BlockDefault))
+
+    expect(observed).toEqual([{undo: 1, redo: 0}])
+  })
+
   it('returns an unsubscribe that detaches the listener', () => {
     const m = new UndoManager()
     const listener = vi.fn()

@@ -60,12 +60,17 @@ export class UndoManager {
 
   /** Push an entry onto the undo stack of its scope. Side-effects:
    *  clears the redo stack for that scope (a new action invalidates
-   *  the redo branch). No-op for non-undoable scopes and zero-write txs. */
+   *  the redo branch). No-op for non-undoable scopes and zero-write txs.
+   *
+   *  Subscriber-visible state must be consistent at notify-time, so the
+   *  redo clear happens BEFORE pushUndo's notify fires — otherwise a
+   *  listener that recomputes `depths()` would see the stale pre-clear
+   *  redo count and keep redo UI enabled. */
   record(entry: UndoEntry): void {
     if (!this.isUndoable(entry.scope)) return
     if (entry.snapshots.size === 0) return
-    this.pushUndo(entry.scope, entry)
     this.getRedo(entry.scope).length = 0
+    this.pushUndo(entry.scope, entry)
   }
 
   peekUndo(scope: ChangeScope): UndoEntry | null {
