@@ -173,7 +173,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
       </div>
       <div
         ref={scrollRef}
-        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none'}
+        className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
         onScroll={scheduleScrollTopWrite}
       >
         <NestedBlockContextProvider overrides={{layoutBoundary: false}}>
