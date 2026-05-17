@@ -13,7 +13,6 @@ import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
   formatRescheduleToastMessage,
   rescheduleBlock,
-  undoReschedule,
 } from '../index.ts'
 import { SrsSignal } from '../scheduler.ts'
 import { srsReschedulingDataExtension } from '../dataExtension.ts'
@@ -206,7 +205,7 @@ describe('rescheduleBlock', () => {
   })
 })
 
-describe('undoReschedule', () => {
+describe('repo.undo after rescheduleBlock', () => {
   it('reverts SRS properties on a previously typed block', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date(2026, 4, 5))
@@ -230,12 +229,11 @@ describe('undoReschedule', () => {
 
     const block = repo.block('srs-block')
     await block.load()
-    const result = await rescheduleBlock(block, SrsSignal.GOOD)
-    expect(result).not.toBeNull()
+    expect(await rescheduleBlock(block, SrsSignal.GOOD)).not.toBeNull()
     expect(block.get(srsIntervalProp)).toBe(20)
     expect(block.get(srsReviewCountProp)).toBe(4)
 
-    await undoReschedule(block, result!)
+    expect(await repo.undo()).toBe(true)
     await block.load()
 
     expect(block.types).toContain(SRS_SM25_TYPE)
@@ -262,11 +260,10 @@ describe('undoReschedule', () => {
 
     const block = repo.block('plain-block')
     await block.load()
-    const result = await rescheduleBlock(block, SrsSignal.GOOD)
-    expect(result).not.toBeNull()
+    expect(await rescheduleBlock(block, SrsSignal.GOOD)).not.toBeNull()
     expect(block.types).toContain(SRS_SM25_TYPE)
 
-    await undoReschedule(block, result!)
+    expect(await repo.undo()).toBe(true)
     await block.load()
 
     expect(block.types).not.toContain(SRS_SM25_TYPE)
@@ -282,7 +279,6 @@ describe('formatRescheduleToastMessage', () => {
       newInterval: 5,
       nextReviewDate: new Date(2026, 4, 10),
       previousReviewCount: 0,
-      previousProperties: {},
     })
     expect(msg).toBe('GOOD · 5d (May 10)')
   })
@@ -294,7 +290,6 @@ describe('formatRescheduleToastMessage', () => {
       newInterval: 7.4,
       nextReviewDate: new Date(2026, 4, 24),
       previousReviewCount: 4,
-      previousProperties: {},
     })
     expect(msg).toBe('GOOD · 3d → 7d (May 24)')
   })
@@ -306,7 +301,6 @@ describe('formatRescheduleToastMessage', () => {
       newInterval: 90,
       nextReviewDate: new Date(2026, 7, 3),
       previousReviewCount: 6,
-      previousProperties: {},
     })
     expect(msg).toBe('EASY · 1mo → 3mo (Aug 3)')
   })

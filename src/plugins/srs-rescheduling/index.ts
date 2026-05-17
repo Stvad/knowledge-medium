@@ -118,10 +118,6 @@ export interface RescheduleResult {
   newInterval: number
   nextReviewDate: Date
   previousReviewCount: number
-  /** Pre-reschedule snapshot of the block's `properties` bag. Used by
-   *  `undoReschedule` to restore both the SRS values and (if the block
-   *  wasn't typed before) drop the type that was just added. */
-  previousProperties: Record<string, unknown>
 }
 
 export const rescheduleBlock = async (
@@ -163,11 +159,6 @@ export const rescheduleBlock = async (
   }
   const typeSnapshot = block.repo.snapshotTypeRegistries()
 
-  // Captured before tx so undo restores the pre-action state even if
-  // tx.update ends up merging with concurrent edits. Frozen clone so the
-  // closure isn't tied to mutable repo internals.
-  const previousProperties = {...data.properties}
-
   await block.repo.tx(async tx => {
     let row = await tx.get(block.id)
     if (!row) return
@@ -195,20 +186,7 @@ export const rescheduleBlock = async (
     newInterval: scheduled.interval,
     nextReviewDate: scheduled.nextReviewDate,
     previousReviewCount: reviewCount,
-    previousProperties,
   }
-}
-
-export const undoReschedule = async (
-  block: Block,
-  result: RescheduleResult,
-): Promise<void> => {
-  if (block.repo.isReadOnly) return
-  await block.repo.tx(async tx => {
-    const row = await tx.get(block.id)
-    if (!row) return
-    await tx.update(block.id, {properties: result.previousProperties})
-  }, {scope: ChangeScope.BlockDefault, description: 'srs undo reschedule'})
 }
 
 const formatIntervalDays = (days: number): string => {
@@ -238,10 +216,15 @@ const runRescheduleWithFeedback = async (
 ): Promise<void> => {
   const result = await rescheduleBlock(block, signal)
   if (!result) return
+  // Undo delegates to `repo.undo()` — the reschedule tx is the top of
+  // the BlockDefault undo stack at this point, and toast lifetime (4s)
+  // is short enough that a competing user edit slipping in front is a
+  // non-issue in practice. Same target as cmd-Z, so behaviour matches
+  // the keyboard shortcut and we don't maintain a parallel inverse path.
   showSuccess(formatRescheduleToastMessage(result), {
     action: {
       label: 'Undo',
-      onClick: () => { void undoReschedule(block, result) },
+      onClick: () => { void block.repo.undo() },
     },
   })
 }
