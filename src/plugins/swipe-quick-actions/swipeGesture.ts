@@ -7,6 +7,7 @@ import { focusedBlockIdProp, isEditingProp } from '@/data/properties.ts'
 import type { Block } from '@/data/block'
 import {
   dispatchSwipeQuickActionMenuEvent,
+  dispatchSwipeQuickActionProgressEvent,
   dispatchSwipeQuickActionRunEvent,
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
@@ -27,6 +28,13 @@ interface TouchStart {
   /** Once a horizontal-swipe intent is locked in, we set this so further
    *  movement doesn't keep re-evaluating direction. */
   decided: 'horizontal' | 'vertical' | null
+  /** True once we've emitted at least one 'active' progress event for
+   *  this gesture. We owe the menu a matching 'cancel' on any exit
+   *  path that doesn't commit to opening — including the case where
+   *  the finger crossed zero on the way out and the final `dx` is no
+   *  longer negative. Re-deriving from the final dx would miss those
+   *  reversed gestures and leave the toolbar stuck partially revealed. */
+  previewed: boolean
 }
 
 const touchStartByBlockId = new Map<string, TouchStart>()
@@ -131,6 +139,7 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
         time: Date.now(),
         identifier: touch.identifier,
         decided: null,
+        previewed: false,
       })
     },
 
@@ -156,6 +165,16 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // later horizontal pivot mid-scroll doesn't surprise the user.
       if (start.decided === 'vertical') {
         touchStartByBlockId.delete(block.id)
+        return
+      }
+
+      // Stream live progress for the toolbar reveal preview. Only the
+      // leftward (opening) gesture has a preview — right-swipe on the
+      // closed block surface runs a semantic action and doesn't need
+      // intermediate visual feedback.
+      if (start.decided === 'horizontal' && dx < 0 && !isBlockEditing(block.id, uiStateBlock)) {
+        start.previewed = true
+        dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'active')
       }
     },
 
@@ -174,48 +193,58 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
 
       const dx = touch.clientX - start.x
       const dy = touch.clientY - start.y
+      const previewed = start.previewed
+      let openCommitted = false
 
       // Horizontal-only — vertical scrolls and taps are someone else's job.
-      if (Math.abs(dx) <= Math.abs(dy)) return
-
       // Swipe-left opens this block's menu in this panel. Swipe-right on
       // the block surface runs the semantic block action; if no mounted
       // runtime handles that action, we preserve the old fallback of
       // asking the panel menu to dismiss when anchored here. A rightward
       // swipe directly on the open menu/toolbar is handled inside
       // SwipeActionMenu itself and remains the close gesture.
-      if (dx <= -SWIPE_TRIGGER_PX) {
-        if (isBlockEditing(block.id, uiStateBlock)) return
-        const handled = !dispatchSwipeQuickActionMenuEvent(
-          event.currentTarget,
-          SWIPE_QUICK_ACTION_OPEN_EVENT,
-          block.id,
-        )
-        if (handled) {
-          event.preventDefault()
-          event.stopPropagation()
+      if (Math.abs(dx) > Math.abs(dy)) {
+        if (dx <= -SWIPE_TRIGGER_PX && !isBlockEditing(block.id, uiStateBlock)) {
+          const handled = !dispatchSwipeQuickActionMenuEvent(
+            event.currentTarget,
+            SWIPE_QUICK_ACTION_OPEN_EVENT,
+            block.id,
+          )
+          if (handled) {
+            event.preventDefault()
+            event.stopPropagation()
+            openCommitted = true
+          }
+        } else if (dx >= SWIPE_TRIGGER_PX) {
+          const actionHandled = !dispatchSwipeQuickActionRunEvent(
+            event.currentTarget,
+            SWIPE_RIGHT_BLOCK_ACTION_ID,
+            block.id,
+          )
+          if (actionHandled) {
+            event.preventDefault()
+            event.stopPropagation()
+          } else {
+            const handled = !dispatchSwipeQuickActionMenuEvent(
+              event.currentTarget,
+              SWIPE_QUICK_ACTION_CLOSE_EVENT,
+              block.id,
+            )
+            if (handled) {
+              event.preventDefault()
+              event.stopPropagation()
+            }
+          }
         }
-      } else if (dx >= SWIPE_TRIGGER_PX) {
-        const actionHandled = !dispatchSwipeQuickActionRunEvent(
-          event.currentTarget,
-          SWIPE_RIGHT_BLOCK_ACTION_ID,
-          block.id,
-        )
-        if (actionHandled) {
-          event.preventDefault()
-          event.stopPropagation()
-          return
-        }
+      }
 
-        const handled = !dispatchSwipeQuickActionMenuEvent(
-          event.currentTarget,
-          SWIPE_QUICK_ACTION_CLOSE_EVENT,
-          block.id,
-        )
-        if (handled) {
-          event.preventDefault()
-          event.stopPropagation()
-        }
+      // If we previewed during the drag and didn't commit to opening,
+      // tell the menu to animate the toolbar back. Catches every
+      // non-committing exit, including the reversed-past-zero case
+      // (drag left, then back right) where final dx wouldn't tell us
+      // a preview was in flight.
+      if (previewed && !openCommitted) {
+        dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, dx, 'cancel')
       }
     },
 
@@ -228,6 +257,12 @@ export const swipeQuickActionsContentSurface: BlockContentSurfaceContribution = 
       // in play.
       if (findTrackedTouch(event.changedTouches, start.identifier)) {
         touchStartByBlockId.delete(block.id)
+        // If we had been previewing, settle back. The dx isn't
+        // recoverable here so we pass 0 — the menu just needs the
+        // 'cancel' signal to start its hide animation.
+        if (start.previewed) {
+          dispatchSwipeQuickActionProgressEvent(event.currentTarget, block.id, 0, 'cancel')
+        }
       }
     },
   }

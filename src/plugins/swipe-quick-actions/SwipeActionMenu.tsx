@@ -15,8 +15,10 @@ import {
 import {
   isSwipeQuickActionRunEvent,
   isSwipeQuickActionMenuEvent,
+  isSwipeQuickActionProgressEvent,
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
+  SWIPE_QUICK_ACTION_PROGRESS_EVENT,
   SWIPE_QUICK_ACTION_RUN_EVENT,
 } from './events.ts'
 import {
@@ -108,6 +110,28 @@ interface ResolvedQuickAction {
 }
 
 const TOOLBAR_ROW_HEIGHT_PX = 28
+
+/** Drag distance at which the toolbar is fully revealed during a
+ *  preview. Intentionally larger than `SWIPE_TRIGGER_PX` so releasing
+ *  at the commit threshold still has room for a satisfying "complete
+ *  the appearance" snap (think the Workflowy left-swipe pull-out). */
+const PREVIEW_FULL_REVEAL_PX = 100
+
+/** Duration of the snap-to-resting-state animation after the finger
+ *  lifts. Long enough to read, short enough to feel responsive. */
+const SETTLE_DURATION_MS = 200
+
+const clamp = (value: number, min: number, max: number): number =>
+  Math.max(min, Math.min(max, value))
+
+/** Map an opening-drag delta (dx ≤ 0) to the toolbar's hide percent —
+ *  0 = fully visible, 100 = parked off-screen right. */
+const computeOpenHidePercent = (dx: number): number =>
+  clamp(100 + (dx / PREVIEW_FULL_REVEAL_PX) * 100, 0, 100)
+
+/** Same mapping for a close-drag on an already-open menu (dx ≥ 0). */
+const computeCloseHidePercent = (dx: number): number =>
+  clamp((dx / PREVIEW_FULL_REVEAL_PX) * 100, 0, 100)
 
 /** Build a render-ready view for the toolbar from `(items, registry)`,
  *  so the JSX below stays focused on layout. */
@@ -208,16 +232,83 @@ export const SwipeActionMenu = () => {
     setPanelRoot(inlineAnchorRef.current?.closest<HTMLElement>('.panel') ?? null)
   }, [])
 
+  // Block currently being "previewed" — i.e. the user has started a
+  // leftward swipe and the toolbar is following the finger but the
+  // gesture hasn't committed yet. Set independently of activeBlockId so
+  // we can anchor and render the toolbar before commit.
+  const [previewBlockId, setPreviewBlockId] = useState<string | null>(null)
+  // Live hide percent (0..100). `null` means "use the resting position
+  // for the current activeBlockId" — i.e. 0 if open, 100 if not. While
+  // a drag is in flight or the menu is settling, this carries the
+  // intermediate value so the toolbar can track the finger / animate.
+  const [dragOffsetPercent, setDragOffsetPercent] = useState<number | null>(null)
+  // True while the toolbar is animating to its resting position
+  // (released without commit, committed mid-preview, dismissing). The
+  // CSS transition is gated on this flag — during the drag itself it
+  // must be off so the transform tracks the finger exactly.
+  const [isSettling, setIsSettling] = useState(false)
+  const settleTimerRef = useRef<number | null>(null)
+  // Tracked for the settle timer: if the timer fires while still
+  // pointed at 'closed', we need to drop activeBlockId.
+  const settleTargetRef = useRef<'open' | 'closed' | null>(null)
+
+  // Anchor to the previewed block before commit so the toolbar lines
+  // up with the row the user is dragging on; fall through to the
+  // committed activeBlockId once the gesture lands.
+  const anchorBlockId = previewBlockId ?? activeBlockId
   const anchor = useAnchorRect(
     isMobile ? panelRoot : null,
-    isMobile ? activeBlockId : undefined,
+    isMobile ? anchorBlockId : undefined,
   )
   const [showOverflow, setShowOverflow] = useState(false)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const menuTouchStartRef = useRef<MenuTouchStart | null>(null)
-  const dismiss = useCallback((): void => {
-    setActiveBlockId(undefined)
+
+  const clearSettleTimer = useCallback((): void => {
+    if (settleTimerRef.current !== null) {
+      window.clearTimeout(settleTimerRef.current)
+      settleTimerRef.current = null
+    }
+    settleTargetRef.current = null
   }, [])
+
+  // Kick off a settle animation toward the given resting state. On
+  // timer end we tear down preview state and, for 'closed', drop the
+  // active block so the menu unmounts.
+  const startSettle = useCallback((target: 'open' | 'closed'): void => {
+    if (settleTimerRef.current !== null) {
+      window.clearTimeout(settleTimerRef.current)
+    }
+    settleTargetRef.current = target
+    setIsSettling(true)
+    setDragOffsetPercent(target === 'open' ? 0 : 100)
+    settleTimerRef.current = window.setTimeout(() => {
+      settleTimerRef.current = null
+      const finalTarget = settleTargetRef.current
+      settleTargetRef.current = null
+      setIsSettling(false)
+      setPreviewBlockId(null)
+      setDragOffsetPercent(null)
+      if (finalTarget === 'closed') {
+        setActiveBlockId(undefined)
+      }
+    }, SETTLE_DURATION_MS)
+  }, [])
+
+  // Clear any in-flight settle on unmount AND on panel navigation.
+  // Without the topLevelBlockId dependency, a settle scheduled in the
+  // previous panel scope could fire after the user has opened a fresh
+  // menu in the new scope and reset `activeBlockId`, closing the new
+  // menu unexpectedly.
+  useEffect(() => () => clearSettleTimer(), [clearSettleTimer, topLevelBlockId])
+
+  const dismiss = useCallback((): void => {
+    clearSettleTimer()
+    setActiveBlockId(undefined)
+    setPreviewBlockId(null)
+    setDragOffsetPercent(null)
+    setIsSettling(false)
+  }, [clearSettleTimer])
 
   // Resolve action metadata once per runtime — the registries are stable
   // across renders so this is effectively a one-time lookup that lets
@@ -242,8 +333,11 @@ export const SwipeActionMenu = () => {
   // isn't registered fall through so the missing-action error is still
   // visible on click.
   const visibleItems = useMemo(() => {
-    if (!activeBlockId) return actionItems
-    const block = repo.block(activeBlockId)
+    // Filter against the previewed block too so the buttons that slide
+    // in during the drag match the ones that'll be there after commit.
+    const blockId = activeBlockId ?? previewBlockId
+    if (!blockId) return actionItems
+    const block = repo.block(blockId)
     if (!block.peek()) return actionItems
     return actionItems.filter(item => {
       const action = allActions.find(a => a.id === item.actionId)
@@ -251,7 +345,7 @@ export const SwipeActionMenu = () => {
       if (!action.canRun) return true
       return action.canRun({block, uiStateBlock})
     })
-  }, [actionItems, allActions, activeBlockId, repo, uiStateBlock])
+  }, [actionItems, allActions, activeBlockId, previewBlockId, repo, uiStateBlock])
   const [primaryRows, overflowItems] = useMemo(() => {
     const rows = new Map<number, QuickActionItem[]>()
     const overflow: QuickActionItem[] = []
@@ -291,7 +385,15 @@ export const SwipeActionMenu = () => {
   const [trackedTopLevelBlockId, setTrackedTopLevelBlockId] = useState(topLevelBlockId)
   if (trackedTopLevelBlockId !== topLevelBlockId) {
     setTrackedTopLevelBlockId(topLevelBlockId)
+    // Panel navigated mid-gesture: drop visible state synchronously
+    // (we don't want a leftover preview rendering against an unrelated
+    // block in the new panel scope). A pending settle timer will still
+    // fire but its setState calls are no-ops once everything is
+    // already cleared, so we don't reach into the ref from render.
     if (activeBlockId) setActiveBlockId(undefined)
+    if (previewBlockId !== null) setPreviewBlockId(null)
+    if (dragOffsetPercent !== null) setDragOffsetPercent(null)
+    if (isSettling) setIsSettling(false)
   }
 
   useEffect(() => {
@@ -300,14 +402,28 @@ export const SwipeActionMenu = () => {
     const handleOpen = (event: Event): void => {
       if (!isSwipeQuickActionMenuEvent(event)) return
       event.preventDefault()
-      setActiveBlockId(event.detail.blockId)
+      const blockId = event.detail.blockId
+      setActiveBlockId(blockId)
+      // If the open came after a preview of the same block, animate
+      // the toolbar's remaining offset to fully visible — the
+      // "completes appearing" snap. Otherwise no animation is needed:
+      // either we weren't previewing or we were previewing a different
+      // block (rare), and the menu should just appear at rest.
+      if (previewBlockId === blockId && dragOffsetPercent !== null) {
+        startSettle('open')
+      } else {
+        clearSettleTimer()
+        setPreviewBlockId(null)
+        setDragOffsetPercent(null)
+        setIsSettling(false)
+      }
     }
 
     const handleClose = (event: Event): void => {
       if (!isSwipeQuickActionMenuEvent(event)) return
       if (event.detail.blockId !== activeBlockId) return
       event.preventDefault()
-      setActiveBlockId(undefined)
+      startSettle('closed')
     }
 
     const handleRun = (event: Event): void => {
@@ -316,15 +432,33 @@ export const SwipeActionMenu = () => {
       event.preventDefault()
     }
 
+    const handleProgress = (event: Event): void => {
+      if (!isSwipeQuickActionProgressEvent(event)) return
+      const {blockId, dx, phase} = event.detail
+      if (phase === 'active') {
+        // Drag still in flight — follow the finger without animation.
+        // Re-grabbing a different block mid-gesture just retargets.
+        clearSettleTimer()
+        setIsSettling(false)
+        setPreviewBlockId(blockId)
+        setDragOffsetPercent(computeOpenHidePercent(dx))
+      } else if (phase === 'cancel' && previewBlockId === blockId) {
+        // Released without commit — animate the toolbar back to hidden.
+        startSettle('closed')
+      }
+    }
+
     panelRoot.addEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, handleOpen)
     panelRoot.addEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, handleClose)
     panelRoot.addEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, handleRun)
+    panelRoot.addEventListener(SWIPE_QUICK_ACTION_PROGRESS_EVENT, handleProgress)
     return () => {
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_OPEN_EVENT, handleOpen)
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_CLOSE_EVENT, handleClose)
       panelRoot.removeEventListener(SWIPE_QUICK_ACTION_RUN_EVENT, handleRun)
+      panelRoot.removeEventListener(SWIPE_QUICK_ACTION_PROGRESS_EVENT, handleProgress)
     }
-  }, [activeBlockId, panelRoot, runBlockAction])
+  }, [activeBlockId, dragOffsetPercent, panelRoot, previewBlockId, runBlockAction, startSettle, clearSettleTimer])
 
   useEffect(() => {
     if (!activeBlockId || !isMobile || !panelRoot) return
@@ -378,11 +512,17 @@ export const SwipeActionMenu = () => {
     <div ref={inlineAnchorRef} className="swipe-action-menu-anchor" aria-hidden="true"/>
   )
 
-  if (!isMobile || !activeBlockId || !anchor) return inlineAnchor
+  // Render whenever the menu is committed OR a swipe preview is in
+  // flight. The preview branch lets the toolbar slide in tracking the
+  // finger before commit, matching the Workflowy-style pull-out.
+  const renderedBlockId = activeBlockId ?? previewBlockId
+  if (!isMobile || !renderedBlockId || !anchor) return inlineAnchor
 
   // The block whose handler we'll dispatch lives in this panel; resolve
-  // it from the active id via the same repo that owns uiStateBlock.
-  const block = repo.block(activeBlockId)
+  // it via the same repo that owns uiStateBlock. Buttons only become
+  // tappable once activeBlockId is set, so a preview can safely
+  // reference a block that might disappear between drag and commit.
+  const block = repo.block(renderedBlockId)
   if (!block.peek()) return inlineAnchor
 
   /** Dispatch the resolved action's handler with our block-level deps.
@@ -432,6 +572,22 @@ export const SwipeActionMenu = () => {
 
   const handleMenuTouchMove = (event: TouchEvent) => {
     event.stopPropagation()
+    const touch = trackedMenuTouch(event)
+    const start = menuTouchStartRef.current
+    if (!touch || !start) return
+
+    const dx = touch.clientX - start.x
+    const dy = touch.clientY - start.y
+
+    // Live-track the close-drag: as the finger moves right we slide
+    // the menu out proportionally. Only kick in once the gesture is
+    // clearly horizontal-rightward, otherwise vertical scroll-like
+    // micromotion would jitter the offset.
+    if (dx > 0 && Math.abs(dx) > Math.abs(dy)) {
+      clearSettleTimer()
+      setIsSettling(false)
+      setDragOffsetPercent(computeCloseHidePercent(dx))
+    }
   }
 
   const handleMenuTouchEnd = (event: TouchEvent) => {
@@ -443,15 +599,26 @@ export const SwipeActionMenu = () => {
     menuTouchStartRef.current = null
     const dx = touch.clientX - start.x
     const dy = touch.clientY - start.y
-    if (dx < SWIPE_TRIGGER_PX || Math.abs(dx) <= Math.abs(dy)) return
 
-    event.preventDefault()
-    dismiss()
+    // Past commit threshold and clearly horizontal → animate fully out
+    // and dismiss. Below threshold but with a live drag offset → snap
+    // back to fully open. Otherwise the touch was a tap / scroll and
+    // we leave the menu as-is.
+    if (dx >= SWIPE_TRIGGER_PX && Math.abs(dx) > Math.abs(dy)) {
+      event.preventDefault()
+      startSettle('closed')
+    } else if (dragOffsetPercent !== null) {
+      startSettle('open')
+    }
   }
 
   const handleMenuTouchCancel = (event: TouchEvent) => {
     event.stopPropagation()
-    if (trackedMenuTouch(event)) menuTouchStartRef.current = null
+    if (trackedMenuTouch(event)) {
+      menuTouchStartRef.current = null
+      // If the drag put the menu mid-way out, recover to fully open.
+      if (dragOffsetPercent !== null) startSettle('open')
+    }
   }
 
   // Align the strip's vertical center to the swiped row's center so it
@@ -464,14 +631,32 @@ export const SwipeActionMenu = () => {
     window.innerHeight - toolbarHeight / 2,
   )
 
+  // Compose translateY(-50%) for vertical-row centering with translateX
+  // for the swipe reveal. The hide percent is 0 when the menu is at
+  // rest open, 100 when fully parked off-screen right, and a live value
+  // in between while dragging or settling.
+  const hidePercent = dragOffsetPercent ?? (activeBlockId ? 0 : 100)
+  const toolbarTransform = `translate(${hidePercent}%, -50%)`
+  const toolbarTransition = isSettling
+    ? `transform ${SETTLE_DURATION_MS}ms ease-out`
+    : undefined
+
   return (
     <>
       {inlineAnchor}
       {createPortal(
         <div
           ref={containerRef}
-          className="swipe-action-menu fixed left-0 right-0 z-50 -translate-y-1/2"
-          style={{top: `${toolbarTop}px`}}
+          className="swipe-action-menu fixed left-0 right-0 z-50"
+          style={{
+            top: `${toolbarTop}px`,
+            transform: toolbarTransform,
+            transition: toolbarTransition,
+            // Hint the compositor while a drag is in flight; once
+            // settled we drop the hint so the browser can recycle the
+            // layer.
+            willChange: dragOffsetPercent !== null ? 'transform' : undefined,
+          }}
           data-block-interaction="ignore"
           onTouchStart={handleMenuTouchStart}
           onTouchMove={handleMenuTouchMove}

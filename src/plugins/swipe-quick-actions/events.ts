@@ -6,12 +6,26 @@ export interface SwipeQuickActionRunEventDetail extends SwipeQuickActionMenuEven
   actionId: string
 }
 
+/** Streamed during an in-flight horizontal swipe so SwipeActionMenu can
+ *  render the toolbar tracking the finger. `dx` is the horizontal delta
+ *  from the gesture's starting point — negative while dragging left to
+ *  open. Phase `active` fires on every touchmove past the direction
+ *  lock; `cancel` fires once on release when the swipe didn't commit,
+ *  so the menu can animate back to hidden. Commits dispatch the OPEN
+ *  event instead and the menu treats that as its settle target. */
+export interface SwipeQuickActionProgressEventDetail extends SwipeQuickActionMenuEventDetail {
+  dx: number
+  phase: 'active' | 'cancel'
+}
+
 export type SwipeQuickActionMenuEvent = CustomEvent<SwipeQuickActionMenuEventDetail>
 export type SwipeQuickActionRunEvent = CustomEvent<SwipeQuickActionRunEventDetail>
+export type SwipeQuickActionProgressEvent = CustomEvent<SwipeQuickActionProgressEventDetail>
 
 export const SWIPE_QUICK_ACTION_OPEN_EVENT = 'swipe-quick-actions:open'
 export const SWIPE_QUICK_ACTION_CLOSE_EVENT = 'swipe-quick-actions:close'
 export const SWIPE_QUICK_ACTION_RUN_EVENT = 'swipe-quick-actions:run'
+export const SWIPE_QUICK_ACTION_PROGRESS_EVENT = 'swipe-quick-actions:progress'
 
 export const isSwipeQuickActionMenuEvent = (
   event: Event,
@@ -26,6 +40,13 @@ export const isSwipeQuickActionRunEvent = (
 ): event is SwipeQuickActionRunEvent =>
   isSwipeQuickActionMenuEvent(event) &&
   typeof (event.detail as {actionId?: unknown}).actionId === 'string'
+
+export const isSwipeQuickActionProgressEvent = (
+  event: Event,
+): event is SwipeQuickActionProgressEvent =>
+  isSwipeQuickActionMenuEvent(event) &&
+  typeof (event.detail as {dx?: unknown}).dx === 'number' &&
+  typeof (event.detail as {phase?: unknown}).phase === 'string'
 
 export const dispatchSwipeQuickActionMenuEvent = (
   target: EventTarget,
@@ -47,4 +68,16 @@ export const dispatchSwipeQuickActionRunEvent = (
     bubbles: true,
     cancelable: true,
     detail: {blockId, actionId},
+  }))
+
+export const dispatchSwipeQuickActionProgressEvent = (
+  target: EventTarget,
+  blockId: string,
+  dx: number,
+  phase: 'active' | 'cancel',
+): boolean =>
+  target.dispatchEvent(new CustomEvent<SwipeQuickActionProgressEventDetail>(SWIPE_QUICK_ACTION_PROGRESS_EVENT, {
+    bubbles: true,
+    cancelable: true,
+    detail: {blockId, dx, phase},
   }))
