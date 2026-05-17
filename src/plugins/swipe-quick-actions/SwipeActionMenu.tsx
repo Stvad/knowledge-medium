@@ -295,7 +295,12 @@ export const SwipeActionMenu = () => {
     }, SETTLE_DURATION_MS)
   }, [])
 
-  useEffect(() => () => clearSettleTimer(), [clearSettleTimer])
+  // Clear any in-flight settle on unmount AND on panel navigation.
+  // Without the topLevelBlockId dependency, a settle scheduled in the
+  // previous panel scope could fire after the user has opened a fresh
+  // menu in the new scope and reset `activeBlockId`, closing the new
+  // menu unexpectedly.
+  useEffect(() => () => clearSettleTimer(), [clearSettleTimer, topLevelBlockId])
 
   const dismiss = useCallback((): void => {
     clearSettleTimer()

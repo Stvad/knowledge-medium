@@ -382,6 +382,26 @@ describe('swipe-quick-actions gesture', () => {
     expect(progress.map(p => p.phase)).toEqual(['active'])
   })
 
+  it('emits cancel when a left-swipe preview reverses past zero before lift', () => {
+    const surface = document.createElement('div')
+    const progress = recordProgressEvents(surface)
+    const props = handlers(makeContext('b-reverse'))
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), surface))
+    // Drag left enough to register as a preview.
+    props.onTouchMove?.(touchEvent('touches', touch(170, 102), surface))
+    // Reverse past the starting point — final dx is now positive but
+    // below the right-swipe trigger.
+    props.onTouchMove?.(touchEvent('touches', touch(210, 102), surface))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(210, 102), surface))
+
+    const phases = progress.map(p => p.phase)
+    // At minimum: at least one active, and a cancel at the end so the
+    // toolbar doesn't get stranded partially revealed.
+    expect(phases[0]).toBe('active')
+    expect(phases[phases.length - 1]).toBe('cancel')
+  })
+
   it('does not preview right-swipe drags', () => {
     const surface = document.createElement('div')
     const progress = recordProgressEvents(surface)
