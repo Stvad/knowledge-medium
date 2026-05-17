@@ -1,7 +1,6 @@
 import { useIsMobile } from '@/utils/react.tsx'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useActiveContextsState } from '@/shortcuts/ActiveContexts.tsx'
-import { useRunAction } from '@/shortcuts/runAction.ts'
+import { useActiveContextsState, type ActiveContextsMap } from '@/shortcuts/ActiveContexts.tsx'
 import { actionRuntimeKey, getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { mobileBottomNavItemsFacet } from './facet.ts'
@@ -9,15 +8,18 @@ import { MobileBottomNavButton } from './Button.tsx'
 
 function MobileBottomNavActionButton({
   action,
+  activeContexts,
   disabled,
 }: {
   action: ActionConfig
+  activeContexts: ActiveContextsMap
   disabled: boolean
 }) {
-  const runAction = useRunAction()
   const handleClick = () => {
-    void runAction(
-      action.id,
+    const deps = activeContexts.get(action.context)
+    if (!deps) return
+    void action.handler(
+      deps as never,
       new CustomEvent('mobile-bottom-nav-action', {detail: {actionId: action.id}}),
     )
   }
@@ -61,6 +63,7 @@ function MobileBottomNavSurface() {
             <MobileBottomNavActionButton
               key={id}
               action={action}
+              activeContexts={activeContexts}
               disabled={!activeContexts.has(action.context)}
             />
           )
