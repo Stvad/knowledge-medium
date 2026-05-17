@@ -291,7 +291,7 @@ describe('formatRescheduleToastMessage', () => {
       nextReviewDate: new Date(2026, 4, 24),
       previousReviewCount: 4,
     })
-    expect(msg).toBe('GOOD · 3d → 7d (May 24)')
+    expect(msg).toBe('GOOD · 3d → 8d (May 24)')
   })
 
   it('renders long intervals in months', () => {

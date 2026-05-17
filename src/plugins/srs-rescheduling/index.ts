@@ -8,7 +8,7 @@ import { ChangeScope, type PropertySchema } from '@/data/api'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.ts'
 import { formatIsoDate } from '@/utils/dailyPage'
-import { showSuccess } from '@/utils/toast.ts'
+import { showError, showSuccess } from '@/utils/toast.ts'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -192,11 +192,14 @@ export const rescheduleBlock = async (
   }
 }
 
+// Mirrors `scheduleSrsProperties` which uses `Math.ceil(interval)` to
+// pick the next-review date — display rounding has to match or the
+// toast says "7d" while the date lands 8 days out.
 const formatIntervalDays = (days: number): string => {
-  const rounded = Math.max(1, Math.round(days))
-  if (rounded < 30) return `${rounded}d`
-  if (rounded < 365) return `${Math.round(rounded / 30)}mo`
-  return `${Math.round(rounded / 365)}y`
+  const ceil = Math.max(1, Math.ceil(days))
+  if (ceil < 30) return `${ceil}d`
+  if (ceil < 365) return `${Math.round(ceil / 30)}mo`
+  return `${Math.round(ceil / 365)}y`
 }
 
 const formatShortDate = (date: Date): string =>
@@ -227,7 +230,11 @@ const runRescheduleWithFeedback = async (
   showSuccess(formatRescheduleToastMessage(result), {
     action: {
       label: 'Undo',
-      onClick: () => { void block.repo.undo() },
+      onClick: () => {
+        block.repo.undo().catch((err: unknown) => {
+          showError(err instanceof Error ? err.message : 'Could not undo reschedule')
+        })
+      },
     },
   })
 }
