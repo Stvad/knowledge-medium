@@ -67,7 +67,12 @@ export class PanelHistoryStore {
     const off = set.add(listener)
     return () => {
       off()
-      if (set.size === 0) this.listeners.delete(panelId)
+      // Identity-guard the bucket drop: a double-unsubscribe could
+      // otherwise nuke a fresh bucket that a re-subscribe installed
+      // for the same panelId in between.
+      if (set.size === 0 && this.listeners.get(panelId) === set) {
+        this.listeners.delete(panelId)
+      }
     }
   }
 

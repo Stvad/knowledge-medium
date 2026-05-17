@@ -168,9 +168,10 @@ export class BlockCache {
     return () => {
       off()
       // Drop the per-id slot once empty so the outer Map doesn't
-      // bloat with idle subscriber buckets (the original Set-based
-      // path did the same).
-      if (listeners.size === 0) {
+      // bloat with idle subscriber buckets. Identity-guarded so a
+      // double-unsubscribe can't evict a fresh bucket that a
+      // re-subscribe installed for the same id in between.
+      if (listeners.size === 0 && this.listeners.get(id) === listeners) {
         this.listeners.delete(id)
       }
     }
