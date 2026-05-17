@@ -12,8 +12,10 @@ import { swipeQuickActionsContentSurface } from '../swipeGesture.ts'
 import {
   SWIPE_QUICK_ACTION_CLOSE_EVENT,
   SWIPE_QUICK_ACTION_OPEN_EVENT,
+  SWIPE_QUICK_ACTION_PROGRESS_EVENT,
   SWIPE_QUICK_ACTION_RUN_EVENT,
   type SwipeQuickActionMenuEvent,
+  type SwipeQuickActionProgressEvent,
   type SwipeQuickActionRunEvent,
 } from '../events.ts'
 import { SWIPE_RIGHT_BLOCK_ACTION_ID } from '../actions.ts'
@@ -97,6 +99,17 @@ const recordCloseEvents = (
     if (menuEvent.detail.blockId === activeBlockId) event.preventDefault()
   })
   return closed
+}
+
+const recordProgressEvents = (
+  target: EventTarget,
+): Array<{blockId: string; dx: number; phase: 'active' | 'cancel'}> => {
+  const progress: Array<{blockId: string; dx: number; phase: 'active' | 'cancel'}> = []
+  target.addEventListener(SWIPE_QUICK_ACTION_PROGRESS_EVENT, event => {
+    const detail = (event as SwipeQuickActionProgressEvent).detail
+    progress.push({blockId: detail.blockId, dx: detail.dx, phase: detail.phase})
+  })
+  return progress
 }
 
 const recordRunEvents = (target: EventTarget): Array<{blockId: string; actionId: string}> => {
@@ -330,6 +343,56 @@ describe('swipe-quick-actions gesture', () => {
     props.onTouchStart?.(touchEvent('changedTouches', second, surface))
     props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 100, 1), surface))
     expect(opened).toEqual(['b-lock'])
+  })
+
+  it('streams progress events during a leftward drag and stops on cancel', () => {
+    const surface = document.createElement('div')
+    const progress = recordProgressEvents(surface)
+    const props = handlers(makeContext('b-preview'))
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), surface))
+    // Two move samples mid-drag — direction lock decides 'horizontal'
+    // immediately because |dx|>|dy| at the first sample past the lock
+    // threshold, so both samples should fire 'active' progress.
+    props.onTouchMove?.(touchEvent('touches', touch(180, 102), surface))
+    props.onTouchMove?.(touchEvent('touches', touch(160, 102), surface))
+    // Release short of the trigger threshold — should emit a 'cancel'
+    // so the menu can animate the toolbar back.
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(170, 102), surface))
+
+    expect(progress.map(p => p.phase)).toEqual(['active', 'active', 'cancel'])
+    expect(progress.every(p => p.blockId === 'b-preview')).toBe(true)
+    expect(progress[0].dx).toBe(-20)
+    expect(progress[1].dx).toBe(-40)
+  })
+
+  it('omits the trailing cancel when the swipe commits to opening', () => {
+    const surface = document.createElement('div')
+    const progress = recordProgressEvents(surface)
+    recordOpenEvents(surface)
+    const props = handlers(makeContext('b-commit'))
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(200, 100), surface))
+    props.onTouchMove?.(touchEvent('touches', touch(150, 102), surface))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(120, 102), surface))
+
+    // Active was streamed during the move; the commit path delegates
+    // the "finalize" to the OPEN event, not a cancel, so the menu can
+    // settle into the open state instead of bouncing back.
+    expect(progress.map(p => p.phase)).toEqual(['active'])
+  })
+
+  it('does not preview right-swipe drags', () => {
+    const surface = document.createElement('div')
+    const progress = recordProgressEvents(surface)
+    const props = handlers(makeContext('b-right-only'))
+
+    props.onTouchStart?.(touchEvent('changedTouches', touch(50, 100), surface))
+    props.onTouchMove?.(touchEvent('touches', touch(90, 102), surface))
+    props.onTouchEnd?.(touchEvent('changedTouches', touch(140, 102), surface))
+
+    // Right-swipe runs a semantic action and has no toolbar preview.
+    expect(progress).toEqual([])
   })
 
   it('does not open the menu on non-mobile viewports', () => {
