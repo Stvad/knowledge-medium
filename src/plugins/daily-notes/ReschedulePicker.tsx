@@ -326,7 +326,7 @@ export const ReschedulePicker = () => {
                     isSelected
                       ? 'border-primary bg-primary text-primary-foreground'
                       : cell.isToday
-                        ? 'border-primary/40 bg-background text-primary'
+                        ? 'border-primary bg-primary/10 text-primary'
                         : 'border-border bg-background text-foreground hover:bg-muted',
                   )}
                 >
@@ -337,11 +337,13 @@ export const ReschedulePicker = () => {
                     {cell.date.getDate()}
                   </span>
                   <span className="text-[9px] opacity-60">
-                    {cell.offsetDays === 0
+                    {cell.isToday
                       ? 'today'
-                      : cell.offsetDays > 0
-                        ? `+${cell.offsetDays}d`
-                        : `${cell.offsetDays}d`}
+                      : cell.offsetDays === 0
+                        ? 'original'
+                        : cell.offsetDays > 0
+                          ? `+${cell.offsetDays}d`
+                          : `${cell.offsetDays}d`}
                   </span>
                 </button>
               )
