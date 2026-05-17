@@ -32,6 +32,7 @@
  */
 
 import { ChangeScope, scopeIsUndoable } from '@/data/api'
+import { CallbackSet } from '@/utils/callbackSet'
 import type { SnapshotsMap } from './txSnapshots'
 
 export interface UndoEntry {
@@ -50,6 +51,7 @@ export interface UndoManagerOptions {
 export class UndoManager {
   private readonly undoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
   private readonly redoStacks: Map<ChangeScope, UndoEntry[]> = new Map()
+  private readonly listenersByScope: Map<ChangeScope, CallbackSet<[]>> = new Map()
   private readonly maxDepth: number
 
   constructor(opts: UndoManagerOptions = {}) {
@@ -58,12 +60,17 @@ export class UndoManager {
 
   /** Push an entry onto the undo stack of its scope. Side-effects:
    *  clears the redo stack for that scope (a new action invalidates
-   *  the redo branch). No-op for non-undoable scopes and zero-write txs. */
+   *  the redo branch). No-op for non-undoable scopes and zero-write txs.
+   *
+   *  Subscriber-visible state must be consistent at notify-time, so the
+   *  redo clear happens BEFORE pushUndo's notify fires — otherwise a
+   *  listener that recomputes `depths()` would see the stale pre-clear
+   *  redo count and keep redo UI enabled. */
   record(entry: UndoEntry): void {
     if (!this.isUndoable(entry.scope)) return
     if (entry.snapshots.size === 0) return
-    this.pushUndo(entry.scope, entry)
     this.getRedo(entry.scope).length = 0
+    this.pushUndo(entry.scope, entry)
   }
 
   peekUndo(scope: ChangeScope): UndoEntry | null {
@@ -75,29 +82,50 @@ export class UndoManager {
   }
 
   popUndo(scope: ChangeScope): UndoEntry | null {
-    return this.getUndo(scope).pop() ?? null
+    const entry = this.getUndo(scope).pop() ?? null
+    if (entry !== null) this.notify(scope)
+    return entry
   }
 
   popRedo(scope: ChangeScope): UndoEntry | null {
-    return this.getRedo(scope).pop() ?? null
+    const entry = this.getRedo(scope).pop() ?? null
+    if (entry !== null) this.notify(scope)
+    return entry
   }
 
   pushUndo(scope: ChangeScope, entry: UndoEntry): void {
     const stack = this.getUndo(scope)
     stack.push(entry)
     if (stack.length > this.maxDepth) stack.shift()
+    this.notify(scope)
   }
 
   pushRedo(scope: ChangeScope, entry: UndoEntry): void {
     const stack = this.getRedo(scope)
     stack.push(entry)
     if (stack.length > this.maxDepth) stack.shift()
+    this.notify(scope)
   }
 
-  /** Drop all stacks (for tests + an eventual "clear history" UX). */
+  /** Subscribe to stack-shape changes for `scope`. Fires after any
+   *  record / push / pop on either the undo or redo stack of that
+   *  scope. Used by reactive UI (toast button enable-state, future
+   *  Edit-menu Undo/Redo) to re-read `peekUndo` / `depths`. Returns
+   *  an unsubscribe; listener exceptions are isolated by CallbackSet. */
+  subscribe(scope: ChangeScope, listener: () => void): () => void {
+    return this.listenersFor(scope).add(listener)
+  }
+
+  /** Drop all stacks (for tests + an eventual "clear history" UX).
+   *  Notifies subscribers on every scope that previously had state. */
   clear(): void {
+    const touched = new Set<ChangeScope>([
+      ...this.undoStacks.keys(),
+      ...this.redoStacks.keys(),
+    ])
     this.undoStacks.clear()
     this.redoStacks.clear()
+    for (const scope of touched) this.notify(scope)
   }
 
   /** Stack depths — used by UI to enable / disable undo/redo buttons. */
@@ -129,5 +157,18 @@ export class UndoManager {
       this.redoStacks.set(scope, stack)
     }
     return stack
+  }
+
+  private listenersFor(scope: ChangeScope): CallbackSet<[]> {
+    let set = this.listenersByScope.get(scope)
+    if (!set) {
+      set = new CallbackSet(`UndoManager[${scope}]`)
+      this.listenersByScope.set(scope, set)
+    }
+    return set
+  }
+
+  private notify(scope: ChangeScope): void {
+    this.listenersByScope.get(scope)?.notify()
   }
 }

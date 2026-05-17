@@ -27,6 +27,7 @@ import {
   scrollTopProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
+import { CallbackSet } from '@/utils/callbackSet'
 
 /** Per-(panel, block-visit) ephemeral state captured at navigation time
  *  and replayed on back/forward. New fields can be added freely; consumers
@@ -50,7 +51,7 @@ const EMPTY: PanelHistoryState = {back: [], forward: []}
 
 export class PanelHistoryStore {
   private state = new Map<string, PanelHistoryState>()
-  private readonly listeners = new Map<string, Set<() => void>>()
+  private readonly listeners = new Map<string, CallbackSet<[]>>()
   private readonly snapshotters = new Map<string, () => VisitState | undefined>()
   private readonly pendingRestore = new Map<string, VisitState>()
 
@@ -58,14 +59,20 @@ export class PanelHistoryStore {
     this.state.get(panelId) ?? EMPTY
 
   subscribe = (panelId: string, listener: () => void): (() => void) => {
-    const set = this.listeners.get(panelId) ?? new Set()
-    set.add(listener)
-    this.listeners.set(panelId, set)
+    let set = this.listeners.get(panelId)
+    if (!set) {
+      set = new CallbackSet(`PanelHistory[${panelId}]`)
+      this.listeners.set(panelId, set)
+    }
+    const off = set.add(listener)
     return () => {
-      const current = this.listeners.get(panelId)
-      if (!current) return
-      current.delete(listener)
-      if (current.size === 0) this.listeners.delete(panelId)
+      off()
+      // Identity-guard the bucket drop: a double-unsubscribe could
+      // otherwise nuke a fresh bucket that a re-subscribe installed
+      // for the same panelId in between.
+      if (set.size === 0 && this.listeners.get(panelId) === set) {
+        this.listeners.delete(panelId)
+      }
     }
   }
 
@@ -191,9 +198,7 @@ export class PanelHistoryStore {
   }
 
   private notify(panelId: string): void {
-    const listeners = this.listeners.get(panelId)
-    if (!listeners) return
-    for (const l of [...listeners]) l()
+    this.listeners.get(panelId)?.notify()
   }
 }
 

@@ -17,6 +17,7 @@
  * `<Toaster />` at the app root and exposes the `toast` function
  * from module scope. The `<Toaster />` is mounted in main.tsx.
  */
+import type React from 'react'
 import { toast as sonnerToast } from 'sonner'
 
 export interface ToastAction {
@@ -58,6 +59,20 @@ export const showSuccess = (message: string, opts: ToastOptions = {}): string | 
   sonnerToast.success(message, {
     duration: opts.duration ?? 4000,
     action: buildAction(opts.action),
+    id: opts.id,
+  })
+
+/** Render a fully custom toast (JSX). Use when the toast needs internal
+ *  reactive state — e.g. a button whose enabled-state depends on a live
+ *  subscription — that the standard `action` shape can't express. The
+ *  render fn receives the sonner toast id so the JSX can dismiss itself
+ *  on user action. */
+export const showCustom = (
+  render: (id: string | number) => React.ReactElement,
+  opts: Pick<ToastOptions, 'duration' | 'id'> = {},
+): string | number =>
+  sonnerToast.custom(render, {
+    duration: opts.duration ?? 4000,
     id: opts.id,
   })
 

@@ -1,4 +1,5 @@
 import type { BlockData } from '@/types'
+import { CallbackSet } from '@/utils/callbackSet'
 
 const deepFreeze = <T>(value: T): T => {
   if (value === null || typeof value !== 'object') return value
@@ -73,7 +74,7 @@ export class BlockCacheMetrics {
  *  class. */
 export class BlockCache {
   private readonly snapshots = new Map<string, BlockData>()
-  private readonly listeners = new Map<string, Set<() => void>>()
+  private readonly listeners = new Map<string, CallbackSet<[]>>()
   private readonly pendingLoads = new Map<string, Promise<BlockData | undefined>>()
   /** Confirmed-missing markers — ids the loader looked up and the row
    *  did not exist (or was soft-deleted). Lets the Block facade
@@ -160,14 +161,17 @@ export class BlockCache {
   subscribe(id: string, listener: () => void): () => void {
     let listeners = this.listeners.get(id)
     if (!listeners) {
-      listeners = new Set()
+      listeners = new CallbackSet(`BlockCache[${id}]`)
       this.listeners.set(id, listeners)
     }
-    listeners.add(listener)
-
+    const off = listeners.add(listener)
     return () => {
-      listeners?.delete(listener)
-      if (listeners?.size === 0) {
+      off()
+      // Drop the per-id slot once empty so the outer Map doesn't
+      // bloat with idle subscriber buckets. Identity-guarded so a
+      // double-unsubscribe can't evict a fresh bucket that a
+      // re-subscribe installed for the same id in between.
+      if (listeners.size === 0 && this.listeners.get(id) === listeners) {
         this.listeners.delete(id)
       }
     }
@@ -193,7 +197,7 @@ export class BlockCache {
 
   private notify(id: string): void {
     this.metrics.notifies++
-    this.listeners.get(id)?.forEach(listener => listener())
+    this.listeners.get(id)?.notify()
   }
 
   // ──── Confirmed-missing markers ────

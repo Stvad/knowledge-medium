@@ -198,6 +198,18 @@ describe('PanelHistoryStore', () => {
       store.push('p1', e('b-a'))
       expect(n).toBe(0)
     })
+
+    it('idempotent unsubscribe does not detach a fresh re-subscribe', () => {
+      let stale = 0
+      const unsubA = store.subscribe('p1', () => { stale += 1 })
+      unsubA()
+      let fresh = 0
+      store.subscribe('p1', () => { fresh += 1 })
+      unsubA() // second call must not evict the new bucket
+      store.push('p1', e('b-a'))
+      expect(fresh).toBe(1)
+      expect(stale).toBe(0)
+    })
   })
 
   describe('getSnapshot identity', () => {

@@ -141,6 +141,19 @@ describe('BlockCache subscriptions', () => {
     cache.setSnapshot(snap({content: 'x'}))
     expect(listener).not.toHaveBeenCalled()
   })
+
+  it('idempotent unsubscribe does not detach a fresh re-subscribe', () => {
+    const cache = new BlockCache()
+    const stale = vi.fn()
+    const unsubA = cache.subscribe('block-1', stale)
+    unsubA()
+    const fresh = vi.fn()
+    cache.subscribe('block-1', fresh)
+    unsubA() // second call must not evict the new bucket
+    cache.setSnapshot(snap({content: 'x'}))
+    expect(fresh).toHaveBeenCalledTimes(1)
+    expect(stale).not.toHaveBeenCalled()
+  })
 })
 
 describe('BlockCache applySyncSnapshot (LWW)', () => {

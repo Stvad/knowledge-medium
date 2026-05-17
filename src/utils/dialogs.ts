@@ -12,6 +12,7 @@
  * should `await` the previous promise before opening the next.
  */
 import type { ComponentType } from 'react'
+import { CallbackSet } from '@/utils/callbackSet'
 
 export interface DialogContextProps<TResult> {
   resolve: (value: TResult) => void
@@ -36,12 +37,8 @@ export interface DialogQueueEntry {
 }
 
 let nextId = 0
-const subscribers = new Set<() => void>()
+const subscribers = new CallbackSet<[]>('dialogs')
 let queue: readonly DialogQueueEntry[] = []
-
-const notify = (): void => {
-  for (const s of subscribers) s()
-}
 
 export const openDialog = <
   TResult,
@@ -55,7 +52,7 @@ export const openDialog = <
     const finalize = (value: unknown): void => {
       queue = queue.filter(entry => entry.id !== id)
       resolve(value as TResult | null)
-      notify()
+      subscribers.notify()
     }
     const entry: DialogQueueEntry = {
       id,
@@ -66,17 +63,13 @@ export const openDialog = <
       finalize,
     }
     queue = [...queue, entry]
-    notify()
+    subscribers.notify()
   })
 
 export const getDialogQueue = (): readonly DialogQueueEntry[] => queue
 
-export const subscribeDialogs = (callback: () => void): (() => void) => {
+export const subscribeDialogs = (callback: () => void): (() => void) =>
   subscribers.add(callback)
-  return () => {
-    subscribers.delete(callback)
-  }
-}
 
 /** Test-only reset. Drops all queued dialogs (resolving each with
  *  `null` so any awaiters unblock) and notifies subscribers so the
@@ -86,5 +79,5 @@ export const __resetDialogsForTests = (): void => {
   queue = []
   nextId = 0
   for (const entry of drained) entry.finalize(null)
-  notify()
+  subscribers.notify()
 }
