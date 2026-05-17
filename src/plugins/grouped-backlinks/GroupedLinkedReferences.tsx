@@ -22,7 +22,8 @@ import {
   GROUPED_BACKLINKS_FOR_BLOCK_QUERY,
   type GroupedBacklinksResult,
 } from './query.ts'
-import { groupedBacklinksGroupHeaderControlsFacet } from './facet.ts'
+import { groupedBacklinksGroupHeaderActionsFacet } from './facet.ts'
+import { GroupHeaderActionButton } from './GroupHeaderActionButton.tsx'
 
 interface GroupedBacklinksSnapshot {
   unfilteredBacklinks: Block[]
@@ -57,20 +58,16 @@ const buildGroupedQueryArgs = (
 const EMPTY_GROUPED_BACKLINKS_RESULT: GroupedBacklinksResult = {groups: [], total: 0}
 
 const GroupItems = ({
-  targetBlock,
-  workspaceId,
-  group,
   sourceBlocks,
+  group,
   parentsBySourceId,
 }: {
-  targetBlock: Block
-  workspaceId: string
   group: GroupedBacklinkGroup
   sourceBlocks: Block[]
   parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
   const runtime = useAppRuntime()
-  const headerControls = runtime.read(groupedBacklinksGroupHeaderControlsFacet)
+  const headerActions = runtime.read(groupedBacklinksGroupHeaderActionsFacet)
   const [open, setOpen] = useState(true)
 
   return (
@@ -85,20 +82,18 @@ const GroupItems = ({
           <span className="truncate">{group.label}</span>
           <span className="text-xs text-muted-foreground/70">{group.sourceIds.length}</span>
         </button>
-        {headerControls.length > 0 && (
+        {headerActions.length > 0 && (
           <div className="flex shrink-0 items-center gap-0.5">
-            {headerControls.map(control => {
-              const Control = control.component
-              return (
-                <Control
-                  key={control.id}
-                  targetBlock={targetBlock}
-                  workspaceId={workspaceId}
-                  group={group}
-                  sourceBlocks={sourceBlocks}
-                />
-              )
-            })}
+            {headerActions.map((entry, index) => (
+              <GroupHeaderActionButton
+                key={`${entry.actionId}:${index}`}
+                actionId={entry.actionId}
+                sourceBlocks={sourceBlocks}
+                icon={entry.icon}
+                label={entry.label}
+                triggerDetail={entry.triggerDetail}
+              />
+            ))}
           </div>
         )}
       </div>
@@ -118,13 +113,9 @@ const GroupItems = ({
 }
 
 const GroupedReferencesGroup = ({
-  targetBlock,
-  workspaceId,
   group,
   parentsBySourceId,
 }: {
-  targetBlock: Block
-  workspaceId: string
   group: GroupedBacklinkGroup
   parentsBySourceId: ReadonlyMap<string, Block[]>
 }) => {
@@ -136,8 +127,6 @@ const GroupedReferencesGroup = ({
 
   return (
     <GroupItems
-      targetBlock={targetBlock}
-      workspaceId={workspaceId}
       group={group}
       sourceBlocks={sourceBlocks}
       parentsBySourceId={parentsBySourceId}
@@ -364,7 +353,6 @@ function FrozenGroupedReferencesBody({
 }
 
 function GroupedReferencesView({
-  block,
   workspaceId,
   data,
   liveUpdates,
@@ -453,8 +441,6 @@ function GroupedReferencesView({
               {grouped.groups.map(group => (
                 <GroupedReferencesGroup
                   key={group.groupId}
-                  targetBlock={block}
-                  workspaceId={workspaceId}
                   group={group}
                   parentsBySourceId={initialParentsByBacklinkId}
                 />

@@ -4,6 +4,7 @@ import { typesFacet } from '@/data/facets.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { dailyNoteBacklinksDefaultsProp } from '@/plugins/backlinks/dailyNoteDefaults.ts'
 import { backlinksViewProp } from '@/plugins/backlinks-view/prop.ts'
+import { blockTagsConfigProp } from '@/plugins/block-tagging/config.ts'
 import { groupedBacklinksDefaultsProp } from '@/plugins/grouped-backlinks/config.ts'
 import { videoNotesPaneRatioProp } from '@/plugins/video-player/view.ts'
 
@@ -13,6 +14,7 @@ export const userPrefsType = defineBlockType({
   properties: [
     backlinksViewProp,
     dailyNoteBacklinksDefaultsProp,
+    blockTagsConfigProp,
     groupedBacklinksDefaultsProp,
     videoNotesPaneRatioProp,
   ],

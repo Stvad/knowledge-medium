@@ -2,6 +2,7 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.tsx'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
@@ -28,6 +29,7 @@ import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
 import { roamImportPlugin } from '@/plugins/roam-import'
+import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
@@ -43,6 +45,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   kernelValuePresetsExtension,
   defaultRenderersExtension,
   toastAppMountExtension,
+  dialogAppMountExtension,
   breadcrumbsPlugin,
   defaultEditorInteractionExtension,
   defaultActionsExtension({repo}),
@@ -76,6 +79,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   userPrefsDataExtension,
   backlinksViewPlugin,
   todoPlugin,
+  blockTaggingPlugin,
   srsReschedulingPlugin,
   syncStatusPlugin,
   updateIndicatorPlugin,
