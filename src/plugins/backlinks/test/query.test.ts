@@ -329,6 +329,41 @@ describe('backlinksDataExtension query', () => {
     expect(out.map(row => row.id)).toEqual(['child-a'])
   })
 
+  it('treats the containing page as a context tag for ancestor referencedBy', async () => {
+    // Roam-style "page is a tag" semantic: filtering for context = X
+    // should match blocks on the X page even when no ancestor sources
+    // an outgoing reference to X. Pre-unification SQL UNIONed the root
+    // ancestor's id into the context set; this exercises that behaviour
+    // through the typed-query predicate compiler.
+    await create({id: 'target'})
+    await create({id: 'roam-memo'})
+    await create({id: 'other-page'})
+    await create({
+      id: 'on-roam-memo',
+      parentId: 'roam-memo',
+      references: [{id: 'target', alias: 'T'}],
+    })
+    await create({
+      id: 'elsewhere',
+      parentId: 'other-page',
+      references: [{id: 'target', alias: 'T'}],
+    })
+
+    const includeOut = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      filter: {include: [{scope: 'ancestor', referencedBy: {id: 'roam-memo'}}]},
+    }).load())
+    expect(includeOut.map(row => row.id)).toEqual(['on-roam-memo'])
+
+    const excludeOut = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      filter: {exclude: [{scope: 'ancestor', referencedBy: {id: 'roam-memo'}}]},
+    }).load())
+    expect(excludeOut.map(row => row.id)).toEqual(['elsewhere'])
+  })
+
   it('filters out backlinks that match remove references in source context', async () => {
     await create({id: 'target'})
     await create({id: 'done'})

@@ -121,7 +121,15 @@ const compilePredicateAgainstRow = (
 
 /** Compile a predicate against the result block `b` directly (self
  *  scope) or as an EXISTS over the ancestor_chain CTE rows that share
- *  `block_id = b.id` (ancestor scope, includes b itself). */
+ *  `block_id = b.id` (ancestor scope, includes b itself).
+ *
+ *  Page-as-tag exception: a pure `{scope:'ancestor', referencedBy:{id:X}}`
+ *  also matches when the root ancestor's id IS X. Roam treats a page
+ *  as an implicit tag on every block it contains, so filtering for
+ *  "context includes X" should match blocks on the X page even when
+ *  no ancestor sources an outgoing reference to X. Pre-unification SQL
+ *  encoded this by UNIONing the root ancestor's own id into the context
+ *  set; without it, backlink filters by page name silently drop. */
 const compileScopedPredicate = (
   predicate: BlockPredicate,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -131,6 +139,26 @@ const compileScopedPredicate = (
     return compilePredicateAgainstRow(predicate, 'b', propertySchemas)
   }
   const inner = compilePredicateAgainstRow(predicate, 'anc', propertySchemas)
+
+  const isPureRefByPredicate =
+    predicate.referencedBy !== undefined &&
+    predicate.referencedBy.sourceField === undefined &&
+    predicate.where === undefined &&
+    predicate.id === undefined
+  if (isPureRefByPredicate) {
+    return {
+      sql: `EXISTS (
+        SELECT 1 FROM ancestor_chain ac
+        JOIN blocks anc ON anc.id = ac.anc_id
+        WHERE ac.block_id = b.id AND (
+          ${inner.sql}
+          OR (ac.anc_parent_id IS NULL AND anc.id = ?)
+        )
+      )`,
+      params: [...inner.params, predicate.referencedBy!.id],
+    }
+  }
+
   return {
     sql: `EXISTS (
       SELECT 1 FROM ancestor_chain ac
