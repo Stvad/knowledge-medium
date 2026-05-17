@@ -8,7 +8,9 @@ import { ChangeScope, type PropertySchema } from '@/data/api'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { getBlockTypes } from '@/data/properties.ts'
 import { formatIsoDate } from '@/utils/dailyPage'
-import { showError, showSuccess } from '@/utils/toast.ts'
+import { createElement } from 'react'
+import { showCustom } from '@/utils/toast.ts'
+import { RescheduleToast } from './RescheduleToast.tsx'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -222,21 +224,20 @@ const runRescheduleWithFeedback = async (
 ): Promise<void> => {
   const result = await rescheduleBlock(block, signal)
   if (!result) return
-  // Undo delegates to `repo.undo()` — the reschedule tx is the top of
-  // the BlockDefault undo stack at this point, and toast lifetime (4s)
-  // is short enough that a competing user edit slipping in front is a
-  // non-issue in practice. Same target as cmd-Z, so behaviour matches
-  // the keyboard shortcut and we don't maintain a parallel inverse path.
-  showSuccess(formatRescheduleToastMessage(result), {
-    action: {
-      label: 'Undo',
-      onClick: () => {
-        block.repo.undo().catch((err: unknown) => {
-          showError(err instanceof Error ? err.message : 'Could not undo reschedule')
-        })
-      },
-    },
-  })
+  // JS is single-threaded; the entry recorded by the just-completed tx
+  // is guaranteed to be the BlockDefault top right now, so peekUndo
+  // gives us the txId to gate the toast's Undo button on. If a later
+  // tx pushes onto the stack, the toast subscribes via UndoManager and
+  // disables itself rather than reverting the wrong action.
+  const top = block.repo.undoManager.peekUndo(ChangeScope.BlockDefault)
+  if (!top) return
+  const message = formatRescheduleToastMessage(result)
+  showCustom(id => createElement(RescheduleToast, {
+    toastId: id,
+    message,
+    txId: top.txId,
+    repo: block.repo,
+  }))
 }
 
 const createRescheduleAction = <T extends SrsActionContext>(
