@@ -1,0 +1,96 @@
+import { useMemo, type MouseEvent } from 'react'
+import type { Block } from '@/data/block'
+import { Button } from '@/components/ui/button.tsx'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { useUIStateBlock } from '@/data/globalState.ts'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
+import {
+  ActionContextTypes,
+  type ActionConfig,
+  type ActionIcon,
+  type MultiSelectModeDependencies,
+} from '@/shortcuts/types.ts'
+
+interface GroupHeaderActionButtonProps {
+  actionId: string
+  /** Blocks to pass as `selectedBlocks` to the resolved action. */
+  sourceBlocks: readonly Block[]
+  /** Falls back to the action's `icon` when omitted. */
+  icon?: ActionIcon
+  /** Falls back to the action's `description` when omitted. */
+  label?: string
+  /** Merged into the CustomEvent `detail` passed to the handler.
+   *  Lets one action serve multiple buttons by carrying which
+   *  variant the user picked. */
+  triggerDetail?: Record<string, unknown>
+}
+
+/** Renders a single grouped-backlinks header button that invokes a
+ *  registered `MULTI_SELECT_MODE` action with the group's blocks.
+ *
+ *  Resolves the action from the runtime at render time rather than
+ *  at facet-contribution time so contributions don't have to be
+ *  ordered with the action registration. If the action isn't
+ *  registered, or its `canRun` predicate rejects the synthesized
+ *  deps, the button renders nothing — same affordance-hiding
+ *  contract as the command palette. */
+export const GroupHeaderActionButton = ({
+  actionId,
+  sourceBlocks,
+  icon: iconOverride,
+  label: labelOverride,
+  triggerDetail,
+}: GroupHeaderActionButtonProps) => {
+  const runtime = useAppRuntime()
+  const uiStateBlock = useUIStateBlock()
+
+  const action = useMemo(
+    () => {
+      const effective = getEffectiveActions(runtime)
+      return effective.find(
+        candidate =>
+          candidate.id === actionId &&
+          candidate.context === ActionContextTypes.MULTI_SELECT_MODE,
+      ) as
+        | ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>
+        | undefined
+    },
+    [runtime, actionId],
+  )
+
+  if (!action) return null
+
+  const deps: MultiSelectModeDependencies = {
+    selectedBlocks: sourceBlocks as Block[],
+    anchorBlock: null,
+    uiStateBlock,
+  }
+  if (action.canRun && !action.canRun(deps)) return null
+
+  const Icon = iconOverride ?? action.icon
+  const label = labelOverride ?? action.description
+
+  const handleClick = (event: MouseEvent<HTMLButtonElement>): void => {
+    event.stopPropagation()
+    const trigger = new CustomEvent(`group-header:${actionId}`, {
+      detail: triggerDetail,
+    })
+    void Promise.resolve(action.handler(deps, trigger)).catch(error => {
+      console.error(`[group-header] Action ${actionId} failed`, error)
+    })
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="h-6 w-6 shrink-0 rounded-sm text-muted-foreground hover:text-foreground"
+      title={label}
+      aria-label={label}
+      onClick={handleClick}
+    >
+      {Icon && <Icon className="h-3.5 w-3.5" />}
+    </Button>
+  )
+}
