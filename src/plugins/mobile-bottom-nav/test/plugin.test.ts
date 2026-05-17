@@ -12,6 +12,7 @@ import {
   openSidebarBottomNavItem,
   searchBottomNavItem,
   todayBottomNavItem,
+  undoBottomNavItem,
 } from '../index.ts'
 
 describe('mobileBottomNavPlugin', () => {
@@ -31,6 +32,7 @@ describe('mobileBottomNavPlugin', () => {
       appendTodayDailyBlockBottomNavItem,
       todayBottomNavItem,
       searchBottomNavItem,
+      undoBottomNavItem,
       commandPaletteBottomNavItem,
     ])
   })

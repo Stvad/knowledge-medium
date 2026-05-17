@@ -39,3 +39,8 @@ export const commandPaletteBottomNavItem: MobileBottomNavItemContribution = {
   id: 'mobile-bottom-nav.command-palette',
   actionId: COMMAND_PALETTE_ACTION_ID,
 }
+
+export const undoBottomNavItem: MobileBottomNavItemContribution = {
+  id: 'mobile-bottom-nav.undo',
+  actionId: 'undo',
+}
