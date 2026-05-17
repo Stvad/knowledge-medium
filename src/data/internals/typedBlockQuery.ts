@@ -121,7 +121,16 @@ const compilePredicateAgainstRow = (
 
 /** Compile a predicate against the result block `b` directly (self
  *  scope) or as an EXISTS over the ancestor_chain CTE rows that share
- *  `block_id = b.id` (ancestor scope, includes b itself). */
+ *  `block_id = b.id` (ancestor scope, includes b itself).
+ *
+ *  Page-as-tag: in ancestor scope, a `referencedBy:{id:X}` sub-clause
+ *  also matches when the root ancestor's own id IS X — Roam treats a
+ *  page as an implicit reference target for every block it contains.
+ *  Filtering by a page name should match blocks living on that page
+ *  even when no ancestor sources an explicit reference. Pre-unification
+ *  SQL encoded this by UNIONing the root ancestor's id into the
+ *  context set; `sourceField` predicates target a specific reference
+ *  channel and stay strict (the page-is-itself case has no channel). */
 const compileScopedPredicate = (
   predicate: BlockPredicate,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
@@ -130,14 +139,42 @@ const compileScopedPredicate = (
   if (scope === 'self') {
     return compilePredicateAgainstRow(predicate, 'b', propertySchemas)
   }
-  const inner = compilePredicateAgainstRow(predicate, 'anc', propertySchemas)
+
+  const clauses: string[] = []
+  const params: unknown[] = []
+
+  if (predicate.id !== undefined) {
+    clauses.push('anc.id = ?')
+    params.push(predicate.id)
+  }
+
+  if (predicate.where !== undefined) {
+    for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json')
+      clauses.push(compiled.sql)
+      params.push(...compiled.params)
+    }
+  }
+
+  if (predicate.referencedBy !== undefined) {
+    const refExists = compileReferencedByExists(predicate.referencedBy, 'anc.id')
+    if (predicate.referencedBy.sourceField === undefined) {
+      clauses.push(`(${refExists.sql} OR (ac.anc_parent_id IS NULL AND anc.id = ?))`)
+      params.push(...refExists.params, predicate.referencedBy.id)
+    } else {
+      clauses.push(refExists.sql)
+      params.push(...refExists.params)
+    }
+  }
+
+  const inner = clauses.length === 0 ? '1' : clauses.join(' AND ')
   return {
     sql: `EXISTS (
       SELECT 1 FROM ancestor_chain ac
       JOIN blocks anc ON anc.id = ac.anc_id
-      WHERE ac.block_id = b.id AND ${inner.sql}
+      WHERE ac.block_id = b.id AND ${inner}
     )`,
-    params: inner.params,
+    params,
   }
 }
 
