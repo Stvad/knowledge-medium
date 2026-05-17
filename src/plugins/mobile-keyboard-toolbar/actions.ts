@@ -11,13 +11,24 @@ export const INSERT_BLOCK_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_block_ref_trig
 
 const insertCompletionTrigger = (
   editorView: CodeMirrorEditModeDependencies['editorView'],
-  text: string,
-  cursorOffset = text.length,
+  open: string,
+  close: string,
 ) => {
-  editorView.dispatch(editorView.state.changeByRange(range => ({
-    changes: {from: range.from, to: range.to, insert: text},
-    range: EditorSelection.cursor(range.from + cursorOffset),
-  })))
+  const {state} = editorView
+  editorView.dispatch(state.changeByRange(range => {
+    if (range.empty) {
+      return {
+        changes: {from: range.from, insert: `${open}${close}`},
+        range: EditorSelection.cursor(range.from + open.length),
+      }
+    }
+
+    const selectedText = state.sliceDoc(range.from, range.to)
+    return {
+      changes: {from: range.from, to: range.to, insert: `${open}${selectedText}${close}`},
+      range: EditorSelection.range(range.from + open.length, range.to + open.length),
+    }
+  }))
   editorView.focus()
   startCompletion(editorView)
 }
@@ -25,14 +36,14 @@ const insertCompletionTrigger = (
 const completionTriggerAction = (
   id: string,
   description: string,
-  text: string,
-  cursorOffset?: number,
+  open: string,
+  close: string,
 ): ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> => ({
   id,
   description,
   context: ActionContextTypes.EDIT_MODE_CM,
   handler: async (deps) => {
-    insertCompletionTrigger(deps.editorView, text, cursorOffset)
+    insertCompletionTrigger(deps.editorView, open, close)
   },
 })
 
@@ -40,13 +51,13 @@ export const mobileKeyboardToolbarActions: readonly ActionConfig<typeof ActionCo
   completionTriggerAction(
     INSERT_PAGE_REF_TRIGGER_ACTION_ID,
     'Insert page reference trigger',
-    '[[]]',
-    2,
+    '[[',
+    ']]',
   ),
   completionTriggerAction(
     INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
     'Insert block reference trigger',
-    '(())',
-    2,
+    '((',
+    '))',
   ),
 ]
