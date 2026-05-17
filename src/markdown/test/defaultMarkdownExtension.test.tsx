@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import Markdown from 'react-markdown'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Block } from '@/data/block'
@@ -51,5 +52,33 @@ describe('gfm markdown extension', () => {
     expect(isExternalHref('https://app.example/other', baseHref)).toBe(false)
     expect(isExternalHref('/other', baseHref)).toBe(false)
     expect(isExternalHref('mailto:user@example.com', baseHref)).toBe(false)
+  })
+
+  it('opens a fullscreen preview when an embedded image is clicked', async () => {
+    const user = userEvent.setup()
+    renderMarkdown('![A cat](https://example.com/cat.png)')
+
+    const inlineImage = screen.getByAltText('A cat')
+    expect(inlineImage).toHaveAttribute('src', 'https://example.com/cat.png')
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    await user.click(inlineImage)
+
+    const dialog = await screen.findByRole('dialog')
+    const previewImage = within(dialog).getByAltText('A cat')
+    expect(previewImage).toHaveAttribute('src', 'https://example.com/cat.png')
+    expect(within(dialog).getByRole('button', {name: /close image preview/i})).toBeInTheDocument()
+  })
+
+  it('closes the image preview when the close button is clicked', async () => {
+    const user = userEvent.setup()
+    renderMarkdown('![A cat](https://example.com/cat.png)')
+
+    await user.click(screen.getByAltText('A cat'))
+
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', {name: /close image preview/i}))
+
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
