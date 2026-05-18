@@ -3,7 +3,7 @@ import { BlockProperties } from '../BlockProperties.tsx'
 import { BlockChildren } from '../BlockComponent.tsx'
 import { Button } from '../ui/button.tsx'
 import { Collapsible, CollapsibleContent } from '../ui/collapsible.tsx'
-import type { ComponentType } from 'react'
+import type { ComponentType, RefObject } from 'react'
 import {
   focusBlock,
   showPropertiesProp,
@@ -13,7 +13,7 @@ import {
 } from '@/data/properties.ts'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.tsx'
 import { CodeMirrorContentRenderer } from '@/components/renderer/CodeMirrorContentRenderer.tsx'
-import { useRef, ClipboardEvent, useMemo, useEffect, useLayoutEffect } from 'react'
+import { useRef, ClipboardEvent, useMemo } from 'react'
 import { Block } from '../../data/block'
 import {
   useUIStateProperty,
@@ -37,10 +37,10 @@ import {
   ContextMenuContent,
 } from '@/components/ui/context-menu.tsx'
 import { useBlockContext } from '@/context/block.tsx'
-import { isElementProperlyVisible } from '@/utils/dom.ts'
 import { useHasChildren, usePropertyValue } from '@/hooks/block.ts'
 import { useIsFocalRender } from '@/hooks/useIsFocalRender.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { ExtensionRenderBoundary } from '@/extensions/ExtensionRenderBoundary.tsx'
 import {
   blockChildrenFooterFacet,
   blockClickHandlersFacet,
@@ -49,18 +49,17 @@ import {
   blockContentSurfacePropsFacet,
   blockHeaderFacet,
   blockLayoutFacet,
+  blockShellDecoratorsFacet,
   isInteractiveContentEvent,
   type BlockLayout,
   type BlockLayoutSlots,
   type BlockResolveContext,
+  type BlockShellDecorator,
+  type BlockShellState,
   type BlockShellProps,
 } from '@/extensions/blockInteraction.ts'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
 import { focusedBlockIdProp } from '@/data/properties.ts'
-import {
-  useVisualNavigationTarget,
-  visualNavigationSurfaceFromContext,
-} from '@/utils/visualNavigation.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -244,24 +243,24 @@ export const DefaultBlockLayout: BlockLayout = ({
   Controls, Header,
   shellProps,
 }) => {
-  const inFocus = shellProps['data-visual-focused'] === 'true'
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
+  const {className: shellClassName, ...collapsibleProps} = shellProps
 
   return (
     <div>
       <Header/>
 
       <Collapsible
-        {...shellProps}
+        {...collapsibleProps}
         open={!isCollapsed || isTopLevel}
-        className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
+        className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''} ${shellClassName ?? ''}`}
       >
         <Controls/>
 
         <div className="block-body flex-grow relative flex flex-col">
-          <div className={`flex flex-col rounded-sm ${inFocus ? 'bg-muted/95' : ''}`}>
+          <div className="flex flex-col rounded-sm">
             <Content/>
             {Properties && <Properties/>}
           </div>
@@ -274,6 +273,50 @@ export const DefaultBlockLayout: BlockLayout = ({
         </div>
       </Collapsible>
     </div>
+  )
+}
+
+function BlockShellDecoratorStack({
+  decorators,
+  index = 0,
+  resolveContext,
+  shellRef,
+  contentRef,
+  state,
+  ShellBody,
+}: {
+  decorators: readonly BlockShellDecorator[]
+  index?: number
+  resolveContext: BlockResolveContext
+  shellRef: RefObject<HTMLDivElement | null>
+  contentRef: RefObject<HTMLDivElement | null>
+  state: BlockShellState
+  ShellBody: ComponentType<{state: BlockShellState}>
+}) {
+  const Decorator = decorators[index]
+  if (!Decorator) return <ShellBody state={state}/>
+
+  return (
+    <ExtensionRenderBoundary>
+      <Decorator
+        resolveContext={resolveContext}
+        shellRef={shellRef}
+        contentRef={contentRef}
+        state={state}
+      >
+        {nextState => (
+          <BlockShellDecoratorStack
+            decorators={decorators}
+            index={index + 1}
+            resolveContext={resolveContext}
+            shellRef={shellRef}
+            contentRef={contentRef}
+            state={nextState}
+            ShellBody={ShellBody}
+          />
+        )}
+      </Decorator>
+    </ExtensionRenderBoundary>
   )
 }
 
@@ -296,39 +339,6 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
-  const {
-    targetId: visualTargetId,
-    active: visualTargetActive,
-    activate: activateVisualTarget,
-  } = useVisualNavigationTarget({
-    blockId: block.id,
-    uiStateBlock,
-    panelId: typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined,
-    layoutSessionBlockId: typeof blockContext.layoutSessionBlockId === 'string'
-      ? blockContext.layoutSessionBlockId
-      : undefined,
-    surface: visualNavigationSurfaceFromContext(blockContext),
-    elementRef: shellRef,
-    anchorElementRef: contentContainerRef,
-  })
-
-  // Scroll-into-view on focus (effect below). The `data-editing` attr
-  // on shellProps wants `inEditMode`. Other reactive state is read by
-  // the layout / slots themselves, not threaded through here.
-  const inFocus = visualTargetActive
-
-  useLayoutEffect(() => {
-    if (!inFocus || inEditMode) return
-
-    const element = shellRef.current
-    if (!element) return
-
-    const activeElement = document.activeElement
-    if (activeElement === element || element.contains(activeElement)) return
-    if (activeElement && activeElement !== document.body) return
-
-    element.focus({preventScroll: true})
-  }, [block.id, inEditMode, inFocus])
 
   // Stable per-block resolver context — doesn't change on focus/edit/
   // selection toggles, so facet resolvers and the components they
@@ -393,10 +403,6 @@ export function DefaultBlockRenderer(
     () => resolveContentSurfaceProps(resolveContext),
     [resolveContext, resolveContentSurfaceProps],
   )
-  useShortcutSurfaceActivations(block, 'block', {
-    visualTargetId,
-    visualTargetActive,
-  })
   const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
   const childrenFooterSections = useMemo(
     () => resolveChildrenFooterSections(resolveContext),
@@ -414,12 +420,11 @@ export function DefaultBlockRenderer(
     () => resolveBlockLayout(resolveContext).last?.render ?? DefaultBlockLayout,
     [resolveContext, resolveBlockLayout],
   )
-
-  useEffect(() => {
-    if (!inFocus) return
-    const element = contentContainerRef.current
-    if (element && !isElementProperlyVisible(element)) element.scrollIntoView({behavior: 'instant', block: 'nearest'})
-  }, [inFocus])
+  const resolveBlockShellDecorators = runtime.read(blockShellDecoratorsFacet)
+  const shellDecorators = useMemo(
+    () => resolveBlockShellDecorators(resolveContext),
+    [resolveBlockShellDecorators, resolveContext],
+  )
 
   // Memoized on stable inputs so shellProps below doesn't churn on
   // focus toggles. The "is this block focused?" check reads live state
@@ -545,37 +550,51 @@ export function DefaultBlockRenderer(
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
     'data-editing': inEditMode ? 'true' : 'false',
-    'data-visual-focused': visualTargetActive ? 'true' : 'false',
     tabIndex: 0,
     ref: shellRef,
-    onFocus: () => activateVisualTarget(),
-    onPointerDownCapture: () => activateVisualTarget(),
     onClick: handleBlockClick
       ? (event) => { void handleBlockClick(event) }
       : undefined,
     onPaste: (event) => { void handlePaste(event) },
-  }), [activateVisualTarget, block.id, inEditMode, handleBlockClick, handlePaste, visualTargetActive])
+  }), [block.id, inEditMode, handleBlockClick, handlePaste])
 
-  const layoutSlots = useMemo<BlockLayoutSlots>(() => ({
-    block,
-    Content: ContentSlot,
-    Properties: PropertiesSlot,
-    Children: ChildrenSlot,
-    Footer: FooterSlot,
-    Controls: ControlsSlot,
-    Header: HeaderSlot,
+  const initialShellState = useMemo<BlockShellState>(() => ({
     shellProps,
-  }), [
+    shortcutSurfaceOptions: {},
+  }), [shellProps])
+
+  const ShellBody = useMemo<ComponentType<{state: BlockShellState}>>(() => {
+    return function BlockShellBody({state}: {state: BlockShellState}) {
+      useShortcutSurfaceActivations(block, 'block', state.shortcutSurfaceOptions)
+
+      const layoutSlots: BlockLayoutSlots = {
+        block,
+        Content: ContentSlot,
+        Properties: PropertiesSlot,
+        Children: ChildrenSlot,
+        Footer: FooterSlot,
+        Controls: ControlsSlot,
+        Header: HeaderSlot,
+        shellProps: state.shellProps,
+      }
+
+      return <Layout {...layoutSlots}/>
+    }
+  }, [
     block,
     ContentSlot, PropertiesSlot, ChildrenSlot, FooterSlot,
     ControlsSlot, HeaderSlot,
-    shellProps,
+    Layout,
   ])
 
   return (
-    // Layout is resolved from blockLayoutFacet — its identity is stable
-    // per resolveContext (the resolver memo above), not a fresh
-    // component each render.
-    <Layout {...layoutSlots}/>
+    <BlockShellDecoratorStack
+      decorators={shellDecorators}
+      resolveContext={resolveContext}
+      shellRef={shellRef}
+      contentRef={contentContainerRef}
+      state={initialShellState}
+      ShellBody={ShellBody}
+    />
   )
 }

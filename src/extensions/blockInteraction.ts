@@ -6,6 +6,8 @@ import type {
   MouseEvent,
   PointerEvent,
   Ref,
+  RefObject,
+  ReactNode,
 } from 'react'
 import type { EditorView } from '@codemirror/view'
 import { Block } from '../data/block'
@@ -171,7 +173,7 @@ export type BlockChildrenFooterResolver =
 export interface BlockShellProps {
   'data-block-id': string
   'data-editing': 'true' | 'false'
-  'data-visual-focused'?: 'true' | 'false'
+  className?: string
   tabIndex: number
   ref?: Ref<HTMLDivElement>
   onFocus?: (event: FocusEvent<HTMLElement>) => void
@@ -179,6 +181,31 @@ export interface BlockShellProps {
   onClick?: (event: MouseEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent<HTMLElement>) => void
 }
+
+export interface BlockShellState {
+  shellProps: BlockShellProps
+  shortcutSurfaceOptions: Record<string, unknown>
+}
+
+export interface BlockShellDecoratorProps {
+  resolveContext: BlockResolveContext
+  shellRef: RefObject<HTMLDivElement | null>
+  contentRef: RefObject<HTMLDivElement | null>
+  state: BlockShellState
+  children: (state: BlockShellState) => ReactNode
+}
+
+export type BlockShellDecorator = ComponentType<BlockShellDecoratorProps>
+
+// Hook-safe shell extension point. Contributions return a component
+// that wraps the block shell render with a render-prop state transform,
+// so plugin hooks can contribute wrapper props / shortcut metadata
+// without being called directly by DefaultBlockRenderer.
+export type BlockShellDecoratorContribution =
+  (context: BlockResolveContext) => BlockShellDecorator | null | undefined | false
+
+export type BlockShellDecoratorResolver =
+  (context: BlockResolveContext) => readonly BlockShellDecorator[]
 
 export interface BlockLayoutSlots {
   block: Block
@@ -250,6 +277,23 @@ export const blockLayoutFacet = defineVariantFacet<BlockResolveContext, BlockLay
   id: 'core.block-layout',
 })
 
+export const blockShellDecoratorsFacet = defineFacet<
+  BlockShellDecoratorContribution,
+  BlockShellDecoratorResolver
+>({
+  id: 'core.block-shell-decorators',
+  combine: contributions => context => {
+    const result: BlockShellDecorator[] = []
+    for (const contribution of contributions) {
+      const decorator = contribution(context)
+      if (decorator) result.push(decorator)
+    }
+    return result
+  },
+  empty: () => () => [],
+  validate: isFunction<BlockShellDecoratorContribution>,
+})
+
 export type ShortcutSurface =
   | 'block'
   | 'codemirror'
@@ -258,8 +302,7 @@ export type ShortcutSurface =
 export interface ShortcutSurfaceContext extends BlockInteractionContext {
   surface: ShortcutSurface
   editorView?: EditorView
-  visualTargetId?: string
-  visualTargetActive?: boolean
+  [key: string]: unknown
 }
 
 export type ShortcutActivationContribution =

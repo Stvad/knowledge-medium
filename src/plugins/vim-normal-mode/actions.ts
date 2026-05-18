@@ -10,7 +10,6 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
 } from '@/utils/selection.ts'
-import { moveVisualFocus, type VisualNavigationDirection } from '@/utils/visualNavigation.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { pasteFromClipboard } from '@/utils/paste.ts'
@@ -46,15 +45,6 @@ const jumpVisibleBlocks = async (
   return last === startBlock ? null : last
 }
 
-const moveVisualFocusWithFallback = async (
-  deps: BlockShortcutDependencies,
-  direction: VisualNavigationDirection,
-): Promise<boolean> => {
-  const {block, uiStateBlock, visualTargetId} = deps
-  if (!block || !uiStateBlock) return false
-  return moveVisualFocus({block, uiStateBlock, visualTargetId}, direction)
-}
-
 export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
   const {
     indentBlock,
@@ -80,64 +70,6 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
   return [
     indentBlockAction,
     outdentBlockAction,
-    bindNormal({
-      id: 'move_down',
-      description: 'Move focus visually down',
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        if (await moveVisualFocusWithFallback(deps, 'down')) return
-
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
-
-        const next = await nextVisibleBlock(block, topLevelBlockId)
-        if (next) void focusBlock(uiStateBlock, next.id)
-      },
-      defaultBinding: {
-        keys: ['down', 'k'],
-      },
-    }),
-    bindNormal({
-      id: 'move_up',
-      description: 'Move focus visually up',
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        if (await moveVisualFocusWithFallback(deps, 'up')) return
-
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
-
-        const prev = await previousVisibleBlock(block, topLevelBlockId)
-        if (prev) void focusBlock(uiStateBlock, prev.id)
-      },
-      defaultBinding: {
-        keys: ['up', 'h'],
-      },
-    }),
-    bindNormal({
-      id: 'move_left',
-      description: 'Move focus visually left',
-      handler: async (deps: BlockShortcutDependencies) => {
-        await moveVisualFocusWithFallback(deps, 'left')
-      },
-      defaultBinding: {
-        keys: ['left', 'j'],
-      },
-    }),
-    bindNormal({
-      id: 'move_right',
-      description: 'Move focus visually right',
-      handler: async (deps: BlockShortcutDependencies) => {
-        await moveVisualFocusWithFallback(deps, 'right')
-      },
-      defaultBinding: {
-        keys: ['right', 'l'],
-      },
-    }),
     bindNormal({
       id: 'enter_edit_mode',
       description: 'Enter edit mode',

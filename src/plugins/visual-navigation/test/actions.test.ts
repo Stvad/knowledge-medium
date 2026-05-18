@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { waitFor } from '@testing-library/react'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
@@ -10,11 +11,13 @@ import {
   focusedVisualTargetKeyProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { getVimNormalModeActions } from '@/plugins/vim-normal-mode/actions.ts'
+import { getVisualNavigationActions } from '@/plugins/visual-navigation/actions.ts'
 import {
   __resetVisualNavigationForTesting,
+  getActiveVisualNavigationTarget,
   registerVisualNavigationTarget,
-} from '@/utils/visualNavigation.ts'
+  setActiveVisualNavigationTarget,
+} from '@/plugins/visual-navigation/navigation.ts'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -43,10 +46,9 @@ const setup = async (): Promise<Harness> => {
 }
 
 const findNormalModeAction = (
-  repo: Repo,
   id: string,
 ): ActionConfig<typeof ActionContextTypes.NORMAL_MODE> => {
-  const action = getVimNormalModeActions({repo}).find(
+  const action = getVisualNavigationActions().find(
     (candidate): candidate is ActionConfig<typeof ActionContextTypes.NORMAL_MODE> =>
       candidate.id === id && candidate.context === ActionContextTypes.NORMAL_MODE,
   )
@@ -90,10 +92,10 @@ afterEach(async () => {
   await env.h.cleanup()
 })
 
-describe('vim normal mode visual navigation actions', () => {
+describe('visual navigation actions', () => {
   it('binds j and l to visual left and right movement', () => {
-    expect(findNormalModeAction(env.repo, 'move_left').defaultBinding?.keys).toEqual(['left', 'j'])
-    expect(findNormalModeAction(env.repo, 'move_right').defaultBinding?.keys).toEqual(['right', 'l'])
+    expect(findNormalModeAction('move_left').defaultBinding?.keys).toEqual(['left', 'j'])
+    expect(findNormalModeAction('move_right').defaultBinding?.keys).toEqual(['right', 'l'])
   })
 
   it('moves down from the document body into a visually lower backlink occurrence', async () => {
@@ -136,7 +138,7 @@ describe('vim normal mode visual navigation actions', () => {
       element: backlinkElement,
     })
 
-    const action = findNormalModeAction(env.repo, 'move_down')
+    const action = findNormalModeAction('move_down')
     await action.handler({
       block: env.repo.block('current'),
       uiStateBlock,
@@ -148,5 +150,99 @@ describe('vim normal mode visual navigation actions', () => {
 
     unregisterCurrent()
     unregisterBacklink()
+  })
+
+  it('stays on the current visual target at an edge instead of falling back to hidden tree focus', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'panel',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root'),
+          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('current'),
+          [focusedVisualTargetKeyProp.name]: focusedVisualTargetKeyProp.codec.encode('current-target'),
+        },
+      })
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'root'})
+      await tx.create({id: 'current', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'current'})
+      await tx.create({id: 'hidden-tree-next', workspaceId: WS, parentId: 'root', orderKey: 'b0', content: 'hidden'})
+    }, {scope: ChangeScope.UiState})
+
+    const uiStateBlock = env.repo.block('panel')
+    const currentElement = makeElement({top: 0, left: 0})
+    const unregisterCurrent = registerVisualNavigationTarget({
+      id: 'current-target',
+      key: 'current-target',
+      blockId: 'current',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'backlink',
+      element: currentElement,
+    })
+
+    const action = findNormalModeAction('move_down')
+    await action.handler({
+      block: env.repo.block('current'),
+      uiStateBlock,
+      visualTargetId: 'current-target',
+    } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('current')
+    expect(uiStateBlock.peekProperty(focusedVisualTargetKeyProp)).toBe('current-target')
+
+    unregisterCurrent()
+  })
+
+  it('recovers active visual focus to the nearest mounted target when the active occurrence unmounts', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'panel',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root'),
+          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('current'),
+          [focusedVisualTargetKeyProp.name]: focusedVisualTargetKeyProp.codec.encode('current-target'),
+        },
+      })
+      await tx.create({id: 'current', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'current'})
+      await tx.create({id: 'nearby', workspaceId: WS, parentId: null, orderKey: 'c0', content: 'nearby'})
+    }, {scope: ChangeScope.UiState})
+
+    const uiStateBlock = env.repo.block('panel')
+    const currentElement = makeElement({top: 0, left: 0})
+    const nearbyElement = makeElement({top: 32, left: 0})
+    const unregisterCurrent = registerVisualNavigationTarget({
+      id: 'current-target',
+      key: 'current-target',
+      blockId: 'current',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'document',
+      element: currentElement,
+    })
+    const unregisterNearby = registerVisualNavigationTarget({
+      id: 'nearby-target',
+      key: 'nearby-target',
+      blockId: 'nearby',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'document',
+      element: nearbyElement,
+    })
+    setActiveVisualNavigationTarget('current-target')
+
+    unregisterCurrent()
+
+    expect(getActiveVisualNavigationTarget()?.id).toBe('nearby-target')
+    await waitFor(() => {
+      expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('nearby')
+      expect(uiStateBlock.peekProperty(focusedVisualTargetKeyProp)).toBe('nearby-target')
+    })
+
+    unregisterNearby()
   })
 })

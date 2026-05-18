@@ -22,7 +22,9 @@ import { usePropertyValue } from '@/hooks/block.ts'
 
 type ShortcutSurfaceOptions =
   Partial<Omit<ShortcutSurfaceContext, keyof BlockInteractionContext | 'surface'>> &
-  Record<string, unknown>
+  Record<string, unknown> & {
+    surfaceActive?: boolean
+  }
 
 const emptyShortcutSurfaceOptions: ShortcutSurfaceOptions = {}
 
@@ -51,10 +53,10 @@ export function useShortcutSurfaceActivations(
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [types] = usePropertyValue(block, typesProp)
   const blockInFocus = useInFocus(block.id)
-  const visualTargetActive = typeof options.visualTargetActive === 'boolean'
-    ? options.visualTargetActive
+  const surfaceActive = typeof options.surfaceActive === 'boolean'
+    ? options.surfaceActive
     : true
-  const inFocus = blockInFocus && visualTargetActive
+  const inFocus = blockInFocus && surfaceActive
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
 

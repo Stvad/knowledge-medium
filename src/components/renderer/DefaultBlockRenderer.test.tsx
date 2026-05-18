@@ -22,6 +22,7 @@ import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/utils/paste'
+import { visualNavigationPlugin } from '@/plugins/visual-navigation'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
@@ -122,6 +123,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelDataExtension,
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
+      visualNavigationPlugin,
       propertySchemasFacet.of(statusProp, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),

@@ -38,6 +38,7 @@ export interface RegisteredVisualNavigationTarget {
   surface: VisualNavigationSurface
   element: HTMLElement
   anchorElement?: HTMLElement | null
+  lastRect?: VisualNavigationRect
 }
 
 export interface RegisterVisualNavigationTargetInput {
@@ -94,14 +95,19 @@ export const visualNavigationSurfaceFromContext = (
 export const registerVisualNavigationTarget = (
   input: RegisterVisualNavigationTargetInput,
 ): (() => void) => {
-  targets.set(input.id, input)
+  const target: RegisteredVisualNavigationTarget = input
+  targets.set(target.id, target)
   notify()
 
   return () => {
-    targets.delete(input.id)
-    if (activeTargetId === input.id) {
-      activeTargetId = null
+    const removedOrder = orderedTargets().findIndex(entry => entry.id === target.id)
+    targetRect(target)
+    targets.delete(target.id)
+    if (activeTargetId === target.id) {
+      const replacement = pickRecoveryTarget(target, removedOrder)
+      activeTargetId = replacement?.id ?? null
       notify()
+      if (replacement) scheduleFocusVisualNavigationTarget(replacement)
       return
     }
     notify()
@@ -122,6 +128,13 @@ export const __resetVisualNavigationForTesting = (): void => {
   activeTargetId = null
   notify()
 }
+
+const toVisualRect = (rect: DOMRect): VisualNavigationRect => ({
+  top: rect.top,
+  right: rect.right,
+  bottom: rect.bottom,
+  left: rect.left,
+})
 
 const centerX = (rect: VisualNavigationRect): number => (rect.left + rect.right) / 2
 const centerY = (rect: VisualNavigationRect): number => (rect.top + rect.bottom) / 2
@@ -240,11 +253,14 @@ const rectIsNavigable = (rect: DOMRect): boolean =>
   rect.top <= (window.innerHeight || document.documentElement.clientHeight) &&
   rect.left <= (window.innerWidth || document.documentElement.clientWidth)
 
-const targetRect = (target: RegisteredVisualNavigationTarget): DOMRect | null => {
+const targetRect = (target: RegisteredVisualNavigationTarget): VisualNavigationRect | null => {
   const element = target.anchorElement ?? target.element
   if (!element.isConnected) return null
   const rect = element.getBoundingClientRect()
-  return rectIsNavigable(rect) ? rect : null
+  if (!rectIsNavigable(rect)) return null
+  const visualRect = toVisualRect(rect)
+  target.lastRect = visualRect
+  return visualRect
 }
 
 const candidateFromTarget = (
@@ -276,6 +292,84 @@ const targetFromElement = (element: Element | null): RegisteredVisualNavigationT
   const targetElement = element?.closest<HTMLElement>('[data-visual-navigation-target-id]')
   const targetId = targetElement?.dataset.visualNavigationTargetId
   return targetId ? targets.get(targetId) ?? null : null
+}
+
+const rectDistance = (source: VisualNavigationRect, candidate: VisualNavigationRect): number => {
+  const x = centerX(source) - centerX(candidate)
+  const y = centerY(source) - centerY(candidate)
+  return x * x + y * y
+}
+
+const compareRecoveryTargets = (
+  removed: RegisteredVisualNavigationTarget,
+  removedOrder: number,
+  left: {target: RegisteredVisualNavigationTarget; rect: VisualNavigationRect; order: number},
+  right: {target: RegisteredVisualNavigationTarget; rect: VisualNavigationRect; order: number},
+): number => {
+  const leftSameBlock = left.target.blockId === removed.blockId ? 0 : 1
+  const rightSameBlock = right.target.blockId === removed.blockId ? 0 : 1
+  if (leftSameBlock !== rightSameBlock) return leftSameBlock - rightSameBlock
+
+  const leftSamePanel = left.target.panelId === removed.panelId ? 0 : 1
+  const rightSamePanel = right.target.panelId === removed.panelId ? 0 : 1
+  if (leftSamePanel !== rightSamePanel) return leftSamePanel - rightSamePanel
+
+  const sourceRect = removed.lastRect
+  if (sourceRect) {
+    const distance = rectDistance(sourceRect, left.rect) - rectDistance(sourceRect, right.rect)
+    if (distance !== 0) return distance
+  }
+
+  return Math.abs(left.order - removedOrder) - Math.abs(right.order - removedOrder)
+}
+
+const pickRecoveryTarget = (
+  removed: RegisteredVisualNavigationTarget,
+  removedOrder: number,
+): RegisteredVisualNavigationTarget | null => {
+  let best: {target: RegisteredVisualNavigationTarget; rect: VisualNavigationRect; order: number} | null = null
+
+  for (const [order, target] of orderedTargets().entries()) {
+    if (target.uiStateBlock.id !== removed.uiStateBlock.id) continue
+    if (target.surface === 'breadcrumb') continue
+    const rect = targetRect(target)
+    if (!rect) continue
+    const candidate = {target, rect, order}
+    if (!best || compareRecoveryTargets(removed, removedOrder, candidate, best) < 0) {
+      best = candidate
+    }
+  }
+
+  return best?.target ?? null
+}
+
+const recoverVisualNavigationTarget = async (
+  input: VisualNavigationMoveInput,
+): Promise<boolean> => {
+  const source: RegisteredVisualNavigationTarget = {
+    id: input.visualTargetId ?? '__missing__',
+    key: input.uiStateBlock.peekProperty(focusedVisualTargetKeyProp) ?? '',
+    blockId: input.uiStateBlock.peekProperty(focusedBlockIdProp) ?? input.block.id,
+    uiStateBlock: input.uiStateBlock,
+    surface: 'document',
+    element: document.body,
+  }
+  const replacement = pickRecoveryTarget(source, 0)
+  if (!replacement) return false
+  await focusVisualNavigationTarget(replacement)
+  return true
+}
+
+const scheduleFocusVisualNavigationTarget = (target: RegisteredVisualNavigationTarget): void => {
+  const focus = () => {
+    if (targets.get(target.id) !== target) return
+    void focusVisualNavigationTarget(target)
+  }
+  if (typeof queueMicrotask === 'function') {
+    queueMicrotask(focus)
+  } else {
+    setTimeout(focus, 0)
+  }
 }
 
 const hasMountedTargetKey = (
@@ -330,9 +424,9 @@ const resolveCurrentTarget = (
   ) ?? null
 }
 
-const focusVisualNavigationTarget = async (
+async function focusVisualNavigationTarget(
   target: RegisteredVisualNavigationTarget,
-): Promise<void> => {
+): Promise<void> {
   setActiveVisualNavigationTarget(target.id)
 
   if (target.layoutSessionBlockId && target.panelId) {
@@ -358,12 +452,12 @@ export const moveVisualFocus = async (
   if (typeof window === 'undefined' || typeof document === 'undefined') return false
 
   const current = resolveCurrentTarget(input)
-  if (!current) return false
+  if (!current) return recoverVisualNavigationTarget(input)
 
   const ordered = orderedTargets()
   const sourceOrder = ordered.findIndex(target => target.id === current.id)
   const source = candidateFromTarget(current, Math.max(0, sourceOrder))
-  if (!source) return false
+  if (!source) return recoverVisualNavigationTarget(input)
 
   const candidates = ordered
     .map((target, order) => candidateFromTarget(target, order))

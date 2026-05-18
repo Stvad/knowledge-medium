@@ -77,12 +77,15 @@ export const vimNormalModeActivation: ShortcutActivationContribution = context =
   if (context.surface !== 'block' || !context.inFocus || context.inEditMode || context.isSelected) {
     return null
   }
+  const visualTargetId = typeof context.visualTargetId === 'string'
+    ? context.visualTargetId
+    : undefined
 
   return [{
     context: ActionContextTypes.NORMAL_MODE,
     dependencies: {
       block: context.block,
-      ...(context.visualTargetId ? {visualTargetId: context.visualTargetId} : {}),
+      ...(visualTargetId ? {visualTargetId} : {}),
     },
   }]
 }
