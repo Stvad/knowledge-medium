@@ -82,6 +82,7 @@ export const vimNormalModeActivation: ShortcutActivationContribution = context =
     context: ActionContextTypes.NORMAL_MODE,
     dependencies: {
       block: context.block,
+      ...(context.visualTargetId ? {visualTargetId: context.visualTargetId} : {}),
     },
   }]
 }

@@ -75,7 +75,14 @@ function PanelSlotView({
 
   return (
     <NestedBlockContextProvider
-      overrides={{layoutBoundary: true, panelId: slot.id, canClosePanel, stackedPanel: stacked, wideScrollSurface}}
+      overrides={{
+        layoutBoundary: true,
+        panelId: slot.id,
+        layoutSessionBlockId: layoutSessionBlock.id,
+        canClosePanel,
+        stackedPanel: stacked,
+        wideScrollSurface,
+      }}
       key={slot.id}
     >
       <div

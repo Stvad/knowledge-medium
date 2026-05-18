@@ -51,6 +51,12 @@ export const focusedBlockIdProp = defineProperty<string | undefined>('focusedBlo
   changeScope: ChangeScope.UiState,
 })
 
+export const focusedVisualTargetKeyProp = defineProperty<string | undefined>('focusedVisualTargetKey', {
+  codec: codecs.optionalString,
+  defaultValue: undefined,
+  changeScope: ChangeScope.UiState,
+})
+
 export const activePanelIdProp = defineProperty<string | undefined>('activePanelId', {
   codec: codecs.optionalString,
   defaultValue: undefined,
@@ -245,6 +251,21 @@ export const focusBlock = async (
   }, {scope: ChangeScope.UiState, description: 'focus block'})
 }
 
+export const focusVisualTarget = async (
+  uiStateBlock: Block,
+  blockId: string,
+  visualTargetKey: string,
+  options: {edit?: boolean} = {},
+): Promise<void> => {
+  const {edit = false} = options
+  const targetEdit = edit && !uiStateBlock.repo.isReadOnly ? true : false
+  await uiStateBlock.repo.tx(async tx => {
+    await tx.setProperty(uiStateBlock.id, focusedBlockIdProp, blockId)
+    await tx.setProperty(uiStateBlock.id, focusedVisualTargetKeyProp, visualTargetKey)
+    await tx.setProperty(uiStateBlock.id, isEditingProp, targetEdit)
+  }, {scope: ChangeScope.UiState, description: 'focus visual target'})
+}
+
 export const requestEditorFocus = (uiStateBlock: Block): void => {
   const current = uiStateBlock.peekProperty(editorFocusRequestProp) ?? 0
   void uiStateBlock.set(editorFocusRequestProp, current + 1)
@@ -271,6 +292,7 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   isEditingProp,
   topLevelBlockIdProp,
   focusedBlockIdProp,
+  focusedVisualTargetKeyProp,
   activePanelIdProp,
   scrollTopProp,
   editorSelection,

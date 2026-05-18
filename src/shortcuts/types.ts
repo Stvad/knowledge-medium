@@ -59,6 +59,7 @@ export interface BaseShortcutDependencies {
 
 export interface BlockShortcutDependencies  extends BaseShortcutDependencies {
   block: Block;
+  visualTargetId?: string;
 }
 
 export interface CodeMirrorEditModeDependencies extends BaseShortcutDependencies {

@@ -50,7 +50,11 @@ export function useShortcutSurfaceActivations(
   const blockContext = useBlockContext()
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [types] = usePropertyValue(block, typesProp)
-  const inFocus = useInFocus(block.id)
+  const blockInFocus = useInFocus(block.id)
+  const visualTargetActive = typeof options.visualTargetActive === 'boolean'
+    ? options.visualTargetActive
+    : true
+  const inFocus = blockInFocus && visualTargetActive
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
 

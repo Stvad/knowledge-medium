@@ -19,7 +19,6 @@ import {
   useUIStateProperty,
   useUIStateBlock,
   useIsSelected,
-  useInFocus,
   useInEditMode,
 } from '@/data/globalState'
 import { useRepo } from '@/context/repo'
@@ -58,6 +57,10 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { useShortcutSurfaceActivations } from '@/extensions/useShortcutSurfaceActivations.ts'
 import { focusedBlockIdProp } from '@/data/properties.ts'
+import {
+  useVisualNavigationTarget,
+  visualNavigationSurfaceFromContext,
+} from '@/utils/visualNavigation.ts'
 
 interface DefaultBlockRendererProps extends BlockRendererProps {
   ContentRenderer?: BlockRenderer;
@@ -241,7 +244,7 @@ export const DefaultBlockLayout: BlockLayout = ({
   Controls, Header,
   shellProps,
 }) => {
-  const inFocus = useInFocus(block.id)
+  const inFocus = shellProps['data-visual-focused'] === 'true'
   const isSelected = useIsSelected(block.id)
   const isTopLevel = useIsFocalRender(block)
   const [isCollapsed] = usePropertyValue(block, isCollapsedProp)
@@ -293,11 +296,26 @@ export function DefaultBlockRenderer(
   const shellRef = useRef<HTMLDivElement | null>(null)
   const contentContainerRef = useRef<HTMLDivElement | null>(null)
   const isTopLevel = useIsFocalRender(block)
+  const {
+    targetId: visualTargetId,
+    active: visualTargetActive,
+    activate: activateVisualTarget,
+  } = useVisualNavigationTarget({
+    blockId: block.id,
+    uiStateBlock,
+    panelId: typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined,
+    layoutSessionBlockId: typeof blockContext.layoutSessionBlockId === 'string'
+      ? blockContext.layoutSessionBlockId
+      : undefined,
+    surface: visualNavigationSurfaceFromContext(blockContext),
+    elementRef: shellRef,
+    anchorElementRef: contentContainerRef,
+  })
 
   // Scroll-into-view on focus (effect below). The `data-editing` attr
   // on shellProps wants `inEditMode`. Other reactive state is read by
   // the layout / slots themselves, not threaded through here.
-  const inFocus = useInFocus(block.id)
+  const inFocus = visualTargetActive
 
   useLayoutEffect(() => {
     if (!inFocus || inEditMode) return
@@ -375,7 +393,10 @@ export function DefaultBlockRenderer(
     () => resolveContentSurfaceProps(resolveContext),
     [resolveContext, resolveContentSurfaceProps],
   )
-  useShortcutSurfaceActivations(block, 'block')
+  useShortcutSurfaceActivations(block, 'block', {
+    visualTargetId,
+    visualTargetActive,
+  })
   const resolveChildrenFooterSections = runtime.read(blockChildrenFooterFacet)
   const childrenFooterSections = useMemo(
     () => resolveChildrenFooterSections(resolveContext),
@@ -524,13 +545,16 @@ export function DefaultBlockRenderer(
   const shellProps = useMemo<BlockShellProps>(() => ({
     'data-block-id': block.id,
     'data-editing': inEditMode ? 'true' : 'false',
+    'data-visual-focused': visualTargetActive ? 'true' : 'false',
     tabIndex: 0,
     ref: shellRef,
+    onFocus: () => activateVisualTarget(),
+    onPointerDownCapture: () => activateVisualTarget(),
     onClick: handleBlockClick
       ? (event) => { void handleBlockClick(event) }
       : undefined,
     onPaste: (event) => { void handlePaste(event) },
-  }), [block.id, inEditMode, handleBlockClick, handlePaste])
+  }), [activateVisualTarget, block.id, inEditMode, handleBlockClick, handlePaste, visualTargetActive])
 
   const layoutSlots = useMemo<BlockLayoutSlots>(() => ({
     block,
@@ -552,7 +576,6 @@ export function DefaultBlockRenderer(
     // Layout is resolved from blockLayoutFacet — its identity is stable
     // per resolveContext (the resolver memo above), not a fresh
     // component each render.
-    // eslint-disable-next-line react-hooks/static-components
     <Layout {...layoutSlots}/>
   )
 }

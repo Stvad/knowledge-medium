@@ -1,8 +1,10 @@
 import type {
   ClipboardEvent,
   ComponentType,
+  FocusEvent,
   HTMLAttributes,
   MouseEvent,
+  PointerEvent,
   Ref,
 } from 'react'
 import type { EditorView } from '@codemirror/view'
@@ -169,8 +171,11 @@ export type BlockChildrenFooterResolver =
 export interface BlockShellProps {
   'data-block-id': string
   'data-editing': 'true' | 'false'
+  'data-visual-focused'?: 'true' | 'false'
   tabIndex: number
   ref?: Ref<HTMLDivElement>
+  onFocus?: (event: FocusEvent<HTMLElement>) => void
+  onPointerDownCapture?: (event: PointerEvent<HTMLElement>) => void
   onClick?: (event: MouseEvent<HTMLElement>) => void
   onPaste?: (event: ClipboardEvent<HTMLElement>) => void
 }
@@ -253,6 +258,8 @@ export type ShortcutSurface =
 export interface ShortcutSurfaceContext extends BlockInteractionContext {
   surface: ShortcutSurface
   editorView?: EditorView
+  visualTargetId?: string
+  visualTargetActive?: boolean
 }
 
 export type ShortcutActivationContribution =

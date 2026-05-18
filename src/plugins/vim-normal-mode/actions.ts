@@ -10,6 +10,7 @@ import {
   nextVisibleBlock,
   previousVisibleBlock,
 } from '@/utils/selection.ts'
+import { moveVisualFocus, type VisualNavigationDirection } from '@/utils/visualNavigation.ts'
 import { actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { pasteFromClipboard } from '@/utils/paste.ts'
@@ -45,6 +46,15 @@ const jumpVisibleBlocks = async (
   return last === startBlock ? null : last
 }
 
+const moveVisualFocusWithFallback = async (
+  deps: BlockShortcutDependencies,
+  direction: VisualNavigationDirection,
+): Promise<boolean> => {
+  const {block, uiStateBlock, visualTargetId} = deps
+  if (!block || !uiStateBlock) return false
+  return moveVisualFocus({block, uiStateBlock, visualTargetId}, direction)
+}
+
 export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<typeof ActionContextTypes.NORMAL_MODE>[] {
   const {
     indentBlock,
@@ -72,10 +82,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     outdentBlockAction,
     bindNormal({
       id: 'move_down',
-      description: 'Move to next block',
+      description: 'Move focus visually down',
       handler: async (deps: BlockShortcutDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
+
+        if (await moveVisualFocusWithFallback(deps, 'down')) return
 
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
@@ -89,10 +101,12 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     }),
     bindNormal({
       id: 'move_up',
-      description: 'Move to previous block',
+      description: 'Move focus visually up',
       handler: async (deps: BlockShortcutDependencies) => {
         const {block, uiStateBlock} = deps
         if (!block || !uiStateBlock) return
+
+        if (await moveVisualFocusWithFallback(deps, 'up')) return
 
         const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
         if (!topLevelBlockId) return
@@ -102,6 +116,26 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
       },
       defaultBinding: {
         keys: ['up', 'h'],
+      },
+    }),
+    bindNormal({
+      id: 'move_left',
+      description: 'Move focus visually left',
+      handler: async (deps: BlockShortcutDependencies) => {
+        await moveVisualFocusWithFallback(deps, 'left')
+      },
+      defaultBinding: {
+        keys: 'left',
+      },
+    }),
+    bindNormal({
+      id: 'move_right',
+      description: 'Move focus visually right',
+      handler: async (deps: BlockShortcutDependencies) => {
+        await moveVisualFocusWithFallback(deps, 'right')
+      },
+      defaultBinding: {
+        keys: 'right',
       },
     }),
     bindNormal({

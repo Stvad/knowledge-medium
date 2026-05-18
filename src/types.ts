@@ -90,6 +90,7 @@ export interface BlockContextType {
         name: string
     }
     panelId?: string
+    layoutSessionBlockId?: string
     /** Single visible panel mode: widen the panel's scroll target to the
      *  whole layout surface while constraining its document content inside
      *  the panel renderer. */
