@@ -167,10 +167,13 @@ export const buildGroupedBacklinks = ({
   }
 
   const consumePriority = (priority: GroupPriority) => {
+    // High-priority groups are always surfaced — even a single-item group must
+    // appear at the top rather than getting absorbed into the Other fallback.
+    const minSize = priority === 'high' ? 1 : minGroupSize
     const priorityGroups = Array.from(groups.values())
       .filter(group => group.priority === priority && group.kind !== 'field')
     while (priorityGroups.length > 0) {
-      const picked = pickLargestGroup(priorityGroups, sourceOrder, consumed, minGroupSize)
+      const picked = pickLargestGroup(priorityGroups, sourceOrder, consumed, minSize)
       if (!picked) return
       result.push({
         groupId: picked.group.groupId,

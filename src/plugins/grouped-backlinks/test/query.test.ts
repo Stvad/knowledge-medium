@@ -352,6 +352,40 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(sorted(out.groups[0].sourceIds)).toEqual(['src-1', 'src-2'])
   })
 
+  it('surfaces singleton high-priority groups at the top instead of folding them into Other', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'project', content: 'Project'})
+    await create({id: 'topic', content: 'Topic'})
+    await create({
+      id: 'src-solo',
+      references: [{id: 'target', alias: 'T'}, {id: 'project', alias: 'Project'}],
+    })
+    await create({
+      id: 'src-topic-1',
+      references: [{id: 'target', alias: 'T'}, {id: 'topic', alias: 'Topic'}],
+    })
+    await create({
+      id: 'src-topic-2',
+      references: [{id: 'target', alias: 'T'}, {id: 'topic', alias: 'Topic'}],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      groupingConfig: {
+        highPriorityTags: ['Project'],
+        lowPriorityTags: [],
+        excludedTags: [],
+        excludedPatterns: [],
+      },
+    }).load()
+
+    expect(out.total).toBe(3)
+    expect(out.groups.map(group => group.label)).toEqual(['Project', 'Topic'])
+    expect(out.groups[0].sourceIds).toEqual(['src-solo'])
+    expect(sorted(out.groups[1].sourceIds)).toEqual(['src-topic-1', 'src-topic-2'])
+  })
+
   it('does not treat include filters as grouping priority', async () => {
     await create({id: 'target', content: 'Target'})
     await create({id: 'project', content: 'Project'})
