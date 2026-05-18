@@ -90,6 +90,10 @@ export interface BlockContextType {
         name: string
     }
     panelId?: string
+    /** Single visible panel mode: widen the panel's scroll target to the
+     *  whole layout surface while constraining its document content inside
+     *  the panel renderer. */
+    wideScrollSurface?: boolean
     /** Umbrella surface flag — set by every non-document mount
      *  (`BlockEmbed`, `BacklinkEntry`, breadcrumb list). Consulted by
      *  `useIsFocalRender` / `isFocalRender` so a new surface only has

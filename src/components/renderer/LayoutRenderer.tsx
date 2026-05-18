@@ -20,6 +20,8 @@ const EMPTY_ROWS: readonly BlockData[] = Object.freeze([])
 
 const TOP_LEVEL_COLUMN_CLASS =
   'h-full w-full min-w-0 max-w-3xl shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0 only:mx-auto md:min-w-md md:basis-0 md:grow md:shrink'
+const WIDE_SCROLL_COLUMN_CLASS =
+  'h-full w-full min-w-0 shrink-0 border-l border-border pl-2 first:border-l-0 first:pl-0'
 const STACK_CHILD_CLASS =
   'w-full min-w-0 shrink-0 border-t border-border pt-2 first:border-t-0 first:pt-0'
 
@@ -55,6 +57,7 @@ function PanelSlotView({
   canClosePanel,
   className,
   stacked,
+  wideScrollSurface,
   trackFocus,
 }: {
   slot: Extract<RenderSlot, {kind: 'panel'}>
@@ -62,6 +65,7 @@ function PanelSlotView({
   canClosePanel: boolean
   className: string
   stacked: boolean
+  wideScrollSurface: boolean
   trackFocus: boolean
 }) {
   const markActivePanel = useCallback(() => {
@@ -71,7 +75,7 @@ function PanelSlotView({
 
   return (
     <NestedBlockContextProvider
-      overrides={{layoutBoundary: true, panelId: slot.id, canClosePanel, stackedPanel: stacked}}
+      overrides={{layoutBoundary: true, panelId: slot.id, canClosePanel, stackedPanel: stacked, wideScrollSurface}}
       key={slot.id}
     >
       <div
@@ -90,12 +94,14 @@ function SlotView({
   layoutSessionBlock,
   canClosePanel,
   topLevel,
+  wideScrollSurface,
   trackFocus,
 }: {
   slot: RenderSlot
   layoutSessionBlock: Block
   canClosePanel: boolean
   topLevel: boolean
+  wideScrollSurface: boolean
   trackFocus: boolean
 }) {
   if (slot.kind === 'panel') {
@@ -103,8 +109,9 @@ function SlotView({
       slot={slot}
       layoutSessionBlock={layoutSessionBlock}
       canClosePanel={canClosePanel}
-      className={topLevel ? TOP_LEVEL_COLUMN_CLASS : STACK_CHILD_CLASS}
+      className={topLevel ? (wideScrollSurface ? WIDE_SCROLL_COLUMN_CLASS : TOP_LEVEL_COLUMN_CLASS) : STACK_CHILD_CLASS}
       stacked={!topLevel}
+      wideScrollSurface={wideScrollSurface}
       trackFocus={trackFocus}
     />
   }
@@ -121,6 +128,7 @@ function SlotView({
           layoutSessionBlock={layoutSessionBlock}
           canClosePanel={canClosePanel}
           topLevel={false}
+          wideScrollSurface={false}
           trackFocus={trackFocus}
         />
       ))}
@@ -150,6 +158,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
     ? (mobilePanelSlot ? [mobilePanelSlot] : [])
     : slots
   const canClosePanel = panelSlots.length > 1
+  const hasOneVisiblePanel = slotsToRender.length === 1 && slotsToRender[0]?.kind === 'panel'
 
   useEffect(() => {
     // A panel insert writes activePanelId and the new row in one tx, but
@@ -168,6 +177,7 @@ export function LayoutRenderer({block}: BlockRendererProps) {
         layoutSessionBlock={block}
         canClosePanel={canClosePanel}
         topLevel
+        wideScrollSurface={hasOneVisiblePanel && slot.kind === 'panel'}
         trackFocus={!isMobile}
       />
     ))}

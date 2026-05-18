@@ -37,6 +37,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
   const blockContext = useBlockContext()
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
+  const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
 
   const repo = useRepo();
 
@@ -132,53 +133,75 @@ export function PanelRenderer({block}: BlockRendererProps) {
      return null
   }
 
+  const actionButtons = (
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className={PANEL_HISTORY_BUTTON_CLASS}
+        onClick={() => { void goBackInPanel(block) }}
+        disabled={!canBack}
+        aria-label="Back"
+        title="Back"
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        className={PANEL_HISTORY_BUTTON_CLASS}
+        onClick={() => { void goForwardInPanel(block) }}
+        disabled={!canForward}
+        aria-label="Forward"
+        title="Forward"
+      >
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+      {canClosePanel && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className={PANEL_ACTION_BUTTON_CLASS}
+          onClick={handleClose}
+          aria-label="Close panel"
+        >
+          <X className="h-4 w-4" />
+        </Button>
+      )}
+    </>
+  )
+
+  const panelBody = (
+    <NestedBlockContextProvider overrides={{layoutBoundary: false}}>
+      <BlockComponent blockId={topLevelBlockId}/>
+    </NestedBlockContextProvider>
+  )
+
   return (
     <div className={`panel min-w-0 max-w-full flex flex-col relative ${
       stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
     }`}>
-      <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
-        <Button
-          variant="ghost"
-          size="icon"
-          className={PANEL_HISTORY_BUTTON_CLASS}
-          onClick={() => { void goBackInPanel(block) }}
-          disabled={!canBack}
-          aria-label="Back"
-          title="Back"
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className={PANEL_HISTORY_BUTTON_CLASS}
-          onClick={() => { void goForwardInPanel(block) }}
-          disabled={!canForward}
-          aria-label="Forward"
-          title="Forward"
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-        {canClosePanel && (
-          <Button
-            variant="ghost"
-            size="icon"
-            className={PANEL_ACTION_BUTTON_CLASS}
-            onClick={handleClose}
-            aria-label="Close panel"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        )}
-      </div>
+      {wideScrollSurface ? (
+        <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
+          <div className="pointer-events-auto mx-auto flex w-full max-w-3xl justify-end gap-0.5">
+            {actionButtons}
+          </div>
+        </div>
+      ) : (
+        <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
+          {actionButtons}
+        </div>
+      )}
       <div
         ref={scrollRef}
         className={stackedPanel ? 'overflow-visible' : 'flex-grow overflow-y-auto scrollbar-none pb-[calc(env(safe-area-inset-bottom)+4rem)] md:pb-0'}
         onScroll={scheduleScrollTopWrite}
       >
-        <NestedBlockContextProvider overrides={{layoutBoundary: false}}>
-          <BlockComponent blockId={topLevelBlockId}/>
-        </NestedBlockContextProvider>
+        {wideScrollSurface ? (
+          <div className="mx-auto w-full max-w-3xl">
+            {panelBody}
+          </div>
+        ) : panelBody}
       </div>
       {/* Per-panel mount points — chrome contributed via
           `panelMountsFacet` (e.g. swipe-quick-actions menu). Mounted
