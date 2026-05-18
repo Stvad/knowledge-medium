@@ -14,14 +14,35 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
  *  so this is the canonical place that re-derives "what day is this"
  *  for the query layer. UTC midnight keeps `toISOString()` stable
  *  across clients regardless of local timezone — same invariant the
- *  reverse-chronology orderKey relies on. */
-const dailyNoteDateValue = (iso: string): Date => {
+ *  reverse-chronology orderKey relies on.
+ *
+ *  Round-trip the parsed Date back to `YYYY-MM-DD` and compare —
+ *  `Date.parse('2026-02-30T00:00:00Z')` rolls over to March 2 instead
+ *  of returning NaN in V8, so the NaN check alone isn't enough. */
+const tryDailyNoteDateValue = (iso: string): Date | undefined => {
   const ms = Date.parse(`${iso}T00:00:00Z`)
-  if (Number.isNaN(ms)) {
+  if (Number.isNaN(ms)) return undefined
+  const d = new Date(ms)
+  if (d.toISOString().slice(0, 10) !== iso) return undefined
+  return d
+}
+
+/** Strict variant for `getOrCreateDailyNote` callers, which receive
+ *  validated ISOs from app surfaces (landing, picker, date math).
+ *  An invalid iso here is a caller bug — fail loudly instead of
+ *  silently dropping the indexable date. */
+const dailyNoteDateValue = (iso: string): Date => {
+  const d = tryDailyNoteDateValue(iso)
+  if (d === undefined) {
     throw new Error(`Invalid ISO date for daily note: ${iso}`)
   }
-  return new Date(ms)
+  return d
 }
+
+const dailyNoteInitialValues = (
+  date: Date | undefined,
+): Readonly<Record<string, unknown>> =>
+  date === undefined ? {} : {[dailyNoteDateProp.name]: date}
 
 // Namespace UUIDs — fixed constants so two clients computing the same
 // (workspaceId, isoDate) pair derive the same block id even before any
@@ -284,9 +305,13 @@ export const ensureDailyNoteTarget = async (
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)
+      // `isDateAlias` matches the YYYY-MM-DD shape but doesn't check
+      // calendar validity; aliases like `2026-13-01` reach here from
+      // the references processor. Index when parseable, skip when not
+      // — the seat block still exists, just without a queryable date.
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
-        {[dailyNoteDateProp.name]: dailyNoteDateValue(date)},
+        dailyNoteInitialValues(tryDailyNoteDateValue(date)),
         typeSnapshot,
       )
     },

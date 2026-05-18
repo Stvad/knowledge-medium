@@ -28,6 +28,7 @@ import {
   DAILY_NOTE_NS,
   DAILY_NOTE_TYPE,
   dailyNoteBlockId,
+  dailyNoteDateProp,
   dailyNotesDataExtension,
   ensureDailyNoteTarget,
   isDateAlias,
@@ -139,5 +140,28 @@ describe('ensureDailyNoteTarget', () => {
     expect(first.id).toBe(second.id)
     expect(first.inserted).toBe(true)
     expect(second.inserted).toBe(false)
+  })
+
+  it('tolerates date-shaped aliases that are not real calendar dates', async () => {
+    // `isDateAlias` matches by regex (YYYY-MM-DD shape) without
+    // calendar-validity check. The references processor routes any
+    // such match through ensureDailyNoteTarget, so a user-typed
+    // `[[2026-13-01]]` or `[[2026-02-30]]` must not blow up the tx
+    // — the seat block still gets created, just without an indexable
+    // date property.
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    for (const bogusIso of ['2026-13-01', '2026-02-30']) {
+      const result = await env.repo.tx(
+        tx => ensureDailyNoteTarget(tx, env.repo, bogusIso, WS, typeSnapshot),
+        {scope: ChangeScope.BlockDefault},
+      )
+      expect(result.inserted).toBe(true)
+      const row = await env.h.db.get<{properties_json: string}>(
+        'SELECT properties_json FROM blocks WHERE id = ?', [result.id])
+      const props = JSON.parse(row.properties_json)
+      expect(props[aliasesProp.name]).toEqual([bogusIso])
+      expect(props[typesProp.name]).toEqual([PAGE_TYPE, DAILY_NOTE_TYPE])
+      expect(props[dailyNoteDateProp.name]).toBeUndefined()
+    }
   })
 })
