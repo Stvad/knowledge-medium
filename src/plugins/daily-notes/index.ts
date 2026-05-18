@@ -215,6 +215,7 @@ export {
 } from './rescheduleAction.ts'
 export {
   SPREAD_BLOCK_DATES_ACTION_ID,
+  SPREAD_BLOCK_DATES_BLOCKS_ACTION_ID,
   spreadBlockDateAction,
   spreadBlockDatesAction,
   spreadBlockDatesGroupHeaderEntry,

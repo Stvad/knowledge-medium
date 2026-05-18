@@ -9,6 +9,7 @@ import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backl
 import { ActionContextTypes } from '@/shortcuts/types.ts'
 import {
   ADD_TAG_ACTION_ID,
+  ADD_TAG_BLOCKS_ACTION_ID,
   blockTaggingPlugin,
   blockTagsConfigProp,
 } from '../index.ts'
@@ -28,23 +29,21 @@ describe('blockTaggingPlugin', () => {
     expect(typeof override?.Editor).toBe('function')
   })
 
-  it('registers the add-tag action in both NORMAL_MODE and MULTI_SELECT_MODE', () => {
+  it('registers the add-tag action in both NORMAL_MODE and MULTI_SELECT_MODE under distinct ids', () => {
     const runtime = resolveFacetRuntimeSync(blockTaggingPlugin)
-    const actions = runtime.read(actionsFacet).filter(a => a.id === ADD_TAG_ACTION_ID)
-    expect(actions.map(a => a.context).sort()).toEqual([
-      ActionContextTypes.MULTI_SELECT_MODE,
-      ActionContextTypes.NORMAL_MODE,
-    ].sort())
-    for (const action of actions) {
-      expect(action.icon).toBe(Tag)
-    }
-    const multiSelect = actions.find(a => a.context === ActionContextTypes.MULTI_SELECT_MODE)
-    expect(typeof multiSelect?.canRun).toBe('function')
+    const actions = runtime.read(actionsFacet)
+    const blockAction = actions.find(a => a.id === ADD_TAG_ACTION_ID)
+    const blocksAction = actions.find(a => a.id === ADD_TAG_BLOCKS_ACTION_ID)
+    expect(blockAction?.context).toBe(ActionContextTypes.NORMAL_MODE)
+    expect(blocksAction?.context).toBe(ActionContextTypes.MULTI_SELECT_MODE)
+    expect(blockAction?.icon).toBe(Tag)
+    expect(blocksAction?.icon).toBe(Tag)
+    expect(typeof blocksAction?.canRun).toBe('function')
   })
 
-  it('contributes a grouped-backlinks header entry pointing at the action', () => {
+  it('contributes a grouped-backlinks header entry pointing at the multi-select action id', () => {
     const runtime = resolveFacetRuntimeSync(blockTaggingPlugin)
     const entries = runtime.read(groupedBacklinksGroupHeaderActionsFacet)
-    expect(entries.map(entry => entry.actionId)).toContain(ADD_TAG_ACTION_ID)
+    expect(entries.map(entry => entry.actionId)).toContain(ADD_TAG_BLOCKS_ACTION_ID)
   })
 })

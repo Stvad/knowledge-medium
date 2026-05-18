@@ -45,7 +45,8 @@ const pair = defineBlocksAction({
 
 export const addTagBlockAction = pair.block
 export const addTagAction = pair.blocks
+export const ADD_TAG_BLOCKS_ACTION_ID = pair.blocks.id
 
 export const addTagGroupHeaderEntry: GroupedBacklinksGroupHeaderAction = {
-  actionId: ADD_TAG_ACTION_ID,
+  actionId: pair.blocks.id,
 }

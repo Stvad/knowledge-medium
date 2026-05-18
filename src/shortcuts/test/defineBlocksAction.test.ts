@@ -2,7 +2,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import type { Block } from '@/data/block'
-import { defineBlocksAction } from '../utils.ts'
+import { defineBlocksAction, multiSelectActionId } from '../utils.ts'
 import { ActionContextTypes } from '../types.ts'
 
 const fakeBlock = (id: string): Block => ({id} as unknown as Block)
@@ -30,7 +30,7 @@ describe('defineBlocksAction', () => {
     expect(flow).toHaveBeenCalledWith([block])
   })
 
-  it('emits a MULTI_SELECT_MODE variant that hands the full selection to the flow at once', async () => {
+  it('emits a MULTI_SELECT_MODE variant under a multi_select-prefixed id', async () => {
     const flow = vi.fn(async () => undefined)
     const pair = defineBlocksAction({
       id: 'test.op',
@@ -39,7 +39,12 @@ describe('defineBlocksAction', () => {
       flow,
     })
 
-    expect(pair.blocks.id).toBe('test.op')
+    // Distinct id keeps palette dispatch unambiguous: clicking the
+    // "block" row runs the NORMAL_MODE handler, clicking the
+    // "blocks" row runs the MULTI_SELECT_MODE handler, even when
+    // both contexts are active simultaneously.
+    expect(pair.blocks.id).toBe(multiSelectActionId('test.op'))
+    expect(pair.blocks.id).not.toBe(pair.block.id)
     expect(pair.blocks.context).toBe(ActionContextTypes.MULTI_SELECT_MODE)
     expect(pair.blocks.description).toBe('many')
 

@@ -156,9 +156,12 @@ export const makeCMMode = makeModeAction(ActionContextTypes.EDIT_MODE_CM, 'edit.
 export const makeMultiSelect = makeModeAction(ActionContextTypes.MULTI_SELECT_MODE, 'multi_select')
 
 export interface DefineBlocksActionConfig {
-  /** Shared action id. Both context variants register under this
-   *  same id; `getActiveActionById` resolves the right variant
-   *  based on the currently active context. */
+  /** Id for the NORMAL_MODE variant. The MULTI_SELECT_MODE variant
+   *  is registered under `multi_select.<id>` (matching the
+   *  `makeMultiSelect` convention) so dispatch by id stays
+   *  unambiguous when both contexts are active simultaneously —
+   *  e.g. focus moves to an unselected block while a selection
+   *  remains. */
   id: string
   /** Optional icon shown by any surface that renders actions. */
   icon?: ActionIcon
@@ -185,6 +188,14 @@ export interface BlocksActionPair {
   blocks: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>
 }
 
+/** Prefix used for the MULTI_SELECT_MODE variant's id. Mirrors the
+ *  prefix emitted by `makeMultiSelect`, so an existing multi-select
+ *  surface wired up via either path keeps the same id shape. */
+const MULTI_SELECT_ID_PREFIX = 'multi_select'
+
+export const multiSelectActionId = (baseId: string): string =>
+  `${MULTI_SELECT_ID_PREFIX}.${baseId}`
+
 /** Pair an "operation over a set of blocks" with the two natural
  *  action contexts: NORMAL_MODE (focused block as a one-element set)
  *  and MULTI_SELECT_MODE (the current selection).
@@ -197,7 +208,15 @@ export interface BlocksActionPair {
  *  per-block handler N times for an N-block selection, which would
  *  prompt the user N times for any operation that opens a dialog
  *  in its handler. This helper passes the whole set into a single
- *  `flow` call instead. */
+ *  `flow` call instead.
+ *
+ *  The two variants get distinct ids (NORMAL: `id`, MULTI_SELECT:
+ *  `multi_select.<id>`) because the command palette dispatches by
+ *  id alone — `getActiveActionById` picks the most-recently-active
+ *  matching context — so a shared id can route a click on the
+ *  "block" row to the multi-select handler when both contexts are
+ *  active. Distinct ids keep each row's behaviour grounded in the
+ *  context it advertises. */
 export const defineBlocksAction = ({
   id,
   icon,
@@ -217,7 +236,7 @@ export const defineBlocksAction = ({
     handler: ({block}: BlockShortcutDependencies) => flow([block]),
   },
   blocks: {
-    id,
+    id: multiSelectActionId(id),
     description: blocksDescription,
     context: ActionContextTypes.MULTI_SELECT_MODE,
     ...(icon ? {icon} : {}),

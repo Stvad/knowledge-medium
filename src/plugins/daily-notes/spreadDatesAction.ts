@@ -63,7 +63,8 @@ const pair = defineBlocksAction({
 
 export const spreadBlockDateAction = pair.block
 export const spreadBlockDatesAction = pair.blocks
+export const SPREAD_BLOCK_DATES_BLOCKS_ACTION_ID = pair.blocks.id
 
 export const spreadBlockDatesGroupHeaderEntry: GroupedBacklinksGroupHeaderAction = {
-  actionId: SPREAD_BLOCK_DATES_ACTION_ID,
+  actionId: pair.blocks.id,
 }
