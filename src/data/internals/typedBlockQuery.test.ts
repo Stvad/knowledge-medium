@@ -204,6 +204,21 @@ describe('repo.queryBlocks', () => {
       expect(ids(onOrAfter).sort()).toEqual(['future', 'today'])
     })
 
+    it('accepts JSON-revived date operands (Date → ISO string after persist)', async () => {
+      // Persisted predicates (e.g. backlinks:predicates) round-trip
+      // through JSON, which turns Date instances into ISO strings.
+      // The compiler re-runs where.encode on the rehydrated value;
+      // it must accept the string form so saved date-range filters
+      // still work after reload.
+      await create({id: 'past', properties: {[dueProp.name]: encodeDate('2026-01-01')}})
+      await create({id: 'future', properties: {[dueProp.name]: encodeDate('2026-12-31')}})
+
+      const original = {due: {lt: new Date('2026-05-18T00:00:00.000Z')}}
+      const persisted = JSON.parse(JSON.stringify(original)) as Record<string, unknown>
+      const out = await env.repo.queryBlocks({where: persisted})
+      expect(ids(out)).toEqual(['past'])
+    })
+
     it('between is inclusive on both ends', async () => {
       await create({id: 'p1', properties: {[priorityProp.name]: priorityProp.codec.encode(1)}})
       await create({id: 'p2', properties: {[priorityProp.name]: priorityProp.codec.encode(2)}})
