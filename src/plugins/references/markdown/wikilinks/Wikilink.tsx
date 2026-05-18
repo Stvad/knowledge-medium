@@ -4,10 +4,14 @@ import { useBlockLinkClick } from '@/utils/navigation'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { resolveWikilinkDisplay } from './wikilinkDecorator.ts'
 
-export function Wikilink({alias, blockId, workspaceId, children}: {
+export function Wikilink({alias, blockId, workspaceId, hasCustomDisplay = false, children}: {
   alias: string
   blockId: string
   workspaceId: string
+  /** True when the markdown source carried an explicit display label, as
+   *  in `[display]([[alias]])`. Display-decorators are bypassed in that
+   *  case so the author's intent isn't silently overridden. */
+  hasCustomDisplay?: boolean
   children: ReactNode
 }) {
   // Hooks must run before any early return so the caller's hook order
@@ -16,7 +20,9 @@ export function Wikilink({alias, blockId, workspaceId, children}: {
   // safely — it's never invoked in that branch since we render plain text.
   const onClick = useBlockLinkClick({blockId, workspaceId})
   const runtime = useAppRuntime()
-  const decorated = resolveWikilinkDisplay(runtime, {alias, blockId, workspaceId})
+  const decorated = hasCustomDisplay
+    ? null
+    : resolveWikilinkDisplay(runtime, {alias, blockId, workspaceId})
   const display = decorated ?? children
 
   // Reference resolution is an invariant maintained by parseAndUpdateReferences
