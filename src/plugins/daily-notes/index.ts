@@ -22,7 +22,11 @@
  *     date that has no row yet.
  *   - `openDailyNotePicker(detail?)` / `openDailyNotePickerEvent` —
  *     reusable UI trigger for the global daily-note date picker.
- *   - `isDateAlias(alias)` — date-shape predicate (`YYYY-MM-DD`).
+ *   - `isDateAlias(alias)` — shape-only predicate (`YYYY-MM-DD`).
+ *   - `isValidDateAlias(alias)` — shape + calendar-validity predicate.
+ *     The routing decision in `parseReferences` and SRS's daily-note
+ *     ISO extraction use this so calendar-invalid strings
+ *     (`2026-13-01`, `2026-02-30`) don't get treated as real dates.
  *   - `DAILY_NOTE_NS`, `JOURNAL_NS` — namespace UUIDs.
  *
  * The `dailyNotesPlugin` AppExtension contributes:
@@ -196,6 +200,7 @@ export {
   getOrCreateDailyNote,
   getOrCreateJournalBlock,
   isDateAlias,
+  isValidDateAlias,
   journalBlockId,
   todayIso,
 } from './dailyNotes.ts'

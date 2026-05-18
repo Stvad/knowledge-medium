@@ -16,33 +16,22 @@ import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
  *  across clients regardless of local timezone — same invariant the
  *  reverse-chronology orderKey relies on.
  *
- *  Round-trip the parsed Date back to `YYYY-MM-DD` and compare —
- *  `Date.parse('2026-02-30T00:00:00Z')` rolls over to March 2 instead
- *  of returning NaN in V8, so the NaN check alone isn't enough. */
-const tryDailyNoteDateValue = (iso: string): Date | undefined => {
-  const ms = Date.parse(`${iso}T00:00:00Z`)
-  if (Number.isNaN(ms)) return undefined
-  const d = new Date(ms)
-  if (d.toISOString().slice(0, 10) !== iso) return undefined
-  return d
-}
-
-/** Strict variant for `getOrCreateDailyNote` callers, which receive
- *  validated ISOs from app surfaces (landing, picker, date math).
- *  An invalid iso here is a caller bug — fail loudly instead of
- *  silently dropping the indexable date. */
+ *  Throws on invalid input. Callers must validate via `isValidDateAlias`
+ *  upstream — the references-processor routing decision is the canonical
+ *  gate, so reaching this with a bad iso is a caller bug. */
 const dailyNoteDateValue = (iso: string): Date => {
-  const d = tryDailyNoteDateValue(iso)
-  if (d === undefined) {
+  const ms = Date.parse(`${iso}T00:00:00Z`)
+  if (Number.isNaN(ms)) {
     throw new Error(`Invalid ISO date for daily note: ${iso}`)
+  }
+  const d = new Date(ms)
+  // `Date.parse('2026-02-30T00:00:00Z')` rolls over to March 2 instead
+  // of returning NaN in V8, so the NaN check alone isn't enough.
+  if (d.toISOString().slice(0, 10) !== iso) {
+    throw new Error(`Invalid calendar date for daily note: ${iso}`)
   }
   return d
 }
-
-const dailyNoteInitialValues = (
-  date: Date | undefined,
-): Readonly<Record<string, unknown>> =>
-  date === undefined ? {} : {[dailyNoteDateProp.name]: date}
 
 // Namespace UUIDs — fixed constants so two clients computing the same
 // (workspaceId, isoDate) pair derive the same block id even before any
@@ -268,12 +257,30 @@ export const getOrCreateDailyNote = async (
 // sort path anymore (orderKey carries that responsibility now).
 export {dailyNoteCreatedAt}
 
-/** Date-shaped alias detector (spec §7.6). Routing decision used by
- *  the references processor: dates go to `ensureDailyNoteTarget`
- *  (no cleanup eligibility); non-dates go to `ensureAliasTarget`
- *  (eligible for orphan cleanup if this tx inserted them). */
+/** Date-shaped alias detector (spec §7.6). Shape-only — matches the
+ *  `YYYY-MM-DD` regex without checking calendar validity. Reach for
+ *  this when you want to find any date-looking alias on a row
+ *  (e.g. extracting the iso from a daily-note's alias list) and the
+ *  caller will tolerate a malformed-but-shaped result. Routing
+ *  decisions (references processor) use `isValidDateAlias` instead. */
 export const isDateAlias = (alias: string): boolean =>
   /^\d{4}-\d{2}-\d{2}$/.test(alias)
+
+/** Shape + calendar-validity check. Returns `true` only for strings
+ *  that parse to a real calendar day (rejects `2026-13-01`,
+ *  `2026-02-30`, etc. via a round-trip-to-ISO comparison — naive
+ *  `Date.parse` rolls these over silently). This is the routing
+ *  predicate: aliases that pass go through `ensureDailyNoteTarget`
+ *  (deterministic-id daily-note seat); aliases that only pass the
+ *  shape check fall through to `ensureAliasTarget` (regular alias
+ *  target page) so the user's typo doesn't pollute the daily-note
+ *  namespace with a wrong-but-deterministic seat. */
+export const isValidDateAlias = (alias: string): boolean => {
+  if (!isDateAlias(alias)) return false
+  const ms = Date.parse(`${alias}T00:00:00Z`)
+  if (Number.isNaN(ms)) return false
+  return new Date(ms).toISOString().slice(0, 10) === alias
+}
 
 /** Ensure a daily-note **target seat** block exists for ISO date `date`
  *  in `workspaceId`. The seat is a reference target materialised at
@@ -281,6 +288,11 @@ export const isDateAlias = (alias: string): boolean =>
  *  that date yet — same `dailyNoteBlockId(workspaceId, date)` namespace
  *  as `getOrCreateDailyNote`, so the two flows converge on the same
  *  row through PowerSync without a merge.
+ *
+ *  Contract: `date` MUST be a valid calendar ISO (`isValidDateAlias`).
+ *  The references-processor routing gate enforces this; callers
+ *  invoking this directly are responsible for the same. Invalid input
+ *  throws via `dailyNoteDateValue`.
  *
  *  Distinct from `getOrCreateDailyNote`, which parents the row under
  *  the Journal page and writes long-form aliases. `ensureDailyNoteTarget`
@@ -305,13 +317,9 @@ export const ensureDailyNoteTarget = async (
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)
-      // `isDateAlias` matches the YYYY-MM-DD shape but doesn't check
-      // calendar validity; aliases like `2026-13-01` reach here from
-      // the references processor. Index when parseable, skip when not
-      // — the seat block still exists, just without a queryable date.
       await repo.addTypeInTx(
         tx, id, DAILY_NOTE_TYPE,
-        dailyNoteInitialValues(tryDailyNoteDateValue(date)),
+        {[dailyNoteDateProp.name]: dailyNoteDateValue(date)},
         typeSnapshot,
       )
     },
