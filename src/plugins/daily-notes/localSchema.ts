@@ -32,9 +32,17 @@ const RECORD_BACKFILL_DONE_SQL = `
 
 /** `$.${dailyNoteDateProp.name}` JSON path — the codec encodes
  *  `Date.toISOString()`, so the on-disk shape we write is the ISO
- *  alias `YYYY-MM-DD` concatenated with `T00:00:00.000Z`. The GLOB
- *  shape rejects malformed aliases (e.g. partial or non-numeric
- *  strings) so a corrupted row never gets an invalid date value. */
+ *  alias `YYYY-MM-DD` concatenated with `T00:00:00.000Z`.
+ *
+ *  Calendar validity is enforced via `date(je.value) = je.value`:
+ *  SQLite's `date()` returns NULL for unparseable input and rolls
+ *  bad calendar dates over to the normalized real date (`2026-02-30`
+ *  → `2026-03-02`), so the round-trip equality is `true` only for
+ *  real `YYYY-MM-DD` calendar days. Legacy rows whose only date-
+ *  shaped alias is invalid (`2026-13-01`, `2026-02-30`) — possible
+ *  before the references processor moved to `isValidDateAlias` —
+ *  are left without the property rather than seeded with a value the
+ *  date codec can't decode. */
 const BACKFILL_DAILY_NOTE_DATE_SQL = `
   UPDATE blocks
   SET properties_json = json_set(
@@ -44,6 +52,7 @@ const BACKFILL_DAILY_NOTE_DATE_SQL = `
       SELECT je.value || 'T00:00:00.000Z'
       FROM json_each(blocks.properties_json, '$.alias') AS je
       WHERE je.value GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        AND date(je.value) = je.value
       LIMIT 1
     )
   )
@@ -56,8 +65,11 @@ const BACKFILL_DAILY_NOTE_DATE_SQL = `
     AND EXISTS (
       SELECT 1 FROM json_each(blocks.properties_json, '$.alias') AS je
       WHERE je.value GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+        AND date(je.value) = je.value
     )
 `
+
+const SELECT_HAS_ANY_BLOCKS_SQL = `SELECT 1 FROM blocks LIMIT 1`
 
 export const backfillDailyNoteDatePropertyIfNeeded = async (
   db: LocalSchemaDb,
@@ -65,6 +77,16 @@ export const backfillDailyNoteDatePropertyIfNeeded = async (
   const done = await db.getOptional<{1: number}>(SELECT_BACKFILL_DONE_SQL)
   if (done !== null) return
   await db.execute(BACKFILL_DAILY_NOTE_DATE_SQL)
+  // Only seal the marker once the local blocks table has *something*
+  // to scan. PowerSync's local-schema bootstrap runs this before
+  // `db.connect()`, so a fresh device joining an existing workspace
+  // would otherwise mark the migration complete against an empty
+  // table — and the legacy daily-note rows that stream in via sync
+  // afterwards would never get backfilled. Deferring the seal means
+  // an empty workspace re-runs the (cheap, no-rows) UPDATE on each
+  // cold start until rows exist, then seals.
+  const hasBlocks = await db.getOptional<{1: number}>(SELECT_HAS_ANY_BLOCKS_SQL)
+  if (hasBlocks === null) return
   await db.execute(RECORD_BACKFILL_DONE_SQL)
 }
 
