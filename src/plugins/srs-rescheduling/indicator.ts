@@ -8,7 +8,9 @@ export interface SrsIndicatorState {
 const BAR_BASE = 'srs-review-block border-l-2 pl-1'
 
 export const srsBarClass = (state: SrsIndicatorState): string => {
-  if (state.archived) return `${BAR_BASE} border-muted-foreground/30 border-dashed`
+  if (state.archived) {
+    return `${BAR_BASE} srs-review-block--archived border-muted-foreground/40 border-dashed`
+  }
   if (state.reviewCount === 0) return `${BAR_BASE} border-sky-500/40 border-dashed`
   const i = state.interval
   if (i <= 3) return `${BAR_BASE} border-sky-500`

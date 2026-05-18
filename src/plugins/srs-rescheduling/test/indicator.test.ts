@@ -11,9 +11,10 @@ const state = (overrides: Partial<SrsIndicatorState> = {}): SrsIndicatorState =>
 
 describe('srsBarClass', () => {
   it('uses a dashed muted bar for archived blocks regardless of interval', () => {
-    expect(srsBarClass(state({archived: true, interval: 60, reviewCount: 12})))
-      .toContain('border-muted-foreground/30')
-    expect(srsBarClass(state({archived: true}))).toContain('border-dashed')
+    const cls = srsBarClass(state({archived: true, interval: 60, reviewCount: 12}))
+    expect(cls).toContain('border-muted-foreground/40')
+    expect(cls).toContain('border-dashed')
+    expect(cls).toContain('srs-review-block--archived')
   })
 
   it('uses a dashed faint sky bar for unreviewed blocks', () => {
@@ -41,7 +42,7 @@ describe('srsBarClass', () => {
 
   it('archived takes precedence over unreviewed', () => {
     const cls = srsBarClass(state({archived: true, reviewCount: 0}))
-    expect(cls).toContain('border-muted-foreground/30')
+    expect(cls).toContain('border-muted-foreground/40')
     expect(cls).not.toContain('border-sky-500')
   })
 })
