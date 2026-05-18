@@ -12,7 +12,7 @@ interface WikilinkNode {
   children: RootContent[]
   data: {
     hName: string
-    hProperties: { alias: string; blockId: string }
+    hProperties: { alias: string; blockId: string; hasCustomDisplay: boolean }
   }
 }
 
@@ -336,6 +336,33 @@ describe('remarkWikilinks', () => {
         linkUrls.push((node as {url: string}).url)
       })
       expect(linkUrls).toEqual(['https://example.com'])
+    })
+
+    it('marks bare [[…]] wikilinks with hasCustomDisplay=false', () => {
+      const tree = transform('See [[Foo]] here.', {Foo: 'x'})
+      const links = collectWikilinks(tree)
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(false)
+    })
+
+    it('marks [display]([[alias]]) wikilinks with hasCustomDisplay=true', () => {
+      const tree = transform('See [my page]([[Foo]]) here.', {Foo: 'x'})
+      const links = collectWikilinks(tree)
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(true)
+    })
+
+    it('marks text-form [display]([[Spaced Alias]]) with hasCustomDisplay=true', () => {
+      const tree = transform(
+        'Meeting [notes]([[April 30th, 2026]]) attached.',
+        {'April 30th, 2026': 'x'},
+      )
+      const links = collectWikilinks(tree)
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(true)
+    })
+
+    it('marks reassembled cross-node [[email@host]] with hasCustomDisplay=false', () => {
+      const tree = transformWithGfm('[[foo@example.com]]', {'foo@example.com': 'x'})
+      const links = collectWikilinks(tree)
+      expect(links[0].data.hProperties.hasCustomDisplay).toBe(false)
     })
 
     it('leaves a bare email autolink alone when it is not wrapped in [[…]]', () => {

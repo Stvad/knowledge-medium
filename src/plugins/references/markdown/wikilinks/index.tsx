@@ -9,6 +9,7 @@ interface WikilinkNode {
   properties?: {
     alias?: unknown
     blockId?: unknown
+    hasCustomDisplay?: unknown
   }
 }
 
@@ -39,12 +40,14 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
       wikilink: ({node, children}: WikilinkComponentProps) => {
         const alias = node?.properties?.alias
         const blockId = node?.properties?.blockId
+        const hasCustomDisplay = node?.properties?.hasCustomDisplay === true
         if (typeof alias !== 'string') return null
         return (
           <Wikilink
             alias={alias}
             blockId={typeof blockId === 'string' ? blockId : ''}
             workspaceId={workspaceId}
+            hasCustomDisplay={hasCustomDisplay}
           >
             {children}
           </Wikilink>
