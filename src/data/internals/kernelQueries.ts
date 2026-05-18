@@ -448,10 +448,17 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string) => `
  *  map — every direct key, plus the inner keys reached through any
  *  `target` traversal. The inner keys live on other rows (the ref
  *  targets), so changes there have to wake this query just like
- *  changes to the source row's outer property would. An empty
- *  `target: {}` predicate means "ref points at a live block" — any
- *  block insertion in the workspace could satisfy a referrer's ref,
- *  so the live channel is the right granularity. */
+ *  changes to the source row's outer property would.
+ *
+ *  Live-channel rule for `target`: if the inner predicate has no
+ *  selective key (empty `target: {}`, `target: { x: null }`,
+ *  `target: { x: { exists: false } }`, or any combination of unset-
+ *  matching predicates), a fresh target-row insert that matches
+ *  won't fire any property channel — the row never set the property
+ *  the predicate names. Without subscribing to the live channel in
+ *  that case, the subscriber stays stale until an unrelated write
+ *  fires invalidations. Mirrors the top-level "live channel only
+ *  when no positive axis" gate. */
 const collectWhereDeps = (
   where: Readonly<Record<string, unknown>> | undefined,
   workspaceId: string,
@@ -471,15 +478,18 @@ const collectWhereDeps = (
     if (op !== 'target') continue
     if (operand === null || typeof operand !== 'object' || Array.isArray(operand)) continue
     const inner = operand as Record<string, unknown>
-    if (Object.keys(inner).length === 0) {
+    const innerHasSelective = Object.values(inner).some(isSelectiveWhereValue)
+    if (!innerHasSelective) {
       ctx.depend({
         kind: 'plugin',
         channel: TYPED_BLOCKS_LIVE_CHANNEL,
         key: typedBlocksLiveKey(workspaceId),
       })
-    } else {
-      collectWhereDeps(inner, workspaceId, ctx)
     }
+    // Always recurse for the narrower per-property channels too —
+    // updates to an existing target row's properties still wake via
+    // those even when the live channel is also subscribed.
+    collectWhereDeps(inner, workspaceId, ctx)
   }
 }
 

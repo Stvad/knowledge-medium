@@ -443,6 +443,32 @@ describe('repo.subscribeBlocks', () => {
     off()
   })
 
+  it('updates when a target row appears with the inner-null property unset', async () => {
+    // `target: { status: null }` matches rows whose status is unset.
+    // A freshly-inserted target row with no `status` property doesn't
+    // fire the status property channel — same shape as the top-level
+    // "where with only null predicates" case. Without a live-channel
+    // sub on this branch the subscriber would stay stale.
+    await env.repo.tx(tx => tx.create({
+      id: 'source', workspaceId: WS, parentId: null, orderKey: 'a',
+      properties: {[reviewerProp.name]: reviewerProp.codec.encode('target')},
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    }), {scope: ChangeScope.BlockDefault})
+
+    const fired: string[][] = []
+    const off = env.repo.subscribeBlocks(
+      {where: {[reviewerProp.name]: {target: {status: null}}}},
+      rows => fired.push(ids(rows)),
+    )
+    await vi.waitFor(() => expect(fired).toEqual([[]]))
+
+    await env.repo.tx(tx => tx.create({
+      id: 'target', workspaceId: WS, parentId: null, orderKey: 'b',
+    }), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(fired).toEqual([[], ['source']]))
+    off()
+  })
+
   it('updates when a target operator inner property changes on the referenced row', async () => {
     // Regression: the `target` traversal makes membership depend on
     // the REFERENCED row's properties. Without dep wiring on the
