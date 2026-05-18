@@ -352,6 +352,49 @@ describe('groupedBacklinksDataExtension query', () => {
     expect(sorted(out.groups[0].sourceIds)).toEqual(['src-1', 'src-2'])
   })
 
+  it('returns a coherent render snapshot with unfiltered sources and parents for grouped sources', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'project', content: 'Project'})
+    await create({id: 'done', content: 'DONE'})
+    await create({id: 'page', content: 'Page'})
+    await create({id: 'section', parentId: 'page', content: 'Section'})
+    await create({
+      id: 'visible',
+      parentId: 'section',
+      references: [{id: 'target', alias: 'T'}, {id: 'project', alias: 'Project'}],
+    })
+    await create({
+      id: 'hidden',
+      references: [{id: 'target', alias: 'T'}, {id: 'done', alias: 'DONE'}],
+    })
+
+    const out = await env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+      filter: {
+        exclude: [{scope: 'ancestor', referencedBy: {id: 'done'}}],
+      },
+      groupingConfig: {
+        highPriorityTags: ['Project'],
+        lowPriorityTags: [],
+        excludedTags: [],
+        excludedPatterns: [],
+      },
+    }).load()
+
+    expect(out.total).toBe(1)
+    expect(sorted(out.unfilteredSources.map(source => source.id))).toEqual(['hidden', 'visible'])
+    expect(out.groups.map(group => group.sourceIds)).toEqual([['visible']])
+    expect(out.sourceParents).toEqual([{
+      sourceId: 'visible',
+      parents: expect.arrayContaining([
+        expect.objectContaining({id: 'page'}),
+        expect.objectContaining({id: 'section'}),
+      ]),
+    }])
+    expect(out.sourceParents[0].parents.map(parent => parent.id)).toEqual(['page', 'section'])
+  })
+
   it('surfaces singleton high-priority groups at the top instead of folding them into Other', async () => {
     await create({id: 'target', content: 'Target'})
     await create({id: 'project', content: 'Project'})

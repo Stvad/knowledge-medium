@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetState
 import { Filter, Pause, Play } from 'lucide-react'
 import type { BlockRendererProps } from '@/types.ts'
 import { Block } from '@/data/block'
-import { useManyParents, useWorkspaceId } from '@/hooks/block.ts'
+import { useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.tsx'
@@ -11,7 +11,6 @@ import {
   hasBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
-import { useBacklinks } from '@/plugins/backlinks/useBacklinks.ts'
 import { useBacklinkFilterState } from '@/plugins/backlinks/useStoredBacklinkFilter.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import type { GroupedBacklinkGroup } from './grouping.ts'
@@ -55,7 +54,19 @@ const buildGroupedQueryArgs = (
   ...(hasBacklinksFilter(effectiveFilter) ? {filter: effectiveFilter} : {}),
 })
 
-const EMPTY_GROUPED_BACKLINKS_RESULT: GroupedBacklinksResult = {groups: [], total: 0}
+const snapshotFromGroupedResult = (
+  repo: Block['repo'],
+  grouped: GroupedBacklinksResult,
+): GroupedBacklinksSnapshot => ({
+  unfilteredBacklinks: grouped.unfilteredSources.map(source => repo.block(source.id)),
+  grouped,
+  initialParentsByBacklinkId: new Map(
+    grouped.sourceParents.map(entry => [
+      entry.sourceId,
+      entry.parents.map(parent => repo.block(parent.id)),
+    ]),
+  ),
+})
 
 const GroupItems = ({
   sourceBlocks,
@@ -194,8 +205,8 @@ function GroupedLinkedReferencesInner({
   // Stable string identity of the grouped-query args. The snapshot
   // carries the key of the args it was captured under; whenever the
   // current key drifts (filter or config change while paused), the
-  // frozen body fires a one-shot `handle.load()` to refresh just the
-  // `grouped` field — no subscription, so unrelated row edits still
+  // frozen body fires a one-shot `handle.load()` to refresh the whole
+  // render snapshot — no subscription, so unrelated row edits still
   // don't trigger work.
   const currentQueryKey = useMemo(() => JSON.stringify(groupedArgs), [groupedArgs])
 
@@ -216,8 +227,8 @@ function GroupedLinkedReferencesInner({
     setLiveUpdates(true)
   }, [])
   const handleSnapshotRefreshed = useCallback(
-    (grouped: GroupedBacklinksResult, queryKey: string) => {
-      setSnapshot(prev => (prev ? {data: {...prev.data, grouped}, queryKey} : prev))
+    (data: GroupedBacklinksSnapshot, queryKey: string) => {
+      setSnapshot(prev => (prev ? {data, queryKey} : prev))
     },
     [],
   )
@@ -236,11 +247,10 @@ function GroupedLinkedReferencesInner({
     openDefaultFilterConfig,
   }
 
-  // While paused, mount the frozen body — the live body (which is what
-  // subscribes to the grouped-backlinks query, the backlinks list, and
-  // the manyAncestors prefetch) is unmounted, so those handles lose
-  // their subscribers and the underlying queries stop recomputing on
-  // edits the user makes while inspecting the snapshot.
+  // While paused, mount the frozen body — the live body (which subscribes
+  // to the grouped-backlinks render snapshot query) is unmounted, so that
+  // handle loses its subscriber and the underlying query stops
+  // recomputing on edits the user makes while inspecting the snapshot.
   if (liveUpdates) {
     return (
       <LiveGroupedReferencesBody
@@ -274,23 +284,16 @@ function LiveGroupedReferencesBody({
   onPause: (data: GroupedBacklinksSnapshot) => void
 }) {
   const {block, workspaceId, filterActive} = shared
-  const unfilteredBacklinks = useBacklinks(block, workspaceId)
   const grouped = useGroupedBacklinks(
     block,
     workspaceId,
     groupingConfig,
     filterActive ? effectiveFilter : undefined,
   )
-  // Same prefetch as `LinkedReferences` — one batched manyAncestors
-  // covering every visible source so per-entry breadcrumbs don't each
-  // fire `core.ancestors`. We use the `unfilteredBacklinks` set as
-  // the seed list so the prefetch handle is stable across filter
-  // toggles.
-  const initialParentsByBacklinkId = useManyParents(unfilteredBacklinks)
 
   const data = useMemo<GroupedBacklinksSnapshot>(
-    () => ({unfilteredBacklinks, grouped, initialParentsByBacklinkId}),
-    [unfilteredBacklinks, grouped, initialParentsByBacklinkId],
+    () => snapshotFromGroupedResult(block.repo, grouped),
+    [block.repo, grouped],
   )
 
   const handleTogglePause = useCallback(() => onPause(data), [onPause, data])
@@ -317,7 +320,7 @@ function FrozenGroupedReferencesBody({
   groupedArgs: GroupedQueryArgs
   currentQueryKey: string
   onResume: () => void
-  onSnapshotRefreshed: (grouped: GroupedBacklinksResult, queryKey: string) => void
+  onSnapshotRefreshed: (data: GroupedBacklinksSnapshot, queryKey: string) => void
 }) {
   const {block} = shared
   const repo = block.repo
@@ -335,7 +338,7 @@ function FrozenGroupedReferencesBody({
     handle.load().then(
       result => {
         if (cancelled) return
-        onSnapshotRefreshed(result ?? EMPTY_GROUPED_BACKLINKS_RESULT, currentQueryKey)
+        onSnapshotRefreshed(snapshotFromGroupedResult(repo, result), currentQueryKey)
       },
       () => {/* error is stored on the handle */},
     )

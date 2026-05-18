@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defineQuery, type Schema } from '@/data/api'
+import { defineQuery, type BlockData, type QueryCtx, type Schema } from '@/data/api'
 import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
@@ -11,6 +11,7 @@ import {
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
 import { resolveTypedBlocks } from '@/data/internals/kernelQueries.ts'
+import { manyAncestorsSql } from '@/data/internals/treeQueries.ts'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -24,9 +25,16 @@ import {
 
 export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
+export interface GroupedBacklinkSourceParents {
+  sourceId: string
+  parents: BlockData[]
+}
+
 export interface GroupedBacklinksResult {
   groups: GroupedBacklinkGroup[]
   total: number
+  unfilteredSources: BlockData[]
+  sourceParents: GroupedBacklinkSourceParents[]
 }
 
 type CandidateRow = BlockRow & {
@@ -69,6 +77,40 @@ const groupedBacklinksConfigSchema = z.object({
 
 const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
   rows as unknown as ReadonlyArray<Record<string, unknown>>
+
+const resolveBacklinkSources = async (
+  ctx: QueryCtx,
+  workspaceId: string,
+  id: string,
+  filter?: Required<BacklinksFilter>,
+): Promise<BlockData[]> =>
+  (await resolveTypedBlocks({
+    workspaceId,
+    referencedBy: {id},
+    match: filter?.include,
+    exclude: filter?.exclude,
+    order: 'created-desc',
+  }, ctx)).filter(row => row.id !== id)
+
+const resolveSourceParents = async (
+  ctx: QueryCtx,
+  sourceIds: readonly string[],
+): Promise<GroupedBacklinkSourceParents[]> => {
+  if (sourceIds.length === 0) return []
+
+  type AncestorRow = BlockRow & {chain_start_id: string}
+  const rows = await ctx.db.getAll<AncestorRow>(manyAncestorsSql(sourceIds.length), [...sourceIds])
+  const rowsBySourceId = new Map<string, BlockRow[]>()
+  for (const id of sourceIds) rowsBySourceId.set(id, [])
+  for (const row of rows) {
+    rowsBySourceId.get(row.chain_start_id)?.push(row)
+  }
+
+  return sourceIds.map(sourceId => ({
+    sourceId,
+    parents: ctx.hydrateBlocks(asBlockRows(rowsBySourceId.get(sourceId) ?? [])).reverse(),
+  }))
+}
 
 /** Source ids ride in a single JSON-array bind parameter and unpack
  *  via `json_each`. One bind regardless of source count — avoids
@@ -143,37 +185,6 @@ export const SELECT_GROUPED_BACKLINK_FIELD_CANDIDATES_SQL = `
   ORDER BY refs.source_id, refs.source_field
 `
 
-/** Materialize every (block_id, ancestor_id) pair the grouping CTE
- *  would visit, so the resolver can register row deps on every
- *  walked ancestor. Without these deps, an intermediate ancestor
- *  (one that isn't itself a group block) gaining or losing a
- *  reference wouldn't invalidate the grouped handle, leaving
- *  groupings stale. Same recursion shape as the grouping CTE — just
- *  emits the ids without the join to block_references. */
-export const SELECT_GROUPED_BACKLINK_ANCESTOR_IDS_SQL = `
-  WITH RECURSIVE
-    ${SOURCE_IDS_CTE},
-    walk(source_id, anc_id, anc_parent_id, depth, path) AS (
-      SELECT s.id, b.id, b.parent_id, 0, '!' || hex(b.id) || '/'
-      FROM source_ids s
-      JOIN blocks b ON b.id = s.id
-      WHERE b.deleted = 0
-      UNION ALL
-      SELECT
-        walk.source_id,
-        parent.id,
-        parent.parent_id,
-        walk.depth + 1,
-        walk.path || '!' || hex(parent.id) || '/'
-      FROM walk
-      JOIN blocks parent ON parent.id = walk.anc_parent_id
-      WHERE parent.deleted = 0
-        AND walk.depth < 100
-        AND INSTR(walk.path, '!' || hex(parent.id) || '/') = 0
-    )
-  SELECT DISTINCT anc_id FROM walk
-`
-
 export const groupedBacklinksForBlockQuery = defineQuery<
   {
     workspaceId: string
@@ -192,7 +203,9 @@ export const groupedBacklinksForBlockQuery = defineQuery<
   }),
   resultSchema: groupedBacklinksSchema,
   resolve: async ({workspaceId, id, filter, groupingConfig}, ctx) => {
-    if (!workspaceId || !id) return {groups: [], total: 0}
+    if (!workspaceId || !id) {
+      return {groups: [], total: 0, unfilteredSources: [], sourceParents: []}
+    }
 
     const normalizedFilter = normalizeBacklinksFilter(filter)
     const normalizedGroupingConfig = normalizeGroupedBacklinksConfig(
@@ -203,39 +216,30 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     // the target row itself changes (e.g. soft-delete).
     ctx.depend({kind: 'row', id})
 
-    // Inline-resolve the typed-blocks call so its deps (typed-blocks
+    // Inline-resolve the typed-blocks calls so their deps (typed-blocks
     // reference channel, per-source row deps via hydrateBlocks, etc.)
     // register against THIS handle, not the sub-query's handle. A
     // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
     // execute correctly but leave the grouped handle without the
     // invalidation triggers that wake the backlinks handle.
-    const sourceData = (await resolveTypedBlocks({
-      workspaceId,
-      referencedBy: {id},
-      match: hasBacklinksFilter(normalizedFilter) ? normalizedFilter.include : undefined,
-      exclude: hasBacklinksFilter(normalizedFilter) ? normalizedFilter.exclude : undefined,
-      order: 'created-desc',
-    }, ctx)).filter(r => r.id !== id)
-    if (sourceData.length === 0) return {groups: [], total: 0}
+    const unfilteredSources = await resolveBacklinkSources(ctx, workspaceId, id)
+    const sourceData = hasBacklinksFilter(normalizedFilter)
+      ? await resolveBacklinkSources(ctx, workspaceId, id, normalizedFilter)
+      : unfilteredSources
+    if (sourceData.length === 0) {
+      return {groups: [], total: 0, unfilteredSources, sourceParents: []}
+    }
 
     const sourceIds = sourceData.map(source => source.id)
+    const sourceParents = await resolveSourceParents(ctx, sourceIds)
     // One JSON-array bind for the source-ids CTE (vs one per id).
     // Avoids the SQLite parameter ceiling on heavily-linked targets.
     const sourceIdsJson = JSON.stringify(sourceIds)
 
-    // Walk every ancestor of every source up-front so intermediate
-    // ancestors (rows that aren't themselves emitted as groups, but
-    // whose references shape what groups exist) wake the handle when
-    // their refs / parent_id change. Without this, an intermediate
-    // ancestor gaining a ref wouldn't invalidate this handle —
-    // grouped output would go stale.
-    const ancestorIdRows = await ctx.db.getAll<{anc_id: string}>(
-      SELECT_GROUPED_BACKLINK_ANCESTOR_IDS_SQL,
-      [sourceIdsJson],
-    )
-    for (const row of ancestorIdRows) {
-      ctx.depend({kind: 'row', id: row.anc_id})
-    }
+    // `sourceParents` is part of the result now, so hydrating those
+    // rows also declares deps for every ancestor that can affect
+    // grouping. The source rows themselves were hydrated by
+    // `resolveTypedBlocks`.
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
@@ -276,6 +280,8 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         groupingConfig: normalizedGroupingConfig,
       }),
       total: sourceData.length,
+      unfilteredSources,
+      sourceParents,
     }
   },
 })
