@@ -13,20 +13,36 @@
  * ("Fri, April 26th, 2026") at render time, while the stored alias
  * remains the canonical "April 26th, 2026" the link resolver depends on.
  */
-import type { ReactNode } from 'react'
+import { isValidElement, type ReactNode } from 'react'
+import type { Block } from '@/data/block'
 import { defineFacet, type FacetRuntime } from '@/extensions/facet.ts'
 
 export interface WikilinkDisplayContext {
   alias: string
   /** Resolved block id, or '' when the alias didn't match any block. */
   blockId: string
+  /** Block whose markdown content contains this wikilink. */
+  sourceBlock?: Block
   workspaceId: string
+  /** Runtime available to display decorators that need to consult other facets. */
+  runtime?: FacetRuntime
 }
+
+export interface WikilinkDisplayParts {
+  /** Content rendered inside the normal wikilink anchor. */
+  content: ReactNode
+  /** Inline chrome rendered immediately before the anchor, outside the link. */
+  before?: ReactNode
+  /** Inline chrome rendered immediately after the anchor, outside the link. */
+  after?: ReactNode
+}
+
+export type WikilinkDisplayResult = ReactNode | WikilinkDisplayParts
 
 export interface WikilinkDisplayDecorator {
   /** Diagnostic id, also distinguishes decorators in tests. */
   readonly id: string
-  decorate: (context: WikilinkDisplayContext) => ReactNode | null
+  decorate: (context: WikilinkDisplayContext) => WikilinkDisplayResult | null
 }
 
 const isWikilinkDisplayDecorator = (value: unknown): value is WikilinkDisplayDecorator =>
@@ -43,13 +59,22 @@ export const wikilinkDisplayDecoratorFacet = defineFacet<
   validate: isWikilinkDisplayDecorator,
 })
 
+export const isWikilinkDisplayParts = (
+  value: WikilinkDisplayResult | null,
+): value is WikilinkDisplayParts =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  !isValidElement(value) &&
+  'content' in value
+
 /** First decorator (in precedence order) to return a non-null display,
  *  or null if every decorator passes. Mirrors `pickBlockDateAdapter`'s
  *  first-match semantics. */
 export const resolveWikilinkDisplay = (
   runtime: FacetRuntime,
   context: WikilinkDisplayContext,
-): ReactNode | null => {
+): WikilinkDisplayResult | null => {
   const decorators = runtime.read(wikilinkDisplayDecoratorFacet)
   for (const decorator of decorators) {
     const result = decorator.decorate(context)

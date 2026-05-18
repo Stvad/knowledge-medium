@@ -1,26 +1,30 @@
 /**
- * Two-finger horizontal drag → scrub-to-date gesture (option-2
- * prototype). Long-press is intentionally NOT used: that gesture
- * belongs to selection / bullet drag (Workflowy convention). A
- * two-finger drag is rare enough to be unambiguously intentional and
- * doesn't conflict with any single-finger gesture (tap, swipe,
- * scroll, long-press selection).
+ * Date scrub gestures:
+ *   - mobile: two-finger horizontal drag
+ *   - desktop: Option + horizontal wheel / trackpad / Magic Mouse scroll
+ *
+ * Long-press is intentionally NOT used: that gesture belongs to
+ * selection / bullet drag (Workflowy convention). The two-finger mobile
+ * drag and modifier-gated desktop wheel are rare enough to be
+ * intentional and avoid single-finger tap / swipe / scroll conflicts.
  *
  * Coordination contract:
  *   - The React overlay (`DateScrubOverlay`) registers itself as the
  *     `ScrubHandler` on mount and unregisters on unmount. The overlay
  *     owns the runtime + adapter resolution + tooltip rendering.
- *   - This module owns the touch tracking: per-block "two fingers
- *     locked" state, midpoint motion thresholds, scrub-active flag.
+ *   - This module owns the gesture tracking: per-block touch state,
+ *     desktop wheel candidates, thresholds, scrub-active flag.
  *   - When midpoint horizontal travel crosses the activation
  *     threshold (and dominates vertical travel — so a two-finger
  *     vertical scroll doesn't trip it, and a pinch-zoom where the
  *     midpoint stays put doesn't either), we ask the overlay to
  *     start. If it accepts, we cancel the swipe-quick-actions
  *     candidate so the same gesture doesn't also open the swipe menu.
- *   - Either tracked finger lifting ends the scrub.
+ *   - Either tracked finger lifting ends the mobile scrub. Desktop
+ *     wheel scrub commits after a short idle window because wheel
+ *     streams have no explicit "end" event.
  */
-import type { TouchEvent } from 'react'
+import type { TouchEvent, WheelEvent } from 'react'
 import {
   isInteractiveContentEvent,
   type BlockContentSurfaceContribution,
@@ -46,6 +50,13 @@ const HORIZONTAL_LOCK_PX = 10
 /** Pixels of horizontal drag per ISO day. Picked so that ±2 weeks fits
  *  inside half a thumb-arc on a phone (~200px = 14 days). */
 const PIXELS_PER_DAY = 14
+/** Wheel streams do not have an explicit end event, so an idle window
+ *  is the least surprising "release" equivalent. Long enough to bridge
+ *  normal trackpad event bursts, short enough to feel like the commit
+ *  happens when the gesture stops. */
+const WHEEL_END_IDLE_MS = 220
+const WHEEL_CANDIDATE_IDLE_MS = 180
+const WHEEL_LINE_PX = 16
 /** Vertical midpoint travel above this — once scrub is active —
  *  snaps the gesture into "cancel" intent. Released past this point
  *  reverts. */
@@ -108,11 +119,29 @@ interface MultiTouch {
   scrubbing: boolean
 }
 
+interface WheelCandidate {
+  blockId: string
+  block: Block
+  startX: number
+  startY: number
+  dx: number
+  dy: number
+  clearTimer: number | null
+}
+
+interface WheelScrub {
+  blockId: string
+  dx: number
+  endTimer: number | null
+}
+
 /** First finger landed on a block but the second hasn't arrived yet —
  *  remember it so the eventual second-finger touchstart can promote
  *  to a `MultiTouch` tracker. */
 const singleByBlockId = new Map<string, SingleFinger>()
 const multiByBlockId = new Map<string, MultiTouch>()
+let wheelCandidate: WheelCandidate | null = null
+let wheelScrub: WheelScrub | null = null
 
 const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
@@ -149,6 +178,51 @@ const computeDeltaDays = (dx: number): number => {
 const clearAllForBlock = (blockId: string): void => {
   singleByBlockId.delete(blockId)
   multiByBlockId.delete(blockId)
+  if (wheelCandidate?.blockId === blockId) clearWheelCandidate()
+  if (wheelScrub?.blockId === blockId) finishWheelScrub(false)
+}
+
+const clearWheelCandidate = (): void => {
+  if (wheelCandidate?.clearTimer) window.clearTimeout(wheelCandidate.clearTimer)
+  wheelCandidate = null
+}
+
+const finishWheelScrub = (commit: boolean): void => {
+  const current = wheelScrub
+  if (!current) return
+  if (current.endTimer) window.clearTimeout(current.endTimer)
+  wheelScrub = null
+  activeHandler?.end(commit)
+}
+
+const normalizeWheelDelta = (
+  event: Pick<WheelEvent, 'deltaMode' | 'deltaX' | 'deltaY'>,
+): {dx: number; dy: number} => {
+  const multiplier = event.deltaMode === 1
+    ? WHEEL_LINE_PX
+    : event.deltaMode === 2
+      ? (typeof window === 'undefined' ? 800 : window.innerWidth)
+      : 1
+  return {
+    dx: event.deltaX * multiplier,
+    dy: event.deltaY * multiplier,
+  }
+}
+
+const scheduleWheelCandidateClear = (): void => {
+  if (!wheelCandidate) return
+  if (wheelCandidate.clearTimer) window.clearTimeout(wheelCandidate.clearTimer)
+  wheelCandidate.clearTimer = window.setTimeout(() => {
+    clearWheelCandidate()
+  }, WHEEL_CANDIDATE_IDLE_MS)
+}
+
+const scheduleWheelEnd = (): void => {
+  if (!wheelScrub) return
+  if (wheelScrub.endTimer) window.clearTimeout(wheelScrub.endTimer)
+  wheelScrub.endTimer = window.setTimeout(() => {
+    finishWheelScrub(true)
+  }, WHEEL_END_IDLE_MS)
 }
 
 export const dateScrubContentSurface: BlockContentSurfaceContribution = context => {
@@ -306,6 +380,83 @@ export const dateScrubContentSurface: BlockContentSurfaceContribution = context 
       const wasScrubbing = multi.scrubbing
       multiByBlockId.delete(block.id)
       if (wasScrubbing) activeHandler?.end(false)
+    },
+  }
+}
+
+export const dateWheelScrubContentSurface: BlockContentSurfaceContribution = context => {
+  const {block, uiStateBlock} = context
+
+  return {
+    onWheel: (event: WheelEvent) => {
+      if (isMobileViewport()) return
+      if (!event.altKey) return
+      // Buttons, editors, and other controls own their wheel behavior.
+      // Links and video follow the mobile gesture exemption: the date
+      // gesture can still apply to rendered content inside the block.
+      if (!isOnInteractiveSurface(event) && isInteractiveContentEvent(event)) {
+        clearAllForBlock(block.id)
+        return
+      }
+      if (isBlockEditing(block.id, uiStateBlock)) return
+
+      const {dx, dy} = normalizeWheelDelta(event)
+      if (dx === 0 && dy === 0) return
+
+      if (wheelScrub && wheelScrub.blockId !== block.id) {
+        finishWheelScrub(true)
+      }
+
+      if (!wheelScrub) {
+        if (!wheelCandidate || wheelCandidate.blockId !== block.id) {
+          clearWheelCandidate()
+          wheelCandidate = {
+            blockId: block.id,
+            block,
+            startX: event.clientX,
+            startY: event.clientY,
+            dx: 0,
+            dy: 0,
+            clearTimer: null,
+          }
+        }
+
+        wheelCandidate.dx += dx
+        wheelCandidate.dy += dy
+        scheduleWheelCandidateClear()
+
+        if (Math.abs(wheelCandidate.dx) <= HORIZONTAL_LOCK_PX) return
+        if (Math.abs(wheelCandidate.dx) <= Math.abs(wheelCandidate.dy)) {
+          clearWheelCandidate()
+          return
+        }
+        if (!activeHandler) {
+          clearWheelCandidate()
+          return
+        }
+
+        const candidate = wheelCandidate
+        const accepted = activeHandler.start({
+          block: candidate.block,
+          blockId: candidate.blockId,
+          startX: candidate.startX,
+          startY: candidate.startY,
+        })
+        clearWheelCandidate()
+        if (!accepted) return
+
+        wheelScrub = {
+          blockId: candidate.blockId,
+          dx: candidate.dx,
+          endTimer: null,
+        }
+      } else {
+        wheelScrub.dx += dx
+      }
+
+      event.preventDefault()
+      activeHandler?.update(computeDeltaDays(wheelScrub.dx), false)
+      scheduleWheelEnd()
     },
   }
 }

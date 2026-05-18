@@ -46,6 +46,7 @@ export const wikilinkMarkdownExtension: MarkdownExtension = ({block}) => {
           <Wikilink
             alias={alias}
             blockId={typeof blockId === 'string' ? blockId : ''}
+            sourceBlock={block}
             workspaceId={workspaceId}
             hasCustomDisplay={hasCustomDisplay}
           >

@@ -1,9 +1,47 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { Fragment, createElement } from 'react'
+import type { Block } from '@/data/block'
+import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
+import {
+  isWikilinkDisplayParts,
+  type WikilinkDisplayContext,
+} from '@/plugins/references/markdown/wikilinks/wikilinkDecorator.ts'
+import {
+  blockDateAdapterFacet,
+  type BlockDateAdapter,
+} from '../blockDateAdapter.ts'
+import {
+  openReschedulePickerEvent,
+  type OpenReschedulePickerEventDetail,
+} from '../rescheduleEvents.ts'
 import { dailyDateWikilinkDecorator } from '../wikilinkDateDecorator.ts'
 
-const ctx = (alias: string) => ({alias, blockId: 'b', workspaceId: 'ws'})
+const sourceBlock = {id: 'source-block'} as Block
+
+const adapter: BlockDateAdapter = {
+  id: 'test.adapter',
+  canHandle: block => block.id === sourceBlock.id,
+  getCurrentIso: async () => '2026-04-26',
+  setIso: async () => true,
+}
+
+const runtime = resolveFacetRuntimeSync([
+  blockDateAdapterFacet.of(adapter),
+])
+
+const ctx = (alias: string, overrides: Partial<WikilinkDisplayContext> = {}): WikilinkDisplayContext => ({
+  alias,
+  blockId: 'target-date-block',
+  workspaceId: 'ws',
+  ...overrides,
+})
+
+afterEach(() => {
+  cleanup()
+})
 
 describe('dailyDateWikilinkDecorator', () => {
   it('prefixes weekday to Roam long-form aliases', () => {
@@ -34,5 +72,29 @@ describe('dailyDateWikilinkDecorator', () => {
   it('returns null for malformed dates that look ISO-shaped', () => {
     expect(dailyDateWikilinkDecorator.decorate(ctx('2026-13-01'))).toBeNull()
     expect(dailyDateWikilinkDecorator.decorate(ctx(''))).toBeNull()
+  })
+
+  it('adds an inline reschedule button when the source block has a date adapter', () => {
+    const decorated = dailyDateWikilinkDecorator.decorate(ctx('2026-04-26', {
+      runtime,
+      sourceBlock,
+    }))
+
+    expect(isWikilinkDisplayParts(decorated)).toBe(true)
+    if (!isWikilinkDisplayParts(decorated)) return
+    expect(decorated.content).toBe('Sun, 2026-04-26')
+
+    const opened: OpenReschedulePickerEventDetail[] = []
+    window.addEventListener(openReschedulePickerEvent, event => {
+      opened.push((event as CustomEvent<OpenReschedulePickerEventDetail>).detail)
+    }, {once: true})
+
+    render(createElement(Fragment, null, decorated.before))
+    fireEvent.click(screen.getByRole('button', {name: 'Reschedule date'}))
+
+    expect(opened).toEqual([expect.objectContaining({
+      blockId: 'source-block',
+      workspaceId: 'ws',
+    })])
   })
 })

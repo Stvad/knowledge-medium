@@ -2,11 +2,16 @@ import { ReactNode } from 'react'
 import { buildAppHash } from '@/utils/routing'
 import { useBlockLinkClick } from '@/utils/navigation'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { resolveWikilinkDisplay } from './wikilinkDecorator.ts'
+import {
+  isWikilinkDisplayParts,
+  resolveWikilinkDisplay,
+} from './wikilinkDecorator.ts'
+import type { Block } from '@/data/block'
 
-export function Wikilink({alias, blockId, workspaceId, hasCustomDisplay = false, children}: {
+export function Wikilink({alias, blockId, sourceBlock, workspaceId, hasCustomDisplay = false, children}: {
   alias: string
   blockId: string
+  sourceBlock?: Block
   workspaceId: string
   /** True when the markdown source carried an explicit display label, as
    *  in `[display]([[alias]])`. Display-decorators are bypassed in that
@@ -22,18 +27,27 @@ export function Wikilink({alias, blockId, workspaceId, hasCustomDisplay = false,
   const runtime = useAppRuntime()
   const decorated = hasCustomDisplay
     ? null
-    : resolveWikilinkDisplay(runtime, {alias, blockId, workspaceId})
-  const display = decorated ?? children
+    : resolveWikilinkDisplay(runtime, {alias, blockId, sourceBlock, workspaceId, runtime})
+  const decoratedParts = isWikilinkDisplayParts(decorated) ? decorated : null
+  const display: ReactNode = decoratedParts
+    ? decoratedParts.content
+    : (decorated as ReactNode | null) ?? children
+  const before = decoratedParts?.before
+  const after = decoratedParts?.after
 
   // Reference resolution is an invariant maintained by parseAndUpdateReferences
   // on every block.change(). If we ever land here without a blockId it's a
   // transient lookup miss — render the display text as plain text and let the
   // next edit reconcile it, rather than inventing a "broken link" UI state.
-  if (!blockId) return <span>{display}</span>
+  if (!blockId) return <span>{before}{display}{after}</span>
 
   return (
-    <a href={buildAppHash(workspaceId, blockId)} className="wikilink" data-alias={alias} onClick={onClick}>
-      {display}
-    </a>
+    <>
+      {before}
+      <a href={buildAppHash(workspaceId, blockId)} className="wikilink" data-alias={alias} onClick={onClick}>
+        {display}
+      </a>
+      {after}
+    </>
   )
 }

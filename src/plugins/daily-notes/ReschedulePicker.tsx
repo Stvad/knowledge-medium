@@ -13,7 +13,7 @@
  * `srsNextReviewDateProp` while content-date blocks rewrite the inline
  * wikilink, all behind the same UI.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
@@ -25,9 +25,12 @@ import { CalendarGrid } from './CalendarGrid.tsx'
 import { firstOfMonth, formatDayLabel, fromIso } from './calendar.ts'
 import {
   openReschedulePickerEvent,
+  type ReschedulePickerAnchorRect,
   type OpenReschedulePickerEventDetail,
 } from './rescheduleEvents.ts'
 
+const DESKTOP_PANEL_WIDTH = 448
+const DESKTOP_PANEL_MARGIN = 8
 const STRIP_PAST_DAYS = 7
 const STRIP_FUTURE_DAYS = 60
 const STRIP_CELL_WIDTH_PX = 48
@@ -66,6 +69,25 @@ const QUICK_CHIPS: readonly {label: string; offset: number}[] = [
   {label: '+1m', offset: 30},
 ]
 
+const desktopPickerPosition = (
+  anchorRect: ReschedulePickerAnchorRect | null,
+): CSSProperties => {
+  if (!anchorRect || typeof window === 'undefined') {
+    return {left: '50%', top: '50%', transform: 'translate(-50%, -50%)'}
+  }
+
+  const centeredLeft = anchorRect.left + anchorRect.width / 2 - DESKTOP_PANEL_WIDTH / 2
+  const left = Math.min(
+    Math.max(DESKTOP_PANEL_MARGIN, centeredLeft),
+    Math.max(DESKTOP_PANEL_MARGIN, window.innerWidth - DESKTOP_PANEL_WIDTH - DESKTOP_PANEL_MARGIN),
+  )
+
+  return {
+    left,
+    top: anchorRect.bottom + DESKTOP_PANEL_MARGIN,
+  }
+}
+
 interface ActiveSession {
   blockId: string
   workspaceId: string
@@ -78,6 +100,7 @@ export const ReschedulePicker = () => {
   const repo = useRepo()
   const isMobile = useIsMobile()
   const [session, setSession] = useState<ActiveSession | null>(null)
+  const [anchorRect, setAnchorRect] = useState<ReschedulePickerAnchorRect | null>(null)
   const [visibleMonth, setVisibleMonth] = useState(() => firstOfMonth(new Date()))
   const [previewIso, setPreviewIso] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
@@ -95,6 +118,7 @@ export const ReschedulePicker = () => {
     // become stale and won't reopen the sheet.
     openRequestIdRef.current += 1
     setSession(null)
+    setAnchorRect(null)
     setPreviewIso(null)
     stripDidScrollRef.current = false
   }, [])
@@ -147,6 +171,7 @@ export const ReschedulePicker = () => {
           adapter,
           initialIso,
         })
+        setAnchorRect(detail.anchorRect ?? null)
         setVisibleMonth(firstOfMonth(initialDate))
         setPreviewIso(initialIso)
         stripDidScrollRef.current = false
@@ -169,6 +194,10 @@ export const ReschedulePicker = () => {
   const stripCells = useMemo(
     () => session ? buildStripCells(session.initialIso) : [],
     [session],
+  )
+  const desktopPosition = useMemo(
+    () => isMobile ? undefined : desktopPickerPosition(anchorRect),
+    [anchorRect, isMobile],
   )
 
   // Center the strip on the initial date the first time it appears, then
@@ -229,9 +258,9 @@ export const ReschedulePicker = () => {
     // safe-area inset for notched devices. Spans roughly the bottom 75%
     // so the swiped block stays peeking above on tall phones.
     ? 'fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto rounded-t-2xl border-t bg-popover px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 text-popover-foreground shadow-2xl'
-    // Modal-ish on desktop (the picker is mobile-first; this is a
-    // graceful fallback for the touch-laptop case).
-    : 'fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-2xl border bg-popover p-4 text-popover-foreground shadow-2xl'
+    // Anchored popover on desktop when opened from inline date chrome;
+    // centered fallback for command / touch-laptop paths without an anchor.
+    : 'fixed z-50 max-h-[calc(100vh-1rem)] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-2xl border bg-popover p-4 text-popover-foreground shadow-2xl'
 
   return createPortal(
     <>
@@ -245,6 +274,7 @@ export const ReschedulePicker = () => {
         aria-label="Reschedule block"
         aria-busy={pending || undefined}
         className={sheetClassName}
+        style={desktopPosition}
         onClick={event => event.stopPropagation()}
       >
         {/* Drag-handle indicator (purely decorative on the bottom sheet) */}
