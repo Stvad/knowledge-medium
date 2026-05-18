@@ -11,12 +11,31 @@
   "display_override": ["standalone", "minimal-ui"],
   "background_color": "#1e1b4b",
   "theme_color": "#1e1b4b",
+  "prefer_related_applications": false,
   "shortcuts": [
     {
       "name": "New daily block",
       "short_name": "New block",
       "description": "Append a new block to today's daily note",
       "url": "./?intent=new-daily-block",
+      "icons": [
+        { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Pick a date",
+      "short_name": "Pick date",
+      "description": "Open the calendar to jump to a daily note",
+      "url": "./?intent=open-picker",
+      "icons": [
+        { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    },
+    {
+      "name": "Quick find",
+      "short_name": "Find",
+      "description": "Search for a page or block",
+      "url": "./?intent=quick-find",
       "icons": [
         { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }
       ]
