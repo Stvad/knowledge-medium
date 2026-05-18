@@ -1,8 +1,11 @@
+import type { Block } from '@/data/block'
 import {
   ActionConfig,
   Action,
   ActionContextType,
   ActionContextTypes,
+  ActionIcon,
+  BlockShortcutDependencies,
   MultiSelectModeDependencies,
   ShortcutDependenciesMap, ActionTrigger,
 } from './types'
@@ -151,3 +154,98 @@ export const makeModeAction = <TargetMode extends ActionContextType>(
 export const makeNormalMode = makeModeAction(ActionContextTypes.NORMAL_MODE, 'normal')
 export const makeCMMode = makeModeAction(ActionContextTypes.EDIT_MODE_CM, 'edit.cm')
 export const makeMultiSelect = makeModeAction(ActionContextTypes.MULTI_SELECT_MODE, 'multi_select')
+
+export interface DefineBlocksActionConfig {
+  /** Id for the NORMAL_MODE variant. The MULTI_SELECT_MODE variant
+   *  is registered under `multi_select.<id>` (matching the
+   *  `makeMultiSelect` convention) so dispatch by id stays
+   *  unambiguous when both contexts are active simultaneously —
+   *  e.g. focus moves to an unselected block while a selection
+   *  remains. */
+  id: string
+  /** Optional icon shown by any surface that renders actions. */
+  icon?: ActionIcon
+  /** Description shown for the NORMAL_MODE variant (e.g. "Tag
+   *  block"). Appears in the command palette when a single block
+   *  is focused. */
+  blockDescription: string
+  /** Description shown for the MULTI_SELECT_MODE variant
+   *  (e.g. "Tag selected blocks"). Appears in the palette during a
+   *  real multi-select and labels the group-header button. */
+  blocksDescription: string
+  /** Per-block applicability predicate. When provided, the
+   *  NORMAL_MODE variant's `canRun` gates on `appliesTo(block)`,
+   *  and the MULTI_SELECT_MODE variant's `canRun` gates on at
+   *  least one selected block matching. Omit to mean "always". */
+  appliesTo?: (block: Block) => boolean
+  /** The actual operation. Both variants forward to this with the
+   *  blocks they respectively hold (one or many). */
+  flow: (blocks: readonly Block[]) => Promise<void> | void
+}
+
+export interface BlocksActionPair {
+  block: ActionConfig<typeof ActionContextTypes.NORMAL_MODE>
+  blocks: ActionConfig<typeof ActionContextTypes.MULTI_SELECT_MODE>
+}
+
+/** Prefix used for the MULTI_SELECT_MODE variant's id. Mirrors the
+ *  prefix emitted by `makeMultiSelect`, so an existing multi-select
+ *  surface wired up via either path keeps the same id shape. */
+const MULTI_SELECT_ID_PREFIX = 'multi_select'
+
+export const multiSelectActionId = (baseId: string): string =>
+  `${MULTI_SELECT_ID_PREFIX}.${baseId}`
+
+/** Pair an "operation over a set of blocks" with the two natural
+ *  action contexts: NORMAL_MODE (focused block as a one-element set)
+ *  and MULTI_SELECT_MODE (the current selection).
+ *
+ *  Reach for this when the operation collects shared user input
+ *  ONCE (a dialog asking for parameters, a confirm step, …) and
+ *  then applies the result to every block in the set.
+ *
+ *  Why not `applyToAllBlocksInSelection`: that wrapper invokes the
+ *  per-block handler N times for an N-block selection, which would
+ *  prompt the user N times for any operation that opens a dialog
+ *  in its handler. This helper passes the whole set into a single
+ *  `flow` call instead.
+ *
+ *  The two variants get distinct ids (NORMAL: `id`, MULTI_SELECT:
+ *  `multi_select.<id>`) because the command palette dispatches by
+ *  id alone — `getActiveActionById` picks the most-recently-active
+ *  matching context — so a shared id can route a click on the
+ *  "block" row to the multi-select handler when both contexts are
+ *  active. Distinct ids keep each row's behaviour grounded in the
+ *  context it advertises. */
+export const defineBlocksAction = ({
+  id,
+  icon,
+  blockDescription,
+  blocksDescription,
+  appliesTo,
+  flow,
+}: DefineBlocksActionConfig): BlocksActionPair => ({
+  block: {
+    id,
+    description: blockDescription,
+    context: ActionContextTypes.NORMAL_MODE,
+    ...(icon ? {icon} : {}),
+    ...(appliesTo
+      ? {canRun: ({block}: BlockShortcutDependencies) => appliesTo(block)}
+      : {}),
+    handler: ({block}: BlockShortcutDependencies) => flow([block]),
+  },
+  blocks: {
+    id: multiSelectActionId(id),
+    description: blocksDescription,
+    context: ActionContextTypes.MULTI_SELECT_MODE,
+    ...(icon ? {icon} : {}),
+    canRun: ({selectedBlocks}: MultiSelectModeDependencies) => {
+      if (selectedBlocks.length === 0) return false
+      if (!appliesTo) return true
+      return selectedBlocks.some(block => appliesTo(block))
+    },
+    handler: ({selectedBlocks}: MultiSelectModeDependencies) =>
+      flow(selectedBlocks),
+  },
+})
