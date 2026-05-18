@@ -17,6 +17,13 @@ import { getEffectiveActions } from '@/shortcuts/effectiveActions.ts'
 import { dailyNotesDataExtension } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
+  EDIT_MODE_TODO_CYCLE_ACTION_ID,
+  TODO_CYCLE_ACTION_ID,
+  todoActionsExtension,
+} from '@/plugins/todo/actions.ts'
+import { todoDataExtension } from '@/plugins/todo/dataExtension.ts'
+import { statusProp, TODO_TYPE } from '@/plugins/todo/schema.ts'
+import {
   SRS_SM25_TYPE,
   srsArchivedProp,
   srsFactorProp,
@@ -191,6 +198,109 @@ describe('srsReschedulingPlugin', () => {
       await plainBlock.load()
       await action!.handler({block: plainBlock, uiStateBlock: plainBlock}, {} as CustomEvent)
       expect(baseSwipeRight).toHaveBeenCalledOnce()
+    } finally {
+      await h.cleanup()
+    }
+  })
+
+  it('decorates cmd-enter todo cycle actions to archive SRS blocks', async () => {
+    const h = await createTestDb()
+    try {
+      let txSeq = 0
+      const repo = new Repo({
+        db: h.db,
+        cache: new BlockCache(),
+        user: {id: 'user-1'},
+        newTxSeq: () => ++txSeq,
+        registerKernelProcessors: false,
+        startRowEventsTail: false,
+      })
+      const runtime = resolveFacetRuntimeSync([
+        kernelDataExtension,
+        dailyNotesDataExtension,
+        todoDataExtension,
+        todoActionsExtension,
+        srsReschedulingPlugin,
+      ])
+      repo.setFacetRuntime(runtime)
+
+      const snapshot = repo.snapshotTypeRegistries()
+      await repo.tx(async tx => {
+        await tx.create({
+          id: 'srs-normal',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a0',
+          content: 'SRS normal',
+        })
+        await repo.addTypeInTx(tx, 'srs-normal', SRS_SM25_TYPE, {}, snapshot)
+        await tx.create({
+          id: 'srs-edit',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a1',
+          content: 'SRS edit',
+        })
+        await repo.addTypeInTx(tx, 'srs-edit', SRS_SM25_TYPE, {}, snapshot)
+        await tx.create({
+          id: 'plain-normal',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a2',
+          content: 'Plain normal',
+        })
+        await tx.create({
+          id: 'plain-edit',
+          workspaceId: 'ws-1',
+          parentId: null,
+          orderKey: 'a3',
+          content: 'Plain edit',
+        })
+      }, {scope: ChangeScope.BlockDefault, description: 'seed cmd-enter blocks'})
+
+      const actions = getEffectiveActions(runtime)
+      const normalAction = actions.find(action =>
+        action.id === TODO_CYCLE_ACTION_ID && action.context === ActionContextTypes.NORMAL_MODE
+      ) as ActionConfig<typeof ActionContextTypes.NORMAL_MODE> | undefined
+      const editAction = actions.find(action =>
+        action.id === EDIT_MODE_TODO_CYCLE_ACTION_ID && action.context === ActionContextTypes.EDIT_MODE_CM
+      ) as ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> | undefined
+      expect(normalAction?.defaultBinding?.keys).toEqual(['cmd+enter', 'ctrl+enter'])
+      expect(editAction?.defaultBinding?.keys).toEqual(['cmd+enter', 'ctrl+enter'])
+
+      const srsNormal = repo.block('srs-normal')
+      await srsNormal.load()
+      await normalAction!.handler({block: srsNormal, uiStateBlock: srsNormal}, {} as KeyboardEvent)
+      expect(srsNormal.get(srsArchivedProp)).toBe(true)
+      expect(srsNormal.types).toContain(SRS_SM25_TYPE)
+      expect(srsNormal.types).not.toContain(TODO_TYPE)
+
+      const srsEdit = repo.block('srs-edit')
+      await srsEdit.load()
+      await editAction!.handler({
+        block: srsEdit,
+        uiStateBlock: srsEdit,
+        editorView: {dispatch: vi.fn()},
+      } as never, {} as KeyboardEvent)
+      expect(srsEdit.get(srsArchivedProp)).toBe(true)
+      expect(srsEdit.types).toContain(SRS_SM25_TYPE)
+      expect(srsEdit.types).not.toContain(TODO_TYPE)
+
+      const plainNormal = repo.block('plain-normal')
+      await plainNormal.load()
+      await normalAction!.handler({block: plainNormal, uiStateBlock: plainNormal}, {} as KeyboardEvent)
+      expect(plainNormal.types).toContain(TODO_TYPE)
+      expect(plainNormal.get(statusProp)).toBe('open')
+
+      const plainEdit = repo.block('plain-edit')
+      await plainEdit.load()
+      await editAction!.handler({
+        block: plainEdit,
+        uiStateBlock: plainEdit,
+        editorView: {dispatch: vi.fn()},
+      } as never, {} as KeyboardEvent)
+      expect(plainEdit.types).toContain(TODO_TYPE)
+      expect(plainEdit.get(statusProp)).toBe('open')
     } finally {
       await h.cleanup()
     }

@@ -46,7 +46,7 @@ import {
 import { srsDateShiftDecorators } from './dateShiftDecorator.ts'
 import { srsBlockDateAdapter } from './srsBlockDateAdapter.ts'
 import { srsRescheduleDecorator } from './rescheduleDecorator.ts'
-import { srsSwipeRightDecorator } from './swipeRightDecorator.ts'
+import { srsSwipeRightDecorator, srsTodoCycleDecorators } from './swipeRightDecorator.ts'
 import { blockDateAdapterFacet } from '@/plugins/daily-notes'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 
@@ -375,6 +375,9 @@ export const srsReschedulingPlugin: AppExtension = [
   ),
   actionDecoratorsFacet.of(srsRescheduleDecorator, {source: 'srs-rescheduling'}),
   actionDecoratorsFacet.of(srsSwipeRightDecorator, {source: 'srs-rescheduling'}),
+  srsTodoCycleDecorators.map(decorator =>
+    actionDecoratorsFacet.of(decorator, {source: 'srs-rescheduling'}),
+  ),
   // Negative precedence: SRS adapter sorts before the generic reference
   // adapter so a block that is BOTH an SRS card AND has an inline date
   // reference reschedules its `srsNextReviewDateProp` rather than

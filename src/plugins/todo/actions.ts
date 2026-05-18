@@ -15,6 +15,8 @@ type TodoActionContext =
   | typeof ActionContextTypes.NORMAL_MODE
   | typeof ActionContextTypes.EDIT_MODE_CM
 
+export const TODO_CYCLE_ACTION_ID = 'todo.cycle'
+export const EDIT_MODE_TODO_CYCLE_ACTION_ID = 'edit.cm.todo.cycle'
 const TODO_TOGGLE_KEYS = ['cmd+enter', 'ctrl+enter']
 
 const readStatus = (properties: Record<string, unknown>) => {
@@ -81,12 +83,12 @@ const createTodoCycleAction = <T extends TodoActionContext>(
 export const todoActions: readonly ActionConfig[] = [
   createTodoCycleAction(
     ActionContextTypes.NORMAL_MODE,
-    'todo.cycle',
+    TODO_CYCLE_ACTION_ID,
     'Cycle todo state',
   ),
   createTodoCycleAction(
     ActionContextTypes.EDIT_MODE_CM,
-    'edit.cm.todo.cycle',
+    EDIT_MODE_TODO_CYCLE_ACTION_ID,
     'Cycle todo state (Edit Mode)',
   ),
   {
