@@ -1,4 +1,6 @@
 import {
+  isRefCodec,
+  isRefListCodec,
   type AnyPropertySchema,
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
@@ -22,7 +24,7 @@ interface CompiledClause {
 /** Operator names recognised inside `where[name]` object values.
  *  Mirrors `WhereOperator` in `src/data/api/typedBlockQuery.ts`. */
 const COMPARATOR_OPERATORS = new Set(['eq', 'lt', 'lte', 'gt', 'gte'])
-const ALL_OPERATORS = new Set([...COMPARATOR_OPERATORS, 'between', 'exists'])
+const ALL_OPERATORS = new Set([...COMPARATOR_OPERATORS, 'between', 'exists', 'target'])
 
 /** A scalar `where` value goes through `codec.where.encode` and lands
  *  in one of the comparator operators below; an object becomes an
@@ -32,6 +34,7 @@ type ParsedWhere =
   | { readonly kind: 'set' }                // exists: true
   | { readonly kind: 'comparator'; readonly op: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; readonly operand: unknown }
   | { readonly kind: 'between'; readonly lo: unknown; readonly hi: unknown }
+  | { readonly kind: 'target'; readonly inner: Readonly<Record<string, unknown>> }
 
 const COMPARATOR_SQL: Readonly<Record<'eq' | 'lt' | 'lte' | 'gt' | 'gte', string>> = {
   eq: '=', lt: '<', lte: '<=', gt: '>', gte: '>=',
@@ -74,6 +77,12 @@ const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
     }
     return {kind: 'between', lo: operand[0], hi: operand[1]}
   }
+  if (op === 'target') {
+    if (!isPlainOperatorObject(operand)) {
+      throw new Error(`[queryBlocks] where.${name}.target must be a where-map object`)
+    }
+    return {kind: 'target', inner: operand}
+  }
   return {kind: 'comparator', op: op as 'eq' | 'lt' | 'lte' | 'gt' | 'gte', operand}
 }
 
@@ -99,11 +108,70 @@ const encodeForWhere = (
   }
 }
 
+/** Mutable counter for nested `target` traversals so each level gets
+ *  its own SQL alias (`d0`, `d1`, …) and inner joins don't collide
+ *  with outer ones. The top-level call always passes `{n: 0}`. */
+interface AliasCounter { n: number }
+
+const compileTargetTraversal = (
+  name: string,
+  inner: Readonly<Record<string, unknown>>,
+  schema: AnyPropertySchema,
+  jsonExpr: string,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  aliasCounter: AliasCounter,
+): CompiledClause => {
+  const isRef = isRefCodec(schema.codec)
+  const isRefList = isRefListCodec(schema.codec)
+  if (!isRef && !isRefList) {
+    throw new Error(
+      `[queryBlocks] where.${name}.target is only valid on ref / refList properties; ` +
+      `${JSON.stringify(name)} has codec type ${JSON.stringify(schema.codec.type)}`,
+    )
+  }
+  const alias = `d${aliasCounter.n++}`
+  const targetPath = jsonPathForProperty(name)
+  const innerEntries = Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))
+  const innerClauses: string[] = []
+  const innerParams: unknown[] = []
+  for (const [innerName, innerValue] of innerEntries) {
+    const compiled = compileWhereClause(
+      innerName, innerValue, propertySchemas.get(innerName),
+      `${alias}.properties_json`, propertySchemas, aliasCounter,
+    )
+    innerClauses.push(compiled.sql)
+    innerParams.push(...compiled.params)
+  }
+  const inWhere = innerClauses.length === 0 ? '' : ` AND ${innerClauses.join(' AND ')}`
+  if (isRef) {
+    // The source row's `properties_json[name]` holds the target id
+    // (string, stored as JSON). `json_extract` unwraps the JSON
+    // quoting and gives us the bare id for the equality join.
+    return {
+      sql:
+        `EXISTS (SELECT 1 FROM blocks ${alias} ` +
+        `WHERE ${alias}.id = json_extract(${jsonExpr}, ?) ` +
+        `AND ${alias}.deleted = 0${inWhere})`,
+      params: [targetPath, ...innerParams],
+    }
+  }
+  // refList: target value is an array of ids — fan out via json_each.
+  return {
+    sql:
+      `EXISTS (SELECT 1 FROM json_each(json_extract(${jsonExpr}, ?)) AS je ` +
+      `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
+      `WHERE ${alias}.deleted = 0${inWhere})`,
+    params: [targetPath, ...innerParams],
+  }
+}
+
 const compileWhereClause = (
   name: string,
   value: unknown,
   schema: AnyPropertySchema | undefined,
   jsonExpr: string,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  aliasCounter: AliasCounter = {n: 0},
 ): CompiledClause => {
   if (value === undefined) {
     throw new Error(`[queryBlocks] where.${name} is undefined; pass null to match unset values`)
@@ -122,6 +190,9 @@ const compileWhereClause = (
   }
   if (parsed.kind === 'set') {
     return {sql: `json_extract(${jsonExpr}, ?) IS NOT NULL`, params: [path]}
+  }
+  if (parsed.kind === 'target') {
+    return compileTargetTraversal(name, parsed.inner, schema, jsonExpr, propertySchemas, aliasCounter)
   }
   if (parsed.kind === 'between') {
     const lo = encodeForWhere(name, schema, parsed.lo)
@@ -173,7 +244,7 @@ const compilePredicateAgainstRow = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), propsExpr)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), propsExpr, propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -222,7 +293,7 @@ const compileScopedPredicate = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json')
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -369,7 +440,7 @@ export const buildCandidatesCte = (
 
   if (normalized.where !== undefined) {
     for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json')
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }

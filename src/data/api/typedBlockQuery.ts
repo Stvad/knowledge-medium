@@ -19,7 +19,25 @@ export interface TypedBlockQueryReferenceFilter {
  *  validate identically to their equality-form counterparts. `between`
  *  is inclusive on both ends. `exists` takes a boolean — `true` for
  *  "property is set" (`IS NOT NULL`), `false` for "unset" (`IS NULL`,
- *  same as the `null` shorthand). */
+ *  same as the `null` shorthand).
+ *
+ *  `target` is the ref-traversal operator. Valid only on `ref`-typed
+ *  (and `refList`-typed) properties; the operand is an inner where-map
+ *  compiled against the referenced block's `properties_json`. Lets
+ *  callers ask "this ref points to a block whose <inner where> holds"
+ *  without bouncing through `referencedBy`, which only knows equality
+ *  on the target id. Example — find blocks whose `next-review-date`
+ *  ref points to a daily note whose `daily-note:date` is in the past:
+ *
+ *    where: {
+ *      'next-review-date': {
+ *        target: { 'daily-note:date': { lt: new Date() } }
+ *      }
+ *    }
+ *
+ *  The compiler stays plugin-agnostic — it doesn't know about
+ *  daily-notes; the caller (typically UI) spells the target property
+ *  name. */
 export type WhereOperator =
   | { readonly eq: unknown }
   | { readonly lt: unknown }
@@ -28,6 +46,7 @@ export type WhereOperator =
   | { readonly gte: unknown }
   | { readonly between: readonly [unknown, unknown] }
   | { readonly exists: boolean }
+  | { readonly target: Readonly<Record<string, unknown>> }
 
 /** A single block predicate. Compiled against either the block itself
  *  (`scope: 'self'`, default) or the block-or-any-of-its-ancestors

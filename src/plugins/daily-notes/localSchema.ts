@@ -71,6 +71,21 @@ const BACKFILL_DAILY_NOTE_DATE_SQL = `
 
 const SELECT_HAS_ANY_BLOCKS_SQL = `SELECT 1 FROM blocks LIMIT 1`
 
+/** Functional index on the daily-note date property. Cheap to maintain
+ *  (the property only lands on daily-note rows; the partial-index
+ *  predicate keeps the b-tree small), turns unbounded date-range
+ *  queries into b-tree seeks instead of `properties_json` JSON
+ *  extracts. The motivating query is the JOIN-through-ref shape used
+ *  for filters like "items whose `next-review-date` ref points to a
+ *  daily note before today" — `WHERE d.daily-note:date < ?` lands
+ *  here. */
+const CREATE_DAILY_NOTE_DATE_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_blocks_daily_note_date
+  ON blocks (json_extract(properties_json, '$.${dailyNoteDateProp.name}'))
+  WHERE deleted = 0
+    AND json_extract(properties_json, '$.${dailyNoteDateProp.name}') IS NOT NULL
+`
+
 export const backfillDailyNoteDatePropertyIfNeeded = async (
   db: LocalSchemaDb,
 ): Promise<void> => {
@@ -92,6 +107,7 @@ export const backfillDailyNoteDatePropertyIfNeeded = async (
 
 export const dailyNotesLocalSchema: LocalSchemaContribution = {
   id: 'daily-notes.local-schema',
+  statements: [CREATE_DAILY_NOTE_DATE_INDEX_SQL],
   backfills: [
     {
       id: 'daily-notes.date-property-backfill',

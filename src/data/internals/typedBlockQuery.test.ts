@@ -241,6 +241,67 @@ describe('repo.queryBlocks', () => {
       await expect(env.repo.queryBlocks({where: {reviewer: {eq: 'target'}}}))
         .rejects.toThrow('is not where-queryable')
     })
+
+    it('traverses ref-typed properties via the target operator', async () => {
+      // Realistic shape: a ref-typed property points at a "target"
+      // block that carries its own queryable properties (the daily-
+      // notes plugin's date property is the motivating case, but the
+      // compiler is plugin-agnostic — anything with a where-queryable
+      // codec on the target works).
+      await create({
+        id: 'past-target',
+        properties: {[dueProp.name]: encodeDate('2026-01-01')},
+      })
+      await create({
+        id: 'future-target',
+        properties: {[dueProp.name]: encodeDate('2026-12-31')},
+      })
+      await create({id: 'unrelated-target'})
+      await create({
+        id: 'source-past',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('past-target')},
+        references: [{id: 'past-target', alias: 'past-target', sourceField: 'reviewer'}],
+      })
+      await create({
+        id: 'source-future',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('future-target')},
+        references: [{id: 'future-target', alias: 'future-target', sourceField: 'reviewer'}],
+      })
+      await create({
+        id: 'source-unrelated',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('unrelated-target')},
+        references: [{id: 'unrelated-target', alias: 'unrelated-target', sourceField: 'reviewer'}],
+      })
+
+      const past = await env.repo.queryBlocks({
+        where: {
+          [reviewerProp.name]: {
+            target: {[dueProp.name]: {lt: new Date('2026-06-01T00:00:00.000Z')}},
+          },
+        },
+      })
+      expect(ids(past)).toEqual(['source-past'])
+
+      // Empty target predicate = "ref points at a live block".
+      // Excludes the dangling case (no row at the ref id) and the
+      // soft-deleted case via the JOIN's `d.deleted = 0` clause.
+      const anyTarget = await env.repo.queryBlocks({
+        where: {[reviewerProp.name]: {target: {}}},
+      })
+      expect(ids(anyTarget).sort()).toEqual(['source-future', 'source-past', 'source-unrelated'])
+    })
+
+    it('rejects the target operator on non-ref properties', async () => {
+      await expect(env.repo.queryBlocks({
+        where: {status: {target: {priority: {gt: 0}}}},
+      })).rejects.toThrow('only valid on ref / refList properties')
+    })
+
+    it('rejects malformed target operand', async () => {
+      await expect(env.repo.queryBlocks({
+        where: {[reviewerProp.name]: {target: 'not-an-object'}},
+      })).rejects.toThrow('target must be a where-map object')
+    })
   })
 
   it('filters by references with optional sourceField', async () => {
