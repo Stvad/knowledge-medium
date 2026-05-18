@@ -66,7 +66,7 @@ function PendingInvitationsInner() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className="relative flex items-center gap-1 rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
+          className="relative flex h-7 w-7 items-center justify-center gap-1 rounded-md p-0 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground sm:h-auto sm:w-auto sm:px-2 sm:py-1"
           aria-label={label}
         >
           <Mail className="h-4 w-4" />

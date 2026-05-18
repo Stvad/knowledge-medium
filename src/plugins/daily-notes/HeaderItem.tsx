@@ -42,9 +42,9 @@ export function DailyNotePickerHeaderItem() {
   }
 
   return (
-    <div className="inline-flex h-8 items-center gap-0.5 text-muted-foreground">
+    <div className="inline-flex h-7 items-center gap-0.5 text-muted-foreground sm:h-8">
       <button
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:text-foreground"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:text-foreground sm:h-8 sm:w-8"
         onClick={() => runDailyNoteAction(OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID)}
         title="Open previous daily note"
         aria-label="Open previous daily note"
@@ -52,7 +52,7 @@ export function DailyNotePickerHeaderItem() {
         <ChevronLeft className="h-5 w-5"/>
       </button>
       <button
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:text-foreground"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:text-foreground sm:h-8 sm:w-8"
         onClick={event => {
           void handleClick(event).catch(error => {
             console.error('[DailyNotePickerHeaderItem] Open picker failed', error)
@@ -64,7 +64,7 @@ export function DailyNotePickerHeaderItem() {
         <CalendarDays className="h-5 w-5"/>
       </button>
       <button
-        className="inline-flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:text-foreground"
+        className="inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:text-foreground sm:h-8 sm:w-8"
         onClick={() => runDailyNoteAction(OPEN_NEXT_DAILY_NOTE_ACTION_ID)}
         title="Open next daily note"
         aria-label="Open next daily note"

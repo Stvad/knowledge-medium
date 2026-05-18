@@ -89,7 +89,7 @@ export function SyncStatusHeaderItem() {
         <button
           type="button"
           className={cn(
-            'flex h-8 w-8 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring',
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:w-8',
             toneClass[view.tone],
           )}
           aria-label={view.title}
