@@ -19,7 +19,12 @@ import {
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { __resetAppIntentForTesting, consumeAppIntent, formatSharedContent } from '../appIntents.ts'
-import { dailyNotesDataExtension, getOrCreateDailyNote } from '@/plugins/daily-notes'
+import {
+  dailyNotesDataExtension,
+  getOrCreateDailyNote,
+  openDailyNotePickerEvent,
+} from '@/plugins/daily-notes'
+import { toggleQuickFindEvent } from '@/plugins/quick-find'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -172,6 +177,39 @@ describe('consumeAppIntent', () => {
 
     const dailyChildren = await env.repo.block(daily.id).childIds.load()
     expect(dailyChildren).toHaveLength(1)
+  })
+
+  it('on intent=open-picker fires the daily-note picker event and clears params', async () => {
+    const {daily, layoutSession} = await seedLandingLayout()
+    setLocationSearch('?intent=open-picker')
+    const handler = vi.fn()
+    window.addEventListener(openDailyNotePickerEvent, handler)
+
+    await consumeAppIntent(env.repo, layoutSession)
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(window.location.search).toBe('')
+    // Picker is a UI-only intent — must not create a block.
+    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    expect(dailyChildren).toHaveLength(0)
+
+    window.removeEventListener(openDailyNotePickerEvent, handler)
+  })
+
+  it('on intent=quick-find fires the quick-find toggle and clears params', async () => {
+    const {daily, layoutSession} = await seedLandingLayout()
+    setLocationSearch('?intent=quick-find')
+    const handler = vi.fn()
+    window.addEventListener(toggleQuickFindEvent, handler)
+
+    await consumeAppIntent(env.repo, layoutSession)
+
+    expect(handler).toHaveBeenCalledTimes(1)
+    expect(window.location.search).toBe('')
+    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    expect(dailyChildren).toHaveLength(0)
+
+    window.removeEventListener(toggleQuickFindEvent, handler)
   })
 
   it('preserves URL params when the dispatch no-ops in read-only mode', async () => {

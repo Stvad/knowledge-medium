@@ -1,16 +1,20 @@
 /**
  * PWA-shortcut and Web Share Target dispatcher.
  *
- * The manifest exposes three URL surfaces that land back in the SPA:
+ * The manifest exposes URL surfaces that land back in the SPA:
  *   - shortcuts                  → `./?intent=new-daily-block`
+ *                                 `./?intent=open-picker`
+ *                                 `./?intent=quick-find`
  *   - share_target action        → `./?intent=share&title=…&text=…&url=…`
  *   - note_taking.new_note_url   → `./?intent=new-daily-block`
  *
- * Each should drop the user into a freshly-created block on today's
- * daily note (the share-target variant pre-fills it with the shared
- * payload). We delegate to `appendTodayDailyBlockInStack` from the
- * daily-notes plugin so the UX matches Ctrl+Shift+N exactly — same
- * panel placement, same focus, same editing state.
+ * `new-daily-block` and `share` drop the user into a freshly-created
+ * block on today's daily note (the share-target variant pre-fills
+ * it with the shared payload); we delegate to
+ * `appendTodayDailyBlockInStack` so the UX matches Ctrl+Shift+N
+ * exactly. `open-picker` and `quick-find` just fire the same global
+ * events the matching keyboard actions / header buttons do, so the
+ * launcher entry points are 1:1 with the in-app affordances.
  *
  * The dispatcher runs once per page load (module-level `consumed`
  * flag), fired by `appIntentsBootstrapEffect` once the workspace's
@@ -26,7 +30,11 @@
  */
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { appendTodayDailyBlockInStack } from '@/plugins/daily-notes'
+import {
+  appendTodayDailyBlockInStack,
+  openDailyNotePicker,
+} from '@/plugins/daily-notes'
+import { toggleQuickFindEvent } from '@/plugins/quick-find'
 
 const INTENT_PARAMS = ['intent', 'title', 'text', 'url'] as const
 
@@ -93,7 +101,9 @@ export const consumeAppIntent = async (
 
   const isShare = intent === 'share' || hasShareFields
   const isNewBlock = intent === 'new-daily-block'
-  if (!isShare && !isNewBlock) return
+  const isOpenPicker = intent === 'open-picker'
+  const isQuickFind = intent === 'quick-find'
+  if (!isShare && !isNewBlock && !isOpenPicker && !isQuickFind) return
 
   // Flip the module-level guard BEFORE awaiting so a re-entrant
   // call (e.g. React strict-mode double-invoke of the bootstrap
@@ -103,6 +113,20 @@ export const consumeAppIntent = async (
   // (read-only mode, missing workspace) or a thrown mutator would
   // silently drop the shared payload with no way to recover.
   consumed = true
+
+  // UI-only intents — fire-and-forget window events that the
+  // matching app mounts listen for. No data to lose, so we strip
+  // the URL params unconditionally.
+  if (isOpenPicker) {
+    openDailyNotePicker()
+    stripIntentParams()
+    return
+  }
+  if (isQuickFind) {
+    window.dispatchEvent(new CustomEvent(toggleQuickFindEvent))
+    stripIntentParams()
+    return
+  }
 
   const dispatched = isShare
     ? await appendTodayDailyBlockInStack(repo, layoutSessionBlock, {
