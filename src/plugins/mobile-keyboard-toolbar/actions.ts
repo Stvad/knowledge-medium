@@ -1,10 +1,10 @@
 import { startCompletion } from '@codemirror/autocomplete'
-import { EditorSelection } from '@codemirror/state'
 import {
   ActionContextTypes,
   type ActionConfig,
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types.ts'
+import { wrapRangeWithPair } from '@/utils/codemirror.ts'
 
 export const INSERT_PAGE_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_page_ref_trigger'
 export const INSERT_BLOCK_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_block_ref_trigger'
@@ -15,20 +15,7 @@ const insertCompletionTrigger = (
   close: string,
 ) => {
   const {state} = editorView
-  editorView.dispatch(state.changeByRange(range => {
-    if (range.empty) {
-      return {
-        changes: {from: range.from, insert: `${open}${close}`},
-        range: EditorSelection.cursor(range.from + open.length),
-      }
-    }
-
-    const selectedText = state.sliceDoc(range.from, range.to)
-    return {
-      changes: {from: range.from, to: range.to, insert: `${open}${selectedText}${close}`},
-      range: EditorSelection.range(range.from + open.length, range.to + open.length),
-    }
-  }))
+  editorView.dispatch(state.changeByRange(range => wrapRangeWithPair(state, range, open, close)))
   editorView.focus()
   startCompletion(editorView)
 }
