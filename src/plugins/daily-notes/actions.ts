@@ -31,6 +31,7 @@ import {
   editorSelection,
   isEditingProp,
 } from '@/data/properties.ts'
+import type { EditorSelectionState } from '@/data/properties.ts'
 import {
   ActionConfig,
   ActionContextTypes,
@@ -99,26 +100,38 @@ const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
   navigateFromGlobalCommand(repo, {blockId: note.id, workspaceId})
 }
 
-const appendTodayDailyBlockInStack = async (
+/** Append a fresh block to today's daily note and open it in a new
+ *  sidebar-stacked panel ready for editing. Shared between the
+ *  `append_today_daily_block` keyboard action and the
+ *  `consumeAppIntent` PWA-shortcut / share-target dispatcher in
+ *  `appIntents.ts` — both want the exact same UX (drop the user into
+ *  a fresh, focused, editable block on today's note); content lets
+ *  the share-target seed the block with the shared title/text/URL.
+ *  Cursor lands at end-of-content so the user can keep typing. */
+export const appendTodayDailyBlockInStack = async (
   repo: Repo,
-  uiStateBlock: Block,
+  layoutSessionBlock: Block,
+  options: {content?: string} = {},
 ): Promise<void> => {
   const workspaceId = repo.activeWorkspaceId
   if (!workspaceId || repo.isReadOnly) return
 
+  const content = options.content
   const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
   const blockId = await repo.mutate.createChild({
     parentId: note.id,
+    content,
     position: {kind: 'last'},
   })
 
-  const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
   await layoutSessionBlock.load()
   const sourcePanelId = layoutSessionBlock.peekProperty(activePanelIdProp)
   const panelId = await insertSidebarStackedPanel(repo, layoutSessionBlock, blockId, {sourcePanelId})
 
+  const cursor = content ? content.length : 0
+  const selection: EditorSelectionState = {blockId, start: cursor}
   await repo.tx(async tx => {
-    await tx.setProperty(panelId, editorSelection, {blockId, start: 0})
+    await tx.setProperty(panelId, editorSelection, selection)
     await tx.setProperty(panelId, isEditingProp, true)
   }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
 }
@@ -151,7 +164,8 @@ export const dailyNotesActions = (
     context: ActionContextTypes.GLOBAL,
     icon: CalendarPlus,
     handler: async ({uiStateBlock}) => {
-      await appendTodayDailyBlockInStack(repo, uiStateBlock)
+      const layoutSessionBlock = await getLayoutSessionBlock(uiStateBlock, getLayoutSessionId())
+      await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
     },
     defaultBinding: {
       keys: 'ctrl+shift+n',

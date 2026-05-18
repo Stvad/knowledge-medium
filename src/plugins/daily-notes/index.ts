@@ -79,8 +79,10 @@ export {
   OPEN_NEXT_DAILY_NOTE_ACTION_ID,
   OPEN_PREVIOUS_DAILY_NOTE_ACTION_ID,
   OPEN_TODAY_ACTION_ID,
+  appendTodayDailyBlockInStack,
   resolveCurrentDailyNoteIso,
 } from './actions.ts'
+export { consumeAppIntent } from './appIntents.ts'
 export {
   openDailyNotePicker,
   openDailyNotePickerEvent,

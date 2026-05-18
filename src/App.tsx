@@ -23,6 +23,7 @@ import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState.ts'
+import { consumeAppIntent } from '@/plugins/daily-notes'
 import { workspaceLandingFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.ts'
@@ -349,6 +350,13 @@ const App = () => {
           return
         }
         syncHash()
+        // Dispatch any pending PWA-shortcut / share-target intent
+        // captured in the URL on first paint. Runs after projection
+        // start so the landing panel exists; consumeAppIntent
+        // self-guards against double-invocation.
+        void consumeAppIntent(repo, layoutSessionBlock).catch(error => {
+          console.error('[App] consumeAppIntent failed', error)
+        })
       })
       .catch(error => {
         console.error('[App] Failed to start panel layout projection', error)
