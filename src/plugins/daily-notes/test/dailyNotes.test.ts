@@ -20,7 +20,6 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.ts'
 import {
   backfillDailyNoteDatePropertyIfNeeded,
-  DAILY_NOTE_DATE_BACKFILL_MARKER_KEY,
 } from '@/plugins/daily-notes/localSchema.ts'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -258,17 +257,6 @@ describe('backfillDailyNoteDatePropertyIfNeeded', () => {
     },
   })
 
-  /** createTestDb's template runs `applyLocalSchemaContributions` at
-   *  init time, which records this backfill's marker on an empty DB.
-   *  Tests that exercise the backfill itself need to clear that marker
-   *  first so the gate doesn't short-circuit. */
-  const resetBackfillMarker = async () => {
-    await env.h.db.execute(
-      'DELETE FROM client_schema_state WHERE key = ?',
-      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
-    )
-  }
-
   /** Bypass the codec write path to simulate a legacy row: daily-note
    *  type with ISO aliases but no `dailyNoteDateProp` value. The
    *  `tx.update` raw-properties path lets us drop the new property
@@ -285,83 +273,50 @@ describe('backfillDailyNoteDatePropertyIfNeeded', () => {
     return note.id
   }
 
+  const readDateProperty = async (id: string): Promise<unknown> => {
+    const row = await env.h.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id])
+    return JSON.parse(row?.properties_json ?? '{}')[dailyNoteDateProp.name]
+  }
+
   it('populates the date property from the ISO alias for legacy rows', async () => {
     const id = await seedLegacyDailyNote('2026-04-28')
+    expect(await readDateProperty(id)).toBeUndefined()
 
-    const before = await env.h.db.getAll<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?',
-      [id],
-    )
-    const beforeParsed = JSON.parse(before[0]?.properties_json ?? '{}')
-    expect(beforeParsed[dailyNoteDateProp.name]).toBeUndefined()
-
-    await resetBackfillMarker()
     await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
 
-    // Backfill writes via raw UPDATE so the cached row would otherwise
-    // serve the pre-backfill properties; check the DB row directly.
-    const after = await env.h.db.getAll<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?',
-      [id],
-    )
-    const afterParsed = JSON.parse(after[0]?.properties_json ?? '{}')
-    expect(afterParsed[dailyNoteDateProp.name]).toBe('2026-04-28T00:00:00.000Z')
+    expect(await readDateProperty(id)).toBe('2026-04-28T00:00:00.000Z')
   })
 
-  it('records the marker so subsequent calls noop', async () => {
-    await seedLegacyDailyNote('2026-04-28')
-    await resetBackfillMarker()
+  it('catches up rows that arrive after the first invocation', async () => {
+    // Partial-sync regression: PowerSync's local-schema phase runs
+    // the backfill before `db.connect()`, so a fresh device may scan
+    // an incomplete set of legacy rows. The probe-then-update
+    // approach re-checks every cold start, so later-arriving rows
+    // still get processed instead of staying permanently unhealed.
+    const earlyId = await seedLegacyDailyNote('2026-04-28')
     await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
+    expect(await readDateProperty(earlyId)).toBe('2026-04-28T00:00:00.000Z')
 
-    const marker = await env.h.db.getAll<{key: string}>(
-      'SELECT key FROM client_schema_state WHERE key = ?',
-      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
-    )
-    expect(marker).toHaveLength(1)
-
-    // Drop the property again post-marker; the second invocation must
-    // not re-populate (one-shot semantic).
-    const id = dailyNoteBlockId(WS, '2026-04-28')
-    await env.repo.tx(async tx => {
-      const current = await tx.get(id)
-      if (!current) return
-      const props = {...current.properties}
-      delete props[dailyNoteDateProp.name]
-      await tx.update(id, {properties: props})
-    }, {scope: ChangeScope.BlockDefault})
-
+    const lateId = await seedLegacyDailyNote('2026-05-12')
+    expect(await readDateProperty(lateId)).toBeUndefined()
     await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-    const reloadedRow = await env.h.db.getAll<{properties_json: string}>(
-      'SELECT properties_json FROM blocks WHERE id = ?',
-      [id],
-    )
-    const reloadedProps = JSON.parse(reloadedRow[0]?.properties_json ?? '{}')
-    expect(reloadedProps[dailyNoteDateProp.name]).toBeUndefined()
+    expect(await readDateProperty(lateId)).toBe('2026-05-12T00:00:00.000Z')
   })
 
-  it('defers sealing the marker until the local blocks table has rows', async () => {
-    // Bootstrap pathology: PowerSync's local-schema phase runs the
-    // backfill before `db.connect()`, so a fresh device for an
-    // existing workspace boots empty. If we sealed eagerly, legacy
-    // daily notes streaming in via sync would never get the
-    // property. Empty-table runs must NOT seal.
-    await env.h.db.execute('DELETE FROM blocks')
-    await resetBackfillMarker()
+  it('is a no-op once every daily-note row has the property', async () => {
+    // Steady-state guarantee: with no pending work, the probe must
+    // exit before issuing the UPDATE. We test that by stamping a
+    // sentinel onto every daily-note row and verifying it survives
+    // the backfill call — if the UPDATE had fired, `json_set` would
+    // rebuild `properties_json` and drop the sentinel order.
+    const id = (await getOrCreateDailyNote(env.repo, WS, '2026-04-28')).id
+    const before = await env.h.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id])
     await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-    const emptyMarker = await env.h.db.getAll<{key: string}>(
-      'SELECT key FROM client_schema_state WHERE key = ?',
-      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
-    )
-    expect(emptyMarker).toHaveLength(0)
-
-    // Once rows exist, a second invocation seals the marker.
-    await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
-    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
-    const sealedMarker = await env.h.db.getAll<{key: string}>(
-      'SELECT key FROM client_schema_state WHERE key = ?',
-      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
-    )
-    expect(sealedMarker).toHaveLength(1)
+    const after = await env.h.db.get<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?', [id])
+    expect(after?.properties_json).toBe(before?.properties_json)
   })
 
   it('skips calendar-invalid date-shaped aliases', async () => {
@@ -392,16 +347,11 @@ describe('backfillDailyNoteDatePropertyIfNeeded', () => {
     await seedBogusDailyNote('bogus-rollover', '2026-02-30')
     await seedBogusDailyNote('valid', '2026-04-28')
 
-    await resetBackfillMarker()
     await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
 
-    const rows = await env.h.db.getAll<{id: string; properties_json: string}>(
-      "SELECT id, properties_json FROM blocks WHERE id IN ('bogus-month','bogus-rollover','valid')",
-    )
-    const byId = new Map(rows.map(r => [r.id, JSON.parse(r.properties_json)]))
-    expect(byId.get('bogus-month')?.[dailyNoteDateProp.name]).toBeUndefined()
-    expect(byId.get('bogus-rollover')?.[dailyNoteDateProp.name]).toBeUndefined()
-    expect(byId.get('valid')?.[dailyNoteDateProp.name]).toBe('2026-04-28T00:00:00.000Z')
+    expect(await readDateProperty('bogus-month')).toBeUndefined()
+    expect(await readDateProperty('bogus-rollover')).toBeUndefined()
+    expect(await readDateProperty('valid')).toBe('2026-04-28T00:00:00.000Z')
   })
 })
 
