@@ -125,7 +125,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         await moveVisualFocusWithFallback(deps, 'left')
       },
       defaultBinding: {
-        keys: 'left',
+        keys: ['left', 'j'],
       },
     }),
     bindNormal({
@@ -135,7 +135,7 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
         await moveVisualFocusWithFallback(deps, 'right')
       },
       defaultBinding: {
-        keys: 'right',
+        keys: ['right', 'l'],
       },
     }),
     bindNormal({

@@ -184,10 +184,11 @@ const compareScores = (left: Score, right: Score): number =>
   left.primary - right.primary ||
   left.order - right.order
 
-export const pickVisualNavigationTarget = (
+const bestVisualNavigationTarget = (
   source: VisualNavigationCandidate,
   candidates: readonly VisualNavigationCandidate[],
   direction: VisualNavigationDirection,
+  predicate: (candidate: VisualNavigationCandidate, score: Score) => boolean,
 ): VisualNavigationCandidate | null => {
   let best: {candidate: VisualNavigationCandidate; score: Score} | null = null
 
@@ -195,13 +196,40 @@ export const pickVisualNavigationTarget = (
     if (candidate.id === source.id) continue
     if (candidate.surface === 'breadcrumb') continue
     const score = scoreCandidate(source, candidate, direction)
-    if (!score) continue
+    if (!score || !predicate(candidate, score)) continue
     if (!best || compareScores(score, best.score) < 0) {
       best = {candidate, score}
     }
   }
 
   return best?.candidate ?? null
+}
+
+export const pickVisualNavigationTarget = (
+  source: VisualNavigationCandidate,
+  candidates: readonly VisualNavigationCandidate[],
+  direction: VisualNavigationDirection,
+): VisualNavigationCandidate | null => {
+  if (source.panelId && (direction === 'left' || direction === 'right')) {
+    return bestVisualNavigationTarget(source, candidates, direction, candidate =>
+      Boolean(candidate.panelId) && candidate.panelId !== source.panelId)
+  }
+
+  if (source.panelId && (direction === 'up' || direction === 'down')) {
+    const inPanel = bestVisualNavigationTarget(source, candidates, direction, candidate =>
+      candidate.panelId === source.panelId)
+    if (inPanel) return inPanel
+
+    // Only jump vertically across panels when the target is actually in
+    // the same visual column. Without the overlap gate, a lower block in
+    // a side panel can beat the expected "stay in this panel" mental
+    // model just because it is technically below the source.
+    return bestVisualNavigationTarget(source, candidates, direction, candidate =>
+      Boolean(candidate.panelId) && candidate.panelId !== source.panelId &&
+      intervalGap(source.rect.left, source.rect.right, candidate.rect.left, candidate.rect.right) === 0)
+  }
+
+  return bestVisualNavigationTarget(source, candidates, direction, () => true)
 }
 
 const rectIsNavigable = (rect: DOMRect): boolean =>

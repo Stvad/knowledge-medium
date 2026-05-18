@@ -91,6 +91,11 @@ afterEach(async () => {
 })
 
 describe('vim normal mode visual navigation actions', () => {
+  it('binds j and l to visual left and right movement', () => {
+    expect(findNormalModeAction(env.repo, 'move_left').defaultBinding?.keys).toEqual(['left', 'j'])
+    expect(findNormalModeAction(env.repo, 'move_right').defaultBinding?.keys).toEqual(['right', 'l'])
+  })
+
   it('moves down from the document body into a visually lower backlink occurrence', async () => {
     await env.repo.tx(async tx => {
       await tx.create({

@@ -256,7 +256,7 @@ export const DefaultBlockLayout: BlockLayout = ({
       <Collapsible
         {...shellProps}
         open={!isCollapsed || isTopLevel}
-        className={`tm-block group/block relative flex items-start gap-1 ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
+        className={`tm-block group/block relative flex items-start gap-1 outline-none focus:outline-none focus-visible:outline-none ${isTopLevel ? 'top-level-block' : ''} ${isSelected ? 'bg-accent/80' : ''}`}
       >
         <Controls/>
 
