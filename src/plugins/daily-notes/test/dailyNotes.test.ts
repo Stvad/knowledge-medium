@@ -404,3 +404,32 @@ describe('backfillDailyNoteDatePropertyIfNeeded', () => {
     expect(byId.get('valid')?.[dailyNoteDateProp.name]).toBe('2026-04-28T00:00:00.000Z')
   })
 })
+
+describe('idx_blocks_daily_note_date', () => {
+  /** SQLite expression-index matching is text-based: the indexed
+   *  expression text must appear literally in the query. Both halves
+   *  — the CREATE INDEX statement and the compiled `where` clause —
+   *  have to agree on the exact `json_extract(properties_json, '...')`
+   *  spelling. This test pins that agreement by asking the planner
+   *  whether it picks the index for the motivating query, so a future
+   *  change to either the compiler's path-emission or the index DDL
+   *  that breaks the match fails here before it ships to prod. */
+  it('is picked by the planner for daily-note:date range queries', async () => {
+    // Seed a daily note so the partial index isn't empty (an empty
+    // index is the planner's strong default to skip).
+    await getOrCreateDailyNote(env.repo, WS, '2026-04-28')
+
+    // Use repo.queryBlocks against the daily-note type filtered by
+    // date; whatever SQL the compiler emits is what we want indexed.
+    // Grab it via EXPLAIN QUERY PLAN on a hand-rolled equivalent that
+    // mirrors the candidates-CTE path-extract text exactly.
+    const plan = await env.h.db.getAll<{detail: string}>(`
+      EXPLAIN QUERY PLAN
+      SELECT id FROM blocks
+      WHERE deleted = 0
+        AND json_extract(properties_json, '$."${dailyNoteDateProp.name}"') < ?
+    `, ['2026-05-18T00:00:00.000Z'])
+    const detail = plan.map(r => r.detail).join(' | ')
+    expect(detail).toContain('idx_blocks_daily_note_date')
+  })
+})

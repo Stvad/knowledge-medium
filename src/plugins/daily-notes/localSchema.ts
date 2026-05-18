@@ -30,6 +30,12 @@ const RECORD_BACKFILL_DONE_SQL = `
   VALUES ('${BACKFILL_MARKER_KEY}', strftime('%s', 'now') * 1000)
 `
 
+/** Always-quoted JSON path for the date property. Matches what
+ *  `jsonPathForProperty` (in the typed-query compiler) emits, so the
+ *  expression index below uses the same literal text the compiler
+ *  produces — SQLite only matches expression indexes by literal text. */
+const DAILY_NOTE_DATE_JSON_PATH = `$."${dailyNoteDateProp.name}"`
+
 /** `$.${dailyNoteDateProp.name}` JSON path — the codec encodes
  *  `Date.toISOString()`, so the on-disk shape we write is the ISO
  *  alias `YYYY-MM-DD` concatenated with `T00:00:00.000Z`.
@@ -47,7 +53,7 @@ const BACKFILL_DAILY_NOTE_DATE_SQL = `
   UPDATE blocks
   SET properties_json = json_set(
     properties_json,
-    '$.${dailyNoteDateProp.name}',
+    '${DAILY_NOTE_DATE_JSON_PATH}',
     (
       SELECT je.value || 'T00:00:00.000Z'
       FROM json_each(blocks.properties_json, '$.alias') AS je
@@ -57,7 +63,7 @@ const BACKFILL_DAILY_NOTE_DATE_SQL = `
     )
   )
   WHERE deleted = 0
-    AND json_extract(properties_json, '$.${dailyNoteDateProp.name}') IS NULL
+    AND json_extract(properties_json, '${DAILY_NOTE_DATE_JSON_PATH}') IS NULL
     AND EXISTS (
       SELECT 1 FROM json_each(blocks.properties_json, '$.types') AS jt
       WHERE jt.value = '${DAILY_NOTE_TYPE}'
@@ -71,8 +77,8 @@ const BACKFILL_DAILY_NOTE_DATE_SQL = `
 
 const SELECT_HAS_ANY_BLOCKS_SQL = `SELECT 1 FROM blocks LIMIT 1`
 
-/** Functional index on the daily-note date property. Cheap to maintain
- *  (the property only lands on daily-note rows; the partial-index
+/** Partial functional index on the daily-note date property. Cheap to
+ *  maintain (the property only lands on daily-note rows; the partial
  *  predicate keeps the b-tree small), turns unbounded date-range
  *  queries into b-tree seeks instead of `properties_json` JSON
  *  extracts. The motivating query is the JOIN-through-ref shape used
@@ -81,9 +87,9 @@ const SELECT_HAS_ANY_BLOCKS_SQL = `SELECT 1 FROM blocks LIMIT 1`
  *  here. */
 const CREATE_DAILY_NOTE_DATE_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS idx_blocks_daily_note_date
-  ON blocks (json_extract(properties_json, '$.${dailyNoteDateProp.name}'))
+  ON blocks (json_extract(properties_json, '${DAILY_NOTE_DATE_JSON_PATH}'))
   WHERE deleted = 0
-    AND json_extract(properties_json, '$.${dailyNoteDateProp.name}') IS NOT NULL
+    AND json_extract(properties_json, '${DAILY_NOTE_DATE_JSON_PATH}') IS NOT NULL
 `
 
 export const backfillDailyNoteDatePropertyIfNeeded = async (

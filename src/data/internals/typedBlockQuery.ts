@@ -16,6 +16,20 @@ export interface CompiledTypedBlockQuery {
 export const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 
+/** Inline a JSON path as a SQL string literal — needed so SQLite's
+ *  query planner can match expression indexes. SQLite only treats
+ *  `json_extract(col, '$.foo')` and `idx ON (json_extract(col, '$.foo'))`
+ *  as the same indexable expression when the path appears literally;
+ *  if the path is bound via `?` the planner sees `json_extract(col, ?)`
+ *  and falls back to a table scan. Property names are registered via
+ *  trusted facets, but the literal still gets standard `''`-escaping
+ *  defensively so a name containing a single quote can't break the
+ *  surrounding SQL. */
+const inlineJsonPath = (name: string): string => {
+  const path = jsonPathForProperty(name)
+  return `'${path.replaceAll("'", "''")}'`
+}
+
 interface CompiledClause {
   readonly sql: string
   readonly params: readonly unknown[]
@@ -130,7 +144,7 @@ const compileTargetTraversal = (
     )
   }
   const alias = `d${aliasCounter.n++}`
-  const targetPath = jsonPathForProperty(name)
+  const refExtract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
   const innerEntries = Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))
   const innerClauses: string[] = []
   const innerParams: unknown[] = []
@@ -150,18 +164,18 @@ const compileTargetTraversal = (
     return {
       sql:
         `EXISTS (SELECT 1 FROM blocks ${alias} ` +
-        `WHERE ${alias}.id = json_extract(${jsonExpr}, ?) ` +
+        `WHERE ${alias}.id = ${refExtract} ` +
         `AND ${alias}.deleted = 0${inWhere})`,
-      params: [targetPath, ...innerParams],
+      params: innerParams,
     }
   }
   // refList: target value is an array of ids — fan out via json_each.
   return {
     sql:
-      `EXISTS (SELECT 1 FROM json_each(json_extract(${jsonExpr}, ?)) AS je ` +
+      `EXISTS (SELECT 1 FROM json_each(${refExtract}) AS je ` +
       `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
       `WHERE ${alias}.deleted = 0${inWhere})`,
-    params: [targetPath, ...innerParams],
+    params: innerParams,
   }
 }
 
@@ -179,17 +193,17 @@ const compileWhereClause = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  const path = jsonPathForProperty(name)
+  const extract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
   const parsed = parseWhereValue(name, value)
 
   // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
   // they're orthogonal to the codec's encoding contract (and
   // codec.where.encode rejects null/undefined by design).
   if (parsed.kind === 'unset') {
-    return {sql: `json_extract(${jsonExpr}, ?) IS NULL`, params: [path]}
+    return {sql: `${extract} IS NULL`, params: []}
   }
   if (parsed.kind === 'set') {
-    return {sql: `json_extract(${jsonExpr}, ?) IS NOT NULL`, params: [path]}
+    return {sql: `${extract} IS NOT NULL`, params: []}
   }
   if (parsed.kind === 'target') {
     return compileTargetTraversal(name, parsed.inner, schema, jsonExpr, propertySchemas, aliasCounter)
@@ -198,14 +212,14 @@ const compileWhereClause = (
     const lo = encodeForWhere(name, schema, parsed.lo)
     const hi = encodeForWhere(name, schema, parsed.hi)
     return {
-      sql: `json_extract(${jsonExpr}, ?) BETWEEN ? AND ?`,
-      params: [path, lo, hi],
+      sql: `${extract} BETWEEN ? AND ?`,
+      params: [lo, hi],
     }
   }
   const operand = encodeForWhere(name, schema, parsed.operand)
   return {
-    sql: `json_extract(${jsonExpr}, ?) ${COMPARATOR_SQL[parsed.op]} ?`,
-    params: [path, operand],
+    sql: `${extract} ${COMPARATOR_SQL[parsed.op]} ?`,
+    params: [operand],
   }
 }
 
