@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
 import { Filter, Pause, Play } from 'lucide-react'
-import type { BlockRendererProps } from '@/types.ts'
 import { Block } from '@/data/block'
 import { useWorkspaceId } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
 import { BacklinkFilters } from '@/plugins/backlinks/BacklinkFilters.tsx'
 import { LazyBacklinkItem } from '@/plugins/backlinks/BacklinkEntry.tsx'
+import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.ts'
+import { BacklinksEmptyState } from '@/plugins/backlinks-view/BacklinksEmptyState.tsx'
 import {
   hasBacklinksFilter,
   type BacklinksFilter,
@@ -145,7 +146,7 @@ const GroupedReferencesGroup = ({
   )
 }
 
-export function GroupedLinkedReferences({block}: BlockRendererProps) {
+export function GroupedLinkedReferences({block, controls}: BacklinksViewRendererProps) {
   const repo = useRepo()
   const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
 
@@ -154,6 +155,7 @@ export function GroupedLinkedReferences({block}: BlockRendererProps) {
       key={`${workspaceId}:${block.id}`}
       block={block}
       workspaceId={workspaceId}
+      controls={controls}
     />
   )
 }
@@ -161,6 +163,7 @@ export function GroupedLinkedReferences({block}: BlockRendererProps) {
 interface SharedViewProps {
   block: Block
   workspaceId: string
+  controls?: BacklinksViewRendererProps['controls']
   open: boolean
   setOpen: Dispatch<SetStateAction<boolean>>
   filter: BacklinksFilter
@@ -175,9 +178,11 @@ interface SharedViewProps {
 function GroupedLinkedReferencesInner({
   block,
   workspaceId,
+  controls,
 }: {
   block: Block
   workspaceId: string
+  controls?: BacklinksViewRendererProps['controls']
 }) {
   const {
     filter,
@@ -236,6 +241,7 @@ function GroupedLinkedReferencesInner({
   const shared: SharedViewProps = {
     block,
     workspaceId,
+    controls,
     open,
     setOpen,
     filter,
@@ -357,6 +363,7 @@ function FrozenGroupedReferencesBody({
 
 function GroupedReferencesView({
   workspaceId,
+  controls,
   data,
   liveUpdates,
   onToggleLiveUpdates,
@@ -376,82 +383,85 @@ function GroupedReferencesView({
 }) {
   const {unfilteredBacklinks, grouped, initialParentsByBacklinkId} = data
 
-  if (unfilteredBacklinks.length === 0) return null
+  if (unfilteredBacklinks.length === 0) return <BacklinksEmptyState controls={controls}/>
 
   const countLabel = filterActive
     ? `${grouped.total} / ${unfilteredBacklinks.length}`
     : String(grouped.total)
 
   return (
-    <div className="mt-4 pt-3 border-t border-border">
-      <div className="flex items-center justify-between gap-2">
-        <button
-          type="button"
-          onClick={() => setOpen(prev => !prev)}
-          className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
-        >
-          <span className="text-base leading-none">{open ? '▾' : '▸'}</span>
-          <span>Grouped References</span>
-          <span className="text-xs text-muted-foreground/70">{countLabel}</span>
-        </button>
-        <div className="flex shrink-0 items-center gap-0.5">
+    <>
+      {controls}
+      <div className="mt-4 pt-3 border-t border-border">
+        <div className="flex items-center justify-between gap-2">
           <button
             type="button"
-            onClick={onToggleLiveUpdates}
-            className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              !liveUpdates ? 'bg-accent text-foreground' : ''
-            }`}
-            title={liveUpdates ? 'Pause live updates' : 'Resume live updates'}
-            aria-label={liveUpdates ? 'Pause live updates' : 'Resume live updates'}
-            aria-pressed={!liveUpdates}
+            onClick={() => setOpen(prev => !prev)}
+            className="flex min-w-0 items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
           >
-            {liveUpdates ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            <span className="text-base leading-none">{open ? '▾' : '▸'}</span>
+            <span>Grouped References</span>
+            <span className="text-xs text-muted-foreground/70">{countLabel}</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
-            className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-              filterActive ? 'bg-accent text-foreground' : ''
-            }`}
-            title="Filters"
-            aria-label="Filters"
-            aria-pressed={filtersOpen}
-          >
-            <Filter className="h-4 w-4" />
-          </button>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <button
+              type="button"
+              onClick={onToggleLiveUpdates}
+              className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                !liveUpdates ? 'bg-accent text-foreground' : ''
+              }`}
+              title={liveUpdates ? 'Pause live updates' : 'Resume live updates'}
+              aria-label={liveUpdates ? 'Pause live updates' : 'Resume live updates'}
+              aria-pressed={!liveUpdates}
+            >
+              {liveUpdates ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltersOpenOverride(prev => !(prev ?? filterActive))}
+              className={`rounded-sm p-1 text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+                filterActive ? 'bg-accent text-foreground' : ''
+              }`}
+              title="Filters"
+              aria-label="Filters"
+              aria-pressed={filtersOpen}
+            >
+              <Filter className="h-4 w-4" />
+            </button>
+          </div>
         </div>
-      </div>
 
-      {open && (
-        <>
-          {filtersOpen && workspaceId && (
-            <BacklinkFilters
-              workspaceId={workspaceId}
-              filter={filter}
-              baseFilter={defaultFilter}
-              baseLabel="Daily note defaults"
-              baseConfigLabel="Open daily note defaults"
-              onBaseConfigClick={openDefaultFilterConfig}
-              onChange={setFilter}
-            />
-          )}
-          {grouped.total === 0 ? (
-            <div className="mt-3 text-xs text-muted-foreground">
-              No matching references.
-            </div>
-          ) : (
-            <div className="mt-3 flex flex-col gap-4">
-              {grouped.groups.map(group => (
-                <GroupedReferencesGroup
-                  key={group.groupId}
-                  group={group}
-                  parentsBySourceId={initialParentsByBacklinkId}
-                />
-              ))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
+        {open && (
+          <>
+            {filtersOpen && workspaceId && (
+              <BacklinkFilters
+                workspaceId={workspaceId}
+                filter={filter}
+                baseFilter={defaultFilter}
+                baseLabel="Daily note defaults"
+                baseConfigLabel="Open daily note defaults"
+                onBaseConfigClick={openDefaultFilterConfig}
+                onChange={setFilter}
+              />
+            )}
+            {grouped.total === 0 ? (
+              <div className="mt-3 text-xs text-muted-foreground">
+                No matching references.
+              </div>
+            ) : (
+              <div className="mt-3 flex flex-col gap-4">
+                {grouped.groups.map(group => (
+                  <GroupedReferencesGroup
+                    key={group.groupId}
+                    group={group}
+                    parentsBySourceId={initialParentsByBacklinkId}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </>
   )
 }

@@ -1,6 +1,13 @@
 import type { BlockResolveContext } from '@/extensions/blockInteraction.ts'
 import { defineVariantFacet, type Variant } from '@/extensions/variantFacet.ts'
-import type { BlockRenderer } from '@/types.ts'
+import type { ComponentType, ReactNode } from 'react'
+import type { BlockRendererProps } from '@/types.ts'
+
+export interface BacklinksViewRendererProps extends BlockRendererProps {
+  controls?: ReactNode
+}
+
+export type BacklinksViewRenderer = ComponentType<BacklinksViewRendererProps>
 
 /**
  * Variant facet for the "Linked References" footer section. The
@@ -14,8 +21,8 @@ import type { BlockRenderer } from '@/types.ts'
  * subscribe — switching genuinely stops the inactive view's work
  * without any `enabled` plumbing.
  */
-export type BacklinksViewVariant = Variant<BlockRenderer>
+export type BacklinksViewVariant = Variant<BacklinksViewRenderer>
 
-export const backlinksViewFacet = defineVariantFacet<BlockResolveContext, BlockRenderer>({
+export const backlinksViewFacet = defineVariantFacet<BlockResolveContext, BacklinksViewRenderer>({
   id: 'backlinks-view.variants',
 })

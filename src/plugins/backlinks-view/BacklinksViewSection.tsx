@@ -6,9 +6,6 @@ import type {
 } from '@/extensions/blockInteraction.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useUserPrefsProperty } from '@/data/globalState.ts'
-import { useWorkspaceId } from '@/hooks/block.ts'
-import { useRepo } from '@/context/repo.tsx'
-import { useBacklinks } from '@/plugins/backlinks/useBacklinks.ts'
 import { backlinksViewFacet } from './facet.ts'
 import { backlinksViewProp } from './prop.ts'
 
@@ -26,16 +23,13 @@ interface Props extends BlockRendererProps {
  *   their queries, since their hooks live inside their components and
  *   only mount when rendered
  *
- * The "are there any backlinks?" gate is hoisted up here so the picker
- * doesn't appear above a block with no references. Both the variant's
- * internal gate and this one subscribe to the same query handle —
- * the data layer dedupes the underlying query.
+ * The "are there any backlinks?" gate lives inside the selected variant,
+ * which receives `controls` and decides whether to render them. That lets
+ * grouped backlinks gate from its grouped snapshot instead of forcing this
+ * coordinator to run an unconditional flat backlinks query first.
  */
 export function BacklinksViewSection({block, resolveContext}: Props) {
   const runtime = useAppRuntime()
-  const repo = useRepo()
-  const workspaceId = useWorkspaceId(block, repo.activeWorkspaceId ?? '')
-  const backlinks = useBacklinks(block, workspaceId)
 
   const variants = useMemo(
     () => runtime.read(backlinksViewFacet)(resolveContext).all,
@@ -46,43 +40,36 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
   const selected = variants.find(v => v.id === savedId) ?? variants[0]
 
   if (!selected) return null
-  // Mirror the legacy variant gate — render nothing for blocks without
-  // any backlinks. Keeps the picker from dangling on empty pages.
-  if (backlinks.length === 0) return null
 
   const Selected = selected.render
-
-  return (
-    <>
-      {variants.length > 1 && (
-        <div
-          className="mt-4 inline-flex items-center gap-0.5 text-xs text-muted-foreground"
-          role="group"
-          aria-label="Backlinks view"
-        >
-          {variants.map(variant => {
-            const active = variant.id === selected.id
-            return (
-              <button
-                key={variant.id}
-                type="button"
-                onClick={() => setSavedId(variant.id)}
-                className={`rounded-sm px-1.5 py-0.5 leading-4 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
-                  active
-                    ? 'bg-accent text-foreground'
-                    : 'hover:bg-accent/50 hover:text-foreground'
-                }`}
-                aria-pressed={active}
-              >
-                {variant.label}
-              </button>
-            )
-          })}
-        </div>
-      )}
-      <Selected block={block}/>
-    </>
+  const controls = variants.length > 1 && (
+    <div
+      className="mt-4 inline-flex items-center gap-0.5 text-xs text-muted-foreground"
+      role="group"
+      aria-label="Backlinks view"
+    >
+      {variants.map(variant => {
+        const active = variant.id === selected.id
+        return (
+          <button
+            key={variant.id}
+            type="button"
+            onClick={() => setSavedId(variant.id)}
+            className={`rounded-sm px-1.5 py-0.5 leading-4 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${
+              active
+                ? 'bg-accent text-foreground'
+                : 'hover:bg-accent/50 hover:text-foreground'
+            }`}
+            aria-pressed={active}
+          >
+            {variant.label}
+          </button>
+        )
+      })}
+    </div>
   )
+
+  return <Selected block={block} controls={controls || undefined}/>
 }
 
 /** Coordinator footer contribution. Captures the resolve context so
