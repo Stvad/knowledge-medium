@@ -173,4 +173,20 @@ describe('consumeAppIntent', () => {
     const dailyChildren = await env.repo.block(daily.id).childIds.load()
     expect(dailyChildren).toHaveLength(1)
   })
+
+  it('preserves URL params when the dispatch no-ops in read-only mode', async () => {
+    const {daily, layoutSession} = await seedLandingLayout()
+    env.repo.setReadOnly(true)
+    const sharedQuery = '?intent=share&text=Important%20note'
+    setLocationSearch(sharedQuery)
+
+    await consumeAppIntent(env.repo, layoutSession)
+
+    // No block created — appendTodayDailyBlockInStack early-returns
+    // when read-only — and the URL still carries the share payload
+    // so a reload (after read-only is lifted) can retry.
+    const dailyChildren = await env.repo.block(daily.id).childIds.load()
+    expect(dailyChildren).toHaveLength(0)
+    expect(window.location.search).toBe(sharedQuery)
+  })
 })

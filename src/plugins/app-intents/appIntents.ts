@@ -95,17 +95,23 @@ export const consumeAppIntent = async (
   const isNewBlock = intent === 'new-daily-block'
   if (!isShare && !isNewBlock) return
 
-  // Mark consumed and strip params BEFORE awaiting any work, so a
-  // re-entrant call (e.g. React strict-mode double-invoke of the
-  // bootstrap effect) doesn't dispatch the intent twice.
+  // Flip the module-level guard BEFORE awaiting so a re-entrant
+  // call (e.g. React strict-mode double-invoke of the bootstrap
+  // effect) doesn't dispatch the same intent twice. We do NOT
+  // strip the URL params here — that has to wait until we know
+  // the dispatch actually produced a block, otherwise a no-op
+  // (read-only mode, missing workspace) or a thrown mutator would
+  // silently drop the shared payload with no way to recover.
   consumed = true
-  stripIntentParams()
 
-  if (isShare) {
-    const content = formatSharedContent(title, text, sharedUrl)
-    await appendTodayDailyBlockInStack(repo, layoutSessionBlock, {content})
-    return
-  }
+  const dispatched = isShare
+    ? await appendTodayDailyBlockInStack(repo, layoutSessionBlock, {
+      content: formatSharedContent(title, text, sharedUrl),
+    })
+    : await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
 
-  await appendTodayDailyBlockInStack(repo, layoutSessionBlock)
+  // Only strip on a successful dispatch. On no-op, leave the
+  // params so a reload (which resets `consumed`) can retry once
+  // the read-only / no-workspace condition has been resolved.
+  if (dispatched !== null) stripIntentParams()
 }

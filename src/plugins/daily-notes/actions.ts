@@ -104,17 +104,25 @@ const openDailyNoteByOffset = async (repo: Repo, offsetDays: number) => {
  *  sidebar-stacked panel ready for editing. Shared between the
  *  `append_today_daily_block` keyboard action and the
  *  `consumeAppIntent` PWA-shortcut / share-target dispatcher in
- *  `appIntents.ts` — both want the exact same UX (drop the user into
- *  a fresh, focused, editable block on today's note); content lets
- *  the share-target seed the block with the shared title/text/URL.
- *  Cursor lands at end-of-content so the user can keep typing. */
+ *  the app-intents plugin — both want the exact same UX (drop the
+ *  user into a fresh, focused, editable block on today's note);
+ *  `content` lets the share-target seed the block with the shared
+ *  title/text/URL. Cursor lands at end-of-content so the user can
+ *  keep typing.
+ *
+ *  Returns the new block id on success, or `null` when nothing was
+ *  done (no active workspace, or read-only mode). The PWA-intent
+ *  dispatcher inspects the return value before stripping the URL
+ *  params — that way a shared payload that hits a read-only repo
+ *  isn't silently lost (the params survive so a reload, after the
+ *  user exits read-only mode, retries the dispatch). */
 export const appendTodayDailyBlockInStack = async (
   repo: Repo,
   layoutSessionBlock: Block,
   options: {content?: string} = {},
-): Promise<void> => {
+): Promise<string | null> => {
   const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId || repo.isReadOnly) return
+  if (!workspaceId || repo.isReadOnly) return null
 
   const content = options.content
   const note = await getOrCreateDailyNote(repo, workspaceId, todayIso())
@@ -134,6 +142,8 @@ export const appendTodayDailyBlockInStack = async (
     await tx.setProperty(panelId, editorSelection, selection)
     await tx.setProperty(panelId, isEditingProp, true)
   }, {scope: ChangeScope.UiState, description: 'edit new daily block'})
+
+  return blockId
 }
 
 export const dailyNotesActions = (
