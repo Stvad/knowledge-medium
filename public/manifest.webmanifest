@@ -1,12 +1,17 @@
 {
   "name": "Knowledge Medium",
-  "short_name": "Knowledge",
+  "short_name": "Knowledge Medium",
+  "id": ".",
   "description": "A malleable, offline-first medium for knowledge work.",
+  "categories": ["productivity", "utilities"],
+  "lang": "en",
+  "dir": "ltr",
   "start_url": ".",
   "scope": ".",
   "launch_handler": {
     "client_mode": ["focus-existing", "auto"]
   },
+  "handle_links": "preferred",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "background_color": "#1e1b4b",
