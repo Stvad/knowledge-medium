@@ -9,7 +9,6 @@
   },
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "orientation": "any",
   "background_color": "#1e1b4b",
   "theme_color": "#1e1b4b",
   "icons": [
