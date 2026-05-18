@@ -82,7 +82,6 @@ export {
   appendTodayDailyBlockInStack,
   resolveCurrentDailyNoteIso,
 } from './actions.ts'
-export { consumeAppIntent } from './appIntents.ts'
 export {
   openDailyNotePicker,
   openDailyNotePickerEvent,

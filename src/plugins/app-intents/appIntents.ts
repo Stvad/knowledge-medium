@@ -1,25 +1,32 @@
 /**
  * PWA-shortcut and Web Share Target dispatcher.
  *
- * The manifest exposes two URL surfaces that land back in the SPA:
- *   - shortcuts and `note_taking.new_note_url` → `./?intent=new-daily-block`
- *   - share_target action                     → `./?intent=share&title=…&text=…&url=…`
+ * The manifest exposes three URL surfaces that land back in the SPA:
+ *   - shortcuts                  → `./?intent=new-daily-block`
+ *   - share_target action        → `./?intent=share&title=…&text=…&url=…`
+ *   - note_taking.new_note_url   → `./?intent=new-daily-block`
  *
- * Both should drop the user into a freshly-created block on today's
+ * Each should drop the user into a freshly-created block on today's
  * daily note (the share-target variant pre-fills it with the shared
- * payload). We delegate to `appendTodayDailyBlockInStack` so the UX
- * matches Ctrl+Shift+N exactly — same panel placement, same focus,
- * same editing state.
+ * payload). We delegate to `appendTodayDailyBlockInStack` from the
+ * daily-notes plugin so the UX matches Ctrl+Shift+N exactly — same
+ * panel placement, same focus, same editing state.
  *
- * The handler runs once per page load (module-level `consumed` flag),
- * after `App.tsx` has resolved the layout session block. It clears
- * the consumed query params via `history.replaceState` so reloads
- * (or a later share that lands on the same tab) don't replay the
- * intent.
+ * The dispatcher runs once per page load (module-level `consumed`
+ * flag), fired by `appIntentsBootstrapEffect` once the workspace's
+ * UI-state and layout-session blocks are resolvable. It strips the
+ * consumed query params via `history.replaceState` so reloads (or a
+ * later share landing on the same tab) don't replay the intent.
+ *
+ * Lives in its own plugin (rather than inside daily-notes) because
+ * the intent surface is a property of the app shell, not of daily
+ * notes — when future intents resolve to a different target
+ * (e.g. an "open last panel" or a tag-quick-add flow) they can grow
+ * here without daily-notes owning them all.
  */
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
-import { appendTodayDailyBlockInStack } from './actions.ts'
+import { appendTodayDailyBlockInStack } from '@/plugins/daily-notes'
 
 const INTENT_PARAMS = ['intent', 'title', 'text', 'url'] as const
 

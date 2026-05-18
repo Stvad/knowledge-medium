@@ -28,6 +28,7 @@ import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
 import { backlinksViewPlugin } from '@/plugins/backlinks-view'
 import { updateIndicatorPlugin } from '@/plugins/update-indicator'
 import { agentRuntimePlugin } from '@/plugins/agent-runtime'
+import { appIntentsPlugin } from '@/plugins/app-intents'
 import { roamImportPlugin } from '@/plugins/roam-import'
 import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
@@ -85,4 +86,12 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   updateIndicatorPlugin,
   agentRuntimePlugin,
   roamImportPlugin({repo}),
+  // appIntentsPlugin's bootstrap effect resolves the layout-session
+  // block via getUIStateBlock + getLayoutSessionBlock and then
+  // dispatches any PWA-shortcut / share-target / note-taker intent
+  // captured in the URL. Registered last so it runs after every
+  // other plugin's data-layer setup is in place — the dispatch may
+  // call appendTodayDailyBlockInStack, which depends on the
+  // daily-notes data extension being live.
+  appIntentsPlugin,
 ]

@@ -19,7 +19,7 @@ import {
   panelRowsInLayoutOrder,
 } from '@/utils/panelLayoutProjection'
 import { __resetAppIntentForTesting, consumeAppIntent, formatSharedContent } from '../appIntents.ts'
-import { dailyNotesDataExtension, getOrCreateDailyNote } from '../index.ts'
+import { dailyNotesDataExtension, getOrCreateDailyNote } from '@/plugins/daily-notes'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
