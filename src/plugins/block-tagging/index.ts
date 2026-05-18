@@ -4,11 +4,16 @@ import type { AppExtension } from '@/extensions/facet.ts'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
 import { blockTaggingDataExtension } from './dataExtension.ts'
 import { blockTagsConfigUi } from './propertyEditorOverride.ts'
-import { addTagAction, addTagGroupHeaderEntry } from './addTagAction.ts'
+import {
+  addTagAction,
+  addTagBlockAction,
+  addTagGroupHeaderEntry,
+} from './addTagAction.ts'
 
 export const blockTaggingPlugin: AppExtension = [
   blockTaggingDataExtension,
   propertyEditorOverridesFacet.of(blockTagsConfigUi, {source: 'block-tagging'}),
+  actionsFacet.of(addTagBlockAction, {source: 'block-tagging'}),
   actionsFacet.of(addTagAction, {source: 'block-tagging'}),
   groupedBacklinksGroupHeaderActionsFacet.of(
     addTagGroupHeaderEntry,

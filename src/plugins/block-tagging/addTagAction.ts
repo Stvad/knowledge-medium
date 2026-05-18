@@ -1,7 +1,9 @@
 import { Tag } from 'lucide-react'
+import type { Block } from '@/data/block'
 import {
   ActionContextTypes,
   type ActionConfig,
+  type BlockShortcutDependencies,
   type MultiSelectModeDependencies,
 } from '@/shortcuts/types.ts'
 import { showError, showSuccess } from '@/utils/toast.ts'
@@ -12,18 +14,51 @@ import { appendTagToBlocks } from './appendTag.ts'
 
 export const ADD_TAG_ACTION_ID = 'block-tagging.add-tag'
 
-/** Append a `[[name]]` reference to every block in
- *  `selectedBlocks`. Opens a picker so the user can choose from the
- *  configured tag list (workspace-scoped, stored under
- *  `blockTagging:tagsConfig` on the user-prefs block) or type a one-off
- *  name. Blocks that already carry the tag are skipped.
- *
- *  Why a picker rather than per-tag buttons: keeping the surface as a
- *  single ActionConfig means tagging works the same from the command
- *  palette, real multi-select, and the grouped-backlinks header
- *  without any dynamic-facet plumbing. The user picks once per
- *  invocation — cheap for the common case where the configured list
- *  is short. */
+/** Shared flow: pick a tag (one dialog per invocation) and append it
+ *  to every block in `blocks`. Used by both the NORMAL_MODE
+ *  (single-block) and MULTI_SELECT_MODE (whole selection) action
+ *  variants — the dialog still opens exactly once regardless of how
+ *  many blocks are being tagged. */
+const runAddTagFlow = async (blocks: readonly Block[]): Promise<void> => {
+  if (blocks.length === 0) return
+  const choice = await openDialog(AddTagDialog)
+  if (!choice) return
+  try {
+    const result = await appendTagToBlocks(blocks, choice.tagName)
+    if (result.updated > 0) {
+      showSuccess(
+        `Tagged ${result.updated} block${result.updated === 1 ? '' : 's'} with [[${choice.tagName}]]`,
+      )
+    } else if (result.alreadyTagged > 0) {
+      showError(`Every selected block already carries [[${choice.tagName}]]`)
+    } else {
+      showError('No blocks were tagged')
+    }
+  } catch (error) {
+    showError(
+      error instanceof Error ? error.message : 'Failed to tag blocks',
+    )
+  }
+}
+
+/** NORMAL_MODE entry point — the focused single block. Lets the
+ *  command palette and any future shortcut binding tag the block the
+ *  user is currently on without first entering multi-select. */
+export const addTagBlockAction: ActionConfig<
+  typeof ActionContextTypes.NORMAL_MODE
+> = {
+  id: ADD_TAG_ACTION_ID,
+  description: 'Tag block',
+  context: ActionContextTypes.NORMAL_MODE,
+  icon: Tag,
+  handler: ({block}: BlockShortcutDependencies) => runAddTagFlow([block]),
+}
+
+/** MULTI_SELECT_MODE entry point — the whole selection (or whatever
+ *  blocks the group-header surface synthesizes as `selectedBlocks`).
+ *  Shares the action id with `addTagBlockAction` so callers don't
+ *  have to disambiguate; the shortcut system resolves to the right
+ *  variant based on the active context. */
 export const addTagAction: ActionConfig<
   typeof ActionContextTypes.MULTI_SELECT_MODE
 > = {
@@ -33,26 +68,8 @@ export const addTagAction: ActionConfig<
   icon: Tag,
   canRun: ({selectedBlocks}: MultiSelectModeDependencies) =>
     selectedBlocks.length > 0,
-  handler: async ({selectedBlocks}: MultiSelectModeDependencies) => {
-    const choice = await openDialog(AddTagDialog)
-    if (!choice) return
-    try {
-      const result = await appendTagToBlocks(selectedBlocks, choice.tagName)
-      if (result.updated > 0) {
-        showSuccess(
-          `Tagged ${result.updated} block${result.updated === 1 ? '' : 's'} with [[${choice.tagName}]]`,
-        )
-      } else if (result.alreadyTagged > 0) {
-        showError(`Every selected block already carries [[${choice.tagName}]]`)
-      } else {
-        showError('No blocks were tagged')
-      }
-    } catch (error) {
-      showError(
-        error instanceof Error ? error.message : 'Failed to tag blocks',
-      )
-    }
-  },
+  handler: ({selectedBlocks}: MultiSelectModeDependencies) =>
+    runAddTagFlow(selectedBlocks),
 }
 
 export const addTagGroupHeaderEntry: GroupedBacklinksGroupHeaderAction = {

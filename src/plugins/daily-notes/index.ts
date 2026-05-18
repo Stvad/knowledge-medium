@@ -69,6 +69,7 @@ import {
   rescheduleQuickActionItem,
 } from './rescheduleAction.ts'
 import {
+  spreadBlockDateAction,
   spreadBlockDatesAction,
   spreadBlockDatesGroupHeaderEntry,
 } from './spreadDatesAction.ts'
@@ -159,6 +160,7 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   ),
   actionsFacet.of(rescheduleBlockDateAction, {source: 'daily-notes'}),
   quickActionItemsFacet.of(rescheduleQuickActionItem, {source: 'daily-notes'}),
+  actionsFacet.of(spreadBlockDateAction, {source: 'daily-notes'}),
   actionsFacet.of(spreadBlockDatesAction, {source: 'daily-notes'}),
   groupedBacklinksGroupHeaderActionsFacet.of(
     spreadBlockDatesGroupHeaderEntry,
@@ -213,6 +215,7 @@ export {
 } from './rescheduleAction.ts'
 export {
   SPREAD_BLOCK_DATES_ACTION_ID,
+  spreadBlockDateAction,
   spreadBlockDatesAction,
   spreadBlockDatesGroupHeaderEntry,
 } from './spreadDatesAction.ts'

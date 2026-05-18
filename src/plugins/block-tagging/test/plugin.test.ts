@@ -28,13 +28,18 @@ describe('blockTaggingPlugin', () => {
     expect(typeof override?.Editor).toBe('function')
   })
 
-  it('registers the add-tag MULTI_SELECT action with a Tag icon', () => {
+  it('registers the add-tag action in both NORMAL_MODE and MULTI_SELECT_MODE', () => {
     const runtime = resolveFacetRuntimeSync(blockTaggingPlugin)
-    const actions = runtime.read(actionsFacet)
-    const action = actions.find(a => a.id === ADD_TAG_ACTION_ID)
-    expect(action?.context).toBe(ActionContextTypes.MULTI_SELECT_MODE)
-    expect(action?.icon).toBe(Tag)
-    expect(typeof action?.canRun).toBe('function')
+    const actions = runtime.read(actionsFacet).filter(a => a.id === ADD_TAG_ACTION_ID)
+    expect(actions.map(a => a.context).sort()).toEqual([
+      ActionContextTypes.MULTI_SELECT_MODE,
+      ActionContextTypes.NORMAL_MODE,
+    ].sort())
+    for (const action of actions) {
+      expect(action.icon).toBe(Tag)
+    }
+    const multiSelect = actions.find(a => a.context === ActionContextTypes.MULTI_SELECT_MODE)
+    expect(typeof multiSelect?.canRun).toBe('function')
   })
 
   it('contributes a grouped-backlinks header entry pointing at the action', () => {

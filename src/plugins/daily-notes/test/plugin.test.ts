@@ -3,6 +3,7 @@ import { actionsFacet, appMountsFacet, headerItemsFacet } from '@/extensions/cor
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { typesFacet } from '@/data/facets.ts'
 import { groupedBacklinksGroupHeaderActionsFacet } from '@/plugins/grouped-backlinks/facet.ts'
+import { ActionContextTypes } from '@/shortcuts/types.ts'
 import { quickActionItemsFacet } from '@/plugins/swipe-quick-actions'
 import {
   DAILY_NOTE_TYPE,
@@ -55,12 +56,17 @@ describe('dailyNotesPlugin', () => {
     ])
   })
 
-  it('contributes the generic spread-dates action and grouped-backlinks entry', () => {
+  it('contributes spread-dates in both NORMAL_MODE and MULTI_SELECT_MODE plus the grouped-backlinks entry', () => {
     const fakeRepo = {} as Parameters<typeof dailyNotesPlugin>[0]['repo']
     const runtime = resolveFacetRuntimeSync(dailyNotesPlugin({repo: fakeRepo}))
 
-    const actions = runtime.read(actionsFacet)
-    expect(actions.map(a => a.id)).toContain(SPREAD_BLOCK_DATES_ACTION_ID)
+    const spreadActions = runtime
+      .read(actionsFacet)
+      .filter(a => a.id === SPREAD_BLOCK_DATES_ACTION_ID)
+    expect(spreadActions.map(a => a.context).sort()).toEqual([
+      ActionContextTypes.MULTI_SELECT_MODE,
+      ActionContextTypes.NORMAL_MODE,
+    ].sort())
 
     const entries = runtime.read(groupedBacklinksGroupHeaderActionsFacet)
     expect(entries.map(e => e.actionId)).toContain(SPREAD_BLOCK_DATES_ACTION_ID)
