@@ -174,7 +174,7 @@ export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   workspaceLandingFacet.of(todayDailyNoteLanding, {source: 'daily-notes'}),
 ]
 
-export { DAILY_NOTE_TYPE, dailyNoteType } from './schema.ts'
+export { DAILY_NOTE_TYPE, dailyNoteDateProp, dailyNoteType } from './schema.ts'
 export { dailyNotesDataExtension } from './dataExtension.ts'
 export {
   DATE_SHIFT_BACKWARD_DAY_ACTION_ID,

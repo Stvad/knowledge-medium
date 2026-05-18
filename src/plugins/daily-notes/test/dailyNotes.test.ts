@@ -17,6 +17,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp } from '@/data/properties'
 import { PAGE_TYPE } from '@/data/blockTypes'
+import { dailyNoteDateProp } from '@/plugins/daily-notes/schema.ts'
+import {
+  backfillDailyNoteDatePropertyIfNeeded,
+  DAILY_NOTE_DATE_BACKFILL_MARKER_KEY,
+} from '@/plugins/daily-notes/localSchema.ts'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -156,6 +161,13 @@ describe('getOrCreateDailyNote', () => {
     expect(aliases?.[0]).toMatch(/2026/)
   })
 
+  it('populates the indexable date property at creation', async () => {
+    const note = await getOrCreateDailyNote(env.repo, WS, ISO)
+    const stored = note.peekProperty(dailyNoteDateProp)
+    expect(stored).toBeInstanceOf(Date)
+    expect(stored?.toISOString()).toBe('2026-04-28T00:00:00.000Z')
+  })
+
   it('links the daily note as a child of the journal', async () => {
     const note = await getOrCreateDailyNote(env.repo, WS, ISO)
     const journalId = journalBlockId(WS)
@@ -230,5 +242,110 @@ describe('getOrCreateDailyNote', () => {
     expect(restored.peek()?.parentId).toBe(journalBlockId(WS))
     expect(restored.hasType(PAGE_TYPE)).toBe(true)
     expect(restored.hasType(DAILY_NOTE_TYPE)).toBe(true)
+    expect(restored.peekProperty(dailyNoteDateProp)?.toISOString())
+      .toBe('2026-04-28T00:00:00.000Z')
+  })
+})
+
+describe('backfillDailyNoteDatePropertyIfNeeded', () => {
+  /** Test harness mirror of `LocalSchemaDb` over the PowerSync handle
+   *  in `env.h.db`. Production `repoProvider` builds the same shim. */
+  const localDb = (h: TestDb) => ({
+    execute: (sql: string) => h.db.execute(sql),
+    getOptional: async <T,>(sql: string): Promise<T | null> => {
+      const row = await h.db.getOptional<T>(sql)
+      return row ?? null
+    },
+  })
+
+  /** createTestDb's template runs `applyLocalSchemaContributions` at
+   *  init time, which records this backfill's marker on an empty DB.
+   *  Tests that exercise the backfill itself need to clear that marker
+   *  first so the gate doesn't short-circuit. */
+  const resetBackfillMarker = async () => {
+    await env.h.db.execute(
+      'DELETE FROM client_schema_state WHERE key = ?',
+      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
+    )
+  }
+
+  /** Bypass the codec write path to simulate a legacy row: daily-note
+   *  type with ISO aliases but no `dailyNoteDateProp` value. The
+   *  `tx.update` raw-properties path lets us drop the new property
+   *  without it being repopulated by `addTypeInTx`. */
+  const seedLegacyDailyNote = async (iso: string): Promise<string> => {
+    const note = await getOrCreateDailyNote(env.repo, WS, iso)
+    await env.repo.tx(async tx => {
+      const current = await tx.get(note.id)
+      if (!current) return
+      const props = {...current.properties}
+      delete props[dailyNoteDateProp.name]
+      await tx.update(note.id, {properties: props})
+    }, {scope: ChangeScope.BlockDefault})
+    return note.id
+  }
+
+  it('populates the date property from the ISO alias for legacy rows', async () => {
+    const id = await seedLegacyDailyNote('2026-04-28')
+
+    const before = await env.h.db.getAll<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?',
+      [id],
+    )
+    const beforeParsed = JSON.parse(before[0]?.properties_json ?? '{}')
+    expect(beforeParsed[dailyNoteDateProp.name]).toBeUndefined()
+
+    await resetBackfillMarker()
+    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
+
+    // Backfill writes via raw UPDATE so the cached row would otherwise
+    // serve the pre-backfill properties; check the DB row directly.
+    const after = await env.h.db.getAll<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?',
+      [id],
+    )
+    const afterParsed = JSON.parse(after[0]?.properties_json ?? '{}')
+    expect(afterParsed[dailyNoteDateProp.name]).toBe('2026-04-28T00:00:00.000Z')
+  })
+
+  it('records the marker so subsequent calls noop', async () => {
+    await seedLegacyDailyNote('2026-04-28')
+    await resetBackfillMarker()
+    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
+
+    const marker = await env.h.db.getAll<{key: string}>(
+      'SELECT key FROM client_schema_state WHERE key = ?',
+      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
+    )
+    expect(marker).toHaveLength(1)
+
+    // Drop the property again post-marker; the second invocation must
+    // not re-populate (one-shot semantic).
+    const id = dailyNoteBlockId(WS, '2026-04-28')
+    await env.repo.tx(async tx => {
+      const current = await tx.get(id)
+      if (!current) return
+      const props = {...current.properties}
+      delete props[dailyNoteDateProp.name]
+      await tx.update(id, {properties: props})
+    }, {scope: ChangeScope.BlockDefault})
+
+    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
+    const reloadedRow = await env.h.db.getAll<{properties_json: string}>(
+      'SELECT properties_json FROM blocks WHERE id = ?',
+      [id],
+    )
+    const reloadedProps = JSON.parse(reloadedRow[0]?.properties_json ?? '{}')
+    expect(reloadedProps[dailyNoteDateProp.name]).toBeUndefined()
+  })
+
+  it('noops on an empty workspace and still records the marker', async () => {
+    await resetBackfillMarker()
+    await backfillDailyNoteDatePropertyIfNeeded(localDb(env.h))
+    const marker = await env.h.db.getAll<{key: string}>(
+      'SELECT key FROM client_schema_state WHERE key = ?',
+      [DAILY_NOTE_DATE_BACKFILL_MARKER_KEY],
+    )
+    expect(marker).toHaveLength(1)
   })
 })

@@ -7,7 +7,21 @@ import { PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey'
 import { createOrRestoreTargetBlock } from '@/data/targets'
 import { dailyPageAliases, formatIsoDate } from '@/utils/dailyPage'
-import { DAILY_NOTE_TYPE } from './schema.ts'
+import { DAILY_NOTE_TYPE, dailyNoteDateProp } from './schema.ts'
+
+/** Build the indexable `Date` stored on `dailyNoteDateProp`. The
+ *  daily-note id is a hash of (workspaceId, iso) and not reversible,
+ *  so this is the canonical place that re-derives "what day is this"
+ *  for the query layer. UTC midnight keeps `toISOString()` stable
+ *  across clients regardless of local timezone — same invariant the
+ *  reverse-chronology orderKey relies on. */
+const dailyNoteDateValue = (iso: string): Date => {
+  const ms = Date.parse(`${iso}T00:00:00Z`)
+  if (Number.isNaN(ms)) {
+    throw new Error(`Invalid ISO date for daily note: ${iso}`)
+  }
+  return new Date(ms)
+}
 
 // Namespace UUIDs — fixed constants so two clients computing the same
 // (workspaceId, isoDate) pair derive the same block id even before any
@@ -154,6 +168,7 @@ export const getOrCreateDailyNote = async (
   const orderKey = dailyNoteOrderKey(iso)
   const [longLabel, isoLabel] = dailyPageAliases(dailyNoteLocalDate(iso))
   const dailyAliases = [longLabel, isoLabel]
+  const dateValue = dailyNoteDateValue(iso)
   const live = await repo.load(id)
   if (live && !live.deleted) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
@@ -176,7 +191,11 @@ export const getOrCreateDailyNote = async (
         await tx.setProperty(id, aliasesProp, mergeStrings([...dailyAliases, ...currentAliases]))
       }
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
+      await repo.addTypeInTx(
+        tx, id, DAILY_NOTE_TYPE,
+        {[dailyNoteDateProp.name]: dateValue},
+        typeSnapshot,
+      )
       if (current.parentId !== journal.id || current.orderKey !== orderKey) {
         await tx.move(id, {parentId: journal.id, orderKey}, {skipMetadata: true})
       }
@@ -194,7 +213,11 @@ export const getOrCreateDailyNote = async (
       await tx.restore(id, {content: longLabel})
       await tx.setProperty(id, aliasesProp, dailyAliases)
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
+      await repo.addTypeInTx(
+        tx, id, DAILY_NOTE_TYPE,
+        {[dailyNoteDateProp.name]: dateValue},
+        typeSnapshot,
+      )
       // Re-parent under the journal in case the prior tombstoned row
       // had drifted. tx.move sets parent_id + order_key in one
       // primitive (with engine cycle check on parent_id mutation).
@@ -209,7 +232,11 @@ export const getOrCreateDailyNote = async (
       content: longLabel,
     })
     await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: dailyAliases}, typeSnapshot)
-    await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
+    await repo.addTypeInTx(
+      tx, id, DAILY_NOTE_TYPE,
+      {[dailyNoteDateProp.name]: dateValue},
+      typeSnapshot,
+    )
   }, {scope: ChangeScope.BlockDefault})
 
   return repo.block(id)
@@ -257,6 +284,10 @@ export const ensureDailyNoteTarget = async (
     onInsertedOrRestored: async (tx, id) => {
       await tx.setProperty(id, aliasesProp, [date])
       await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [date]}, typeSnapshot)
-      await repo.addTypeInTx(tx, id, DAILY_NOTE_TYPE, {}, typeSnapshot)
+      await repo.addTypeInTx(
+        tx, id, DAILY_NOTE_TYPE,
+        {[dailyNoteDateProp.name]: dailyNoteDateValue(date)},
+        typeSnapshot,
+      )
     },
   })
