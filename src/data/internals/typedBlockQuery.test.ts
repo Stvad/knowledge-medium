@@ -29,6 +29,18 @@ const doneProp = defineProperty<boolean>('done', {
   changeScope: ChangeScope.BlockDefault,
 })
 
+const priorityProp = defineProperty<number>('priority', {
+  codec: codecs.number,
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const dueProp = defineProperty<Date | undefined>('due', {
+  codec: codecs.date,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 const weirdNameProp = defineProperty<string>('weird:name.with-dot-hyphen', {
   codec: codecs.string,
   defaultValue: '',
@@ -69,6 +81,8 @@ const setup = async (): Promise<Harness> => {
     kernelDataExtension,
     propertySchemasFacet.of(statusProp, {source: 'test'}),
     propertySchemasFacet.of(doneProp, {source: 'test'}),
+    propertySchemasFacet.of(priorityProp, {source: 'test'}),
+    propertySchemasFacet.of(dueProp, {source: 'test'}),
     propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
     propertySchemasFacet.of(labelsProp, {source: 'test'}),
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
@@ -146,6 +160,165 @@ describe('repo.queryBlocks', () => {
     expect(ids(out)).toEqual(['missing', 'nullish'])
   })
 
+  describe('where operators', () => {
+    /** `dueProp.codec.date` encodes Date instances to ISO strings.
+     *  Lexicographic comparison on ISO 8601 matches chronological order,
+     *  so SQL `<` / `BETWEEN` work directly on the encoded form. */
+    const encodeDate = (iso: string): unknown =>
+      dueProp.codec.encode(new Date(`${iso}T00:00:00.000Z`))
+
+    it('comparator operators on a numeric property', async () => {
+      await create({id: 'p1', properties: {[priorityProp.name]: priorityProp.codec.encode(1)}})
+      await create({id: 'p2', properties: {[priorityProp.name]: priorityProp.codec.encode(2)}})
+      await create({id: 'p3', properties: {[priorityProp.name]: priorityProp.codec.encode(3)}})
+
+      const lt = await env.repo.queryBlocks({where: {priority: {lt: 3}}})
+      expect(ids(lt).sort()).toEqual(['p1', 'p2'])
+
+      const lte = await env.repo.queryBlocks({where: {priority: {lte: 2}}})
+      expect(ids(lte).sort()).toEqual(['p1', 'p2'])
+
+      const gt = await env.repo.queryBlocks({where: {priority: {gt: 1}}})
+      expect(ids(gt).sort()).toEqual(['p2', 'p3'])
+
+      const gte = await env.repo.queryBlocks({where: {priority: {gte: 2}}})
+      expect(ids(gte).sort()).toEqual(['p2', 'p3'])
+
+      const eq = await env.repo.queryBlocks({where: {priority: {eq: 2}}})
+      expect(ids(eq)).toEqual(['p2'])
+    })
+
+    it('comparator operators on a date property', async () => {
+      await create({id: 'past', properties: {[dueProp.name]: encodeDate('2026-01-01')}})
+      await create({id: 'today', properties: {[dueProp.name]: encodeDate('2026-05-18')}})
+      await create({id: 'future', properties: {[dueProp.name]: encodeDate('2026-12-31')}})
+
+      const before = await env.repo.queryBlocks({
+        where: {due: {lt: new Date('2026-05-18T00:00:00.000Z')}},
+      })
+      expect(ids(before)).toEqual(['past'])
+
+      const onOrAfter = await env.repo.queryBlocks({
+        where: {due: {gte: new Date('2026-05-18T00:00:00.000Z')}},
+      })
+      expect(ids(onOrAfter).sort()).toEqual(['future', 'today'])
+    })
+
+    it('accepts JSON-revived date operands (Date → ISO string after persist)', async () => {
+      // Persisted predicates (e.g. backlinks:predicates) round-trip
+      // through JSON, which turns Date instances into ISO strings.
+      // The compiler re-runs where.encode on the rehydrated value;
+      // it must accept the string form so saved date-range filters
+      // still work after reload.
+      await create({id: 'past', properties: {[dueProp.name]: encodeDate('2026-01-01')}})
+      await create({id: 'future', properties: {[dueProp.name]: encodeDate('2026-12-31')}})
+
+      const original = {due: {lt: new Date('2026-05-18T00:00:00.000Z')}}
+      const persisted = JSON.parse(JSON.stringify(original)) as Record<string, unknown>
+      const out = await env.repo.queryBlocks({where: persisted})
+      expect(ids(out)).toEqual(['past'])
+    })
+
+    it('between is inclusive on both ends', async () => {
+      await create({id: 'p1', properties: {[priorityProp.name]: priorityProp.codec.encode(1)}})
+      await create({id: 'p2', properties: {[priorityProp.name]: priorityProp.codec.encode(2)}})
+      await create({id: 'p3', properties: {[priorityProp.name]: priorityProp.codec.encode(3)}})
+      await create({id: 'p5', properties: {[priorityProp.name]: priorityProp.codec.encode(5)}})
+
+      const out = await env.repo.queryBlocks({where: {priority: {between: [2, 3]}}})
+      expect(ids(out).sort()).toEqual(['p2', 'p3'])
+    })
+
+    it('exists: true matches set, exists: false matches unset', async () => {
+      await create({id: 'set', properties: {status: 'open'}})
+      await create({id: 'missing', properties: {}})
+      await create({id: 'nullish', properties: {status: null}})
+
+      const set = await env.repo.queryBlocks({where: {status: {exists: true}}})
+      expect(ids(set)).toEqual(['set'])
+
+      const unset = await env.repo.queryBlocks({where: {status: {exists: false}}})
+      expect(ids(unset).sort()).toEqual(['missing', 'nullish'])
+    })
+
+    it('rejects malformed operator objects with a clear message', async () => {
+      await expect(env.repo.queryBlocks({where: {priority: {lt: 1, gt: 0}}}))
+        .rejects.toThrow('operator object must have exactly one key')
+      await expect(env.repo.queryBlocks({where: {priority: {bogus: 1}}}))
+        .rejects.toThrow('unknown operator')
+      await expect(env.repo.queryBlocks({where: {priority: {between: [1]}}}))
+        .rejects.toThrow('between must be a [lo, hi] tuple')
+      await expect(env.repo.queryBlocks({where: {status: {exists: 'yes'}}}))
+        .rejects.toThrow('exists must be a boolean')
+    })
+
+    it('rejects comparator operators on non-where-queryable codecs', async () => {
+      await expect(env.repo.queryBlocks({where: {reviewer: {eq: 'target'}}}))
+        .rejects.toThrow('is not where-queryable')
+    })
+
+    it('traverses ref-typed properties via the target operator', async () => {
+      // Realistic shape: a ref-typed property points at a "target"
+      // block that carries its own queryable properties (the daily-
+      // notes plugin's date property is the motivating case, but the
+      // compiler is plugin-agnostic — anything with a where-queryable
+      // codec on the target works).
+      await create({
+        id: 'past-target',
+        properties: {[dueProp.name]: encodeDate('2026-01-01')},
+      })
+      await create({
+        id: 'future-target',
+        properties: {[dueProp.name]: encodeDate('2026-12-31')},
+      })
+      await create({id: 'unrelated-target'})
+      await create({
+        id: 'source-past',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('past-target')},
+        references: [{id: 'past-target', alias: 'past-target', sourceField: 'reviewer'}],
+      })
+      await create({
+        id: 'source-future',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('future-target')},
+        references: [{id: 'future-target', alias: 'future-target', sourceField: 'reviewer'}],
+      })
+      await create({
+        id: 'source-unrelated',
+        properties: {[reviewerProp.name]: reviewerProp.codec.encode('unrelated-target')},
+        references: [{id: 'unrelated-target', alias: 'unrelated-target', sourceField: 'reviewer'}],
+      })
+
+      const past = await env.repo.queryBlocks({
+        where: {
+          [reviewerProp.name]: {
+            target: {[dueProp.name]: {lt: new Date('2026-06-01T00:00:00.000Z')}},
+          },
+        },
+      })
+      expect(ids(past)).toEqual(['source-past'])
+
+      // Empty target predicate = "ref points at a live block".
+      // Excludes the dangling case (no row at the ref id) and the
+      // soft-deleted case via the JOIN's `d.deleted = 0` clause.
+      const anyTarget = await env.repo.queryBlocks({
+        where: {[reviewerProp.name]: {target: {}}},
+      })
+      expect(ids(anyTarget).sort()).toEqual(['source-future', 'source-past', 'source-unrelated'])
+    })
+
+    it('rejects the target operator on non-ref properties', async () => {
+      await expect(env.repo.queryBlocks({
+        where: {status: {target: {priority: {gt: 0}}}},
+      })).rejects.toThrow('only valid on ref / refList properties')
+    })
+
+    it('rejects malformed target operand', async () => {
+      await expect(env.repo.queryBlocks({
+        where: {[reviewerProp.name]: {target: 'not-an-object'}},
+      })).rejects.toThrow('target must be a where-map object')
+    })
+  })
+
   it('filters by references with optional sourceField', async () => {
     await create({id: 'target'})
     await create({
@@ -206,6 +379,17 @@ describe('repo.queryBlocks', () => {
     // meaningful way for the recursive walk.
     await expect(env.repo.queryBlocks({
       where: {status: null},
+      match: [{scope: 'ancestor', where: {status: 'done'}}],
+    })).rejects.toThrow('require at least one candidate filter')
+  })
+
+  it('exists:false-only where does not pass the ancestor gate either', async () => {
+    // `{exists: false}` is semantically identical to `null` (both
+    // compile to IS NULL). The selectivity gate must treat them the
+    // same, otherwise callers using one shorthand silently bypass
+    // the guard the other shorthand triggers.
+    await expect(env.repo.queryBlocks({
+      where: {status: {exists: false}},
       match: [{scope: 'ancestor', where: {status: 'done'}}],
     })).rejects.toThrow('require at least one candidate filter')
   })
@@ -271,6 +455,63 @@ describe('repo.subscribeBlocks', () => {
     await create({id: 'todo', types: ['todo']})
 
     await vi.waitFor(() => expect(fired).toEqual([[], ['todo']]))
+    off()
+  })
+
+  it('updates when a target row appears with the inner-null property unset', async () => {
+    // `target: { status: null }` matches rows whose status is unset.
+    // A freshly-inserted target row with no `status` property doesn't
+    // fire the status property channel — same shape as the top-level
+    // "where with only null predicates" case. Without a live-channel
+    // sub on this branch the subscriber would stay stale.
+    await env.repo.tx(tx => tx.create({
+      id: 'source', workspaceId: WS, parentId: null, orderKey: 'a',
+      properties: {[reviewerProp.name]: reviewerProp.codec.encode('target')},
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    }), {scope: ChangeScope.BlockDefault})
+
+    const fired: string[][] = []
+    const off = env.repo.subscribeBlocks(
+      {where: {[reviewerProp.name]: {target: {status: null}}}},
+      rows => fired.push(ids(rows)),
+    )
+    await vi.waitFor(() => expect(fired).toEqual([[]]))
+
+    await env.repo.tx(tx => tx.create({
+      id: 'target', workspaceId: WS, parentId: null, orderKey: 'b',
+    }), {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(fired).toEqual([[], ['source']]))
+    off()
+  })
+
+  it('updates when a target operator inner property changes on the referenced row', async () => {
+    // Regression: the `target` traversal makes membership depend on
+    // the REFERENCED row's properties. Without dep wiring on the
+    // inner property channel, a target-side update wouldn't wake
+    // the subscriber.
+    await env.repo.tx(tx => tx.create({
+      id: 'target', workspaceId: WS, parentId: null, orderKey: 'a',
+    }), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.create({
+      id: 'source', workspaceId: WS, parentId: null, orderKey: 'b',
+      properties: {[reviewerProp.name]: reviewerProp.codec.encode('target')},
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    }), {scope: ChangeScope.BlockDefault})
+
+    const fired: string[][] = []
+    const off = env.repo.subscribeBlocks(
+      {where: {[reviewerProp.name]: {target: {status: 'done'}}}},
+      rows => fired.push(ids(rows)),
+    )
+    await vi.waitFor(() => expect(fired).toEqual([[]]))
+
+    // Update the *target* row's status. The subscription's filter
+    // doesn't reference the target id directly — only an inner
+    // property predicate — so this hits the dep wiring that
+    // `collectWhereDeps` adds for traversals.
+    await env.repo.tx(tx => tx.setProperty('target', statusProp, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(fired).toEqual([[], ['source']]))
     off()
   })
 

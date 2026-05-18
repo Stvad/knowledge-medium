@@ -1,4 +1,6 @@
 import {
+  isRefCodec,
+  isRefListCodec,
   type AnyPropertySchema,
   type BlockPredicate,
   type ResolvedTypedBlockQuery,
@@ -14,9 +16,167 @@ export interface CompiledTypedBlockQuery {
 export const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 
+/** Inline a JSON path as a SQL string literal — needed so SQLite's
+ *  query planner can match expression indexes. SQLite only treats
+ *  `json_extract(col, '$.foo')` and `idx ON (json_extract(col, '$.foo'))`
+ *  as the same indexable expression when the path appears literally;
+ *  if the path is bound via `?` the planner sees `json_extract(col, ?)`
+ *  and falls back to a table scan. Property names are registered via
+ *  trusted facets, but the literal still gets standard `''`-escaping
+ *  defensively so a name containing a single quote can't break the
+ *  surrounding SQL. */
+const inlineJsonPath = (name: string): string => {
+  const path = jsonPathForProperty(name)
+  return `'${path.replaceAll("'", "''")}'`
+}
+
 interface CompiledClause {
   readonly sql: string
   readonly params: readonly unknown[]
+}
+
+/** Operator names recognised inside `where[name]` object values.
+ *  Mirrors `WhereOperator` in `src/data/api/typedBlockQuery.ts`. */
+const COMPARATOR_OPERATORS = new Set(['eq', 'lt', 'lte', 'gt', 'gte'])
+const ALL_OPERATORS = new Set([...COMPARATOR_OPERATORS, 'between', 'exists', 'target'])
+
+/** A scalar `where` value goes through `codec.where.encode` and lands
+ *  in one of the comparator operators below; an object becomes an
+ *  operator dispatch; a `null` short-circuits to `IS NULL`. */
+type ParsedWhere =
+  | { readonly kind: 'unset' }              // legacy null shorthand
+  | { readonly kind: 'set' }                // exists: true
+  | { readonly kind: 'comparator'; readonly op: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; readonly operand: unknown }
+  | { readonly kind: 'between'; readonly lo: unknown; readonly hi: unknown }
+  | { readonly kind: 'target'; readonly inner: Readonly<Record<string, unknown>> }
+
+const COMPARATOR_SQL: Readonly<Record<'eq' | 'lt' | 'lte' | 'gt' | 'gte', string>> = {
+  eq: '=', lt: '<', lte: '<=', gt: '>', gte: '>=',
+}
+
+const isPlainOperatorObject = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !(value instanceof Date) && !Array.isArray(value)
+
+/** Normalize a `where[name]` value to the discriminated `ParsedWhere`
+ *  shape. Throws on malformed inputs (multiple operator keys, unknown
+ *  operator, `between` not a 2-tuple, `exists` not a boolean). */
+const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
+  if (value === null) return {kind: 'unset'}
+  if (!isPlainOperatorObject(value)) {
+    return {kind: 'comparator', op: 'eq', operand: value}
+  }
+  const entries = Object.entries(value).filter(([k]) => k !== undefined)
+  if (entries.length !== 1) {
+    throw new Error(
+      `[queryBlocks] where.${name} operator object must have exactly one key; got ${entries.length} ` +
+      `(combine via separate match/exclude predicates instead)`,
+    )
+  }
+  const [op, operand] = entries[0]!
+  if (!ALL_OPERATORS.has(op)) {
+    throw new Error(
+      `[queryBlocks] where.${name} unknown operator ${JSON.stringify(op)}; ` +
+      `supported: ${[...ALL_OPERATORS].join(', ')}`,
+    )
+  }
+  if (op === 'exists') {
+    if (typeof operand !== 'boolean') {
+      throw new Error(`[queryBlocks] where.${name}.exists must be a boolean; got ${typeof operand}`)
+    }
+    return operand ? {kind: 'set'} : {kind: 'unset'}
+  }
+  if (op === 'between') {
+    if (!Array.isArray(operand) || operand.length !== 2) {
+      throw new Error(`[queryBlocks] where.${name}.between must be a [lo, hi] tuple`)
+    }
+    return {kind: 'between', lo: operand[0], hi: operand[1]}
+  }
+  if (op === 'target') {
+    if (!isPlainOperatorObject(operand)) {
+      throw new Error(`[queryBlocks] where.${name}.target must be a where-map object`)
+    }
+    return {kind: 'target', inner: operand}
+  }
+  return {kind: 'comparator', op: op as 'eq' | 'lt' | 'lte' | 'gt' | 'gte', operand}
+}
+
+const encodeForWhere = (
+  name: string,
+  schema: AnyPropertySchema,
+  value: unknown,
+): string | number => {
+  if (!schema.codec.where) {
+    throw new Error(
+      `[queryBlocks] where.${name} is not where-queryable; ` +
+      `codec type ${JSON.stringify(schema.codec.type)} doesn't support comparison predicates ` +
+      '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
+    )
+  }
+  try {
+    return schema.codec.where.encode(value)
+  } catch (err) {
+    throw new Error(
+      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+      {cause: err},
+    )
+  }
+}
+
+/** Mutable counter for nested `target` traversals so each level gets
+ *  its own SQL alias (`d0`, `d1`, …) and inner joins don't collide
+ *  with outer ones. The top-level call always passes `{n: 0}`. */
+interface AliasCounter { n: number }
+
+const compileTargetTraversal = (
+  name: string,
+  inner: Readonly<Record<string, unknown>>,
+  schema: AnyPropertySchema,
+  jsonExpr: string,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  aliasCounter: AliasCounter,
+): CompiledClause => {
+  const isRef = isRefCodec(schema.codec)
+  const isRefList = isRefListCodec(schema.codec)
+  if (!isRef && !isRefList) {
+    throw new Error(
+      `[queryBlocks] where.${name}.target is only valid on ref / refList properties; ` +
+      `${JSON.stringify(name)} has codec type ${JSON.stringify(schema.codec.type)}`,
+    )
+  }
+  const alias = `d${aliasCounter.n++}`
+  const refExtract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
+  const innerEntries = Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))
+  const innerClauses: string[] = []
+  const innerParams: unknown[] = []
+  for (const [innerName, innerValue] of innerEntries) {
+    const compiled = compileWhereClause(
+      innerName, innerValue, propertySchemas.get(innerName),
+      `${alias}.properties_json`, propertySchemas, aliasCounter,
+    )
+    innerClauses.push(compiled.sql)
+    innerParams.push(...compiled.params)
+  }
+  const inWhere = innerClauses.length === 0 ? '' : ` AND ${innerClauses.join(' AND ')}`
+  if (isRef) {
+    // The source row's `properties_json[name]` holds the target id
+    // (string, stored as JSON). `json_extract` unwraps the JSON
+    // quoting and gives us the bare id for the equality join.
+    return {
+      sql:
+        `EXISTS (SELECT 1 FROM blocks ${alias} ` +
+        `WHERE ${alias}.id = ${refExtract} ` +
+        `AND ${alias}.deleted = 0${inWhere})`,
+      params: innerParams,
+    }
+  }
+  // refList: target value is an array of ids — fan out via json_each.
+  return {
+    sql:
+      `EXISTS (SELECT 1 FROM json_each(${refExtract}) AS je ` +
+      `JOIN blocks ${alias} ON ${alias}.id = je.value ` +
+      `WHERE ${alias}.deleted = 0${inWhere})`,
+    params: innerParams,
+  }
 }
 
 const compileWhereClause = (
@@ -24,6 +184,8 @@ const compileWhereClause = (
   value: unknown,
   schema: AnyPropertySchema | undefined,
   jsonExpr: string,
+  propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  aliasCounter: AliasCounter = {n: 0},
 ): CompiledClause => {
   if (value === undefined) {
     throw new Error(`[queryBlocks] where.${name} is undefined; pass null to match unset values`)
@@ -31,38 +193,33 @@ const compileWhereClause = (
   if (schema === undefined) {
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
-  const path = jsonPathForProperty(name)
+  const extract = `json_extract(${jsonExpr}, ${inlineJsonPath(name)})`
+  const parsed = parseWhereValue(name, value)
 
-  // `null` is the typed-query "match unset / explicitly-null" sentinel;
-  // SQLite `=` against NULL never matches, so compile to `IS NULL` and
-  // skip `where.encode` entirely (it would reject null).
-  if (value === null) {
+  // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
+  // they're orthogonal to the codec's encoding contract (and
+  // codec.where.encode rejects null/undefined by design).
+  if (parsed.kind === 'unset') {
+    return {sql: `${extract} IS NULL`, params: []}
+  }
+  if (parsed.kind === 'set') {
+    return {sql: `${extract} IS NOT NULL`, params: []}
+  }
+  if (parsed.kind === 'target') {
+    return compileTargetTraversal(name, parsed.inner, schema, jsonExpr, propertySchemas, aliasCounter)
+  }
+  if (parsed.kind === 'between') {
+    const lo = encodeForWhere(name, schema, parsed.lo)
+    const hi = encodeForWhere(name, schema, parsed.hi)
     return {
-      sql: `json_extract(${jsonExpr}, ?) IS NULL`,
-      params: [path],
+      sql: `${extract} BETWEEN ? AND ?`,
+      params: [lo, hi],
     }
   }
-
-  if (!schema.codec.where) {
-    throw new Error(
-      `[queryBlocks] where.${name} is not where-queryable; ` +
-      `codec type ${JSON.stringify(schema.codec.type)} doesn't support equality predicates ` +
-      '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
-    )
-  }
-
-  let sqlValue: string | number
-  try {
-    sqlValue = schema.codec.where.encode(value)
-  } catch (err) {
-    throw new Error(
-      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
-      {cause: err},
-    )
-  }
+  const operand = encodeForWhere(name, schema, parsed.operand)
   return {
-    sql: `json_extract(${jsonExpr}, ?) = ?`,
-    params: [path, sqlValue],
+    sql: `${extract} ${COMPARATOR_SQL[parsed.op]} ?`,
+    params: [operand],
   }
 }
 
@@ -101,7 +258,7 @@ const compilePredicateAgainstRow = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), propsExpr)
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), propsExpr, propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -150,7 +307,7 @@ const compileScopedPredicate = (
 
   if (predicate.where !== undefined) {
     for (const [name, value] of Object.entries(predicate.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json')
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'anc.properties_json', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }
@@ -208,8 +365,23 @@ export const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean
 const isSelfScope = (predicate: BlockPredicate): boolean =>
   (predicate.scope ?? 'self') === 'self'
 
+/** Does this `where[name]` value narrow the candidate set, or does
+ *  it only match rows lacking the property? `null` and the operator
+ *  form `{exists: false}` are semantic duplicates — both compile to
+ *  `IS NULL` — so both have to be classified as non-selective; if
+ *  only one were, ancestor-gate and dep-wiring decisions would drift
+ *  based on which shorthand the caller happened to use. */
+export const isSelectiveWhereValue = (value: unknown): boolean => {
+  if (value === null) return false
+  if (typeof value !== 'object' || value instanceof Date || Array.isArray(value)) return true
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length !== 1) return true
+  const [op, operand] = entries[0]!
+  return !(op === 'exists' && operand === false)
+}
+
 const hasNonNullWhere = (where: Readonly<Record<string, unknown>> | undefined): boolean =>
-  where !== undefined && Object.values(where).some(v => v !== null)
+  where !== undefined && Object.values(where).some(isSelectiveWhereValue)
 
 /** Does this self-scope predicate actually bound the candidate set
  *  (vs. just match-anything)? Used by the ancestor-walk safety gate
@@ -297,7 +469,7 @@ export const buildCandidatesCte = (
 
   if (normalized.where !== undefined) {
     for (const [name, value] of Object.entries(normalized.where).sort(([a], [b]) => a.localeCompare(b))) {
-      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json')
+      const compiled = compileWhereClause(name, value, propertySchemas.get(name), 'b.properties_json', propertySchemas)
       clauses.push(compiled.sql)
       params.push(...compiled.params)
     }

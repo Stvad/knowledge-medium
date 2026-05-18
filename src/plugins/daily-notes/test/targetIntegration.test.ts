@@ -31,6 +31,7 @@ import {
   dailyNotesDataExtension,
   ensureDailyNoteTarget,
   isDateAlias,
+  isValidDateAlias,
 } from '@/plugins/daily-notes'
 
 const WS = 'ws-1'
@@ -94,6 +95,36 @@ describe('isDateAlias', () => {
     expect(isDateAlias('hello')).toBe(false)
     expect(isDateAlias('')).toBe(false)
   })
+
+  it('is shape-only — accepts calendar-invalid YYYY-MM-DD', () => {
+    // Distinct from `isValidDateAlias`. Documented here so a future
+    // change that tightens `isDateAlias` itself triggers a test
+    // failure and the author has to reconcile the SRS find/extract
+    // call sites that depend on the shape-only contract.
+    expect(isDateAlias('2026-13-01')).toBe(true)
+    expect(isDateAlias('2026-02-30')).toBe(true)
+  })
+})
+
+describe('isValidDateAlias', () => {
+  it('matches real calendar days', () => {
+    expect(isValidDateAlias('2026-04-28')).toBe(true)
+    expect(isValidDateAlias('2024-02-29')).toBe(true)  // leap day
+    expect(isValidDateAlias('1999-12-31')).toBe(true)
+  })
+
+  it('rejects calendar-invalid shapes that `isDateAlias` accepts', () => {
+    expect(isValidDateAlias('2026-13-01')).toBe(false)  // month 13
+    expect(isValidDateAlias('2026-02-30')).toBe(false)  // Feb 30 → Mar 2
+    expect(isValidDateAlias('2025-02-29')).toBe(false)  // non-leap
+    expect(isValidDateAlias('2026-04-31')).toBe(false)  // Apr 31 → May 1
+  })
+
+  it('rejects non-date shapes', () => {
+    expect(isValidDateAlias('2026-4-28')).toBe(false)
+    expect(isValidDateAlias('hello')).toBe(false)
+    expect(isValidDateAlias('')).toBe(false)
+  })
 })
 
 describe('ensureDailyNoteTarget', () => {
@@ -139,5 +170,22 @@ describe('ensureDailyNoteTarget', () => {
     expect(first.id).toBe(second.id)
     expect(first.inserted).toBe(true)
     expect(second.inserted).toBe(false)
+  })
+
+  it('rejects calendar-invalid date-shaped inputs (contract enforced by routing)', async () => {
+    // The references processor's `isValidDateAlias` gate is the
+    // canonical filter; calendar-invalid strings never reach
+    // `ensureDailyNoteTarget` in production. Direct callers that
+    // bypass that gate get a clear failure rather than silently
+    // creating a daily-note seat for a nonexistent calendar day.
+    const typeSnapshot = env.repo.snapshotTypeRegistries()
+    for (const bogusIso of ['2026-13-01', '2026-02-30']) {
+      await expect(
+        env.repo.tx(
+          tx => ensureDailyNoteTarget(tx, env.repo, bogusIso, WS, typeSnapshot),
+          {scope: ChangeScope.BlockDefault},
+        ),
+      ).rejects.toThrow(/Invalid (?:ISO|calendar) date for daily note/)
+    }
   })
 })

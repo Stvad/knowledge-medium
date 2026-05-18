@@ -63,7 +63,7 @@ import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
-  isDateAlias,
+  isValidDateAlias,
 } from '@/plugins/daily-notes/dailyNotes.ts'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
@@ -119,10 +119,17 @@ const buildSourcePlan = async (
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
     seenAliases.add(mark.alias)
-    if (isDateAlias(mark.alias)) {
+    if (isValidDateAlias(mark.alias)) {
       // Daily note path — distinct deterministic id, never feeds cleanup.
       // Always-present id (deterministic from date+workspace); the write
       // phase will ensureDailyNoteTarget which is idempotent.
+      //
+      // Calendar-invalid date-shaped aliases (`[[2026-13-01]]`,
+      // `[[2026-02-30]]`) deliberately fall through to the alias path
+      // below: the typo becomes a regular alias-target page named for
+      // the typo'd string. Routing them as daily notes would mint a
+      // deterministic seat for a nonexistent calendar day and roll
+      // over silently in any downstream date arithmetic.
       const id = dailyNoteBlockId(source.workspaceId, mark.alias)
       dateRefs.push({id, alias: mark.alias})
       datesToEnsure.push(mark.alias)

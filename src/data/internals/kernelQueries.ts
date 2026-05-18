@@ -33,6 +33,7 @@ import {
   assertAncestorWalkBounded,
   buildCandidatesCte,
   compileTypedBlockQuery,
+  isSelectiveWhereValue,
   normalizeTypedBlockQuery,
 } from './typedBlockQuery'
 import {
@@ -443,21 +444,62 @@ const ANCESTOR_DEP_NODES_SQL = (candidatesCte: string) => `
 `
 
 
+/** Subscribe to the property channels relevant to a single `where`
+ *  map — every direct key, plus the inner keys reached through any
+ *  `target` traversal. The inner keys live on other rows (the ref
+ *  targets), so changes there have to wake this query just like
+ *  changes to the source row's outer property would.
+ *
+ *  Live-channel rule for `target`: if the inner predicate has no
+ *  selective key (empty `target: {}`, `target: { x: null }`,
+ *  `target: { x: { exists: false } }`, or any combination of unset-
+ *  matching predicates), a fresh target-row insert that matches
+ *  won't fire any property channel — the row never set the property
+ *  the predicate names. Without subscribing to the live channel in
+ *  that case, the subscriber stays stale until an unrelated write
+ *  fires invalidations. Mirrors the top-level "live channel only
+ *  when no positive axis" gate. */
+const collectWhereDeps = (
+  where: Readonly<Record<string, unknown>> | undefined,
+  workspaceId: string,
+  ctx: QueryCtx,
+): void => {
+  if (where === undefined) return
+  for (const [name, value] of Object.entries(where)) {
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
+      key: typedBlocksPropertyKey(workspaceId, name),
+    })
+    if (value === null || typeof value !== 'object' || value instanceof Date || Array.isArray(value)) continue
+    const entries = Object.entries(value as Record<string, unknown>)
+    if (entries.length !== 1) continue
+    const [op, operand] = entries[0]!
+    if (op !== 'target') continue
+    if (operand === null || typeof operand !== 'object' || Array.isArray(operand)) continue
+    const inner = operand as Record<string, unknown>
+    const innerHasSelective = Object.values(inner).some(isSelectiveWhereValue)
+    if (!innerHasSelective) {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_LIVE_CHANNEL,
+        key: typedBlocksLiveKey(workspaceId),
+      })
+    }
+    // Always recurse for the narrower per-property channels too —
+    // updates to an existing target row's properties still wake via
+    // those even when the live channel is also subscribed.
+    collectWhereDeps(inner, workspaceId, ctx)
+  }
+}
+
 const collectPredicateDeps = (
   predicates: readonly BlockPredicate[],
   workspaceId: string,
   ctx: QueryCtx,
 ): void => {
   for (const predicate of predicates) {
-    if (predicate.where !== undefined) {
-      for (const name of Object.keys(predicate.where)) {
-        ctx.depend({
-          kind: 'plugin',
-          channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-          key: typedBlocksPropertyKey(workspaceId, name),
-        })
-      }
-    }
+    collectWhereDeps(predicate.where, workspaceId, ctx)
     if (predicate.referencedBy !== undefined) {
       const ref = predicate.referencedBy
       if (ref.sourceField !== undefined) {
@@ -489,7 +531,6 @@ export const resolveTypedBlocks = async (
   const normalized = normalizeTypedBlockQuery(query)
   const workspaceId = normalized.workspaceId
   const types = normalized.types ?? []
-  const whereNames = Object.keys(normalized.where ?? {})
   const referencedBy = normalized.referencedBy
   const matchPredicates = normalized.match ?? []
   const excludePredicates = normalized.exclude ?? []
@@ -501,13 +542,7 @@ export const resolveTypedBlocks = async (
       key: typedBlocksTypeKey(workspaceId, t),
     })
   }
-  for (const name of whereNames) {
-    ctx.depend({
-      kind: 'plugin',
-      channel: TYPED_BLOCKS_PROPERTY_CHANNEL,
-      key: typedBlocksPropertyKey(workspaceId, name),
-    })
-  }
+  collectWhereDeps(normalized.where, workspaceId, ctx)
   if (referencedBy !== undefined) {
     if (referencedBy.sourceField !== undefined) {
       ctx.depend({
@@ -538,15 +573,13 @@ export const resolveTypedBlocks = async (
   //     appeared. (Mixed cases like `{status: null, foo: 'bar'}`
   //     don't need live: matching rows must set `foo='bar'` to
   //     match, which fires the foo property channel.)
-  const hasNonNullWhere = whereNames.some(
-    name => (normalized.where as Record<string, unknown>)[name] !== null,
-  )
+  const hasSelectiveWhere = Object.values(normalized.where ?? {}).some(isSelectiveWhereValue)
   const hasMatchAxis = matchPredicates.some(p =>
     p.referencedBy !== undefined ||
-    (p.where !== undefined && Object.values(p.where).some(v => v !== null)),
+    (p.where !== undefined && Object.values(p.where).some(isSelectiveWhereValue)),
   )
   const hasPositiveAxis =
-    types.length > 0 || referencedBy !== undefined || hasNonNullWhere || hasMatchAxis
+    types.length > 0 || referencedBy !== undefined || hasSelectiveWhere || hasMatchAxis
   if (!hasPositiveAxis) {
     ctx.depend({
       kind: 'plugin',

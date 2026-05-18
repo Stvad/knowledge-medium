@@ -52,6 +52,19 @@ describe('codec where capability', () => {
     expect(codecs.date.where!.encode(d)).toBe('2026-04-29T12:34:56.789Z')
   })
 
+  it('date.where also accepts an already-encoded ISO string (idempotent)', () => {
+    // Persisted operator predicates (e.g. backlinks:predicates) go
+    // through JSON.stringify, which turns Date instances into ISO
+    // strings. On reload the compiler re-runs `where.encode` on the
+    // rehydrated value; rejecting the string would break every saved
+    // date-range filter. Both shapes normalise to the same scalar.
+    const iso = '2026-04-29T12:34:56.789Z'
+    expect(codecs.date.where!.encode(iso as unknown as Date)).toBe(iso)
+    // Strings that don't parse as dates still throw.
+    expect(() => codecs.date.where!.encode('not-a-date' as unknown as Date))
+      .toThrow(CodecError)
+  })
+
   it('validates input types and rejects mismatches', () => {
     expect(() => codecs.string.where!.encode(42 as unknown as string)).toThrow(CodecError)
     expect(() => codecs.boolean.where!.encode('true' as unknown as boolean)).toThrow(CodecError)

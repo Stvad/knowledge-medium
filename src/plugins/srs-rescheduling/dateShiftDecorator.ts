@@ -8,7 +8,7 @@ import {
   DATE_SHIFT_FORWARD_WEEK_ACTION_ID,
   addDaysIso,
   getOrCreateDailyNote,
-  isDateAlias,
+  isValidDateAlias,
 } from '@/plugins/daily-notes'
 import type { ActionConfig, ActionDecorator, BlockShortcutDependencies } from '@/shortcuts/types.ts'
 import {
@@ -44,11 +44,15 @@ const dailyNoteIsoFromBlockId = async (
   const data = await block.repo.load(dailyNoteId)
   if (!data) return null
 
-  const aliasIso = decodeAliases(data.properties).find(isDateAlias)
+  // Calendar-validity check (not shape-only): bogus stored aliases like
+  // `2026-13-01` would otherwise feed `addDaysIso` and roll over to
+  // 2027-01-01 instead of refusing to shift. Treat as "no date" so
+  // the action falls through to its default handler.
+  const aliasIso = decodeAliases(data.properties).find(isValidDateAlias)
   if (aliasIso) return aliasIso
 
   const content = data.content.trim()
-  return isDateAlias(content) ? content : null
+  return isValidDateAlias(content) ? content : null
 }
 
 const hasLoadedSrsNextReviewDate = (block: Block): boolean => {

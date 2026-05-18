@@ -124,6 +124,19 @@ const dateCodec: Codec<Date | undefined> = {
       // before reaching where.encode. undefined arriving here is a
       // caller bug — typed-query callers use null for unset matching.
       if (v === undefined) throw new CodecError('date (use null for unset)', v)
+      // Accept both Date instances and the already-encoded ISO string
+      // form: persisted operator predicates (e.g. backlinks chips
+      // saved to `backlinks:predicates`) round-trip through JSON,
+      // which turns a Date into its ISO string. The compiler re-runs
+      // `where.encode` on the rehydrated value, so rejecting strings
+      // would break every saved date-range filter on reload. Both
+      // shapes normalise to the same ISO string so storage stays
+      // bit-stable. Strings that don't parse as dates still throw.
+      if (typeof v === 'string') {
+        const d = new Date(v)
+        if (Number.isNaN(d.getTime())) throw new CodecError('date', v)
+        return d.toISOString()
+      }
       if (!(v instanceof Date) || Number.isNaN(v.getTime())) throw new CodecError('date', v)
       return v.toISOString()
     },

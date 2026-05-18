@@ -7,7 +7,7 @@
 import type { Block } from '@/data/block'
 import { ChangeScope } from '@/data/api'
 import { aliasesProp, getBlockTypes } from '@/data/properties.ts'
-import { getOrCreateDailyNote, isDateAlias } from '@/plugins/daily-notes'
+import { getOrCreateDailyNote, isValidDateAlias } from '@/plugins/daily-notes'
 import type { BlockDateAdapter } from '@/plugins/daily-notes/blockDateAdapter.ts'
 import { SRS_SM25_TYPE, srsNextReviewDateProp } from './schema.ts'
 
@@ -38,10 +38,14 @@ const dailyNoteIsoFromBlockId = async (
 ): Promise<string | null> => {
   const data = await block.repo.load(dailyNoteId)
   if (!data) return null
-  const aliasIso = decodeAliases(data.properties).find(isDateAlias)
+  // Calendar-validity check (not shape-only): a daily-note row whose
+  // only date-shaped alias is e.g. `2026-13-01` would, under shape-only
+  // matching, feed bogus input to `addDaysIso` and roll over silently.
+  // Treat such rows as "no date" so scheduling refuses to act on them.
+  const aliasIso = decodeAliases(data.properties).find(isValidDateAlias)
   if (aliasIso) return aliasIso
   const content = data.content.trim()
-  return isDateAlias(content) ? content : null
+  return isValidDateAlias(content) ? content : null
 }
 
 export const srsBlockDateAdapter: BlockDateAdapter = {
