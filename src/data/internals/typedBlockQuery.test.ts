@@ -29,6 +29,18 @@ const doneProp = defineProperty<boolean>('done', {
   changeScope: ChangeScope.BlockDefault,
 })
 
+const priorityProp = defineProperty<number>('priority', {
+  codec: codecs.number,
+  defaultValue: 0,
+  changeScope: ChangeScope.BlockDefault,
+})
+
+const dueProp = defineProperty<Date | undefined>('due', {
+  codec: codecs.date,
+  defaultValue: undefined,
+  changeScope: ChangeScope.BlockDefault,
+})
+
 const weirdNameProp = defineProperty<string>('weird:name.with-dot-hyphen', {
   codec: codecs.string,
   defaultValue: '',
@@ -69,6 +81,8 @@ const setup = async (): Promise<Harness> => {
     kernelDataExtension,
     propertySchemasFacet.of(statusProp, {source: 'test'}),
     propertySchemasFacet.of(doneProp, {source: 'test'}),
+    propertySchemasFacet.of(priorityProp, {source: 'test'}),
+    propertySchemasFacet.of(dueProp, {source: 'test'}),
     propertySchemasFacet.of(weirdNameProp, {source: 'test'}),
     propertySchemasFacet.of(labelsProp, {source: 'test'}),
     propertySchemasFacet.of(reviewerProp, {source: 'test'}),
@@ -144,6 +158,89 @@ describe('repo.queryBlocks', () => {
     const out = await env.repo.queryBlocks({where: {status: null}})
 
     expect(ids(out)).toEqual(['missing', 'nullish'])
+  })
+
+  describe('where operators', () => {
+    /** `dueProp.codec.date` encodes Date instances to ISO strings.
+     *  Lexicographic comparison on ISO 8601 matches chronological order,
+     *  so SQL `<` / `BETWEEN` work directly on the encoded form. */
+    const encodeDate = (iso: string): unknown =>
+      dueProp.codec.encode(new Date(`${iso}T00:00:00.000Z`))
+
+    it('comparator operators on a numeric property', async () => {
+      await create({id: 'p1', properties: {[priorityProp.name]: priorityProp.codec.encode(1)}})
+      await create({id: 'p2', properties: {[priorityProp.name]: priorityProp.codec.encode(2)}})
+      await create({id: 'p3', properties: {[priorityProp.name]: priorityProp.codec.encode(3)}})
+
+      const lt = await env.repo.queryBlocks({where: {priority: {lt: 3}}})
+      expect(ids(lt).sort()).toEqual(['p1', 'p2'])
+
+      const lte = await env.repo.queryBlocks({where: {priority: {lte: 2}}})
+      expect(ids(lte).sort()).toEqual(['p1', 'p2'])
+
+      const gt = await env.repo.queryBlocks({where: {priority: {gt: 1}}})
+      expect(ids(gt).sort()).toEqual(['p2', 'p3'])
+
+      const gte = await env.repo.queryBlocks({where: {priority: {gte: 2}}})
+      expect(ids(gte).sort()).toEqual(['p2', 'p3'])
+
+      const eq = await env.repo.queryBlocks({where: {priority: {eq: 2}}})
+      expect(ids(eq)).toEqual(['p2'])
+    })
+
+    it('comparator operators on a date property', async () => {
+      await create({id: 'past', properties: {[dueProp.name]: encodeDate('2026-01-01')}})
+      await create({id: 'today', properties: {[dueProp.name]: encodeDate('2026-05-18')}})
+      await create({id: 'future', properties: {[dueProp.name]: encodeDate('2026-12-31')}})
+
+      const before = await env.repo.queryBlocks({
+        where: {due: {lt: new Date('2026-05-18T00:00:00.000Z')}},
+      })
+      expect(ids(before)).toEqual(['past'])
+
+      const onOrAfter = await env.repo.queryBlocks({
+        where: {due: {gte: new Date('2026-05-18T00:00:00.000Z')}},
+      })
+      expect(ids(onOrAfter).sort()).toEqual(['future', 'today'])
+    })
+
+    it('between is inclusive on both ends', async () => {
+      await create({id: 'p1', properties: {[priorityProp.name]: priorityProp.codec.encode(1)}})
+      await create({id: 'p2', properties: {[priorityProp.name]: priorityProp.codec.encode(2)}})
+      await create({id: 'p3', properties: {[priorityProp.name]: priorityProp.codec.encode(3)}})
+      await create({id: 'p5', properties: {[priorityProp.name]: priorityProp.codec.encode(5)}})
+
+      const out = await env.repo.queryBlocks({where: {priority: {between: [2, 3]}}})
+      expect(ids(out).sort()).toEqual(['p2', 'p3'])
+    })
+
+    it('exists: true matches set, exists: false matches unset', async () => {
+      await create({id: 'set', properties: {status: 'open'}})
+      await create({id: 'missing', properties: {}})
+      await create({id: 'nullish', properties: {status: null}})
+
+      const set = await env.repo.queryBlocks({where: {status: {exists: true}}})
+      expect(ids(set)).toEqual(['set'])
+
+      const unset = await env.repo.queryBlocks({where: {status: {exists: false}}})
+      expect(ids(unset).sort()).toEqual(['missing', 'nullish'])
+    })
+
+    it('rejects malformed operator objects with a clear message', async () => {
+      await expect(env.repo.queryBlocks({where: {priority: {lt: 1, gt: 0}}}))
+        .rejects.toThrow('operator object must have exactly one key')
+      await expect(env.repo.queryBlocks({where: {priority: {bogus: 1}}}))
+        .rejects.toThrow('unknown operator')
+      await expect(env.repo.queryBlocks({where: {priority: {between: [1]}}}))
+        .rejects.toThrow('between must be a [lo, hi] tuple')
+      await expect(env.repo.queryBlocks({where: {status: {exists: 'yes'}}}))
+        .rejects.toThrow('exists must be a boolean')
+    })
+
+    it('rejects comparator operators on non-where-queryable codecs', async () => {
+      await expect(env.repo.queryBlocks({where: {reviewer: {eq: 'target'}}}))
+        .rejects.toThrow('is not where-queryable')
+    })
   })
 
   it('filters by references with optional sourceField', async () => {

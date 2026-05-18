@@ -19,6 +19,86 @@ interface CompiledClause {
   readonly params: readonly unknown[]
 }
 
+/** Operator names recognised inside `where[name]` object values.
+ *  Mirrors `WhereOperator` in `src/data/api/typedBlockQuery.ts`. */
+const COMPARATOR_OPERATORS = new Set(['eq', 'lt', 'lte', 'gt', 'gte'])
+const ALL_OPERATORS = new Set([...COMPARATOR_OPERATORS, 'between', 'exists'])
+
+/** A scalar `where` value goes through `codec.where.encode` and lands
+ *  in one of the comparator operators below; an object becomes an
+ *  operator dispatch; a `null` short-circuits to `IS NULL`. */
+type ParsedWhere =
+  | { readonly kind: 'unset' }              // legacy null shorthand
+  | { readonly kind: 'set' }                // exists: true
+  | { readonly kind: 'comparator'; readonly op: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; readonly operand: unknown }
+  | { readonly kind: 'between'; readonly lo: unknown; readonly hi: unknown }
+
+const COMPARATOR_SQL: Readonly<Record<'eq' | 'lt' | 'lte' | 'gt' | 'gte', string>> = {
+  eq: '=', lt: '<', lte: '<=', gt: '>', gte: '>=',
+}
+
+const isPlainOperatorObject = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === 'object' && value !== null && !(value instanceof Date) && !Array.isArray(value)
+
+/** Normalize a `where[name]` value to the discriminated `ParsedWhere`
+ *  shape. Throws on malformed inputs (multiple operator keys, unknown
+ *  operator, `between` not a 2-tuple, `exists` not a boolean). */
+const parseWhereValue = (name: string, value: unknown): ParsedWhere => {
+  if (value === null) return {kind: 'unset'}
+  if (!isPlainOperatorObject(value)) {
+    return {kind: 'comparator', op: 'eq', operand: value}
+  }
+  const entries = Object.entries(value).filter(([k]) => k !== undefined)
+  if (entries.length !== 1) {
+    throw new Error(
+      `[queryBlocks] where.${name} operator object must have exactly one key; got ${entries.length} ` +
+      `(combine via separate match/exclude predicates instead)`,
+    )
+  }
+  const [op, operand] = entries[0]!
+  if (!ALL_OPERATORS.has(op)) {
+    throw new Error(
+      `[queryBlocks] where.${name} unknown operator ${JSON.stringify(op)}; ` +
+      `supported: ${[...ALL_OPERATORS].join(', ')}`,
+    )
+  }
+  if (op === 'exists') {
+    if (typeof operand !== 'boolean') {
+      throw new Error(`[queryBlocks] where.${name}.exists must be a boolean; got ${typeof operand}`)
+    }
+    return operand ? {kind: 'set'} : {kind: 'unset'}
+  }
+  if (op === 'between') {
+    if (!Array.isArray(operand) || operand.length !== 2) {
+      throw new Error(`[queryBlocks] where.${name}.between must be a [lo, hi] tuple`)
+    }
+    return {kind: 'between', lo: operand[0], hi: operand[1]}
+  }
+  return {kind: 'comparator', op: op as 'eq' | 'lt' | 'lte' | 'gt' | 'gte', operand}
+}
+
+const encodeForWhere = (
+  name: string,
+  schema: AnyPropertySchema,
+  value: unknown,
+): string | number => {
+  if (!schema.codec.where) {
+    throw new Error(
+      `[queryBlocks] where.${name} is not where-queryable; ` +
+      `codec type ${JSON.stringify(schema.codec.type)} doesn't support comparison predicates ` +
+      '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
+    )
+  }
+  try {
+    return schema.codec.where.encode(value)
+  } catch (err) {
+    throw new Error(
+      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
+      {cause: err},
+    )
+  }
+}
+
 const compileWhereClause = (
   name: string,
   value: unknown,
@@ -32,37 +112,29 @@ const compileWhereClause = (
     throw new Error(`[queryBlocks] where.${name} has no registered PropertySchema`)
   }
   const path = jsonPathForProperty(name)
+  const parsed = parseWhereValue(name, value)
 
-  // `null` is the typed-query "match unset / explicitly-null" sentinel;
-  // SQLite `=` against NULL never matches, so compile to `IS NULL` and
-  // skip `where.encode` entirely (it would reject null).
-  if (value === null) {
+  // `IS NULL` / `IS NOT NULL` skip `codec.where.encode` entirely —
+  // they're orthogonal to the codec's encoding contract (and
+  // codec.where.encode rejects null/undefined by design).
+  if (parsed.kind === 'unset') {
+    return {sql: `json_extract(${jsonExpr}, ?) IS NULL`, params: [path]}
+  }
+  if (parsed.kind === 'set') {
+    return {sql: `json_extract(${jsonExpr}, ?) IS NOT NULL`, params: [path]}
+  }
+  if (parsed.kind === 'between') {
+    const lo = encodeForWhere(name, schema, parsed.lo)
+    const hi = encodeForWhere(name, schema, parsed.hi)
     return {
-      sql: `json_extract(${jsonExpr}, ?) IS NULL`,
-      params: [path],
+      sql: `json_extract(${jsonExpr}, ?) BETWEEN ? AND ?`,
+      params: [path, lo, hi],
     }
   }
-
-  if (!schema.codec.where) {
-    throw new Error(
-      `[queryBlocks] where.${name} is not where-queryable; ` +
-      `codec type ${JSON.stringify(schema.codec.type)} doesn't support equality predicates ` +
-      '(use referencedBy for refs, or add a dedicated query for collection/object filters)',
-    )
-  }
-
-  let sqlValue: string | number
-  try {
-    sqlValue = schema.codec.where.encode(value)
-  } catch (err) {
-    throw new Error(
-      `[queryBlocks] where.${name} value is not a valid ${schema.codec.type}: ${(err as Error).message}`,
-      {cause: err},
-    )
-  }
+  const operand = encodeForWhere(name, schema, parsed.operand)
   return {
-    sql: `json_extract(${jsonExpr}, ?) = ?`,
-    params: [path, sqlValue],
+    sql: `json_extract(${jsonExpr}, ?) ${COMPARATOR_SQL[parsed.op]} ?`,
+    params: [path, operand],
   }
 }
 

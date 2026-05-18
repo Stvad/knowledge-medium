@@ -3,6 +3,32 @@ export interface TypedBlockQueryReferenceFilter {
   readonly sourceField?: string
 }
 
+/** Operator object accepted inside `BlockPredicate.where[name]`. The
+ *  scalar/null shorthand still works: a bare value compiles as
+ *  equality, `null` compiles as `IS NULL`. The object form is needed
+ *  for everything else.
+ *
+ *  Exactly one operator key per object — multiple keys would force an
+ *  AND-vs-OR interpretation that's better expressed by combining
+ *  predicates in `match` / `exclude`. The runtime parser rejects
+ *  multi-key objects to keep the surface unambiguous.
+ *
+ *  Operand types: each scalar operand goes through `codec.where.encode`
+ *  the same way scalar shorthand does, so `{ lt: new Date('2026-01-01') }`
+ *  on a date-codec property and `{ gt: 5 }` on a number-codec property
+ *  validate identically to their equality-form counterparts. `between`
+ *  is inclusive on both ends. `exists` takes a boolean — `true` for
+ *  "property is set" (`IS NOT NULL`), `false` for "unset" (`IS NULL`,
+ *  same as the `null` shorthand). */
+export type WhereOperator =
+  | { readonly eq: unknown }
+  | { readonly lt: unknown }
+  | { readonly lte: unknown }
+  | { readonly gt: unknown }
+  | { readonly gte: unknown }
+  | { readonly between: readonly [unknown, unknown] }
+  | { readonly exists: boolean }
+
 /** A single block predicate. Compiled against either the block itself
  *  (`scope: 'self'`, default) or the block-or-any-of-its-ancestors
  *  (`scope: 'ancestor'`). All sub-fields within one predicate AND
@@ -12,7 +38,11 @@ export interface TypedBlockQueryReferenceFilter {
  *  The `id` field is the "block has this id" primitive. Useful with
  *  ancestor scope to filter for "block is contained in page X" without
  *  requiring X to be referenced — e.g. backlinks-on-a-daily-note
- *  filtering by which page their context lives in. */
+ *  filtering by which page their context lives in.
+ *
+ *  `where[name]` values: scalar (equality), `null` (unset), or a
+ *  `WhereOperator` object (`{ lt: v }`, `{ exists: true }`, etc.). See
+ *  the `WhereOperator` doc for the operand contract. */
 export interface BlockPredicate {
   readonly scope?: 'self' | 'ancestor'
   readonly id?: string
