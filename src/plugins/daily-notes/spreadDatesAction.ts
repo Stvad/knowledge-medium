@@ -1,12 +1,7 @@
 import { Shuffle } from 'lucide-react'
 import type { Block } from '@/data/block'
 import type { FacetRuntime } from '@/extensions/facet.ts'
-import {
-  ActionContextTypes,
-  type ActionConfig,
-  type BlockShortcutDependencies,
-  type MultiSelectModeDependencies,
-} from '@/shortcuts/types.ts'
+import { defineBlocksAction } from '@/shortcuts/utils.ts'
 import { showError, showSuccess } from '@/utils/toast.ts'
 import { openDialog } from '@/utils/dialogs.ts'
 import type { GroupedBacklinksGroupHeaderAction } from '@/plugins/grouped-backlinks/facet.ts'
@@ -16,11 +11,10 @@ import { spreadBlockDates } from './spreadBlockDates.ts'
 
 export const SPREAD_BLOCK_DATES_ACTION_ID = 'block.date.spread'
 
-/** Shared flow: prompt for the day window once, then dispatch
- *  `spreadBlockDates` over the supplied blocks. The runtime carries
- *  the registered `blockDateAdapterFacet` so adapter dispatch stays
- *  uniform across the NORMAL_MODE (single block) and
- *  MULTI_SELECT_MODE (selection) entry points. */
+/** Prompt for the day window once, then dispatch `spreadBlockDates`
+ *  over the supplied blocks. The runtime carries the registered
+ *  `blockDateAdapterFacet` so adapter dispatch stays uniform across
+ *  the NORMAL_MODE and MULTI_SELECT_MODE entry points. */
 const runSpreadFlow = async (
   blocks: readonly Block[],
   runtime: FacetRuntime | null,
@@ -50,54 +44,25 @@ const runSpreadFlow = async (
   }
 }
 
-/** NORMAL_MODE entry point — spread the focused block's date.
- *  Equivalent to "randomize my date within the next N days" for any
- *  block whose date is reachable through the adapter facet. */
-export const spreadBlockDateAction: ActionConfig<
-  typeof ActionContextTypes.NORMAL_MODE
-> = {
+const pair = defineBlocksAction({
   id: SPREAD_BLOCK_DATES_ACTION_ID,
-  description: 'Spread block date across upcoming days',
-  context: ActionContextTypes.NORMAL_MODE,
   icon: Shuffle,
-  canRun: ({block}: BlockShortcutDependencies) => {
+  blockDescription: 'Spread block date across upcoming days',
+  blocksDescription: 'Spread dates across upcoming days',
+  appliesTo: (block: Block) => {
+    // canRun runs sync during render; fall back to "permissive"
+    // when the runtime isn't installed yet (test setups) so the
+    // surface doesn't disappear unconditionally.
     const runtime = block.repo.facetRuntime
     if (!runtime) return true
     return hasAnyBlockDateAdapter(runtime, block)
   },
-  handler: ({block}: BlockShortcutDependencies) =>
-    runSpreadFlow([block], block.repo.facetRuntime),
-}
+  flow: (blocks: readonly Block[]) =>
+    runSpreadFlow(blocks, blocks[0]?.repo.facetRuntime ?? null),
+})
 
-/** MULTI_SELECT_MODE entry point — spread every block in
- *  `selectedBlocks`. Per-block dispatch is delegated to
- *  `blockDateAdapterFacet`, so SRS cards reschedule their
- *  next-review date and blocks with an inline `[[YYYY-MM-DD]]`
- *  reference rewrite the wikilink in a single invocation.
- *
- *  Gated on at least one selected block having a registered adapter
- *  so the surface hides on groups with no date-bearing blocks. */
-export const spreadBlockDatesAction: ActionConfig<
-  typeof ActionContextTypes.MULTI_SELECT_MODE
-> = {
-  id: SPREAD_BLOCK_DATES_ACTION_ID,
-  description: 'Spread dates across upcoming days',
-  context: ActionContextTypes.MULTI_SELECT_MODE,
-  icon: Shuffle,
-  canRun: ({selectedBlocks}: MultiSelectModeDependencies) => {
-    if (selectedBlocks.length === 0) return false
-    // The runtime is shared across blocks; pull it off the first one
-    // rather than threading it through deps. Returns null before the
-    // runtime has been installed (test setups that skip the setup),
-    // in which case we fall back to "permissive" so canRun doesn't
-    // hide the surface unconditionally.
-    const runtime = selectedBlocks[0].repo.facetRuntime
-    if (!runtime) return true
-    return selectedBlocks.some(block => hasAnyBlockDateAdapter(runtime, block))
-  },
-  handler: ({selectedBlocks}: MultiSelectModeDependencies) =>
-    runSpreadFlow(selectedBlocks, selectedBlocks[0]?.repo.facetRuntime ?? null),
-}
+export const spreadBlockDateAction = pair.block
+export const spreadBlockDatesAction = pair.blocks
 
 export const spreadBlockDatesGroupHeaderEntry: GroupedBacklinksGroupHeaderAction = {
   actionId: SPREAD_BLOCK_DATES_ACTION_ID,
