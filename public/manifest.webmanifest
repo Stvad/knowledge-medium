@@ -9,9 +9,32 @@
   },
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
-  "orientation": "any",
   "background_color": "#1e1b4b",
   "theme_color": "#1e1b4b",
+  "shortcuts": [
+    {
+      "name": "New daily block",
+      "short_name": "New block",
+      "description": "Append a new block to today's daily note",
+      "url": "./?intent=new-daily-block",
+      "icons": [
+        { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" }
+      ]
+    }
+  ],
+  "share_target": {
+    "action": "./?intent=share",
+    "method": "GET",
+    "enctype": "application/x-www-form-urlencoded",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url"
+    }
+  },
+  "note_taking": {
+    "new_note_url": "./?intent=new-daily-block"
+  },
   "icons": [
     {
       "src": "icon.svg",
