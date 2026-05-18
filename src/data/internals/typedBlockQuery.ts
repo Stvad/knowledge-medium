@@ -351,8 +351,23 @@ export const hasAncestorScope = (predicates: readonly BlockPredicate[]): boolean
 const isSelfScope = (predicate: BlockPredicate): boolean =>
   (predicate.scope ?? 'self') === 'self'
 
+/** Does this `where[name]` value narrow the candidate set, or does
+ *  it only match rows lacking the property? `null` and the operator
+ *  form `{exists: false}` are semantic duplicates — both compile to
+ *  `IS NULL` — so both have to be classified as non-selective; if
+ *  only one were, ancestor-gate and dep-wiring decisions would drift
+ *  based on which shorthand the caller happened to use. */
+export const isSelectiveWhereValue = (value: unknown): boolean => {
+  if (value === null) return false
+  if (typeof value !== 'object' || value instanceof Date || Array.isArray(value)) return true
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length !== 1) return true
+  const [op, operand] = entries[0]!
+  return !(op === 'exists' && operand === false)
+}
+
 const hasNonNullWhere = (where: Readonly<Record<string, unknown>> | undefined): boolean =>
-  where !== undefined && Object.values(where).some(v => v !== null)
+  where !== undefined && Object.values(where).some(isSelectiveWhereValue)
 
 /** Does this self-scope predicate actually bound the candidate set
  *  (vs. just match-anything)? Used by the ancestor-walk safety gate

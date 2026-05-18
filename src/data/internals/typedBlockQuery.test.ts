@@ -368,6 +368,17 @@ describe('repo.queryBlocks', () => {
     })).rejects.toThrow('require at least one candidate filter')
   })
 
+  it('exists:false-only where does not pass the ancestor gate either', async () => {
+    // `{exists: false}` is semantically identical to `null` (both
+    // compile to IS NULL). The selectivity gate must treat them the
+    // same, otherwise callers using one shorthand silently bypass
+    // the guard the other shorthand triggers.
+    await expect(env.repo.queryBlocks({
+      where: {status: {exists: false}},
+      match: [{scope: 'ancestor', where: {status: 'done'}}],
+    })).rejects.toThrow('require at least one candidate filter')
+  })
+
   it('self-scope match predicate counts as a candidate filter for the gate', async () => {
     // create() hardcodes parentId: null, so use tx.create directly to
     // build a parent-child chain.
@@ -429,6 +440,37 @@ describe('repo.subscribeBlocks', () => {
     await create({id: 'todo', types: ['todo']})
 
     await vi.waitFor(() => expect(fired).toEqual([[], ['todo']]))
+    off()
+  })
+
+  it('updates when a target operator inner property changes on the referenced row', async () => {
+    // Regression: the `target` traversal makes membership depend on
+    // the REFERENCED row's properties. Without dep wiring on the
+    // inner property channel, a target-side update wouldn't wake
+    // the subscriber.
+    await env.repo.tx(tx => tx.create({
+      id: 'target', workspaceId: WS, parentId: null, orderKey: 'a',
+    }), {scope: ChangeScope.BlockDefault})
+    await env.repo.tx(tx => tx.create({
+      id: 'source', workspaceId: WS, parentId: null, orderKey: 'b',
+      properties: {[reviewerProp.name]: reviewerProp.codec.encode('target')},
+      references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
+    }), {scope: ChangeScope.BlockDefault})
+
+    const fired: string[][] = []
+    const off = env.repo.subscribeBlocks(
+      {where: {[reviewerProp.name]: {target: {status: 'done'}}}},
+      rows => fired.push(ids(rows)),
+    )
+    await vi.waitFor(() => expect(fired).toEqual([[]]))
+
+    // Update the *target* row's status. The subscription's filter
+    // doesn't reference the target id directly — only an inner
+    // property predicate — so this hits the dep wiring that
+    // `collectWhereDeps` adds for traversals.
+    await env.repo.tx(tx => tx.setProperty('target', statusProp, 'done'),
+      {scope: ChangeScope.BlockDefault})
+    await vi.waitFor(() => expect(fired).toEqual([[], ['source']]))
     off()
   })
 
