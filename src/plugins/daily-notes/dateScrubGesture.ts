@@ -21,8 +21,8 @@
  *     start. If it accepts, we cancel the swipe-quick-actions
  *     candidate so the same gesture doesn't also open the swipe menu.
  *   - Either tracked finger lifting ends the mobile scrub. Desktop
- *     wheel scrub commits after a short idle window because wheel
- *     streams have no explicit "end" event.
+ *     wheel scrub commits when the user releases Option/Alt, which is
+ *     the clearest "let go" signal for a modifier-gated wheel stream.
  */
 import type { TouchEvent, WheelEvent } from 'react'
 import {
@@ -50,11 +50,6 @@ const HORIZONTAL_LOCK_PX = 10
 /** Pixels of horizontal drag per ISO day. Picked so that ±2 weeks fits
  *  inside half a thumb-arc on a phone (~200px = 14 days). */
 const PIXELS_PER_DAY = 14
-/** Wheel streams do not have an explicit end event, so an idle window
- *  is the least surprising "release" equivalent. Long enough to bridge
- *  normal trackpad event bursts, short enough to feel like the commit
- *  happens when the gesture stops. */
-const WHEEL_END_IDLE_MS = 220
 const WHEEL_CANDIDATE_IDLE_MS = 180
 const WHEEL_LINE_PX = 16
 /** Vertical midpoint travel above this — once scrub is active —
@@ -132,7 +127,6 @@ interface WheelCandidate {
 interface WheelScrub {
   blockId: string
   dx: number
-  endTimer: number | null
 }
 
 /** First finger landed on a block but the second hasn't arrived yet —
@@ -142,6 +136,7 @@ const singleByBlockId = new Map<string, SingleFinger>()
 const multiByBlockId = new Map<string, MultiTouch>()
 let wheelCandidate: WheelCandidate | null = null
 let wheelScrub: WheelScrub | null = null
+let wheelScrubListenersInstalled = false
 
 const isBlockEditing = (blockId: string, uiStateBlock: Block): boolean =>
   uiStateBlock.peekProperty(focusedBlockIdProp) === blockId &&
@@ -190,9 +185,40 @@ const clearWheelCandidate = (): void => {
 const finishWheelScrub = (commit: boolean): void => {
   const current = wheelScrub
   if (!current) return
-  if (current.endTimer) window.clearTimeout(current.endTimer)
   wheelScrub = null
+  removeWheelScrubListeners()
   activeHandler?.end(commit)
+}
+
+const isAltReleaseEvent = (event: Pick<KeyboardEvent, 'code' | 'key'>): boolean =>
+  event.key === 'Alt' || event.code === 'AltLeft' || event.code === 'AltRight'
+
+const handleWheelScrubKeyUp = (event: KeyboardEvent): void => {
+  if (isAltReleaseEvent(event)) finishWheelScrub(true)
+}
+
+const handleWheelScrubKeyDown = (event: KeyboardEvent): void => {
+  if (event.key === 'Escape') finishWheelScrub(false)
+}
+
+const handleWheelScrubBlur = (): void => {
+  finishWheelScrub(false)
+}
+
+function installWheelScrubListeners(): void {
+  if (wheelScrubListenersInstalled || typeof window === 'undefined') return
+  window.addEventListener('keyup', handleWheelScrubKeyUp, true)
+  window.addEventListener('keydown', handleWheelScrubKeyDown, true)
+  window.addEventListener('blur', handleWheelScrubBlur)
+  wheelScrubListenersInstalled = true
+}
+
+function removeWheelScrubListeners(): void {
+  if (!wheelScrubListenersInstalled || typeof window === 'undefined') return
+  window.removeEventListener('keyup', handleWheelScrubKeyUp, true)
+  window.removeEventListener('keydown', handleWheelScrubKeyDown, true)
+  window.removeEventListener('blur', handleWheelScrubBlur)
+  wheelScrubListenersInstalled = false
 }
 
 const normalizeWheelDelta = (
@@ -215,14 +241,6 @@ const scheduleWheelCandidateClear = (): void => {
   wheelCandidate.clearTimer = window.setTimeout(() => {
     clearWheelCandidate()
   }, WHEEL_CANDIDATE_IDLE_MS)
-}
-
-const scheduleWheelEnd = (): void => {
-  if (!wheelScrub) return
-  if (wheelScrub.endTimer) window.clearTimeout(wheelScrub.endTimer)
-  wheelScrub.endTimer = window.setTimeout(() => {
-    finishWheelScrub(true)
-  }, WHEEL_END_IDLE_MS)
 }
 
 export const dateScrubContentSurface: BlockContentSurfaceContribution = context => {
@@ -390,7 +408,10 @@ export const dateWheelScrubContentSurface: BlockContentSurfaceContribution = con
   return {
     onWheel: (event: WheelEvent) => {
       if (isMobileViewport()) return
-      if (!event.altKey) return
+      if (!event.altKey) {
+        if (wheelScrub) finishWheelScrub(true)
+        return
+      }
       // Buttons, editors, and other controls own their wheel behavior.
       // Links and video follow the mobile gesture exemption: the date
       // gesture can still apply to rendered content inside the block.
@@ -448,15 +469,14 @@ export const dateWheelScrubContentSurface: BlockContentSurfaceContribution = con
         wheelScrub = {
           blockId: candidate.blockId,
           dx: candidate.dx,
-          endTimer: null,
         }
+        installWheelScrubListeners()
       } else {
         wheelScrub.dx += dx
       }
 
       event.preventDefault()
       activeHandler?.update(computeDeltaDays(wheelScrub.dx), false)
-      scheduleWheelEnd()
     },
   }
 }

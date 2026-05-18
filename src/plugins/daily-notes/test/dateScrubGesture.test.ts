@@ -105,7 +105,7 @@ describe('date scrub wheel gesture', () => {
     document.body.innerHTML = ''
   })
 
-  it('starts, updates, and commits an option-horizontal wheel scrub on desktop', () => {
+  it('starts, updates, and commits an option-horizontal wheel scrub on Alt release', () => {
     const props = handlers(makeContext('dated-block'))
 
     const belowLock = wheelEvent({deltaX: 6})
@@ -125,7 +125,32 @@ describe('date scrub wheel gesture', () => {
     expect(locked.preventDefault).toHaveBeenCalled()
 
     vi.advanceTimersByTime(260)
+    expect(handler.end).not.toHaveBeenCalled()
+
+    window.dispatchEvent(new KeyboardEvent('keyup', {key: 'Alt'}))
     expect(handler.end).toHaveBeenCalledWith(true)
+  })
+
+  it('continues updating an active wheel scrub while Alt remains down after an idle gap', () => {
+    const props = handlers(makeContext('dated-block'))
+
+    props.onWheel?.(wheelEvent({deltaX: 14}))
+    vi.advanceTimersByTime(1000)
+    expect(handler.end).not.toHaveBeenCalled()
+
+    props.onWheel?.(wheelEvent({deltaX: 14}))
+
+    expect(handler.update).toHaveBeenLastCalledWith(2, false)
+    expect(handler.end).not.toHaveBeenCalled()
+  })
+
+  it('cancels an active wheel scrub on Escape', () => {
+    const props = handlers(makeContext('dated-block'))
+
+    props.onWheel?.(wheelEvent({deltaX: 14}))
+    window.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape'}))
+
+    expect(handler.end).toHaveBeenCalledWith(false)
   })
 
   it('ignores horizontal wheel events without the Option key', () => {
