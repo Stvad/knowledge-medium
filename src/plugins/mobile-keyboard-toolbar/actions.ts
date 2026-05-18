@@ -1,23 +1,21 @@
 import { startCompletion } from '@codemirror/autocomplete'
-import { EditorSelection } from '@codemirror/state'
 import {
   ActionContextTypes,
   type ActionConfig,
   type CodeMirrorEditModeDependencies,
 } from '@/shortcuts/types.ts'
+import { wrapRangeWithPair } from '@/utils/codemirror.ts'
 
 export const INSERT_PAGE_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_page_ref_trigger'
 export const INSERT_BLOCK_REF_TRIGGER_ACTION_ID = 'edit.cm.insert_block_ref_trigger'
 
 const insertCompletionTrigger = (
   editorView: CodeMirrorEditModeDependencies['editorView'],
-  text: string,
-  cursorOffset = text.length,
+  open: string,
+  close: string,
 ) => {
-  editorView.dispatch(editorView.state.changeByRange(range => ({
-    changes: {from: range.from, to: range.to, insert: text},
-    range: EditorSelection.cursor(range.from + cursorOffset),
-  })))
+  const {state} = editorView
+  editorView.dispatch(state.changeByRange(range => wrapRangeWithPair(state, range, open, close)))
   editorView.focus()
   startCompletion(editorView)
 }
@@ -25,14 +23,14 @@ const insertCompletionTrigger = (
 const completionTriggerAction = (
   id: string,
   description: string,
-  text: string,
-  cursorOffset?: number,
+  open: string,
+  close: string,
 ): ActionConfig<typeof ActionContextTypes.EDIT_MODE_CM> => ({
   id,
   description,
   context: ActionContextTypes.EDIT_MODE_CM,
   handler: async (deps) => {
-    insertCompletionTrigger(deps.editorView, text, cursorOffset)
+    insertCompletionTrigger(deps.editorView, open, close)
   },
 })
 
@@ -40,13 +38,13 @@ export const mobileKeyboardToolbarActions: readonly ActionConfig<typeof ActionCo
   completionTriggerAction(
     INSERT_PAGE_REF_TRIGGER_ACTION_ID,
     'Insert page reference trigger',
-    '[[]]',
-    2,
+    '[[',
+    ']]',
   ),
   completionTriggerAction(
     INSERT_BLOCK_REF_TRIGGER_ACTION_ID,
     'Insert block reference trigger',
-    '(())',
-    2,
+    '((',
+    '))',
   ),
 ]

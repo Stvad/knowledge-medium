@@ -1,13 +1,36 @@
-import { EditorSelection, type Extension, type StateCommand } from '@codemirror/state'
+import { EditorSelection, type EditorState, type Extension, type SelectionRange, type StateCommand } from '@codemirror/state'
 import { EditorView, keymap, type KeyBinding } from '@codemirror/view'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { javascript } from '@codemirror/lang-javascript'
 
+/** Produce the change/range spec for one selection range that either
+ *  inserts an empty `open`/`close` pair at the cursor or wraps the
+ *  selection with them, keeping the selection inside the wrappers.
+ *  Shared by the markdown formatting commands (bold/italic/etc.) and
+ *  the mobile toolbar's page-ref / block-ref completion triggers. */
+export const wrapRangeWithPair = (
+  state: EditorState,
+  range: SelectionRange,
+  open: string,
+  close: string = open,
+) => {
+  if (range.empty) {
+    return {
+      changes: {from: range.from, insert: `${open}${close}`},
+      range: EditorSelection.cursor(range.from + open.length),
+    }
+  }
+
+  const selectedText = state.sliceDoc(range.from, range.to)
+  return {
+    changes: {from: range.from, to: range.to, insert: `${open}${selectedText}${close}`},
+    range: EditorSelection.range(range.from + open.length, range.to + open.length),
+  }
+}
+
 const markdownInlineFormatCommand = (open: string, close = open): StateCommand =>
   ({state, dispatch}) => {
     const transaction = state.changeByRange(range => {
-      const selectedText = state.sliceDoc(range.from, range.to)
-
       if (range.empty) {
         const isBetweenMarkers =
           range.from >= open.length &&
@@ -25,12 +48,10 @@ const markdownInlineFormatCommand = (open: string, close = open): StateCommand =
           }
         }
 
-        return {
-          changes: {from: range.from, insert: `${open}${close}`},
-          range: EditorSelection.cursor(range.from + open.length),
-        }
+        return wrapRangeWithPair(state, range, open, close)
       }
 
+      const selectedText = state.sliceDoc(range.from, range.to)
       const isWrappedSelection =
         selectedText.startsWith(open) &&
         selectedText.endsWith(close) &&
@@ -62,10 +83,7 @@ const markdownInlineFormatCommand = (open: string, close = open): StateCommand =
         }
       }
 
-      return {
-        changes: {from: range.from, to: range.to, insert: `${open}${selectedText}${close}`},
-        range: EditorSelection.range(range.from + open.length, range.to + open.length),
-      }
+      return wrapRangeWithPair(state, range, open, close)
     })
 
     dispatch(state.update(transaction))
