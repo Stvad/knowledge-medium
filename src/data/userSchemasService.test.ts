@@ -304,11 +304,15 @@ describe('UserSchemasService.withProvisionalSchema', () => {
     const newer = buildSchema('topic', 'newer')
     // Simulate the duplicate-name state the subscription rebuild can
     // produce: two contributions with the same name in registration
-    // order, `nameToBlockId` pinned to the latter block.
+    // order, `nameToBlockId` and the committed mirror pinned to the
+    // latter block. Mirrors what rebuildFromBlocks would produce, so
+    // both live and committed views agree.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(env.service as any).contributions = [older, newer]
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(env.service as any).nameToBlockId = new Map([['topic', 'block-newer']])
+    const svc = env.service as any
+    svc.contributions = [older, newer]
+    svc.nameToBlockId = new Map([['topic', 'block-newer']])
+    svc.committedContributions = [older, newer]
+    svc.committedNameToBlockId = new Map([['topic', 'block-newer']])
     env.repo.setRuntimeContributions(
       propertySchemasFacet, 'user-data', [older, newer],
     )
@@ -356,6 +360,57 @@ describe('UserSchemasService.withProvisionalSchema', () => {
     expect(aResult).toBe(boom)
     expect(env.repo.propertySchemas.get('topic')).toBe(schemaB)
     expect(env.service.getSchemaBlockId('topic')).toBe('block-B')
+  })
+
+  it('overlapping provisionals + both fail: name ends UNREGISTERED (no failed provisional restored)', async () => {
+    // Two overlapping withProvisionalSchema calls for the same name,
+    // both fail. If `prior` captured the live view, A's failed
+    // provisional would become B's restore target — leaving a failed
+    // provisional registered with no successful tx behind it. The
+    // committed-only baseline (_peekCommitted) avoids this.
+    //
+    // We can't actually run nested repo.tx (PowerSync serializes
+    // writes — the inner tx would deadlock). Instead, simulate B
+    // entirely via the synchronous primitives the public method
+    // uses internally.
+    env = await setup()
+    await drainInitialSubscriptionTick()
+
+    const schemaA = buildSchema('topic', 'A')
+    const schemaB = buildSchema('topic', 'B')
+    const boomA = new Error('A tx failed')
+
+    const aResult = await env.service.withProvisionalSchema(schemaA, 'block-A', async () => {
+      // Inside A's body: A is the live provisional, committed mirror
+      // is still empty. Simulate B's flow synchronously:
+      //   1. B captures _peekCommitted (returns undefined because A
+      //      is provisional, not committed).
+      //   2. B appends its own provisional.
+      //   3. B's tx body throws → B's catch arm runs removeUserSchema
+      //      (since B's captured prior was undefined).
+      // Net of B's simulated overlap: name is fully unregistered.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const serviceAny = env.service as any
+      const bCommittedPrior = serviceAny._peekCommitted('topic')
+      expect(bCommittedPrior).toBeUndefined()       // committed view, not A's live provisional
+      serviceAny._appendProvisional(schemaB, 'block-B')
+      // B's hypothetical tx fails — its catch arm would call
+      // removeUserSchema (since bCommittedPrior was undefined).
+      env.service.removeUserSchema('topic')
+      expect(env.repo.propertySchemas.get('topic')).toBeUndefined()
+
+      // Now A's body throws.
+      throw boomA
+    }).catch(err => err)
+
+    expect(aResult).toBe(boomA)
+    // A's catch ran. Its token was cleared by removeUserSchema (B's
+    // rollback simulation), so the CAS check skipped rollback. Final
+    // state: name is fully unregistered. The bug we're guarding
+    // against: a live-peek prior would have made B "restore" schemaA,
+    // leaving a failed provisional registered.
+    expect(env.repo.propertySchemas.get('topic')).toBeUndefined()
+    expect(env.service.getSchemaBlockId('topic')).toBeUndefined()
   })
 
   it('concurrent overlap (SAME blockId, different schema): A fails after B succeeds → A does NOT clobber B', async () => {

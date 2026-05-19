@@ -56,6 +56,18 @@ export class UserSchemasService {
    *  same (name, blockId) pair. */
   private contributionTokens = new Map<string, symbol>()
 
+  /** Committed-only mirror of `contributions` / `nameToBlockId`. Tracks
+   *  the rollback baseline for `withProvisionalSchema`: what the live
+   *  state would be if every in-flight provisional unwound. Updated by
+   *  successful operations (subscription rebuild, `appendUserSchema`
+   *  from outside withProvisionalSchema, `removeUserSchema`, and the
+   *  success arm of `withProvisionalSchema`); NOT touched by an
+   *  in-flight provisional append. Without this, two overlapping
+   *  provisional calls for the same name capture each other as "prior"
+   *  and a double-failure rollback restores a failed provisional. */
+  private committedContributions: readonly AnyPropertySchema[] = []
+  private committedNameToBlockId = new Map<string, string>()
+
   /** Active block-subscription disposer, set by `start()`. */
   private subscriptionDisposer: Unsubscribe | null = null
 
@@ -96,9 +108,13 @@ export class UserSchemasService {
           nextTokens.set(built.name, Symbol('rebuild'))
         }
       }
+      // Subscription rebuild reflects on-disk truth — write to both
+      // committed and live (and reset any stale provisional tokens).
       this.contributions = next
       this.nameToBlockId = nextNameToBlockId
       this.contributionTokens = nextTokens
+      this.committedContributions = next
+      this.committedNameToBlockId = new Map(nextNameToBlockId)
       this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
     }
 
@@ -187,6 +203,14 @@ export class UserSchemasService {
     ]
     this.nameToBlockId.set(schema.name, blockId)
     this.contributionTokens.set(schema.name, Symbol('appendUserSchema'))
+    // Public appendUserSchema asserts a committed registration — addSchema
+    // calls it after its tx succeeds. Update the committed mirror too so a
+    // subsequent withProvisionalSchema sees this as the rollback baseline.
+    this.committedContributions = [
+      ...this.committedContributions.filter(s => s.name !== schema.name),
+      schema,
+    ]
+    this.committedNameToBlockId.set(schema.name, blockId)
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
   }
 
@@ -220,6 +244,35 @@ export class UserSchemasService {
     this.contributions = this.contributions.filter(s => s.name !== name)
     this.nameToBlockId.delete(name)
     this.contributionTokens.delete(name)
+    this.committedContributions = this.committedContributions.filter(s => s.name !== name)
+    this.committedNameToBlockId.delete(name)
+    this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
+  }
+
+  /** Look up the COMMITTED entry for `name` (ignoring any in-flight
+   *  provisional appended by a still-running `withProvisionalSchema`).
+   *  Used by `withProvisionalSchema` as the rollback baseline so two
+   *  overlapping provisional calls for the same name don't capture
+   *  each other as "prior." */
+  private _peekCommitted(name: string): {contribution: AnyPropertySchema; blockId: string} | undefined {
+    const blockId = this.committedNameToBlockId.get(name)
+    if (!blockId) return undefined
+    const contribution = this.committedContributions.findLast(s => s.name === name)
+    if (!contribution) return undefined
+    return {contribution, blockId}
+  }
+
+  /** Append `schema` to the LIVE view only. The committed mirror is
+   *  not touched — this is for in-flight provisional registrations
+   *  that may or may not commit. Mirrors `appendUserSchema` shape but
+   *  without the committed-mirror update. */
+  private _appendProvisional(schema: AnyPropertySchema, blockId: string): void {
+    this.contributions = [
+      ...this.contributions.filter(s => s.name !== schema.name),
+      schema,
+    ]
+    this.nameToBlockId.set(schema.name, blockId)
+    this.contributionTokens.set(schema.name, Symbol('provisional'))
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
   }
 
@@ -239,19 +292,37 @@ export class UserSchemasService {
     body: (tx: Tx) => Promise<T>,
     opts: {scope?: ChangeScope; description?: string} = {},
   ): Promise<T> {
-    const prior = this.peekContribution(schema.name)
-    this.appendUserSchema(schema, blockId)
-    // Snapshot our token IMMEDIATELY after appendUserSchema — this is
-    // the per-call sentinel for the CAS check below. blockId isn't
-    // unique enough: two overlapping calls (retries / duplicate
-    // submits) can legitimately share the same (name, blockId) pair.
-    // A fresh symbol per appendUserSchema makes ownership identifiable.
+    // Capture the COMMITTED prior, not the live peek. If another
+    // in-flight withProvisionalSchema for the same name overlapped
+    // (call A appended, call B starts), live peek would return A's
+    // provisional. Restoring it on B's failure would leave a failed
+    // provisional registered. The committed mirror only reflects
+    // successful operations, so it's the right rollback baseline.
+    const prior = this._peekCommitted(schema.name)
+    // Provisional append: updates LIVE only, leaves committed mirror
+    // untouched so a later overlapping caller doesn't see this entry
+    // as a committed baseline.
+    this._appendProvisional(schema, blockId)
     const ourToken = this.contributionTokens.get(schema.name)
     try {
-      return await this.repo.tx(body, {
+      const result = await this.repo.tx(body, {
         scope: opts.scope ?? ChangeScope.BlockDefault,
         description: opts.description ?? 'withProvisionalSchema',
       })
+      // Success: promote our provisional to committed. The caller's
+      // body asserted the registration is good (presumably wrote a
+      // backing property-schema block; the next subscription rebuild
+      // will reconcile from disk regardless). Only promote if we
+      // still own the token — an intervening rebuild / external
+      // append / removeUserSchema may have already taken over.
+      if (this.contributionTokens.get(schema.name) === ourToken) {
+        this.committedContributions = [
+          ...this.committedContributions.filter(s => s.name !== schema.name),
+          schema,
+        ]
+        this.committedNameToBlockId.set(schema.name, blockId)
+      }
+      return result
     } catch (err) {
       // CAS: only roll back if our token is still the live one. Any
       // intervening appendUserSchema / removeUserSchema / subscription
