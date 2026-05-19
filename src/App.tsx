@@ -22,7 +22,7 @@ import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorksp
 import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState.ts'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.ts'
 import { workspaceLandingFacet } from '@/extensions/core.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { staticAppExtensions } from '@/extensions/staticAppExtensions.ts'

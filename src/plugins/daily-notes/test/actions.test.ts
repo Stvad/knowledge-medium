@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
   activePanelIdProp,
   editorSelection,

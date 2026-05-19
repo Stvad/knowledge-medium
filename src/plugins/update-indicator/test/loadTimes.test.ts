@@ -5,7 +5,7 @@ import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { getPluginPrefsBlock } from '@/data/globalState'
+import { getPluginPrefsBlock } from '@/data/stateBlocks'
 import {
   currentLoadTimeProp,
   previousLoadTimeProp,

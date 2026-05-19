@@ -24,7 +24,7 @@
 import type { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { ChangeScope } from '@/data/api'
-import { getLayoutSessionBlock } from '@/data/globalState.ts'
+import { getLayoutSessionBlock } from '@/data/stateBlocks.ts'
 import {
   activePanelIdProp,
   aliasesProp,

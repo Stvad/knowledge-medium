@@ -136,7 +136,7 @@ export {
   getPluginUIStateBlock,
   getUserBlock,
   getUserPrefsBlock,
-} from '@/data/globalState.ts'
+} from '@/data/stateBlocks.ts'
 // PropertySchema authoring — extensions define their own typed
 // properties via `defineProperty` from the data-layer api.
 export { defineBlockType, defineProperty, definePropertyEditorOverride, codecs, ChangeScope } from '@/data/api'

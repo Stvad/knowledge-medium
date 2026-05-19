@@ -20,7 +20,7 @@ vi.mock('@/context/repo', () => ({
   useRepo: vi.fn(),
 }))
 
-vi.mock('@/data/globalState', () => ({
+vi.mock('@/data/stateBlocks', () => ({
   getUIStateBlock: mocks.getUIStateBlock,
   getLayoutSessionBlock: mocks.getLayoutSessionBlock,
 }))

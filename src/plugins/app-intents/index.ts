@@ -18,7 +18,7 @@
  */
 import { appEffectsFacet, type AppEffect } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState.ts'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import { consumeAppIntent } from './appIntents.ts'
 

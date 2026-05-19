@@ -20,7 +20,7 @@ import {
 import {
   getSelectionStateSnapshot,
   resetBlockSelection,
-} from '@/data/globalState.ts'
+} from '@/data/stateBlocks.ts'
 import { Repo } from '../data/repo'
 import { combineLastContributionResult, defineFacet, isFunction } from '@/extensions/facet.ts'
 import {

@@ -51,7 +51,7 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { getLayoutSessionBlock } from '@/data/globalState.ts'
+import { getLayoutSessionBlock } from '@/data/stateBlocks.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
   navigate,

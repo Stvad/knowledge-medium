@@ -41,7 +41,7 @@ import {
   getUserBlock,
   getUserPrefsBlock,
   resetBlockSelection,
-} from '@/data/globalState'
+} from '@/data/stateBlocks'
 import { defineBlockType } from '@/data/api'
 
 const WS = 'ws-1'

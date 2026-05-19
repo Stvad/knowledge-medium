@@ -12,7 +12,7 @@ import { panelHistory } from '@/utils/panelHistory'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
   __resetLayoutSessionIdForTesting,
   getLayoutSessionId,

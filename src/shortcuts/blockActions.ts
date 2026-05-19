@@ -1,7 +1,7 @@
 import { ChevronsDownUp, ClipboardCopy, Copy, Link2, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { Block } from '../data/block'
 import { Repo } from '../data/repo'
-import { resetBlockSelection } from '@/data/globalState.ts'
+import { resetBlockSelection } from '@/data/stateBlocks.ts'
 import { copyBlockToClipboard } from '@/utils/copy.ts'
 import {
   editorSelection,

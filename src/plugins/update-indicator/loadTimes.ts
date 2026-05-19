@@ -1,4 +1,4 @@
-import { getPluginPrefsBlock } from '@/data/globalState.ts'
+import { getPluginPrefsBlock } from '@/data/stateBlocks.ts'
 import {
   ChangeScope,
   codecs,

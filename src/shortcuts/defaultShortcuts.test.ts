@@ -12,7 +12,7 @@ import {
   focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/globalState'
+import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
 import {
   CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
   getDefaultActions,
