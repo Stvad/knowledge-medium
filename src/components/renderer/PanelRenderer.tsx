@@ -27,7 +27,7 @@ import { deletePanelRow } from '@/utils/panelLayoutProjection.ts'
 
 const SCROLL_WRITE_DELAY_MS = 200
 const PANEL_ACTION_BUTTON_CLASS =
-  'h-6 w-6 bg-background/60 text-muted-foreground hover:bg-accent hover:text-foreground'
+  'pointer-events-auto h-6 w-6 bg-background/60 text-muted-foreground hover:bg-accent hover:text-foreground'
 const PANEL_HISTORY_BUTTON_CLASS =
   `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/60 disabled:hover:text-muted-foreground/40`
 
@@ -183,12 +183,12 @@ export function PanelRenderer({block}: BlockRendererProps) {
     }`}>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
-          <div className="pointer-events-auto mx-auto flex w-full max-w-3xl justify-end gap-0.5">
+          <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">
             {actionButtons}
           </div>
         </div>
       ) : (
-        <div className="absolute top-1 right-0.5 z-10 flex gap-0.5">
+        <div className="pointer-events-none absolute top-1 right-0.5 z-10 flex gap-0.5">
           {actionButtons}
         </div>
       )}

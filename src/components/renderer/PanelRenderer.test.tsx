@@ -128,6 +128,15 @@ describe('PanelRenderer', () => {
     expect(contentFrame?.className).toContain('max-w-3xl')
   })
 
+  it('lets wide-surface chrome empty space pass clicks through to content', async () => {
+    renderPanel(true)
+
+    const backButton = await screen.findByLabelText('Back')
+    expect(backButton.className).toContain('pointer-events-auto')
+    expect(backButton.parentElement?.className).toContain('pointer-events-none')
+    expect(backButton.parentElement?.parentElement?.className).toContain('pointer-events-none')
+  })
+
   it('does not add a content-width frame for normal panel columns', async () => {
     renderPanel(false)
 
