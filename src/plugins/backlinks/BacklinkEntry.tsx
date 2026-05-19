@@ -8,6 +8,8 @@ import { LazyViewportMount } from '@/components/util/LazyViewportMount.tsx'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.tsx'
 import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import { useUIStateBlock } from '@/data/globalState.ts'
+import { focusBlock } from '@/data/properties.ts'
 import {
   backlinkEntryShortcutContextOverrides,
   findNextCollapsedBreadcrumb,
@@ -128,16 +130,18 @@ const BacklinkItem = ({
   initialParents?: readonly Block[]
 }) => {
   const repo = useRepo()
+  const uiStateBlock = useUIStateBlock()
   const [shownBlockId, setShownBlockId] = useState(block.id)
   const shownBlock = useMemo(() => repo.block(shownBlockId), [repo, shownBlockId])
   const isInitial = shownBlockId === block.id
 
-  const handleSelect = useCallback((parent: Block) => {
-    setShownBlockId(parent.id)
-  }, [])
-  const handleShowBlock = useCallback((blockId: string) => {
+  const handleShowBlock = useCallback(async (blockId: string) => {
     setShownBlockId(blockId)
-  }, [])
+    await focusBlock(uiStateBlock, blockId)
+  }, [uiStateBlock])
+  const handleSelect = useCallback((parent: Block) => {
+    void handleShowBlock(parent.id)
+  }, [handleShowBlock])
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
