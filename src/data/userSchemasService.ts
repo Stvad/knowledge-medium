@@ -230,10 +230,21 @@ export class UserSchemasService {
         description: opts.description ?? 'withProvisionalSchema',
       })
     } catch (err) {
-      if (prior) {
-        this.appendUserSchema(prior.contribution, prior.blockId)
-      } else {
-        this.removeUserSchema(schema.name)
+      // Compare-and-swap on the live entry's blockId. Two concurrent
+      // withProvisionalSchema calls for the same name can interleave:
+      // call A peeks prior=undefined, appends, awaits its tx; call B
+      // peeks prior=A's-provisional, appends-and-overwrites with B's
+      // schema, and its tx succeeds; A's tx then fails. Without this
+      // check, A's catch would call `removeUserSchema(name)` and wipe
+      // B's legitimately-live entry. Only roll back if the current
+      // live entry is still the one this call appended.
+      const current = this.peekContribution(schema.name)
+      if (current && current.blockId === blockId) {
+        if (prior) {
+          this.appendUserSchema(prior.contribution, prior.blockId)
+        } else {
+          this.removeUserSchema(schema.name)
+        }
       }
       throw err
     }
