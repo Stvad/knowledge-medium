@@ -21,10 +21,11 @@
  * in one place so the codes stay greppable.
  */
 
+import { createElement } from 'react'
 import type { ProcessorRejection } from '@/data/api'
 import type { Repo } from '@/data/repo'
-import { navigate } from '@/utils/navigation.ts'
-import { showError } from './toast.ts'
+import { AliasCollisionToast } from './AliasCollisionToast.tsx'
+import { showCustom, showError } from './toast.ts'
 
 interface AliasCollisionMeta {
   alias: string
@@ -57,26 +58,26 @@ export const surfaceProcessorRejectionFor = (repo: Repo) =>
           showError(error.message)
           return
         }
-        const {alias, conflictingBlockId, conflictingBlockTitle, workspaceId} = error.meta
+        const {alias, attemptedOn, conflictingBlockId, conflictingBlockTitle, workspaceId} = error.meta
         // Blank-title fallback: a block can legitimately claim an
         // alias with empty content, in which case the title would be
         // useless in the toast — fall back to showing the alias text.
         const displayTitle = conflictingBlockTitle.trim() === ''
           ? `"${alias}"`
           : `"${truncate(conflictingBlockTitle, 60)}"`
-        showError(
-          `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name.`,
-          {
-            duration: 8000,
-            action: {
-              label: 'Open',
-              onClick: () => navigate(repo, {
-                target: 'main',
-                blockId: conflictingBlockId,
-                workspaceId,
-              }),
-            },
-          },
+        const message = `Alias "${alias}" is already used by ${displayTitle}. Your edit was reverted — try a different name or merge with the existing page.`
+        showCustom(
+          id => createElement(AliasCollisionToast, {
+            toastId: id,
+            message,
+            alias,
+            attemptedOn,
+            conflictingBlockId,
+            conflictingBlockTitle,
+            workspaceId,
+            repo,
+          }),
+          {duration: 12000},
         )
         return
       }
