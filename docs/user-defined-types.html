@@ -332,6 +332,17 @@ export class UserTypesService {
     this.nameToBlockId.set(contribution.id, blockId)
     this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
   }
+
+  <span class="comment">// Symmetric rollback for the synchronous-append path. Callers that</span>
+  <span class="comment">// append before opening a tx use this in a catch arm so a tx</span>
+  <span class="comment">// failure can't leave an orphan in the runtime. The subscription</span>
+  <span class="comment">// would only reconcile on the next block-write, which never fires</span>
+  <span class="comment">// if the tx aborted before writing any block.</span>
+  removeUserType(typeId: string): void {
+    this.contributions = this.contributions.filter(t =&gt; t.id !== typeId)
+    this.nameToBlockId.delete(typeId)
+    this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
+  }
 }</code></pre>
 
 <p>
@@ -630,17 +641,27 @@ anyway.
 <p>One small ergonomic piece &mdash; a delta helper so every processor isn't reimplementing the diff:</p>
 
 <pre><code><span class="comment">// src/data/properties.ts (additions)</span>
+<span class="comment">// ChangedRow.before is null for inserts; ChangedRow.after is null</span>
+<span class="comment">// for hard-deletes (`src/data/api/processor.ts:70-73`). Both helpers</span>
+<span class="comment">// must accept either null without throwing, otherwise any processor</span>
+<span class="comment">// using them aborts insert / hard-delete txs.</span>
 export const addedTypes = (row: ChangedRow): readonly string[] =&gt; {
   const before = row.before ? getBlockTypes(row.before) : []
-  const after  = getBlockTypes(row.after)
+  const after  = row.after  ? getBlockTypes(row.after)  : []
   return after.filter(t =&gt; !before.includes(t))
 }
 
 export const removedTypes = (row: ChangedRow): readonly string[] =&gt; {
   const before = row.before ? getBlockTypes(row.before) : []
-  const after  = getBlockTypes(row.after)
+  const after  = row.after  ? getBlockTypes(row.after)  : []
   return before.filter(t =&gt; !after.includes(t))
 }</code></pre>
+
+<p>
+With the helpers null-safe, the example processor above is also safe on hard-delete events: a deleted block returns
+<code>addedTypes(row) === []</code> for any type id, the loop body skips, and <code>row.after</code> is never
+dereferenced. Processors that genuinely care about removal switch on <code>removedTypes(row)</code> instead.
+</p>
 
 <h3>What <code>repo.addType</code> becomes</h3>
 
@@ -746,7 +767,7 @@ service needs the same synchronous-append escape hatch <code>UserSchemasService<
 <code>appendUserType(contribution, blockId)</code>, same shape, updating the user-data bucket on
 <code>typesFacet</code> synchronously via <code>setRuntimeContributions</code>.</p>
 
-<p>With that primitive in place:</p>
+<p>With that primitive in place, plus a symmetric <code>removeUserType(typeId)</code> for cleanup:</p>
 <ol>
   <li>
     <b>Before opening the tx</b> &mdash; build the <code>TypeContribution</code> from the action args
@@ -756,8 +777,8 @@ service needs the same synchronous-append escape hatch <code>UserSchemasService<
     (taken inside the tx) sees it.
   </li>
   <li>
-    Open the tx. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code> on the Person page,
-    materializing <code>block-type:label</code> and <code>block-type:properties</code>.
+    Open the tx <i>under a try/catch</i>. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code>
+    on the Person page, materializing <code>block-type:label</code> and <code>block-type:properties</code>.
   </li>
   <li>
     Query <code>repo.queryBlocks({referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code> &mdash; the
@@ -773,16 +794,41 @@ service needs the same synchronous-append escape hatch <code>UserSchemasService<
     If <code>rewriteIsaReferences</code>: rewrite the <code>roam:isa</code> refList on each instance, dropping the
     promoted alias. Default off &mdash; users typically want both for a while.
   </li>
+  <li>
+    <b>On tx failure</b>: in the catch arm, call <code>userTypesService.removeUserType(targetBlockId)</code>
+    explicitly, then rethrow. Don't rely on the next subscription rebuild to clean up &mdash; see callout below.
+  </li>
 </ol>
 
-<div class="callout muted">
-  <h4>Crash / abort behavior</h4>
+<pre><code>userTypesService.appendUserType(contribution, targetBlockId)
+try {
+  await repo.tx(async tx =&gt; {
+    await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})
+    const instances = await repo.queryBlocks({referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})
+    for (const instance of instances) {
+      await repo.addTypeInTx(tx, instance.id, targetBlockId, {})
+    }
+    if (rewriteIsaReferences) <span class="comment">/* ... */</span>
+  })
+} catch (err) {
+  userTypesService.removeUserType(targetBlockId)
+  throw err
+}</code></pre>
+
+<div class="callout warn">
+  <h4>Why explicit rollback &mdash; subscription rebuild isn't enough</h4>
+  <p style="margin:0 0 .4rem">
+    The subscription that reconciles user-data type contributions from blocks fires <i>only on block writes</i>.
+    A tx that fails before writing any <code>block-type</code> block (validation error, mid-tx exception, abort
+    signal) doesn't trigger a subscription tick, so the provisionally-registered <code>targetBlockId</code>
+    persists in the runtime indefinitely. During that window <code>repo.addTypeInTx(_, _, targetBlockId, {})</code>
+    from any other caller would succeed, attaching an orphan type id to unrelated blocks.
+  </p>
   <p style="margin:0">
-    If the tx fails after step 1, the runtime carries a registration for a type whose block doesn't exist on
-    disk. Same property <code>addSchema</code> has: the next subscription rebuild reads from blocks, finds no
-    backing one, drops the orphan. Transient, self-healing. The alternative &mdash; appending only after the tx
-    commits &mdash; can't work here because steps 4's <code>addTypeInTx</code> calls need the registration
-    in-tx. The asymmetry vs. <code>addSchema</code> is justified by the in-tx dependency.
+    Explicit <code>removeUserType</code> on the catch arm closes the window. The asymmetry vs. <code>addSchema</code>
+    (which appends after commit and doesn't need rollback) is justified by the in-tx dependency: step 4's
+    <code>addTypeInTx</code> calls need the registration to be visible before the tx commits, so the registration
+    has to precede the writes that depend on it.
   </p>
 </div>
 
