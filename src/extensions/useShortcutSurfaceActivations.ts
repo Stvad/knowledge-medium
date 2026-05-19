@@ -17,7 +17,7 @@ import {
   useUIStateBlock,
   useUIStateProperty,
 } from '@/data/globalState.ts'
-import { topLevelBlockIdProp, typesProp } from '@/data/properties.ts'
+import { activePanelIdProp, topLevelBlockIdProp, typesProp } from '@/data/properties.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
 
 type ShortcutSurfaceOptions =
@@ -52,11 +52,19 @@ export function useShortcutSurfaceActivations(
   const blockContext = useBlockContext()
   const [topLevelBlockId] = useUIStateProperty(topLevelBlockIdProp)
   const [types] = usePropertyValue(block, typesProp)
+  const panelId = typeof blockContext.panelId === 'string' ? blockContext.panelId : undefined
+  const layoutSessionBlockId = typeof blockContext.layoutSessionBlockId === 'string'
+    ? blockContext.layoutSessionBlockId
+    : undefined
+  const activePanelStateBlock = layoutSessionBlockId ? repo.block(layoutSessionBlockId) : uiStateBlock
+  const [activePanelId] = usePropertyValue(activePanelStateBlock, activePanelIdProp)
   const blockInFocus = useInFocus(block.id)
   const surfaceActive = typeof options.surfaceActive === 'boolean'
     ? options.surfaceActive
     : true
-  const inFocus = blockInFocus && surfaceActive
+  const panelSurfaceActive =
+    !panelId || !layoutSessionBlockId || !activePanelId || activePanelId === panelId
+  const inFocus = blockInFocus && surfaceActive && panelSurfaceActive
   const inEditMode = useInEditMode(block.id)
   const isSelected = useIsSelected(block.id)
 
