@@ -8,6 +8,7 @@ import {
   defineProperty,
   type AnyPropertySchema,
 } from '@/data/api'
+import { refTargetFilterDefaultsFacet, type RefTargetFilterDefault } from '@/data/facets.ts'
 import {
   DAILY_NOTE_TYPE,
   dailyNoteDateProp,
@@ -16,6 +17,7 @@ import { BacklinkFilters } from '../BacklinkFilters.tsx'
 
 const schemaStore = vi.hoisted(() => ({
   schemas: new Map<string, unknown>(),
+  refTargetDefaults: new Map<string, unknown>(),
 }))
 
 vi.mock('@/context/repo.tsx', () => ({
@@ -35,13 +37,35 @@ vi.mock('@/hooks/propertySchemas.ts', () => ({
   usePropertySchemas: () => schemaStore.schemas,
 }))
 
+vi.mock('@/extensions/runtimeContext.ts', () => ({
+  useAppRuntime: () => ({
+    read: (facet: {id: string}) => {
+      if (facet.id === refTargetFilterDefaultsFacet.id) return schemaStore.refTargetDefaults
+      return new Map()
+    },
+  }),
+}))
+
 const setSchemas = (...schemas: AnyPropertySchema[]) => {
   schemaStore.schemas = new Map(schemas.map(schema => [schema.name, schema]))
+  // Daily-note schema is needed when resolving any daily-note ref to
+  // its inner date property's affordance.
+  if (!schemaStore.schemas.has(dailyNoteDateProp.name)) {
+    schemaStore.schemas.set(dailyNoteDateProp.name, dailyNoteDateProp)
+  }
+}
+
+const setRefTargetDefaults = (...entries: RefTargetFilterDefault[]) => {
+  schemaStore.refTargetDefaults = new Map(entries.map(e => [e.targetType, e]))
 }
 
 describe('BacklinkFilters', () => {
   beforeEach(() => {
     setSchemas()
+    setRefTargetDefaults({
+      targetType: DAILY_NOTE_TYPE,
+      property: dailyNoteDateProp.name,
+    })
   })
 
   it('shows a config action for displayed default filters', () => {

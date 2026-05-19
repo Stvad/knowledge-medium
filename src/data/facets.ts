@@ -236,6 +236,42 @@ export const localSchemaFacet = defineFacet<LocalSchemaContribution, readonly Lo
   validate: isLocalSchemaContribution,
 })
 
+/** Default inner-property to use when filtering a `ref`/`refList`
+ *  property whose target is of a given block type. Contributed by the
+ *  *target* type's plugin (e.g. daily-notes contributes
+ *  `{targetType: 'daily-note', property: 'daily-note:date'}`) so that
+ *  filter UIs can present "filter this ref as a date" without baking
+ *  daily-note knowledge into the filter component. The compiled
+ *  predicate uses the typed-query `target` traversal — no
+ *  query-engine extension required.
+ *
+ *  Lookup is by target type id; last-wins on collision. Keyed by
+ *  target type (not ref property name) because the contract belongs to
+ *  the target — any user-defined ref pointing at a daily note should
+ *  get the same affordance without per-property registration. */
+export interface RefTargetFilterDefault {
+  readonly targetType: string
+  /** Name of a registered `PropertySchema` on the target block type. */
+  readonly property: string
+}
+
+export const refTargetFilterDefaultsFacet = defineFacet<RefTargetFilterDefault, ReadonlyMap<string, RefTargetFilterDefault>>({
+  id: 'data.refTargetFilterDefaults',
+  combine: (values) => {
+    const out = new Map<string, RefTargetFilterDefault>()
+    for (const d of values) {
+      if (out.has(d.targetType)) {
+        console.warn(
+          `[refTargetFilterDefaultsFacet] duplicate registration for "${d.targetType}"; last-wins per facet convention`,
+        )
+      }
+      out.set(d.targetType, d)
+    }
+    return out
+  },
+  empty: () => new Map(),
+})
+
 export const invalidationRulesFacet = defineFacet<InvalidationRule, readonly InvalidationRule[]>({
   id: 'data.invalidationRules',
   validate: isInvalidationRule,

@@ -11,16 +11,16 @@ import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { useRepo } from '@/context/repo.tsx'
 import { useHandle } from '@/hooks/block.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
+import { useAppRuntime } from '@/extensions/runtimeContext.ts'
+import { refTargetFilterDefaultsFacet } from '@/data/facets.ts'
+import { type BlockPredicate } from '@/data/api'
 import {
-  isRefCodec,
-  isRefListCodec,
-  type AnyPropertySchema,
-  type BlockPredicate,
-} from '@/data/api'
-import {
-  DAILY_NOTE_TYPE,
-  dailyNoteDateProp,
-} from '@/plugins/daily-notes/schema.ts'
+  propertyFilterOperatorArity,
+  resolvePropertyFilter,
+  type PropertyFilterAffordance,
+  type PropertyFilterInputKind,
+  type PropertyFilterOperatorId,
+} from './propertyFilter.ts'
 import { Button } from '@/components/ui/button.tsx'
 import { Input } from '@/components/ui/input.tsx'
 import { FloatingListbox } from '@/components/ui/floating-listbox.tsx'
@@ -56,111 +56,17 @@ const truncate = (text: string, max = 72): string =>
 
 const predicateKey = (p: BlockPredicate): string => JSON.stringify(p)
 
-/** Ref/refList-typed property whose targets are daily notes. These get the
- *  same date-operator UX as a `date`-codec property — the predicate
- *  builder wraps the operator in a `target` traversal that compares
- *  the referenced daily note's `daily-note:date`. */
-const isDailyNoteDateRef = (schema: AnyPropertySchema): boolean => {
-  if (isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
-    return schema.codec.targetTypes.includes(DAILY_NOTE_TYPE)
-  }
-  return false
-}
-
-type WhereOperatorId =
-  | 'eq' | 'lt' | 'lte' | 'gt' | 'gte' | 'between'
-  | 'exists-true' | 'exists-false'
-
-/** Operator menu surfaced for a given property. `date`/`number`/
- *  daily-note-ref properties get the full comparison surface; the
- *  remaining where-queryable codecs (string/url/boolean) keep the
- *  simple equality+unset UX they had pre-operator-support. Registered
- *  schemas without comparison support can still be queried for set/unset
- *  because those operators compile to JSON presence checks. */
-const operatorOptionsFor = (schema: AnyPropertySchema): WhereOperatorId[] => {
-  const t = schema.codec.type
-  if (t === 'date' || t === 'number' || isDailyNoteDateRef(schema)) {
-    return ['eq', 'lt', 'lte', 'gt', 'gte', 'between', 'exists-true', 'exists-false']
-  }
-  if (schema.codec.where === undefined) return ['exists-true', 'exists-false']
-  return ['eq', 'exists-true', 'exists-false']
-}
-
-const OPERATOR_LABELS: Readonly<Record<WhereOperatorId, string>> = {
+const OPERATOR_LABELS: Readonly<Record<PropertyFilterOperatorId, string>> = {
   eq: '=', lt: '<', lte: '≤', gt: '>', gte: '≥',
   between: 'between',
   'exists-true': 'is set',
   'exists-false': 'is unset',
 }
 
-/** Number of value inputs the form should render for an operator.
- *  `exists-*` need zero, `between` needs two, everything else one. */
-const operatorArity = (op: WhereOperatorId): 0 | 1 | 2 =>
-  op === 'exists-true' || op === 'exists-false' ? 0 : op === 'between' ? 2 : 1
-
-const parseValueFor = (schema: AnyPropertySchema, raw: string): unknown => {
-  if (raw === '') return undefined
-  const t = schema.codec.type
-  if (isDailyNoteDateRef(schema) || t === 'date') {
-    // <input type="date"> yields `YYYY-MM-DD`; same UTC-midnight
-    // construction as `dailyNoteDateValue` so encoded values line up
-    // byte-for-byte with stored `daily-note:date` strings.
-    const d = new Date(`${raw}T00:00:00.000Z`)
-    return Number.isNaN(d.getTime()) ? undefined : d
-  }
-  if (t === 'number') {
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : undefined
-  }
-  if (t === 'boolean') return raw === 'true'
-  return raw
-}
-
-/** Wrap a where-clause in `target: { 'daily-note:date': ... }` when
- *  the property is a daily-note ref; otherwise return the inner
- *  clause directly. Lets the UI present the ref as if it were a
- *  date-typed property. */
-const wrapForSchema = (schema: AnyPropertySchema, clause: unknown): unknown =>
-  isDailyNoteDateRef(schema)
-    ? {target: {[dailyNoteDateProp.name]: clause}}
-    : clause
-
-const buildPredicate = (
-  name: string,
-  schema: AnyPropertySchema,
-  op: WhereOperatorId,
-  rawValues: readonly string[],
-): BlockPredicate | null => {
-  let whereValue: unknown
-  if (op === 'exists-true') {
-    whereValue = isDailyNoteDateRef(schema)
-      ? {target: {}}   // ref points to a live daily-note row
-      : {exists: true}
-  } else if (op === 'exists-false') {
-    whereValue = null
-  } else if (op === 'between') {
-    const lo = parseValueFor(schema, rawValues[0] ?? '')
-    const hi = parseValueFor(schema, rawValues[1] ?? '')
-    if (lo === undefined || hi === undefined) return null
-    whereValue = wrapForSchema(schema, {between: [lo, hi]})
-  } else {
-    const operand = parseValueFor(schema, rawValues[0] ?? '')
-    if (operand === undefined) {
-      // Empty input on `=` keeps the legacy "empty = match unset"
-      // sugar so existing user mental model isn't disrupted.
-      whereValue = op === 'eq' ? null : undefined
-      if (whereValue === undefined) return null
-    } else {
-      whereValue = wrapForSchema(schema, {[op]: operand})
-    }
-  }
-  return {scope: 'ancestor', where: {[name]: whereValue}}
-}
-
 /** Render a `where[name]: value` clause as a short, human-readable
- *  string for chips. Unwraps the daily-note-ref `target` shape so
- *  the chip shows "next-review-date < 2026-05-18" rather than the
- *  internal traversal. */
+ *  string for chips. Unwraps single-key `target` traversals so a chip
+ *  reads "next-review-date < 2026-05-18" rather than exposing the
+ *  internal ref-traversal shape. */
 const formatPredicateClause = (name: string, value: unknown): string => {
   if (value === null) return `${name}=∅`
   if (value instanceof Date || typeof value !== 'object') {
@@ -184,7 +90,7 @@ const formatPredicateClause = (name: string, value: unknown): string => {
     if (op === 'between' && Array.isArray(operand) && operand.length === 2) {
       return `${name} ∈ [${formatScalar(operand[0])}, ${formatScalar(operand[1])}]`
     }
-    const sym = OPERATOR_LABELS[op as WhereOperatorId]
+    const sym = OPERATOR_LABELS[op as PropertyFilterOperatorId]
     if (sym !== undefined) return `${name} ${sym} ${formatScalar(operand)}`
   }
   return `${name}=${JSON.stringify(value)}`
@@ -450,14 +356,8 @@ const RefPredicateInput = ({
   )
 }
 
-/** Pick the right HTML input type for the property's value editor.
- *  Daily-note refs render as a date picker even though the codec is
- *  `ref` — `wrapForSchema` materialises the daily-note traversal. */
-const valueInputTypeFor = (schema: AnyPropertySchema): 'date' | 'number' | 'text' => {
-  if (isDailyNoteDateRef(schema) || schema.codec.type === 'date') return 'date'
-  if (schema.codec.type === 'number') return 'number'
-  return 'text'
-}
+const htmlInputType = (kind: PropertyFilterInputKind): 'date' | 'number' | 'text' =>
+  kind === 'date' ? 'date' : kind === 'number' ? 'number' : 'text'
 
 const PropertyPredicateInput = ({
   mode,
@@ -469,21 +369,28 @@ const PropertyPredicateInput = ({
   onAdd: (predicate: BlockPredicate) => void
 }) => {
   const schemas = usePropertySchemas()
+  const runtime = useAppRuntime()
+  const refTargetDefaults = runtime.read(refTargetFilterDefaultsFacet)
   const queryable = useMemo(() => {
     return Array.from(schemas.values())
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [schemas])
   const [name, setName] = useState('')
-  const [op, setOp] = useState<WhereOperatorId>('eq')
+  const [op, setOp] = useState<PropertyFilterOperatorId>('eq')
   const [value, setValue] = useState('')
   const [valueHi, setValueHi] = useState('')
   const schema = useMemo(() => schemas.get(name), [schemas, name])
-  const operators = useMemo(() => schema ? operatorOptionsFor(schema) : [], [schema])
-  const arity = operatorArity(op)
-  const inputType = schema ? valueInputTypeFor(schema) : 'text'
-  const defaultOperatorFor = (propertyName: string): WhereOperatorId => {
+  const affordance: PropertyFilterAffordance | undefined = useMemo(
+    () => schema ? resolvePropertyFilter(schema, schemas, refTargetDefaults) : undefined,
+    [schema, schemas, refTargetDefaults],
+  )
+  const arity = propertyFilterOperatorArity(op)
+  const inputKind: PropertyFilterInputKind = affordance?.inputKind ?? 'text'
+  const inputType = htmlInputType(inputKind)
+  const defaultOperatorFor = (propertyName: string): PropertyFilterOperatorId => {
     const nextSchema = schemas.get(propertyName)
-    return nextSchema ? operatorOptionsFor(nextSchema)[0] ?? 'eq' : 'eq'
+    if (!nextSchema) return 'eq'
+    return resolvePropertyFilter(nextSchema, schemas, refTargetDefaults).operators[0] ?? 'eq'
   }
 
   const reset = () => {
@@ -495,9 +402,9 @@ const PropertyPredicateInput = ({
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (readOnly || !schema) return
+    if (readOnly || !schema || !affordance) return
     const rawValues = arity === 2 ? [value, valueHi] : arity === 1 ? [value] : []
-    const predicate = buildPredicate(name, schema, op, rawValues)
+    const predicate = affordance.build(name, op, rawValues)
     if (!predicate) return
     onAdd(predicate)
     reset()
@@ -506,6 +413,7 @@ const PropertyPredicateInput = ({
   if (queryable.length === 0) return null
 
   const valueAriaLabel = mode === 'include' ? 'Include value' : 'Exclude value'
+  const operators = affordance?.operators ?? []
 
   return (
     <form className="flex min-w-0 gap-1" onSubmit={submit}>
@@ -530,7 +438,7 @@ const PropertyPredicateInput = ({
       {schema && operators.length > 1 && (
         <select
           value={op}
-          onChange={e => setOp(e.target.value as WhereOperatorId)}
+          onChange={e => setOp(e.target.value as PropertyFilterOperatorId)}
           disabled={readOnly}
           className="h-8 min-w-0 rounded-md border bg-background px-2 text-xs"
           aria-label="operator"
@@ -540,7 +448,7 @@ const PropertyPredicateInput = ({
           ))}
         </select>
       )}
-      {schema?.codec.type === 'boolean' && arity === 1 ? (
+      {inputKind === 'boolean' && arity === 1 ? (
         <select
           value={value}
           onChange={e => setValue(e.target.value)}
@@ -558,7 +466,7 @@ const PropertyPredicateInput = ({
           value={value}
           onChange={e => setValue(e.target.value)}
           disabled={readOnly || !schema}
-          placeholder={schema ? `${inputType === 'text' ? schema.codec.type : inputType}` : 'value'}
+          placeholder={schema ? (inputType === 'text' ? schema.codec.type : inputType) : 'value'}
           className="h-8 min-w-0 flex-1 text-xs"
           aria-label={valueAriaLabel}
         />

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Property Filter Adapter Seam</title>
+  <title>Property Filter Seam</title>
   <style>
     :root {
       color-scheme: light dark;
@@ -90,63 +90,79 @@
 </head>
 <body>
   <main>
-    <h1>Property Filter Adapter Seam</h1>
+    <h1>Property Filter Seam</h1>
     <p class="lede">
       The typed query engine already has richer semantics than the backlinks filter UI exposes.
-      We need an extension seam that lets a property describe its filter affordance without
+      The filter UI needed a way to learn about a property's filter affordance without
       hard-coding domain knowledge into <code>BacklinkFilters</code>.
     </p>
 
-    <h2>Current Shape</h2>
+    <h2>Background</h2>
     <ul>
-      <li><code>codec.where</code> means the stored JSON value can be directly compared.</li>
-      <li><code>where[name].target</code> means a <code>ref</code> or <code>refList</code> can be traversed and filtered by target block properties.</li>
-      <li>The backlinks UI lists direct-comparable codecs and has a local daily-note-ref special case.</li>
-      <li>All registered schemas can support <code>is set</code> and <code>is unset</code>, because those compile to JSON presence checks.</li>
+      <li><code>codec.where</code> means the stored JSON value can be directly compared in SQL.</li>
+      <li><code>where[name].target</code> traverses a <code>ref</code> or <code>refList</code> and filters by the referenced block's properties — generic in the query compiler, no daily-notes special case.</li>
+      <li>All registered schemas can support <code>is set</code> / <code>is unset</code>, because those compile to JSON presence checks.</li>
     </ul>
 
     <h2>Problem</h2>
     <p>
-      The UI currently knows that a ref to a daily note should behave like a date. That is useful,
-      but it leaks daily-notes semantics into a generic backlinks surface. It also missed
-      Roam-imported date attributes that are represented as <code>refList</code>.
+      The UI used to know that a ref to a daily note should behave like a date. Useful, but it
+      leaked daily-notes semantics into a generic backlinks surface, and it missed Roam-imported
+      date attributes that arrive as <code>refList</code>.
     </p>
 
-    <h2>Proposed Seam</h2>
+    <h2>What shipped</h2>
     <p>
-      Add a property-filter adapter facet. Each adapter receives a registered schema and can
-      return a compact description of how to render, parse, build, and format a filter for that
-      property. The backlinks filter UI becomes a consumer of adapters, not a place where
-      semantic property cases accumulate.
+      A small two-piece seam rather than a plugin-style adapter registry. The two pieces hang on
+      facilities the codebase already has (a facet for cross-plugin contributions, a codec
+      capability for storage-layer answers), so neither side has to grow new arbitration logic.
     </p>
-
-    <pre><code>interface PropertyFilterAdapter {
-  id: string
-  priority?: number
-  match(schema: AnyPropertySchema): boolean
-  operators(schema: AnyPropertySchema): PropertyFilterOperator[]
-  input(schema: AnyPropertySchema, operator: string): PropertyFilterInput
-  build(args: {
-    schema: AnyPropertySchema
-    propertyName: string
-    operator: string
-    rawValues: readonly string[]
-  }): BlockPredicate | null
-  format?(propertyName: string, value: unknown): string | null
-}</code></pre>
-
-    <h2>Default Adapters</h2>
     <ul>
-      <li><strong>Presence adapter:</strong> matches every registered schema and provides <code>is set</code> / <code>is unset</code>.</li>
-      <li><strong>Scalar adapter:</strong> matches schemas with <code>codec.where</code> and provides equality and scalar comparisons where appropriate.</li>
-      <li><strong>Daily-note target adapter:</strong> matches <code>ref</code> and <code>refList</code> schemas targeting daily notes and builds <code>target.daily-note:date</code> predicates.</li>
+      <li>
+        <strong><code>refTargetFilterDefaultsFacet</code></strong> in <code>src/data/facets.ts</code>:
+        keyed by target block type. Daily notes contributes
+        <code>{targetType: 'daily-note', property: 'daily-note:date'}</code>. Any <code>ref</code>
+        or <code>refList</code> property whose target type appears in the facet — kernel-defined,
+        user-defined, or Roam-imported — gets the same affordance without per-property
+        registration.
+      </li>
+      <li>
+        <strong><code>resolvePropertyFilter</code></strong> in
+        <code>src/plugins/backlinks/propertyFilter.ts</code>: derives a single
+        <code>PropertyFilterAffordance</code> (operators, input kind, parser, predicate builder)
+        from <code>(schema, schemas, refTargetDefaults)</code>. For ref/refList with a matching
+        target entry, it recursively resolves the inner property's affordance and wraps the
+        builder in a <code>target</code> traversal. Otherwise it derives a scalar affordance from
+        the codec's <code>type</code> and <code>where</code> presence.
+      </li>
     </ul>
 
-    <h2>Ownership</h2>
+    <h2>Why not a <code>filterAffordance</code> field on PropertySchema?</h2>
     <p class="decision">
-      Keep query capability in codecs and typed query. Put presentation and semantic shortcuts in
-      adapters contributed by the owning feature. Daily notes owns daily-note-as-date behavior;
-      Roam import can contribute compatibility adapters if imported vocabulary needs special UX.
+      Considered but deferred. The proposed field — letting a schema declare its own operators,
+      parser, and builder — has no concrete consumer in the tree today. Adding a speculative
+      extension point would have violated the project's "no design for hypothetical
+      requirements" guideline. The door stays open: if a future schema needs per-property custom
+      UX, slotting a <code>filterAffordance</code> field in front of <code>resolvePropertyFilter</code>
+      is a small change.
+    </p>
+
+    <h2>Why not the originally proposed adapter registry?</h2>
+    <p>
+      The original sketch had a <code>PropertyFilterAdapter</code> interface with
+      <code>match(schema)</code> and <code>priority</code>. That arbitration only earns its
+      keep when ownership of a property is ambiguous between multiple contributors. Here it
+      isn't — the target type owns the affordance for refs pointing at it, and codec type
+      owns the scalar case. A direct facet lookup beats <code>match()</code> when there's no
+      contention to resolve.
+    </p>
+
+    <h2>Layering</h2>
+    <p class="decision">
+      Query capability stays in codecs and typed query. The facet expresses a target-type-level
+      fact ("filtering a ref to me defaults to filtering on this inner property") rather than a
+      per-property UI hint, so the contributing plugin owns one entry regardless of how many
+      ref properties downstream point at its type.
     </p>
   </main>
 </body>
