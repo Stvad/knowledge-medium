@@ -296,10 +296,12 @@ export class UserTypesService {
       <span class="comment">// rule is "user wins if set, else kernel" (see &sect;Overriding kernel</span>
       <span class="comment">// types). Pass undefined through so the rebuild step picks the</span>
       <span class="comment">// kernel value rather than overwriting with empty string.</span>
+      const description = block.peekProperty(blockTypeDescriptionProp)
       return {
         kind: 'override',
         target: extendsId,
         label: label || undefined,
+        description: description || undefined,
         properties,
       } as TypeOverride
     }
@@ -313,6 +315,22 @@ export class UserTypesService {
       description: block.peekProperty(blockTypeDescriptionProp),
       properties,
     }
+  }
+
+  <span class="comment">// Synchronous append used by callers that need a freshly-built</span>
+  <span class="comment">// type to be registered BEFORE their next write (e.g. Roam</span>
+  <span class="comment">// promotion's bulk re-tag step). Mirrors</span>
+  <span class="comment">// UserSchemasService.appendUserSchema at userSchemasService.ts:167.</span>
+  <span class="comment">// The block-write that backs `contribution` is the caller's</span>
+  <span class="comment">// responsibility &mdash; this only updates the runtime bucket so the</span>
+  <span class="comment">// id resolves in addTypeInTx's registry check.</span>
+  appendUserType(contribution: TypeContribution, blockId: string): void {
+    this.contributions = [
+      ...this.contributions.filter(t =&gt; t.id !== contribution.id),
+      contribution,
+    ]
+    this.nameToBlockId.set(contribution.id, blockId)
+    this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
   }
 }</code></pre>
 
@@ -719,11 +737,27 @@ What's missing is <b>promotion</b> &mdash; the action that turns a Roam page (wh
   <figcaption>Roam <code>roam:isa</code> adoption is mechanical because the type id is the target block's id &mdash; the same id Roam <code>[[Person]]</code> references already resolve to.</figcaption>
 </figure>
 
-<p>Steps inside one <code>repo.tx</code>:</p>
+<p>Order matters here. <code>repo.addTypeInTx</code> verifies the type id is in the merged registry and throws on
+unknown ids (<span class="file">docs/type-system.md</span> &sect;3a, <code>[addType] type id ... is not registered</code>);
+the brand-new <code>targetBlockId</code> isn't in the registry yet at the moment we want to retag instances with it,
+because <code>UserTypesService</code>'s subscription publishes the contribution after the tx commits. The
+service needs the same synchronous-append escape hatch <code>UserSchemasService</code> has
+(<code>appendUserSchema</code> at <span class="file">src/data/userSchemasService.ts:167</span>) &mdash; call it
+<code>appendUserType(contribution, blockId)</code>, same shape, updating the user-data bucket on
+<code>typesFacet</code> synchronously via <code>setRuntimeContributions</code>.</p>
+
+<p>With that primitive in place:</p>
 <ol>
   <li>
-    <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code> on the Person page, materializing
-    <code>block-type:label</code> and <code>block-type:properties</code> from the action args.
+    <b>Before opening the tx</b> &mdash; build the <code>TypeContribution</code> from the action args
+    (<code>id = targetBlockId</code>, <code>label</code>, <code>properties</code> = resolved schemas for
+    <code>propertySchemaIds</code>), then <code>userTypesService.appendUserType(contribution, targetBlockId)</code>.
+    <code>repo.types</code> now includes <code>targetBlockId</code>; the next <code>repo.snapshotTypeRegistries()</code>
+    (taken inside the tx) sees it.
+  </li>
+  <li>
+    Open the tx. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code> on the Person page,
+    materializing <code>block-type:label</code> and <code>block-type:properties</code>.
   </li>
   <li>
     Query <code>repo.queryBlocks({referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code> &mdash; the
@@ -732,14 +766,25 @@ What's missing is <b>promotion</b> &mdash; the action that turns a Roam page (wh
   </li>
   <li>
     For each referencing block, <code>repo.addTypeInTx(tx, instanceId, targetBlockId, {})</code> &mdash; appending
-    the new type id (= target's block id) to <code>block:types</code>. Any <code>sameTxProcessor</code> watching the
-    field fires per row.
+    the new type id (= target's block id) to <code>block:types</code>. The id resolves because step 1 already
+    registered it. Any <code>sameTxProcessor</code> watching the field fires per row.
   </li>
   <li>
     If <code>rewriteIsaReferences</code>: rewrite the <code>roam:isa</code> refList on each instance, dropping the
     promoted alias. Default off &mdash; users typically want both for a while.
   </li>
 </ol>
+
+<div class="callout muted">
+  <h4>Crash / abort behavior</h4>
+  <p style="margin:0">
+    If the tx fails after step 1, the runtime carries a registration for a type whose block doesn't exist on
+    disk. Same property <code>addSchema</code> has: the next subscription rebuild reads from blocks, finds no
+    backing one, drops the orphan. Transient, self-healing. The alternative &mdash; appending only after the tx
+    commits &mdash; can't work here because steps 4's <code>addTypeInTx</code> calls need the registration
+    in-tx. The asymmetry vs. <code>addSchema</code> is justified by the in-tx dependency.
+  </p>
+</div>
 
 <p>Two surfaces use the primitive:</p>
 <ul class="tight">
