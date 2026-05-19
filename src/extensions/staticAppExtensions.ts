@@ -23,6 +23,7 @@ import { visualNavigationPlugin } from '@/plugins/visual-navigation'
 import { vimNormalModePlugin } from '@/plugins/vim-normal-mode'
 import { videoPlayerPlugin } from '@/plugins/video-player'
 import { aliasPlugin } from '@/plugins/alias'
+import { mergeBlocksPlugin } from '@/plugins/merge-blocks'
 import { referencesPlugin } from '@/plugins/references'
 import { backlinksPlugin } from '@/plugins/backlinks'
 import { groupedBacklinksPlugin } from '@/plugins/grouped-backlinks'
@@ -72,6 +73,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   videoPlayerPlugin,
   referencesPlugin,
   aliasPlugin,
+  mergeBlocksPlugin,
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
