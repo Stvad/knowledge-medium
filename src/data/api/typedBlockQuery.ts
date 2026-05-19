@@ -70,8 +70,14 @@ export interface BlockPredicate {
 }
 
 export interface TypedBlockQuery {
-  /** Defaults to Repo.activeWorkspaceId for the Repo wrapper methods. */
-  readonly workspaceId?: string
+  /** Required. Callers that want the user's currently-active workspace
+   *  use `repo.queryActiveWorkspace` / `repo.subscribeActiveWorkspace`
+   *  (or pass `repo.activeWorkspaceId` explicitly). Making this field
+   *  required at the type level prevents background flows, import runs,
+   *  and any code that operates on a workspace other than the
+   *  currently-active one from silently mis-scoping when the user
+   *  switches workspaces mid-flight (see PR #47 review). */
+  readonly workspaceId: string
   /** Contains any of these type ids. Empty/omitted means no type filter. */
   readonly types?: readonly string[]
   /** Self-scope shorthand: equivalent to a `match` entry with
@@ -97,6 +103,8 @@ export interface TypedBlockQuery {
   readonly order?: 'created-asc' | 'created-desc'
 }
 
-export interface ResolvedTypedBlockQuery extends Omit<TypedBlockQuery, 'workspaceId'> {
-  readonly workspaceId: string
-}
+/** Historically the "post-default-resolution" shape used internally;
+ *  now that `TypedBlockQuery.workspaceId` is required at the type level
+ *  the two shapes are identical. Kept as an alias for back-compat with
+ *  internal call sites that name the resolved form explicitly. */
+export type ResolvedTypedBlockQuery = TypedBlockQuery

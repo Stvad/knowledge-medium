@@ -119,13 +119,34 @@ const create = async (args: {
 const ids = (rows: readonly {id: string}[]) => rows.map(row => row.id)
 
 describe('repo.queryBlocks', () => {
+  it('rejects calls that omit workspaceId at the type level', () => {
+    // PR #47 follow-up: TypedBlockQuery.workspaceId is required so
+    // background flows / import runs can't silently fall back to
+    // activeWorkspaceId. The `@ts-expect-error` lines below FAIL the
+    // build if the field becomes optional again.
+    //
+    // We don't actually invoke the call (no `await`) — the type check
+    // alone is the assertion. The `void` cast prevents the unused-
+    // expression lint rule from firing.
+    void (() => {
+      // @ts-expect-error workspaceId is required on TypedBlockQuery
+      env.repo.queryBlocks({types: ['todo']})
+      // @ts-expect-error workspaceId is required on TypedBlockQuery
+      env.repo.subscribeBlocks({types: ['todo']}, () => {})
+      // queryActiveWorkspace / subscribeActiveWorkspace accept the
+      // workspaceId-free shape — these must compile.
+      env.repo.queryActiveWorkspace({types: ['todo']})
+      env.repo.subscribeActiveWorkspace({types: ['todo']}, () => {})
+    })
+  })
+
   it('filters by any matching type and scalar where values without duplicate rows', async () => {
     await create({id: 'todo-open', types: ['todo'], properties: {status: 'open'}})
     await create({id: 'todo-done', types: ['todo'], properties: {status: 'done'}})
     await create({id: 'task-open', types: ['task', 'todo'], properties: {status: 'open'}})
     await create({id: 'other-open', types: ['project'], properties: {status: 'open'}})
 
-    const out = await env.repo.queryBlocks({
+    const out = await env.repo.queryBlocks({workspaceId: WS, 
       types: ['todo', 'task'],
       where: {status: 'open'},
     })
@@ -145,7 +166,7 @@ describe('repo.queryBlocks', () => {
       properties: {[weirdNameProp.name]: 'no'},
     })
 
-    await expect(env.repo.queryBlocks({
+    await expect(env.repo.queryBlocks({workspaceId: WS, 
       where: {[weirdNameProp.name]: 'yes'},
     })).resolves.toMatchObject([{id: 'hit'}])
   })
@@ -155,7 +176,7 @@ describe('repo.queryBlocks', () => {
     await create({id: 'nullish', types: ['todo'], properties: {status: null}})
     await create({id: 'set', types: ['todo'], properties: {status: 'open'}})
 
-    const out = await env.repo.queryBlocks({where: {status: null}})
+    const out = await env.repo.queryBlocks({workspaceId: WS, where: {status: null}})
 
     expect(ids(out)).toEqual(['missing', 'nullish'])
   })
@@ -172,19 +193,19 @@ describe('repo.queryBlocks', () => {
       await create({id: 'p2', properties: {[priorityProp.name]: priorityProp.codec.encode(2)}})
       await create({id: 'p3', properties: {[priorityProp.name]: priorityProp.codec.encode(3)}})
 
-      const lt = await env.repo.queryBlocks({where: {priority: {lt: 3}}})
+      const lt = await env.repo.queryBlocks({workspaceId: WS, where: {priority: {lt: 3}}})
       expect(ids(lt).sort()).toEqual(['p1', 'p2'])
 
-      const lte = await env.repo.queryBlocks({where: {priority: {lte: 2}}})
+      const lte = await env.repo.queryBlocks({workspaceId: WS, where: {priority: {lte: 2}}})
       expect(ids(lte).sort()).toEqual(['p1', 'p2'])
 
-      const gt = await env.repo.queryBlocks({where: {priority: {gt: 1}}})
+      const gt = await env.repo.queryBlocks({workspaceId: WS, where: {priority: {gt: 1}}})
       expect(ids(gt).sort()).toEqual(['p2', 'p3'])
 
-      const gte = await env.repo.queryBlocks({where: {priority: {gte: 2}}})
+      const gte = await env.repo.queryBlocks({workspaceId: WS, where: {priority: {gte: 2}}})
       expect(ids(gte).sort()).toEqual(['p2', 'p3'])
 
-      const eq = await env.repo.queryBlocks({where: {priority: {eq: 2}}})
+      const eq = await env.repo.queryBlocks({workspaceId: WS, where: {priority: {eq: 2}}})
       expect(ids(eq)).toEqual(['p2'])
     })
 
@@ -193,12 +214,12 @@ describe('repo.queryBlocks', () => {
       await create({id: 'today', properties: {[dueProp.name]: encodeDate('2026-05-18')}})
       await create({id: 'future', properties: {[dueProp.name]: encodeDate('2026-12-31')}})
 
-      const before = await env.repo.queryBlocks({
+      const before = await env.repo.queryBlocks({workspaceId: WS, 
         where: {due: {lt: new Date('2026-05-18T00:00:00.000Z')}},
       })
       expect(ids(before)).toEqual(['past'])
 
-      const onOrAfter = await env.repo.queryBlocks({
+      const onOrAfter = await env.repo.queryBlocks({workspaceId: WS, 
         where: {due: {gte: new Date('2026-05-18T00:00:00.000Z')}},
       })
       expect(ids(onOrAfter).sort()).toEqual(['future', 'today'])
@@ -215,7 +236,7 @@ describe('repo.queryBlocks', () => {
 
       const original = {due: {lt: new Date('2026-05-18T00:00:00.000Z')}}
       const persisted = JSON.parse(JSON.stringify(original)) as Record<string, unknown>
-      const out = await env.repo.queryBlocks({where: persisted})
+      const out = await env.repo.queryBlocks({workspaceId: WS, where: persisted})
       expect(ids(out)).toEqual(['past'])
     })
 
@@ -225,7 +246,7 @@ describe('repo.queryBlocks', () => {
       await create({id: 'p3', properties: {[priorityProp.name]: priorityProp.codec.encode(3)}})
       await create({id: 'p5', properties: {[priorityProp.name]: priorityProp.codec.encode(5)}})
 
-      const out = await env.repo.queryBlocks({where: {priority: {between: [2, 3]}}})
+      const out = await env.repo.queryBlocks({workspaceId: WS, where: {priority: {between: [2, 3]}}})
       expect(ids(out).sort()).toEqual(['p2', 'p3'])
     })
 
@@ -234,26 +255,26 @@ describe('repo.queryBlocks', () => {
       await create({id: 'missing', properties: {}})
       await create({id: 'nullish', properties: {status: null}})
 
-      const set = await env.repo.queryBlocks({where: {status: {exists: true}}})
+      const set = await env.repo.queryBlocks({workspaceId: WS, where: {status: {exists: true}}})
       expect(ids(set)).toEqual(['set'])
 
-      const unset = await env.repo.queryBlocks({where: {status: {exists: false}}})
+      const unset = await env.repo.queryBlocks({workspaceId: WS, where: {status: {exists: false}}})
       expect(ids(unset).sort()).toEqual(['missing', 'nullish'])
     })
 
     it('rejects malformed operator objects with a clear message', async () => {
-      await expect(env.repo.queryBlocks({where: {priority: {lt: 1, gt: 0}}}))
+      await expect(env.repo.queryBlocks({workspaceId: WS, where: {priority: {lt: 1, gt: 0}}}))
         .rejects.toThrow('operator object must have exactly one key')
-      await expect(env.repo.queryBlocks({where: {priority: {bogus: 1}}}))
+      await expect(env.repo.queryBlocks({workspaceId: WS, where: {priority: {bogus: 1}}}))
         .rejects.toThrow('unknown operator')
-      await expect(env.repo.queryBlocks({where: {priority: {between: [1]}}}))
+      await expect(env.repo.queryBlocks({workspaceId: WS, where: {priority: {between: [1]}}}))
         .rejects.toThrow('between must be a [lo, hi] tuple')
-      await expect(env.repo.queryBlocks({where: {status: {exists: 'yes'}}}))
+      await expect(env.repo.queryBlocks({workspaceId: WS, where: {status: {exists: 'yes'}}}))
         .rejects.toThrow('exists must be a boolean')
     })
 
     it('rejects comparator operators on non-where-queryable codecs', async () => {
-      await expect(env.repo.queryBlocks({where: {reviewer: {eq: 'target'}}}))
+      await expect(env.repo.queryBlocks({workspaceId: WS, where: {reviewer: {eq: 'target'}}}))
         .rejects.toThrow('is not where-queryable')
     })
 
@@ -288,7 +309,7 @@ describe('repo.queryBlocks', () => {
         references: [{id: 'unrelated-target', alias: 'unrelated-target', sourceField: 'reviewer'}],
       })
 
-      const past = await env.repo.queryBlocks({
+      const past = await env.repo.queryBlocks({workspaceId: WS, 
         where: {
           [reviewerProp.name]: {
             target: {[dueProp.name]: {lt: new Date('2026-06-01T00:00:00.000Z')}},
@@ -300,20 +321,20 @@ describe('repo.queryBlocks', () => {
       // Empty target predicate = "ref points at a live block".
       // Excludes the dangling case (no row at the ref id) and the
       // soft-deleted case via the JOIN's `d.deleted = 0` clause.
-      const anyTarget = await env.repo.queryBlocks({
+      const anyTarget = await env.repo.queryBlocks({workspaceId: WS, 
         where: {[reviewerProp.name]: {target: {}}},
       })
       expect(ids(anyTarget).sort()).toEqual(['source-future', 'source-past', 'source-unrelated'])
     })
 
     it('rejects the target operator on non-ref properties', async () => {
-      await expect(env.repo.queryBlocks({
+      await expect(env.repo.queryBlocks({workspaceId: WS, 
         where: {status: {target: {priority: {gt: 0}}}},
       })).rejects.toThrow('only valid on ref / refList properties')
     })
 
     it('rejects malformed target operand', async () => {
-      await expect(env.repo.queryBlocks({
+      await expect(env.repo.queryBlocks({workspaceId: WS, 
         where: {[reviewerProp.name]: {target: 'not-an-object'}},
       })).rejects.toThrow('target must be a where-map object')
     })
@@ -330,45 +351,60 @@ describe('repo.queryBlocks', () => {
       references: [{id: 'target', alias: 'target', sourceField: 'reviewer'}],
     })
 
-    expect(ids(await env.repo.queryBlocks({referencedBy: {id: 'target'}})))
+    expect(ids(await env.repo.queryBlocks({workspaceId: WS, referencedBy: {id: 'target'}})))
       .toEqual(['content-source', 'field-source'])
-    expect(ids(await env.repo.queryBlocks({referencedBy: {id: 'target', sourceField: 'reviewer'}})))
+    expect(ids(await env.repo.queryBlocks({workspaceId: WS, referencedBy: {id: 'target', sourceField: 'reviewer'}})))
       .toEqual(['field-source'])
-    expect(ids(await env.repo.queryBlocks({referencedBy: {id: 'target', sourceField: ''}})))
+    expect(ids(await env.repo.queryBlocks({workspaceId: WS, referencedBy: {id: 'target', sourceField: ''}})))
       .toEqual(['content-source'])
   })
 
-  it('defaults to the active workspace and ignores other workspaces', async () => {
+  it('scopes to the explicit workspace and ignores other workspaces', async () => {
     await create({id: 'local', types: ['todo']})
     await create({id: 'remote', workspaceId: OTHER_WS, types: ['todo']})
 
-    expect(ids(await env.repo.queryBlocks({types: ['todo']}))).toEqual(['local'])
+    expect(ids(await env.repo.queryBlocks({workspaceId: WS, types: ['todo']}))).toEqual(['local'])
+    expect(ids(await env.repo.queryBlocks({workspaceId: OTHER_WS, types: ['todo']}))).toEqual(['remote'])
+  })
+
+  it('queryActiveWorkspace resolves to the active workspace at call time', async () => {
+    await create({id: 'local', types: ['todo']})
+    await create({id: 'remote', workspaceId: OTHER_WS, types: ['todo']})
+
+    // setActiveWorkspaceId(WS) ran in setup
+    expect(ids(await env.repo.queryActiveWorkspace({types: ['todo']}))).toEqual(['local'])
+
+    env.repo.setActiveWorkspaceId(OTHER_WS)
+    expect(ids(await env.repo.queryActiveWorkspace({types: ['todo']}))).toEqual(['remote'])
+
+    env.repo.setActiveWorkspaceId(null)
+    expect(await env.repo.queryActiveWorkspace({types: ['todo']})).toEqual([])
   })
 
   it('rejects unsupported where filters clearly', async () => {
-    await expect(env.repo.queryBlocks({where: {missing: 'x'}}))
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {missing: 'x'}}))
       .rejects.toThrow('has no registered PropertySchema')
-    await expect(env.repo.queryBlocks({where: {labels: ['x']}}))
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {labels: ['x']}}))
       .rejects.toThrow('is not where-queryable')
-    await expect(env.repo.queryBlocks({where: {reviewer: 'target'}}))
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {reviewer: 'target'}}))
       .rejects.toThrow('is not where-queryable')
-    await expect(env.repo.queryBlocks({where: {status: undefined}}))
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {status: undefined}}))
       .rejects.toThrow('is undefined')
   })
 
   it('does not alias invalid undefined where filters to a cached empty where handle', async () => {
     await create({id: 'todo-open', types: ['todo'], properties: {status: 'open'}})
 
-    await expect(env.repo.queryBlocks({where: {}}))
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {}}))
       .resolves.toMatchObject([{id: 'todo-open'}])
-    await expect(env.repo.queryBlocks({where: {status: undefined}}))
+    await expect(env.repo.queryBlocks({workspaceId: WS, where: {status: undefined}}))
       .rejects.toThrow('is undefined')
   })
 
   it('rejects ancestor-scope predicates without a candidate-narrowing filter', async () => {
     // No referencedBy, no types, no top-level where, no narrowing
     // self-scope match → would chain-walk every block in the ws.
-    await expect(env.repo.queryBlocks({
+    await expect(env.repo.queryBlocks({workspaceId: WS, 
       match: [{scope: 'ancestor', where: {status: 'done'}}],
     })).rejects.toThrow('require at least one candidate filter')
   })
@@ -377,7 +413,7 @@ describe('repo.queryBlocks', () => {
     // Top-level where: {status: null} matches every row that doesn't
     // have status set — does not narrow the candidate set in any
     // meaningful way for the recursive walk.
-    await expect(env.repo.queryBlocks({
+    await expect(env.repo.queryBlocks({workspaceId: WS, 
       where: {status: null},
       match: [{scope: 'ancestor', where: {status: 'done'}}],
     })).rejects.toThrow('require at least one candidate filter')
@@ -388,7 +424,7 @@ describe('repo.queryBlocks', () => {
     // compile to IS NULL). The selectivity gate must treat them the
     // same, otherwise callers using one shorthand silently bypass
     // the guard the other shorthand triggers.
-    await expect(env.repo.queryBlocks({
+    await expect(env.repo.queryBlocks({workspaceId: WS, 
       where: {status: {exists: false}},
       match: [{scope: 'ancestor', where: {status: 'done'}}],
     })).rejects.toThrow('require at least one candidate filter')
@@ -411,7 +447,7 @@ describe('repo.queryBlocks', () => {
 
     // Self-scope `status=open` predicate folds into candidates →
     // the recursive walk only seeds from rows that match it.
-    const out = await env.repo.queryBlocks({
+    const out = await env.repo.queryBlocks({workspaceId: WS, 
       match: [
         {scope: 'self', where: {status: 'open'}},
         {scope: 'ancestor', id: 'parent'},
@@ -436,7 +472,7 @@ describe('repo.queryBlocks', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    const out = await env.repo.queryBlocks({
+    const out = await env.repo.queryBlocks({workspaceId: WS, 
       where: {status: 'open'},
       match: [{scope: 'ancestor', id: 'parent'}],
     })
@@ -447,7 +483,7 @@ describe('repo.queryBlocks', () => {
 describe('repo.subscribeBlocks', () => {
   it('updates when local writes change type membership', async () => {
     const fired: string[][] = []
-    const off = env.repo.subscribeBlocks({types: ['todo']}, rows => {
+    const off = env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, rows => {
       fired.push(ids(rows))
     })
 
@@ -472,7 +508,7 @@ describe('repo.subscribeBlocks', () => {
 
     const fired: string[][] = []
     const off = env.repo.subscribeBlocks(
-      {where: {[reviewerProp.name]: {target: {status: null}}}},
+      {workspaceId: WS, where: {[reviewerProp.name]: {target: {status: null}}}},
       rows => fired.push(ids(rows)),
     )
     await vi.waitFor(() => expect(fired).toEqual([[]]))
@@ -500,7 +536,7 @@ describe('repo.subscribeBlocks', () => {
 
     const fired: string[][] = []
     const off = env.repo.subscribeBlocks(
-      {where: {[reviewerProp.name]: {target: {status: 'done'}}}},
+      {workspaceId: WS, where: {[reviewerProp.name]: {target: {status: 'done'}}}},
       rows => fired.push(ids(rows)),
     )
     await vi.waitFor(() => expect(fired).toEqual([[]]))
@@ -517,7 +553,7 @@ describe('repo.subscribeBlocks', () => {
 
   it('updates when sync-applied rows change type membership', async () => {
     const fired: string[][] = []
-    const off = env.repo.subscribeBlocks({types: ['todo']}, rows => {
+    const off = env.repo.subscribeBlocks({workspaceId: WS, types: ['todo']}, rows => {
       fired.push(ids(rows))
     })
     await vi.waitFor(() => expect(fired).toEqual([[]]))
