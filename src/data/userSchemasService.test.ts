@@ -327,23 +327,18 @@ describe('UserSchemasService.withProvisionalSchema', () => {
     expect(env.service.getSchemaBlockId('topic')).toBe('block-newer')
   })
 
-  it('concurrent overlap: A fails after B succeeds → A does NOT clobber B', async () => {
+  it('concurrent overlap (different blockId): A fails after B succeeds → A does NOT clobber B', async () => {
     // Two concurrent withProvisionalSchema calls for the same name:
     //   - A peeks prior=undefined, appends A.
     //   - B (simulated as a synchronous append from another caller)
     //     overwrites the live entry with schemaB / block-B.
     //   - A's tx body then throws.
     // Without the CAS guard, A's catch arm would call
-    // `removeUserSchema('topic')` (because A's snapshot of prior was
-    // undefined) and wipe B's legitimately-live entry. The CAS guard
-    // checks `peekContribution(name).blockId === blockId` and skips
-    // rollback when the current live entry isn't A's any more.
+    // `removeUserSchema('topic')` and wipe B's legitimately-live entry.
     //
-    // We don't go through two concurrent repo.tx calls here — PowerSync
-    // serializes writes, so the inner tx would deadlock waiting for the
-    // outer's body to release. Simulating B's append synchronously from
-    // inside A's body exercises the same CAS logic (the field-level
-    // race that the guard exists to handle).
+    // Simulated synchronously (not via two concurrent repo.tx calls)
+    // because PowerSync serializes writes — a real second tx inside A's
+    // body would deadlock waiting on the outer's writer slot.
     env = await setup()
     await drainInitialSubscriptionTick()
 
@@ -352,8 +347,6 @@ describe('UserSchemasService.withProvisionalSchema', () => {
     const boom = new Error('A tx failed')
 
     const aResult = await env.service.withProvisionalSchema(schemaA, 'block-A', async () => {
-      // A's provisional is live at this point. Simulate a concurrent
-      // caller B that appends-and-overwrites.
       env.service.appendUserSchema(schemaB, 'block-B')
       expect(env.repo.propertySchemas.get('topic')).toBe(schemaB)
       expect(env.service.getSchemaBlockId('topic')).toBe('block-B')
@@ -361,9 +354,36 @@ describe('UserSchemasService.withProvisionalSchema', () => {
     }).catch(err => err)
 
     expect(aResult).toBe(boom)
-    // Key invariant: A's catch arm DID NOT call removeUserSchema('topic').
-    // B's entry is still live, paired with block-B.
     expect(env.repo.propertySchemas.get('topic')).toBe(schemaB)
     expect(env.service.getSchemaBlockId('topic')).toBe('block-B')
+  })
+
+  it('concurrent overlap (SAME blockId, different schema): A fails after B succeeds → A does NOT clobber B', async () => {
+    // The blockId-only guard would falsely pass here because B reuses
+    // A's blockId (retries / duplicate submits / re-registration of the
+    // same property-schema block with a different codec). The token-
+    // based CAS distinguishes A's appendUserSchema from B's even when
+    // (name, blockId) coincide.
+    env = await setup()
+    await drainInitialSubscriptionTick()
+
+    const sharedBlockId = 'block-shared'
+    const schemaA = buildSchema('topic', 'A')
+    const schemaB = buildSchema('topic', 'B')
+    const boom = new Error('A tx failed')
+
+    const aResult = await env.service.withProvisionalSchema(schemaA, sharedBlockId, async () => {
+      env.service.appendUserSchema(schemaB, sharedBlockId)
+      expect(env.repo.propertySchemas.get('topic')).toBe(schemaB)
+      throw boom
+    }).catch(err => err)
+
+    expect(aResult).toBe(boom)
+    // Key invariant: even though A and B share blockId, A's catch arm
+    // must not roll back over B's registration. The token-based CAS
+    // distinguishes them; a blockId-only check would falsely pass and
+    // wipe B.
+    expect(env.repo.propertySchemas.get('topic')).toBe(schemaB)
+    expect(env.service.getSchemaBlockId('topic')).toBe(sharedBlockId)
   })
 })

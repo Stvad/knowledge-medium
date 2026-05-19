@@ -44,6 +44,18 @@ export class UserSchemasService {
    *  `contributions`, so it's always in sync. */
   private nameToBlockId = new Map<string, string>()
 
+  /** Per-name CAS token. Every mutation (`appendUserSchema`,
+   *  `removeUserSchema`, subscription rebuild) generates a fresh symbol
+   *  for the affected name. `withProvisionalSchema` captures the token
+   *  right after its append and compares in the catch arm: if the
+   *  current token matches, no one has touched this slot since our
+   *  append, so rollback is safe. If it differs, someone else has
+   *  mutated the slot — skip rollback to avoid clobbering their entry.
+   *  blockId alone isn't a sufficient sentinel because two overlapping
+   *  calls (retries / duplicate submits) can legitimately share the
+   *  same (name, blockId) pair. */
+  private contributionTokens = new Map<string, symbol>()
+
   /** Active block-subscription disposer, set by `start()`. */
   private subscriptionDisposer: Unsubscribe | null = null
 
@@ -75,15 +87,18 @@ export class UserSchemasService {
       const presets = this.repo.valuePresets
       const next: AnyPropertySchema[] = []
       const nextNameToBlockId = new Map<string, string>()
+      const nextTokens = new Map<string, symbol>()
       for (const block of blocks) {
         const built = this.tryBuildSchema(block, presets)
         if (built) {
           next.push(built)
           nextNameToBlockId.set(built.name, block.id)
+          nextTokens.set(built.name, Symbol('rebuild'))
         }
       }
       this.contributions = next
       this.nameToBlockId = nextNameToBlockId
+      this.contributionTokens = nextTokens
       this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
     }
 
@@ -171,6 +186,7 @@ export class UserSchemasService {
       schema,
     ]
     this.nameToBlockId.set(schema.name, blockId)
+    this.contributionTokens.set(schema.name, Symbol('appendUserSchema'))
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
   }
 
@@ -203,6 +219,7 @@ export class UserSchemasService {
   removeUserSchema(name: string): void {
     this.contributions = this.contributions.filter(s => s.name !== name)
     this.nameToBlockId.delete(name)
+    this.contributionTokens.delete(name)
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
   }
 
@@ -224,22 +241,23 @@ export class UserSchemasService {
   ): Promise<T> {
     const prior = this.peekContribution(schema.name)
     this.appendUserSchema(schema, blockId)
+    // Snapshot our token IMMEDIATELY after appendUserSchema — this is
+    // the per-call sentinel for the CAS check below. blockId isn't
+    // unique enough: two overlapping calls (retries / duplicate
+    // submits) can legitimately share the same (name, blockId) pair.
+    // A fresh symbol per appendUserSchema makes ownership identifiable.
+    const ourToken = this.contributionTokens.get(schema.name)
     try {
       return await this.repo.tx(body, {
         scope: opts.scope ?? ChangeScope.BlockDefault,
         description: opts.description ?? 'withProvisionalSchema',
       })
     } catch (err) {
-      // Compare-and-swap on the live entry's blockId. Two concurrent
-      // withProvisionalSchema calls for the same name can interleave:
-      // call A peeks prior=undefined, appends, awaits its tx; call B
-      // peeks prior=A's-provisional, appends-and-overwrites with B's
-      // schema, and its tx succeeds; A's tx then fails. Without this
-      // check, A's catch would call `removeUserSchema(name)` and wipe
-      // B's legitimately-live entry. Only roll back if the current
-      // live entry is still the one this call appended.
-      const current = this.peekContribution(schema.name)
-      if (current && current.blockId === blockId) {
+      // CAS: only roll back if our token is still the live one. Any
+      // intervening appendUserSchema / removeUserSchema / subscription
+      // rebuild generates a fresh token, so a token mismatch means
+      // someone else has taken ownership of this slot — skip rollback.
+      if (this.contributionTokens.get(schema.name) === ourToken) {
         if (prior) {
           this.appendUserSchema(prior.contribution, prior.blockId)
         } else {
