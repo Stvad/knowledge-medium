@@ -324,6 +324,17 @@ export class UserTypesService {
   <span class="comment">// The block-write that backs `contribution` is the caller's</span>
   <span class="comment">// responsibility &mdash; this only updates the runtime bucket so the</span>
   <span class="comment">// id resolves in addTypeInTx's registry check.</span>
+  <span class="comment">// Look up the current user-data contribution for an id (if any).</span>
+  <span class="comment">// Callers using the synchronous-append pattern peek before</span>
+  <span class="comment">// appending so they can restore the prior value on tx failure</span>
+  <span class="comment">// rather than blindly removing it (which would wipe a legitimate</span>
+  <span class="comment">// pre-existing registration on a retry).</span>
+  peekContribution(typeId: string): {contribution: TypeContribution; blockId: string} | undefined {
+    const contribution = this.contributions.find(t =&gt; t.id === typeId)
+    const blockId = this.nameToBlockId.get(typeId)
+    return contribution && blockId !== undefined ? {contribution, blockId} : undefined
+  }
+
   appendUserType(contribution: TypeContribution, blockId: string): void {
     this.contributions = [
       ...this.contributions.filter(t =&gt; t.id !== contribution.id),
@@ -826,10 +837,25 @@ const candidates = await repo.queryBlocks({
   referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP},
 })
 
+<span class="comment">// Capture the prior user-data contribution for this id (if any).</span>
+<span class="comment">// Restored on tx failure rather than blindly removed &mdash; see</span>
+<span class="comment">// "Rollback must preserve prior registration" callout.</span>
+const prior = userTypesService.peekContribution(targetBlockId)
 userTypesService.appendUserType(contribution, targetBlockId)
 try {
   await repo.tx(async tx =&gt; {
+    <span class="comment">// In-tx guard: the target may have been deleted concurrently</span>
+    <span class="comment">// between our pre-tx load() and the tx opening. addTypeInTx is a</span>
+    <span class="comment">// no-op when tx.get(blockId) returns null (src/data/repo.ts) so</span>
+    <span class="comment">// without this guard the loop below would happily tag N instances</span>
+    <span class="comment">// with a type id whose backing block doesn't exist. Throwing here</span>
+    <span class="comment">// aborts the tx and triggers the rollback path below.</span>
+    const targetInTx = await tx.get(targetBlockId)
+    if (!targetInTx || targetInTx.deleted) {
+      throw new Error(`promoteToType: target ${targetBlockId} no longer exists`)
+    }
     await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})
+
     for (const candidate of candidates) {
       const row = await tx.get(candidate.id)
       if (!row) continue                          <span class="comment">// deleted between prefilter and tx</span>
@@ -840,9 +866,37 @@ try {
     if (rewriteIsaReferences) <span class="comment">/* ... */</span>
   })
 } catch (err) {
-  userTypesService.removeUserType(targetBlockId)
+  if (prior) {
+    userTypesService.appendUserType(prior.contribution, prior.blockId)   <span class="comment">// restore</span>
+  } else {
+    userTypesService.removeUserType(targetBlockId)                       <span class="comment">// drop provisional</span>
+  }
   throw err
 }</code></pre>
+
+<div class="callout warn">
+  <h4>In-tx existence guard for the target</h4>
+  <p style="margin:0">
+    <code>repo.addTypeInTx(tx, blockId, ...)</code> silently no-ops when <code>tx.get(blockId)</code> returns null
+    or a tombstone &mdash; reasonable behavior on sync-applied deletes where another device removed the row, but
+    a footgun for orchestration code that's about to fan out work tied to the target. Without the explicit
+    <code>tx.get</code> + <code>deleted</code> check, a concurrent delete between the pre-tx <code>load()</code> and
+    the tx opening would let the loop persist <code>targetBlockId</code> on every candidate's <code>block:types</code>
+    while the target itself stays a non-<code>block-type</code> tombstone. The next runtime rebuild then drops the
+    provisional registration, leaving orphan ids on N rows.
+  </p>
+</div>
+
+<div class="callout warn">
+  <h4>Rollback must preserve prior registration</h4>
+  <p style="margin:0">
+    A retry on an already-promoted target (e.g. user re-runs promotion with a different property set) has
+    <code>peekContribution(targetBlockId)</code> returning the existing user-data contribution. An unconditional
+    <code>removeUserType</code> on tx failure would wipe that legitimate registration, breaking every block
+    currently tagged with this id until the next subscription tick reconciles. Capture-and-restore is the right
+    primitive: <code>peek &rarr; append &rarr; on-failure-restore-or-drop</code>.
+  </p>
+</div>
 
 <div class="callout warn">
   <h4>Why the query lives outside the tx</h4>
