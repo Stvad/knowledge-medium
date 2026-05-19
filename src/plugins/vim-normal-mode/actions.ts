@@ -71,6 +71,40 @@ export function getVimNormalModeActions({repo}: { repo: Repo }): ActionConfig<ty
     indentBlockAction,
     outdentBlockAction,
     bindNormal({
+      id: 'move_down',
+      description: 'Move to next block',
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock} = deps
+        if (!block || !uiStateBlock) return
+
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+        if (!topLevelBlockId) return
+
+        const next = await nextVisibleBlock(block, topLevelBlockId)
+        if (next) void focusBlock(uiStateBlock, next.id)
+      },
+      defaultBinding: {
+        keys: ['down', 'k'],
+      },
+    }),
+    bindNormal({
+      id: 'move_up',
+      description: 'Move to previous block',
+      handler: async (deps: BlockShortcutDependencies) => {
+        const {block, uiStateBlock} = deps
+        if (!block || !uiStateBlock) return
+
+        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
+        if (!topLevelBlockId) return
+
+        const prev = await previousVisibleBlock(block, topLevelBlockId)
+        if (prev) void focusBlock(uiStateBlock, prev.id)
+      },
+      defaultBinding: {
+        keys: ['up', 'h'],
+      },
+    }),
+    bindNormal({
       id: 'enter_edit_mode',
       description: 'Enter edit mode',
       handler: async (deps: BlockShortcutDependencies) => enterEditMode(deps.uiStateBlock),

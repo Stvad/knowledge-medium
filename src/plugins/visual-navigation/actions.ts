@@ -1,15 +1,11 @@
 import {
-  focusBlock,
-  topLevelBlockIdProp,
-} from '@/data/properties.ts'
-import {
-  nextVisibleBlock,
-  previousVisibleBlock,
-} from '@/utils/selection.ts'
-import { actionsFacet } from '@/extensions/core.ts'
+  actionDecoratorsFacet,
+  actionsFacet,
+} from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import {
   ActionConfig,
+  type ActionDecorator,
   ActionContextTypes,
   type BlockShortcutDependencies,
 } from '@/shortcuts/types.ts'
@@ -35,44 +31,6 @@ export function getVisualNavigationActions(): ActionConfig<typeof ActionContextT
 
   return [
     bindNormal({
-      id: 'move_down',
-      description: 'Move focus visually down',
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        if (await moveVisualFocusOrStay(deps, 'down')) return
-
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
-
-        const next = await nextVisibleBlock(block, topLevelBlockId)
-        if (next) void focusBlock(uiStateBlock, next.id)
-      },
-      defaultBinding: {
-        keys: ['down', 'k'],
-      },
-    }),
-    bindNormal({
-      id: 'move_up',
-      description: 'Move focus visually up',
-      handler: async (deps: BlockShortcutDependencies) => {
-        const {block, uiStateBlock} = deps
-        if (!block || !uiStateBlock) return
-
-        if (await moveVisualFocusOrStay(deps, 'up')) return
-
-        const topLevelBlockId = uiStateBlock.peekProperty(topLevelBlockIdProp)
-        if (!topLevelBlockId) return
-
-        const prev = await previousVisibleBlock(block, topLevelBlockId)
-        if (prev) void focusBlock(uiStateBlock, prev.id)
-      },
-      defaultBinding: {
-        keys: ['up', 'h'],
-      },
-    }),
-    bindNormal({
       id: 'move_left',
       description: 'Move focus visually left',
       handler: async (deps: BlockShortcutDependencies) => {
@@ -95,7 +53,36 @@ export function getVisualNavigationActions(): ActionConfig<typeof ActionContextT
   ]
 }
 
+const visualNavigationMoveDecorator = (
+  actionId: 'move_down' | 'move_up',
+  direction: Extract<VisualNavigationDirection, 'down' | 'up'>,
+  description: string,
+): ActionDecorator<typeof ActionContextTypes.NORMAL_MODE> => ({
+  actionId,
+  context: ActionContextTypes.NORMAL_MODE,
+  decorate: action => ({
+    ...action,
+    description,
+    handler: async (deps, trigger) => {
+      if (await moveVisualFocusOrStay(deps, direction)) return
+      await action.handler(deps, trigger)
+    },
+  }),
+})
+
+export function getVisualNavigationActionDecorators(): ActionDecorator<typeof ActionContextTypes.NORMAL_MODE>[] {
+  return [
+    visualNavigationMoveDecorator('move_down', 'down', 'Move focus visually down'),
+    visualNavigationMoveDecorator('move_up', 'up', 'Move focus visually up'),
+  ]
+}
+
 export const visualNavigationActionsExtension: AppExtension =
   getVisualNavigationActions().map(action =>
     actionsFacet.of(action as ActionConfig, {source: 'visual-navigation'}),
+  )
+
+export const visualNavigationActionDecoratorsExtension: AppExtension =
+  getVisualNavigationActionDecorators().map(decorator =>
+    actionDecoratorsFacet.of(decorator as ActionDecorator, {source: 'visual-navigation'}),
   )

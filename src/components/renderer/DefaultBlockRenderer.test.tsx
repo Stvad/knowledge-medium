@@ -17,12 +17,12 @@ import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPro
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { blockLayoutFacet, type BlockLayout } from '@/extensions/blockInteraction'
+import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts'
 import type { Block } from '@/data/block'
 import type { BlockRendererProps } from '@/types'
 import { pasteMultilineText } from '@/utils/paste'
-import { visualNavigationPlugin } from '@/plugins/visual-navigation'
 import { DefaultBlockRenderer } from './DefaultBlockRenderer'
 
 const repoRef = vi.hoisted(() => ({
@@ -123,7 +123,7 @@ describe('DefaultBlockRenderer paste handling', () => {
       kernelDataExtension,
       kernelPropertyUiExtension,
       kernelValuePresetsExtension,
-      visualNavigationPlugin,
+      defaultEditorInteractionExtension,
       propertySchemasFacet.of(statusProp, {source: 'test'}),
       blockLayoutFacet.of(
         () => ({id: 'property-only', label: 'Property only', render: propertyOnlyLayout}),
@@ -217,6 +217,13 @@ describe('DefaultBlockRenderer paste handling', () => {
       repo.block('block-1'),
       repo,
     )
+  })
+
+  it('applies the default focused-block shell highlight without visual navigation', () => {
+    renderBlock()
+
+    const shell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
+    expect(shell?.className).toContain('bg-muted/95')
   })
 
   it('restores DOM focus to a focused normal-mode block shell after remount', async () => {

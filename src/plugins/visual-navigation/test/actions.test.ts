@@ -7,19 +7,29 @@ import { ChangeScope, type User } from '@/data/api'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
+  actionDecoratorsFacet,
+  actionsFacet,
+} from '@/extensions/core'
+import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import {
   focusedBlockIdProp,
   focusedVisualTargetKeyProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { getVisualNavigationActions } from '@/plugins/visual-navigation/actions.ts'
+import {
+  getVisualNavigationActionDecorators,
+  getVisualNavigationActions,
+} from '@/plugins/visual-navigation/actions.ts'
 import {
   __resetVisualNavigationForTesting,
   getActiveVisualNavigationTarget,
   registerVisualNavigationTarget,
   setActiveVisualNavigationTarget,
 } from '@/plugins/visual-navigation/navigation.ts'
+import { getEffectiveActions } from '@/shortcuts/effectiveActions'
 import {
   ActionContextTypes,
+  type ActionDecorator,
   type ActionConfig,
   type ActionTrigger,
   type BlockShortcutDependencies,
@@ -49,6 +59,33 @@ const findNormalModeAction = (
   id: string,
 ): ActionConfig<typeof ActionContextTypes.NORMAL_MODE> => {
   const action = getVisualNavigationActions().find(
+    (candidate): candidate is ActionConfig<typeof ActionContextTypes.NORMAL_MODE> =>
+      candidate.id === id && candidate.context === ActionContextTypes.NORMAL_MODE,
+  )
+  if (!action) throw new Error(`Action not found: ${id}`)
+  return action
+}
+
+const decoratedMoveAction = (
+  id: 'move_down' | 'move_up',
+  fallback = vi.fn(),
+): ActionConfig<typeof ActionContextTypes.NORMAL_MODE> => {
+  const baseAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
+    id,
+    description: 'Base move action',
+    context: ActionContextTypes.NORMAL_MODE,
+    handler: fallback,
+    defaultBinding: id === 'move_down'
+      ? {keys: ['down', 'k']}
+      : {keys: ['up', 'h']},
+  }
+  const runtime = resolveFacetRuntimeSync([
+    actionsFacet.of(baseAction as ActionConfig),
+    ...getVisualNavigationActionDecorators().map(decorator =>
+      actionDecoratorsFacet.of(decorator as ActionDecorator),
+    ),
+  ])
+  const action = getEffectiveActions(runtime).find(
     (candidate): candidate is ActionConfig<typeof ActionContextTypes.NORMAL_MODE> =>
       candidate.id === id && candidate.context === ActionContextTypes.NORMAL_MODE,
   )
@@ -138,7 +175,7 @@ describe('visual navigation actions', () => {
       element: backlinkElement,
     })
 
-    const action = findNormalModeAction('move_down')
+    const action = decoratedMoveAction('move_down')
     await action.handler({
       block: env.repo.block('current'),
       uiStateBlock,
@@ -192,7 +229,7 @@ describe('visual navigation actions', () => {
       element: backlinkElement,
     })
 
-    const action = findNormalModeAction('move_down')
+    const action = decoratedMoveAction('move_down')
     await action.handler({
       block: env.repo.block('current'),
       uiStateBlock,
@@ -236,7 +273,8 @@ describe('visual navigation actions', () => {
       element: currentElement,
     })
 
-    const action = findNormalModeAction('move_down')
+    const fallback = vi.fn()
+    const action = decoratedMoveAction('move_down', fallback)
     await action.handler({
       block: env.repo.block('current'),
       uiStateBlock,
@@ -245,8 +283,31 @@ describe('visual navigation actions', () => {
 
     expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('current')
     expect(uiStateBlock.peekProperty(focusedVisualTargetKeyProp)).toBe('current-target')
+    expect(fallback).not.toHaveBeenCalled()
 
     unregisterCurrent()
+  })
+
+  it('falls back to the decorated tree action when no visual target is active', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'panel',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+      })
+      await tx.create({id: 'current', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'current'})
+    }, {scope: ChangeScope.UiState})
+
+    const fallback = vi.fn()
+    const action = decoratedMoveAction('move_down', fallback)
+
+    await action.handler({
+      block: env.repo.block('current'),
+      uiStateBlock: env.repo.block('panel'),
+    } as BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(fallback).toHaveBeenCalledTimes(1)
   })
 
   it('recovers active visual focus to the nearest mounted target when the active occurrence unmounts', async () => {

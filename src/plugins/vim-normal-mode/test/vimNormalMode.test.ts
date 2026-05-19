@@ -3,10 +3,19 @@ import { actionsFacet } from '@/extensions/core.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { ActionConfig, ActionContextTypes } from '@/shortcuts/types.ts'
+import type { Repo } from '@/data/repo'
+import { getVimNormalModeActions } from '@/plugins/vim-normal-mode/actions'
 
 const noop = () => undefined
 
 describe('vim normal mode actions in the unified action surface', () => {
+  it('owns the baseline hierarchical up and down movement bindings', () => {
+    const actions = getVimNormalModeActions({repo: {} as Repo})
+
+    expect(actions.find(action => action.id === 'move_down')?.defaultBinding?.keys).toEqual(['down', 'k'])
+    expect(actions.find(action => action.id === 'move_up')?.defaultBinding?.keys).toEqual(['up', 'h'])
+  })
+
   it('exposes normal-mode actions through the shared actions facet', () => {
     const globalAction: ActionConfig<typeof ActionContextTypes.GLOBAL> = {
       id: 'global.test',
