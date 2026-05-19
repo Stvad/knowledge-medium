@@ -112,6 +112,45 @@ describe('collectSchemaReconciliationPlan', () => {
     expect(plan.toRegister).toEqual([{name: 'roam:topics', presetId: 'refList'}])
   })
 
+  it('infers daily-note targetTypes when every token alias is a canonical daily title', async () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:initial review date': '[[2026-05-18]]'}),
+      block('b', {'roam:initial review date': '[[2026-05-19]]'}),
+      block('c', {'roam:initial review date': ['[[May 20th, 2026]]', '[[2026-06-01]]']}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{
+      name: 'roam:initial review date',
+      presetId: 'refList',
+      targetTypes: ['daily-note'],
+    }])
+
+    // End-to-end: the registered schema's codec carries the targetTypes
+    // so the backlinks property-filter UI surfaces the date affordance.
+    await applySchemaReconciliation(plan.toRegister, env.repo, [])
+    const schema = env.repo.propertySchemas.get('roam:initial review date')
+    expect(schema?.codec.type).toBe('refList')
+    expect((schema?.codec as {targetTypes?: readonly string[]}).targetTypes).toEqual(['daily-note'])
+  })
+
+  it('omits targetTypes when token aliases mix daily-note and non-daily-note pages', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:related': '[[2026-05-18]]'}),
+      block('b', {'roam:related': '[[Some Concept]]'}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:related', presetId: 'refList'}])
+  })
+
+  it('omits targetTypes for refList properties whose tokens are non-daily-note pages', () => {
+    const blocks: BlockData[] = [
+      block('a', {'roam:topics': '[[Algorithms]]'}),
+      block('b', {'roam:topics': '[[Data Structures]]'}),
+    ]
+    const plan = collectSchemaReconciliationPlan(blocks, env.repo)
+    expect(plan.toRegister).toEqual([{name: 'roam:topics', presetId: 'refList'}])
+  })
+
   it('forces semantic Roam ref fields to the refList preset', () => {
     const blocks: BlockData[] = [
       block('a', {'roam:isa': 'person'}),

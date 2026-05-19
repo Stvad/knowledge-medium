@@ -21,6 +21,8 @@ import type { Repo } from '@/data/repo'
 import {
   ROAM_PAGE_ALIAS_PROP,
   collectAliasesFromRoamSemanticRefListValue,
+  inferRefListTargetTypes,
+  isDailyNoteAlias,
   isRoamSemanticRefListProperty,
   parsePageTokenList,
 } from './properties'
@@ -45,6 +47,12 @@ interface SampledNameStats {
    *  appear alongside plainStringArrays, the field is a string-list
    *  property whose scalar cases need one-item-array normalization. */
   plainStrings: number
+  /** Token aliases extracted from every pure-token value seen — feeds
+   *  `inferRefListTargetTypes` so a property whose targets are all
+   *  daily notes lands on `targetTypes: ['daily-note']` and shows up
+   *  with the date filter affordance in the backlinks UI. */
+  refListTokensTotal: number
+  refListTokensDailyNote: number
   nonRefListSamples: Array<{blockRef: string; value: string}>
 }
 
@@ -75,6 +83,15 @@ const isPureTokenString = (value: string): boolean => {
   return parsePageTokenList(value) !== null
 }
 
+const tallyTokens = (stats: SampledNameStats, value: string): void => {
+  const tokens = parsePageTokenList(value)
+  if (!tokens) return
+  for (const {alias} of tokens) {
+    stats.refListTokensTotal += 1
+    if (isDailyNoteAlias(alias)) stats.refListTokensDailyNote += 1
+  }
+}
+
 const recordSample = (stats: SampledNameStats, blockId: string, value: unknown): void => {
   stats.totalValues += 1
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -89,6 +106,7 @@ const recordSample = (stats: SampledNameStats, blockId: string, value: unknown):
   }
   if (typeof value === 'string' && isPureTokenString(value)) {
     stats.pageTokenStrings += 1
+    tallyTokens(stats, value)
     return
   }
   if (typeof value === 'string') {
@@ -99,6 +117,7 @@ const recordSample = (stats: SampledNameStats, blockId: string, value: unknown):
   if (Array.isArray(value) && value.length > 0 && value.every(item => typeof item === 'string')) {
     if (value.every(item => isPureTokenString(item as string))) {
       stats.pageTokenArrays += 1
+      for (const item of value as string[]) tallyTokens(stats, item)
     } else {
       stats.plainStringArrays += 1
       rememberNonRefListSample(stats, blockId, value)
@@ -157,11 +176,21 @@ const schemaNearMissDiagnostic = (
  *  hidden reserved slots, classify the rest by sampling values across
  *  the planned set, and produce a list of {name, presetId} pairs to
  *  register before the import writes content. */
+export interface ReconciliationRegistration {
+  readonly name: string
+  readonly presetId: ClassifiedPresetId
+  /** Inferred when every observed token alias resolves to a single known
+   *  target type (currently only daily-note). Omitted otherwise — the
+   *  schema lands with no `targetTypes` constraint and the user can
+   *  refine via `RefTargetTypePicker`. */
+  readonly targetTypes?: readonly string[]
+}
+
 export const collectSchemaReconciliationPlan = (
   blocks: ReadonlyArray<BlockData>,
   repo: Repo,
 ): {
-  toRegister: ReadonlyArray<{name: string; presetId: ClassifiedPresetId}>
+  toRegister: ReadonlyArray<ReconciliationRegistration>
   skippedReserved: ReadonlyArray<string>
   diagnostics: ReadonlyArray<string>
 } => {
@@ -178,6 +207,8 @@ export const collectSchemaReconciliationPlan = (
         pageTokenArrays: 0,
         plainStringArrays: 0,
         plainStrings: 0,
+        refListTokensTotal: 0,
+        refListTokensDailyNote: 0,
         nonRefListSamples: [],
       }
       recordSample(stats, block.id, value)
@@ -185,7 +216,7 @@ export const collectSchemaReconciliationPlan = (
     }
   }
 
-  const toRegister: Array<{name: string; presetId: ClassifiedPresetId}> = []
+  const toRegister: ReconciliationRegistration[] = []
   const skippedReserved: string[] = []
   const diagnostics: string[] = []
 
@@ -214,10 +245,16 @@ export const collectSchemaReconciliationPlan = (
     const diagnostic = schemaNearMissDiagnostic(name, stats, inferredPreset, 'inferred')
     if (diagnostic) diagnostics.push(diagnostic)
 
-    toRegister.push({
-      name,
-      presetId: inferredPreset,
-    })
+    const targetTypes = inferredPreset === 'refList'
+      ? inferRefListTargetTypes({
+        total: stats.refListTokensTotal,
+        dailyNote: stats.refListTokensDailyNote,
+      })
+      : undefined
+
+    toRegister.push(
+      targetTypes ? {name, presetId: inferredPreset, targetTypes} : {name, presetId: inferredPreset},
+    )
   }
 
   return {toRegister, skippedReserved, diagnostics}
@@ -231,13 +268,15 @@ export const collectSchemaReconciliationPlan = (
  *  whose property values use the missing schema fall through to the
  *  unknown-schema read fallback (per §9). */
 export const applySchemaReconciliation = async (
-  toRegister: ReadonlyArray<{name: string; presetId: ClassifiedPresetId}>,
+  toRegister: ReadonlyArray<ReconciliationRegistration>,
   repo: Repo,
   diagnostics: string[],
 ): Promise<void> => {
-  for (const {name, presetId} of toRegister) {
+  for (const entry of toRegister) {
+    const {name, presetId} = entry
+    const config = entry.targetTypes ? {targetTypes: entry.targetTypes} : undefined
     try {
-      await repo.userSchemas.addSchema({name, presetId})
+      await repo.userSchemas.addSchema({name, presetId, config})
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       diagnostics.push(`Failed to register schema "${name}" (preset ${presetId}): ${message}`)

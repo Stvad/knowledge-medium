@@ -3,6 +3,8 @@ import {
   parseReferences,
   type ParsedReference,
 } from '@/plugins/references/referenceParser.ts'
+import { DAILY_NOTE_TYPE } from '@/plugins/daily-notes/schema.ts'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
 
 const NS_PREFIX = 'roam'
 export const ROAM_PAGE_ALIAS_PROP = `${NS_PREFIX}:page_alias`
@@ -17,6 +19,35 @@ export const ROAM_MESSAGE_TIMESTAMP_PROP = `${NS_PREFIX}:message-timestamp`
 
 export const isRoamSemanticRefListProperty = (name: string): boolean =>
   name === ROAM_ISA_PROP || name === ROAM_PAGE_ALIAS_PROP
+
+/** Tally of token aliases observed for a single property during
+ *  schema reconciliation. Inputs to `inferRefListTargetTypes`. */
+export interface RefListTokenTally {
+  /** Total token aliases seen across all values. A value like
+   *  `[[A]] [[B]]` contributes 2; `['[[A]]', '[[B]]']` contributes 2. */
+  readonly total: number
+  /** Subset of `total` whose alias parses as a daily-note page title
+   *  (canonical ISO or canonical Roam form per `parseLiteralDailyPageTitle`). */
+  readonly dailyNote: number
+}
+
+/** Given the per-property token tally, return the `targetTypes` to use
+ *  when registering the property's refList schema. Conservative — only
+ *  emits a result when every observed token unanimously fits a known
+ *  target type, so users with mixed-target Roam properties land on an
+ *  un-constrained refList that they can refine via RefTargetTypePicker. */
+export const inferRefListTargetTypes = (
+  tally: RefListTokenTally,
+): readonly string[] | undefined => {
+  if (tally.total === 0) return undefined
+  if (tally.total === tally.dailyNote) return [DAILY_NOTE_TYPE]
+  return undefined
+}
+
+/** True iff `alias` is a canonical daily-note page title (ISO or
+ *  Roam-style) — i.e. the import will resolve it to a daily-note block. */
+export const isDailyNoteAlias = (alias: string): boolean =>
+  parseLiteralDailyPageTitle(alias) !== null
 
 export const uniqueStrings = (values: readonly string[]): string[] => {
   const out: string[] = []
