@@ -777,18 +777,37 @@ service needs the same synchronous-append escape hatch <code>UserSchemasService<
     (taken inside the tx) sees it.
   </li>
   <li>
+    <b>Still before the tx</b> &mdash; resolve the target's workspace and prefilter the instance set.
+    Read the target block to capture its <code>workspaceId</code>, then call
+    <code>repo.queryBlocks({workspaceId, referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code>
+    to get the candidate instance ids. The <code>block_references</code> edge index from
+    <span class="file">type-system.md</span> &sect;6b answers this in one EXISTS. Two reasons this runs <i>outside</i>
+    the tx (see callout):
+    <ul class="tight">
+      <li>
+        <code>repo.queryBlocks</code> reads via <code>ctx.db.getAll</code>, not the active write-tx lock context.
+        Running it inside <code>repo.tx</code> reintroduces the PowerSync queue deadlock documented in
+        <span class="file">tasks/processor-tx-deadlock.md</span> and called out at
+        <span class="file">docs/follow-ups.md:19-21</span>.
+      </li>
+      <li>
+        Explicit <code>workspaceId</code> avoids <code>queryBlocks</code> falling back to
+        <code>activeWorkspaceId</code>, which can differ from the target's workspace during background flows /
+        import runs / UI workspace switches and would silently mis-scope the retag set.
+      </li>
+    </ul>
+  </li>
+  <li>
     Open the tx <i>under a try/catch</i>. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code>
     on the Person page, materializing <code>block-type:label</code> and <code>block-type:properties</code>.
   </li>
   <li>
-    Query <code>repo.queryBlocks({referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code> &mdash; the
-    <code>block_references</code> edge index from <span class="file">type-system.md</span> &sect;6b already gives
-    this answer in one EXISTS.
-  </li>
-  <li>
-    For each referencing block, <code>repo.addTypeInTx(tx, instanceId, targetBlockId, {})</code> &mdash; appending
-    the new type id (= target's block id) to <code>block:types</code>. The id resolves because step 1 already
-    registered it. Any <code>sameTxProcessor</code> watching the field fires per row.
+    For each prefiltered instance id, re-read in-tx via <code>tx.get(instanceId)</code> (cheap; the writer slot
+    is already held) and skip if the row is gone or no longer carries the <code>roam:isa</code> ref to the target
+    &mdash; the TOCTOU narrow guard. For survivors,
+    <code>repo.addTypeInTx(tx, instanceId, targetBlockId, {})</code> appends the new type id to
+    <code>block:types</code>. The id resolves because step 1 already registered it. Any
+    <code>sameTxProcessor</code> watching the field fires per row.
   </li>
   <li>
     If <code>rewriteIsaReferences</code>: rewrite the <code>roam:isa</code> refList on each instance, dropping the
@@ -800,13 +819,23 @@ service needs the same synchronous-append escape hatch <code>UserSchemasService<
   </li>
 </ol>
 
-<pre><code>userTypesService.appendUserType(contribution, targetBlockId)
+<pre><code>const target = await repo.load(targetBlockId)
+const workspaceId = target.workspaceId
+const candidates = await repo.queryBlocks({
+  workspaceId,
+  referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP},
+})
+
+userTypesService.appendUserType(contribution, targetBlockId)
 try {
   await repo.tx(async tx =&gt; {
     await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})
-    const instances = await repo.queryBlocks({referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})
-    for (const instance of instances) {
-      await repo.addTypeInTx(tx, instance.id, targetBlockId, {})
+    for (const candidate of candidates) {
+      const row = await tx.get(candidate.id)
+      if (!row) continue                          <span class="comment">// deleted between prefilter and tx</span>
+      const isaRefs = row.properties[ROAM_ISA_PROP] ?? []
+      if (!resolveRoamIsaTargets(isaRefs).includes(targetBlockId)) continue   <span class="comment">// no longer references target</span>
+      await repo.addTypeInTx(tx, candidate.id, targetBlockId, {})
     }
     if (rewriteIsaReferences) <span class="comment">/* ... */</span>
   })
@@ -814,6 +843,25 @@ try {
   userTypesService.removeUserType(targetBlockId)
   throw err
 }</code></pre>
+
+<div class="callout warn">
+  <h4>Why the query lives outside the tx</h4>
+  <p style="margin:0 0 .4rem">
+    <code>repo.queryBlocks</code> and other typed-query reads route through <code>ctx.db.getAll</code> on the read
+    DB handle, not through <code>tx</code>'s write-transaction lock. Under PowerSync's serialized single-connection
+    config, holding a writer slot while issuing a bare DB read deadlocks the queue &mdash; the read can't progress
+    until the writer releases, and the writer is blocked on the read. The kernel's <code>parseReferences</code>
+    and <code>cleanupOrphanAliases</code> processors paid the same cost and moved their broad reads outside the
+    write tx (<span class="file">docs/follow-ups.md:19</span>); the promotion flow follows the same shape.
+  </p>
+  <p style="margin:0">
+    The TOCTOU window opened by reading outside the tx is narrow and the in-tx re-read closes it:
+    instances may be deleted or have their <code>roam:isa</code> rewritten between the prefilter and the tx,
+    which the in-tx <code>tx.get</code> + property check catches. Conversely, instances that gained an
+    <code>isa</code> ref during the window are silently missed by this promotion &mdash; conservative miss is
+    fine; the user can re-run promotion.
+  </p>
+</div>
 
 <div class="callout warn">
   <h4>Why explicit rollback &mdash; subscription rebuild isn't enough</h4>
