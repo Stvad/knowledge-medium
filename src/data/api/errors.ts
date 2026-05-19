@@ -23,6 +23,25 @@ export class BlockNotFoundError extends DataLayerError {
   }
 }
 
+/** Thrown by `repo.addType` / `repo.addTypeInTx` when the target block is
+ *  missing or tombstoned at write time. Orchestration code that's about
+ *  to fan out work based on the assumption the tag was applied wants this
+ *  to throw rather than silently no-op. Callers that legitimately race
+ *  against a concurrent delete (sync-apply / processor paths) can opt
+ *  into the lenient `addTypeInTxLenient` entry point. */
+export class BlockNotFoundForTypeError extends DataLayerError {
+  constructor(
+    public readonly blockId: string,
+    public readonly typeId: string,
+    public readonly reason: 'missing' | 'tombstoned',
+  ) {
+    super(
+      `cannot add type ${JSON.stringify(typeId)} to block ${blockId}: ` +
+      `block is ${reason}`,
+    )
+  }
+}
+
 // ──── Tx primitives ────
 
 export class DuplicateIdError extends DataLayerError {
