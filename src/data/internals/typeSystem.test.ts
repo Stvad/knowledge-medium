@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import {
+  BlockNotFoundForTypeError,
   ChangeScope,
   codecs,
   defineBlockType,
@@ -148,6 +149,114 @@ describe('Repo type membership orchestration', () => {
 
     await block.removeType('b')
     expect(block.types).toEqual(['a'])
+  })
+
+  it('addType throws BlockNotFoundForTypeError when the target block is missing', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+
+    await expect(repo.addType('does-not-exist', 'todo')).rejects.toBeInstanceOf(BlockNotFoundForTypeError)
+    try {
+      await repo.addType('does-not-exist', 'todo')
+    } catch (err) {
+      const e = err as BlockNotFoundForTypeError
+      expect(e.blockId).toBe('does-not-exist')
+      expect(e.typeId).toBe('todo')
+      expect(e.reason).toBe('missing')
+    }
+  })
+
+  it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a missing block', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    const snapshot = repo.snapshotTypeRegistries()
+
+    let caught: unknown = null
+    await repo.tx(async tx => {
+      try {
+        await repo.addTypeInTx(tx, 'ghost', 'todo', {}, snapshot)
+      } catch (err) {
+        caught = err
+        throw err
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'strict missing'}).catch(() => {})
+
+    expect(caught).toBeInstanceOf(BlockNotFoundForTypeError)
+    const e = caught as BlockNotFoundForTypeError
+    expect(e.blockId).toBe('ghost')
+    expect(e.typeId).toBe('todo')
+    expect(e.reason).toBe('missing')
+  })
+
+  it('addTypeInTx (strict default) throws BlockNotFoundForTypeError on a tombstoned block', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    await createBlock('b1')
+    // Soft-delete the row so tx.get returns it with deleted=true.
+    await repo.tx(async tx => {
+      await tx.delete('b1')
+    }, {scope: ChangeScope.BlockDefault, description: 'tombstone'})
+
+    const snapshot = repo.snapshotTypeRegistries()
+    let caught: unknown = null
+    await repo.tx(async tx => {
+      try {
+        await repo.addTypeInTx(tx, 'b1', 'todo', {}, snapshot)
+      } catch (err) {
+        caught = err
+        throw err
+      }
+    }, {scope: ChangeScope.BlockDefault, description: 'strict tombstone'}).catch(() => {})
+
+    expect(caught).toBeInstanceOf(BlockNotFoundForTypeError)
+    const e = caught as BlockNotFoundForTypeError
+    expect(e.blockId).toBe('b1')
+    expect(e.typeId).toBe('todo')
+    expect(e.reason).toBe('tombstoned')
+  })
+
+  it('addTypeInTxLenient silently no-ops on a missing block (preserves legacy semantics)', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    const snapshot = repo.snapshotTypeRegistries()
+
+    // Should not throw; should not write anything.
+    await repo.tx(async tx => {
+      await repo.addTypeInTxLenient(tx, 'ghost', 'todo', {}, snapshot)
+    }, {scope: ChangeScope.BlockDefault, description: 'lenient missing'})
+  })
+
+  it('addTypeInTxLenient silently no-ops on a tombstoned block', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    await createBlock('b1')
+    await repo.tx(async tx => {
+      await tx.delete('b1')
+    }, {scope: ChangeScope.BlockDefault, description: 'tombstone'})
+
+    const snapshot = repo.snapshotTypeRegistries()
+    await repo.tx(async tx => {
+      await repo.addTypeInTxLenient(tx, 'b1', 'todo', {}, snapshot)
+    }, {scope: ChangeScope.BlockDefault, description: 'lenient tombstone'})
+  })
+
+  it('addTypeInTx (strict default) tags a valid block normally', async () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      typesFacet.of(defineBlockType({id: 'todo'}), {source: 'test'}),
+    ]))
+    await createBlock('b1')
+    const snapshot = repo.snapshotTypeRegistries()
+
+    await repo.tx(async tx => {
+      await repo.addTypeInTx(tx, 'b1', 'todo', {}, snapshot)
+    }, {scope: ChangeScope.BlockDefault, description: 'strict happy'})
+
+    expect(repo.block('b1').types).toEqual(['todo'])
   })
 
   it('addTypeInTx uses a caller-supplied registry snapshot', async () => {
