@@ -11,7 +11,12 @@ import { FilterX, Plus, Settings2, X } from 'lucide-react'
 import { useRepo } from '@/context/repo.tsx'
 import { useHandle } from '@/hooks/block.ts'
 import { usePropertySchemas } from '@/hooks/propertySchemas.ts'
-import { isRefCodec, type AnyPropertySchema, type BlockPredicate } from '@/data/api'
+import {
+  isRefCodec,
+  isRefListCodec,
+  type AnyPropertySchema,
+  type BlockPredicate,
+} from '@/data/api'
 import {
   DAILY_NOTE_TYPE,
   dailyNoteDateProp,
@@ -51,13 +56,15 @@ const truncate = (text: string, max = 72): string =>
 
 const predicateKey = (p: BlockPredicate): string => JSON.stringify(p)
 
-/** Ref-typed property whose targets are daily notes. These get the
+/** Ref/refList-typed property whose targets are daily notes. These get the
  *  same date-operator UX as a `date`-codec property — the predicate
  *  builder wraps the operator in a `target` traversal that compares
  *  the referenced daily note's `daily-note:date`. */
 const isDailyNoteDateRef = (schema: AnyPropertySchema): boolean => {
-  if (!isRefCodec(schema.codec)) return false
-  return schema.codec.targetTypes.includes(DAILY_NOTE_TYPE)
+  if (isRefCodec(schema.codec) || isRefListCodec(schema.codec)) {
+    return schema.codec.targetTypes.includes(DAILY_NOTE_TYPE)
+  }
+  return false
 }
 
 type WhereOperatorId =
@@ -67,12 +74,15 @@ type WhereOperatorId =
 /** Operator menu surfaced for a given property. `date`/`number`/
  *  daily-note-ref properties get the full comparison surface; the
  *  remaining where-queryable codecs (string/url/boolean) keep the
- *  simple equality+unset UX they had pre-operator-support. */
+ *  simple equality+unset UX they had pre-operator-support. Registered
+ *  schemas without comparison support can still be queried for set/unset
+ *  because those operators compile to JSON presence checks. */
 const operatorOptionsFor = (schema: AnyPropertySchema): WhereOperatorId[] => {
   const t = schema.codec.type
   if (t === 'date' || t === 'number' || isDailyNoteDateRef(schema)) {
     return ['eq', 'lt', 'lte', 'gt', 'gte', 'between', 'exists-true', 'exists-false']
   }
+  if (schema.codec.where === undefined) return ['exists-true', 'exists-false']
   return ['eq', 'exists-true', 'exists-false']
 }
 
@@ -461,7 +471,6 @@ const PropertyPredicateInput = ({
   const schemas = usePropertySchemas()
   const queryable = useMemo(() => {
     return Array.from(schemas.values())
-      .filter(s => s.codec.where !== undefined || isDailyNoteDateRef(s))
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [schemas])
   const [name, setName] = useState('')
@@ -472,6 +481,10 @@ const PropertyPredicateInput = ({
   const operators = useMemo(() => schema ? operatorOptionsFor(schema) : [], [schema])
   const arity = operatorArity(op)
   const inputType = schema ? valueInputTypeFor(schema) : 'text'
+  const defaultOperatorFor = (propertyName: string): WhereOperatorId => {
+    const nextSchema = schemas.get(propertyName)
+    return nextSchema ? operatorOptionsFor(nextSchema)[0] ?? 'eq' : 'eq'
+  }
 
   const reset = () => {
     setName('')
@@ -499,8 +512,9 @@ const PropertyPredicateInput = ({
       <select
         value={name}
         onChange={e => {
-          setName(e.target.value)
-          setOp('eq')
+          const nextName = e.target.value
+          setName(nextName)
+          setOp(defaultOperatorFor(nextName))
           setValue('')
           setValueHi('')
         }}

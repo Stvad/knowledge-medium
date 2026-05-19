@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Property Filter Adapter Seam</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+      }
+    }
+
+    body {
+      margin: 0;
+      color: var(--fg);
+      background: Canvas;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 40px 24px 56px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 2rem;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 32px 0 8px;
+      font-size: 1.15rem;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul {
+      margin: 0 0 16px 20px;
+      padding: 0;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.08rem 0.25rem;
+      border-radius: 4px;
+      background: var(--code);
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+    }
+
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .decision {
+      border-left: 3px solid var(--accent);
+      padding-left: 14px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Property Filter Adapter Seam</h1>
+    <p class="lede">
+      The typed query engine already has richer semantics than the backlinks filter UI exposes.
+      We need an extension seam that lets a property describe its filter affordance without
+      hard-coding domain knowledge into <code>BacklinkFilters</code>.
+    </p>
+
+    <h2>Current Shape</h2>
+    <ul>
+      <li><code>codec.where</code> means the stored JSON value can be directly compared.</li>
+      <li><code>where[name].target</code> means a <code>ref</code> or <code>refList</code> can be traversed and filtered by target block properties.</li>
+      <li>The backlinks UI lists direct-comparable codecs and has a local daily-note-ref special case.</li>
+      <li>All registered schemas can support <code>is set</code> and <code>is unset</code>, because those compile to JSON presence checks.</li>
+    </ul>
+
+    <h2>Problem</h2>
+    <p>
+      The UI currently knows that a ref to a daily note should behave like a date. That is useful,
+      but it leaks daily-notes semantics into a generic backlinks surface. It also missed
+      Roam-imported date attributes that are represented as <code>refList</code>.
+    </p>
+
+    <h2>Proposed Seam</h2>
+    <p>
+      Add a property-filter adapter facet. Each adapter receives a registered schema and can
+      return a compact description of how to render, parse, build, and format a filter for that
+      property. The backlinks filter UI becomes a consumer of adapters, not a place where
+      semantic property cases accumulate.
+    </p>
+
+    <pre><code>interface PropertyFilterAdapter {
+  id: string
+  priority?: number
+  match(schema: AnyPropertySchema): boolean
+  operators(schema: AnyPropertySchema): PropertyFilterOperator[]
+  input(schema: AnyPropertySchema, operator: string): PropertyFilterInput
+  build(args: {
+    schema: AnyPropertySchema
+    propertyName: string
+    operator: string
+    rawValues: readonly string[]
+  }): BlockPredicate | null
+  format?(propertyName: string, value: unknown): string | null
+}</code></pre>
+
+    <h2>Default Adapters</h2>
+    <ul>
+      <li><strong>Presence adapter:</strong> matches every registered schema and provides <code>is set</code> / <code>is unset</code>.</li>
+      <li><strong>Scalar adapter:</strong> matches schemas with <code>codec.where</code> and provides equality and scalar comparisons where appropriate.</li>
+      <li><strong>Daily-note target adapter:</strong> matches <code>ref</code> and <code>refList</code> schemas targeting daily notes and builds <code>target.daily-note:date</code> predicates.</li>
+    </ul>
+
+    <h2>Ownership</h2>
+    <p class="decision">
+      Keep query capability in codecs and typed query. Put presentation and semantic shortcuts in
+      adapters contributed by the owning feature. Daily notes owns daily-note-as-date behavior;
+      Roam import can contribute compatibility adapters if imported vocabulary needs special UX.
+    </p>
+  </main>
+</body>
+</html>
