@@ -31,33 +31,36 @@ const PANEL_ACTION_BUTTON_CLASS =
 const PANEL_HISTORY_BUTTON_CLASS =
   `${PANEL_ACTION_BUTTON_CLASS} disabled:text-muted-foreground/40 disabled:hover:bg-background/60 disabled:hover:text-muted-foreground/40`
 
+function PanelMultiSelectActionContext() {
+  const [selectionState] = useSelectionState()
+  const repo = useRepo()
+
+  const multiSelectDeps = useMemo(() => {
+    if (!selectionState.selectedBlockIds.length) return null
+
+    return {
+      selectedBlocks: selectionState.selectedBlockIds.map(id => repo.block(id)),
+      anchorBlock: selectionState.anchorBlockId ? repo.block(selectionState.anchorBlockId) : null,
+    }
+  }, [selectionState, repo])
+
+  useActionContext(
+    ActionContextTypes.MULTI_SELECT_MODE,
+    multiSelectDeps,
+    Boolean(multiSelectDeps),
+  )
+
+  return null
+}
+
 export function PanelRenderer({block}: BlockRendererProps) {
   const [topLevelBlockId] = usePropertyValue(block, topLevelBlockIdProp)
-  const [selectionState] = useSelectionState();
   const blockContext = useBlockContext()
   const canClosePanel = Boolean(blockContext.canClosePanel)
   const stackedPanel = Boolean(blockContext.stackedPanel)
   const wideScrollSurface = Boolean(blockContext.wideScrollSurface) && !stackedPanel
 
-  const repo = useRepo();
-
-  // Memoize dependencies for MULTI_SELECT_MODE
-  const multiSelectDeps = useMemo(() => {
-    if (!selectionState.selectedBlockIds.length) return null;
-
-    return {
-      selectedBlocks: selectionState.selectedBlockIds.map(id => repo.block(id)),
-      anchorBlock: selectionState.anchorBlockId ? repo.block(selectionState.anchorBlockId) : null,
-      uiStateBlock: block,
-    };
-  }, [selectionState, block, repo]);
-
-  // Activate MULTI_SELECT_MODE context when there are selected blocks and we're not editing
-  useActionContext(
-    ActionContextTypes.MULTI_SELECT_MODE,
-    multiSelectDeps,
-    !!multiSelectDeps
-  );
+  const repo = useRepo()
 
   const {canBack, canForward} = usePanelHistory(block.id)
   const runtime = useAppRuntime()
@@ -181,6 +184,7 @@ export function PanelRenderer({block}: BlockRendererProps) {
     <div className={`panel min-w-0 max-w-full flex flex-col relative ${
       stackedPanel ? 'overflow-visible' : 'h-full flex-grow overflow-hidden'
     }`}>
+      <PanelMultiSelectActionContext/>
       {wideScrollSurface ? (
         <div className="pointer-events-none absolute inset-x-0 top-1 z-10">
           <div className="pointer-events-none mx-auto flex w-full max-w-3xl justify-end gap-0.5">

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import type { Block } from '@/data/block'
@@ -12,10 +12,33 @@ import { BlockContextProvider } from '@/context/block'
 import { resolveFacetRuntimeSync, type FacetRuntime } from '@/extensions/facet'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext'
 import { PanelRenderer } from './PanelRenderer'
+import { BlockComponent } from '@/components/BlockComponent.tsx'
+import { useActionContext } from '@/shortcuts/useActionContext'
+import { ActionContextTypes } from '@/shortcuts/types'
 
 const repoRef = vi.hoisted(() => ({
   current: undefined as Repo | undefined,
 }))
+
+const selectionStore = vi.hoisted(() => {
+  const listeners = new Set<() => void>()
+  const store = {
+    current: {selectedBlockIds: [] as string[], anchorBlockId: null as string | null},
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set(next: {selectedBlockIds: string[]; anchorBlockId: string | null}) {
+      store.current = next
+      for (const listener of listeners) listener()
+    },
+    reset() {
+      store.current = {selectedBlockIds: [], anchorBlockId: null}
+      listeners.clear()
+    },
+  }
+  return store
+})
 
 vi.mock('@/context/repo', () => ({
   useRepo: () => {
@@ -26,12 +49,17 @@ vi.mock('@/context/repo', () => ({
 
 vi.mock('@/data/globalState', async () => {
   const actual = await vi.importActual<typeof import('@/data/globalState')>('@/data/globalState')
+  const {useSyncExternalStore} = await vi.importActual<typeof import('react')>('react')
   return {
     ...actual,
-    useSelectionState: () => [
-      {selectedBlockIds: [], anchorBlockId: null},
-      vi.fn(),
-    ],
+    useSelectionState: () => {
+      const current = useSyncExternalStore(
+        selectionStore.subscribe,
+        () => selectionStore.current,
+        () => selectionStore.current,
+      )
+      return [current, vi.fn()]
+    },
   }
 })
 
@@ -40,9 +68,9 @@ vi.mock('@/shortcuts/useActionContext', () => ({
 }))
 
 vi.mock('@/components/BlockComponent.tsx', () => ({
-  BlockComponent: ({blockId}: {blockId: string}) => (
+  BlockComponent: vi.fn(({blockId}: {blockId: string}) => (
     <div data-testid="panel-top-level-block" data-block-id={blockId}/>
-  ),
+  )),
 }))
 
 const WS = 'ws-1'
@@ -96,6 +124,9 @@ describe('PanelRenderer', () => {
   let env: Harness
 
   beforeEach(async () => {
+    selectionStore.reset()
+    vi.mocked(BlockComponent).mockClear()
+    vi.mocked(useActionContext).mockClear()
     env = await setup()
   })
 
@@ -142,5 +173,27 @@ describe('PanelRenderer', () => {
 
     const topLevelBlock = await screen.findByTestId('panel-top-level-block')
     expect(topLevelBlock.parentElement?.className).not.toContain('max-w-3xl')
+  })
+
+  it('keeps selection-state updates out of the panel body render path', async () => {
+    renderPanel(false)
+    await screen.findByTestId('panel-top-level-block')
+
+    vi.mocked(BlockComponent).mockClear()
+    vi.mocked(useActionContext).mockClear()
+
+    act(() => {
+      selectionStore.set({selectedBlockIds: ['page-a'], anchorBlockId: 'page-a'})
+    })
+
+    expect(BlockComponent).not.toHaveBeenCalled()
+    expect(useActionContext).toHaveBeenLastCalledWith(
+      ActionContextTypes.MULTI_SELECT_MODE,
+      expect.objectContaining({
+        selectedBlocks: [env.repo.block('page-a')],
+        anchorBlock: env.repo.block('page-a'),
+      }),
+      true,
+    )
   })
 })
