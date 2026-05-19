@@ -20,7 +20,7 @@ import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import {
-  searchLinkTargets,
+  searchLinkTargetsProgressively,
   type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.ts'
@@ -107,26 +107,42 @@ export function QuickFind() {
 
     let cancelled = false
     const timer = setTimeout(async () => {
-      const results = await searchLinkTargets(repo, {
+      await searchLinkTargetsProgressively(repo, {
         workspaceId,
         query: trimmedQuery,
         limit: SEARCH_LIMIT,
+      }, {
+        onAliases: aliasResults => {
+          if (cancelled) return
+          setSearchResults({
+            query: trimmedQuery,
+            aliases: aliasResults,
+            blocks: [],
+          })
+          setValue(current => nextQuickFindSelection({
+            query: trimmedQuery,
+            aliases: aliasResults,
+            blocks: [],
+            dateValue: dateItemValue,
+            currentValue: current,
+          }))
+        },
+        onBlocks: (blockResults, results) => {
+          if (cancelled) return
+          setSearchResults({
+            query: trimmedQuery,
+            aliases: results.aliases,
+            blocks: blockResults,
+          })
+          setValue(current => nextQuickFindSelection({
+            query: trimmedQuery,
+            aliases: results.aliases,
+            blocks: blockResults,
+            dateValue: dateItemValue,
+            currentValue: current,
+          }))
+        },
       })
-      if (cancelled) return
-
-      setSearchResults({
-        query: trimmedQuery,
-        aliases: results.aliases,
-        blocks: results.blocks,
-      })
-
-      setValue(current => nextQuickFindSelection({
-        query: trimmedQuery,
-        aliases: results.aliases,
-        blocks: results.blocks,
-        dateValue: dateItemValue,
-        currentValue: current,
-      }))
     }, DEBOUNCE_MS)
 
     return () => {

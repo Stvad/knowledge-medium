@@ -19,6 +19,11 @@ export interface LinkTargetSearchResult {
   blocks: LinkTargetBlockMatch[]
 }
 
+export interface ProgressiveLinkTargetSearchCallbacks {
+  onAliases?: (aliases: LinkTargetAliasMatch[]) => void
+  onBlocks?: (blocks: LinkTargetBlockMatch[], result: LinkTargetSearchResult) => void
+}
+
 export interface LinkTargetIdCandidate {
   id: string
   label: string
@@ -47,6 +52,40 @@ export const labelForBlockData = (
 
 const stringSet = (values?: Iterable<string>): Set<string> =>
   new Set(values ?? [])
+
+const aliasMatchesFromRows = (
+  rows: LinkTargetAliasMatch[],
+  seenBlockIds: Set<string>,
+): LinkTargetAliasMatch[] => {
+  const aliases: LinkTargetAliasMatch[] = []
+  for (const row of rows) {
+    if (seenBlockIds.has(row.blockId)) continue
+    seenBlockIds.add(row.blockId)
+    aliases.push({
+      alias: row.alias,
+      blockId: row.blockId,
+      content: row.content,
+    })
+  }
+  return aliases
+}
+
+const blockMatchesFromRows = (
+  rows: BlockData[],
+  seenBlockIds: Set<string>,
+): LinkTargetBlockMatch[] => {
+  const blocks: LinkTargetBlockMatch[] = []
+  for (const block of rows) {
+    if (seenBlockIds.has(block.id)) continue
+    seenBlockIds.add(block.id)
+    blocks.push({
+      blockId: block.id,
+      content: block.content,
+      label: labelForBlockData(block, block.id),
+    })
+  }
+  return blocks
+}
 
 export const searchAliasLabels = async (
   repo: Repo,
@@ -79,35 +118,50 @@ export const searchLinkTargets = async (
   const trimmed = query.trim()
   if (!workspaceId || !trimmed) return {aliases: [], blocks: []}
 
-  const [aliasRows, blockRows] = await Promise.all([
-    repo.query.aliasMatches({workspaceId, filter: trimmed, limit}).load(),
-    repo.query.searchByContent({workspaceId, query: trimmed, limit}).load(),
-  ])
+  return searchLinkTargetsProgressively(repo, {
+    workspaceId,
+    query: trimmed,
+    limit,
+    excludeBlockIds,
+  })
+}
+
+export const searchLinkTargetsProgressively = async (
+  repo: Repo,
+  {
+    workspaceId,
+    query,
+    limit,
+    excludeBlockIds,
+  }: {
+    workspaceId: string
+    query: string
+    limit: number
+    excludeBlockIds?: Iterable<string>
+  },
+  callbacks: ProgressiveLinkTargetSearchCallbacks = {},
+): Promise<LinkTargetSearchResult> => {
+  const trimmed = query.trim()
+  if (!workspaceId || !trimmed) return {aliases: [], blocks: []}
+
+  const aliasRowsPromise = repo.query.aliasMatches({workspaceId, filter: trimmed, limit}).load()
+  const blockRowsPromise = repo.query.searchByContent({workspaceId, query: trimmed, limit}).load()
+    .then(
+      rows => ({ok: true as const, rows}),
+      error => ({ok: false as const, error}),
+    )
 
   const seenBlockIds = stringSet(excludeBlockIds)
-  const aliases: LinkTargetAliasMatch[] = []
-  for (const row of aliasRows) {
-    if (seenBlockIds.has(row.blockId)) continue
-    seenBlockIds.add(row.blockId)
-    aliases.push({
-      alias: row.alias,
-      blockId: row.blockId,
-      content: row.content,
-    })
-  }
+  const aliases = aliasMatchesFromRows(await aliasRowsPromise, seenBlockIds)
+  callbacks.onAliases?.(aliases)
 
-  const blocks: LinkTargetBlockMatch[] = []
-  for (const block of blockRows) {
-    if (seenBlockIds.has(block.id)) continue
-    seenBlockIds.add(block.id)
-    blocks.push({
-      blockId: block.id,
-      content: block.content,
-      label: labelForBlockData(block, block.id),
-    })
-  }
+  const blockRows = await blockRowsPromise
+  if (!blockRows.ok) throw blockRows.error
 
-  return {aliases, blocks}
+  const blocks = blockMatchesFromRows(blockRows.rows, seenBlockIds)
+  const result = {aliases, blocks}
+  callbacks.onBlocks?.(blocks, result)
+  return result
 }
 
 export const searchLinkTargetIdCandidates = async (
