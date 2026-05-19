@@ -43,6 +43,17 @@ interface SnapshotState {
   queryKey: string
 }
 
+const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
+  unfilteredBacklinks: [],
+  grouped: {
+    groups: [],
+    total: 0,
+    unfilteredSources: [],
+    sourceParents: [],
+  },
+  initialParentsByBacklinkId: new Map(),
+}
+
 const buildGroupedQueryArgs = (
   workspaceId: string,
   blockId: string,
@@ -184,6 +195,7 @@ function GroupedLinkedReferencesInner({
   workspaceId: string
   controls?: BacklinksViewRendererProps['controls']
 }) {
+  const repo = block.repo
   const {
     filter,
     defaultFilter,
@@ -193,9 +205,9 @@ function GroupedLinkedReferencesInner({
   } = useBacklinkFilterState(block)
   const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
   const filterActive = hasBacklinksFilter(effectiveFilter)
-  // `groupingConfig` lives in the parent so the paused body can compare
-  // it against the snapshot's captured args and trigger a one-shot
-  // recompute when it (or the filter) changes.
+  // `groupingConfig` lives in the parent so paused mode can compare it
+  // against the snapshot's captured args and trigger a one-shot recompute
+  // when it (or the filter) changes.
   const groupingConfig = useGroupedBacklinksConfig(block)
   const [open, setOpen] = useState(true)
   const [filtersOpenOverride, setFiltersOpenOverride] = useState<boolean | null>(null)
@@ -210,7 +222,7 @@ function GroupedLinkedReferencesInner({
   // Stable string identity of the grouped-query args. The snapshot
   // carries the key of the args it was captured under; whenever the
   // current key drifts (filter or config change while paused), the
-  // frozen body fires a one-shot `handle.load()` to refresh the whole
+  // parent fires a one-shot `handle.load()` to refresh the whole
   // render snapshot — no subscription, so unrelated row edits still
   // don't trigger work.
   const currentQueryKey = useMemo(() => JSON.stringify(groupedArgs), [groupedArgs])
@@ -223,20 +235,39 @@ function GroupedLinkedReferencesInner({
     navigateFromGlobalCommand({blockId: defaultFilterConfigBlock.id, workspaceId})
   }, [defaultFilterConfigBlock.id, navigateFromGlobalCommand, workspaceId])
 
-  const handlePause = useCallback((data: GroupedBacklinksSnapshot) => {
-    setSnapshot({data, queryKey: currentQueryKey})
-    setLiveUpdates(false)
-  }, [currentQueryKey])
-  const handleResume = useCallback(() => {
-    setSnapshot(null)
-    setLiveUpdates(true)
-  }, [])
-  const handleSnapshotRefreshed = useCallback(
-    (data: GroupedBacklinksSnapshot, queryKey: string) => {
-      setSnapshot(prev => (prev ? {data, queryKey} : prev))
+  const handleLiveData = useCallback(
+    (data: GroupedBacklinksSnapshot) => {
+      setSnapshot({data, queryKey: currentQueryKey})
     },
-    [],
+    [currentQueryKey],
   )
+  const handleToggleLiveUpdates = useCallback(() => {
+    setLiveUpdates(prev => !prev)
+  }, [])
+
+  const snapshotQueryKey = snapshot?.queryKey
+  const snapshotStale = snapshotQueryKey !== undefined && snapshotQueryKey !== currentQueryKey
+
+  // While paused, keep the visible tree mounted and run the same one-shot
+  // refresh the old frozen body used when filter/config args drift. This
+  // refresh loads imperatively, so it does not subscribe to live query
+  // invalidations.
+  useEffect(() => {
+    if (liveUpdates || !snapshotStale) return
+    let cancelled = false
+    const handle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
+    handle.load().then(
+      result => {
+        if (cancelled) return
+        setSnapshot({
+          data: snapshotFromGroupedResult(repo, result),
+          queryKey: currentQueryKey,
+        })
+      },
+      () => {/* error is stored on the handle */},
+    )
+    return () => { cancelled = true }
+  }, [liveUpdates, snapshotStale, repo, groupedArgs, currentQueryKey])
 
   const shared: SharedViewProps = {
     block,
@@ -252,49 +283,47 @@ function GroupedLinkedReferencesInner({
     setFilter,
     openDefaultFilterConfig,
   }
+  const data = snapshot?.data ?? EMPTY_GROUPED_BACKLINKS_SNAPSHOT
 
-  // While paused, mount the frozen body — the live body (which subscribes
-  // to the grouped-backlinks render snapshot query) is unmounted, so that
-  // handle loses its subscriber and the underlying query stops
-  // recomputing on edits the user makes while inspecting the snapshot.
-  if (liveUpdates) {
-    return (
-      <LiveGroupedReferencesBody
-        {...shared}
-        effectiveFilter={effectiveFilter}
-        groupingConfig={groupingConfig}
-        onPause={handlePause}
-      />
-    )
-  }
   return (
-    <FrozenGroupedReferencesBody
-      {...shared}
-      snapshot={snapshot!}
-      groupedArgs={groupedArgs}
-      currentQueryKey={currentQueryKey}
-      onResume={handleResume}
-      onSnapshotRefreshed={handleSnapshotRefreshed}
-    />
+    <>
+      <GroupedReferencesView
+        {...shared}
+        data={data}
+        liveUpdates={liveUpdates}
+        onToggleLiveUpdates={handleToggleLiveUpdates}
+      />
+      {liveUpdates && (
+        <GroupedBacklinksLiveBridge
+          block={block}
+          workspaceId={workspaceId}
+          groupingConfig={groupingConfig}
+          filter={filterActive ? effectiveFilter : undefined}
+          onData={handleLiveData}
+        />
+      )}
+    </>
   )
 }
 
-function LiveGroupedReferencesBody({
-  effectiveFilter,
+function GroupedBacklinksLiveBridge({
+  block,
+  workspaceId,
   groupingConfig,
-  onPause,
-  ...shared
-}: SharedViewProps & {
-  effectiveFilter: BacklinksFilter
+  filter,
+  onData,
+}: {
+  block: Block
+  workspaceId: string
   groupingConfig: GroupedBacklinksConfig
-  onPause: (data: GroupedBacklinksSnapshot) => void
+  filter?: BacklinksFilter
+  onData: (data: GroupedBacklinksSnapshot) => void
 }) {
-  const {block, workspaceId, filterActive} = shared
   const grouped = useGroupedBacklinks(
     block,
     workspaceId,
     groupingConfig,
-    filterActive ? effectiveFilter : undefined,
+    filter,
   )
 
   const data = useMemo<GroupedBacklinksSnapshot>(
@@ -302,63 +331,11 @@ function LiveGroupedReferencesBody({
     [block.repo, grouped],
   )
 
-  const handleTogglePause = useCallback(() => onPause(data), [onPause, data])
-
-  return (
-    <GroupedReferencesView
-      {...shared}
-      data={data}
-      liveUpdates
-      onToggleLiveUpdates={handleTogglePause}
-    />
-  )
-}
-
-function FrozenGroupedReferencesBody({
-  snapshot,
-  groupedArgs,
-  currentQueryKey,
-  onResume,
-  onSnapshotRefreshed,
-  ...shared
-}: SharedViewProps & {
-  snapshot: SnapshotState
-  groupedArgs: GroupedQueryArgs
-  currentQueryKey: string
-  onResume: () => void
-  onSnapshotRefreshed: (data: GroupedBacklinksSnapshot, queryKey: string) => void
-}) {
-  const {block} = shared
-  const repo = block.repo
-  const stale = snapshot.queryKey !== currentQueryKey
-
-  // One-shot refresh when the user adjusts the filter or grouping
-  // config while paused. Uses `handle.load()` directly rather than
-  // `useHandle(...)` so we never subscribe — unrelated row edits won't
-  // wake the handle, and once the load resolves the new result lands
-  // in the snapshot and we settle back into the frozen view.
   useEffect(() => {
-    if (!stale) return
-    let cancelled = false
-    const handle = repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY](groupedArgs)
-    handle.load().then(
-      result => {
-        if (cancelled) return
-        onSnapshotRefreshed(snapshotFromGroupedResult(repo, result), currentQueryKey)
-      },
-      () => {/* error is stored on the handle */},
-    )
-    return () => { cancelled = true }
-  }, [stale, repo, groupedArgs, currentQueryKey, onSnapshotRefreshed])
+    onData(data)
+  }, [onData, data])
 
-  return (
-    <GroupedReferencesView
-      {...shared}
-      data={snapshot.data}
-      liveUpdates={false}
-      onToggleLiveUpdates={onResume}
-    />
-  )
+  return null
 }
 
 function GroupedReferencesView({
