@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>User-defined types</title>
+<style>
+  :root {
+    --fg: #1a1a1a;
+    --muted: #555;
+    --line: #ddd;
+    --code: #f5f5f5;
+    --code-inline: #f0f0f0;
+    --accent: #2a7;
+    --warn: #a44;
+    --kernel: #4f74c0;
+    --user: #c08040;
+    --merged: #2a7;
+  }
+  body {
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 820px;
+    margin: 2rem auto;
+    padding: 0 1.2rem;
+    color: var(--fg);
+  }
+  h1 { font-size: 1.7rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .5rem; border-bottom: 1px solid var(--line); padding-bottom: .25rem; }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  h4 { font-size: .92rem; margin: 1rem 0 .3rem; color: var(--muted); }
+  code, pre { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { background: var(--code); padding: .75rem 1rem; border-radius: 4px; overflow-x: auto; }
+  code { background: var(--code-inline); padding: 1px 4px; border-radius: 3px; }
+  pre code { background: none; padding: 0; }
+  .lede { color: var(--muted); margin-top: .3rem; }
+  .callout {
+    border-left: 3px solid var(--accent);
+    background: #f4faf6;
+    padding: .6rem .9rem;
+    margin: 1rem 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .callout.warn {
+    border-left-color: var(--warn);
+    background: #fcf4f4;
+  }
+  .callout.muted {
+    border-left-color: #bbb;
+    background: #fafafa;
+  }
+  .callout h4 { margin-top: 0; color: var(--fg); }
+  .tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    color: white;
+    margin-left: .4rem;
+    vertical-align: middle;
+    font-weight: 500;
+  }
+  .tag.rec { background: var(--accent); }
+  .tag.bad { background: var(--warn); }
+  .tag.muted { background: #888; }
+  .comment { color: #888; }
+  ul.tight li { margin: .25rem 0; }
+  figure {
+    margin: 1.2rem 0;
+    text-align: center;
+  }
+  figure svg { max-width: 100%; height: auto; }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: .4rem; }
+  table {
+    border-collapse: collapse;
+    margin: .8rem 0;
+    font-size: 13px;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: .35rem .6rem;
+    text-align: left;
+    vertical-align: top;
+  }
+  th { background: var(--code); font-weight: 600; }
+  .file { color: #06a; font-style: italic; }
+  .diag-box { fill: white; stroke: #555; stroke-width: 1.2; }
+  .diag-box-kernel { fill: #e8edf6; stroke: var(--kernel); }
+  .diag-box-user   { fill: #f8ede0; stroke: var(--user); }
+  .diag-box-merged { fill: #e8f6ec; stroke: var(--merged); }
+  .diag-text { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1a1a1a; }
+  .diag-label { font: 11px -apple-system, BlinkMacSystemFont, sans-serif; fill: #555; }
+  .diag-arrow { stroke: #555; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+</style>
+</head>
+<body>
+
+<h1>User-defined types</h1>
+<p class="lede">
+Users author types as blocks &mdash; same shape as user-defined property schemas. Code-defined types stop being special.
+Kernel types get a clean override path. Per-type behavior moves from a <code>setup</code> callback to same-tx processors.
+</p>
+
+<h2>The premise has shifted</h2>
+
+<p>
+When <span class="file">docs/type-system.md</span> was written, user-authored types were &sect;9-deferred to a
+<code>dynamicExtensions</code>-style resolver pattern. The reasoning was strong: <code>FacetRuntime</code> is
+immutable after construction for real reasons (atomic switchover, upfront validation, deterministic
+<code>combine</code>, order-independent visibility), and a mutable-contribution sink would compromise those.
+The follow-up at <span class="file">docs/follow-ups.md:147</span> still reflects that position.
+</p>
+
+<p>
+The user-defined&nbsp;<i>properties</i> work invalidated that argument. It shipped exactly the mutable contribution
+path the type-system v1 ruled out &mdash;
+<code>repo.setRuntimeContributions(facet, sourceId, contributions)</code> with per-facet rebuild steps
+(<span class="file">src/data/repo.ts:1340</span>) and an end-to-end service
+(<span class="file">src/data/userSchemasService.ts</span>) that subscribes to <code>property-schema</code> blocks,
+builds <code>AnyPropertySchema</code> entries, and publishes them into the <code>'user-data'</code> source bucket on
+<code>propertySchemasFacet</code>. Atomic switchover is preserved because <i>each rebuild step</i> is atomic and only
+the dependent steps re-run.
+</p>
+
+<p>
+With that primitive paid for, the question for user-defined types isn't "resolver vs sink" anymore. It's:
+do user-defined types mirror <code>UserSchemasService</code>, or stay deferred until something forces the issue?
+This doc takes the mirror path.
+</p>
+
+<h2>Storage model: types are blocks</h2>
+
+<p>
+Symmetric to property-schema blocks. A new kernel type <code>block-type</code> holds three fields:
+</p>
+
+<pre><code><span class="comment">// src/data/properties.ts (additions)</span>
+export const blockTypeLabelProp       = defineProperty&lt;string&gt;('block-type:label',       {...})
+export const blockTypeDescriptionProp = defineProperty&lt;string&gt;('block-type:description', {...})
+export const blockTypePropertiesProp  = defineProperty&lt;readonly string[]&gt;('block-type:properties', {
+  codec: codecs.refList({targetTypes: ['property-schema']}),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+<span class="comment">// Optional &mdash; if present, this is an override of an existing type, not a new one.</span>
+export const blockTypeExtendsProp     = defineProperty&lt;string&gt;('block-type:extends', {...})</code></pre>
+
+<p>
+And the type contribution itself, registered in <span class="file">src/data/blockTypes.ts</span>:
+</p>
+
+<pre><code>export const BLOCK_TYPE_TYPE = 'block-type'
+
+defineBlockType({
+  id: BLOCK_TYPE_TYPE,
+  label: 'Type',
+  properties: [
+    blockTypeLabelProp,
+    blockTypeDescriptionProp,
+    blockTypePropertiesProp,
+    blockTypeExtendsProp,
+  ],
+})</code></pre>
+
+<p>
+Per-workspace <code>Types</code> page (deterministic uuid&nbsp;v5 from <code>workspaceId</code>, parallel to
+<span class="file">src/data/propertiesPage.ts</span>) hosts these blocks as children. Users navigate to it, see the
+list of types, click into one to edit name / description / property set.
+</p>
+
+<figure>
+  <svg viewBox="0 0 760 220" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Workspace structure">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+      </marker>
+    </defs>
+
+    <text x="380" y="20" class="diag-label" text-anchor="middle">workspace root</text>
+    <line x1="380" y1="28" x2="380" y2="48" class="diag-arrow"/>
+
+    <rect x="140" y="50" width="160" height="36" rx="6" class="diag-box diag-box-kernel"/>
+    <text x="220" y="73" class="diag-text" text-anchor="middle">Properties page</text>
+
+    <rect x="460" y="50" width="160" height="36" rx="6" class="diag-box diag-box-kernel"/>
+    <text x="540" y="73" class="diag-text" text-anchor="middle">Types page</text>
+
+    <line x1="220" y1="88" x2="220" y2="108" class="diag-arrow"/>
+    <line x1="540" y1="88" x2="540" y2="108" class="diag-arrow"/>
+
+    <rect x="60"  y="110" width="160" height="32" rx="6" class="diag-box"/>
+    <rect x="60"  y="148" width="160" height="32" rx="6" class="diag-box"/>
+    <rect x="220" y="110" width="160" height="32" rx="6" class="diag-box"/>
+    <text x="140" y="131" class="diag-text" text-anchor="middle">property-schema: status</text>
+    <text x="140" y="169" class="diag-text" text-anchor="middle">property-schema: dob</text>
+    <text x="300" y="131" class="diag-text" text-anchor="middle">property-schema: email</text>
+
+    <rect x="400" y="110" width="160" height="32" rx="6" class="diag-box"/>
+    <rect x="400" y="148" width="160" height="32" rx="6" class="diag-box"/>
+    <rect x="560" y="110" width="160" height="32" rx="6" class="diag-box"/>
+    <text x="480" y="131" class="diag-text" text-anchor="middle">block-type: Person</text>
+    <text x="480" y="169" class="diag-text" text-anchor="middle">block-type: Project</text>
+    <text x="640" y="131" class="diag-text" text-anchor="middle">block-type: Meeting</text>
+  </svg>
+  <figcaption>
+    Each workspace has a kernel-bootstrapped <code>Properties</code> page and <code>Types</code> page.
+    Property-schema and block-type blocks live as their children.
+  </figcaption>
+</figure>
+
+<h3>Type id = block id, not slug</h3>
+
+<p>
+The persisted <code>block:types</code> string array (per <span class="file">docs/type-system.md</span> &sect;2)
+now mixes semantic kernel ids and block-id uuids:
+</p>
+
+<pre><code><span class="comment">// A daily note that's also tagged as a user-defined "meeting" type</span>
+block:types = ['daily-note', '7d4e2b1a-...']
+                ^kernel       ^user-defined: id of the meeting block-type block</code></pre>
+
+<p>
+Block ids are the right answer because they survive renaming the type's display label, they don't need uniqueness
+enforcement, and &mdash; load-bearing for Roam adoption &mdash; <code>roam:isa = [[Person]]</code> already resolves
+to the Person page's block id via refList. Promotion becomes mechanical (see &sect;Roam isa adoption).
+The picker UI shows <code>blockTypeLabelProp</code>, never the id.
+</p>
+
+<div class="callout muted">
+  <h4>Alternative rejected: slug ids in a <code>block-type:id</code> field</h4>
+  <p style="margin:0">
+    Readable in logs, but every alternative has at least one of: brittle on rename, requires global uniqueness
+    enforcement, makes adoption from <code>roam:isa</code> non-mechanical (refs are by block id, slugs aren't),
+    and forces a second registry of "id &rarr; block." Block ids win on every axis except eyeballing
+    <code>block:types</code> in raw JSON, and the picker UI takes care of that.
+  </p>
+</div>
+
+<h2>UserTypesService</h2>
+
+<p>
+Near-clone of <code>UserSchemasService</code> (<span class="file">src/data/userSchemasService.ts</span>),
+adapted for the type-contribution shape:
+</p>
+
+<pre><code><span class="comment">// src/data/userTypesService.ts (new)</span>
+export class UserTypesService {
+  private contributions: readonly TypeContribution[] = []
+  private nameToBlockId = new Map&lt;string, string&gt;()
+  private subscriptionDisposer: Unsubscribe | null = null
+  private schemasListenerDisposer: (() =&gt; void) | null = null
+
+  constructor(private readonly repo: Repo) {}
+
+  start(): () =&gt; void {
+    const rebuildFromBlocks = (blocks: readonly Block[]) =&gt; {
+      const schemas = this.repo.propertySchemas
+      const next: TypeContribution[] = []
+      for (const block of blocks) {
+        const built = this.tryBuildType(block, schemas)
+        if (built) next.push(built)
+      }
+      this.contributions = next
+      this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
+    }
+
+    this.subscriptionDisposer = this.repo.subscribeBlocks(
+      {types: [BLOCK_TYPE_TYPE]},
+      blocks =&gt; rebuildFromBlocks(blocks.map(b =&gt; this.repo.block(b.id))),
+    )
+    <span class="comment">// Re-resolve when the merged schema map changes &mdash; a newly-loaded</span>
+    <span class="comment">// property schema makes previously-unresolvable refs in</span>
+    <span class="comment">// block-type:properties suddenly resolvable. Mirrors</span>
+    <span class="comment">// onValuePresetsChange in UserSchemasService.</span>
+    this.schemasListenerDisposer = this.repo.onPropertySchemasChange(() =&gt; rebuild())
+
+    return () =&gt; this.dispose()
+  }
+
+  private tryBuildType(
+    block: Block,
+    schemas: ReadonlyMap&lt;string, AnyPropertySchema&gt;,
+  ): TypeContribution | null {
+    const label = block.peekProperty(blockTypeLabelProp) ?? ''
+    if (!label) {
+      console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
+      return null
+    }
+    const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
+    const properties: AnyPropertySchema[] = []
+    for (const refId of refIds) {
+      const schemaBlock = this.repo.peek(refId)
+      const name = schemaBlock?.properties[propertyNameProp.name]
+      if (typeof name !== 'string') continue            <span class="comment">// schema block not yet synced</span>
+      const schema = schemas.get(name)
+      if (schema) properties.push(schema)
+    }
+    const extendsId = block.peekProperty(blockTypeExtendsProp)
+    if (extendsId) {
+      return {kind: 'override', target: extendsId, label, properties} as TypeOverride
+    }
+    return {
+      id: block.id,
+      label,
+      description: block.peekProperty(blockTypeDescriptionProp),
+      properties,
+    }
+  }
+}</code></pre>
+
+<p>
+The bootstrap path (<code>repo</code> construction in <span class="file">src/data/repo.ts</span>) starts the service
+after the workspace's <code>Types</code> page is ensured &mdash; same wiring as <code>UserSchemasService</code>.
+</p>
+
+<h2>Overriding kernel types via <code>extends</code></h2>
+
+<p>
+Plausible use case: a user wants <code>daily-note</code> blocks to surface <code>weather</code> and <code>mood</code>
+slots in the property panel. They author a <code>block-type</code> block with
+<code>block-type:extends = 'daily-note'</code> and <code>block-type:properties = [weather, mood]</code>.
+</p>
+
+<p>
+The naive path &mdash; let <code>typesFacet.combine</code>'s last-wins-on-id resolve it &mdash; is destructive:
+the user's contribution would <i>replace</i> the kernel <code>daily-note</code> entry, wiping
+<code>label</code>, kernel <code>properties[]</code>, and (if it existed) <code>setup</code>. That's not what
+they meant.
+</p>
+
+<p>
+The clean path: distinguish full contributions from <i>override</i> contributions. The
+<code>typesFacet.of(...)</code> contribution stays as-is for full types; user-defined override contributions arrive
+through the same <code>'user-data'</code> source bucket but as a different shape, and the rebuild step in
+<code>setFacetRuntime</code> (<span class="file">src/data/repo.ts:1783</span>) folds them in <i>after</i> combine:
+</p>
+
+<figure>
+  <svg viewBox="0 0 760 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Override merge">
+    <defs>
+      <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+      </marker>
+    </defs>
+
+    <rect x="20" y="20" width="220" height="100" rx="6" class="diag-box diag-box-kernel"/>
+    <text x="130" y="38" class="diag-label" text-anchor="middle">kernel contribution</text>
+    <text x="30" y="58" class="diag-text">id: 'daily-note'</text>
+    <text x="30" y="76" class="diag-text">label: 'Daily note'</text>
+    <text x="30" y="94" class="diag-text">properties: [journalDate]</text>
+    <text x="30" y="112" class="diag-text">setup: createTemplate()</text>
+
+    <rect x="20" y="140" width="220" height="80" rx="6" class="diag-box diag-box-user"/>
+    <text x="130" y="158" class="diag-label" text-anchor="middle">user override</text>
+    <text x="30" y="178" class="diag-text">extends: 'daily-note'</text>
+    <text x="30" y="196" class="diag-text">label: undefined</text>
+    <text x="30" y="214" class="diag-text">properties: [weather, mood]</text>
+
+    <line x1="245" y1="120" x2="370" y2="135" class="diag-arrow"/>
+    <line x1="245" y1="180" x2="370" y2="155" class="diag-arrow"/>
+    <text x="305" y="105" class="diag-label" text-anchor="middle">merge</text>
+    <text x="305" y="200" class="diag-label" text-anchor="middle">at rebuild step</text>
+
+    <rect x="380" y="80" width="360" height="130" rx="6" class="diag-box diag-box-merged"/>
+    <text x="560" y="98" class="diag-label" text-anchor="middle">merged contribution (visible to consumers)</text>
+    <text x="390" y="120" class="diag-text">id: 'daily-note'</text>
+    <text x="390" y="138" class="diag-text">label: 'Daily note'           <tspan fill="#888">(kernel wins; user unset)</tspan></text>
+    <text x="390" y="156" class="diag-text">properties: [journalDate, weather, mood]</text>
+    <text x="390" y="174" class="diag-text">setup: createTemplate()        <tspan fill="#888">(kernel; user cannot)</tspan></text>
+    <text x="390" y="194" class="diag-text">_overriddenBy: ['user-data']   <tspan fill="#888">(audit trail)</tspan></text>
+  </svg>
+  <figcaption>Override merge: union <code>properties[]</code>, user-wins-if-set for <code>label</code> / <code>description</code>, kernel-only for behavioral fields.</figcaption>
+</figure>
+
+<p>The merge rules:</p>
+<ul class="tight">
+  <li><code>properties[]</code> &mdash; <b>union</b> with the kernel list, dedup by name via the existing object-identity rule in <code>mergeLiftedSchemas</code> (<span class="file">src/data/repo.ts:178</span>).</li>
+  <li><code>label</code> / <code>description</code> &mdash; <b>user wins if set</b>, else kernel.</li>
+  <li>Any behavioral field (today: <code>setup</code>) &mdash; <b>kernel only</b>. User-defined types ship no code, so this isn't a regression from the user's side; it's an architectural invariant.</li>
+</ul>
+
+<div class="callout">
+  <h4>Why not a separate <code>typeOverridesFacet</code></h4>
+  <p style="margin:0">
+    Tempting &mdash; the "clean Tana" answer is a parallel facet keyed by target type id. But it adds a service,
+    a publish path, and a rebuild step for one anticipated use case. The single-block-type-with-<code>extends</code>
+    shape is strictly less surface; if overrides grow real complexity later (per-type render overrides, chained
+    setups, etc.) extracting the facet is mechanical. Don't pre-extract.
+  </p>
+</div>
+
+<h2>Replace <code>setup</code> with same-tx processors</h2>
+
+<p>
+<code>setup</code> (<span class="file">docs/type-system.md:60-89</span>) was designed before same-tx processors
+existed (<span class="file">src/data/api/sameTxProcessor.ts</span>). With same-tx processors now a real
+primitive, <code>setup</code> is redundant.
+</p>
+
+<p>What <code>setup</code> provides today:</p>
+<ul class="tight">
+  <li>Fires inside <code>repo.addType</code> after <code>initialValues</code> are written, in the same tx.</li>
+  <li>Use cases: child-block templates (meeting &rarr; Attendees / Agenda / Action items), computed initial values (<code>due = now() + 7 days</code>), cross-block wiring at add time.</li>
+</ul>
+
+<p>What a same-tx processor watching the <code>properties</code> field provides:</p>
+<ul class="tight">
+  <li>Sees <code>before</code> and <code>after</code> <code>BlockData</code> per touched row.</li>
+  <li>Writes via <code>ctx.tx.update/setProperty</code>, amending the same tx; one undo entry covers everything.</li>
+  <li>Rejects via <code>throw new ProcessorRejection(code, meta)</code>, rolling the user's tx back atomically.</li>
+  <li>Already has access to merged <code>propertySchemas</code> on <code>ctx</code>.</li>
+</ul>
+
+<h3>Why same-tx wins</h3>
+
+<table>
+  <tr><th>Concern</th><th><code>setup</code></th><th>Same-tx processor</th></tr>
+  <tr>
+    <td><b>Bypass surface</b></td>
+    <td>
+      Skipped by raw <code>tx.update(typesProp)</code>, <code>addBlockTypeToProperties</code> (fixtures / plan code),
+      sync apply from another device. <span class="file">docs/type-system.md</span> warns about this in three
+      separate paragraphs (&sect;3-pure, &sect;3a, &sect;3a-setup).
+    </td>
+    <td>
+      Catches every write uniformly &mdash; sync, raw, plan, orchestrated. The bypass footgun becomes
+      architecturally impossible.
+    </td>
+  </tr>
+  <tr>
+    <td><b>Removal symmetry</b></td>
+    <td>
+      <code>removeType</code> has no teardown today (open question at <span class="file">type-system.md:1275</span>).
+    </td>
+    <td>
+      Free: <code>removedTypes(event)</code> falls out of the same before/after diff. Cleanup on type removal stops
+      needing a new mechanism.
+    </td>
+  </tr>
+  <tr>
+    <td><b>Composability</b></td>
+    <td>One callback per type contribution. Multiple plugins reacting to <code>todo</code>-add can't both ship setups.</td>
+    <td>Multiple processors fire in registration order; one-way fixpoint (each sees earlier processors' writes).</td>
+  </tr>
+  <tr>
+    <td><b>User-defined-types parity</b></td>
+    <td>
+      Code-only. <code>extends</code>-overrides can't change it. Creates a "user types are second-class on
+      <code>setup</code>" carveout in the design.
+    </td>
+    <td>
+      Nobody ships behavior via the contribution &mdash; not kernel, not plugins, not users. Type contributions
+      become pure metadata. The override path stops having a carveout.
+    </td>
+  </tr>
+  <tr>
+    <td><b>Locality</b> <span class="tag bad">cost</span></td>
+    <td>
+      Inline with the type definition. "What happens when I add a <code>meeting</code>?" is one-look discoverable.
+    </td>
+    <td>
+      Processor lives in its own facet contribution and filters by type id from the event diff. Mitigation is
+      conventional, not structural: colocate the processor file next to the type definition.
+    </td>
+  </tr>
+  <tr>
+    <td><b>Rejection</b></td>
+    <td>Throw bubbles through <code>repo.tx</code>'s error path. Ad-hoc.</td>
+    <td><code>ProcessorRejection</code> with stable <code>code</code> + <code>meta</code> routes to the toast layer cleanly.</td>
+  </tr>
+</table>
+
+<h3>Lifecycle: addType before vs after</h3>
+
+<figure>
+  <svg viewBox="0 0 760 290" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="addType lifecycle comparison">
+    <defs>
+      <marker id="arrow3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+      </marker>
+    </defs>
+
+    <text x="190" y="20" class="diag-label" text-anchor="middle" font-weight="bold">Today: setup keyed by type id</text>
+    <rect x="40"  y="38" width="300" height="32" rx="4" class="diag-box"/>
+    <text x="190" y="58" class="diag-text" text-anchor="middle">caller: repo.addType(id, 'meeting', initial)</text>
+    <line x1="190" y1="72" x2="190" y2="92" class="diag-arrow"/>
+    <rect x="40"  y="94" width="300" height="32" rx="4" class="diag-box diag-box-kernel"/>
+    <text x="190" y="114" class="diag-text" text-anchor="middle">addType: write initial, append 'meeting'</text>
+    <line x1="190" y1="128" x2="190" y2="148" class="diag-arrow"/>
+    <rect x="40"  y="150" width="300" height="32" rx="4" class="diag-box diag-box-kernel"/>
+    <text x="190" y="170" class="diag-text" text-anchor="middle">addType: lookup setup, run it</text>
+    <line x1="190" y1="184" x2="190" y2="204" class="diag-arrow"/>
+    <rect x="40"  y="206" width="300" height="32" rx="4" class="diag-box"/>
+    <text x="190" y="226" class="diag-text" text-anchor="middle">commit</text>
+    <text x="190" y="260" class="diag-label" text-anchor="middle" font-style="italic" fill="#a44">raw tx.update(typesProp) skips the setup step</text>
+
+    <text x="570" y="20" class="diag-label" text-anchor="middle" font-weight="bold">Proposed: field-watching processor</text>
+    <rect x="420" y="38" width="300" height="32" rx="4" class="diag-box"/>
+    <text x="570" y="58" class="diag-text" text-anchor="middle">caller: any write touching properties_json</text>
+    <line x1="570" y1="72" x2="570" y2="92" class="diag-arrow"/>
+    <rect x="420" y="94" width="300" height="32" rx="4" class="diag-box"/>
+    <text x="570" y="114" class="diag-text" text-anchor="middle">user fn finishes writing</text>
+    <line x1="570" y1="128" x2="570" y2="148" class="diag-arrow"/>
+    <rect x="420" y="150" width="300" height="32" rx="4" class="diag-box diag-box-merged"/>
+    <text x="570" y="170" class="diag-text" text-anchor="middle">same-tx processor: addedTypes diff &rarr; apply</text>
+    <line x1="570" y1="184" x2="570" y2="204" class="diag-arrow"/>
+    <rect x="420" y="206" width="300" height="32" rx="4" class="diag-box"/>
+    <text x="570" y="226" class="diag-text" text-anchor="middle">commit</text>
+    <text x="570" y="260" class="diag-label" text-anchor="middle" font-style="italic" fill="#2a7">every write path goes through the same step</text>
+  </svg>
+  <figcaption>
+    Left: today's <code>setup</code> path. Right: same-tx processor path. The processor sees every property write,
+    not just orchestrated <code>addType</code> calls, so sync / raw / plan paths get the same behavior as direct
+    calls. <code>repo.addType</code> shrinks to "encode <code>initialValues</code>, append to <code>typesProp</code>";
+    everything downstream rides the processor stream.
+  </figcaption>
+</figure>
+
+<h3>Sketch of a per-type processor</h3>
+
+<pre><code><span class="comment">// src/plugins/meeting/typeOnAdd.ts</span>
+import {createChild} from '@/data/internals/kernelMutators'
+import {addedTypes} from '@/data/properties'
+
+export const meetingOnAdd = defineSameTxProcessor({
+  name: 'meeting.onAdd',
+  watches: {kind: 'field', table: 'blocks', fields: ['properties']},
+  apply: async (event, ctx) =&gt; {
+    for (const row of event.changedRows) {
+      if (!addedTypes(row).includes('meeting')) continue
+
+      <span class="comment">// init-if-missing for type-defined computed initial values</span>
+      if (row.after.properties[meetingDateProp.name] === undefined) {
+        await ctx.tx.setProperty(row.after.id, meetingDateProp, today())
+      }
+
+      <span class="comment">// child-block template</span>
+      for (const label of ['Attendees:', 'Agenda:', 'Action items:']) {
+        const childId = await ctx.tx.run(createChild, {
+          parentId: row.after.id,
+          position: {kind: 'last'},
+        })
+        await ctx.tx.update(childId, {content: label})
+      }
+    }
+  },
+})
+
+<span class="comment">// Registered alongside the type contribution:</span>
+sameTxProcessorsFacet.of(meetingOnAdd, {source: 'meeting'})
+typesFacet.of(meetingType, {source: 'meeting'})</code></pre>
+
+<h3>What needs to be added</h3>
+
+<p>One small ergonomic piece &mdash; a delta helper so every processor isn't reimplementing the diff:</p>
+
+<pre><code><span class="comment">// src/data/properties.ts (additions)</span>
+export const addedTypes = (row: ChangedRow): readonly string[] =&gt; {
+  const before = row.before ? getBlockTypes(row.before) : []
+  const after  = getBlockTypes(row.after)
+  return after.filter(t =&gt; !before.includes(t))
+}
+
+export const removedTypes = (row: ChangedRow): readonly string[] =&gt; {
+  const before = row.before ? getBlockTypes(row.before) : []
+  const after  = getBlockTypes(row.after)
+  return before.filter(t =&gt; !after.includes(t))
+}</code></pre>
+
+<h3>What <code>repo.addType</code> becomes</h3>
+
+<p>
+Without <code>setup</code> in the picture, the orchestration shrinks to: encode <code>initialValues</code> through
+their schemas' codecs, append the type id to <code>typesProp</code>. That's mutator-shaped work; it might even fold
+into a regular registered mutator. The <code>_types</code> retention on <code>Repo</code> stays useful for the
+property-panel section grouping (&sect;3c in <span class="file">type-system.md</span>) and the
+"is this id registered?" guard, but <code>setFacetRuntime</code>'s <code>_types</code> snapshot is no longer
+load-bearing for <i>behavior</i> &mdash; behavior is in the processor stream now.
+</p>
+
+<div class="callout warn">
+  <h4>Migration moment</h4>
+  <p style="margin:0">
+    Kill <code>setup</code> <i>now</i>, before existing kernel use cases migrate into it. Today the only real user
+    is the deferred daily-note template (<span class="file">type-system.md:678</span>), and it's still being
+    designed. Once <code>daily-note</code>'s setup is written, the rewrite has cost; right now it doesn't.
+    Same reasoning that landed user-defined properties before too many ad-hoc <code>adhocSchema</code> call sites
+    were live.
+  </p>
+</div>
+
+<h2>Roam <code>isa</code> adoption</h2>
+
+<p>
+The import already does the survey work. <span class="file">src/plugins/roam-import/typeCandidates.ts</span> walks
+<code>roam:isa</code> values per imported block, groups by alias, ranks by occurrence count and common-property
+frequency, and emits a report:
+</p>
+
+<pre><code>[[Person]] -&gt; type "person" (53 nodes); common props: dob 41/53 (77%), email 38/53 (72%)
+[[Project]] -&gt; type "project" (12 nodes); common props: status 10/12 (83%), owner 9/12 (75%)</code></pre>
+
+<p>
+What's missing is <b>promotion</b> &mdash; the action that turns a Roam page (which is currently the target of
+<code>roam:isa</code> refs) into a real <code>block-type</code> block and re-tags the referencing blocks.
+</p>
+
+<h3>The promotion primitive</h3>
+
+<p>One action, two call sites:</p>
+
+<pre><code>async function promoteToType(args: {
+  targetBlockId: string                  <span class="comment">// the Roam page that's the isa target</span>
+  label: string                          <span class="comment">// pre-filled from the page's alias</span>
+  propertySchemaIds: readonly string[]   <span class="comment">// chosen from the candidate report's common-prop list</span>
+  rewriteIsaReferences?: boolean         <span class="comment">// default false &mdash; leave roam:isa intact for review</span>
+}): Promise&lt;void&gt;</code></pre>
+
+<figure>
+  <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Roam isa adoption flow">
+    <defs>
+      <marker id="arrow4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+      </marker>
+    </defs>
+
+    <text x="380" y="22" class="diag-label" text-anchor="middle" font-weight="bold">Before promotion</text>
+    <rect x="60" y="34" width="220" height="46" rx="6" class="diag-box"/>
+    <text x="170" y="52" class="diag-text" text-anchor="middle">"Person" page</text>
+    <text x="170" y="68" class="diag-text" text-anchor="middle">block:types = ['page']</text>
+
+    <rect x="480" y="34" width="220" height="46" rx="6" class="diag-box"/>
+    <text x="590" y="52" class="diag-text" text-anchor="middle">Alice (instance)</text>
+    <text x="590" y="68" class="diag-text" text-anchor="middle">roam:isa = [[Person]] (refList)</text>
+
+    <line x1="480" y1="56" x2="285" y2="56" class="diag-arrow" stroke="#888"/>
+    <text x="380" y="50" class="diag-label" text-anchor="middle">roam:isa ref</text>
+
+    <line x1="380" y1="100" x2="380" y2="130" class="diag-arrow"/>
+    <text x="380" y="120" class="diag-label" text-anchor="middle">promoteToType("Person", ['dob','email'])</text>
+
+    <text x="380" y="158" class="diag-label" text-anchor="middle" font-weight="bold">After promotion</text>
+    <rect x="60" y="170" width="220" height="74" rx="6" class="diag-box diag-box-merged"/>
+    <text x="170" y="190" class="diag-text" text-anchor="middle">"Person" page (now a type)</text>
+    <text x="170" y="208" class="diag-text" text-anchor="middle">block:types = ['page', 'block-type']</text>
+    <text x="170" y="226" class="diag-text" text-anchor="middle">block-type:label = 'Person'</text>
+    <text x="170" y="241" class="diag-text" text-anchor="middle">block-type:properties = [dob, email]</text>
+
+    <rect x="480" y="170" width="220" height="74" rx="6" class="diag-box diag-box-merged"/>
+    <text x="590" y="190" class="diag-text" text-anchor="middle">Alice (instance)</text>
+    <text x="590" y="208" class="diag-text" text-anchor="middle">block:types = ['page', &lt;Person-id&gt;]</text>
+    <text x="590" y="226" class="diag-text" text-anchor="middle">roam:isa = [[Person]]</text>
+    <text x="590" y="241" class="diag-text" text-anchor="middle" fill="#888">(left intact unless rewrite=true)</text>
+
+    <text x="380" y="280" class="diag-label" text-anchor="middle">
+      Same-tx processor sees addedTypes(row) = [&lt;Person-id&gt;]
+    </text>
+    <text x="380" y="298" class="diag-label" text-anchor="middle">
+      and fires whatever the Person type's "on add" processor declared (if any).
+    </text>
+  </svg>
+  <figcaption>Roam <code>roam:isa</code> adoption is mechanical because the type id is the target block's id &mdash; the same id Roam <code>[[Person]]</code> references already resolve to.</figcaption>
+</figure>
+
+<p>Steps inside one <code>repo.tx</code>:</p>
+<ol>
+  <li>
+    <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code> on the Person page, materializing
+    <code>block-type:label</code> and <code>block-type:properties</code> from the action args.
+  </li>
+  <li>
+    Query <code>repo.queryBlocks({referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code> &mdash; the
+    <code>block_references</code> edge index from <span class="file">type-system.md</span> &sect;6b already gives
+    this answer in one EXISTS.
+  </li>
+  <li>
+    For each referencing block, <code>repo.addTypeInTx(tx, instanceId, targetBlockId, {})</code> &mdash; appending
+    the new type id (= target's block id) to <code>block:types</code>. Any <code>sameTxProcessor</code> watching the
+    field fires per row.
+  </li>
+  <li>
+    If <code>rewriteIsaReferences</code>: rewrite the <code>roam:isa</code> refList on each instance, dropping the
+    promoted alias. Default off &mdash; users typically want both for a while.
+  </li>
+</ol>
+
+<p>Two surfaces use the primitive:</p>
+<ul class="tight">
+  <li>
+    <b>Auto-suggest at import time.</b> The existing type-candidate report
+    (<span class="file">src/plugins/roam-import/report.ts:492</span>) gets an "Adopt as type" button per candidate.
+    Property checkboxes default to the common-prop list. Same code path.
+  </li>
+  <li>
+    <b>After-the-fact.</b> "Promote this page to a type" action on any page that's a <code>roam:isa</code> target.
+    Surfaced through the same action infrastructure that handles other context-actions on pages.
+  </li>
+</ul>
+
+<h2>Phasing</h2>
+
+<p>Each phase ships independently. Earlier phases don't depend on the deferred follow-ups in
+<span class="file">type-system.md</span>.</p>
+
+<h3>Phase 1 &mdash; <code>block-type</code> kernel type + Types page + UserTypesService</h3>
+<ul class="tight">
+  <li>Add <code>blockTypeLabelProp</code>, <code>blockTypeDescriptionProp</code>, <code>blockTypePropertiesProp</code> to <span class="file">src/data/properties.ts</span>.</li>
+  <li>Add <code>BLOCK_TYPE_TYPE</code> and <code>TYPES_PAGE_TYPE</code> to <span class="file">src/data/blockTypes.ts</span>; lift the three props onto the contribution.</li>
+  <li><span class="file">src/data/typesPage.ts</span> new &mdash; bootstrap helper near-clone of <span class="file">src/data/propertiesPage.ts</span>.</li>
+  <li><span class="file">src/data/userTypesService.ts</span> new &mdash; subscribe, build contributions, publish to <code>typesFacet</code>'s <code>'user-data'</code> bucket.</li>
+  <li>Start <code>UserTypesService</code> in <code>Repo</code> bootstrap, right after <code>UserSchemasService</code>.</li>
+  <li>Block renderer for <code>block-type</code> blocks (parallel to <span class="file">src/components/renderer/PropertySchemaBlockRenderer.tsx</span>): label / description / property-ref multi-picker.</li>
+  <li>"New type" command on the Types page.</li>
+</ul>
+<p><b>Acceptance:</b> creating a type block surfaces a new entry in the property panel's type picker; tagging a block with it shows the chosen properties as panel slots.</p>
+
+<h3>Phase 2 &mdash; <code>extends</code> overrides</h3>
+<ul class="tight">
+  <li>Add <code>blockTypeExtendsProp</code> to <span class="file">src/data/properties.ts</span>.</li>
+  <li>Extend <code>UserTypesService.tryBuildType</code> to emit override records when <code>extends</code> is set.</li>
+  <li>Extend the rebuild step at <span class="file">src/data/repo.ts:1783</span> to fold overrides into the base contribution post-combine. Drop overrides whose <code>extends</code> target doesn't resolve, log a diagnostic.</li>
+  <li>Renderer surfaces an "extends" picker; tested against a kernel type (e.g., <code>daily-note</code>) plus a user type.</li>
+</ul>
+<p><b>Acceptance:</b> an override block extending <code>daily-note</code> with <code>[weather, mood]</code> adds those slots to every daily-note panel; kernel-defined behavior on daily-note is unchanged.</p>
+
+<h3>Phase 3 &mdash; replace <code>setup</code> with same-tx processors</h3>
+<ul class="tight">
+  <li>Add <code>addedTypes</code> / <code>removedTypes</code> helpers to <span class="file">src/data/properties.ts</span>.</li>
+  <li>Strip <code>setup</code> from <code>TypeContribution</code>; remove the orchestration calls in <code>repo.addType</code> / <code>addTypeInTx</code>.</li>
+  <li>Update <span class="file">docs/type-system.md</span> &sect;3a, &sect;3a-setup, &sect;5 to match.</li>
+  <li>Migrate any existing in-code <code>setup</code> use to <code>sameTxProcessorsFacet</code> contributions (kernel today: none, per audit).</li>
+</ul>
+<p><b>Acceptance:</b> existing kernel + plugin behavior unchanged. Raw <code>tx.update(typesProp)</code> from a fixture now triggers the same processor flow as a <code>repo.addType</code> call.</p>
+
+<h3>Phase 4 &mdash; Roam <code>isa</code> adoption</h3>
+<ul class="tight">
+  <li><code>promoteToType</code> action in <span class="file">src/plugins/roam-import/</span>.</li>
+  <li>UI: "Adopt as type" button per high-confidence candidate in the import report; column of property checkboxes pre-checked at <code>&ge;50%</code> frequency.</li>
+  <li>Standalone action on any page registered as a <code>roam:isa</code> target.</li>
+  <li>Optional <code>rewriteIsaReferences</code> flag; default off.</li>
+</ul>
+<p><b>Acceptance:</b> on a Roam import with 53 blocks tagged <code>is a [[Person]]</code>, promoting Person turns the page into a <code>block-type</code> and re-tags all 53 instances; the Person panel section in the property panel reflects the chosen schemas.</p>
+
+<h2>What's deferred</h2>
+<ul class="tight">
+  <li><b>Type templates as data.</b> A subtree to materialize on instance creation, declared on the type-definition block via a <code>block-type:template</code> refList. Once the same-tx processor pattern is established, a single generic <code>typeTemplateProcessor</code> can dispatch from data. Defer until at least one type wants this in practice.</li>
+  <li><b>Type inheritance for user types.</b> A user type extending <i>another user type</i> rather than a kernel type. The override merge already handles "child extends parent" semantics; only the resolver loop guard (cycle detection) is missing.</li>
+  <li><b>Required-field validation on add.</b> A type-definition block lists which of its <code>properties[]</code> are required; a same-tx processor rejects writes that leave them unset. Easy once Phase 3 lands.</li>
+  <li><b>Property-schema authoring inline with the type.</b> Today the user creates schemas on the Properties page, then refs them from a type on the Types page. A combined "type editor" surface that creates schemas as side-effects of editing a type is ergonomic but not necessary for v1.</li>
+  <li><b>Bulk reimport-time auto-promotion.</b> The import currently <i>suggests</i>; this design's promotion stays user-triggered. Heuristic-based auto-promotion at import time is plausible but a separate UX call.</li>
+</ul>
+
+<h2>Decisions locked in</h2>
+<ul class="tight">
+  <li>User-defined types are blocks of kernel type <code>block-type</code>, hosted on a per-workspace Types page.</li>
+  <li>Type id is the block id. Display label is <code>block-type:label</code>. The picker shows the label; <code>block:types</code> arrays carry ids.</li>
+  <li>Override existing types via <code>block-type:extends</code>; merge at the rebuild step, never destructive.</li>
+  <li>Behavioral fields (today: <code>setup</code>) cannot come from data. The merge rule is "kernel only" for those.</li>
+  <li>Replace <code>setup</code> with same-tx processors. Type contributions become pure metadata. Do this before any current kernel use lands.</li>
+  <li>Roam <code>isa</code> adoption rides one primitive (<code>promoteToType</code>) usable from import time or after-the-fact.</li>
+</ul>
+
+</body>
+</html>
