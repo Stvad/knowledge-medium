@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
   ChangeScope,
   codecs,
@@ -219,7 +219,7 @@ describe('DefaultBlockRenderer paste handling', () => {
     )
   })
 
-  it('restores DOM focus to a focused normal-mode block shell after remount', () => {
+  it('restores DOM focus to a focused normal-mode block shell after remount', async () => {
     const renderTree = (version: number) => (
       <AppRuntimeContextProvider value={runtime}>
         <ActiveContextsProvider>
@@ -234,7 +234,7 @@ describe('DefaultBlockRenderer paste handling', () => {
 
     const view = render(renderTree(1))
     const firstShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
-    expect(document.activeElement).toBe(firstShell)
+    await waitFor(() => expect(document.activeElement).toBe(firstShell))
 
     act(() => {
       view.rerender(renderTree(2))
@@ -242,6 +242,6 @@ describe('DefaultBlockRenderer paste handling', () => {
 
     const remountedShell = document.querySelector<HTMLElement>('[data-block-id="block-1"][data-editing="false"]')
     expect(remountedShell).not.toBe(firstShell)
-    expect(document.activeElement).toBe(remountedShell)
+    await waitFor(() => expect(document.activeElement).toBe(remountedShell))
   })
 })

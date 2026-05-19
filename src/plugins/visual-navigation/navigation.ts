@@ -426,6 +426,19 @@ const hasMountedTargetKey = (
     Boolean(targetRect(target)),
   )
 
+const firstMountedTargetForBlock = (
+  uiStateBlock: Block,
+  blockId: string | undefined,
+): RegisteredVisualNavigationTarget | null => {
+  if (!blockId) return null
+  return orderedTargets().find(target =>
+    target.uiStateBlock.id === uiStateBlock.id &&
+    target.blockId === blockId &&
+    target.surface !== 'breadcrumb' &&
+    target.element.isConnected,
+  ) ?? null
+}
+
 const resolveCurrentTarget = (
   input: VisualNavigationMoveInput,
 ): RegisteredVisualNavigationTarget | null => {
@@ -548,6 +561,9 @@ export const useVisualNavigationTarget = ({
     activeTarget?.uiStateBlock.id === uiStateBlock.id &&
     activeTarget.blockId === focusedBlockId &&
     Boolean(targetRect(activeTarget))
+  const defaultFocusedTarget = focusedTargetKeyMounted || activeTargetApplies
+    ? null
+    : firstMountedTargetForBlock(uiStateBlock, focusedBlockId)
 
   useEffect(() => {
     const element = elementRef.current
@@ -594,6 +610,8 @@ export const useVisualNavigationTarget = ({
     active: focusedBlockId === blockId &&
       (focusedTargetKeyMounted
         ? focusedTargetKey === targetKey
-        : !activeTargetApplies || activeTargetId === targetId),
+        : activeTargetApplies
+          ? activeTargetId === targetId
+          : defaultFocusedTarget?.id === targetId),
   }
 }
