@@ -19,6 +19,7 @@ import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
 import { isCollapsedProp } from '@/data/properties'
+import { aliasesProp } from './coreProperties'
 
 interface Harness {
   h: TestDb
@@ -652,6 +653,96 @@ describe('core.merge', () => {
       expect(env.read(id)!.parentId).toBe('a')
       expect(env.read(id)!.deleted).toBe(false)
     }
+  })
+
+  describe('contentStrategy', () => {
+    const seed = async (intoContent: string, fromContent: string) => {
+      await env.repo.tx(
+        tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.mutate.createChild({parentId: 'p', id: 'into', content: intoContent})
+      await env.repo.mutate.createChild({parentId: 'p', id: 'from', content: fromContent})
+    }
+
+    it("defaults to 'concat' (Backspace-at-start caller stays identical)", async () => {
+      await seed('foo', 'bar')
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      expect(env.read('into')!.content).toBe('foobar')
+    })
+
+    it("'concat' joins with empty string", async () => {
+      await seed('foo', 'bar')
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: 'concat'})
+      expect(env.read('into')!.content).toBe('foobar')
+    })
+
+    it("'keepTarget' keeps target content when non-empty", async () => {
+      await seed('canonical text', 'will be discarded')
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: 'keepTarget'})
+      expect(env.read('into')!.content).toBe('canonical text')
+    })
+
+    it("'keepTarget' takes source content when target is empty (stub absorbs page)", async () => {
+      await seed('', 'real writeup')
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: 'keepTarget'})
+      expect(env.read('into')!.content).toBe('real writeup')
+    })
+
+    it('{separator} joins with the given separator', async () => {
+      await seed('line one', 'line two')
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from', contentStrategy: {separator: '\n'}})
+      expect(env.read('into')!.content).toBe('line one\nline two')
+    })
+  })
+
+  describe('property merge', () => {
+    const seedWithProps = async (
+      intoProps: Record<string, unknown>,
+      fromProps: Record<string, unknown>,
+    ) => {
+      await env.repo.tx(
+        tx => tx.create({id: 'p', workspaceId: 'ws-1', parentId: null, orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await env.repo.mutate.createChild({parentId: 'p', id: 'into', properties: intoProps})
+      await env.repo.mutate.createChild({parentId: 'p', id: 'from', properties: fromProps})
+    }
+
+    it('unions array-typed properties (target order first)', async () => {
+      await seedWithProps(
+        {tags: ['x', 'y']},
+        {tags: ['y', 'z']},
+      )
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      expect(env.read('into')!.properties.tags).toEqual(['x', 'y', 'z'])
+    })
+
+    it('takes source-only properties through to the target', async () => {
+      await seedWithProps({a: 1}, {b: 2})
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      expect(env.read('into')!.properties).toMatchObject({a: 1, b: 2})
+    })
+
+    it('target wins on scalar collision', async () => {
+      await seedWithProps({title: 'Target'}, {title: 'Source'})
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      expect(env.read('into')!.properties.title).toBe('Target')
+    })
+
+    it('merges alias arrays without tripping the uniqueness trigger', async () => {
+      // Each page-block's title is conventionally its own alias. After
+      // merge, target should carry both titles so wikilinks resolve.
+      // The unique trigger fires per-row; if we leave source's alias in
+      // place when writing target's merged properties, this rejects.
+      await seedWithProps(
+        {[aliasesProp.name]: aliasesProp.codec.encode(['Foo'])},
+        {[aliasesProp.name]: aliasesProp.codec.encode(['Bar'])},
+      )
+      await env.repo.mutate.merge({intoId: 'into', fromId: 'from'})
+      expect(env.read('into')!.properties[aliasesProp.name]).toEqual(['Foo', 'Bar'])
+      expect(env.read('from')!.deleted).toBe(true)
+    })
   })
 })
 
