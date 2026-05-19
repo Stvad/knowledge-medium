@@ -24,7 +24,7 @@ type BlockUploadPayload = Record<string, unknown> & {id: string}
 
 type CompactedBlockOperation =
   | {
-      kind: 'upsert'
+      kind: 'create'
       id: string
       payload: BlockUploadPayload
       order: number
@@ -40,6 +40,21 @@ type CompactedBlockOperation =
       id: string
       order: number
     }
+
+// Per-id accumulator used by `compactBlockCrudEntries`. PUT and PATCH are
+// tracked in separate slots so we can emit them as distinct wire ops, which
+// lets the server treat PUT as insert-or-skip without losing the PATCH
+// deltas. A row that already exists on the server (deterministic-id collision
+// during bootstrap, restart with empty local DB, etc.) keeps its server-side
+// state for the columns it covers, and the PATCH still applies the user's
+// intentional edits on top.
+type PerBlockState = {
+  id: string
+  order: number
+  create?: BlockUploadPayload
+  patch?: Record<string, unknown>
+  deleted?: true
+}
 
 const assertSupabase = () => {
   if (!supabase) {
@@ -60,62 +75,50 @@ const normalizeLocalBlockUploadRow = (row: BlockRow): BlockUploadPayload => ({
 })
 
 const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockOperation[] => {
-  const byId = new Map<string, CompactedBlockOperation>()
+  const byId = new Map<string, PerBlockState>()
 
   for (const [order, entry] of entries.entries()) {
     if (entry.table !== 'blocks') {
       throw new Error(`Unsupported table in upload queue: ${entry.table}`)
     }
 
+    const existing = byId.get(entry.id)
+
     if (entry.op === UpdateType.PUT) {
+      // A fresh PUT supersedes any prior state for this id in the batch —
+      // it's a full row snapshot at INSERT time. Subsequent PATCHes in
+      // this batch will accumulate again on top.
       byId.set(entry.id, {
-        kind: 'upsert',
         id: entry.id,
-        payload: blockPayloadFromPut(entry),
         order,
+        create: blockPayloadFromPut(entry),
       })
       continue
     }
 
     if (entry.op === UpdateType.PATCH) {
-      const patch = entry.opData ?? {}
-      const existing = byId.get(entry.id)
-      if (existing?.kind === 'upsert') {
-        byId.set(entry.id, {
-          kind: 'upsert',
-          id: existing.id,
-          payload: {
-            ...existing.payload,
-            ...patch,
-          },
-          order: existing.order,
-        })
-      } else if (existing?.kind === 'patch') {
-        byId.set(entry.id, {
-          kind: 'patch',
-          id: existing.id,
-          payload: {
-            ...existing.payload,
-            ...patch,
-          },
-          order: existing.order,
-        })
-      } else {
-        byId.set(entry.id, {
-          kind: 'patch',
-          id: entry.id,
-          payload: patch,
-          order,
-        })
-      }
+      const patchData = entry.opData ?? {}
+      // A PATCH that follows a DELETE in the same batch is a no-op (we
+      // already decided the row is gone). This is defensive — repo.tx
+      // shouldn't produce that sequence.
+      if (existing?.deleted) continue
+      byId.set(entry.id, {
+        id: entry.id,
+        order: existing?.order ?? order,
+        create: existing?.create,
+        patch: existing?.patch ? {...existing.patch, ...patchData} : patchData,
+      })
       continue
     }
 
     if (entry.op === UpdateType.DELETE) {
+      // DELETE clears prior create/patch in the batch — they cancel out.
+      // Soft-delete UPDATEs come through as PATCH ops (deleted=1), not
+      // DELETE, so this only fires for hard deletes (not v1).
       byId.set(entry.id, {
-        kind: 'delete',
         id: entry.id,
         order,
+        deleted: true,
       })
       continue
     }
@@ -123,7 +126,21 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
     throw new Error(`Unsupported CRUD operation: ${entry.op}`)
   }
 
-  return [...byId.values()].sort((left, right) => left.order - right.order)
+  const operations: CompactedBlockOperation[] = []
+  for (const state of byId.values()) {
+    if (state.deleted) {
+      operations.push({kind: 'delete', id: state.id, order: state.order})
+      continue
+    }
+    if (state.create) {
+      operations.push({kind: 'create', id: state.id, payload: state.create, order: state.order})
+    }
+    if (state.patch) {
+      operations.push({kind: 'patch', id: state.id, payload: state.patch, order: state.order})
+    }
+  }
+
+  return operations.sort((left, right) => left.order - right.order)
 }
 
 const orderedBlockUpserts = (rows: readonly BlockUploadPayload[]): BlockUploadPayload[] => {
@@ -184,6 +201,30 @@ const applyBlockDelete = async (id: string) => {
   }
 }
 
+// Insert-or-skip on the id PK. Used for client-originated CREATEs so a
+// deterministic-id collision with an existing server row preserves the
+// server's state — user-prefs, user-page, and ui-state bootstrap on a fresh
+// client all rely on this. Subsequent PATCH ops in the same batch still
+// carry the user's intentional edits.
+const applyBlockCreates = async (rows: readonly BlockUploadPayload[]) => {
+  if (rows.length === 0) return
+  const client = assertSupabase()
+
+  for (const chunk of chunked(orderedBlockUpserts(rows), MAX_BLOCKS_PER_SUPABASE_UPSERT)) {
+    console.debug('[powersync] CREATE batch', chunk.length)
+    const {error} = await client
+      .from('blocks')
+      .upsert(chunk, {onConflict: 'id', ignoreDuplicates: true})
+
+    if (error) {
+      throw error
+    }
+  }
+}
+
+// Full-row replace by id. Only safe when the caller has the authoritative
+// current row state — used by `applyBlockPatches` below for the bulk-patch
+// fallback (which has just read the full local rows out of SQLite).
 const applyBlockUpserts = async (rows: readonly BlockUploadPayload[]) => {
   if (rows.length === 0) return
   const client = assertSupabase()
@@ -255,13 +296,13 @@ const applyCompactedBlockOperations = async (
   database: AbstractPowerSyncDatabase,
   operations: readonly CompactedBlockOperation[],
 ) => {
-  const upserts: BlockUploadPayload[] = []
+  const creates: BlockUploadPayload[] = []
   const patches: Array<{id: string; payload: Record<string, unknown>}> = []
   const deletes: string[] = []
 
   for (const operation of operations) {
-    if (operation.kind === 'upsert') {
-      upserts.push(operation.payload)
+    if (operation.kind === 'create') {
+      creates.push(operation.payload)
     } else if (operation.kind === 'patch') {
       patches.push({id: operation.id, payload: operation.payload})
     } else {
@@ -269,7 +310,10 @@ const applyCompactedBlockOperations = async (
     }
   }
 
-  await applyBlockUpserts(upserts)
+  // Order matters: creates first so subsequent patches/deletes find their
+  // rows (when the row is genuinely new). Insert-or-skip semantics make
+  // this safe when the row already exists.
+  await applyBlockCreates(creates)
 
   await applyBlockPatches(database, patches)
 

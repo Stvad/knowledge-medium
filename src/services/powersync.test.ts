@@ -26,7 +26,10 @@ const del = (clientId: number, id: string, txId = 1) =>
   new CrudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
 
 describe('PowerSync upload compaction', () => {
-  it('folds PUT + PATCH chains for a block into one upsert payload', () => {
+  it('splits PUT + PATCH chains into a create plus an accumulated patch', () => {
+    // The split preserves user-intentional edits (the PATCH) while letting the
+    // CREATE be a no-op when the server already has the row (deterministic-id
+    // collisions during bootstrap on a fresh client — see globalState.ts).
     const operations = __compactBlockCrudEntriesForTest([
       put(1, 'block-a', {
         workspace_id: 'workspace-a',
@@ -48,7 +51,7 @@ describe('PowerSync upload compaction', () => {
 
     expect(operations).toEqual([
       {
-        kind: 'upsert',
+        kind: 'create',
         id: 'block-a',
         order: 0,
         payload: {
@@ -57,8 +60,47 @@ describe('PowerSync upload compaction', () => {
           parent_id: null,
           order_key: 'a0',
           content: 'A',
+          properties_json: '{}',
+          updated_at: 1,
+        },
+      },
+      {
+        kind: 'patch',
+        id: 'block-a',
+        order: 0,
+        payload: {
           properties_json: '{"alias":["A"],"types":["page"]}',
           updated_at: 3,
+        },
+      },
+    ])
+  })
+
+  it('emits a pure PUT as a single create op (insert-or-skip semantics on the server)', () => {
+    const operations = __compactBlockCrudEntriesForTest([
+      put(1, 'block-a', {
+        workspace_id: 'workspace-a',
+        parent_id: null,
+        order_key: 'a0',
+        content: 'A',
+        properties_json: '{}',
+        updated_at: 1,
+      }),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'create',
+        id: 'block-a',
+        order: 0,
+        payload: {
+          id: 'block-a',
+          workspace_id: 'workspace-a',
+          parent_id: null,
+          order_key: 'a0',
+          content: 'A',
+          properties_json: '{}',
+          updated_at: 1,
         },
       },
     ])
