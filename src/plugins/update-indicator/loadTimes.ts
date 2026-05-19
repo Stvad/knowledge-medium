@@ -26,7 +26,7 @@ export const currentLoadTimeProp = defineProperty<number | undefined>('currentLo
  *  the user "a new build is live since you last loaded." */
 export const updateIndicatorPrefsType = defineBlockType({
   id: 'update-indicator-prefs',
-  label: 'Update indicator load times',
+  label: 'Update indicator',
   properties: [previousLoadTimeProp, currentLoadTimeProp],
 })
 

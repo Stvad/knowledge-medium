@@ -99,13 +99,20 @@ const requireWorkspaceId = (repo: Repo, caller: string): string => {
 const ensureStateChild = async (
   repo: Repo,
   parent: Block,
-  content: string,
+  /** Stable internal key for the deterministic child id. Two clients
+   *  bootstrapping the same logical state row must pass the same string
+   *  here so the rows converge on sync. */
+  namespace: string,
   scope: ChangeScope,
   initialProperties: Record<string, unknown> = {},
+  /** Human-readable row content (the block's page title / navigation
+   *  label). Defaults to `namespace` for state children whose title is
+   *  intentionally internal (`ui-state`, `layout-sessions`, …). */
+  displayContent: string = namespace,
 ): Promise<Block> => {
   const parentData = parent.peek() ?? await parent.load()
   if (!parentData) throw new Error(`ensureStateChild: parent ${parent.id} not loaded`)
-  const childId = stateChildBlockId(parent.id, content)
+  const childId = stateChildBlockId(parent.id, namespace)
 
   const live = await repo.load(childId)
   if (live && !live.deleted) {
@@ -118,7 +125,7 @@ const ensureStateChild = async (
       return
     }
     if (existing && existing.deleted) {
-      await tx.restore(childId, {content})
+      await tx.restore(childId, {content: displayContent})
       return
     }
     // Fresh insert. Use 'a0' as a starter order key — fine because
@@ -130,26 +137,27 @@ const ensureStateChild = async (
       workspaceId: parentData.workspaceId,
       parentId: parent.id,
       orderKey: 'a0',
-      content,
+      content: displayContent,
       properties: initialProperties,
     })
-  }, {scope, description: `ensureStateChild ${content}`})
+  }, {scope, description: `ensureStateChild ${namespace}`})
 
   const child = repo.block(childId)
   await child.load()
   return child
 }
 
-const ensureUiChild = (repo: Repo, parent: Block, content: string): Promise<Block> =>
-  ensureStateChild(repo, parent, content, ChangeScope.UiState)
+const ensureUiChild = (repo: Repo, parent: Block, namespace: string): Promise<Block> =>
+  ensureStateChild(repo, parent, namespace, ChangeScope.UiState)
 
-const ensureUserPrefsChild = (repo: Repo, parent: Block, content: string): Promise<Block> =>
+const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
   ensureStateChild(
     repo,
     parent,
-    content,
+    USER_PREFS_PATH_PART,
     ChangeScope.UserPrefs,
     addBlockTypeToProperties({}, USER_PREFS_TYPE),
+    'Preferences',
   )
 
 const requireSchemaScope = <T>(
@@ -217,7 +225,7 @@ export const getUserBlock = memoize(
 export const getUserPrefsBlock = memoize(
   async (repo: Repo, workspaceId: string, user: User): Promise<Block> => {
     const userBlock = await getUserBlock(repo, workspaceId, user)
-    return ensureUserPrefsChild(repo, userBlock, USER_PREFS_PATH_PART)
+    return ensureUserPrefsChild(repo, userBlock)
   },
   (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}:__user_prefs__`,
 )
@@ -244,6 +252,7 @@ export const getPluginPrefsBlock = memoize(
       type.id,
       ChangeScope.UserPrefs,
       addBlockTypeToProperties({}, type.id),
+      type.label ?? type.id,
     )
   },
   (repo, workspaceId, user, type) =>

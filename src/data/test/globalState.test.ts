@@ -126,12 +126,12 @@ describe('getUserBlock', () => {
 })
 
 describe('getUserPrefsBlock', () => {
-  it('ensures a "user-prefs" child under the user page', async () => {
+  it('ensures the "Preferences" child under the user page', async () => {
     const userBlock = await getUserBlock(env.repo, WS, USER)
     const prefs = await getUserPrefsBlock(env.repo, WS, USER)
 
     expect(prefs.peek()?.parentId).toBe(userBlock.id)
-    expect(prefs.peek()?.content).toBe('user-prefs')
+    expect(prefs.peek()?.content).toBe('Preferences')
     expect(prefs.peekProperty(typesProp)).toEqual([USER_PREFS_TYPE])
 
     const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
@@ -153,7 +153,7 @@ describe('getUserPrefsBlock', () => {
 
     try {
       const prefs = await getUserPrefsBlock(repo, WS, USER)
-      expect(prefs.peek()?.content).toBe('user-prefs')
+      expect(prefs.peek()?.content).toBe('Preferences')
 
       const events = await h.db.getAll<{scope: string; source: string}>(
         'SELECT scope, source FROM command_events ORDER BY created_at',
@@ -173,13 +173,24 @@ describe('getPluginPrefsBlock', () => {
     label: 'Example plugin prefs',
   })
 
-  it('ensures a sub-block under user-prefs keyed by the type id', async () => {
+  it('ensures a sub-block under user-prefs keyed by the type id, titled by the label', async () => {
     const userPrefs = await getUserPrefsBlock(env.repo, WS, USER)
     const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
 
     expect(pluginPrefs.peek()?.parentId).toBe(userPrefs.id)
-    expect(pluginPrefs.peek()?.content).toBe('example-plugin-prefs')
+    expect(pluginPrefs.peek()?.content).toBe('Example plugin prefs')
     expect(pluginPrefs.peekProperty(typesProp)).toEqual(['example-plugin-prefs'])
+  })
+
+  it('falls back to the type id when the contribution omits a label', async () => {
+    const otherEnv = await setup()
+    try {
+      const unlabeled = defineBlockType({id: 'unlabeled-plugin-prefs'})
+      const block = await getPluginPrefsBlock(otherEnv.repo, WS, USER, unlabeled)
+      expect(block.peek()?.content).toBe('unlabeled-plugin-prefs')
+    } finally {
+      await otherEnv.h.cleanup()
+    }
   })
 
   it('is idempotent — same type resolves to the same block', async () => {

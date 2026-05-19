@@ -33,7 +33,7 @@ export const dailyNoteBacklinksDefaultsProp = defineProperty<StoredBacklinksFilt
  *  on the target block itself (`backlinksFilterProp`, BlockDefault scope). */
 export const backlinksPrefsType = defineBlockType({
   id: 'backlinks-prefs',
-  label: 'Backlinks preferences',
+  label: 'Backlinks',
   properties: [dailyNoteBacklinksDefaultsProp],
 })
 

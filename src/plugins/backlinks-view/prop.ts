@@ -26,6 +26,6 @@ export const backlinksViewProp = defineProperty<string>('backlinks:viewId', {
  *  block's `properties_json`. */
 export const backlinksViewPrefsType = defineBlockType({
   id: 'backlinks-view-prefs',
-  label: 'Backlinks view preferences',
+  label: 'Backlinks view',
   properties: [backlinksViewProp],
 })

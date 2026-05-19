@@ -149,6 +149,6 @@ export const groupedBacklinksOverridesProp = defineProperty<GroupedBacklinksOver
  *  `groupedBacklinksOverridesProp` on the target block itself. */
 export const groupedBacklinksPrefsType = defineBlockType({
   id: 'grouped-backlinks-prefs',
-  label: 'Grouped backlinks preferences',
+  label: 'Grouped backlinks',
   properties: [groupedBacklinksDefaultsProp],
 })

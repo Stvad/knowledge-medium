@@ -13,7 +13,7 @@ export const recentBlockIdsProp = defineProperty<string[]>('recentBlockIds', {
  *  block-id MRU list. */
 export const quickFindPrefsType = defineBlockType({
   id: 'quick-find-prefs',
-  label: 'Quick find preferences',
+  label: 'Quick find',
   properties: [recentBlockIdsProp],
 })
 

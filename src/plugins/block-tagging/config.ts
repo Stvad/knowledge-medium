@@ -59,6 +59,6 @@ export const blockTagsConfigProp = defineProperty<string[]>(
  *  `blockTagsConfigProp` (the user's curated tag list). */
 export const blockTaggingPrefsType = defineBlockType({
   id: 'block-tagging-prefs',
-  label: 'Block tagging preferences',
+  label: 'Tags',
   properties: [blockTagsConfigProp],
 })

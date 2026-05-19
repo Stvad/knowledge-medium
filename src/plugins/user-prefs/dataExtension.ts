@@ -10,7 +10,7 @@ import type { AppExtension } from '@/extensions/facet.ts'
  *  recognises the marker written by `ensureUserPrefsChild`. */
 export const userPrefsType = defineBlockType({
   id: USER_PREFS_TYPE,
-  label: 'User preferences',
+  label: 'Preferences',
 })
 
 export const userPrefsDataExtension: AppExtension = [
