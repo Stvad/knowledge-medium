@@ -36,6 +36,7 @@ import {
   USER_PREFS_TYPE,
   getLayoutSessionBlock,
   getPluginPrefsBlock,
+  getPluginUIStateBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
   getUserBlock,
@@ -216,6 +217,45 @@ describe('getPluginPrefsBlock', () => {
       'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',
     )
     expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user', workspace_id: WS})
+  })
+})
+
+describe('getPluginUIStateBlock', () => {
+  const exampleUIStateType = defineBlockType({
+    id: 'example-plugin-ui-state',
+    label: 'Example plugin state',
+  })
+
+  it('ensures a sub-block under root ui-state titled by the label', async () => {
+    const rootUI = await getUIStateBlock(env.repo, WS, USER, {})
+    const pluginUI = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
+
+    expect(pluginUI.peek()?.parentId).toBe(rootUI.id)
+    expect(pluginUI.peek()?.content).toBe('Example plugin state')
+    expect(pluginUI.peekProperty(typesProp)).toEqual(['example-plugin-ui-state'])
+  })
+
+  it('is idempotent — same type resolves to the same block', async () => {
+    const a = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
+    const b = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
+    expect(a).toBe(b)
+  })
+
+  it('routes its bootstrap write through ChangeScope.UiState (local-ephemeral)', async () => {
+    const pluginUI = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
+    const events = await env.h.db.getAll<{scope: string; source: string}>(
+      'SELECT scope, source FROM command_events ORDER BY created_at',
+    )
+    // Bootstrap should not enter the upload queue: ui-state writes are
+    // local-ephemeral. (Earlier UserPrefs bootstraps for the user page do
+    // populate ps_crud — we only assert the plugin-ui-state row itself
+    // never enters that queue.)
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
+    const crudForBlock = await env.h.db.getAll<{id: string}>(
+      "SELECT id FROM ps_crud WHERE data LIKE '%' || ? || '%'",
+      [pluginUI.id],
+    )
+    expect(crudForBlock).toEqual([])
   })
 })
 

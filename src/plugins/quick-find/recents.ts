@@ -3,22 +3,24 @@ import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api
 
 export const RECENT_BLOCKS_LIMIT = 10
 
+/** Recently-opened block-id MRU list. Per-device persistent state —
+ *  what *this* device's user has just been looking at, not a synced
+ *  preference. Scoped to UiState so writes stay local-ephemeral; lives
+ *  on the plugin's ui-state sub-block (see `quickFindUIStateType`). */
 export const recentBlockIdsProp = defineProperty<string[]>('recentBlockIds', {
   codec: codecs.list(codecs.string),
   defaultValue: [],
-  changeScope: ChangeScope.UserPrefs,
+  changeScope: ChangeScope.UiState,
 })
 
-/** Per-plugin prefs sub-block for quick-find — holds the recently-opened
- *  block-id MRU list. */
-export const quickFindPrefsType = defineBlockType({
-  id: 'quick-find-prefs',
+export const quickFindUIStateType = defineBlockType({
+  id: 'quick-find-ui-state',
   label: 'Quick find',
   properties: [recentBlockIdsProp],
 })
 
-export const pushRecentBlockId = (prefsBlock: Block, blockId: string): void => {
-  const current = prefsBlock.peekProperty(recentBlockIdsProp) ?? []
+export const pushRecentBlockId = (uiStateBlock: Block, blockId: string): void => {
+  const current = uiStateBlock.peekProperty(recentBlockIdsProp) ?? []
   const next = [blockId, ...current.filter(id => id !== blockId)].slice(0, RECENT_BLOCKS_LIMIT)
-  void prefsBlock.set(recentBlockIdsProp, next)
+  void uiStateBlock.set(recentBlockIdsProp, next)
 }

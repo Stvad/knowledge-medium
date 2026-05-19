@@ -12,7 +12,7 @@ import { Search } from 'lucide-react'
 import { QuickFindHeaderItem } from './HeaderItem.tsx'
 import { QuickFind } from './QuickFind.tsx'
 import { toggleQuickFindEvent } from './events.ts'
-import { quickFindPrefsType, recentBlockIdsProp } from './recents.ts'
+import { quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 
 export { QuickFindHeaderItem } from './HeaderItem.tsx'
 export { QuickFind } from './QuickFind.tsx'
@@ -48,7 +48,7 @@ export const quickFindHeaderItem: HeaderItemContribution = {
 export const quickFindPlugin: AppExtension = [
   appMountsFacet.of(quickFindMount, {source: 'quick-find'}),
   propertySchemasFacet.of(recentBlockIdsProp, {source: 'quick-find'}),
-  typesFacet.of(quickFindPrefsType, {source: 'quick-find'}),
+  typesFacet.of(quickFindUIStateType, {source: 'quick-find'}),
   actionsFacet.of(quickFindAction, {source: 'quick-find'}),
   headerItemsFacet.of(quickFindHeaderItem, {
     source: 'quick-find',

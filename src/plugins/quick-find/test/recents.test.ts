@@ -40,7 +40,7 @@ const setup = async (initialIds: string[]): Promise<Harness> => {
     properties: {
       [recentBlockIdsProp.name]: recentBlockIdsProp.codec.encode(initialIds),
     },
-  }), {scope: ChangeScope.UserPrefs})
+  }), {scope: ChangeScope.UiState})
   return {h, repo}
 }
 
@@ -48,7 +48,7 @@ let env: Harness
 afterEach(async () => { await env?.h.cleanup() })
 
 const flush = async (repo: Repo) => {
-  await repo.tx(async () => {}, {scope: ChangeScope.UserPrefs})
+  await repo.tx(async () => {}, {scope: ChangeScope.UiState})
 }
 
 describe('pushRecentBlockId', () => {
@@ -97,17 +97,20 @@ describe('pushRecentBlockId', () => {
     expect(block.peekProperty(recentBlockIdsProp)).toEqual(['first'])
   })
 
-  it('writes through the UserPrefs scope', async () => {
+  it('writes locally without entering the upload queue', async () => {
     env = await setup([])
     const block = env.repo.block(PREFS_BLOCK_ID)
 
     pushRecentBlockId(block, 'first')
     await flush(env.repo)
 
+    // Recents are device-local — ChangeScope.UiState writes route to
+    // local-ephemeral and never appear in ps_crud.
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events WHERE workspace_id = ? ORDER BY created_at',
       [WS],
     )
-    expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user'})
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UiState, source: 'local-ephemeral'})
+    expect(await env.h.db.getAll('SELECT id FROM ps_crud')).toEqual([])
   })
 })

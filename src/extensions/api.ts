@@ -133,6 +133,7 @@ export { Repo } from '../data/repo'
 export {
   getLayoutSessionBlock,
   getPluginPrefsBlock,
+  getPluginUIStateBlock,
   getUserBlock,
   getUserPrefsBlock,
 } from '@/data/globalState.ts'

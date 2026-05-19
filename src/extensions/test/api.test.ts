@@ -44,6 +44,7 @@ describe('@/extensions/api — public surface', () => {
     'getUserBlock',
     'getUserPrefsBlock',
     'getPluginPrefsBlock',
+    'getPluginUIStateBlock',
     // PropertySchema authoring surface (replaces legacy boolProp /
     // numberProperty / stringProperty / uiChangeScope)
     'defineBlockType',

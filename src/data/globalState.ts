@@ -291,6 +291,32 @@ export const getLayoutSessionBlock = memoize(
   (uiBlock, layoutSessionId) => `${repoIdentity(uiBlock.repo)}:${uiBlock.id}:${layoutSessionId}`,
 )
 
+/** Per-plugin ui-state sub-block under the root ui-state block. The
+ *  mirror of `getPluginPrefsBlock` for state that is persistent but
+ *  per-device (and therefore should NOT sync) — e.g. "what blocks did
+ *  the user open recently on this device". Writes flow through
+ *  `ChangeScope.UiState` so they stay out of the upload queue. */
+export const getPluginUIStateBlock = memoize(
+  async (
+    repo: Repo,
+    workspaceId: string,
+    user: User,
+    type: TypeContribution,
+  ): Promise<Block> => {
+    const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
+    return ensureStateChild(
+      repo,
+      rootUIStateBlock,
+      type.id,
+      ChangeScope.UiState,
+      addBlockTypeToProperties({}, type.id),
+      type.label ?? type.id,
+    )
+  },
+  (repo, workspaceId, user, type) =>
+    `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-ui-state:${type.id}`,
+)
+
 // ──── React hooks ────
 
 export function useUIStateBlock(): Block {
@@ -365,6 +391,30 @@ export const usePluginPrefsProperty = <T>(
   usePropertyValue(
     usePluginPrefsBlock(type),
     requireSchemaScope(schema, ChangeScope.UserPrefs, 'usePluginPrefsProperty'),
+  )
+
+/** Resolve the per-plugin ui-state sub-block for a given type
+ *  contribution. The mirror of `usePluginPrefsBlock` for persistent
+ *  per-device state — the block lives under the root ui-state subtree
+ *  and never enters the upload queue. */
+export function usePluginUIStateBlock(type: TypeContribution): Block {
+  const repo = useRepo()
+  const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'usePluginUIStateBlock')
+
+  return use(getPluginUIStateBlock(repo, workspaceId, user, type))
+}
+
+/** Read/write a ui-state property on the plugin's own ui-state
+ *  sub-block. The schema must declare `changeScope: ChangeScope.UiState`
+ *  so writes stay local-ephemeral (persistent in SQLite, never synced). */
+export const usePluginUIStateProperty = <T>(
+  type: TypeContribution,
+  schema: PropertySchema<T>,
+): [T, (value: T) => void] =>
+  usePropertyValue(
+    usePluginUIStateBlock(type),
+    requireSchemaScope(schema, ChangeScope.UiState, 'usePluginUIStateProperty'),
   )
 
 /** Sugar for the global editing flag — `[isEditing, setIsEditing]`. */
