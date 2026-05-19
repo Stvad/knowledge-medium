@@ -1,10 +1,11 @@
-import { autocompletion, completionKeymap } from '@codemirror/autocomplete'
+import { autocompletion } from '@codemirror/autocomplete'
 import { EditorView, keymap } from '@codemirror/view'
 import type { CodeMirrorExtensionContribution } from '@/extensions/editor.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.ts'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.ts'
+import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
 import { searchAliasLabels } from '@/utils/linkTargetAutocomplete.ts'
 
 const referenceAutocompleteTheme = EditorView.theme({
@@ -109,5 +110,5 @@ export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = (
     icons: false,
     tooltipClass: () => 'tm-reference-autocomplete',
   }),
-  keymap.of(completionKeymap.map(item => ({...item, stopPropagation: true}))),
+  keymap.of(completionKeymapWithEscapeFallthrough),
 ]

@@ -4,8 +4,9 @@
  */
 
 import { Extension, EditorSelection } from '@codemirror/state'
-import { autocompletion, CompletionContext, CompletionResult, completionKeymap } from '@codemirror/autocomplete'
+import { autocompletion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { keymap } from '@codemirror/view'
+import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
 
 export interface BacklinkAutocompleteOptions {
   /**
@@ -25,7 +26,7 @@ export function createBacklinkAutocomplete(options: BacklinkAutocompleteOptions)
       override: [backlinkCompletionSource(options)],
       defaultKeymap: false,
     }),
-    keymap.of(completionKeymap.map(it => ({...it, stopPropagation: true})))
+    keymap.of(completionKeymapWithEscapeFallthrough)
   ]
 }
 

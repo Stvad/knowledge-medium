@@ -1,4 +1,5 @@
 import { EditorSelection, EditorState, type Extension, type StateCommand, type Transaction } from '@codemirror/state'
+import { completionKeymap } from '@codemirror/autocomplete'
 import { describe, expect, it } from 'vitest'
 import {
   createMinimalMarkdownConfig,
@@ -7,6 +8,7 @@ import {
   toggleMarkdownItalic,
   toggleMarkdownStrikethrough,
 } from '@/utils/codemirror.ts'
+import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
 
 const runCommand = (
   command: StateCommand,
@@ -107,6 +109,22 @@ describe('minimal markdown CodeMirror config', () => {
   it('removes the focus outline from the focused editor root', () => {
     expect(collectThemeRules(createMinimalMarkdownConfig())).toContainEqual(
       expect.stringMatching(/^\.\S+\.cm-focused \{outline: none;\}$/),
+    )
+  })
+})
+
+describe('completion keymap behavior', () => {
+  it('lets Escape fall through while preserving the rest of CodeMirror completion navigation', () => {
+    const bindingKeys = (binding: {key?: string, mac?: string, linux?: string, win?: string}) =>
+      [binding.key, binding.mac, binding.linux, binding.win].filter((key): key is string => key !== undefined)
+    const originalKeys = completionKeymap.flatMap(bindingKeys)
+    const configuredKeys = completionKeymapWithEscapeFallthrough.flatMap(bindingKeys)
+
+    expect(originalKeys).toContain('Escape')
+    expect(configuredKeys).not.toContain('Escape')
+    expect(configuredKeys).toEqual(originalKeys.filter(key => key !== 'Escape'))
+    expect(completionKeymapWithEscapeFallthrough).toContainEqual(
+      expect.objectContaining({key: 'ArrowDown', stopPropagation: true}),
     )
   })
 })
