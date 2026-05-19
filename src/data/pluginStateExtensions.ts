@@ -47,7 +47,7 @@ const pluginUIStateBootstrapEffect = (type: TypeContribution): AppEffect => ({
 export const pluginPrefsExtension = (
   type: TypeContribution,
   source: string,
-): AppExtension => [
+): readonly AppExtension[] => [
   typesFacet.of(type, {source}),
   appEffectsFacet.of(pluginPrefsBootstrapEffect(type), {source}),
 ]
@@ -57,7 +57,7 @@ export const pluginPrefsExtension = (
 export const pluginUIStateExtension = (
   type: TypeContribution,
   source: string,
-): AppExtension => [
+): readonly AppExtension[] => [
   typesFacet.of(type, {source}),
   appEffectsFacet.of(pluginUIStateBootstrapEffect(type), {source}),
 ]
