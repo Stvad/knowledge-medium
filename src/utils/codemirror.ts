@@ -128,7 +128,9 @@ export const createMinimalMarkdownConfig = (
         fontFamily: 'inherit',
         color: 'inherit',
         lineHeight: 'inherit',
+        outline: 'none',
       },
+      '&.cm-focused': {outline: 'none'},
       ".cm-scroller": {
         fontFamily: "inherit",
         fontSize: "inherit",

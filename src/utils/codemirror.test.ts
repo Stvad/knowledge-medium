@@ -1,6 +1,7 @@
-import { EditorSelection, EditorState, type StateCommand, type Transaction } from '@codemirror/state'
+import { EditorSelection, EditorState, type Extension, type StateCommand, type Transaction } from '@codemirror/state'
 import { describe, expect, it } from 'vitest'
 import {
+  createMinimalMarkdownConfig,
   toggleMarkdownBold,
   toggleMarkdownInlineCode,
   toggleMarkdownItalic,
@@ -32,6 +33,30 @@ const runCommand = (
     to: selection.to,
     head: selection.head,
   }
+}
+
+type StyleModuleExtension = {
+  value?: {
+    rules?: readonly string[]
+  }
+}
+
+const collectThemeRules = (extensions: readonly Extension[]) => {
+  const stack: unknown[] = [...extensions]
+  const rules: string[] = []
+
+  while (stack.length > 0) {
+    const extension = stack.pop()
+    if (Array.isArray(extension)) {
+      stack.push(...extension)
+      continue
+    }
+
+    const maybeRules = (extension as StyleModuleExtension | undefined)?.value?.rules
+    if (Array.isArray(maybeRules)) rules.push(...maybeRules)
+  }
+
+  return rules
 }
 
 describe('markdown formatting CodeMirror commands', () => {
@@ -75,5 +100,13 @@ describe('markdown formatting CodeMirror commands', () => {
     expect(runCommand(toggleMarkdownItalic, 'word', 0, 4).doc).toBe('*word*')
     expect(runCommand(toggleMarkdownInlineCode, 'word', 0, 4).doc).toBe('`word`')
     expect(runCommand(toggleMarkdownStrikethrough, 'word', 0, 4).doc).toBe('~~word~~')
+  })
+})
+
+describe('minimal markdown CodeMirror config', () => {
+  it('removes the focus outline from the focused editor root', () => {
+    expect(collectThemeRules(createMinimalMarkdownConfig())).toContainEqual(
+      expect.stringMatching(/^\.\S+\.cm-focused \{outline: none;\}$/),
+    )
   })
 })
