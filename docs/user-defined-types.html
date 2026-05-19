@@ -281,10 +281,7 @@ export class UserTypesService {
     schemas: ReadonlyMap&lt;string, AnyPropertySchema&gt;,
   ): TypeContribution | null {
     const label = block.peekProperty(blockTypeLabelProp) ?? ''
-    if (!label) {
-      console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
-      return null
-    }
+    const extendsId = block.peekProperty(blockTypeExtendsProp)
     const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
     const properties: AnyPropertySchema[] = []
     for (const refId of refIds) {
@@ -294,9 +291,21 @@ export class UserTypesService {
       const schema = schemas.get(name)
       if (schema) properties.push(schema)
     }
-    const extendsId = block.peekProperty(blockTypeExtendsProp)
     if (extendsId) {
-      return {kind: 'override', target: extendsId, label, properties} as TypeOverride
+      <span class="comment">// Overrides may legitimately omit label/description &mdash; the merge</span>
+      <span class="comment">// rule is "user wins if set, else kernel" (see &sect;Overriding kernel</span>
+      <span class="comment">// types). Pass undefined through so the rebuild step picks the</span>
+      <span class="comment">// kernel value rather than overwriting with empty string.</span>
+      return {
+        kind: 'override',
+        target: extendsId,
+        label: label || undefined,
+        properties,
+      } as TypeOverride
+    }
+    if (!label) {
+      console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
+      return null
     }
     return {
       id: block.id,
@@ -422,8 +431,12 @@ primitive, <code>setup</code> is redundant.
       separate paragraphs (&sect;3-pure, &sect;3a, &sect;3a-setup).
     </td>
     <td>
-      Catches every write uniformly &mdash; sync, raw, plan, orchestrated. The bypass footgun becomes
-      architecturally impossible.
+      Catches every <i>local</i> write &mdash; raw, plan, orchestrated &mdash; uniformly through the commit
+      pipeline (<span class="file">src/data/internals/commitPipeline.ts:263</span>). The
+      <code>addBlockTypeToProperties</code> and raw-<code>tx.update</code> bypass footgun becomes architecturally
+      impossible. <b>Sync-applied writes are still a gap</b>: PowerSync's CRUD-apply path lands writes in SQLite
+      without going through <code>repo.tx</code>, so neither <code>setup</code> nor same-tx processors fire on
+      sync apply. See "Sync-apply gap" below.
     </td>
   </tr>
   <tr>
@@ -505,13 +518,14 @@ primitive, <code>setup</code> is redundant.
     <line x1="570" y1="184" x2="570" y2="204" class="diag-arrow"/>
     <rect x="420" y="206" width="300" height="32" rx="4" class="diag-box"/>
     <text x="570" y="226" class="diag-text" text-anchor="middle">commit</text>
-    <text x="570" y="260" class="diag-label" text-anchor="middle" font-style="italic" fill="#2a7">every write path goes through the same step</text>
+    <text x="570" y="260" class="diag-label" text-anchor="middle" font-style="italic" fill="#2a7">every local write goes through the same step</text>
   </svg>
   <figcaption>
-    Left: today's <code>setup</code> path. Right: same-tx processor path. The processor sees every property write,
-    not just orchestrated <code>addType</code> calls, so sync / raw / plan paths get the same behavior as direct
-    calls. <code>repo.addType</code> shrinks to "encode <code>initialValues</code>, append to <code>typesProp</code>";
-    everything downstream rides the processor stream.
+    Left: today's <code>setup</code> path. Right: same-tx processor path. The processor sees every local property
+    write, not just orchestrated <code>addType</code> calls, so raw <code>tx.update</code> and plan-code paths get
+    the same behavior as direct calls. <code>repo.addType</code> shrinks to "encode <code>initialValues</code>,
+    append to <code>typesProp</code>"; everything downstream rides the processor stream. (Sync-applied writes
+    from other devices bypass <code>repo.tx</code> entirely &mdash; see below.)
   </figcaption>
 </figure>
 
@@ -548,6 +562,50 @@ export const meetingOnAdd = defineSameTxProcessor({
 <span class="comment">// Registered alongside the type contribution:</span>
 sameTxProcessorsFacet.of(meetingOnAdd, {source: 'meeting'})
 typesFacet.of(meetingType, {source: 'meeting'})</code></pre>
+
+<h3>Sync-apply gap</h3>
+
+<p>
+Local <code>repo.tx</code> writes (orchestrated, raw, plan) all flow through the commit pipeline at
+<span class="file">src/data/internals/commitPipeline.ts:263</span>, which is where same-tx processors fire.
+PowerSync-applied writes from another device take a different path entirely: they land in SQLite via the CRUD-apply
+mechanism, never set <code>tx_context.source</code>, and surface to the rest of the app via the
+<code>row_events</code> tail (<span class="file">src/data/internals/rowEventsTail.ts:1-32</span>) which updates the
+cache and fires invalidations but does <i>not</i> run same-tx or post-commit processors.
+</p>
+
+<p>
+So replacing <code>setup</code> with a same-tx processor doesn't <i>introduce</i> a sync-apply gap &mdash;
+<code>setup</code> has exactly the same gap (it only runs inside <code>repo.addType</code>, which is local).
+But it doesn't <i>close</i> it either, which is what the earlier "every write uniformly" framing implied.
+</p>
+
+<p>The honest comparison:</p>
+
+<ul class="tight">
+  <li><b>Local raw <code>tx.update</code> / <code>addBlockTypeToProperties</code> / plan code:</b> <code>setup</code> misses these; same-tx processor catches them. Strictly better.</li>
+  <li><b>Sync-applied writes from another device:</b> both miss. Equal.</li>
+</ul>
+
+<p>
+For behaviors that <i>must</i> run on cross-device type changes (e.g., maintaining a derived side-index for typed
+queries when another client tags a block), the right tool is a separate processor wired to the row_events tail
+&mdash; the same mechanism <code>parseReferences</code> already uses for sync-applied content changes
+(<span class="file">src/plugins/references/referencesProcessor.ts:230</span>). That's out of scope for replacing
+<code>setup</code>, but worth flagging: "type-add behavior" splits into two kinds.
+</p>
+
+<ul class="tight">
+  <li><b>Atomic with the originating write</b> (child templates, computed initial values, rejecting writes that violate type-level constraints) &rarr; same-tx processor. Local-only by construction.</li>
+  <li><b>Eventually-consistent</b> (side-index maintenance, downstream notifications, cleanup) &rarr; post-commit processor on the row_events path. Catches sync apply too.</li>
+</ul>
+
+<p>
+Most current <code>setup</code> use cases (templates, computed initials) are the first kind &mdash; users adding
+types from another device shouldn't get child templates materialized retroactively without their consent. The
+sync-apply gap is the right behavior for that class. The second kind didn't have an analog in <code>setup</code>
+anyway.
+</p>
 
 <h3>What needs to be added</h3>
 
@@ -755,7 +813,7 @@ What's missing is <b>promotion</b> &mdash; the action that turns a Roam page (wh
   <li>Type id is the block id. Display label is <code>block-type:label</code>. The picker shows the label; <code>block:types</code> arrays carry ids.</li>
   <li>Override existing types via <code>block-type:extends</code>; merge at the rebuild step, never destructive.</li>
   <li>Behavioral fields (today: <code>setup</code>) cannot come from data. The merge rule is "kernel only" for those.</li>
-  <li>Replace <code>setup</code> with same-tx processors. Type contributions become pure metadata. Do this before any current kernel use lands.</li>
+  <li>Replace <code>setup</code> with same-tx processors for atomic per-add behavior. Type contributions become pure metadata. Do this before any current kernel use lands. Behaviors that must run on sync-applied type changes from other devices use a separate post-commit processor on the row_events tail (same path <code>parseReferences</code> uses).</li>
   <li>Roam <code>isa</code> adoption rides one primitive (<code>promoteToType</code>) usable from import time or after-the-fact.</li>
 </ul>
 
