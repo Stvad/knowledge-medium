@@ -650,8 +650,7 @@ export const useVisualNavigationTarget = ({
 
   const activate = useCallback(() => {
     setActiveVisualNavigationTarget(targetId)
-    void uiStateBlock.set(focusedVisualTargetKeyProp, targetKey)
-  }, [targetId, targetKey, uiStateBlock])
+  }, [targetId])
 
   return {
     targetId,

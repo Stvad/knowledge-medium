@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { render, cleanup, waitFor } from '@testing-library/react'
+import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { useLayoutEffect, useRef } from 'react'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
@@ -55,10 +55,12 @@ function VisualTargetProbe({
   id,
   top,
   env,
+  blockId = 'shared',
 }: {
   id: string
   top: number
   env: Harness
+  blockId?: string
 }) {
   const ref = useRef<HTMLDivElement | null>(null)
   const uiStateBlock = env.repo.block('panel')
@@ -71,7 +73,7 @@ function VisualTargetProbe({
   }, [top])
 
   const target = useVisualNavigationTarget({
-    blockId: 'shared',
+    blockId,
     uiStateBlock,
     panelId: 'panel',
     surface: 'document',
@@ -105,6 +107,7 @@ beforeEach(async () => {
       },
     })
     await tx.create({id: 'shared', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'shared'})
+    await tx.create({id: 'other', workspaceId: WS, parentId: null, orderKey: 'c0', content: 'other'})
   }, {scope: ChangeScope.UiState})
 })
 
@@ -144,6 +147,32 @@ describe('visual navigation target hook', () => {
     await waitFor(() => {
       expect(view.getByTestId('target')).toHaveAttribute('data-active', 'true')
       expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp)).toBe(stableSharedKey)
+    })
+  })
+
+  it('defers persisted visual key writes until the activated occurrence is focused', async () => {
+    const view = render(
+      <>
+        <VisualTargetProbe id="focused" top={0} env={env}/>
+        <VisualTargetProbe id="other" top={40} env={env} blockId="other"/>
+      </>,
+    )
+
+    await waitFor(() => {
+      expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp)).toBe(stableSharedKey)
+    })
+
+    fireEvent.pointerDown(view.getByTestId('other'))
+
+    expect(env.repo.block('panel').peekProperty(focusedBlockIdProp)).toBe('shared')
+    expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp)).toBe(stableSharedKey)
+
+    await env.repo.block('panel').set(focusedBlockIdProp, 'other')
+
+    await waitFor(() => {
+      expect(view.getByTestId('other')).toHaveAttribute('data-active', 'true')
+      expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp))
+        .toBe('__layout__:panel:document:other')
     })
   })
 })
