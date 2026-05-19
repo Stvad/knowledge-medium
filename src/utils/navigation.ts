@@ -137,9 +137,12 @@ const navigateExplicitPanel = async (
   panelId: string,
   blockId: string,
 ): Promise<void> => {
-  const layoutSessionBlock = await resolveLayoutSessionBlock(repo, workspaceId)
-  await setActivePanel(layoutSessionBlock, panelId)
   await navigateInPanel(repo.block(panelId), blockId)
+  void resolveLayoutSessionBlock(repo, workspaceId)
+    .then(layoutSessionBlock => setActivePanel(layoutSessionBlock, panelId))
+    .catch(error => {
+      console.error('[navigation] Failed to mark panel active after navigation', error)
+    })
 }
 
 export const navigate = (repo: Repo, input: NavigateInput): void => {
