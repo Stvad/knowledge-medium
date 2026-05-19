@@ -392,13 +392,15 @@ export const useSubtree = (block: Block): Block[] => {
   })
 }
 
-/** Reactive typed block query. `workspaceId` defaults to the repo's
- *  active workspace at render time; while absent, the query returns [].
- */
+/** Reactive typed block query. `workspaceId` is required on the
+ *  passed query — pass `repo.activeWorkspaceId` explicitly when you
+ *  really do want the user's currently-active workspace. Requiring the
+ *  field at the type level prevents background flows / import surfaces
+ *  from silently mis-scoping when the user switches workspaces mid-flight
+ *  (PR #47 review). */
 export const useBlockQuery = (query: TypedBlockQuery): BlockData[] => {
   const repo = useRepo()
-  const workspaceId = query.workspaceId ?? repo.activeWorkspaceId ?? ''
-  return useHandle(repo.query.typedBlocks({...query, workspaceId}), {
+  return useHandle(repo.query.typedBlocks(query), {
     selector: data => data ?? EMPTY_BLOCK_DATA_ARRAY,
   }) as BlockData[]
 }

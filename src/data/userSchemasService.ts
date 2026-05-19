@@ -69,6 +69,16 @@ export class UserSchemasService {
       throw new Error('[UserSchemasService] already started')
     }
 
+    // Pin the workspace at start() time. The React provider restarts
+    // this service on workspace switch, so capturing here pairs the
+    // subscription's lifetime to one workspace explicitly — preventing
+    // a mid-flight switch from silently retagging the user-data bucket
+    // with a different workspace's schemas (PR #47 review).
+    const workspaceId = this.repo.activeWorkspaceId
+    if (!workspaceId) {
+      throw new Error('[UserSchemasService] no active workspace at start()')
+    }
+
     const rebuildFromBlocks = (blocks: readonly Block[]) => {
       this.latestBlocks = blocks
       const presets = this.repo.valuePresets
@@ -87,7 +97,7 @@ export class UserSchemasService {
     }
 
     this.subscriptionDisposer = this.repo.subscribeBlocks(
-      {types: [PROPERTY_SCHEMA_TYPE]},
+      {workspaceId, types: [PROPERTY_SCHEMA_TYPE]},
       blocks => {
         // Hydrate to Block facades so we can read codec-decoded
         // properties (block.get) rather than poking at raw

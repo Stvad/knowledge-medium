@@ -1211,11 +1211,9 @@ export class Repo {
     return this.dispatchQuery(name)(args).load() as Promise<R>
   }
 
-  private resolveTypedBlockQuery(query: TypedBlockQuery): ResolvedTypedBlockQuery | null {
-    const workspaceId = query.workspaceId ?? this.activeWorkspaceId
-    if (!workspaceId) return null
+  private resolveTypedBlockQuery(query: TypedBlockQuery): ResolvedTypedBlockQuery {
     return normalizeTypedBlockQuery({
-      workspaceId,
+      workspaceId: query.workspaceId,
       types: query.types,
       where: query.where,
       referencedBy: query.referencedBy,
@@ -1225,29 +1223,58 @@ export class Repo {
     })
   }
 
-  /** Run a typed block query once. `workspaceId` defaults to the
-   *  repo's active workspace; missing workspace returns an empty list. */
+  /** Run a typed block query once. `workspaceId` is required: callers
+   *  that want the user's currently-active workspace use
+   *  `queryActiveWorkspace` instead — making the workspace explicit at
+   *  the call site prevents background flows / import runs from silently
+   *  mis-scoping on a workspace switch (PR #47 review). */
   async queryBlocks(query: TypedBlockQuery): Promise<BlockData[]> {
-    const resolved = this.resolveTypedBlockQuery(query)
-    if (resolved === null) return []
-    return this.query.typedBlocks(resolved).load()
+    return this.query.typedBlocks(this.resolveTypedBlockQuery(query)).load()
   }
 
-  /** Subscribe to a typed block query. `workspaceId` defaults to the
-   *  repo's active workspace at subscription time. */
+  /** Subscribe to a typed block query. `workspaceId` is required: callers
+   *  that want the user's currently-active workspace use
+   *  `subscribeActiveWorkspace` instead. */
   subscribeBlocks(
     query: TypedBlockQuery,
     listener: (rows: BlockData[]) => void,
   ): Unsubscribe {
-    const resolved = this.resolveTypedBlockQuery(query)
-    if (resolved === null) {
-      queueMicrotask(() => listener([]))
-      return () => {}
-    }
-    const handle = this.query.typedBlocks(resolved)
+    const handle = this.query.typedBlocks(this.resolveTypedBlockQuery(query))
     const current = handle.peek()
     if (current !== undefined) queueMicrotask(() => listener(current))
     return handle.subscribe(listener)
+  }
+
+  /** Active-workspace shorthand for `queryBlocks`. Resolves
+   *  `activeWorkspaceId` at call time; if no workspace is active,
+   *  returns an empty list (mirrors the historical fallback behaviour
+   *  for the rare callers that legitimately want "whatever the user is
+   *  looking at right now"). Most non-UI code should NOT use this —
+   *  prefer the bare `queryBlocks` with an explicit workspaceId. */
+  async queryActiveWorkspace(
+    query: Omit<TypedBlockQuery, 'workspaceId'>,
+  ): Promise<BlockData[]> {
+    const workspaceId = this.activeWorkspaceId
+    if (!workspaceId) return []
+    return this.queryBlocks({...query, workspaceId})
+  }
+
+  /** Active-workspace shorthand for `subscribeBlocks`. Same caveat as
+   *  `queryActiveWorkspace`: the workspace is captured at subscription
+   *  time and does NOT re-resolve on later workspace switches. UI
+   *  surfaces that need switch-following behaviour should resubscribe
+   *  themselves when `activeWorkspaceId` changes (e.g. via
+   *  `useActiveWorkspaceId`). */
+  subscribeActiveWorkspace(
+    query: Omit<TypedBlockQuery, 'workspaceId'>,
+    listener: (rows: BlockData[]) => void,
+  ): Unsubscribe {
+    const workspaceId = this.activeWorkspaceId
+    if (!workspaceId) {
+      queueMicrotask(() => listener([]))
+      return () => {}
+    }
+    return this.subscribeBlocks({...query, workspaceId}, listener)
   }
 
   /** Count non-deleted blocks in `workspaceId` whose `properties` map
