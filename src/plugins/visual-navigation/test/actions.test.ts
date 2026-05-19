@@ -245,4 +245,56 @@ describe('visual navigation actions', () => {
 
     unregisterNearby()
   })
+
+  it('repairs focus when a focused backlink occurrence unmounts before its replacement registers', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'panel',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root'),
+          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('backlink'),
+          [focusedVisualTargetKeyProp.name]: focusedVisualTargetKeyProp.codec.encode('old-backlink-target'),
+        },
+      })
+      await tx.create({id: 'backlink', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'backlink'})
+    }, {scope: ChangeScope.UiState})
+
+    const uiStateBlock = env.repo.block('panel')
+    const oldElement = makeElement({top: 0, left: 0})
+    const unregisterOld = registerVisualNavigationTarget({
+      id: 'old-backlink-target',
+      key: 'old-backlink-target',
+      blockId: 'backlink',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'backlink',
+      element: oldElement,
+    })
+    setActiveVisualNavigationTarget('old-backlink-target')
+
+    unregisterOld()
+    expect(getActiveVisualNavigationTarget()).toBeNull()
+
+    const replacementElement = makeElement({top: 4, left: 0})
+    const unregisterReplacement = registerVisualNavigationTarget({
+      id: 'new-backlink-target',
+      key: 'new-backlink-target',
+      blockId: 'backlink',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'backlink',
+      element: replacementElement,
+    })
+
+    await waitFor(() => {
+      expect(getActiveVisualNavigationTarget()?.id).toBe('new-backlink-target')
+      expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('backlink')
+      expect(uiStateBlock.peekProperty(focusedVisualTargetKeyProp)).toBe('new-backlink-target')
+    })
+
+    unregisterReplacement()
+  })
 })

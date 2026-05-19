@@ -67,6 +67,10 @@ interface Score {
 
 const targets = new Map<string, RegisteredVisualNavigationTarget>()
 const subscribers = new Set<() => void>()
+const pendingRecoveryByUiStateBlockId = new Map<string, {
+  removed: RegisteredVisualNavigationTarget
+  removedOrder: number
+}>()
 let activeTargetId: string | null = null
 let registryVersion = 0
 
@@ -98,16 +102,22 @@ export const registerVisualNavigationTarget = (
   const target: RegisteredVisualNavigationTarget = input
   targets.set(target.id, target)
   notify()
+  schedulePendingRecoveryFlush(target.uiStateBlock.id)
 
   return () => {
     const removedOrder = orderedTargets().findIndex(entry => entry.id === target.id)
     targetRect(target)
     targets.delete(target.id)
-    if (activeTargetId === target.id) {
+    if (activeTargetId === target.id || isStoredFocusedTarget(target)) {
       const replacement = pickRecoveryTarget(target, removedOrder)
       activeTargetId = replacement?.id ?? null
       notify()
-      if (replacement) scheduleFocusVisualNavigationTarget(replacement)
+      if (replacement) {
+        pendingRecoveryByUiStateBlockId.delete(target.uiStateBlock.id)
+        scheduleFocusVisualNavigationTarget(replacement)
+      } else {
+        queuePendingRecovery(target, removedOrder)
+      }
       return
     }
     notify()
@@ -125,6 +135,7 @@ export const getActiveVisualNavigationTarget = (): RegisteredVisualNavigationTar
 
 export const __resetVisualNavigationForTesting = (): void => {
   targets.clear()
+  pendingRecoveryByUiStateBlockId.clear()
   activeTargetId = null
   notify()
 }
@@ -341,6 +352,35 @@ const pickRecoveryTarget = (
   }
 
   return best?.target ?? null
+}
+
+const isStoredFocusedTarget = (target: RegisteredVisualNavigationTarget): boolean =>
+  target.uiStateBlock.peekProperty(focusedBlockIdProp) === target.blockId &&
+  target.uiStateBlock.peekProperty(focusedVisualTargetKeyProp) === target.key
+
+const flushPendingRecovery = (uiStateBlockId: string): void => {
+  const pending = pendingRecoveryByUiStateBlockId.get(uiStateBlockId)
+  if (!pending) return
+  const replacement = pickRecoveryTarget(pending.removed, pending.removedOrder)
+  if (!replacement) return
+
+  pendingRecoveryByUiStateBlockId.delete(uiStateBlockId)
+  activeTargetId = replacement.id
+  notify()
+  scheduleFocusVisualNavigationTarget(replacement)
+}
+
+const schedulePendingRecoveryFlush = (uiStateBlockId: string): void => {
+  if (!pendingRecoveryByUiStateBlockId.has(uiStateBlockId)) return
+  setTimeout(() => flushPendingRecovery(uiStateBlockId), 0)
+}
+
+const queuePendingRecovery = (
+  removed: RegisteredVisualNavigationTarget,
+  removedOrder: number,
+): void => {
+  pendingRecoveryByUiStateBlockId.set(removed.uiStateBlock.id, {removed, removedOrder})
+  schedulePendingRecoveryFlush(removed.uiStateBlock.id)
 }
 
 const recoverVisualNavigationTarget = async (
