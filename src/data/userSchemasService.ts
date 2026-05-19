@@ -6,6 +6,7 @@ import {
   ChangeScope,
   type AnyPropertySchema,
   type AnyValuePreset,
+  type Tx,
   type Unsubscribe,
 } from '@/data/api'
 import type { Block } from '@/data/block'
@@ -171,6 +172,63 @@ export class UserSchemasService {
     ]
     this.nameToBlockId.set(schema.name, blockId)
     this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
+  }
+
+  /** Capture the currently-registered user-data schema for `name`,
+   *  along with its source block id. Returns undefined when either the
+   *  schema or its block id is missing (kernel/plugin schemas don't
+   *  live in `contributions` / `nameToBlockId`). Used by
+   *  `withProvisionalSchema` to snapshot prior registrations so a
+   *  rollback can restore them rather than wiping them. */
+  peekContribution(name: string): {contribution: AnyPropertySchema; blockId: string} | undefined {
+    const contribution = this.contributions.find(s => s.name === name)
+    if (!contribution) return undefined
+    const blockId = this.nameToBlockId.get(name)
+    if (!blockId) return undefined
+    return {contribution, blockId}
+  }
+
+  /** Symmetric to `appendUserSchema`: drop a user-data schema from the
+   *  runtime bucket and republish. Used by `withProvisionalSchema` to
+   *  unregister a provisional schema when its tx aborts and no prior
+   *  registration existed for the name. */
+  removeUserSchema(name: string): void {
+    this.contributions = this.contributions.filter(s => s.name !== name)
+    this.nameToBlockId.delete(name)
+    this.repo.setRuntimeContributions(propertySchemasFacet, USER_DATA_SOURCE_ID, this.contributions)
+  }
+
+  /** Register `schema` provisionally, run `body` inside a repo tx, and
+   *  on tx failure either restore the previously-registered schema for
+   *  `schema.name` (if one existed) or drop the provisional registration
+   *  (if none did). The capture-and-restore shape lets callers register
+   *  a user-data schema *before* an in-tx write that depends on it
+   *  (e.g. retagging blocks against a new isa) without permanently
+   *  wiping a legitimate prior registration on retry.
+   *
+   *  Mirrors `addSchema`'s tx convention by default (BlockDefault scope,
+   *  a descriptive label). Callers can override either via `opts`. */
+  async withProvisionalSchema<T>(
+    schema: AnyPropertySchema,
+    blockId: string,
+    body: (tx: Tx) => Promise<T>,
+    opts: {scope?: ChangeScope; description?: string} = {},
+  ): Promise<T> {
+    const prior = this.peekContribution(schema.name)
+    this.appendUserSchema(schema, blockId)
+    try {
+      return await this.repo.tx(body, {
+        scope: opts.scope ?? ChangeScope.BlockDefault,
+        description: opts.description ?? 'withProvisionalSchema',
+      })
+    } catch (err) {
+      if (prior) {
+        this.appendUserSchema(prior.contribution, prior.blockId)
+      } else {
+        this.removeUserSchema(schema.name)
+      }
+      throw err
+    }
   }
 
   /** Create a property-schema block in the workspace's Properties

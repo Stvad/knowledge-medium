@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { createElement, type JSX } from 'react'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
-import { ChangeScope, codecs, definePreset, defineProperty, type AnyValuePreset } from '@/data/api'
+import { ChangeScope, codecs, definePreset, defineProperty, type AnyPropertySchema, type AnyValuePreset } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { kernelDataExtension } from '@/data/kernelDataExtension'
@@ -218,5 +218,76 @@ describe('Repo.setFacetRuntime — runtime contribution survival', () => {
     ]))
     const schema = await addPromise
     expect(env.repo.propertySchemas.get('siteUrl')).toBe(schema)
+  })
+})
+
+describe('UserSchemasService.withProvisionalSchema', () => {
+  const buildSchema = (name: string, defaultValue: string): AnyPropertySchema =>
+    defineProperty<string | undefined>(name, {
+      codec: codecs.optionalString,
+      defaultValue,
+      changeScope: ChangeScope.BlockDefault,
+    })
+
+  // The subscription started in `setup()` queues an initial microtask
+  // that rebuilds contributions from `[]` blocks. Wait for it to fire
+  // before the test seeds any provisional registrations, otherwise the
+  // late tick wipes them and the assertion is checking a stale state.
+  const drainInitialSubscriptionTick = async () => {
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  it('no prior registration + body succeeds → schema registered after; body result returned', async () => {
+    env = await setup()
+    await drainInitialSubscriptionTick()
+    const schema = buildSchema('topic', 'first')
+    const result = await env.service.withProvisionalSchema(schema, 'block-1', async () => 'ok')
+    expect(result).toBe('ok')
+    expect(env.repo.propertySchemas.get('topic')).toBe(schema)
+    expect(env.service.getSchemaBlockId('topic')).toBe('block-1')
+  })
+
+  it('no prior registration + body throws → schema NOT registered after; error rethrown', async () => {
+    env = await setup()
+    await drainInitialSubscriptionTick()
+    const schema = buildSchema('topic', 'first')
+    const boom = new Error('tx failed')
+    await expect(env.service.withProvisionalSchema(schema, 'block-1', async () => {
+      throw boom
+    })).rejects.toBe(boom)
+    expect(env.repo.propertySchemas.get('topic')).toBeUndefined()
+    expect(env.service.getSchemaBlockId('topic')).toBeUndefined()
+  })
+
+  it('prior registration exists + body succeeds → new schema is the live one after', async () => {
+    env = await setup()
+    await drainInitialSubscriptionTick()
+    const prior = buildSchema('topic', 'prior')
+    env.service.appendUserSchema(prior, 'block-prior')
+    expect(env.repo.propertySchemas.get('topic')).toBe(prior)
+
+    const next = buildSchema('topic', 'next')
+    const result = await env.service.withProvisionalSchema(next, 'block-next', async () => 42)
+    expect(result).toBe(42)
+    expect(env.repo.propertySchemas.get('topic')).toBe(next)
+    expect(env.service.getSchemaBlockId('topic')).toBe('block-next')
+  })
+
+  it('prior registration exists + body throws → prior schema is restored, not removed', async () => {
+    env = await setup()
+    await drainInitialSubscriptionTick()
+    const prior = buildSchema('topic', 'prior')
+    env.service.appendUserSchema(prior, 'block-prior')
+    expect(env.repo.propertySchemas.get('topic')).toBe(prior)
+
+    const next = buildSchema('topic', 'next')
+    const boom = new Error('tx failed')
+    await expect(env.service.withProvisionalSchema(next, 'block-next', async () => {
+      throw boom
+    })).rejects.toBe(boom)
+    // Key invariant: rollback restores the prior contribution rather
+    // than calling removeUserSchema unconditionally.
+    expect(env.repo.propertySchemas.get('topic')).toBe(prior)
+    expect(env.service.getSchemaBlockId('topic')).toBe('block-prior')
   })
 })
