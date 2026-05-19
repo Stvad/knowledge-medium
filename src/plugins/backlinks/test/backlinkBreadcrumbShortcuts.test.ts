@@ -28,32 +28,17 @@ describe('backlink breadcrumb shortcuts', () => {
     expect(findNextCollapsedBreadcrumb([root, section, immediate])).toBe(immediate)
   })
 
-  it('opens the next collapsed breadcrumb and shows it', async () => {
+  it('opens the next collapsed breadcrumb and expands it', async () => {
     const root = fakeBlock('root', true)
     const immediate = fakeBlock('immediate', true)
-    const showBlock = vi.fn()
+    const setShownBlockId = vi.fn()
 
-    await expect(openNextCollapsedBreadcrumb([root, immediate], showBlock))
+    await expect(openNextCollapsedBreadcrumb([root, immediate], setShownBlockId))
       .resolves.toBe(true)
 
     expect(immediate.set).toHaveBeenCalledExactlyOnceWith(isCollapsedProp, false)
     expect(root.set).not.toHaveBeenCalled()
-    expect(showBlock).toHaveBeenCalledExactlyOnceWith('immediate')
-  })
-
-  it('awaits the promoted breadcrumb show callback', async () => {
-    const calls: string[] = []
-    const immediate = fakeBlock('immediate', true)
-    immediate.set = vi.fn(async () => {
-      calls.push('expand')
-    }) as never
-    const showBlock = vi.fn(async (blockId: string) => {
-      calls.push(`show:${blockId}`)
-    })
-
-    await openNextCollapsedBreadcrumb([immediate], showBlock)
-
-    expect(calls).toEqual(['expand', 'show:immediate'])
+    expect(setShownBlockId).toHaveBeenCalledExactlyOnceWith('immediate')
   })
 
   it('no-ops when every breadcrumb is already expanded', async () => {

@@ -72,13 +72,13 @@ export const findNextCollapsedBreadcrumb = (
 
 export const openNextCollapsedBreadcrumb = async (
   parents: readonly Block[],
-  showBlock: (blockId: string) => void | Promise<void>,
+  setShownBlockId: (blockId: string) => void,
 ): Promise<boolean> => {
   const target = findNextCollapsedBreadcrumb(parents)
   if (!target) return false
 
   await target.set(isCollapsedProp, false)
-  await showBlock(target.id)
+  setShownBlockId(target.id)
   return true
 }
 
