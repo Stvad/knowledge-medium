@@ -25,9 +25,9 @@ export function AccountHeaderItem() {
       <a
         href={buildAppHash(workspaceId, userBlock.id)}
         onClick={handleUserLinkClick}
-        className="block min-w-0 max-w-[7rem] truncate rounded-sm px-0.5 py-1 text-muted-foreground no-underline transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:max-w-none"
+        className="inline-flex h-7 min-w-0 max-w-[7rem] items-center rounded-sm px-0.5 leading-none text-muted-foreground no-underline transition-colors hover:text-foreground hover:no-underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring sm:h-8 sm:max-w-none"
       >
-        {displayName}
+        <span className="min-w-0 truncate">{displayName}</span>
       </a>
       <button
         type="button"

@@ -33,6 +33,7 @@ describe('AccountHeaderItem', () => {
 
     const link = screen.getByRole('link', {name: 'Alice'})
     expect(link).toHaveAttribute('href', '#workspace-1/user-block')
+    expect(link).toHaveClass('inline-flex', 'h-7', 'items-center', 'no-underline', 'hover:no-underline')
 
     fireEvent.click(link)
     expect(mocks.handleUserLinkClick).toHaveBeenCalledOnce()
