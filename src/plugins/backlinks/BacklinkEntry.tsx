@@ -8,6 +8,12 @@ import { LazyViewportMount } from '@/components/util/LazyViewportMount.tsx'
 import type { LazyViewportPlaceholderProps } from '@/components/util/LazyViewportMount.tsx'
 import { useParents } from '@/hooks/block.ts'
 import { useRepo } from '@/context/repo.tsx'
+import {
+  backlinkEntryShortcutContextOverrides,
+  findNextCollapsedBreadcrumb,
+  openNextCollapsedBreadcrumb,
+  type BacklinkEntryShortcutController,
+} from './backlinkBreadcrumbShortcuts.ts'
 
 const NESTED_OVERRIDES = {layoutBoundary: false, isNestedSurface: true, isBacklink: true}
 const BREADCRUMB_OVERRIDES = {...NESTED_OVERRIDES, isBreadcrumb: true}
@@ -44,38 +50,74 @@ const BacklinkBreadcrumbList = ({parents, workspaceId, onSelect}: BreadcrumbList
 // Two render paths so we can avoid an `useParents` query per visible
 // entry in the *initial* state: when the parent component has already
 // prefetched ancestors via `useManyParents`, it passes them in as
-// `initialParents` and `BacklinkInitialBreadcrumbs` renders without
+// `initialParents` and `BacklinkItemContent` renders without
 // firing its own ancestor handle. After the user clicks a breadcrumb
 // the shown block changes, the conditional flips, and
-// `BacklinkDynamicBreadcrumbs` (which DOES use `useParents`) takes
+// `BacklinkDynamicContent` (which DOES use `useParents`) takes
 // over for the new id. Conditional rendering is what gives us the
 // query skip — React unmounts whichever branch we're not on.
 
-const BacklinkInitialBreadcrumbs = ({
+const BacklinkItemContent = ({
+  shownBlock,
   parents,
   onSelect,
+  onShowBlock,
 }: {
+  shownBlock: Block
   parents: readonly Block[]
   onSelect: (parent: Block) => void
+  onShowBlock: (blockId: string) => void
 }) => {
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
-  if (!workspaceId) return null
-  return <BacklinkBreadcrumbList parents={parents} workspaceId={workspaceId} onSelect={onSelect}/>
+
+  const expandNextCollapsedBreadcrumb = useCallback(
+    () => openNextCollapsedBreadcrumb(parents, onShowBlock),
+    [parents, onShowBlock],
+  )
+  const hasCollapsedBreadcrumb = useCallback(
+    () => findNextCollapsedBreadcrumb(parents) !== null,
+    [parents],
+  )
+  const shortcutController = useMemo<BacklinkEntryShortcutController>(() => ({
+    expandNextCollapsedBreadcrumb,
+    hasCollapsedBreadcrumb,
+  }), [expandNextCollapsedBreadcrumb, hasCollapsedBreadcrumb])
+  const bodyOverrides = useMemo(() => ({
+    ...NESTED_OVERRIDES,
+    ...backlinkEntryShortcutContextOverrides(shortcutController),
+  }), [shortcutController])
+
+  return (
+    <>
+      {workspaceId && (
+        <BacklinkBreadcrumbList parents={parents} workspaceId={workspaceId} onSelect={onSelect}/>
+      )}
+      <NestedBlockContextProvider overrides={bodyOverrides}>
+        <BlockComponent blockId={shownBlock.id}/>
+      </NestedBlockContextProvider>
+    </>
+  )
 }
 
-const BacklinkDynamicBreadcrumbs = ({
+const BacklinkDynamicContent = ({
   shownBlock,
   onSelect,
+  onShowBlock,
 }: {
   shownBlock: Block
   onSelect: (parent: Block) => void
+  onShowBlock: (blockId: string) => void
 }) => {
-  const repo = useRepo()
-  const workspaceId = repo.activeWorkspaceId
   const parents = useParents(shownBlock)
-  if (!workspaceId) return null
-  return <BacklinkBreadcrumbList parents={parents} workspaceId={workspaceId} onSelect={onSelect}/>
+  return (
+    <BacklinkItemContent
+      shownBlock={shownBlock}
+      parents={parents}
+      onSelect={onSelect}
+      onShowBlock={onShowBlock}
+    />
+  )
 }
 
 const BacklinkItem = ({
@@ -93,15 +135,28 @@ const BacklinkItem = ({
   const handleSelect = useCallback((parent: Block) => {
     setShownBlockId(parent.id)
   }, [])
+  const handleShowBlock = useCallback((blockId: string) => {
+    setShownBlockId(blockId)
+  }, [])
 
   return (
     <div className="border-l-2 border-muted pl-3 py-2">
       {isInitial
-        ? <BacklinkInitialBreadcrumbs parents={initialParents} onSelect={handleSelect}/>
-        : <BacklinkDynamicBreadcrumbs shownBlock={shownBlock} onSelect={handleSelect}/>}
-      <NestedBlockContextProvider overrides={NESTED_OVERRIDES}>
-        <BlockComponent blockId={shownBlockId}/>
-      </NestedBlockContextProvider>
+        ? (
+            <BacklinkItemContent
+              shownBlock={shownBlock}
+              parents={initialParents}
+              onSelect={handleSelect}
+              onShowBlock={handleShowBlock}
+            />
+          )
+        : (
+            <BacklinkDynamicContent
+              shownBlock={shownBlock}
+              onSelect={handleSelect}
+              onShowBlock={handleShowBlock}
+            />
+          )}
     </div>
   )
 }
