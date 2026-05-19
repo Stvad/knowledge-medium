@@ -15,7 +15,10 @@ describe('updateIndicatorPlugin', () => {
   it('contributes its load-time effect', () => {
     const runtime = resolveFacetRuntimeSync(updateIndicatorPlugin)
 
-    expect(runtime.read(appEffectsFacet)).toEqual([updateIndicatorLoadTimeEffect])
+    // The plugin also contributes a `pluginPrefsExtension`-generated
+    // eager-bootstrap effect alongside the load-time effect; assert only
+    // that the load-time effect is present, not exact set equality.
+    expect(runtime.read(appEffectsFacet)).toContain(updateIndicatorLoadTimeEffect)
   })
 
   it('contributes its property schemas', () => {

@@ -5,7 +5,8 @@ import {
   type HeaderItemContribution,
   type AppMountContribution,
 } from '@/extensions/core.ts'
-import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
+import { propertySchemasFacet } from '@/data/facets.ts'
+import { pluginUIStateExtension } from '@/data/pluginStateExtensions.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Search } from 'lucide-react'
@@ -48,7 +49,7 @@ export const quickFindHeaderItem: HeaderItemContribution = {
 export const quickFindPlugin: AppExtension = [
   appMountsFacet.of(quickFindMount, {source: 'quick-find'}),
   propertySchemasFacet.of(recentBlockIdsProp, {source: 'quick-find'}),
-  typesFacet.of(quickFindUIStateType, {source: 'quick-find'}),
+  ...pluginUIStateExtension(quickFindUIStateType, 'quick-find'),
   actionsFacet.of(quickFindAction, {source: 'quick-find'}),
   headerItemsFacet.of(quickFindHeaderItem, {
     source: 'quick-find',
