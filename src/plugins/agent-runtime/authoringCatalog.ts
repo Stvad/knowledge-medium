@@ -98,7 +98,7 @@ const storageGuide: AuthoringStorageGuide = {
     {
       id: 'user-prefs-config',
       when: 'Per-user plugin settings, defaults, and lightweight sync checkpoints.',
-      use: 'Import getUserPrefsBlock and define typed properties. Read/write them on the user prefs block with ChangeScope.UserPrefs.',
+      use: 'Define a TypeContribution for the plugin and its UserPrefs-scoped properties, register it via typesFacet, then read/write through getPluginPrefsBlock (or the matching hooks). Each plugin gets its own sub-block under user-prefs, so unrelated plugins\' settings are isolated from each other.',
       modules: ['@/extensions/api.js'],
     },
     {

@@ -8,9 +8,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { useUserPrefsProperty } from '@/data/globalState.ts'
+import { usePluginPrefsProperty } from '@/data/globalState.ts'
 import type { DialogContextProps } from '@/utils/dialogs.ts'
 import {
+  blockTaggingPrefsType,
   blockTagsConfigProp,
   isValidTagName,
   normalizeBlockTagsConfig,
@@ -30,7 +31,7 @@ export const AddTagDialog = ({
   resolve,
   cancel,
 }: DialogContextProps<AddTagDialogResult>) => {
-  const [storedTags] = useUserPrefsProperty(blockTagsConfigProp)
+  const [storedTags] = usePluginPrefsProperty(blockTaggingPrefsType, blockTagsConfigProp)
   const tags = useMemo(() => normalizeBlockTagsConfig(storedTags), [storedTags])
   const [query, setQuery] = useState('')
   const filteredTags = useMemo(() => filterTags(tags, query), [tags, query])

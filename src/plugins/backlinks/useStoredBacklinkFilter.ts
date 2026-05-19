@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react'
 import { ChangeScope } from '@/data/api'
 import type { Block } from '@/data/block'
-import { useUserPrefsBlock } from '@/data/globalState.ts'
+import { usePluginPrefsBlock } from '@/data/globalState.ts'
 import { useHandle, usePropertyValue } from '@/hooks/block.ts'
 import {
   mergeBacklinksFilters,
@@ -11,6 +11,7 @@ import {
 } from './query.ts'
 import { backlinksFilterProp } from './filterProperty.ts'
 import {
+  backlinksPrefsType,
   dailyNoteBacklinksDefaultsProp,
   defaultBacklinksFilterForBlock,
 } from './dailyNoteDefaults.ts'
@@ -53,7 +54,7 @@ export const useBacklinkFilterState = (
   setFilter: (filter: BacklinksFilter) => void
 } => {
   const [filter, setFilter] = useStoredBacklinkFilter(block)
-  const defaultFilterConfigBlock = useUserPrefsBlock()
+  const defaultFilterConfigBlock = usePluginPrefsBlock(backlinksPrefsType)
   const [dailyNoteDefaults] = usePropertyValue(
     defaultFilterConfigBlock,
     dailyNoteBacklinksDefaultsProp,

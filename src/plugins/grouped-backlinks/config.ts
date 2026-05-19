@@ -1,5 +1,6 @@
 import {
   ChangeScope,
+  defineBlockType,
   defineProperty,
   type Codec,
 } from '@/data/api'
@@ -142,3 +143,12 @@ export const groupedBacklinksOverridesProp = defineProperty<GroupedBacklinksOver
     changeScope: ChangeScope.BlockDefault,
   },
 )
+
+/** Per-plugin prefs sub-block for grouped-backlinks defaults. The
+ *  defaults live here (UserPrefs scope); per-block overrides keep using
+ *  `groupedBacklinksOverridesProp` on the target block itself. */
+export const groupedBacklinksPrefsType = defineBlockType({
+  id: 'grouped-backlinks-prefs',
+  label: 'Grouped backlinks preferences',
+  properties: [groupedBacklinksDefaultsProp],
+})

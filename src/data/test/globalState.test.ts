@@ -35,12 +35,14 @@ import {
 import {
   USER_PREFS_TYPE,
   getLayoutSessionBlock,
+  getPluginPrefsBlock,
   getSelectionStateSnapshot,
   getUIStateBlock,
   getUserBlock,
   getUserPrefsBlock,
   resetBlockSelection,
 } from '@/data/globalState'
+import { defineBlockType } from '@/data/api'
 
 const WS = 'ws-1'
 const USER: User = {id: 'user-1', name: 'Alice'}
@@ -162,6 +164,47 @@ describe('getUserPrefsBlock', () => {
     } finally {
       await h.cleanup()
     }
+  })
+})
+
+describe('getPluginPrefsBlock', () => {
+  const examplePrefsType = defineBlockType({
+    id: 'example-plugin-prefs',
+    label: 'Example plugin prefs',
+  })
+
+  it('ensures a sub-block under user-prefs keyed by the type id', async () => {
+    const userPrefs = await getUserPrefsBlock(env.repo, WS, USER)
+    const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+
+    expect(pluginPrefs.peek()?.parentId).toBe(userPrefs.id)
+    expect(pluginPrefs.peek()?.content).toBe('example-plugin-prefs')
+    expect(pluginPrefs.peekProperty(typesProp)).toEqual(['example-plugin-prefs'])
+  })
+
+  it('is idempotent — same type resolves to the same block', async () => {
+    const a = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    const b = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    expect(a).toBe(b)
+  })
+
+  it('isolates distinct plugin prefs into distinct sub-blocks', async () => {
+    const otherType = defineBlockType({id: 'other-plugin-prefs'})
+    const a = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    const b = await getPluginPrefsBlock(env.repo, WS, USER, otherType)
+
+    expect(a.id).not.toBe(b.id)
+    expect(a.peek()?.parentId).toBe(b.peek()?.parentId)
+    expect(a.peekProperty(typesProp)).toEqual(['example-plugin-prefs'])
+    expect(b.peekProperty(typesProp)).toEqual(['other-plugin-prefs'])
+  })
+
+  it('routes its bootstrap write through ChangeScope.UserPrefs', async () => {
+    await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
+    const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
+      'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',
+    )
+    expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user', workspace_id: WS})
   })
 })
 

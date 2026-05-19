@@ -5,11 +5,12 @@ import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
-import { getUserPrefsBlock } from '@/data/globalState'
+import { getPluginPrefsBlock } from '@/data/globalState'
 import {
   currentLoadTimeProp,
   previousLoadTimeProp,
   recordUpdateIndicatorLoadTime,
+  updateIndicatorPrefsType,
 } from '../loadTimes'
 
 const WS = 'ws-1'
@@ -49,14 +50,14 @@ describe('recordUpdateIndicatorLoadTime', () => {
     const now = vi.spyOn(Date, 'now').mockReturnValue(100)
     const firstRepo = makeRepo(h)
     await recordUpdateIndicatorLoadTime(firstRepo, WS)
-    const firstPrefs = await getUserPrefsBlock(firstRepo, WS, USER)
+    const firstPrefs = await getPluginPrefsBlock(firstRepo, WS, USER, updateIndicatorPrefsType)
     expect(firstPrefs.peekProperty(previousLoadTimeProp)).toBe(0)
     expect(firstPrefs.peekProperty(currentLoadTimeProp)).toBe(100)
 
     now.mockReturnValue(200)
     const secondRepo = makeRepo(h)
     await recordUpdateIndicatorLoadTime(secondRepo, WS)
-    const secondPrefs = await getUserPrefsBlock(secondRepo, WS, USER)
+    const secondPrefs = await getPluginPrefsBlock(secondRepo, WS, USER, updateIndicatorPrefsType)
     expect(secondPrefs.peekProperty(previousLoadTimeProp)).toBe(100)
     expect(secondPrefs.peekProperty(currentLoadTimeProp)).toBe(200)
 

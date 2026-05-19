@@ -14,7 +14,7 @@ const savedViewRef = vi.hoisted(() => ({
 }))
 
 vi.mock('@/data/globalState.ts', () => ({
-  useUserPrefsProperty: () => [savedViewRef.current, vi.fn()],
+  usePluginPrefsProperty: () => [savedViewRef.current, vi.fn()],
 }))
 
 afterEach(() => {

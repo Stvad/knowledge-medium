@@ -1,5 +1,6 @@
 import {
   ChangeScope,
+  defineBlockType,
   defineProperty,
   type BlockData,
 } from '@/data/api'
@@ -26,6 +27,15 @@ export const dailyNoteBacklinksDefaultsProp = defineProperty<StoredBacklinksFilt
     changeScope: ChangeScope.UserPrefs,
   },
 )
+
+/** Per-plugin prefs sub-block for the backlinks plugin. Currently holds
+ *  only the daily-note backlinks default filter; per-block filters live
+ *  on the target block itself (`backlinksFilterProp`, BlockDefault scope). */
+export const backlinksPrefsType = defineBlockType({
+  id: 'backlinks-prefs',
+  label: 'Backlinks preferences',
+  properties: [dailyNoteBacklinksDefaultsProp],
+})
 
 export const isDailyNoteBlockData = (
   data: Pick<BlockData, 'properties'> | null | undefined,

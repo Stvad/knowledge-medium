@@ -9,7 +9,7 @@ import {
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
 import { useRepo } from '@/context/repo.tsx'
-import { useLayoutSessionBlock, useUserPrefsBlock, useUserPrefsProperty } from '@/data/globalState.ts'
+import { useLayoutSessionBlock, usePluginPrefsBlock, usePluginPrefsProperty } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
 import { activePanelIdProp, aliasesProp } from '@/data/properties.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
@@ -25,7 +25,7 @@ import {
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.ts'
 import { toggleQuickFindEvent } from './events.ts'
-import { pushRecentBlockId, recentBlockIdsProp } from './recents.ts'
+import { pushRecentBlockId, quickFindPrefsType, recentBlockIdsProp } from './recents.ts'
 import {
   nextQuickFindSelection,
   quickFindAliasValue,
@@ -53,12 +53,12 @@ const truncate = (text: string, max = 80) =>
 
 export function QuickFind() {
   const repo = useRepo()
-  const userPrefsBlock = useUserPrefsBlock()
+  const quickFindPrefsBlock = usePluginPrefsBlock(quickFindPrefsType)
   const navigate = useNavigate()
   const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
   const layoutSessionBlock = useLayoutSessionBlock()
   const [activePanelId] = usePropertyValue(layoutSessionBlock, activePanelIdProp)
-  const [recentIds] = useUserPrefsProperty(recentBlockIdsProp)
+  const [recentIds] = usePluginPrefsProperty(quickFindPrefsType, recentBlockIdsProp)
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -157,13 +157,13 @@ export function QuickFind() {
 
   const jumpToBlock = (blockId: string) => {
     if (!repo.activeWorkspaceId) return
-    pushRecentBlockId(userPrefsBlock, blockId)
+    pushRecentBlockId(quickFindPrefsBlock, blockId)
     navigateFromGlobalCommand({blockId})
     setOpen(false)
   }
 
   const openInStackedPanel = (blockId: string) => {
-    pushRecentBlockId(userPrefsBlock, blockId)
+    pushRecentBlockId(quickFindPrefsBlock, blockId)
     navigate({blockId, target: 'sidebar-stack', sourcePanelId: activePanelId})
     setOpen(false)
   }

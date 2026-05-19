@@ -4,12 +4,13 @@ import {
 } from '@/extensions/blockInteraction.ts'
 import { appEffectsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
-import { propertySchemasFacet } from '@/data/facets.ts'
+import { propertySchemasFacet, typesFacet } from '@/data/facets.ts'
 import { UpdateIndicator } from './UpdateIndicator.tsx'
 import {
   currentLoadTimeProp,
   previousLoadTimeProp,
   updateIndicatorLoadTimeEffect,
+  updateIndicatorPrefsType,
 } from './loadTimes.ts'
 
 // Wrap the block's content in a positioned ancestor and overlay the
@@ -33,5 +34,6 @@ export const updateIndicatorPlugin: AppExtension = [
   appEffectsFacet.of(updateIndicatorLoadTimeEffect, {source: 'update-indicator'}),
   propertySchemasFacet.of(previousLoadTimeProp, {source: 'update-indicator'}),
   propertySchemasFacet.of(currentLoadTimeProp, {source: 'update-indicator'}),
+  typesFacet.of(updateIndicatorPrefsType, {source: 'update-indicator'}),
   blockContentDecoratorsFacet.of(updateIndicatorDecorator, {source: 'update-indicator'}),
 ]

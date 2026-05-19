@@ -4,25 +4,17 @@ import { describe, expect, it } from 'vitest'
 import { resolveFacetRuntimeSync } from '@/extensions/facet.ts'
 import { typesFacet } from '@/data/facets.ts'
 import { USER_PREFS_TYPE } from '@/data/userPrefs.ts'
-import { dailyNoteBacklinksDefaultsProp } from '@/plugins/backlinks/dailyNoteDefaults.ts'
-import { backlinksViewProp } from '@/plugins/backlinks-view/prop.ts'
-import { blockTagsConfigProp } from '@/plugins/block-tagging/config.ts'
-import { groupedBacklinksDefaultsProp } from '@/plugins/grouped-backlinks/config.ts'
-import { videoNotesPaneRatioProp } from '@/plugins/video-player/view.ts'
 import { userPrefsDataExtension, userPrefsType } from '../dataExtension.ts'
 
 describe('userPrefsDataExtension', () => {
-  it('contributes the user-prefs type with user-facing preference rows', () => {
+  it('registers the root user-prefs type as a labelled container with no plugin-owned properties', () => {
+    // Plugin preferences each live on their own typed sub-block under the
+    // root user-prefs block, so the root carries only the type marker —
+    // no `properties` here. See `getPluginPrefsBlock` in globalState.ts.
     const runtime = resolveFacetRuntimeSync(userPrefsDataExtension)
     const types = runtime.read(typesFacet)
 
     expect(types.get(USER_PREFS_TYPE)).toBe(userPrefsType)
-    expect(userPrefsType.properties).toEqual([
-      backlinksViewProp,
-      dailyNoteBacklinksDefaultsProp,
-      blockTagsConfigProp,
-      groupedBacklinksDefaultsProp,
-      videoNotesPaneRatioProp,
-    ])
+    expect(userPrefsType.properties).toBeUndefined()
   })
 })

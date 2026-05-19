@@ -1,6 +1,8 @@
 import { blockChildrenFooterFacet } from '@/extensions/blockInteraction.ts'
+import { typesFacet } from '@/data/facets.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { backlinksViewFooterContribution } from './BacklinksViewSection.tsx'
+import { backlinksViewPrefsType } from './prop.ts'
 
 // Public extension points (`backlinksViewFacet`, `backlinksViewProp`)
 // live in `./facet.ts` / `./prop.ts` and are imported directly by
@@ -8,4 +10,5 @@ import { backlinksViewFooterContribution } from './BacklinksViewSection.tsx'
 // minimal and avoids forcing a JSX file via re-exports.
 export const backlinksViewPlugin: AppExtension = [
   blockChildrenFooterFacet.of(backlinksViewFooterContribution, {source: 'backlinks-view'}),
+  typesFacet.of(backlinksViewPrefsType, {source: 'backlinks-view'}),
 ]

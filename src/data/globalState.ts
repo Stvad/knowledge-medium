@@ -29,6 +29,7 @@ import { v5 as uuidv5 } from 'uuid'
 import {
   ChangeScope,
   type PropertySchema,
+  type TypeContribution,
   type User,
 } from '@/data/api'
 import { Block } from './block'
@@ -221,6 +222,34 @@ export const getUserPrefsBlock = memoize(
   (repo, workspaceId, user) => `${repoIdentity(repo)}:${workspaceId}:${user.id}:__user_prefs__`,
 )
 
+/** Per-plugin preferences sub-block under the root user-prefs block.
+ *  Each plugin gets its own child keyed by the type contribution's `id`,
+ *  carrying that id as its block type marker. Splitting preferences across
+ *  per-plugin rows (rather than packing them all into the root block's
+ *  `properties_json`) bounds the blast radius of any single PATCH upload
+ *  to one plugin's settings — the row-level UPDATE trigger writes the full
+ *  `properties_json` column on any property change, so unrelated plugins'
+ *  values are no longer at risk of being clobbered by a peer's edit. */
+export const getPluginPrefsBlock = memoize(
+  async (
+    repo: Repo,
+    workspaceId: string,
+    user: User,
+    type: TypeContribution,
+  ): Promise<Block> => {
+    const userPrefsBlock = await getUserPrefsBlock(repo, workspaceId, user)
+    return ensureStateChild(
+      repo,
+      userPrefsBlock,
+      type.id,
+      ChangeScope.UserPrefs,
+      addBlockTypeToProperties({}, type.id),
+    )
+  },
+  (repo, workspaceId, user, type) =>
+    `${repoIdentity(repo)}:${workspaceId}:${user.id}:plugin-prefs:${type.id}`,
+)
+
 /** Resolve the UI-state block scoped to the current panel context.
  *  In a panel context (`context.panelId`), returns the panel's own
  *  block — per-panel UI state lives directly on it. Outside a panel,
@@ -289,14 +318,6 @@ export function useUserBlock(): Block {
   return use(getUserBlock(repo, workspaceId, user))
 }
 
-export function useUserPrefsBlock(): Block {
-  const repo = useRepo()
-  const user = useUser()
-  const workspaceId = requireWorkspaceId(repo, 'useUserPrefsBlock')
-
-  return use(getUserPrefsBlock(repo, workspaceId, user))
-}
-
 /** Hook to access and modify a UI-state property on the active UI-state
  *  block. The property's schema dictates codec + default; writes are
  *  scoped via the schema's `changeScope` (typically `UiState`). */
@@ -314,18 +335,28 @@ export function useRootUIStateProperty<T>(
   return usePropertyValue(block, requireSchemaScope(schema, ChangeScope.UiState, 'useRootUIStateProperty'))
 }
 
-export const useUserPrefsProperty = <T>(
+/** Resolve the per-plugin user-prefs sub-block for a given type
+ *  contribution. The block is bootstrapped on first access via
+ *  `getPluginPrefsBlock`; subsequent calls return the same Block facade. */
+export function usePluginPrefsBlock(type: TypeContribution): Block {
+  const repo = useRepo()
+  const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'usePluginPrefsBlock')
+
+  return use(getPluginPrefsBlock(repo, workspaceId, user, type))
+}
+
+/** Read/write a user-pref property on the plugin's own sub-block. The
+ *  schema must declare `changeScope: ChangeScope.UserPrefs` so reads and
+ *  writes route through the synced (and read-only-aware) pref pipeline. */
+export const usePluginPrefsProperty = <T>(
+  type: TypeContribution,
   schema: PropertySchema<T>,
 ): [T, (value: T) => void] =>
-  usePropertyValue(useUserPrefsBlock(), requireSchemaScope(schema, ChangeScope.UserPrefs, 'useUserPrefsProperty'))
-
-/** @deprecated Prefer `useUserPrefsProperty` for synced preferences or
- *  `useRootUIStateProperty` for local app-shell state. */
-export function useUserProperty<T>(
-  schema: PropertySchema<T>,
-): [T, (value: T) => void] {
-  return useUserPrefsProperty(schema)
-}
+  usePropertyValue(
+    usePluginPrefsBlock(type),
+    requireSchemaScope(schema, ChangeScope.UserPrefs, 'usePluginPrefsProperty'),
+  )
 
 /** Sugar for the global editing flag — `[isEditing, setIsEditing]`. */
 export const useIsEditing = (): [boolean, (value: boolean) => void] =>

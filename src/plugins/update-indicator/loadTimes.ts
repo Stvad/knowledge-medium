@@ -1,7 +1,8 @@
-import { getUserPrefsBlock } from '@/data/globalState.ts'
+import { getPluginPrefsBlock } from '@/data/globalState.ts'
 import {
   ChangeScope,
   codecs,
+  defineBlockType,
   defineProperty,
 } from '@/data/api'
 import type { Repo } from '@/data/repo'
@@ -20,6 +21,15 @@ export const currentLoadTimeProp = defineProperty<number | undefined>('currentLo
   changeScope: ChangeScope.UserPrefs,
 })
 
+/** Per-plugin prefs sub-block for the update-indicator plugin. Records
+ *  the previous/current bundle-load timestamps so the indicator can tell
+ *  the user "a new build is live since you last loaded." */
+export const updateIndicatorPrefsType = defineBlockType({
+  id: 'update-indicator-prefs',
+  label: 'Update indicator load times',
+  properties: [previousLoadTimeProp, currentLoadTimeProp],
+})
+
 const recordedLoadTimes = new Map<string, Promise<void>>()
 
 export const recordUpdateIndicatorLoadTime = async (
@@ -31,7 +41,7 @@ export const recordUpdateIndicatorLoadTime = async (
   if (existing) return existing
 
   const record = (async () => {
-    const prefsBlock = await getUserPrefsBlock(repo, workspaceId, repo.user)
+    const prefsBlock = await getPluginPrefsBlock(repo, workspaceId, repo.user, updateIndicatorPrefsType)
     const previous = prefsBlock.peekProperty(currentLoadTimeProp) ?? 0
 
     await repo.tx(async tx => {

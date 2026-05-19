@@ -5,9 +5,9 @@ import type {
   BlockResolveContext,
 } from '@/extensions/blockInteraction.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
-import { useUserPrefsProperty } from '@/data/globalState.ts'
+import { usePluginPrefsProperty } from '@/data/globalState.ts'
 import { backlinksViewFacet } from './facet.ts'
-import { backlinksViewProp } from './prop.ts'
+import { backlinksViewPrefsType, backlinksViewProp } from './prop.ts'
 
 interface Props extends BlockRendererProps {
   /** Captured at contribution time so we can resolve variants without
@@ -36,7 +36,7 @@ export function BacklinksViewSection({block, resolveContext}: Props) {
     [runtime, resolveContext],
   )
 
-  const [savedId, setSavedId] = useUserPrefsProperty(backlinksViewProp)
+  const [savedId, setSavedId] = usePluginPrefsProperty(backlinksViewPrefsType, backlinksViewProp)
   const selected = variants.find(v => v.id === savedId) ?? variants[0]
 
   if (!selected) return null

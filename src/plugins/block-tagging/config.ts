@@ -1,5 +1,6 @@
 import {
   ChangeScope,
+  defineBlockType,
   defineProperty,
   type Codec,
 } from '@/data/api'
@@ -53,3 +54,11 @@ export const blockTagsConfigProp = defineProperty<string[]>(
     changeScope: ChangeScope.UserPrefs,
   },
 )
+
+/** Per-plugin prefs sub-block for the block-tagging plugin. Holds
+ *  `blockTagsConfigProp` (the user's curated tag list). */
+export const blockTaggingPrefsType = defineBlockType({
+  id: 'block-tagging-prefs',
+  label: 'Block tagging preferences',
+  properties: [blockTagsConfigProp],
+})

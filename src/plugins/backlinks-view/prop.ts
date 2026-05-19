@@ -1,4 +1,4 @@
-import { ChangeScope, codecs, defineProperty } from '@/data/api'
+import { ChangeScope, codecs, defineBlockType, defineProperty } from '@/data/api'
 
 /** Default variant id when no contributor matches the user's saved
  *  preference (or before any pref has been written). The
@@ -18,4 +18,14 @@ export const backlinksViewProp = defineProperty<string>('backlinks:viewId', {
   codec: codecs.string,
   defaultValue: DEFAULT_BACKLINKS_VIEW_ID,
   changeScope: ChangeScope.UserPrefs,
+})
+
+/** Per-plugin prefs sub-block under the user-prefs root. Holds
+ *  `backlinksViewProp` (and any future backlinks-view preference) so that
+ *  unrelated plugins' settings can't be clobbered by a PATCH on this
+ *  block's `properties_json`. */
+export const backlinksViewPrefsType = defineBlockType({
+  id: 'backlinks-view-prefs',
+  label: 'Backlinks view preferences',
+  properties: [backlinksViewProp],
 })
