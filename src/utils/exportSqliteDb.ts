@@ -23,8 +23,7 @@ export async function exportRawSqliteDb(repo: Repo): Promise<{ blob: Blob; filen
 
   const root = await navigator.storage.getDirectory()
   const fileHandle = await root.getFileHandle(dbFilename)
-  const file = await fileHandle.getFile()
-  const blob = new Blob([await file.arrayBuffer()], { type: 'application/vnd.sqlite3' })
+  const blob = await fileHandle.getFile()
 
   const ts = Date.now()
   const downloadFilename = `${dbFilename.replace(/\.db$/, '')}-export-${ts}.db`
