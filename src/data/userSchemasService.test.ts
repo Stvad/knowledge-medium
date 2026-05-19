@@ -290,4 +290,40 @@ describe('UserSchemasService.withProvisionalSchema', () => {
     expect(env.repo.propertySchemas.get('topic')).toBe(prior)
     expect(env.service.getSchemaBlockId('topic')).toBe('block-prior')
   })
+
+  it('duplicate-name contributions + body throws → restores LIVE (last) schema, not the first', async () => {
+    // rebuildFromBlocks can produce duplicate-name entries (one per
+    // matching `property-schema` block); `propertySchemasFacet.combine`
+    // is last-wins on duplicates and `nameToBlockId` is last-wins on
+    // the block id. `peekContribution` must snapshot the LAST match so
+    // a rollback can't pair an older schema with a newer block id.
+    env = await setup()
+    await drainInitialSubscriptionTick()
+
+    const older = buildSchema('topic', 'older')
+    const newer = buildSchema('topic', 'newer')
+    // Simulate the duplicate-name state the subscription rebuild can
+    // produce: two contributions with the same name in registration
+    // order, `nameToBlockId` pinned to the latter block.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(env.service as any).contributions = [older, newer]
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(env.service as any).nameToBlockId = new Map([['topic', 'block-newer']])
+    env.repo.setRuntimeContributions(
+      propertySchemasFacet, 'user-data', [older, newer],
+    )
+    expect(env.repo.propertySchemas.get('topic')).toBe(newer)
+    expect(env.service.getSchemaBlockId('topic')).toBe('block-newer')
+
+    const provisional = buildSchema('topic', 'provisional')
+    const boom = new Error('tx failed')
+    await expect(env.service.withProvisionalSchema(provisional, 'block-provisional', async () => {
+      throw boom
+    })).rejects.toBe(boom)
+    // After rollback the live schema must be `newer` (paired with
+    // `block-newer`) — restoring `older` paired with `block-newer`
+    // would be the bug.
+    expect(env.repo.propertySchemas.get('topic')).toBe(newer)
+    expect(env.service.getSchemaBlockId('topic')).toBe('block-newer')
+  })
 })

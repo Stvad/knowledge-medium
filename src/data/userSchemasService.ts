@@ -179,9 +179,17 @@ export class UserSchemasService {
    *  schema or its block id is missing (kernel/plugin schemas don't
    *  live in `contributions` / `nameToBlockId`). Used by
    *  `withProvisionalSchema` to snapshot prior registrations so a
-   *  rollback can restore them rather than wiping them. */
+   *  rollback can restore them rather than wiping them.
+   *
+   *  `rebuildFromBlocks` pushes duplicate-name entries unconditionally
+   *  (one per matching block), and `nameToBlockId` is last-wins.
+   *  `propertySchemasFacet.combine` is also last-wins on duplicate
+   *  names, so the LIVE schema is the last occurrence in
+   *  `contributions`. `findLast` snapshots that one — pairing it with
+   *  the (also last-wins) `nameToBlockId.get(name)` so restore can't
+   *  end up with an older schema mapped to a newer block's id. */
   peekContribution(name: string): {contribution: AnyPropertySchema; blockId: string} | undefined {
-    const contribution = this.contributions.find(s => s.name === name)
+    const contribution = this.contributions.findLast(s => s.name === name)
     if (!contribution) return undefined
     const blockId = this.nameToBlockId.get(name)
     if (!blockId) return undefined
