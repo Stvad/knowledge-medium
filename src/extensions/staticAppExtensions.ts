@@ -35,7 +35,6 @@ import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
-import { userPrefsDataExtension } from '@/plugins/user-prefs'
 import type { AppExtension } from '@/extensions/facet.ts'
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
@@ -79,7 +78,6 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // selection itself is driven by `backlinksViewProp`.
   backlinksPlugin,
   groupedBacklinksPlugin,
-  userPrefsDataExtension,
   backlinksViewPlugin,
   todoPlugin,
   blockTaggingPlugin,

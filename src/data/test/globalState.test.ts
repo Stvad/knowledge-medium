@@ -33,7 +33,6 @@ import {
   typesProp,
 } from '@/data/properties'
 import {
-  USER_PREFS_TYPE,
   getLayoutSessionBlock,
   getPluginPrefsBlock,
   getPluginUIStateBlock,
@@ -133,7 +132,9 @@ describe('getUserPrefsBlock', () => {
 
     expect(prefs.peek()?.parentId).toBe(userBlock.id)
     expect(prefs.peek()?.content).toBe('Preferences')
-    expect(prefs.peekProperty(typesProp)).toEqual([USER_PREFS_TYPE])
+    // No type marker on the root Preferences container — it's just a
+    // structural parent for per-plugin prefs sub-blocks.
+    expect(prefs.peekProperty(typesProp)).toBeUndefined()
 
     const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
       'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',

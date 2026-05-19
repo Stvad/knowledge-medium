@@ -45,8 +45,8 @@ import {
 } from '@/data/properties'
 import { usePropertyValue, useHandle, useChildren } from '@/hooks/block'
 import { getLayoutSessionId } from '@/utils/layoutSessionId'
-import { USER_PREFS_PATH_PART, USER_PREFS_TYPE } from '@/data/userPrefs.ts'
-export { USER_PREFS_PATH_PART, USER_PREFS_TYPE } from '@/data/userPrefs.ts'
+import { USER_PREFS_PATH_PART } from '@/data/userPrefs.ts'
+export { USER_PREFS_PATH_PART } from '@/data/userPrefs.ts'
 
 /**
  * One of core principles of the system is to store all state within the system.
@@ -156,7 +156,7 @@ const ensureUserPrefsChild = (repo: Repo, parent: Block): Promise<Block> =>
     parent,
     USER_PREFS_PATH_PART,
     ChangeScope.UserPrefs,
-    addBlockTypeToProperties({}, USER_PREFS_TYPE),
+    {},
     'Preferences',
   )
 
