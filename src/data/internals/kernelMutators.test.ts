@@ -490,6 +490,16 @@ describe('core.indent', () => {
     expect(await env.childIds('A')).toEqual(['B'])
   })
 
+  it('expands the new parent when indenting under a collapsed sibling', async () => {
+    await seedABC()
+    await env.repo.mutate.setProperty({id: 'A', schema: isCollapsedProp, value: true})
+
+    await env.repo.mutate.indent({id: 'B'})
+
+    expect(env.read('B')!.parentId).toBe('A')
+    expect(env.read('A')!.properties[isCollapsedProp.name]).toBe(false)
+  })
+
   it('is a no-op when block has no preceding sibling', async () => {
     await seedABC()
     await env.repo.mutate.indent({id: 'A'})  // first child of root

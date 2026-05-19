@@ -27,6 +27,7 @@ import {
 import { BlockNotFoundError } from '@/data/api'
 import { keyAtEnd, keyAtStart, keyBetween, keysBetween } from '../orderKey'
 import { mergeProperties } from './mergeProperties'
+import { isCollapsedProp } from '@/data/properties'
 
 // ──── Common helpers ────
 
@@ -407,6 +408,9 @@ export const indent = defineMutator<{id: string}, void>({
     const newParentChildren = await tx.childrenOf(newParent.id)
     const orderKey = keyAtEnd(newParentChildren.at(-1)?.orderKey ?? null)
     await tx.move(id, {parentId: newParent.id, orderKey})
+    if (await tx.getProperty(newParent.id, isCollapsedProp)) {
+      await tx.setProperty(newParent.id, isCollapsedProp, false)
+    }
   },
 })
 
