@@ -109,7 +109,7 @@ export const registerVisualNavigationTarget = (
     targetRect(target)
     targets.delete(target.id)
     if (activeTargetId === target.id || isStoredFocusedTarget(target)) {
-      const replacement = pickRecoveryTarget(target, removedOrder)
+      const replacement = pickRecoveryTarget(target, removedOrder, {sameBlockOnly: true})
       activeTargetId = replacement?.id ?? null
       notify()
       if (replacement) {
@@ -259,10 +259,10 @@ export const pickVisualNavigationTarget = (
 const rectIsNavigable = (rect: DOMRect): boolean =>
   rect.width > 0 &&
   rect.height > 0 &&
-  rect.bottom >= 0 &&
-  rect.right >= 0 &&
-  rect.top <= (window.innerHeight || document.documentElement.clientHeight) &&
-  rect.left <= (window.innerWidth || document.documentElement.clientWidth)
+  Number.isFinite(rect.top) &&
+  Number.isFinite(rect.right) &&
+  Number.isFinite(rect.bottom) &&
+  Number.isFinite(rect.left)
 
 const targetRect = (target: RegisteredVisualNavigationTarget): VisualNavigationRect | null => {
   const element = target.anchorElement ?? target.element
@@ -337,12 +337,14 @@ const compareRecoveryTargets = (
 const pickRecoveryTarget = (
   removed: RegisteredVisualNavigationTarget,
   removedOrder: number,
+  options: {sameBlockOnly?: boolean} = {},
 ): RegisteredVisualNavigationTarget | null => {
   let best: {target: RegisteredVisualNavigationTarget; rect: VisualNavigationRect; order: number} | null = null
 
   for (const [order, target] of orderedTargets().entries()) {
     if (target.uiStateBlock.id !== removed.uiStateBlock.id) continue
     if (target.surface === 'breadcrumb') continue
+    if (options.sameBlockOnly && target.blockId !== removed.blockId) continue
     const rect = targetRect(target)
     if (!rect) continue
     const candidate = {target, rect, order}
@@ -412,19 +414,50 @@ const scheduleFocusVisualNavigationTarget = (target: RegisteredVisualNavigationT
   }
 }
 
-const hasMountedTargetKey = (
+const mountedTargetForKey = (
   uiStateBlock: Block,
   blockId: string | undefined,
   targetKey: string | undefined,
-): boolean =>
-  Boolean(targetKey) &&
-  Boolean(blockId) &&
-  Array.from(targets.values()).some(target =>
+): RegisteredVisualNavigationTarget | null => {
+  if (!targetKey || !blockId) return null
+
+  const active = activeTargetId ? targets.get(activeTargetId) ?? null : null
+  if (
+    active?.uiStateBlock.id === uiStateBlock.id &&
+    active.blockId === blockId &&
+    active.key === targetKey &&
+    active.surface !== 'breadcrumb' &&
+    Boolean(targetRect(active))
+  ) {
+    return active
+  }
+
+  return orderedTargets().find(target =>
     target.uiStateBlock.id === uiStateBlock.id &&
     target.blockId === blockId &&
     target.key === targetKey &&
+    target.surface !== 'breadcrumb' &&
     Boolean(targetRect(target)),
-  )
+  ) ?? null
+}
+
+const defaultVisualNavigationTargetKey = ({
+  blockId,
+  panelId,
+  layoutSessionBlockId,
+  surface,
+}: {
+  blockId: string
+  panelId?: string
+  layoutSessionBlockId?: string
+  surface: VisualNavigationSurface
+}): string =>
+  [
+    layoutSessionBlockId ?? '__layout__',
+    panelId ?? '__root__',
+    surface,
+    blockId,
+  ].join(':')
 
 const firstMountedTargetForBlock = (
   uiStateBlock: Block,
@@ -550,20 +583,31 @@ export const useVisualNavigationTarget = ({
 } => {
   const reactId = useId()
   const targetId = `${panelId ?? '__root__'}:${blockId}:${reactId}`
-  const targetKey = visualTargetKey ?? targetId
+  const targetKey = visualTargetKey ?? defaultVisualNavigationTargetKey({
+    blockId,
+    panelId,
+    layoutSessionBlockId,
+    surface,
+  })
   useSyncExternalStore(subscribe, getVisualNavigationSnapshot, getVisualNavigationSnapshot)
   const [focusedBlockId] = usePropertyValue(uiStateBlock, focusedBlockIdProp)
   const [focusedTargetKey] = usePropertyValue(uiStateBlock, focusedVisualTargetKeyProp)
-  const focusedTargetKeyMounted = hasMountedTargetKey(uiStateBlock, focusedBlockId, focusedTargetKey)
+  const focusedTarget = mountedTargetForKey(uiStateBlock, focusedBlockId, focusedTargetKey)
   const activeTarget = activeTargetId ? targets.get(activeTargetId) : null
   const activeTargetApplies =
     Boolean(activeTarget) &&
     activeTarget?.uiStateBlock.id === uiStateBlock.id &&
     activeTarget.blockId === focusedBlockId &&
     Boolean(targetRect(activeTarget))
-  const defaultFocusedTarget = focusedTargetKeyMounted || activeTargetApplies
+  const defaultFocusedTarget = focusedTarget || activeTargetApplies
     ? null
     : firstMountedTargetForBlock(uiStateBlock, focusedBlockId)
+  const active = focusedBlockId === blockId &&
+    (focusedTarget
+      ? focusedTarget.id === targetId
+      : activeTargetApplies
+        ? activeTargetId === targetId
+        : defaultFocusedTarget?.id === targetId)
 
   useEffect(() => {
     const element = elementRef.current
@@ -599,6 +643,11 @@ export const useVisualNavigationTarget = ({
     uiStateBlock,
   ])
 
+  useEffect(() => {
+    if (!active || focusedBlockId !== blockId || focusedTargetKey === targetKey) return
+    void uiStateBlock.set(focusedVisualTargetKeyProp, targetKey)
+  }, [active, blockId, focusedBlockId, focusedTargetKey, targetKey, uiStateBlock])
+
   const activate = useCallback(() => {
     setActiveVisualNavigationTarget(targetId)
     void uiStateBlock.set(focusedVisualTargetKeyProp, targetKey)
@@ -607,11 +656,6 @@ export const useVisualNavigationTarget = ({
   return {
     targetId,
     activate,
-    active: focusedBlockId === blockId &&
-      (focusedTargetKeyMounted
-        ? focusedTargetKey === targetKey
-        : activeTargetApplies
-          ? activeTargetId === targetId
-          : defaultFocusedTarget?.id === targetId),
+    active,
   }
 }

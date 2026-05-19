@@ -152,6 +152,60 @@ describe('visual navigation actions', () => {
     unregisterBacklink()
   })
 
+  it('moves down into a mounted backlink occurrence below the viewport', async () => {
+    await env.repo.tx(async tx => {
+      await tx.create({
+        id: 'panel',
+        workspaceId: WS,
+        parentId: null,
+        orderKey: 'a0',
+        properties: {
+          [topLevelBlockIdProp.name]: topLevelBlockIdProp.codec.encode('root'),
+          [focusedBlockIdProp.name]: focusedBlockIdProp.codec.encode('current'),
+          [focusedVisualTargetKeyProp.name]: focusedVisualTargetKeyProp.codec.encode('current-target'),
+        },
+      })
+      await tx.create({id: 'root', workspaceId: WS, parentId: null, orderKey: 'b0', content: 'root'})
+      await tx.create({id: 'current', workspaceId: WS, parentId: 'root', orderKey: 'a0', content: 'current'})
+      await tx.create({id: 'backlink', workspaceId: WS, parentId: null, orderKey: 'c0', content: 'backlink'})
+    }, {scope: ChangeScope.UiState})
+
+    const uiStateBlock = env.repo.block('panel')
+    const currentElement = makeElement({top: 680, left: 0})
+    const backlinkElement = makeElement({top: 1200, left: 0})
+    const unregisterCurrent = registerVisualNavigationTarget({
+      id: 'current-target',
+      key: 'current-target',
+      blockId: 'current',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'document',
+      element: currentElement,
+    })
+    const unregisterBacklink = registerVisualNavigationTarget({
+      id: 'backlink-target',
+      key: 'backlink-target',
+      blockId: 'backlink',
+      uiStateBlock,
+      panelId: 'panel',
+      surface: 'backlink',
+      element: backlinkElement,
+    })
+
+    const action = findNormalModeAction('move_down')
+    await action.handler({
+      block: env.repo.block('current'),
+      uiStateBlock,
+      visualTargetId: 'current-target',
+    } satisfies BlockShortcutDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
+
+    expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('backlink')
+    expect(uiStateBlock.peekProperty(focusedVisualTargetKeyProp)).toBe('backlink-target')
+
+    unregisterCurrent()
+    unregisterBacklink()
+  })
+
   it('stays on the current visual target at an edge instead of falling back to hidden tree focus', async () => {
     await env.repo.tx(async tx => {
       await tx.create({
@@ -237,8 +291,8 @@ describe('visual navigation actions', () => {
 
     unregisterCurrent()
 
-    expect(getActiveVisualNavigationTarget()?.id).toBe('nearby-target')
     await waitFor(() => {
+      expect(getActiveVisualNavigationTarget()?.id).toBe('nearby-target')
       expect(uiStateBlock.peekProperty(focusedBlockIdProp)).toBe('nearby')
       expect(uiStateBlock.peekProperty(focusedVisualTargetKeyProp)).toBe('nearby-target')
     })

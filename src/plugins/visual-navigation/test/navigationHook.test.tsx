@@ -9,6 +9,7 @@ import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import {
   focusedBlockIdProp,
+  focusedVisualTargetKeyProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
 import {
@@ -47,6 +48,8 @@ const targetRect = (top: number) => ({
   y: top,
   toJSON: () => ({}),
 })
+
+const stableSharedKey = '__layout__:panel:document:shared'
 
 function VisualTargetProbe({
   id,
@@ -122,8 +125,25 @@ describe('visual navigation target hook', () => {
     )
 
     await waitFor(() => {
+      expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp)).toBe(stableSharedKey)
       expect(view.getByTestId('first')).toHaveAttribute('data-active', 'true')
       expect(view.getByTestId('second')).toHaveAttribute('data-active', 'false')
+    })
+  })
+
+  it('keeps the visual target key stable when a focused block occurrence remounts', async () => {
+    const view = render(<VisualTargetProbe key="before" id="target" top={0} env={env}/>)
+
+    await waitFor(() => {
+      expect(view.getByTestId('target')).toHaveAttribute('data-active', 'true')
+      expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp)).toBe(stableSharedKey)
+    })
+
+    view.rerender(<VisualTargetProbe key="after" id="target" top={0} env={env}/>)
+
+    await waitFor(() => {
+      expect(view.getByTestId('target')).toHaveAttribute('data-active', 'true')
+      expect(env.repo.block('panel').peekProperty(focusedVisualTargetKeyProp)).toBe(stableSharedKey)
     })
   })
 })
