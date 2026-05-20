@@ -5,9 +5,12 @@ import {
   AppExtension,
   FacetResolveContext,
   FacetRuntime,
-  resolveFacetRuntime,
-  resolveFacetRuntimeSync,
 } from '@/extensions/facet.ts'
+import {
+  resolveAppRuntime,
+  resolveAppRuntimeSync,
+} from '@/extensions/resolveAppRuntime.ts'
+import type {Overrides} from '@/extensions/togglable.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
@@ -48,9 +51,15 @@ export function AppRuntimeProvider({
 
   const baseExtensions: AppExtension[] = useMemo(() => staticAppExtensions({repo}), [repo])
 
+  // Overrides — slice-5 wires this to the System Plugins config block +
+  // ClientLocalSettings cache. For now we pass an empty map so every
+  // togglable resolves to its manifest default (isEnabled returns
+  // `defaultEnabled ?? true`), which matches pre-toggle behaviour.
+  const overrides: Overrides = useMemo(() => new Map<string, boolean>(), [])
+
   const baseRuntime = useMemo(() =>
-    resolveFacetRuntimeSync(baseExtensions, runtimeContext),
-  [baseExtensions, runtimeContext])
+    resolveAppRuntimeSync(baseExtensions, {overrides, context: runtimeContext}),
+  [baseExtensions, overrides, runtimeContext])
 
   const [runtime, setRuntime] = useState(baseRuntime)
 
@@ -89,7 +98,7 @@ export function AppRuntimeProvider({
 
     void (async () => {
       try {
-        const nextRuntime = await resolveFacetRuntime([
+        const nextRuntime = await resolveAppRuntime([
           baseExtensions,
           dynamicExtensionsExtension({
             repo,
@@ -100,7 +109,7 @@ export function AppRuntimeProvider({
               errorStore.reportError(blockId, error)
             },
           }),
-        ], runtimeContext)
+        ], {overrides, context: runtimeContext})
 
         if (!cancelled) {
           setRuntime(nextRuntime)
@@ -120,7 +129,7 @@ export function AppRuntimeProvider({
     return () => {
       cancelled = true
     }
-  }, [baseExtensions, errorStore, repo, runtimeContext, safeMode, workspaceId])
+  }, [baseExtensions, errorStore, overrides, repo, runtimeContext, safeMode, workspaceId])
 
   useEffect(() => {
     if (!workspaceId) return
