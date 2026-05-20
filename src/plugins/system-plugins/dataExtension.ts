@@ -21,14 +21,9 @@ import {
   systemPluginsPrefsType,
 } from './config.ts'
 import {systemPluginsSyncEffect} from './effect.ts'
-import {legacyDisableMigrationEffect} from './migration.ts'
 
 export const systemPluginsDataExtension: AppExtension = [
   propertySchemasFacet.of(systemPluginOverridesProp, {source: 'system-plugins'}),
   ...pluginPrefsExtension(systemPluginsPrefsType, 'system-plugins'),
   appEffectsFacet.of(systemPluginsSyncEffect, {source: 'system-plugins'}),
-  // One-shot migration: folds legacy `extensionDisabledProp === true`
-  // on individual extension blocks into the unified overrides map.
-  // Idempotent — once cleared, re-runs are no-ops.
-  appEffectsFacet.of(legacyDisableMigrationEffect, {source: 'system-plugins'}),
 ]
