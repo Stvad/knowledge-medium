@@ -95,13 +95,9 @@ function pushValidatedContribution(
   return true
 }
 
-type FacetContributionWithEnables = FacetContribution<unknown> & {
-  enables?: AppExtension | readonly AppExtension[]
-}
-
 const isFacetContribution = (
   value: unknown,
-): value is FacetContributionWithEnables =>
+): value is FacetContribution<unknown> =>
   typeof value === 'object' &&
   value !== null &&
   (value as {type?: unknown}).type === 'facet-contribution'

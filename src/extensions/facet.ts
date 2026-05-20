@@ -13,6 +13,15 @@ export interface Facet<Input, Output = readonly Input[]> {
 export interface FacetContributionOptions {
   precedence?: number
   source?: string
+  /** Dragged-along AppExtension subtree. Contributed iff the parent
+   *  contribution itself survives validation + any enclosing togglable
+   *  boundary. Use this when a sibling contribution exists *because of*
+   *  this one — e.g. an action that only makes sense when its renderer
+   *  contribution is also live, or a property-editor override that
+   *  only fires when its schema is registered. The resolver evaluates
+   *  parent-acceptance before recursing here, so an invalid or
+   *  filtered-out parent silently drops everything below. */
+  enables?: AppExtension
 }
 
 export interface FacetContribution<Input> extends FacetContributionOptions {
