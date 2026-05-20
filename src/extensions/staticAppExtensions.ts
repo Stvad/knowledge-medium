@@ -37,6 +37,7 @@ import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
+import { systemPluginsPlugin } from '@/plugins/system-plugins'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { systemToggle } from '@/extensions/togglable.ts'
 
@@ -54,6 +55,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernelDataExtension contributes KERNEL_MUTATORS and core data
   // registries. repo.setFacetRuntime REPLACES those registries, so the
   // kernel contribution must be present in every static runtime.
+  // System Plugins meta-plugin owns the overrides map + cache sync.
+  // Essential: if disabled, the cache would never refresh and toggle
+  // changes wouldn't take effect.
+  sys('system-plugins', 'System plugins (toggle storage)', systemPluginsPlugin, {essential: true}),
   sys('kernel-data', 'Kernel data', kernelDataExtension, {essential: true}),
   sys('kernel-property-ui', 'Property editors', kernelPropertyUiExtension, {essential: true}),
   sys('kernel-value-presets', 'Property value presets', kernelValuePresetsExtension, {essential: true}),
