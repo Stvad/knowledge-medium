@@ -7,8 +7,8 @@
 // Not a build artifact. Function bodies are skeletons; types reference
 // real codebase paths so renames in src/ break this file too.
 //
-// Typecheck with:
-//   yarn tsc --noEmit --project docs/plugin-runtime-toggle/tsconfig.json
+// Typecheck (along with every other docs/**/*.ts sketch) with:
+//   yarn tsc --noEmit --project docs/tsconfig.json
 
 import type {AppExtension, FacetContribution} from '@/extensions/facet'
 import type {BlockData} from '@/data/api/blockData'
