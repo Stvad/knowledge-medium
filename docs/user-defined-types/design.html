@@ -264,6 +264,11 @@ export class UserTypesService {
   private nameToBlockId = new Map&lt;string, string&gt;()
   private subscriptionDisposer: Unsubscribe | null = null
   private schemasListenerDisposer: (() =&gt; void) | null = null
+  <span class="comment">// Cached for the schemasListenerDisposer's re-resolve path: when</span>
+  <span class="comment">// the merged property-schema map changes, replay the last seen</span>
+  <span class="comment">// blocks against the new schemas without a fresh DB read. Mirrors</span>
+  <span class="comment">// UserSchemasService.latestBlocks.</span>
+  private latestBlocks: readonly Block[] = []
 
   constructor(private readonly repo: Repo) {}
 
@@ -272,7 +277,6 @@ export class UserTypesService {
     <span class="comment">// workspaceId required on queryBlocks / subscribeBlocks. The React</span>
     <span class="comment">// provider restarts the service on workspace switch, so capturing</span>
     <span class="comment">// here pairs the subscription's lifetime to one workspace.</span>
-    this.latestBlocks = []
 
     const rebuildFromBlocks = (blocks: readonly Block[]) =&gt; {
       this.latestBlocks = blocks
@@ -301,6 +305,13 @@ export class UserTypesService {
     return () =&gt; this.dispose()
   }
 
+  dispose(): void {
+    this.subscriptionDisposer?.()
+    this.subscriptionDisposer = null
+    this.schemasListenerDisposer?.()
+    this.schemasListenerDisposer = null
+  }
+
   private tryBuildType(
     block: Block,
     schemas: ReadonlyMap&lt;string, AnyPropertySchema&gt;,
@@ -309,7 +320,12 @@ export class UserTypesService {
     const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
     const properties: AnyPropertySchema[] = []
     for (const refId of refIds) {
-      const schemaBlock = this.repo.peek(refId)
+      <span class="comment">// repo.block returns a Block facade; .peek() is the sync read</span>
+      <span class="comment">// of the row data. We then re-validate the ref against the same</span>
+      <span class="comment">// invariants the promoteToType pre-tx validation enforces (type,</span>
+      <span class="comment">// workspace, registered name) — a ref that's stale or invalid</span>
+      <span class="comment">// silently drops with a diagnostic.</span>
+      const schemaBlock = this.repo.block(refId).peek()
       const name = schemaBlock?.properties[propertyNameProp.name]
       if (typeof name !== 'string') continue            <span class="comment">// schema block not yet synced</span>
       const schema = schemas.get(name)
@@ -792,16 +808,28 @@ args.signal?.throwIfAborted()
 <span class="comment">// pre-commit so there's nothing to roll back.</span>
 const label = args.label.trim()
 if (!label) throw new Error('promoteToType: label must be a non-empty string')
-for (const schemaId of propertySchemaIds) {
-  const schemaBlock = await repo.load(schemaId)
-  if (!schemaBlock || schemaBlock.deleted) {
-    throw new Error(`promoteToType: property-schema ref ${schemaId} doesn't resolve`)
-  }
-}
 
 const target = await repo.load(targetBlockId)
-if (!target) throw new Error(`promoteToType: target ${targetBlockId} not found`)
+if (!target || target.deleted) throw new Error(`promoteToType: target ${targetBlockId} not live`)
 const workspaceId = target.workspaceId
+
+<span class="comment">// Validate each schema ref against the full set of invariants</span>
+<span class="comment">// UserTypesService.tryBuildType silently drops on:</span>
+<span class="comment">//   - block exists, not tombstoned</span>
+<span class="comment">//   - block carries `property-schema` type tag</span>
+<span class="comment">//   - same workspace as the target</span>
+<span class="comment">//   - non-empty propertyNameProp value</span>
+<span class="comment">//   - resolved name registered in repo.propertySchemas (the merged map)</span>
+const mergedSchemas = repo.propertySchemas
+for (const schemaId of propertySchemaIds) {
+  const schemaBlock = await repo.load(schemaId)
+  if (!schemaBlock || schemaBlock.deleted) throw new Error(`...not live`)
+  if (schemaBlock.workspaceId !== workspaceId) throw new Error(`...wrong workspace`)
+  if (!hasBlockType(schemaBlock, PROPERTY_SCHEMA_TYPE)) throw new Error(`...not a property-schema`)
+  const name = schemaBlock.properties[propertyNameProp.name]
+  if (typeof name !== 'string' || !name.trim()) throw new Error(`...empty propertyName`)
+  if (!mergedSchemas.has(name)) throw new Error(`...name "${name}" not registered`)
+}
 
 <span class="comment">// Phase A: commit the type-definition block. addTypeInTx is strict-by-default</span>
 <span class="comment">// per PR #49 — throws if targetBlockId is missing/tombstoned at tx-start.</span>

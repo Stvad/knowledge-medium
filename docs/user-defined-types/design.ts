@@ -27,8 +27,8 @@ import {
   defineProperty,
   defineSameTxProcessor,
 } from '@/data/api'
-import {propertyNameProp} from '@/data/properties'
-import {PAGE_TYPE} from '@/data/blockTypes'
+import {hasBlockType, propertyNameProp} from '@/data/properties'
+import {PAGE_TYPE, PROPERTY_SCHEMA_TYPE} from '@/data/blockTypes'
 import {propertySchemasFacet, typesFacet} from '@/data/facets'
 
 // ──────────────────────────────────────────────────────────────────────
@@ -93,18 +93,6 @@ export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Optional. RefList of blocks whose subtree is materialized under a
- *  new instance when this type is first added to a block (the
- *  `setup`-replacement path; see §5). Descendants-only semantics:
- *  the referenced root is NOT cloned, only its children are attached
- *  as children of the new instance. Cycle detection on this field is
- *  enforced by a same-tx processor (§5b). */
-export const blockTypeTemplateProp = defineProperty<readonly string[]>('block-type:template', {
-  codec: codecs.refList({}),
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
-})
-
 export const blockTypeKernelType = defineBlockType({
   id: BLOCK_TYPE_TYPE,
   label: 'Type',
@@ -112,8 +100,30 @@ export const blockTypeKernelType = defineBlockType({
     blockTypeLabelProp,
     blockTypeDescriptionProp,
     blockTypePropertiesProp,
-    blockTypeTemplateProp,
   ],
+})
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 4 (templates, deferred): block-type:template
+//
+// RefList of blocks whose subtree is materialized under a new instance
+// when this type is first added to a block (the `setup`-replacement
+// path; see §5). Descendants-only semantics: the referenced root is
+// NOT cloned, only its children are attached as children of the new
+// instance. Cycle detection on this field is enforced by a same-tx
+// processor (§5b).
+//
+// Defined here for the materializer / cycle-guard sketches below, but
+// NOT included in the Phase-1 blockTypeKernelType.properties list —
+// Phase 1 lifts only label / description / properties[]. Phase 4 adds
+// blockTypeTemplateProp to the kernel contribution at the same time as
+// the materializer and cycle guard land.
+// ──────────────────────────────────────────────────────────────────────
+
+export const blockTypeTemplateProp = defineProperty<readonly string[]>('block-type:template', {
+  codec: codecs.refList({}),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
 })
 
 // NOTE: `block-type:extends` and the TypeOverride / mergeTypeOverrides
@@ -438,16 +448,69 @@ export async function promoteToType(
       `so committing one would leave a half-promotion.`,
     )
   }
-  // propertySchemaIds: each id must resolve to a property-schema block,
-  // otherwise tryBuildType's refList resolution emits an empty
-  // properties[] which is a silent UX failure (instances tag fine but
-  // the panel surfaces no slots). Resolving here is a cheap read.
+  // Load the target first so workspaceId is available for cross-workspace
+  // checks below.
+  const target = await repo.load(args.targetBlockId)
+  if (!target) {
+    throw new Error(`promoteToType: target ${args.targetBlockId} not found`)
+  }
+  if (target.deleted) {
+    throw new Error(`promoteToType: target ${args.targetBlockId} is tombstoned`)
+  }
+  const workspaceId = target.workspaceId
+
+  // propertySchemaIds: every ref must survive the full set of invariants
+  // that UserTypesService.tryBuildType applies. tryBuildType silently
+  // drops a ref that fails any of these checks, which would leave the
+  // promoted type with missing panel slots — instances retag fine but
+  // the property panel surfaces nothing. The pre-tx validation enforces
+  // each invariant explicitly so the failure is loud and pre-commit:
+  //
+  //   - block exists and isn't tombstoned
+  //   - block carries the `property-schema` type tag (a plain block
+  //     wouldn't be a property-schema even if it had a propertyName)
+  //   - block is in the same workspace as the promotion target (refs
+  //     across workspaces would deference to nothing at materialization)
+  //   - the schema's name is non-empty (tryBuildType drops empty-name
+  //     blocks via UserSchemasService's same diagnostic path)
+  //   - the resolved name is registered in the merged propertySchemas
+  //     map (e.g. user-data schema hasn't been published yet because
+  //     its preset isn't loaded, or a typo'd kernel name)
+  const mergedSchemas = repo.propertySchemas
   for (const schemaId of args.propertySchemaIds) {
     const schemaBlock = await repo.load(schemaId)
     if (!schemaBlock || schemaBlock.deleted) {
       throw new Error(
         `promoteToType: property-schema ref ${schemaId} doesn't resolve to a live block. ` +
         `Drop it from propertySchemaIds before retrying.`,
+      )
+    }
+    if (schemaBlock.workspaceId !== workspaceId) {
+      throw new Error(
+        `promoteToType: property-schema ref ${schemaId} is in workspace ` +
+        `${schemaBlock.workspaceId} but the target is in ${workspaceId}. ` +
+        `Cross-workspace property-schema refs aren't supported.`,
+      )
+    }
+    if (!hasBlockType(schemaBlock, PROPERTY_SCHEMA_TYPE)) {
+      throw new Error(
+        `promoteToType: ref ${schemaId} is not a property-schema block ` +
+        `(missing the ${PROPERTY_SCHEMA_TYPE} type tag).`,
+      )
+    }
+    const name = schemaBlock.properties[propertyNameProp.name]
+    if (typeof name !== 'string' || name.trim() === '') {
+      throw new Error(
+        `promoteToType: property-schema block ${schemaId} has empty ` +
+        `${propertyNameProp.name}; tryBuildType would silently drop it.`,
+      )
+    }
+    if (!mergedSchemas.has(name)) {
+      throw new Error(
+        `promoteToType: property-schema "${name}" (block ${schemaId}) isn't in ` +
+        `the merged registry — e.g. UserSchemasService skipped it because its ` +
+        `preset isn't loaded or its config didn't validate. Fix the schema ` +
+        `block before retrying.`,
       )
     }
   }
@@ -458,16 +521,9 @@ export async function promoteToType(
   args.signal?.throwIfAborted()
 
   // Phase A (tx A): turn the target page into a block-type block.
-  //   - Read workspaceId from the target before opening the tx (avoids
-  //     queryActiveWorkspace silent fallback per the merged PR #48).
   //   - In-tx existence guard: addTypeInTx is strict-by-default per
   //     merged PR #49 — throws BlockNotFoundForTypeError if the target
   //     was deleted concurrently between the pre-tx load() and tx-open.
-  const target = await repo.load(args.targetBlockId)
-  if (!target) {
-    throw new Error(`promoteToType: target ${args.targetBlockId} not found`)
-  }
-  const workspaceId = target.workspaceId
 
   const typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: Tx) => {
