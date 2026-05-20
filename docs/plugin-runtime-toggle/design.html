@@ -368,8 +368,9 @@ export const staticAppExtensions = ({repo}) => [
   if (validated) collected.push(validated)
 }</code></pre>
     <p>
-      <code>shellToggle</code> is just <code>togglable({id, name}).of([])</code> — a
-      boundary that carries identity and no contributions. Discovery sees it and the
+      The disabled-shell line, <code>userExtensionToggle(block).of([])</code>, is just
+      the same factory with no <code>authoredHints</code> wrapping an empty extension —
+      a boundary that carries identity and no contributions. Discovery sees it and the
       settings UI renders the row; flipping it on triggers
       <code>refreshAppRuntime()</code>, which re-runs the loader and this time takes the
       compile branch.
