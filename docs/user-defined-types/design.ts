@@ -382,6 +382,34 @@ export class PromotionRegistrationTimeout extends Error {
   }
 }
 
+/** Thrown by Phase B's in-tx guard when the target type is no longer
+ *  in the live registry at the moment the retag tx opens. The
+ *  realistic trigger is a sync-applied delete of the type-definition
+ *  block between Phase A's commit and Phase B's tx-open that
+ *  UserTypesService reacted to by dropping the user-data contribution.
+ *  Distinct from PromotionRegistrationTimeout (which fires before
+ *  Phase B's tx opens) so callers can branch on the recovery path:
+ *  for this case the type was deleted from another device, so retry
+ *  with the same args would just re-trigger the same race; the
+ *  surface to the user is "the type was deleted while promotion was
+ *  in progress; verify with the other device." */
+export class PromotionTypeUnregistered extends Error {
+  constructor(
+    public readonly targetBlockId: string,
+    public readonly typeLabel: string,
+  ) {
+    super(
+      `promoteToType: type "${typeLabel}" (${targetBlockId}) is no longer ` +
+      `registered when Phase B opened the retag tx. Likely a sync-applied ` +
+      `delete of the type-definition block from another device between ` +
+      `Phase A and Phase B. Phase A committed; Phase B aborted before ` +
+      `writing any retag. Verify whether the type-definition block should ` +
+      `still exist before retrying.`,
+    )
+    this.name = 'PromotionTypeUnregistered'
+  }
+}
+
 export async function promoteToType(
   repo: Repo,
   userTypes: UserTypesService,
@@ -440,17 +468,41 @@ export async function promoteToType(
     referencedBy: {id: args.targetBlockId, sourceField: 'roam:isa'},
   })
 
-  const snapshot2 = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: Tx) => {
+    // Capture the registry snapshot INSIDE the tx body, not before.
+    // Sync-applied writes between Phase A and Phase B could in
+    // principle delete the type-definition block on another device,
+    // which UserTypesService would react to by dropping the contribution
+    // from the user-data bucket. A pre-tx snapshot would still carry
+    // the type and pass addTypeInTx's existence check, then write
+    // orphan ids into instance block:types. Capturing inside the tx
+    // narrows the staleness window to a single event-loop tick (no
+    // other writer can interleave during the synchronous tx body).
+    const snapshotInTx = repo.snapshotTypeRegistries()
+
+    // Belt-and-suspenders: even with the in-tx snapshot, sanity-check
+    // the target is still registered before fanning out tags. The
+    // realistic cause for this firing is a sync-applied delete of the
+    // type-definition block between Phase A and Phase B that
+    // UserTypesService reacted to by dropping the contribution. The
+    // tx body's first read settles whether the registry still has the
+    // type; if not, abort the retag rather than write orphan ids.
+    if (!snapshotInTx.types.has(args.targetBlockId)) {
+      throw new PromotionTypeUnregistered(args.targetBlockId, args.label)
+    }
+
     for (const candidate of candidates) {
       // tx.get re-check closes the TOCTOU window: the candidate may
       // have been deleted or had its roam:isa rewritten between the
-      // pre-tx query and the tx open.
+      // pre-tx query and the tx open. (tx.get returns tombstoned
+      // rows as non-null, so check row.deleted too — a soft-deleted
+      // candidate that gets restored later shouldn't carry the
+      // promoted type id retroactively.)
       const row = await tx.get(candidate.id)
-      if (!row) continue
+      if (!row || row.deleted) continue
       const isaRefs = row.properties['roam:isa']
       if (!Array.isArray(isaRefs) || !isaRefs.includes(args.targetBlockId)) continue
-      await repo.addTypeInTx(tx, candidate.id, args.targetBlockId, {}, snapshot2)
+      await repo.addTypeInTx(tx, candidate.id, args.targetBlockId, {}, snapshotInTx)
     }
     if (args.rewriteIsaReferences) {
       // ... rewrite roam:isa per instance, dropping the promoted alias

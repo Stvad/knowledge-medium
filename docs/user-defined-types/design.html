@@ -780,11 +780,25 @@ const candidates = await repo.queryBlocks({
   referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP},
 })
 
-const snapshotB = repo.snapshotTypeRegistries()
 await repo.tx(async tx =&gt; {
+  <span class="comment">// Capture the type registry snapshot INSIDE the tx body, not before.</span>
+  <span class="comment">// A pre-tx snapshot leaves a window where sync-applied writes (an</span>
+  <span class="comment">// other device deletes the type-definition block) could unregister</span>
+  <span class="comment">// the type. UserTypesService drops the contribution, but a stale</span>
+  <span class="comment">// snapshot still passes addTypeInTx's existence check and writes</span>
+  <span class="comment">// orphan ids. Capturing in-tx narrows the staleness window to a</span>
+  <span class="comment">// single event-loop tick (no other writer can interleave during</span>
+  <span class="comment">// the synchronous tx body).</span>
+  const snapshotB = repo.snapshotTypeRegistries()
+  if (!snapshotB.types.has(targetBlockId)) {
+    <span class="comment">// Belt-and-suspenders: even within the tx, sanity-check the type</span>
+    <span class="comment">// is still registered. Realistic trigger: a sync-applied delete</span>
+    <span class="comment">// of the type-definition block between Phase A and Phase B.</span>
+    throw new PromotionTypeUnregistered(targetBlockId, label)
+  }
   for (const candidate of candidates) {
     const row = await tx.get(candidate.id)
-    if (!row) continue                          <span class="comment">// deleted between prefilter and tx</span>
+    if (!row || row.deleted) continue           <span class="comment">// deleted / tombstoned between prefilter and tx</span>
     const isaRefs = row.properties[ROAM_ISA_PROP] ?? []
     if (!resolveRoamIsaTargets(isaRefs).includes(targetBlockId)) continue
     await repo.addTypeInTx(tx, candidate.id, targetBlockId, {}, snapshotB)
