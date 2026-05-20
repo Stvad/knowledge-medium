@@ -132,32 +132,22 @@ export const blockTypeKernelType = defineBlockType({
 })
 
 // ──────────────────────────────────────────────────────────────────────
-// Phase 4 (templates, deferred): block-type:template
+// Phase 4 (templates, deferred): block-type:template — NOT declared here
 //
-// RefList of blocks whose subtree is materialized under a new instance
-// when this type is first added to a block (the `setup`-replacement
-// path; see §5). Descendants-only semantics: the referenced root is
-// NOT cloned, only its children are attached as children of the new
-// instance. Cycle detection on this field is enforced by a same-tx
-// processor (§5b).
+// The prop is intentionally absent from this spec file. Phase 1 ships
+// only label / description / properties[] on the kernel block-type
+// contribution; the template field, the materializer (§5), and the
+// cycle guard (§5b) all land together in Phase 4 against a real
+// consumer (the recurring-tasks template flow). design.ts is the typed
+// spec, not a sketchpad — declaring the prop now would lead the
+// implementation by an entire phase. §5a / §5b below preserve the
+// descendants-only and tx-time-cycle-detection rationale so the Phase 4
+// implementation has a clear contract to land against.
 //
-// Defined here for the materializer / cycle-guard sketches below, but
-// NOT included in the Phase-1 blockTypeKernelType.properties list —
-// Phase 1 lifts only label / description / properties[]. Phase 4 adds
-// blockTypeTemplateProp to the kernel contribution at the same time as
-// the materializer and cycle guard land.
+// Also deferred (see design.html §What's deferred): `block-type:extends`
+// and the TypeOverride / mergeTypeOverrides merge step (§4). Not
+// declared here for the same reason.
 // ──────────────────────────────────────────────────────────────────────
-
-export const blockTypeTemplateProp = defineProperty<readonly string[]>('block-type:template', {
-  codec: codecs.refList({}),
-  defaultValue: [],
-  changeScope: ChangeScope.BlockDefault,
-})
-
-// NOTE: `block-type:extends` and the TypeOverride / mergeTypeOverrides
-// machinery are deferred (see design.html §What's deferred). The fields
-// are not declared here because v1 ships without them — adding them
-// later is mechanical and the design.html section preserves the spec.
 
 /** The Types page itself follows the "type flow" pattern landed in
  *  the merged kernel: it carries both PAGE_TYPE (for normal page
