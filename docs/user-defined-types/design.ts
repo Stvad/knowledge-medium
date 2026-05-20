@@ -415,6 +415,35 @@ export async function promoteToType(
   userTypes: UserTypesService,
   args: PromoteToTypeArgs,
 ): Promise<void> {
+  // Pre-tx validation — fail fast on inputs that UserTypesService's
+  // tryBuildType will silently reject, before Phase A writes anything.
+  // Without this, a blank label (etc.) commits a block-type block,
+  // tryBuildType drops it, and Phase B's bounded wait surfaces
+  // PromotionRegistrationTimeout 10s later — a half-promotion the
+  // caller has to clean up manually. Validating upfront keeps the
+  // failure pre-commit so there's nothing to clean up.
+  const trimmedLabel = args.label.trim()
+  if (trimmedLabel === '') {
+    throw new Error(
+      `promoteToType: label must be a non-empty string (got ${JSON.stringify(args.label)}). ` +
+      `UserTypesService.tryBuildType would silently skip a block-type block with an empty label, ` +
+      `so committing one would leave a half-promotion.`,
+    )
+  }
+  // propertySchemaIds: each id must resolve to a property-schema block,
+  // otherwise tryBuildType's refList resolution emits an empty
+  // properties[] which is a silent UX failure (instances tag fine but
+  // the panel surfaces no slots). Resolving here is a cheap read.
+  for (const schemaId of args.propertySchemaIds) {
+    const schemaBlock = await repo.load(schemaId)
+    if (!schemaBlock || schemaBlock.deleted) {
+      throw new Error(
+        `promoteToType: property-schema ref ${schemaId} doesn't resolve to a live block. ` +
+        `Drop it from propertySchemaIds before retrying.`,
+      )
+    }
+  }
+
   // Phase A (tx A): turn the target page into a block-type block.
   //   - Read workspaceId from the target before opening the tx (avoids
   //     queryActiveWorkspace silent fallback per the merged PR #48).
@@ -430,14 +459,14 @@ export async function promoteToType(
   const typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: Tx) => {
     await repo.addTypeInTx(tx, args.targetBlockId, BLOCK_TYPE_TYPE, {
-      [blockTypeLabelProp.name]: args.label,
+      [blockTypeLabelProp.name]: trimmedLabel,
       [blockTypePropertiesProp.name]: args.propertySchemaIds,
     }, typeSnapshot)
     // The page also gets PAGE_TYPE so it stays navigable as a page —
     // matches the "type flow" pattern (properties page / readwise
     // root / plugin state / alias user pages).
     await repo.addTypeInTx(tx, args.targetBlockId, PAGE_TYPE, {}, typeSnapshot)
-  }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${args.label}`})
+  }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${trimmedLabel}`})
 
   // The subscription on `block-type` blocks fires between txs and
   // registers args.targetBlockId in the user-data bucket on typesFacet.
@@ -454,7 +483,7 @@ export async function promoteToType(
   await waitForTypeRegistrationBounded(
     repo,
     args.targetBlockId,
-    args.label,
+    trimmedLabel,
     args.signal,
     args.registrationTimeoutMs ?? 10_000,
   )
@@ -488,7 +517,7 @@ export async function promoteToType(
     // tx body's first read settles whether the registry still has the
     // type; if not, abort the retag rather than write orphan ids.
     if (!snapshotInTx.types.has(args.targetBlockId)) {
-      throw new PromotionTypeUnregistered(args.targetBlockId, args.label)
+      throw new PromotionTypeUnregistered(args.targetBlockId, trimmedLabel)
     }
 
     for (const candidate of candidates) {
@@ -507,7 +536,7 @@ export async function promoteToType(
     if (args.rewriteIsaReferences) {
       // ... rewrite roam:isa per instance, dropping the promoted alias
     }
-  }, {scope: ChangeScope.BlockDefault, description: `promoteToType:retag ${args.label}`})
+  }, {scope: ChangeScope.BlockDefault, description: `promoteToType:retag ${trimmedLabel}`})
 }
 
 /** Wait for UserTypesService's subscription to publish `typeId` into

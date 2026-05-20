@@ -267,8 +267,15 @@ export class UserTypesService {
 
   constructor(private readonly repo: Repo) {}
 
-  start(): () =&gt; void {
+  start(workspaceId: string): () =&gt; void {
+    <span class="comment">// Pin the workspace at start() time — required since PR #48 made</span>
+    <span class="comment">// workspaceId required on queryBlocks / subscribeBlocks. The React</span>
+    <span class="comment">// provider restarts the service on workspace switch, so capturing</span>
+    <span class="comment">// here pairs the subscription's lifetime to one workspace.</span>
+    this.latestBlocks = []
+
     const rebuildFromBlocks = (blocks: readonly Block[]) =&gt; {
+      this.latestBlocks = blocks
       const schemas = this.repo.propertySchemas
       const next: TypeContribution[] = []
       for (const block of blocks) {
@@ -280,14 +287,16 @@ export class UserTypesService {
     }
 
     this.subscriptionDisposer = this.repo.subscribeBlocks(
-      {types: [BLOCK_TYPE_TYPE]},
+      {workspaceId, types: [BLOCK_TYPE_TYPE]},
       blocks =&gt; rebuildFromBlocks(blocks.map(b =&gt; this.repo.block(b.id))),
     )
     <span class="comment">// Re-resolve when the merged schema map changes &mdash; a newly-loaded</span>
     <span class="comment">// property schema makes previously-unresolvable refs in</span>
     <span class="comment">// block-type:properties suddenly resolvable. Mirrors</span>
     <span class="comment">// onValuePresetsChange in UserSchemasService.</span>
-    this.schemasListenerDisposer = this.repo.onPropertySchemasChange(() =&gt; rebuild())
+    this.schemasListenerDisposer = this.repo.onPropertySchemasChange(
+      () =&gt; rebuildFromBlocks(this.latestBlocks),
+    )
 
     return () =&gt; this.dispose()
   }
@@ -615,13 +624,32 @@ The import already does the survey work. <span class="file">src/plugins/roam-imp
 frequency, and emits a report:
 </p>
 
-<pre><code>[[Person]] -&gt; type "person" (53 nodes); common props: dob 41/53 (77%), email 38/53 (72%)
-[[Project]] -&gt; type "project" (12 nodes); common props: status 10/12 (83%), owner 9/12 (75%)</code></pre>
+<pre><code>[[Person]] -&gt; "Person" (53 nodes); common props: dob 41/53 (77%), email 38/53 (72%)
+[[Project]] -&gt; "Project" (12 nodes); common props: status 10/12 (83%), owner 9/12 (75%)</code></pre>
 
 <p>
 What's missing is <b>promotion</b> &mdash; the action that turns a Roam page (which is currently the target of
 <code>roam:isa</code> refs) into a real <code>block-type</code> block and re-tags the referencing blocks.
 </p>
+
+<div class="callout warn">
+  <h4>Candidate model needs a <code>targetBlockId</code>, not a slug</h4>
+  <p style="margin:0 0 .4rem">
+    Today <code>typeCandidates.ts</code> emits a <code>typeId: string</code> derived from the alias via
+    <code>typeIdFromIsaAlias</code> (lowercased / dashed slug). That worked when the design imagined kernel-style
+    semantic type ids. With this design's <b>type id = block id</b> decision, the slug is wrong &mdash;
+    <code>promoteToType</code> needs the alias's resolved block id.
+  </p>
+  <p style="margin:0">
+    Phase 3's deliverables include updating <code>RoamTypeCandidate</code> to carry
+    <code>targetBlockId: string | null</code> (null when the alias has no live target in the workspace yet,
+    e.g. a Roam-isa-only alias whose seat hasn't been materialized). The importer resolves the alias to its
+    block id during candidate collection &mdash; the alias index is already populated by the seat-materialization
+    pass that runs before this. The report's display still shows the alias for human readability; the action
+    payload carries the block id. Candidates whose <code>targetBlockId</code> is null get a disabled "Adopt as
+    type" button with a hover-tooltip explaining the unresolved alias.
+  </p>
+</div>
 
 <h3>The promotion primitive</h3>
 
@@ -748,7 +776,23 @@ sees the new row, rebuilds its contribution list, and publishes via
   </li>
 </ol>
 
-<pre><code>const target = await repo.load(targetBlockId)
+<pre><code><span class="comment">// Pre-tx validation — fail fast on inputs UserTypesService.tryBuildType</span>
+<span class="comment">// would silently reject (empty label, unresolvable schema refs).</span>
+<span class="comment">// Without this, a bad-input promotion commits the type block in Phase A,</span>
+<span class="comment">// the subscription drops it, and Phase B's bounded wait surfaces</span>
+<span class="comment">// PromotionRegistrationTimeout 10s later — a half-promotion the caller</span>
+<span class="comment">// has to clean up manually. Validating upfront keeps the failure</span>
+<span class="comment">// pre-commit so there's nothing to roll back.</span>
+const label = args.label.trim()
+if (!label) throw new Error('promoteToType: label must be a non-empty string')
+for (const schemaId of propertySchemaIds) {
+  const schemaBlock = await repo.load(schemaId)
+  if (!schemaBlock || schemaBlock.deleted) {
+    throw new Error(`promoteToType: property-schema ref ${schemaId} doesn't resolve`)
+  }
+}
+
+const target = await repo.load(targetBlockId)
 if (!target) throw new Error(`promoteToType: target ${targetBlockId} not found`)
 const workspaceId = target.workspaceId
 
@@ -939,8 +983,22 @@ await repo.tx(async tx =&gt; {
 
 <h3>Phase 3 &mdash; Roam <code>isa</code> adoption</h3>
 <ul class="tight">
-  <li><code>promoteToType</code> action in <span class="file">src/plugins/roam-import/</span>, two-tx shape per &sect;Roam <code>isa</code> adoption.</li>
-  <li>UI: "Adopt as type" button per high-confidence candidate in the import report; column of property checkboxes pre-checked at <code>&ge;50%</code> frequency.</li>
+  <li>
+    <b>Update <code>RoamTypeCandidate</code> shape</b> in
+    <span class="file">src/plugins/roam-import/typeCandidates.ts:16</span>. Drop the
+    <code>typeId: string</code> slug field (was <code>typeIdFromIsaAlias(alias)</code>); add
+    <code>targetBlockId: string | null</code>. The importer's candidate collection pass resolves each alias
+    against the alias index that the seat-materialization pass populates; aliases with no live target return
+    null. The slug-form id was load-bearing for the previous "semantic kernel id" design; this design's
+    block-id-as-type-id makes the slug redundant.
+  </li>
+  <li>
+    <b>Update <code>formatTypeCandidateLines</code> / <code>typeCandidateLine</code></b>
+    (<span class="file">src/plugins/roam-import/typeCandidates.ts:161</span>) to show the alias as the human
+    label and the block id only as metadata; the slug disappears from the report.
+  </li>
+  <li><code>promoteToType</code> action in <span class="file">src/plugins/roam-import/</span>, two-tx shape per &sect;Roam <code>isa</code> adoption. Pre-tx validation of <code>label</code> and <code>propertySchemaIds</code> per the code sample above.</li>
+  <li>UI: "Adopt as type" button per high-confidence candidate in the import report; column of property checkboxes pre-checked at <code>&ge;50%</code> frequency. Action payload carries the candidate's <code>targetBlockId</code> (not the alias) into <code>promoteToType</code>. Candidates with <code>targetBlockId = null</code> get a disabled button with a tooltip explaining the unresolved alias.</li>
   <li>Standalone action on any page registered as a <code>roam:isa</code> target.</li>
   <li>Optional <code>rewriteIsaReferences</code> flag; default off.</li>
 </ul>
