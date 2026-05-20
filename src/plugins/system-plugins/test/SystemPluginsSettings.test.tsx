@@ -246,6 +246,26 @@ describe('SystemPluginsSettings', () => {
     expect(labels.indexOf('Custom Editor')).toBeLessThan(labels.indexOf('Tag Buddy'))
   })
 
+  it('links user extension names to their definition blocks without toggling them', async () => {
+    const onToggle = vi.fn()
+    const tree = [userNode('block-uuid-1', 'Custom Editor')]
+
+    render(
+      <SystemPluginsSettings
+        tree={tree}
+        overrides={new Map()}
+        onToggle={onToggle}
+        workspaceId="ws"
+      />,
+    )
+
+    const link = screen.getByRole('link', {name: /custom editor/i})
+    expect(link).toHaveAttribute('href', '#ws/block-uuid-1')
+
+    await userEvent.click(link)
+    expect(onToggle).not.toHaveBeenCalled()
+  })
+
   it('omits the "User extensions" header when no user-kind handles exist', () => {
     const tree = [node('system:a', 'Alpha'), node('system:b', 'Bravo')]
 

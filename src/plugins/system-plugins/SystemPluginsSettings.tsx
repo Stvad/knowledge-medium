@@ -22,6 +22,7 @@ import {Checkbox} from '@/components/ui/checkbox.tsx'
 import {Label} from '@/components/ui/label.tsx'
 import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
 import {isEnabled, type Overrides, type Togglable} from '@/extensions/togglable.ts'
+import {buildAppHash} from '@/utils/routing.ts'
 
 /** Stable-sort the tree so essentials surface first within each level,
  *  then alphabetical (case-insensitive, locale-aware) within each
@@ -51,12 +52,14 @@ export interface SystemPluginsSettingsProps {
   tree: ReadonlyArray<ToggleNode>
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
+  workspaceId?: string
 }
 
 export const SystemPluginsSettings = ({
   tree,
   overrides,
   onToggle,
+  workspaceId,
 }: SystemPluginsSettingsProps) => {
   // Bucket the top level by handle.kind so user extensions get their
   // own section. Within each bucket: essentials first, then
@@ -87,11 +90,11 @@ export const SystemPluginsSettings = ({
     <div className="flex flex-col gap-4">
       {sections.system.length > 0 && (
         <Section title="System plugins" nodes={sections.system}
-          overrides={overrides} onToggle={onToggle}/>
+          overrides={overrides} onToggle={onToggle} workspaceId={workspaceId}/>
       )}
       {sections.user.length > 0 && (
         <Section title="User extensions" nodes={sections.user}
-          overrides={overrides} onToggle={onToggle}/>
+          overrides={overrides} onToggle={onToggle} workspaceId={workspaceId}/>
       )}
     </div>
   )
@@ -102,9 +105,10 @@ interface SectionProps {
   nodes: ReadonlyArray<ToggleNode>
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
+  workspaceId?: string
 }
 
-const Section = ({title, nodes, overrides, onToggle}: SectionProps) => (
+const Section = ({title, nodes, overrides, onToggle, workspaceId}: SectionProps) => (
   <section className="flex flex-col gap-1">
     <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
       {title}
@@ -116,6 +120,7 @@ const Section = ({title, nodes, overrides, onToggle}: SectionProps) => (
           node={node}
           overrides={overrides}
           onToggle={onToggle}
+          workspaceId={workspaceId}
           level={1}
         />
       ))}
@@ -127,14 +132,19 @@ interface ToggleRowProps {
   node: ToggleNode
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
+  workspaceId?: string
   level: number
 }
 
-const ToggleRow = ({node, overrides, onToggle, level}: ToggleRowProps) => {
+const ToggleRow = ({node, overrides, onToggle, workspaceId, level}: ToggleRowProps) => {
   const {handle, children} = node
   const checked = isEnabled(handle, overrides)
   const essential = handle.essential === true
   const checkboxId = `system-plugin-toggle-${handle.id}`
+  const labelId = `${checkboxId}-label`
+  const definitionHref = handle.kind === 'user' && workspaceId
+    ? buildAppHash(workspaceId, handle.id)
+    : undefined
   // Pad inward per level; level 1 stays flush so the outer row aligns
   // with the parent container.
   const indent = (level - 1) * 16
@@ -151,6 +161,7 @@ const ToggleRow = ({node, overrides, onToggle, level}: ToggleRowProps) => {
       >
         <Checkbox
           id={checkboxId}
+          aria-labelledby={labelId}
           checked={checked}
           disabled={essential}
           onCheckedChange={(next) => {
@@ -159,17 +170,30 @@ const ToggleRow = ({node, overrides, onToggle, level}: ToggleRowProps) => {
           }}
         />
         <div className="flex flex-col">
-          <Label
-            htmlFor={checkboxId}
-            className={essential ? 'text-muted-foreground' : undefined}
-          >
-            {handle.name}
-            {essential && (
-              <span className="ml-2 text-xs text-muted-foreground">
-                (essential)
-              </span>
-            )}
-          </Label>
+          {definitionHref ? (
+            <a
+              id={labelId}
+              href={definitionHref}
+              data-block-id={handle.id}
+              className="rounded-sm text-sm font-medium leading-none text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="Open extension definition"
+            >
+              {handle.name}
+            </a>
+          ) : (
+            <Label
+              id={labelId}
+              htmlFor={checkboxId}
+              className={essential ? 'text-muted-foreground' : undefined}
+            >
+              {handle.name}
+              {essential && (
+                <span className="ml-2 text-xs text-muted-foreground">
+                  (essential)
+                </span>
+              )}
+            </Label>
+          )}
           {handle.description && (
             <span className="text-xs text-muted-foreground">
               {handle.description}
@@ -183,6 +207,7 @@ const ToggleRow = ({node, overrides, onToggle, level}: ToggleRowProps) => {
           node={child}
           overrides={overrides}
           onToggle={onToggle}
+          workspaceId={workspaceId}
           level={level + 1}
         />
       ))}

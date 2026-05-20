@@ -26,6 +26,7 @@ import {useOverrides} from '@/extensions/useOverrides.ts'
 export interface UseToggleTreeResult {
   tree: readonly ToggleNode[]
   loading: boolean
+  workspaceId?: string
 }
 
 export const useToggleTree = (): UseToggleTreeResult => {
@@ -84,5 +85,5 @@ export const useToggleTree = (): UseToggleTreeResult => {
     return () => { cancelled = true }
   }, [baseExtensions, repo, workspaceId, overrides, generation, safeMode])
 
-  return {tree, loading}
+  return {tree, loading, workspaceId: workspaceId ?? undefined}
 }

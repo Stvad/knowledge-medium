@@ -24,7 +24,7 @@ export const SystemPluginsOverridesEditor = ({
   value,
   onChange,
 }: PropertyEditorProps<Overrides>) => {
-  const {tree, loading} = useToggleTree()
+  const {tree, loading, workspaceId} = useToggleTree()
 
   const handleToggle = useCallback(
     (handle: Togglable, nextState: boolean) => {
@@ -42,6 +42,7 @@ export const SystemPluginsOverridesEditor = ({
       tree={tree}
       overrides={value}
       onToggle={handleToggle}
+      workspaceId={workspaceId}
     />
   )
 }
