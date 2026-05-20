@@ -6,7 +6,16 @@ import {
   AppExtension,
   FacetContribution,
 } from '@/extensions/facet.ts'
-import { extensionDisabledProp } from '@/data/properties.ts'
+import {
+  attachBoundary,
+  getAuthorHints,
+  getBoundary,
+  isEnabled,
+  unwrapAuthorHints,
+  userExtensionShellToggle,
+  userExtensionToggle,
+  type Overrides,
+} from '@/extensions/togglable.ts'
 import { Repo } from '../data/repo'
 import { BlockData } from '@/types.ts'
 
@@ -18,6 +27,14 @@ export interface DynamicExtensionsOptions {
   repo: Repo
   workspaceId: string
   safeMode: boolean
+  /** Runtime-toggle overrides. The loader uses this to skip disabled
+   *  blocks *before* compiling (so a disabled extension's top-level
+   *  module code never runs) and to tag enabled extensions with the
+   *  right togglable boundary so the resolver can flip them at runtime
+   *  without rebuilding the dynamic subtree. Defaults to an empty
+   *  map — every block resolves to "enabled" (since
+   *  `userExtensionToggle` forces `defaultEnabled: true`). */
+  overrides?: Overrides
   errorReporter?: ExtensionLoadErrorReporter
   // Optional override for tests. Production uses the module-wide
   // singleton in compileExtensionModule.ts.
@@ -37,6 +54,10 @@ export interface DynamicExtensionsOptions {
  *   - Imports work through the page-global importmap. `import { x }
  *     from '@/extensions/api.js'` returns the *same* module instance
  *     the running app uses, so contribution facets match by identity.
+ *   - Optional `authorHints({name, description}, ext)` wrapper provides
+ *     a display name + description for the toggle row in settings.
+ *     Platform-owned identity (block.id, defaultEnabled) is forced by
+ *     the loader and cannot be overridden by the author.
  *
  * Provenance: every contribution emitted from a block has its `source`
  * field force-prefixed with `block:<id>`. If the author supplied a
@@ -44,14 +65,23 @@ export interface DynamicExtensionsOptions {
  * agent-bridge `describeRuntime` payload show contribution origin
  * unambiguously.
  *
+ * Toggle integration: each enabled extension is wrapped in a
+ * `userExtensionToggle(block, hints)` boundary so the runtime resolver
+ * can disable it without re-loading. Disabled blocks are NOT compiled
+ * (their top-level module code never runs) — instead the loader emits
+ * a `userExtensionShellToggle(block).of([])` so the row still appears
+ * in the settings tree. Compile / hint-unwrap / validate failures
+ * also emit a shell so a broken extension stays user-recoverable.
+ *
  * Failure isolation: a block whose source fails to compile or whose
  * default export is shaped wrong is reported via `errorReporter` and
- * skipped — other extensions still load.
+ * replaced with a shell — other extensions still load.
  */
 export const dynamicExtensionsExtension = (
   options: DynamicExtensionsOptions,
 ): AppExtension => async () => {
-  const {repo, workspaceId, safeMode, errorReporter, cache} = options
+  const {repo, workspaceId, safeMode, overrides, errorReporter, cache} = options
+  const effectiveOverrides: Overrides = overrides ?? new Map()
 
   if (safeMode) {
     console.log('Safe mode enabled — skipping dynamic extension blocks')
@@ -69,19 +99,40 @@ export const dynamicExtensionsExtension = (
   const collected: AppExtension[] = []
 
   for (const block of extensionBlocks) {
-    if (block.properties[extensionDisabledProp.name] === true) continue
+    // Pre-compile skip — `userExtensionToggle.id` is always `block.id`
+    // and `defaultEnabled` is always true, so a disabled state requires
+    // an explicit `false` in the overrides map. This check is what
+    // makes the toggle meaningful: if we didn't skip here, the block's
+    // top-level module code would still execute every reload.
+    const shell = userExtensionShellToggle(block)
+    if (!isEnabled(shell, effectiveOverrides)) {
+      collected.push(shell.of([]))
+      continue
+    }
 
+    // Compile + hint unwrap + validate are all per-block-fallible; any
+    // failure should still emit a shell so the row appears in settings
+    // and the user can disable the broken extension. Errors continue
+    // to flow through ExtensionLoadErrorStore for status-icon
+    // rendering at the row.
     try {
       const {module} = await compileExtensionModule(block.content, block.id, cache)
       const exported = module.default as AppExtension
-      const validated = validateAndPrefix(exported, block.id)
+      const hints = getAuthorHints(exported)
+      const inner = hints ? unwrapAuthorHints(exported) : exported
+      const handle = userExtensionToggle(block, hints)
+      const wrapped = handle.of(inner)
+      const validated = validateAndPrefix(wrapped, block.id)
       if (validated !== null) {
         collected.push(validated)
+      } else {
+        collected.push(shell.of([]))
       }
     } catch (error) {
       const wrapped = error instanceof Error ? error : new Error(String(error))
       errorReporter?.(block.id, wrapped)
       console.error(`Failed to load extension block ${block.id}`, wrapped)
+      collected.push(shell.of([]))
     }
   }
 
@@ -99,6 +150,12 @@ const isFacetContribution = (value: unknown): value is FacetContribution<unknown
  *
  * Returns a normalized AppExtension on success; throws on shape errors so
  * the caller can attribute them to the offending block.
+ *
+ * **Boundary preservation:** when the input array carries a togglable
+ * BOUNDARY symbol (attached by `userExtensionToggle(block).of(...)`),
+ * the freshly-mapped array also gets the symbol. Without this,
+ * `.map()` would drop the marker, leaving the dynamic subtree
+ * untoggleable by the resolver — every disable would no-op.
  */
 const validateAndPrefix = (
   extension: AppExtension,
@@ -109,7 +166,10 @@ const validateAndPrefix = (
   }
 
   if (Array.isArray(extension)) {
-    return extension.map((child) => validateAndPrefix(child, blockId))
+    const mapped = extension.map((child) => validateAndPrefix(child, blockId))
+    const boundary = getBoundary(extension)
+    if (boundary) attachBoundary(mapped, boundary)
+    return mapped
   }
 
   if (typeof extension === 'function') {

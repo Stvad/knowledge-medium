@@ -10,7 +10,7 @@ import {
   resolveFacetRuntime,
   type AppExtension,
 } from '@/extensions/facet'
-import { extensionDisabledProp } from '@/data/properties'
+import type { Overrides } from '@/extensions/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 
@@ -33,11 +33,6 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
   createdBy: overrides.createdBy ?? 'user-1',
   updatedBy: overrides.updatedBy ?? 'user-1',
   deleted: overrides.deleted ?? false,
-})
-
-/** Flat-property shape: boolean codec is identity. */
-const disabled = (value: boolean): Record<string, unknown> => ({
-  [extensionDisabledProp.name]: value,
 })
 
 const makeRepo = (blocks: BlockData[]): Repo => ({
@@ -115,14 +110,15 @@ describe('dynamicExtensionsExtension — full integration', () => {
     }
   })
 
-  it('system:disabled extensions do not appear in the runtime', async () => {
+  it('extensions disabled via overrides do not appear in the runtime', async () => {
     const blocks = [
       blockData({id: 'enabled', content: 'src-enabled'}),
-      blockData({id: 'disabled', content: 'src-disabled', properties: disabled(true)}),
+      blockData({id: 'disabled', content: 'src-disabled'}),
     ]
     const restore = __setCompileImplForTest(async (content) => ({
       default: integrationFacet.of({label: content}),
     }))
+    const overrides: Overrides = new Map([['disabled', false]])
 
     try {
       const ext = dynamicExtensionsExtension({
@@ -130,6 +126,7 @@ describe('dynamicExtensionsExtension — full integration', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides,
       })
       const runtime = await resolveFacetRuntime(ext)
 

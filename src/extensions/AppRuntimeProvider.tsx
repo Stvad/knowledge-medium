@@ -115,6 +115,11 @@ export function AppRuntimeProvider({
             repo,
             workspaceId,
             safeMode,
+            // Threaded so the loader can skip disabled blocks
+            // *before* compileExtensionModule (i.e. their top-level
+            // code never runs) and tag the survivors with toggle
+            // boundaries the resolver can re-evaluate.
+            overrides,
             errorReporter: (blockId, error) => {
               if (cancelled) return
               errorStore.reportError(blockId, error)

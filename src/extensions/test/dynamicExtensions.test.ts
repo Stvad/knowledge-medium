@@ -9,9 +9,12 @@ import {
 import {
   defineFacet,
   resolveFacetRuntime,
+  type AppExtension,
   type FacetContribution,
 } from '@/extensions/facet'
 import { extensionDisabledProp } from '@/data/properties'
+import { getBoundary } from '@/extensions/togglable'
+import type { Overrides } from '@/extensions/togglable'
 import type { Repo } from '../../data/repo'
 import type { BlockData } from '@/data/api'
 
@@ -40,8 +43,11 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
 
 /** Flat-property shape: the boolean codec is identity, so the encoded
  *  value stored in `properties[extensionDisabledProp.name]` is the
- *  raw boolean. */
-const disabledProperty = (value: boolean): Record<string, unknown> => ({
+ *  raw boolean. The loader no longer consults this property (overrides
+ *  are the single source of truth), but the property is still used by
+ *  the one-shot migration effect that folds legacy state into
+ *  overrides — see `system-plugins` plugin. */
+const legacyDisabledProperty = (value: boolean): Record<string, unknown> => ({
   [extensionDisabledProp.name]: value,
 })
 
@@ -213,20 +219,17 @@ describe('dynamicExtensionsExtension — provenance', () => {
   })
 })
 
-describe('dynamicExtensionsExtension — system:disabled', () => {
-  it('skips blocks with system:disabled = true', async () => {
+describe('dynamicExtensionsExtension — overrides-driven disable', () => {
+  it('does not compile or contribute blocks that are disabled in overrides', async () => {
+    const compileImpl = vi.fn().mockImplementation(async (content: string) => ({
+      default: labelsFacet.of(`compiled:${content}`),
+    }))
+    const restore = __setCompileImplForTest(compileImpl)
     const blocks = [
-      blockData({id: 'enabled', content: 'src-enabled'}),
-      blockData({
-        id: 'disabled',
-        content: 'src-disabled',
-        properties: disabledProperty(true),
-      }),
+      blockData({id: 'enabled-block', content: 'src-enabled'}),
+      blockData({id: 'disabled-block', content: 'src-disabled'}),
     ]
-    const restore = stubCompileByBlockId({
-      'src-enabled': {default: labelsFacet.of('on')},
-      'src-disabled': {default: labelsFacet.of('off')},
-    })
+    const overrides: Overrides = new Map([['disabled-block', false]])
 
     try {
       const ext = dynamicExtensionsExtension({
@@ -234,26 +237,98 @@ describe('dynamicExtensionsExtension — system:disabled', () => {
         workspaceId: 'ws-1',
         cache,
         safeMode: false,
+        overrides,
       })
       const runtime = await resolveFacetRuntime(ext)
 
-      expect(runtime.read(labelsFacet)).toEqual(['on'])
+      expect(runtime.read(labelsFacet)).toEqual(['compiled:src-enabled'])
+      // Crucially the disabled block's content is never run through
+      // the compiler — that's what makes the toggle safe for blocks
+      // whose top-level code has side effects.
+      const compiledContents = compileImpl.mock.calls.map(c => c[0])
+      expect(compiledContents).toEqual(['src-enabled'])
     } finally {
       restore()
     }
   })
 
-  it('loads blocks with system:disabled = false (the default)', async () => {
+  it('emits a shell boundary for each disabled block so settings can still surface them', async () => {
+    const restore = stubCompileByBlockId({
+      'src-on': {default: labelsFacet.of('on')},
+    })
+    const blocks = [
+      blockData({id: 'visible-disabled', content: 'src-disabled', properties: {}}),
+      blockData({id: 'visible-on', content: 'src-on'}),
+    ]
+    const overrides: Overrides = new Map([['visible-disabled', false]])
+
+    try {
+      const ext = dynamicExtensionsExtension({
+        repo: makeRepo(blocks),
+        workspaceId: 'ws-1',
+        cache,
+        safeMode: false,
+        overrides,
+      })
+      // Resolve the function to walk its return value.
+      const factory = ext as (ctx: Record<string, unknown>) => Promise<AppExtension[]>
+      const subtree = await factory({})
+
+      expect(subtree.length).toBe(2)
+      const handles = subtree
+        .map(node => getBoundary(node))
+        .filter((h): h is NonNullable<typeof h> => h !== undefined)
+      const ids = handles.map(h => h.id).sort()
+      expect(ids).toEqual(['visible-disabled', 'visible-on'])
+    } finally {
+      restore()
+    }
+  })
+
+  it('ignores the legacy extensionDisabledProp (overrides are the single source of truth)', async () => {
+    const restore = stubCompileByBlockId({
+      'src': {default: labelsFacet.of('legacy-ignored')},
+    })
+    // Block has the legacy property set to true, but overrides has no
+    // entry for it. The loader treats overrides as authoritative, so
+    // the block loads normally. The migration effect in the
+    // system-plugins plugin is responsible for translating legacy
+    // state into overrides at startup.
     const blocks = [
       blockData({
-        id: 'explicit-enabled',
+        id: 'legacy-flagged',
         content: 'src',
-        properties: disabledProperty(false),
+        properties: legacyDisabledProperty(true),
       }),
     ]
+
+    try {
+      const ext = dynamicExtensionsExtension({
+        repo: makeRepo(blocks),
+        workspaceId: 'ws-1',
+        cache,
+        safeMode: false,
+        // No overrides argument — empty map.
+      })
+      const runtime = await resolveFacetRuntime(ext)
+
+      expect(runtime.read(labelsFacet)).toEqual(['legacy-ignored'])
+    } finally {
+      restore()
+    }
+  })
+})
+
+describe('dynamicExtensionsExtension — boundary tagging', () => {
+  it('wraps each enabled block with a userExtensionToggle boundary whose id is the block id', async () => {
     const restore = stubCompileByBlockId({
-      src: {default: labelsFacet.of('on')},
+      'src-a': {default: labelsFacet.of('a')},
+      'src-b': {default: labelsFacet.of('b')},
     })
+    const blocks = [
+      blockData({id: 'block-a', content: 'src-a'}),
+      blockData({id: 'block-b', content: 'src-b'}),
+    ]
 
     try {
       const ext = dynamicExtensionsExtension({
@@ -262,9 +337,13 @@ describe('dynamicExtensionsExtension — system:disabled', () => {
         cache,
         safeMode: false,
       })
-      const runtime = await resolveFacetRuntime(ext)
+      const factory = ext as (ctx: Record<string, unknown>) => Promise<AppExtension[]>
+      const subtree = await factory({})
 
-      expect(runtime.read(labelsFacet)).toEqual(['on'])
+      const ids = subtree
+        .map(node => getBoundary(node)?.id)
+        .filter((id): id is string => id !== undefined)
+      expect(ids.sort()).toEqual(['block-a', 'block-b'])
     } finally {
       restore()
     }
