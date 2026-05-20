@@ -161,4 +161,43 @@ describe('SystemPluginsSettings', () => {
 
     expect(screen.getByText(/no plugins/i)).toBeInTheDocument()
   })
+
+  it('groups essentials at the top, preserving order within each group', () => {
+    // Catalog ordering mixes essentials and non-essentials freely;
+    // the settings UI should hoist essentials so they're not scattered.
+    const tree = [
+      node('system:opt-a', 'OptA'),
+      node('system:ess-1', 'Ess1', {essential: true}),
+      node('system:opt-b', 'OptB'),
+      node('system:ess-2', 'Ess2', {essential: true}),
+      node('system:opt-c', 'OptC'),
+    ]
+
+    render(
+      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+    )
+
+    const rows = screen.getAllByRole('treeitem')
+    const orderedNames = rows.map(r => r.getAttribute('aria-label'))
+    expect(orderedNames).toEqual(['Ess1', 'Ess2', 'OptA', 'OptB', 'OptC'])
+  })
+
+  it('groups essentials first within nested children too', () => {
+    const tree = [
+      node('system:parent', 'Parent', {
+        children: [
+          node('system:child-opt', 'ChildOpt'),
+          node('system:child-ess', 'ChildEss', {essential: true}),
+        ],
+      }),
+    ]
+
+    render(
+      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+    )
+
+    const rows = screen.getAllByRole('treeitem')
+    const orderedNames = rows.map(r => r.getAttribute('aria-label'))
+    expect(orderedNames).toEqual(['Parent', 'ChildEss', 'ChildOpt'])
+  })
 })

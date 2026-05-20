@@ -17,11 +17,30 @@
  *     `aria-level` carries the nesting for assistive tech and tests.
  */
 
-import {Fragment} from 'react'
+import {Fragment, useMemo} from 'react'
 import {Checkbox} from '@/components/ui/checkbox.tsx'
 import {Label} from '@/components/ui/label.tsx'
 import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
 import {isEnabled, type Overrides, type Togglable} from '@/extensions/togglable.ts'
+
+/** Stable-sort the tree so essentials surface first within each level.
+ *  Within "essential" and "non-essential" groups, the original catalog
+ *  order is preserved (Array.prototype.sort is stable in modern engines)
+ *  so the grouping is the only visible change — plugin authors keep
+ *  control of the relative order of their entries. */
+const groupEssentialsFirst = (
+  nodes: ReadonlyArray<ToggleNode>,
+): ToggleNode[] => {
+  const sorted = nodes.toSorted((a, b) => {
+    const aEss = a.handle.essential === true ? 0 : 1
+    const bEss = b.handle.essential === true ? 0 : 1
+    return aEss - bEss
+  })
+  return sorted.map(node => ({
+    handle: node.handle,
+    children: groupEssentialsFirst(node.children),
+  }))
+}
 
 export interface SystemPluginsSettingsProps {
   tree: ReadonlyArray<ToggleNode>
@@ -34,7 +53,12 @@ export const SystemPluginsSettings = ({
   overrides,
   onToggle,
 }: SystemPluginsSettingsProps) => {
-  if (tree.length === 0) {
+  // Essentials grouped first within each level. Recomputed only when
+  // the tree reference changes — the sort is shallow per level and
+  // recursion bounded by tree depth, so this is cheap.
+  const orderedTree = useMemo(() => groupEssentialsFirst(tree), [tree])
+
+  if (orderedTree.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
         No plugins to display.
@@ -44,7 +68,7 @@ export const SystemPluginsSettings = ({
 
   return (
     <ul role="tree" className="flex flex-col gap-1">
-      {tree.map(node => (
+      {orderedTree.map(node => (
         <ToggleRow
           key={node.handle.id}
           node={node}

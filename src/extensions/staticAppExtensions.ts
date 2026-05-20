@@ -42,8 +42,13 @@ import type { AppExtension } from '@/extensions/facet.ts'
 import { systemToggle } from '@/extensions/togglable.ts'
 
 /** Local helper to keep the catalog readable. `essential` defaults
- *  to false — only kernel-level items and the recovery affordance
- *  (command palette) set it true. */
+ *  to false — only items whose absence would break the data layer or
+ *  fundamental rendering (kernel data, default renderers, toast +
+ *  dialog hosts, default editor interactions, the system-plugins
+ *  meta-plugin itself, app-intents bootstrap) set it true. User-
+ *  facing surfaces like the command palette or default keyboard
+ *  shortcuts are toggleable: the user pays the consequence (no
+ *  hotkeys) but the rest of the runtime stays intact. */
 const sys = (
   id: string,
   name: string,
@@ -60,14 +65,14 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // changes wouldn't take effect.
   sys('system-plugins', 'System plugins (toggle storage)', systemPluginsPlugin, {essential: true}),
   sys('kernel-data', 'Kernel data', kernelDataExtension, {essential: true}),
-  sys('kernel-property-ui', 'Property editors', kernelPropertyUiExtension, {essential: true}),
+  sys('kernel-property-ui', 'Property editors', kernelPropertyUiExtension),
   sys('kernel-value-presets', 'Property value presets', kernelValuePresetsExtension, {essential: true}),
   sys('default-renderers', 'Default renderers', defaultRenderersExtension, {essential: true}),
   sys('toast-mount', 'Toasts', toastAppMountExtension, {essential: true}),
   sys('dialog-mount', 'Dialogs', dialogAppMountExtension, {essential: true}),
   sys('breadcrumbs', 'Breadcrumbs', breadcrumbsPlugin),
   sys('default-editor-interactions', 'Default editor interactions', defaultEditorInteractionExtension, {essential: true}),
-  sys('default-actions', 'Default keyboard shortcuts', defaultActionsExtension({repo}), {essential: true}),
+  sys('default-actions', 'Default keyboard shortcuts', defaultActionsExtension({repo})),
   // dailyNotesPlugin contributes both the workspace-landing resolver
   // (used by App.tsx pre-mount) and the open_today / prev / next
   // shortcut actions. Order vs other landing-contributing plugins:
@@ -77,9 +82,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   sys('daily-notes', 'Daily notes', dailyNotesPlugin({repo})),
   sys('left-sidebar', 'Left sidebar', leftSidebarPlugin),
   sys('workspace-header', 'Workspace header', workspaceHeaderPlugin),
-  // Command palette is the recovery affordance — disabling everything
-  // else still leaves a way to run actions, so it stays essential.
-  sys('command-palette', 'Command palette', commandPalettePlugin, {essential: true}),
+  sys('command-palette', 'Command palette', commandPalettePlugin),
   sys('quick-find', 'Quick find', quickFindPlugin),
   sys('find-replace', 'Find and replace', findReplacePlugin),
   sys('theme-toggle', 'Theme toggle', themeTogglePlugin),
