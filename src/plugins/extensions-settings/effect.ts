@@ -1,14 +1,14 @@
 /**
- * System Plugins subscription effect.
+ * Extensions subscription effect.
  *
- * Resolves the per-user System Plugins prefs block, processes its
+ * Resolves the per-user Extensions prefs block, processes its
  * current overrides snapshot, then subscribes to future mutations.
  * Whenever the canonical map diverges from the cached one, the effect
  * writes the cache and dispatches `refreshAppRuntime` so
  * AppRuntimeProvider re-resolves with the fresh state.
  *
  * Codec failures (malformed property shape) are caught here — the
- * fallback is "no overrides" so system plugins keep working while
+ * fallback is "no overrides" so extensions keep working while
  * the surfaced error can be repaired through the settings UI.
  */
 import type {AppEffect} from '@/extensions/core.ts'
@@ -21,8 +21,8 @@ import {
 import {refreshAppRuntime} from '@/extensions/runtimeEvents.ts'
 import type {Overrides} from '@/extensions/togglable.ts'
 import {
-  systemPluginOverridesProp,
-  systemPluginsPrefsType,
+  extensionsOverridesProp,
+  extensionsPrefsType,
 } from './config.ts'
 
 export const overridesEqual = (a: Overrides, b: Overrides): boolean => {
@@ -39,19 +39,19 @@ interface OverridesReadable {
 
 /** Read the overrides map from a Block snapshot. Returns an empty map
  *  on codec failure (malformed property) and logs the error rather
- *  than letting it bubble — taking down system plugins because the
+ *  than letting it bubble — taking down extensions because the
  *  config block is corrupt would defeat the purpose of having a
  *  toggle system. */
 export const readOverridesFromBlock = (
   block: OverridesReadable,
 ): Overrides => {
   try {
-    return block.peekProperty(systemPluginOverridesProp) ?? new Map()
+    return block.peekProperty(extensionsOverridesProp) ?? new Map()
   } catch (error) {
     console.error(
-      'System Plugins: overrides property is malformed; ' +
+      'Extensions: overrides property is malformed; ' +
       'falling back to no overrides. Repair via settings or manually edit ' +
-      'the System Plugins block.',
+      'the Extensions block.',
       error,
     )
     return new Map()
@@ -75,8 +75,8 @@ export const reconcileOverrides = (
   return true
 }
 
-export const systemPluginsSyncEffect: AppEffect = {
-  id: 'system-plugins.sync-cache',
+export const extensionsSyncEffect: AppEffect = {
+  id: 'extensions.sync-cache',
   start: ({repo, workspaceId}) => {
     let disposed = false
     let unsubscribe: (() => void) | undefined
@@ -86,7 +86,7 @@ export const systemPluginsSyncEffect: AppEffect = {
         repo,
         workspaceId,
         repo.user,
-        systemPluginsPrefsType,
+        extensionsPrefsType,
       )
       if (disposed) return
 
@@ -98,7 +98,7 @@ export const systemPluginsSyncEffect: AppEffect = {
       unsubscribe = block.subscribe(reconcile)
     })().catch(error => {
       console.error(
-        'System Plugins: failed to resolve prefs block; ' +
+        'Extensions: failed to resolve prefs block; ' +
         'overrides will not sync until next session.',
         error,
       )

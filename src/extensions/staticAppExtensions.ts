@@ -36,14 +36,14 @@ import { blockTaggingPlugin } from '@/plugins/block-tagging'
 import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
-import { systemPluginsPlugin } from '@/plugins/system-plugins'
+import { extensionsSettingsPlugin } from '@/plugins/extensions-settings'
 import type { AppExtension } from '@/extensions/facet.ts'
 import { systemToggle } from '@/extensions/togglable.ts'
 
 /** Local helper to keep the catalog readable. `essential` defaults
  *  to false — only items whose absence would break the data layer or
  *  fundamental rendering (kernel data, default renderers, toast +
- *  dialog hosts, default editor interactions, the system-plugins
+ *  dialog hosts, default editor interactions, the extensions-settings
  *  meta-plugin itself, app-intents bootstrap) set it true. User-
  *  facing surfaces like the command palette or default keyboard
  *  shortcuts are toggleable: the user pays the consequence (no
@@ -59,10 +59,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernelDataExtension contributes KERNEL_MUTATORS and core data
   // registries. repo.setFacetRuntime REPLACES those registries, so the
   // kernel contribution must be present in every static runtime.
-  // System Plugins meta-plugin owns the overrides map + cache sync.
+  // Extensions meta-plugin owns the overrides map + cache sync.
   // Essential: if disabled, the cache would never refresh and toggle
   // changes wouldn't take effect.
-  sys('system-plugins', 'System plugins (toggle storage)', systemPluginsPlugin, {
+  sys('extensions-settings', 'Extensions (toggle storage)', extensionsSettingsPlugin, {
     essential: true,
     description: 'Stores the overrides map and syncs each change into the localStorage cache so toggles take effect across reloads.',
   }),

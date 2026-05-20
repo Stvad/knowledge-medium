@@ -39,8 +39,8 @@ import {aliasesProp} from '@/data/internals/coreProperties.ts'
 // ──────────────────────────────────────────────────────────────────────
 
 /** Where a togglable came from. The settings UI uses this to bucket
- *  toggles into "System plugins" vs "User extensions" sections, since
- *  the two have different ergonomics (system plugins ship with the
+ *  toggles into "Built-in extensions" vs "User extensions" sections, since
+ *  the two have different ergonomics (built-in extensions ship with the
  *  app; user extensions can be added/removed/reloaded by the user).
  *  Set by the factory and not user-settable. */
 export type TogglableKind = 'system' | 'user'
@@ -50,7 +50,7 @@ export interface Togglable {
   readonly name: string
   readonly description?: string
   readonly essential?: boolean
-  /** undefined ≡ true. Honoured for system plugins; forced true for
+  /** undefined ≡ true. Honoured for built-in extensions; forced true for
    *  user extensions (see `userExtensionToggle`). */
   readonly defaultEnabled?: boolean
   readonly kind: TogglableKind

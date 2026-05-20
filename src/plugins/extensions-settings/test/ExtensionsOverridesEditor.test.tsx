@@ -6,7 +6,7 @@
  * The pieces underneath (tree discovery + checkbox rendering +
  * applyToggle math) are unit-tested independently; here we just
  * confirm the bridge:
- *   - useToggleTree returns are forwarded to <SystemPluginsSettings>
+ *   - useToggleTree returns are forwarded to <ExtensionsSettings>
  *   - toggling a row calls onChange with applyToggle(value, handle, next)
  *   - loading state renders a placeholder
  */
@@ -17,12 +17,12 @@ import type {Block} from '@/data/block'
 import type {PropertyEditorProps} from '@/data/api'
 import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
 import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
-import {SystemPluginsOverridesEditor} from '@/plugins/system-plugins/SystemPluginsOverridesEditor.tsx'
+import {ExtensionsOverridesEditor} from '@/plugins/extensions-settings/ExtensionsOverridesEditor.tsx'
 
 // Stub useToggleTree at the module boundary so we can drive the
 // editor without standing up a real Repo.
 const useToggleTreeMock = vi.hoisted(() => vi.fn())
-vi.mock('@/plugins/system-plugins/useToggleTree.ts', () => ({
+vi.mock('@/plugins/extensions-settings/useToggleTree.ts', () => ({
   useToggleTree: useToggleTreeMock,
 }))
 
@@ -34,14 +34,14 @@ const renderEditor = (props: Partial<PropertyEditorProps<Overrides>> = {}) => {
     onChange: vi.fn(),
     block: {} as Block,
   }
-  return render(<SystemPluginsOverridesEditor {...defaults} {...props} />)
+  return render(<ExtensionsOverridesEditor {...defaults} {...props} />)
 }
 
-describe('SystemPluginsOverridesEditor', () => {
+describe('ExtensionsOverridesEditor', () => {
   it('renders a loading placeholder while the tree resolves', () => {
     useToggleTreeMock.mockReturnValue({tree: [], loading: true})
     renderEditor()
-    expect(screen.getByText(/loading plugins/i)).toBeInTheDocument()
+    expect(screen.getByText(/loading extensions/i)).toBeInTheDocument()
   })
 
   it('renders the toggle tree once useToggleTree settles', () => {

@@ -1,8 +1,8 @@
 /**
- * Command-palette / shortcut action for opening the System Plugins
+ * Command-palette / shortcut action for opening the Extensions
  * settings. The settings UI itself is a `PropertyEditorOverride`
- * registered on `systemPluginOverridesProp`, so "opening settings"
- * is just navigating to the System Plugins prefs block — the block's
+ * registered on `extensionsOverridesProp`, so "opening settings"
+ * is just navigating to the Extensions prefs block — the block's
  * property panel renders the toggle tree.
  *
  * The action also sets `showPropertiesProp: true` on the block so
@@ -16,13 +16,13 @@ import {getPluginPrefsBlock} from '@/data/stateBlocks.ts'
 import {showPropertiesProp} from '@/data/properties.ts'
 import {navigate} from '@/utils/navigation.ts'
 import {ActionContextTypes, type ActionConfig} from '@/shortcuts/types.ts'
-import {systemPluginsPrefsType} from './config.ts'
+import {extensionsPrefsType} from './config.ts'
 
-export const openSystemPluginsSettingsAction: ActionConfig<
+export const openExtensionsSettingsAction: ActionConfig<
   typeof ActionContextTypes.GLOBAL
 > = {
-  id: 'open_system_plugins_settings',
-  description: 'Manage system plugins',
+  id: 'open_extensions_settings',
+  description: 'Manage extensions',
   context: ActionContextTypes.GLOBAL,
   handler: async ({uiStateBlock}) => {
     const repo = uiStateBlock.repo
@@ -32,7 +32,7 @@ export const openSystemPluginsSettingsAction: ActionConfig<
       repo,
       workspaceId,
       repo.user,
-      systemPluginsPrefsType,
+      extensionsPrefsType,
     )
     await prefsBlock.set(showPropertiesProp, true)
     navigate(repo, {target: 'new-panel', blockId: prefsBlock.id, workspaceId})

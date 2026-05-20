@@ -1,5 +1,5 @@
 /**
- * System Plugins meta-plugin — owns the runtime-toggle overrides
+ * Extensions meta-plugin — owns the runtime-toggle overrides
  * map: schema, sub-block, and the subscription effect that keeps
  * the localStorage first-paint cache in sync with PowerSync.
  *
@@ -9,13 +9,13 @@
  */
 
 import type {AppExtension} from '@/extensions/facet.ts'
-import {systemPluginsDataExtension} from './dataExtension.ts'
+import {extensionsDataExtension} from './dataExtension.ts'
 
-export const systemPluginsPlugin: AppExtension = [
-  systemPluginsDataExtension,
+export const extensionsSettingsPlugin: AppExtension = [
+  extensionsDataExtension,
 ]
 
 export {
-  systemPluginOverridesProp,
-  systemPluginsPrefsType,
+  extensionsOverridesProp,
+  extensionsPrefsType,
 } from './config.ts'

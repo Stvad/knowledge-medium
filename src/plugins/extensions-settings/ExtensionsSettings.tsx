@@ -1,11 +1,11 @@
 /**
- * Presentational tree of toggle rows for the System Plugins settings
+ * Presentational tree of toggle rows for the Extensions settings
  * surface.
  *
  * Pure: takes a discovered `ToggleNode[]` + the current `Overrides`
  * map + an `onToggle(handle, next)` callback, and renders nested
  * checkboxes. The caller threads `onToggle` into a write to the
- * System Plugins block (see `setOverride`, slice 9c).
+ * Extensions block (see `setOverride`, slice 9c).
  *
  * Conventions:
  *
@@ -48,19 +48,19 @@ const groupEssentialsFirst = (
     }))
 }
 
-export interface SystemPluginsSettingsProps {
+export interface ExtensionsSettingsProps {
   tree: ReadonlyArray<ToggleNode>
   overrides: Overrides
   onToggle: (handle: Togglable, nextState: boolean) => void
   workspaceId?: string
 }
 
-export const SystemPluginsSettings = ({
+export const ExtensionsSettings = ({
   tree,
   overrides,
   onToggle,
   workspaceId,
-}: SystemPluginsSettingsProps) => {
+}: ExtensionsSettingsProps) => {
   // Bucket the top level by handle.kind so user extensions get their
   // own section. Within each bucket: essentials first, then
   // alphabetical. Nested children inherit the same sort but stay
@@ -81,7 +81,7 @@ export const SystemPluginsSettings = ({
   if (sections.system.length === 0 && sections.user.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        No plugins to display.
+        No extensions to display.
       </p>
     )
   }
@@ -89,7 +89,7 @@ export const SystemPluginsSettings = ({
   return (
     <div className="flex flex-col gap-4">
       {sections.system.length > 0 && (
-        <Section title="System plugins" nodes={sections.system}
+        <Section title="Built-in extensions" nodes={sections.system}
           overrides={overrides} onToggle={onToggle} workspaceId={workspaceId}/>
       )}
       {sections.user.length > 0 && (

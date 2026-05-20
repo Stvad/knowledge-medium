@@ -32,7 +32,7 @@ export function AppRuntimeProvider({
   const repo = useRepo()
   const workspaceId = repo.activeWorkspaceId
   // First-paint overrides + refresh-event subscription. The hook reads
-  // the localStorage cache mirroring the synced System Plugins block,
+  // the localStorage cache mirroring the synced Extensions block,
   // and re-reads after any `refreshAppRuntime()` dispatch (which the
   // meta-plugin's subscribe effect fires whenever the cache and the
   // canonical block diverge).

@@ -32,7 +32,7 @@ export interface Togglable {
   readonly name: string
   readonly description?: string
   readonly essential?: boolean
-  /** undefined ≡ true. Honoured for system plugins; forced true for
+  /** undefined ≡ true. Honoured for built-in extensions; forced true for
    *  user extensions (see UserExtensionToggle).  */
   readonly defaultEnabled?: boolean
   of(ext: AppExtension): AppExtension
@@ -60,7 +60,7 @@ export function getBoundary(node: unknown): Togglable | undefined {
 // ──────────────────────────────────────────────────────────────────────
 // 2. Constrained factories
 //
-//   Two factories, deliberately not one. System plugins live in code
+//   Two factories, deliberately not one. Built-in extensions live in code
 //   and can express any field. User extensions live in blocks: their
 //   id is forced to block.id (so the pre-compile skip is consistent
 //   with post-compile identity), and their defaultEnabled is forced to

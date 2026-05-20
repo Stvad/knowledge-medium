@@ -354,7 +354,7 @@ describe('dynamicExtensionsExtension — safeMode', () => {
   it('enumerates blocks but emits shells (never compiles) so the settings tree can still surface them', async () => {
     // Why the query MUST run: the user typically lands in `?safeMode`
     // exactly to recover from a broken extension. Returning [] here
-    // would hide every extension row from the System plugins settings
+    // would hide every extension row from the Extensions settings
     // tree, leaving them unreachable for toggling. Emitting shells
     // means the toggle rows appear without running any extension's
     // top-level module code.

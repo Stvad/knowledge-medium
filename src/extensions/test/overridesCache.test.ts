@@ -63,7 +63,7 @@ describe('overridesCache', () => {
 
   it('ignores non-boolean values in the stored shape', () => {
     underlying.setItem(
-      'system-plugins.overrides.ws-a',
+      'extensions.overrides.ws-a',
       JSON.stringify({
         'system:a': false,
         'system:bad-string': 'no',
@@ -78,12 +78,12 @@ describe('overridesCache', () => {
   })
 
   it('returns an empty map when the stored value is malformed JSON', () => {
-    underlying.setItem('system-plugins.overrides.ws-a', 'not-json')
+    underlying.setItem('extensions.overrides.ws-a', 'not-json')
     expect(readOverridesCache('ws-a', storage).size).toBe(0)
   })
 
   it('returns an empty map when the stored value is the wrong shape', () => {
-    underlying.setItem('system-plugins.overrides.ws-a', JSON.stringify([1, 2, 3]))
+    underlying.setItem('extensions.overrides.ws-a', JSON.stringify([1, 2, 3]))
     expect(readOverridesCache('ws-a', storage).size).toBe(0)
   })
 

@@ -183,7 +183,7 @@
   <main>
     <h1>Runtime plugin enable/disable</h1>
     <p class="lede">
-      System plugins live in a hardcoded array. To toggle one you change code. This doc
+      Built-in extensions live in a hardcoded array. To toggle one you change code. This doc
       lays out a design for flipping them at runtime, modeled on how CodeMirror handles
       the same problem — compose by value, identify only what users toggle, dedup by
       reference, and stay out of the dependency-graph business.
@@ -205,13 +205,13 @@
         <li><strong>Implication via <code>enables</code>.</strong> A facet contribution can drag siblings along — they exist iff it does.</li>
         <li><strong>Disable is a boundary-scoped filter.</strong> Skip the subtree at any boundary whose handle resolves to off via the overrides map + manifest defaults. One central store, system + user extensions both. The existing <code>app-runtime-update</code> handles rebuild + effect teardown.</li>
         <li><strong>Settings UI is a tree</strong> derived by walking the unfiltered extension tree — nested togglables render as nested checkboxes.</li>
-        <li><strong>Recovery folds into existing <code>?safeMode</code></strong> — same URL flag also skips non-essential system plugins.</li>
+        <li><strong>Recovery folds into existing <code>?safeMode</code></strong> — same URL flag also skips non-essential built-in extensions.</li>
       </ul>
     </div>
 
     <h2>Where things stand today</h2>
     <ul>
-      <li><strong>System plugins:</strong> flat array of <code>AppExtension</code> in
+      <li><strong>Built-in extensions:</strong> flat array of <code>AppExtension</code> in
         <code>src/extensions/staticAppExtensions.ts</code>. No identity beyond
         <code>source</code> strings on individual contributions.</li>
       <li><strong>User extensions:</strong> blocks with a <code>system:disabled</code>
@@ -223,7 +223,7 @@
         (<code>AppRuntimeProvider.tsx:145–176</code>).</li>
       <li><strong>Safe mode exists:</strong> <code>?safeMode</code> URL parameter skips all
         dynamic extensions (<code>dynamicExtensions.ts:56–59</code>). Doesn't yet skip
-        system plugins.</li>
+        built-in extensions.</li>
       <li><strong>Per-plugin prefs blocks exist</strong> via
         <code>pluginPrefsExtension()</code>.</li>
     </ul>
@@ -281,7 +281,7 @@ function getBoundary(node: unknown): Togglable | undefined {
       to keep explaining which field is honoured where.
     </p>
 
-<pre><code>// System plugins live in code and can express any field.
+<pre><code>// Built-in extensions live in code and can express any field.
 function systemToggle(opts: {
   id: string
   name: string
@@ -451,7 +451,7 @@ export default authorHints(
       Why a handle instead of a manifest object (<code>{id, name, extension}</code>)? The handle
       composes anywhere — wrap a single facet contribution, a sub-tree, or a whole plugin
       with equal ease. It keeps the public type as <code>AppExtension</code>, so nothing else
-      in the resolver grows a new branch. And the same primitive serves both system plugins
+      in the resolver grows a new branch. And the same primitive serves both built-in extensions
       and user extensions, instead of bifurcating into two parallel mechanisms.
     </div>
 
@@ -751,12 +751,12 @@ export const videoPlayerPlugin: AppExtension = [
 
     <h2>Storage — central overrides map, both kinds of plugin</h2>
     <p>
-      One block under the Preferences tree, owned by a <code>system-plugins</code>
+      One block under the Preferences tree, owned by an <code>extensions-settings</code>
       meta-plugin (itself <code>essential</code>):
     </p>
 
     <div class="diagram">Preferences
-└── System Plugins                ← single block
+└── Extensions                    ← single block
       properties:
         overrides: {
           "vim-normal-mode":    false,   ← user turned off (default was on)
@@ -963,12 +963,12 @@ async function discoverToggleTree(
       (<code>src/App.tsx:319</code>) routes through <code>FacetResolveContext</code> and
       causes <code>dynamicExtensionsExtension</code> to return an empty list
       (<code>dynamicExtensions.ts:56–59</code>). Extend it to also skip non-essential
-      system plugins. One escape hatch, not two.
+      built-in extensions. One escape hatch, not two.
     </p>
 
     <h2>What happens when a user disables "Daily Notes"</h2>
     <ol>
-      <li>UI writes <code>{"daily-notes": false}</code> into the System Plugins block's
+      <li>UI writes <code>{"daily-notes": false}</code> into the Extensions block's
         <code>overrides</code> map (since the default for <code>daily-notes</code> was
         <code>on</code>, the new effective state of <code>off</code> deviates from the
         default and is recorded). Also updates the <code>ClientLocalSettings</code>
@@ -1030,7 +1030,7 @@ async function discoverToggleTree(
         <code>Togglable</code> type) from <code>src/extensions/api.ts</code> so
         extension authors can <code>import &#123; authorHints &#125; from
         '@/extensions/api.js'</code> following the existing convention. Wrap existing
-        system plugins in <code>systemToggle({id, name, ...}).of(...)</code>. Mark a
+        built-in extensions in <code>systemToggle({id, name, ...}).of(...)</code>. Mark a
         handful <code>essential: true</code> (kernel, prefs bootstrap, command
         palette). At startup, log a warning when the overrides map contains ids that
         don't appear in the discovered toggle tree — catches the id-drift case
@@ -1045,7 +1045,7 @@ async function discoverToggleTree(
         subtrees that resolve to off. Start with an empty overrides map and all manifest
         defaults; prove that disabling one plugin programmatically actually unmounts
         components, runs effect cleanups, and re-mounts on re-enable.</li>
-      <li><strong>Wire storage</strong> — the meta-plugin, the System Plugins block, the
+      <li><strong>Wire storage</strong> — the meta-plugin, the Extensions block, the
         <code>ClientLocalSettings</code> cache, the <code>refreshAppRuntime</code> dispatch
         on change.</li>
       <li><strong>Migrate user extensions</strong> — one-shot migration folds any

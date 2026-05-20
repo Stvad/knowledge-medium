@@ -1,10 +1,10 @@
 /**
- * Component tests for the System Plugins settings tree.
+ * Component tests for the Extensions settings tree.
  *
  * The component is presentational: it takes a discovered tree + the
  * current overrides + an onToggle callback and renders nested
- * checkboxes. Persistence (writing the overrides map to the System
- * Plugins block) is the parent's responsibility — these tests stub it
+ * checkboxes. Persistence (writing the overrides map to the Extensions
+ * block) is the parent's responsibility — these tests stub it
  * with a vi.fn so the contract between component and host is testable
  * in isolation.
  */
@@ -18,7 +18,7 @@ import {
   userExtensionToggle,
   type Overrides,
 } from '@/extensions/togglable.ts'
-import {SystemPluginsSettings} from '@/plugins/system-plugins/SystemPluginsSettings.tsx'
+import {ExtensionsSettings} from '@/plugins/extensions-settings/ExtensionsSettings.tsx'
 
 const node = (
   id: string,
@@ -51,12 +51,12 @@ const userNode = (
   children: [],
 })
 
-describe('SystemPluginsSettings', () => {
+describe('ExtensionsSettings', () => {
   it('renders a row per handle with its display name', () => {
     const tree = [node('system:a', 'Alpha'), node('system:b', 'Beta')]
 
     render(
-      <SystemPluginsSettings
+      <ExtensionsSettings
         tree={tree}
         overrides={new Map()}
         onToggle={vi.fn()}
@@ -76,7 +76,7 @@ describe('SystemPluginsSettings', () => {
     const overrides: Overrides = new Map([['system:disabled-override', false]])
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={overrides} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={overrides} onToggle={vi.fn()} />,
     )
 
     expect(screen.getByRole('checkbox', {name: /^enabled$/i}))
@@ -92,7 +92,7 @@ describe('SystemPluginsSettings', () => {
     const tree = [node('system:core', 'Core', {essential: true})]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={onToggle} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={onToggle} />,
     )
 
     const checkbox = screen.getByRole('checkbox', {name: /core/i})
@@ -109,7 +109,7 @@ describe('SystemPluginsSettings', () => {
     const tree: ToggleNode[] = [{handle: handleA, children: []}]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={onToggle} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={onToggle} />,
     )
 
     await userEvent.click(screen.getByRole('checkbox', {name: /^a$/i}))
@@ -127,7 +127,7 @@ describe('SystemPluginsSettings', () => {
     const overrides: Overrides = new Map([['system:a', false]])
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={overrides} onToggle={onToggle} />,
+      <ExtensionsSettings tree={tree} overrides={overrides} onToggle={onToggle} />,
     )
 
     await userEvent.click(screen.getByRole('checkbox', {name: /^a$/i}))
@@ -146,7 +146,7 @@ describe('SystemPluginsSettings', () => {
     ]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     // All three checkboxes should be in the DOM; nesting is asserted
@@ -164,7 +164,7 @@ describe('SystemPluginsSettings', () => {
     ]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     expect(screen.getByText('A description of the plugin')).toBeInTheDocument()
@@ -172,10 +172,10 @@ describe('SystemPluginsSettings', () => {
 
   it('renders an empty-state message when the tree is empty', () => {
     render(
-      <SystemPluginsSettings tree={[]} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={[]} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
-    expect(screen.getByText(/no plugins/i)).toBeInTheDocument()
+    expect(screen.getByText(/no extensions/i)).toBeInTheDocument()
   })
 
   it('groups essentials at the top, then non-essentials below', () => {
@@ -191,7 +191,7 @@ describe('SystemPluginsSettings', () => {
     ]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     const rows = screen.getAllByRole('treeitem')
@@ -210,7 +210,7 @@ describe('SystemPluginsSettings', () => {
     ]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     const rows = screen.getAllByRole('treeitem')
@@ -220,7 +220,7 @@ describe('SystemPluginsSettings', () => {
     expect(orderedNames).toEqual(['Alpha-E', 'Zulu', 'alpha', 'Bravo', 'Charlie'])
   })
 
-  it('renders separate "System plugins" and "User extensions" sections when both are present', () => {
+  it('renders separate built-in and user extension sections when both are present', () => {
     const tree = [
       node('system:a', 'Alpha'),
       userNode('block-uuid-1', 'Custom Editor'),
@@ -229,11 +229,11 @@ describe('SystemPluginsSettings', () => {
     ]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     // Both section headers present.
-    expect(screen.getByText(/system plugins/i)).toBeInTheDocument()
+    expect(screen.getByText(/built-in extensions/i)).toBeInTheDocument()
     expect(screen.getByText(/user extensions/i)).toBeInTheDocument()
 
     // System rows come before user rows in DOM order.
@@ -251,7 +251,7 @@ describe('SystemPluginsSettings', () => {
     const tree = [userNode('block-uuid-1', 'Custom Editor')]
 
     render(
-      <SystemPluginsSettings
+      <ExtensionsSettings
         tree={tree}
         overrides={new Map()}
         onToggle={onToggle}
@@ -270,20 +270,20 @@ describe('SystemPluginsSettings', () => {
     const tree = [node('system:a', 'Alpha'), node('system:b', 'Bravo')]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     expect(screen.queryByText(/user extensions/i)).not.toBeInTheDocument()
   })
 
-  it('omits the "System plugins" header when only user extensions exist', () => {
+  it('omits the built-in extensions header when only user extensions exist', () => {
     const tree = [userNode('block-uuid-only', 'Just Mine')]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
-    expect(screen.queryByText(/system plugins/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/built-in extensions/i)).not.toBeInTheDocument()
     expect(screen.getByText(/user extensions/i)).toBeInTheDocument()
   })
 
@@ -298,7 +298,7 @@ describe('SystemPluginsSettings', () => {
     ]
 
     render(
-      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+      <ExtensionsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
     )
 
     const rows = screen.getAllByRole('treeitem')

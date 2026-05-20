@@ -6,7 +6,7 @@
  *
  *   1. **Sync read of the localStorage cache** at mount/render — so the
  *      first paint sees the user's most recent intent without waiting
- *      for PowerSync to hydrate the System Plugins block.
+ *      for PowerSync to hydrate the Extensions block.
  *   2. **Subscribe to `appRuntimeUpdateEvent`** — when the meta-plugin's
  *      subscription effect dispatches a refresh (cache diverged from
  *      the synced block), bump local state so the memo invalidates and

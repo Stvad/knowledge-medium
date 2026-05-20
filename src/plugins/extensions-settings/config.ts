@@ -1,11 +1,11 @@
 /**
- * Storage shape for the System Plugins meta-plugin.
+ * Storage shape for the Extensions meta-plugin.
  *
  * One per-user prefs block (via `getPluginPrefsBlock`) holds the
  * `overrides` map for every togglable in the runtime. The codec
  * follows the standard "throw on shape mismatch" convention — the
  * subscription effect catches the throw and falls back to the empty
- * map, so a manual edit gone wrong doesn't take down system plugins.
+ * map, so a manual edit gone wrong doesn't take down extensions.
  */
 import {
   ChangeScope,
@@ -41,15 +41,15 @@ const decodeOverridesStrict = (json: unknown): Overrides => {
 }
 
 export const overridesCodec: Codec<Overrides> = {
-  type: 'system-plugins:overrides',
+  type: 'extensions:overrides',
   encode: encodeOverrides,
   decode: decodeOverridesStrict,
   // No `where` capability — we never `json_extract(... overrides ...) = ?`.
 }
 
-/** The overrides map property on the System Plugins block. */
-export const systemPluginOverridesProp = defineProperty<Overrides>(
-  'system-plugins:overrides',
+/** The overrides map property on the Extensions block. */
+export const extensionsOverridesProp = defineProperty<Overrides>(
+  'extensions:overrides',
   {
     codec: overridesCodec,
     defaultValue: new Map<string, boolean>(),
@@ -57,11 +57,11 @@ export const systemPluginOverridesProp = defineProperty<Overrides>(
   },
 )
 
-/** Per-user prefs sub-block type for the System Plugins meta-plugin.
+/** Per-user prefs sub-block type for the Extensions meta-plugin.
  *  Holds the central overrides map for every togglable. Lives under the
  *  Preferences tree via `getPluginPrefsBlock`. */
-export const systemPluginsPrefsType = defineBlockType({
-  id: 'system-plugins-prefs',
-  label: 'System plugins',
-  properties: [systemPluginOverridesProp],
+export const extensionsPrefsType = defineBlockType({
+  id: 'extensions-prefs',
+  label: 'Extensions',
+  properties: [extensionsOverridesProp],
 })

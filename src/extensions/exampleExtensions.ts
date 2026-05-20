@@ -336,7 +336,7 @@ import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 
 // Replaces the app-wide renderer registered under id 'layout', so
 // inserting this example wraps every panel with the custom frame
-// below. Disable the row in System plugins settings (or delete the
+// below. Disable the row in Extensions settings (or delete the
 // block) to revert to the host LayoutRenderer.
 
 const DemoLayoutRenderer = (props) => (
@@ -382,7 +382,7 @@ import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRe
 // that falls through to the default renderer: empty blocks show a
 // muted read-mode placeholder while edit mode, children, properties,
 // bullets, and selection chrome stay unchanged. Disable the row in
-// System plugins settings (or delete the block) to revert.
+// Extensions settings (or delete the block) to revert.
 
 const PlaceholderContent = ({ block }) => {
   const content = block.peek()?.content ?? ''
@@ -438,8 +438,8 @@ Below are example **extension blocks** (\`types: ['extension']\`) that show the 
 - **emoji-react** — a multi-facet plugin (decorating content renderer + click handler + action).
 - **kudos-facet** — defines a brand-new facet and decorates the content with a banner.
 - **split-layout** — replaces the block layout for blocks tagged \`user:layout = split\`, placing content and children side by side.
-- **layout-renderer-override** — overrides the app-wide \`layout\` renderer id and wraps the normal panel layout with a custom frame. Inserting it changes every panel until you disable it in System plugins settings.
-- **default-renderer-placeholder** — overrides the fallback \`default\` renderer id so ordinary empty blocks show a muted read-mode placeholder. Inserting it changes every default-rendered block until you disable it in System plugins settings.
+- **layout-renderer-override** — overrides the app-wide \`layout\` renderer id and wraps the normal panel layout with a custom frame. Inserting it changes every panel until you disable it in Extensions settings.
+- **default-renderer-placeholder** — overrides the fallback \`default\` renderer id so ordinary empty blocks show a muted read-mode placeholder. Inserting it changes every default-rendered block until you disable it in Extensions settings.
 
 To author your own:
 1. Create a block with property \`types = ['extension']\`.
@@ -449,7 +449,7 @@ To author your own:
 
 To re-insert these examples beside any block, run **Insert example extensions** from the command palette.
 
-To turn an extension off without deleting it, open **System plugins** from the command palette and untick its row. The override is per-device and persists across reloads.`
+To turn an extension off without deleting it, open **Extensions** from the command palette and untick its row. The override is per-device and persists across reloads.`
 
 /**
  * Append the example-extension blocks under `parentBlock`. Used by the

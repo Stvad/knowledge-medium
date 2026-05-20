@@ -15,21 +15,21 @@ import type {PropertySchema} from '@/data/api'
 import {
   reconcileOverrides,
   readOverridesFromBlock,
-} from '@/plugins/system-plugins/effect.ts'
+} from '@/plugins/extensions-settings/effect.ts'
 import {
-  systemPluginOverridesProp,
-} from '@/plugins/system-plugins/config.ts'
+  extensionsOverridesProp,
+} from '@/plugins/extensions-settings/config.ts'
 import {writeOverridesCache} from '@/extensions/overridesCache.ts'
 import type {Overrides} from '@/extensions/togglable.ts'
 
-/** Build a stub block whose `peekProperty(systemPluginOverridesProp)`
+/** Build a stub block whose `peekProperty(extensionsOverridesProp)`
  *  returns the supplied value (or throws). Other properties return
  *  undefined. */
 const makeBlock = (
   overridesOrError: Overrides | Error,
 ) => ({
   peekProperty<T>(schema: PropertySchema<T>): T | undefined {
-    if (schema !== systemPluginOverridesProp) return undefined
+    if (schema !== extensionsOverridesProp) return undefined
     if (overridesOrError instanceof Error) throw overridesOrError
     return overridesOrError as unknown as T
   },
@@ -83,7 +83,7 @@ describe('reconcileOverrides', () => {
     expect(refreshed).toBe(true)
     expect(dispatch).toHaveBeenCalledTimes(1)
     // localStorage now holds the new map
-    const stored = localStorage.getItem(`system-plugins.overrides.${ws}`)
+    const stored = localStorage.getItem(`extensions.overrides.${ws}`)
     expect(JSON.parse(stored ?? 'null')).toEqual({'system:vim': false})
   })
 
@@ -147,7 +147,7 @@ describe('reconcileOverrides', () => {
 
     expect(reconcileOverrides(ws, block, dispatch)).toBe(true)
     expect(dispatch).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(localStorage.getItem(`system-plugins.overrides.${ws}`) ?? 'null'))
+    expect(JSON.parse(localStorage.getItem(`extensions.overrides.${ws}`) ?? 'null'))
       .toEqual({})
   })
 
