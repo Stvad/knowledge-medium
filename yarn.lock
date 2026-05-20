@@ -775,7 +775,7 @@
   dependencies:
     event-iterator "^2.0.0"
 
-"@powersync/common@1.53.1":
+"@powersync/common@1.53.1", "@powersync/common@^1.53.1":
   version "1.53.1"
   resolved "https://registry.yarnpkg.com/@powersync/common/-/common-1.53.1.tgz#fd740827199bd5b18809d8e749f243fa123c68d3"
   integrity sha512-WAW/XQKpYPCBC66WIf9VjgLzA0YLpQg1TEMwzpCqKm6BuuLoHh6rLMb3PKJ84foFzUHcyF6thw7fB5VvwyguQw==
@@ -798,7 +798,7 @@
   resolved "https://registry.yarnpkg.com/@powersync/react/-/react-1.10.0.tgz#20a17805be0d2295cf634212101bbfd2ee886983"
   integrity sha512-orM29qocbF8zYTBM27j9nPNztyplpbNVaw8djpqxl8N2wESqHTbHOKpatg+Fa5aofgjzmrkiGwevJvCbiWYYWQ==
 
-"@powersync/web@1.38.1":
+"@powersync/web@^1.38.1":
   version "1.38.1"
   resolved "https://registry.yarnpkg.com/@powersync/web/-/web-1.38.1.tgz#68a8151da0b6e1638eacbc50f3050a7bb1149eab"
   integrity sha512-mr5cd8CLgMJJ3QV5TvZyTSvr+ibc9ib6eU/5p9XQypxYG5fA/YrktSk2yTFzve4R0Y5xBLwRhPd61HeKYTjMjA==
