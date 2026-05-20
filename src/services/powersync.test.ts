@@ -26,10 +26,13 @@ const del = (clientId: number, id: string, txId = 1) =>
   new CrudEntry(clientId, UpdateType.DELETE, 'blocks', id, txId)
 
 describe('PowerSync upload compaction', () => {
-  it('splits PUT + PATCH chains into a create plus an accumulated patch', () => {
-    // The split preserves user-intentional edits (the PATCH) while letting the
-    // CREATE be a no-op when the server already has the row (deterministic-id
-    // collisions during bootstrap on a fresh client — see globalState.ts).
+  it('fuses same-tx PUT + PATCH into a single create with merged columns', () => {
+    // Within one tx, the developer's intent is a single atomic state — the
+    // PUT+PATCH split is an abstraction artefact (e.g. `tx.create` followed
+    // by `addTypeInTx` writing the types property as a PATCH). Fusing lets
+    // the wire op stay a single insert-or-skip CREATE, so a fresh client
+    // bootstrapping over an already-synced server row never clobbers the
+    // saved `properties_json`.
     const operations = __compactBlockCrudEntriesForTest([
       put(1, 'block-a', {
         workspace_id: 'workspace-a',
@@ -38,15 +41,58 @@ describe('PowerSync upload compaction', () => {
         content: 'A',
         properties_json: '{}',
         updated_at: 1,
-      }),
+      }, /* txId */ 1),
       patch(2, 'block-a', {
         properties_json: '{"alias":["A"]}',
         updated_at: 2,
-      }),
+      }, /* txId */ 1),
       patch(3, 'block-a', {
         properties_json: '{"alias":["A"],"types":["page"]}',
         updated_at: 3,
-      }),
+      }, /* txId */ 1),
+    ])
+
+    expect(operations).toEqual([
+      {
+        kind: 'create',
+        id: 'block-a',
+        order: 0,
+        payload: {
+          id: 'block-a',
+          workspace_id: 'workspace-a',
+          parent_id: null,
+          order_key: 'a0',
+          content: 'A',
+          properties_json: '{"alias":["A"],"types":["page"]}',
+          updated_at: 3,
+        },
+      },
+    ])
+  })
+
+  it('keeps PUT and PATCH separate when they come from different transactions', () => {
+    // Cross-tx: the PUT is the bootstrap insert; the PATCH is a later
+    // user-intentional edit (separate tx). The PATCH must still land on the
+    // server even when the CREATE is a no-op insert-or-skip on a row the
+    // server already has — that's how user edits committed before initial
+    // sync still propagate after the deterministic-id collision is detected.
+    const operations = __compactBlockCrudEntriesForTest([
+      put(1, 'block-a', {
+        workspace_id: 'workspace-a',
+        parent_id: null,
+        order_key: 'a0',
+        content: 'A',
+        properties_json: '{}',
+        updated_at: 1,
+      }, /* txId */ 1),
+      patch(2, 'block-a', {
+        properties_json: '{"alias":["A"]}',
+        updated_at: 2,
+      }, /* txId */ 2),
+      patch(3, 'block-a', {
+        properties_json: '{"alias":["A"],"types":["page"]}',
+        updated_at: 3,
+      }, /* txId */ 3),
     ])
 
     expect(operations).toEqual([

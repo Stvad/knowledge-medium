@@ -41,17 +41,24 @@ type CompactedBlockOperation =
       order: number
     }
 
-// Per-id accumulator used by `compactBlockCrudEntries`. PUT and PATCH are
-// tracked in separate slots so we can emit them as distinct wire ops, which
-// lets the server treat PUT as insert-or-skip without losing the PATCH
-// deltas. A row that already exists on the server (deterministic-id collision
-// during bootstrap, restart with empty local DB, etc.) keeps its server-side
-// state for the columns it covers, and the PATCH still applies the user's
-// intentional edits on top.
+// Per-id accumulator used by `compactBlockCrudEntries`.
+//
+// PATCHes that share a transaction with the create are folded into the
+// create's payload (`createTxId` tracks which tx the create came from), so
+// the bootstrap pattern `tx.create({props: {}}) → addTypeInTx (PATCH)`
+// emits a single insert-or-skip CREATE rather than CREATE+PATCH — without
+// fusion the PATCH overwrites the server's `properties_json` and wipes
+// preferences when a deterministic-id row already exists server-side.
+//
+// PATCHes from a DIFFERENT tx than the create stay in the separate `patch`
+// slot so they still emit as their own wire op: the CREATE may be a no-op
+// insert-or-skip (server already has the row), but the cross-tx PATCH is a
+// user-intentional edit that must land regardless.
 type PerBlockState = {
   id: string
   order: number
   create?: BlockUploadPayload
+  createTxId?: number
   patch?: Record<string, unknown>
   deleted?: true
 }
@@ -87,11 +94,13 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
     if (entry.op === UpdateType.PUT) {
       // A fresh PUT supersedes any prior state for this id in the batch —
       // it's a full row snapshot at INSERT time. Subsequent PATCHes in
-      // this batch will accumulate again on top.
+      // this batch will fuse into the create or accumulate separately
+      // depending on whether they share the PUT's tx (see PATCH branch).
       byId.set(entry.id, {
         id: entry.id,
         order,
         create: blockPayloadFromPut(entry),
+        createTxId: entry.transactionId,
       })
       continue
     }
@@ -102,10 +111,28 @@ const compactBlockCrudEntries = (entries: readonly CrudEntry[]): CompactedBlockO
       // already decided the row is gone). This is defensive — repo.tx
       // shouldn't produce that sequence.
       if (existing?.deleted) continue
+
+      // Same-tx fusion: when the PATCH shares the create's tx, merge its
+      // columns into the create payload. The PATCH carries the final
+      // post-update value for each column it touches, so `{...create,
+      // ...patch}` is the right merge direction.
+      if (
+        existing?.create
+        && existing.createTxId !== undefined
+        && existing.createTxId === entry.transactionId
+      ) {
+        byId.set(entry.id, {
+          ...existing,
+          create: {...existing.create, ...patchData},
+        })
+        continue
+      }
+
       byId.set(entry.id, {
         id: entry.id,
         order: existing?.order ?? order,
         create: existing?.create,
+        createTxId: existing?.createTxId,
         patch: existing?.patch ? {...existing.patch, ...patchData} : patchData,
       })
       continue
