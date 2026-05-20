@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": null,
+    "paths": {
+      "@/*": ["../../src/*"]
+    }
+  },
+  "include": ["design.ts"]
+}

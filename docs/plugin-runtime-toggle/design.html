@@ -1,0 +1,1037 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runtime plugin enable/disable</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --fg: #171717;
+      --muted: #5f6368;
+      --line: #d6d9de;
+      --code: #f5f6f8;
+      --accent: #0f766e;
+      --warn: #b45309;
+      --diagram-fg: #2c3038;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e8eaed;
+        --muted: #a8adb4;
+        --line: #343941;
+        --code: #20242a;
+        --accent: #5eead4;
+        --warn: #fbbf24;
+        --diagram-fg: #d4d8e0;
+      }
+    }
+
+    body {
+      margin: 0;
+      color: var(--fg);
+      background: Canvas;
+      line-height: 1.55;
+    }
+
+    main {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 40px 24px 64px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 2rem;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 40px 0 10px;
+      font-size: 1.2rem;
+    }
+
+    h3 {
+      margin: 24px 0 6px;
+      font-size: 1.02rem;
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul, ol {
+      margin: 0 0 16px 22px;
+      padding: 0;
+    }
+
+    li {
+      margin-bottom: 4px;
+    }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      padding: 0.08rem 0.28rem;
+      border-radius: 4px;
+      background: var(--code);
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--code);
+      font-size: 0.88em;
+    }
+
+    pre code {
+      padding: 0;
+      background: none;
+      font-size: 1em;
+    }
+
+    .lede {
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .decision {
+      border-left: 3px solid var(--accent);
+      padding: 4px 0 4px 14px;
+      color: var(--muted);
+      margin: 14px 0;
+    }
+
+    .warn {
+      border-left: 3px solid var(--warn);
+      padding: 4px 0 4px 14px;
+      margin: 14px 0;
+    }
+
+    .diagram {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre;
+      background: var(--code);
+      color: var(--diagram-fg);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin: 16px 0;
+      font-size: 0.82rem;
+      line-height: 1.4;
+      overflow-x: auto;
+    }
+
+    .tldr {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 18px;
+      margin: 16px 0 24px;
+      background: var(--code);
+    }
+
+    .tldr h3 {
+      margin: 0 0 6px;
+      color: var(--fg);
+      font-size: 0.92rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .tldr ul {
+      margin-bottom: 0;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 12px 0 18px;
+      font-size: 0.93em;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+
+    th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 0.85em;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .footnote {
+      color: var(--muted);
+      font-size: 0.92em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Runtime plugin enable/disable</h1>
+    <p class="lede">
+      System plugins live in a hardcoded array. To toggle one you change code. This doc
+      lays out a design for flipping them at runtime, modeled on how CodeMirror handles
+      the same problem — compose by value, identify only what users toggle, dedup by
+      reference, and stay out of the dependency-graph business.
+    </p>
+
+    <p class="lede">
+      Canonical companion: <code>design.ts</code> in this directory — types and signatures,
+      typechecked against the real codebase. The prose describes; the <code>.ts</code>
+      specifies. Run
+      <code>yarn tsc --noEmit --project docs/plugin-runtime-toggle/tsconfig.json</code>
+      to verify.
+    </p>
+
+    <div class="tldr">
+      <h3>Design at a glance</h3>
+      <ul>
+        <li><strong>Identity via a Compartment-style handle.</strong> <code>togglable({id, name}).of(ext)</code> wraps a subtree with a boundary marker. Extensions stay plain values; the handle is the identity.</li>
+        <li><strong>Dependencies are inclusion + dedup.</strong> Plugin A needs B → A's extension array contains B's contributions. Reference-equality dedup makes overlap free. Plugin authors export <em>both</em> a bare contributions const (hard-dep inclusion) <em>and</em> a wrapped togglable (user-facing toggle).</li>
+        <li><strong>Ordering already exists</strong> as <code>precedence?: number</code> on <code>FacetContribution</code>. Keep it.</li>
+        <li><strong>Implication via <code>enables</code>.</strong> A facet contribution can drag siblings along — they exist iff it does.</li>
+        <li><strong>Disable is a boundary-scoped filter.</strong> Skip the subtree at any boundary whose handle resolves to off via the overrides map + manifest defaults. One central store, system + user extensions both. The existing <code>app-runtime-update</code> handles rebuild + effect teardown.</li>
+        <li><strong>Settings UI is a tree</strong> derived by walking the unfiltered extension tree — nested togglables render as nested checkboxes.</li>
+        <li><strong>Recovery folds into existing <code>?safeMode</code></strong> — same URL flag also skips non-essential system plugins.</li>
+      </ul>
+    </div>
+
+    <h2>Where things stand today</h2>
+    <ul>
+      <li><strong>System plugins:</strong> flat array of <code>AppExtension</code> in
+        <code>src/extensions/staticAppExtensions.ts</code>. No identity beyond
+        <code>source</code> strings on individual contributions.</li>
+      <li><strong>User extensions:</strong> blocks with a <code>system:disabled</code>
+        property, filtered once at load in <code>src/extensions/dynamicExtensions.ts:71</code>.
+        Toggling the property doesn't auto-rebuild — user must invoke "Reload extensions".</li>
+      <li><strong>Hot rebuild exists:</strong> <code>refreshAppRuntime()</code> dispatches
+        <code>app-runtime-update</code>; <code>AppRuntimeProvider</code> re-resolves and
+        runs accumulated effect cleanups in reverse order
+        (<code>AppRuntimeProvider.tsx:145–176</code>).</li>
+      <li><strong>Safe mode exists:</strong> <code>?safeMode</code> URL parameter skips all
+        dynamic extensions (<code>dynamicExtensions.ts:56–59</code>). Doesn't yet skip
+        system plugins.</li>
+      <li><strong>Per-plugin prefs blocks exist</strong> via
+        <code>pluginPrefsExtension()</code>.</li>
+    </ul>
+
+    <h2>The CodeMirror model we're borrowing</h2>
+    <p>The system is already CM-shaped (facets, contributions, extension values). Worth borrowing the rest:</p>
+    <table>
+      <thead>
+        <tr><th>Concern</th><th>CM answer</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Plugin identity</td><td>None. Extensions are values, compared by reference.</td></tr>
+        <tr><td>Toggleable units</td><td><code>Compartment</code> — wraps a swappable subtree. The handle is the identity.</td></tr>
+        <tr><td>Dependencies</td><td>None declared. Include the dep in your own extension array. Dedup handles overlap.</td></tr>
+        <tr><td>Ordering</td><td><code>Prec.highest/high/default/low/lowest</code>. No DAG. (We use a numeric equivalent — same shape, no migration.)</td></tr>
+        <tr><td>Implication</td><td><code>{value, enables: Extension}</code> — a facet input can drag extensions along.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>The five design pieces</h2>
+
+    <h3>1. Identity — <code>Togglable</code> handle, two constrained factories</h3>
+    <p>
+      A Compartment-style handle. The handle is what carries identity; calling
+      <code>.of(ext)</code> returns a plain <code>AppExtension</code> tagged with the
+      handle. The extension stays a value — no manifest object, no public type
+      bifurcation.
+    </p>
+<pre><code>interface Togglable {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  readonly essential?: boolean
+  readonly defaultEnabled?: boolean   // undefined = true
+  of(ext: AppExtension): AppExtension
+}
+
+const BOUNDARY = Symbol('togglable.boundary')
+
+function markBoundary(handle: Togglable, ext: AppExtension): AppExtension {
+  const wrapped: AppExtension = [ext]
+  Object.defineProperty(wrapped, BOUNDARY, { value: handle, enumerable: false })
+  return wrapped
+}
+
+function getBoundary(node: unknown): Togglable | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  return (node as any)[BOUNDARY]
+}</code></pre>
+
+    <p>
+      Crucially, handles are produced through <strong>two constrained factories</strong>,
+      not one generic <code>togglable()</code>. Different contexts can express different
+      fields; pushing the asymmetry into the type system means the prose doesn't have
+      to keep explaining which field is honoured where.
+    </p>
+
+<pre><code>// System plugins live in code and can express any field.
+function systemToggle(opts: {
+  id: string
+  name: string
+  description?: string
+  essential?: boolean
+  defaultEnabled?: boolean
+}): Togglable { /* ... */ }
+
+// User extensions live in blocks. id is forced to block.id (so the
+// pre-compile skip can check by id); defaultEnabled is forced to true
+// (we can't honour `false` without compiling, which defeats the skip).
+// Authors get name + description hints only — and only post-compile.
+interface UserExtensionAuthorHints {
+  name?: string
+  description?: string
+}
+function userExtensionToggle(
+  block: BlockData,
+  authoredHints?: UserExtensionAuthorHints,
+): Togglable { /* ... */ }</code></pre>
+
+    <p>Usage in <code>staticAppExtensions.ts</code>:</p>
+
+<pre><code>export const dailyNotesToggle = systemToggle({
+  id: 'daily-notes',
+  name: 'Daily notes',
+  description: 'Auto-create dated pages and the today shortcut.',
+})
+export const commandPaletteToggle = systemToggle({
+  id: 'command-palette',
+  name: 'Command palette',
+  essential: true,
+})
+
+export const staticAppExtensions = ({repo}) => [
+  kernelDataExtension,                                  // bare, no toggle
+  dailyNotesToggle.of(dailyNotesPlugin({repo})),
+  commandPaletteToggle.of(commandPalettePlugin),
+  /* ... */
+]</code></pre>
+
+    <div class="decision">
+      Why two factories instead of one with prose-enforced rules? The earlier draft of
+      this design had a single <code>togglable({id, name, description, essential,
+      defaultEnabled})</code> and a paragraph explaining that for user extensions
+      <code>id</code> and <code>defaultEnabled</code> are silently overridden. Three
+      review rounds caught issues stemming from that asymmetry leaking — author-chosen
+      <code>id</code> bypassing the pre-compile skip, <code>defaultEnabled: false</code>
+      being unhonorable without compiling, shell rows trying to read author metadata
+      that wasn't there. Two factories make the constraints unrepresentable instead of
+      relying on prose rules.
+    </div>
+
+    <p>
+      For user extensions, the dynamic loader wraps each block, but the wrapping
+      can't happen after <code>resolvedExt</code> exists — that would mean the disabled
+      block's module has already been imported and its top-level code has already run.
+      Instead, the loader consults the overrides map <em>before</em>
+      <code>compileExtensionModule</code> (the existing per-block skip point at
+      <code>dynamicExtensions.ts:72</code> generalizes):
+    </p>
+<pre><code>for (const block of extensionBlocks) {
+  if (overrides.get(block.id) === false) {
+    // Pre-compile skip. Disabled-shell rows know only block-level info;
+    // userExtensionToggle with no authoredHints falls back to alias /
+    // block-id link automatically.
+    collected.push(userExtensionToggle(block).of([]))
+    continue
+  }
+  const {module} = await compileExtensionModule(block.content, block.id, cache)
+  const exported = module.default as AppExtension
+
+  // If the author wrapped their export, take name/description hints only.
+  // Their id/defaultEnabled/essential are discarded — the factory's
+  // signature physically cannot accept them.
+  const authoredBoundary = getBoundary(exported)
+  const inner = authoredBoundary ? unwrapBoundary(exported) : exported
+  const authoredHints = authoredBoundary
+    ? {name: authoredBoundary.name, description: authoredBoundary.description}
+    : undefined
+
+  const handle = userExtensionToggle(block, authoredHints)
+  const validated = validateAndPrefix(handle.of(inner), block.id)
+  if (validated) collected.push(validated)
+}</code></pre>
+    <p>
+      <code>shellToggle</code> is just <code>togglable({id, name}).of([])</code> — a
+      boundary that carries identity and no contributions. Discovery sees it and the
+      settings UI renders the row; flipping it on triggers
+      <code>refreshAppRuntime()</code>, which re-runs the loader and this time takes the
+      compile branch.
+    </p>
+
+    <div class="decision">
+      <strong>Display name for user extensions.</strong> Extension blocks carry
+      <code>content</code> (the TS/JS module source) and <code>id</code>, not a
+      title field. Two paths:
+      <ul>
+        <li><strong>Compiled (enabled) blocks</strong> resolve name via
+          <code>authored?.name</code> ?? alias ?? "Extension {id-link}". The author's
+          <code>togglable({name})</code> wrapping is consulted post-compile for the label
+          only.</li>
+        <li><strong>Shell (disabled) blocks</strong> resolve name via alias →
+          "Extension {id-link}". The author's name is unavailable because the module is
+          intentionally not compiled.</li>
+      </ul>
+    </div>
+
+    <div class="warn">
+      <strong>Author metadata is name/description only — the platform owns identity and
+      default-enabled.</strong> If a user-extension module exports
+      <code>togglable({id: 'custom', defaultEnabled: false}).of([...])</code>, the
+      loader takes only <code>name</code> and <code>description</code>; it re-wraps the
+      inner extension with a new handle whose <code>id = block.id</code> and
+      <code>defaultEnabled = true</code>. Reasons:
+      <ul>
+        <li>Pre-compile skip can only check by <code>block.id</code> — an author-chosen
+          id wouldn't be visible until the module ran, defeating the skip.</li>
+        <li>Setting <code>defaultEnabled: false</code> in module code is unhonorable on a
+          fresh install: we'd have to compile to read it, then disable, then have
+          compiled disabled code in the runtime.</li>
+      </ul>
+      If author-controlled <code>id</code> / <code>defaultEnabled</code> ever becomes
+      necessary, the design path is a designated pre-compile block property (e.g.
+      <code>extension:manifest</code>). Not implemented now because no concrete demand.
+    </div>
+
+
+    <p>
+      Net result: system and user toggles remain indistinguishable to the resolver, and
+      extension authors who care about UX can opt into nice metadata by wrapping their
+      own export.
+    </p>
+
+    <div class="decision">
+      Why a handle instead of a manifest object (<code>{id, name, extension}</code>)? The handle
+      composes anywhere — wrap a single facet contribution, a sub-tree, or a whole plugin
+      with equal ease. It keeps the public type as <code>AppExtension</code>, so nothing else
+      in the resolver grows a new branch. And the same primitive serves both system plugins
+      and user extensions, instead of bifurcating into two parallel mechanisms.
+    </div>
+
+    <h3>2. Dependencies — inclusion + dedup, bare vs. wrapped</h3>
+    <p>
+      A plugin that structurally needs another plugin's contributions <em>includes</em>
+      them by value. The question is <em>which</em> form to include — and that choice is
+      load-bearing. Each plugin exports two things:
+    </p>
+
+<pre><code>// inside src/plugins/references/index.ts
+export const referencesContributions: AppExtension = [
+  /* bare facet contributions */
+]
+
+export const referencesToggle = togglable({
+  id: 'references',
+  name: 'References',
+})
+
+export const references = referencesToggle.of(referencesContributions)</code></pre>
+
+    <p>The two forms behave differently under disable:</p>
+
+    <table>
+      <thead>
+        <tr><th>Include this</th><th>When disabled</th><th>Use when</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>references</code> (wrapped)</td>
+          <td>Subtree skipped at the boundary — contributions disappear.</td>
+          <td>Top-level registration in <code>staticAppExtensions</code>. Or when another
+              plugin wants to <em>respect</em> the user's toggle.</td>
+        </tr>
+        <tr>
+          <td><code>referencesContributions</code> (bare)</td>
+          <td>No boundary to skip — contributions always run.</td>
+          <td>When you structurally cannot function without it. The disable toggle
+              only removes the top-level binding; your bare inclusion still provides
+              the contributions.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p>Backlinks's structural dependency on references:</p>
+
+<pre><code>// backlinks needs references regardless of the user's toggle state
+export const backlinksContributions: AppExtension = [
+  referencesContributions,    // bare — always on while backlinks is on
+  backlinksViewContribution,
+  backlinksActionsContribution,
+]
+
+export const backlinks = backlinksToggle.of(backlinksContributions)</code></pre>
+
+    <p>
+      The resolver dedups by reference equality during flatten. If
+      <code>referencesContributions</code> is the same <code>const</code> reached via the
+      top-level wrapped <code>references</code> path and via Backlinks's bare inclusion,
+      the underlying facet contributions only land in the runtime once.
+    </p>
+    <p>
+      <strong>Important:</strong> the new collection logic (dedup, boundary-aware filter,
+      <code>enables</code> recursion) must live in <em>shared</em> code used by both
+      <code>resolveFacetRuntimeSync</code> (the sync initial render at
+      <code>AppRuntimeProvider.tsx:52</code>) <em>and</em> the async
+      <code>resolveFacetRuntime</code> path that merges in dynamic extensions
+      (<code>AppRuntimeProvider.tsx:92</code>). Putting dedup only in the sync path means
+      behavior diverges the moment dynamic extensions load — which is exactly when the
+      user-extension case kicks in. Practically: factor a single
+      <code>collectContributions(tree, {overrides})</code> helper that walks
+      a tree, applies <code>isEnabled(handle, overrides)</code> at each boundary
+      (reading <code>handle</code> off the boundary symbol — no separate essential-id
+      registry needed), recurses into <code>enables</code>, and Set-dedups; call it from
+      both sync and async resolvers.
+    </p>
+
+    <div class="diagram">┌──────────────────────────┐
+│  staticAppExtensions     │
+│   references             │   ← wrapped (toggleable)
+│   backlinks              │   ← wrapped (toggleable)
+└─────┬────────────────┬───┘
+      │                │
+      ▼                ▼
+  references           backlinks
+  boundary             boundary
+   └─ referencesContribs   └─ referencesContribs   ← bare, same ref
+                          └─ backlinksView
+                          └─ backlinksActions
+
+User disables "References":
+  filter walks tree, hits references boundary → skip its subtree
+  walks backlinks boundary (not disabled) → recurse
+    sees referencesContribs by bare ref → include
+  net: references contributions still active (via backlinks)</div>
+
+    <div class="decision">
+      Why not a "Required by: Backlinks" UI lock that infers the relationship from the
+      tree? Because the bare inclusion has no boundary or provenance to walk — it's just
+      a value, identical to its source const. The honest answer is to let the plugin
+      author's choice (bare vs wrapped) be the relationship, and trust the user to
+      understand that disabling References while Backlinks runs is a no-op for those
+      contributions. The settings UI surfaces what was toggled, not the resolved runtime
+      state. Required-by belongs in dev tooling at most.
+    </div>
+
+    <div class="warn">
+      <strong>Convention to enforce:</strong> plugin entry points must be referentially
+      stable. Top-level <code>const</code>s are fine. Factories called inline
+      (<code>dailyNotesPlugin({repo})</code>) return fresh objects on each call and break
+      dedup — hoist the result into a const built once at app setup, or memoize the
+      factory on its args. Worth a startup assertion or lint.
+    </div>
+
+    <h3>3. Ordering — keep existing numeric precedence</h3>
+    <p>
+      This already exists. <code>FacetContribution</code> carries
+      <code>precedence?: number</code> (<code>src/extensions/facet.ts:13</code>) and the
+      runtime sorts by it (<code>facet.ts:138</code>):
+    </p>
+<pre><code>const values = contributions
+  .toSorted((a, b) =&gt; (a.precedence ?? 0) - (b.precedence ?? 0))
+  .map((contribution) =&gt; contribution.value as Input)</code></pre>
+    <p>
+      Several plugins already rely on this. CM uses named buckets
+      (<code>highest/high/default/low/lowest</code>) instead, but there's no concrete
+      reason to migrate — both work, and the numeric version is already in production. If
+      arms-race / "what does 73 mean" pain ever shows up, a buckets layer can be added on
+      top (a small map from name → number), but not now.
+    </p>
+    <p>
+      Net change in this design: nothing — just be aware precedence exists and use it
+      when a contribution needs deterministic position relative to siblings (e.g. vim
+      shortcuts intercepting before global ones).
+    </p>
+
+    <h3>4. Implication — <code>enables</code></h3>
+    <p>
+      A facet contribution can carry an <code>enables: AppExtension</code> field. When the
+      contribution survives resolution, its <code>enables</code> enters the tree too (and
+      dedup handles overlap). It expresses "this contribution structurally implies these
+      others, lifecycle-bound to it."
+    </p>
+
+    <h4>Example: video-player today vs. with <code>enables</code></h4>
+    <p>The video-player plugin (<code>src/plugins/video-player/index.ts</code>) is seven sibling contributions:</p>
+<pre><code>// today
+export const videoPlayerPlugin: AppExtension = [
+  propertySchemasFacet.of(videoPlayerViewProp,        {source: 'video-player'}),
+  propertySchemasFacet.of(videoNotesPaneRatioProp,    {source: 'video-player'}),
+  blockRenderersFacet.of({id: 'videoPlayer', renderer: VideoPlayerRenderer},
+                                                      {source: 'video-player'}),
+  blockLayoutFacet.of(videoPlayerLayoutContribution,  {source: 'video-player'}),
+  markdownExtensionsFacet.of(videoPlayerMarkdownExtension, {source: 'video-player'}),
+  shortcutSurfaceActivationsFacet.of(videoPlayerShortcutActivation,
+                                                      {source: 'video-player'}),
+  videoPlayerActionsExtension,   // adds actionContextsFacet + 2× actionsFacet
+]</code></pre>
+
+    <p>The implicit dependency chain isn't in the type system:</p>
+    <div class="diagram">renderer mounts
+  → creates block context with videoPlayerBlockId
+    → shortcut activation fires when that context is present
+      → VIDEO_PLAYER_CONTEXT becomes active
+        → its action context + actions become reachable</div>
+
+    <p>With <code>enables</code>, the chain becomes the structure:</p>
+
+<pre><code>blockRenderersFacet.of({id: 'videoPlayer', renderer: VideoPlayerRenderer}, {
+  source: 'video-player',
+  enables: [
+    blockLayoutFacet.of(videoPlayerLayoutContribution, {source: 'video-player'}),
+    shortcutSurfaceActivationsFacet.of(videoPlayerShortcutActivation, {
+      source: 'video-player',
+      enables: [
+        actionContextsFacet.of(videoPlayerActionContext, {source: 'video-player'}),
+        ...videoPlayerActions.map(a =&gt; actionsFacet.of(a, {source: 'video-player'})),
+      ],
+    }),
+  ],
+})</code></pre>
+
+    <p>
+      <code>propertySchemasFacet</code> and <code>markdownExtensionsFacet</code> stay
+      top-level — schemas register globally (useful for typing existing data even without
+      rendering), and markdown parsing is independently meaningful.
+    </p>
+
+    <div class="decision">
+      For video-player specifically, <code>enables</code> is a clarity refactor, not a bug
+      fix — disabling the whole plugin already drops everything atomically. The payoffs are
+      (a) the file declares the dependency chain instead of leaving it implicit;
+      (b) finer-grained toggles become possible (e.g. "video keyboard shortcuts" as a
+      nested togglable that drops actions + context without touching the renderer);
+      (c) third parties can attach actions to the same activation without checking whether
+      video-player is loaded.
+    </div>
+
+    <p>
+      Where <code>enables</code> is <em>not</em> the right tool: two unconditionally-bundled
+      things in the same plugin — just put them in the same array. <code>enables</code> is
+      for fine-grained <em>conditional</em> bundling.
+    </p>
+
+    <div class="warn">
+      <strong>User-extension loader needs to (a) preserve the BOUNDARY symbol and
+      (b) recurse into <code>enables</code>.</strong>
+      <code>validateAndPrefix</code> in <code>src/extensions/dynamicExtensions.ts:103</code>
+      currently descends into arrays, functions, and <code>FacetContribution</code> leaves.
+      Two changes needed:
+      <strong>(a)</strong> the array branch at
+      <code>dynamicExtensions.ts:111</code> uses <code>extension.map(...)</code>, which
+      produces a fresh array — the non-enumerable <code>BOUNDARY</code> symbol on the
+      togglable wrapper is silently dropped. Restore it after mapping:
+<pre><code>if (Array.isArray(extension)) {
+  const mapped = extension.map((child) =&gt; validateAndPrefix(child, blockId))
+  const boundary = (extension as any)[BOUNDARY]
+  if (boundary) Object.defineProperty(mapped, BOUNDARY, { value: boundary })
+  return mapped
+}</code></pre>
+      Without this, dynamic extension toggles disappear after normalization — the
+      resolver sees a plain array, no boundary, treats the contributions as bare.
+      <strong>(b)</strong> the leaf branch (line 125) must also recurse into
+      <code>contribution.enables</code> and source-prefix its nested contributions.
+      Otherwise user-supplied <code>enables</code> contributions skip validation and
+      lose block-source attribution.
+    </div>
+
+    <h3>5. Disable — boundary-scoped filter</h3>
+    <p>
+      The filter is a top-down walk fused with the flatten step. At each
+      <code>BOUNDARY</code> in the tree, evaluate <code>isEnabled(handle, overrides)</code>
+      using the handle now stored on the boundary itself: if it returns false,
+      <strong>skip the subtree entirely</strong>. Otherwise recurse. Bare
+      contributions (no boundary) are never skipped — they flow into the runtime.
+    </p>
+
+    <div class="diagram">┌──────────────────────────┐
+│  Resolved extension tree │
+└────────────┬─────────────┘
+             │  walk top-down
+             │  at each BOUNDARY: if !isEnabled(handle, overrides), skip subtree
+             │  collect contributions (Set-dedup by reference)
+             ▼
+┌──────────────────────────┐
+│ Sort by precedence       │
+└────────────┬─────────────┘
+             ▼
+┌──────────────────────────┐
+│ FacetRuntime → React     │
+└──────────────────────────┘</div>
+
+    <p>
+      Boundary-scoped means: disable only affects the specific wrapped binding it walks
+      through. If <code>references</code> appears wrapped at top level (toggle on/off
+      meaningful) <em>and</em> <code>referencesContributions</code> appears bare inside
+      Backlinks (hard dep), disabling References at top level skips the wrapped subtree;
+      the bare inclusion still flows through. The plugin author chose that asymmetry by
+      picking bare vs wrapped at the inclusion site.
+    </p>
+
+    <p>
+      When the disable set changes, dispatch <code>refreshAppRuntime()</code>. The
+      effect-cleanup chain at <code>AppRuntimeProvider.tsx:145–176</code> already runs all
+      accumulated teardowns in reverse order when <code>runtime</code> changes — no new
+      teardown protocol needed for synchronous cleanups.
+    </p>
+
+    <div class="warn">
+      <strong>Async cleanup is fire-and-forget.</strong>
+      <code>AppRuntimeProvider.tsx:134–139</code> calls cleanup synchronously; if it
+      returns a Promise, errors are caught but the Promise is not awaited before React
+      starts the next effect pass. A plugin whose cleanup is async will see its next
+      <code>start()</code> begin while the previous cleanup is still in flight. Plugin
+      effects with exclusive resources (network sockets, file handles, singleton
+      listeners) must either tolerate that overlap idempotently or coordinate via their
+      own handshake — the framework does not gate restarts on cleanup completion.
+    </div>
+
+    <h2>Storage — central overrides map, both kinds of plugin</h2>
+    <p>
+      One block under the Preferences tree, owned by a <code>system-plugins</code>
+      meta-plugin (itself <code>essential</code>):
+    </p>
+
+    <div class="diagram">Preferences
+└── System Plugins                ← single block
+      properties:
+        overrides: {
+          "vim-normal-mode":    false,   ← user turned off (default was on)
+          "experimental-graph": true,    ← user turned on  (default was off)
+          "&lt;block-uuid&gt;":       false,   ← user extension toggled off
+        }</div>
+
+    <p>
+      An <strong>overrides map</strong>, not a flat list of disabled ids. Each entry is an
+      explicit user choice; absence means "use the manifest default." This lets the
+      manifest carry <code>defaultEnabled: false</code> for experimental or opt-in
+      features without needing a one-time migration to inject ids into anyone's storage,
+      and lets a future shipped-default change apply cleanly to users who never had an
+      opinion.
+    </p>
+
+    <p>The effective enabled state is computed as:</p>
+
+<pre><code>function isEnabled(handle: Togglable, overrides: Map&lt;string, boolean&gt;): boolean {
+  if (handle.essential) return true
+  if (overrides.has(handle.id)) return overrides.get(handle.id)!
+  return handle.defaultEnabled ?? true
+}</code></pre>
+
+    <p>Worked cases:</p>
+
+    <table>
+      <thead>
+        <tr><th>Handle</th><th>Override</th><th>Effective</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>defaultEnabled: true</code> (omitted)</td><td>—</td><td>on</td></tr>
+        <tr><td><code>defaultEnabled: true</code></td><td><code>false</code></td><td>off</td></tr>
+        <tr><td><code>defaultEnabled: false</code></td><td>—</td><td>off</td></tr>
+        <tr><td><code>defaultEnabled: false</code></td><td><code>true</code></td><td>on</td></tr>
+        <tr><td><code>essential: true</code></td><td>any</td><td>on (override ignored)</td></tr>
+      </tbody>
+    </table>
+
+    <p>
+      <strong>UI toggle convention.</strong> The checkbox shows effective state. When the
+      user clicks, compare the new state to <code>handle.defaultEnabled ?? true</code>:
+      if the new state differs from that, write an override; if it matches, delete the
+      override. The <code>?? true</code> matters because <code>defaultEnabled</code> is
+      typically omitted on default-on plugins (the most common case), so a raw
+      <code>=== defaultEnabled</code> comparison would write spurious
+      <code>{id: true}</code> entries instead of clearing the override. Overrides only
+      hold actual deviations from the manifest, so resetting a user to defaults is just
+      <code>overrides = {}</code>.
+    </p>
+
+    <p>
+      One mechanism, one settings panel. The per-block <code>system:disabled</code>
+      property on user extensions goes away — alpha, no back-compat shims; one-shot
+      migration walks extension blocks, folds <code>system:disabled === true</code> into
+      the new overrides map as <code>{[block.id]: false}</code>, drops the property.
+    </p>
+
+    <p>
+      When a user extension block is deleted, a small subscription prunes its id from
+      the overrides map so we don't accumulate orphans.
+    </p>
+
+    <h3>First paint &amp; the localStorage cache</h3>
+    <p>
+      The honest first-paint problem:
+      <code>staticAppExtensions</code> resolves synchronously before PowerSync hydrates, so
+      every system plugin's <code>appEffectsFacet</code> would start and every
+      <code>appMountsFacet</code> would mount. ~One round-trip later we'd tear them down.
+      Wasteful for tame plugins and actively wrong for plugins that touch network or write
+      state on boot.
+    </p>
+
+    <p>
+      Solution: a narrowly-scoped <code>ClientLocalSettings</code> key per workspace
+      holding the overrides map. Written whenever the synced block changes; read
+      synchronously at boot. First paint reflects the user's most recent intent.
+      Two-phase resolution then applies the canonical block once PowerSync is up and
+      dispatches <code>refreshAppRuntime()</code> if it diverges from the cache.
+    </p>
+
+    <div class="decision">
+      The codebase convention is "read from DB; tolerate hydration flash; rebuild on
+      arrival." It's correct to not cache DB content in localStorage as a rule. The
+      narrow exception is justified here because this isn't DB content — it's <em>intent
+      about what runs before DB exists</em>. The cost of being wrong (effects start then
+      tear down) is real and observable, unlike most flash-of-empty-state cases.
+    </div>
+
+    <h2>Settings UI — tree from discovery</h2>
+    <p>
+      The togglable boundary already lives in the resolved extension tree (the
+      <code>BOUNDARY</code> symbol on the wrapping array). Walk that tree before filtering
+      to get the hierarchy. Walks are cheap and decoupled from filtering — discovery sees
+      the whole tree including currently-off branches.
+    </p>
+
+    <p>
+      "Currently-off branches" needs a precise meaning for user extensions, since their
+      modules can't be safely compiled just to populate the settings UI. The convention:
+      a disabled user extension contributes a metadata-only <code>shellToggle</code>
+      (id + name, empty extension subtree). The shell appears in the discovered tree
+      with the right handle, but no inner contributions to walk into. For nested
+      togglables that live <em>inside</em> a disabled parent's real subtree (i.e. an
+      enabled child of a disabled system plugin), they still appear via the BOUNDARY
+      symbols in the parent's already-resolved tree — those didn't require module
+      compilation.
+    </p>
+
+<pre><code>type ToggleNode = { handle: Togglable; children: ToggleNode[] }
+
+function discoverToggleTree(ext: AppExtension): ToggleNode[] {
+  const out: ToggleNode[] = []
+  walk(ext, out)
+  return out
+
+  function walk(node: AppExtension, sink: ToggleNode[]) {
+    if (!node) return
+    const handle = getBoundary(node)
+    if (handle) {
+      const child: ToggleNode = { handle, children: [] }
+      sink.push(child)
+      for (const inner of node as readonly AppExtension[]) walk(inner, child.children)
+      return
+    }
+    if (Array.isArray(node)) {
+      for (const inner of node) walk(inner, sink)
+      return
+    }
+    // FacetContribution: nothing to discover at the value itself, but if it
+    // carries an `enables` payload, nested togglables can live inside it.
+    if (isFacetContribution(node) && node.enables) walk(node.enables, sink)
+  }
+}</code></pre>
+
+<p>
+  The <code>enables</code> branch matters because a togglable can be introduced
+  <em>through</em> an <code>enables</code> field, not just as a sibling in an array.
+  For example, the nested "Video player keyboard shortcuts" toggle in the §4
+  refactor sits inside a <code>shortcutSurfaceActivationsFacet</code> contribution's
+  <code>enables</code>. Without this branch, that nested handle never shows up in
+  the settings tree.
+</p>
+
+    <p>UI shape:</p>
+
+    <div class="diagram">┌──────────────────────────────────────────────────────────┐
+│  Plugins                                                 │
+├──────────────────────────────────────────────────────────┤
+│  [x] Video player                                        │
+│         [x] Video player keyboard shortcuts              │
+│  [x] Daily notes                                         │
+│  [ ] Vim normal mode                                     │
+│  [x] References                                          │
+│  [x] Backlinks                                           │
+│  [x] Command palette                       (essential)   │
+│                                                          │
+│  User extensions ─────────────────────────────────────── │
+│  [x] My custom slash command                             │
+│  [ ] Experimental block view                             │
+└──────────────────────────────────────────────────────────┘</div>
+
+    <p>
+      The tree only shows <em>wrapped</em> togglables — nested ones indent under their
+      parent. Hard-dep inclusions of bare contributions don't appear in the tree because
+      they don't carry boundaries; that's by design (the plugin author opted out of
+      user-visible toggling for those).
+    </p>
+
+    <p>
+      Parent toggled off: render children greyed but preserve their checkbox state
+      (matches typical nested-settings UIs; toggling parent off-then-on doesn't lose
+      remembered child state). The overrides map holds explicit user choices keyed by
+      id; child ids stay in the map regardless of parent state.
+    </p>
+
+    <h2>Recovery — extend <code>?safeMode</code></h2>
+    <p>
+      The app already has a safe-mode escape hatch: <code>?safeMode</code> URL flag
+      (<code>src/App.tsx:319</code>) routes through <code>FacetResolveContext</code> and
+      causes <code>dynamicExtensionsExtension</code> to return an empty list
+      (<code>dynamicExtensions.ts:56–59</code>). Extend it to also skip non-essential
+      system plugins. One escape hatch, not two.
+    </p>
+
+    <h2>What happens when a user disables "Daily Notes"</h2>
+    <ol>
+      <li>UI writes <code>{"daily-notes": false}</code> into the System Plugins block's
+        <code>overrides</code> map (since the default for <code>daily-notes</code> was
+        <code>on</code>, the new effective state of <code>off</code> deviates from the
+        default and is recorded). Also updates the <code>ClientLocalSettings</code>
+        cache.</li>
+      <li>The meta-plugin subscribes to the block. On change, dispatches
+        <code>refreshAppRuntime()</code>.</li>
+      <li><code>AppRuntimeProvider</code>'s <code>generation</code> bumps → re-resolution
+        runs.</li>
+      <li>Tree walk: at the <code>daily-notes</code> boundary,
+        <code>isEnabled(handle, overrides)</code> returns false → skip subtree.</li>
+      <li>Flatten + dedup over what remains; sort by precedence; produce new runtime.</li>
+      <li>Effect cleanup chain runs in reverse for the old runtime
+        (<code>AppRuntimeProvider.tsx:171–175</code>); new effects start for the new
+        runtime. React unmounts daily-notes components.</li>
+    </ol>
+
+    <h3>Cascade case: References disabled while Backlinks still on</h3>
+    <p>
+      The filter walks the tree and at the standalone <code>references</code> boundary
+      skips the subtree — that wrapped binding's contributions don't enter the runtime.
+      The walk then descends into <code>backlinks</code> (still enabled), which includes
+      <code>referencesContributions</code> bare. Those contributions still flow into the
+      runtime via this path.
+    </p>
+    <p>
+      Net runtime effect: references-related behavior continues to work, because
+      Backlinks structurally requires it. The user's toggle removed the
+      <em>standalone</em> binding (any contributions that <code>references</code> added
+      beyond what Backlinks pulls in) but didn't reach the bare hard-dep inclusion. This
+      asymmetry is the author's deliberate choice via bare vs wrapped at the include
+      site; the UI surfaces what was toggled, not the resolved runtime state.
+    </p>
+    <p>
+      If a plugin author wants the disable toggle to <em>also</em> tear down dependents,
+      they include the wrapped form (<code>references</code>) in dependents instead of
+      the bare form. Then disabling References at top level skips both the top-level and
+      the nested wrapped path.
+    </p>
+
+    <h2>Smallest first slice</h2>
+    <ol>
+      <li><strong>Add shared collection logic</strong> used by both
+        <code>resolveFacetRuntimeSync</code> and <code>resolveFacetRuntime</code> — a
+        single <code>collectContributions(tree, {overrides})</code> helper
+        that walks the tree, calls <code>isEnabled(handle, overrides)</code> at each
+        boundary using the handle stored on the boundary symbol, recurses into
+        <code>enables</code>, and Set-dedups by reference. Initial implementation only
+        needs the dedup branch; the filter and <code>enables</code> branches land in
+        later steps but live in the same helper.</li>
+      <li><strong>Introduce <code>togglable</code></strong>. Wrap existing system plugins
+        in <code>togglable({id, name}).of(...)</code>. Mark a handful
+        <code>essential: true</code> (kernel, prefs bootstrap, command palette).
+        Add a startup assertion that each contribution's <code>source</code> matches the
+        wrapping handle's <code>id</code>.</li>
+      <li><strong>Add the filter pass</strong> inside <code>collectContributions</code>:
+        evaluate <code>isEnabled(handle, overrides)</code> at each boundary; skip
+        subtrees that resolve to off. Start with an empty overrides map and all manifest
+        defaults; prove that disabling one plugin programmatically actually unmounts
+        components, runs effect cleanups, and re-mounts on re-enable.</li>
+      <li><strong>Wire storage</strong> — the meta-plugin, the System Plugins block, the
+        <code>ClientLocalSettings</code> cache, the <code>refreshAppRuntime</code> dispatch
+        on change.</li>
+      <li><strong>Migrate user extensions</strong> — one-shot migration folds any
+        blocks with <code>system:disabled === true</code> into the overrides map as
+        <code>{[block.id]: false}</code>; drop the property. Generalize the existing
+        per-block skip at <code>dynamicExtensions.ts:72</code> to consult the overrides
+        map: if disabled, emit a shell boundary using <code>shellDisplayName(block)</code>
+        — alias if present, else block-id link (the module is intentionally
+        <em>not</em> compiled, so author-provided names aren't available) — and
+        <em>skip <code>compileExtensionModule</code> entirely</em> so disabled
+        extension code never executes. Otherwise compile, unwrap any author togglable
+        for its <code>name</code>/<code>description</code> hints, and re-wrap the inner
+        extension with a platform-owned handle: <code>id = block.id</code>,
+        <code>defaultEnabled = true</code>. Subscribe to overrides changes so toggling
+        fires
+        <code>refreshAppRuntime()</code> automatically (today users must run "Reload
+        extensions" manually).</li>
+      <li><strong>Add <code>enables</code></strong> support to the resolver; refactor
+        video-player as the demonstrator. Update <code>validateAndPrefix</code>
+        (<code>src/extensions/dynamicExtensions.ts:103</code>) to recurse into
+        <code>contribution.enables</code> so user-supplied nested contributions get
+        validated and source-prefixed.</li>
+      <li><strong>Extend <code>?safeMode</code></strong> to also skip non-essential system
+        plugins.</li>
+      <li><strong>Settings UI</strong> — tree from <code>discoverToggleTree</code>,
+        nested checkboxes (children greyed when parent off, state preserved), essential
+        rows locked.</li>
+    </ol>
+
+    <h2>Sharp edges</h2>
+    <ul>
+      <li><strong>Reference stability.</strong> Factory-called plugins must be hoisted or
+        memoized, otherwise dedup silently fails. Startup assertion would catch this.</li>
+      <li><strong>Coarse effect rebuild + async cleanup overlap.</strong> Every effect
+        restarts on every runtime change, and async cleanups are fired-and-forgotten
+        (<code>AppRuntimeProvider.tsx:134–139</code>) so a new <code>start()</code> can
+        begin while the previous cleanup is still in flight. Effects must be both
+        idempotent <em>and</em> tolerate cleanup-in-progress when their <code>start</code>
+        runs. Effects that hold exclusive resources need to coordinate via their own
+        handshake.</li>
+      <li><strong>Bare-vs-wrapped is load-bearing.</strong> Plugin authors who include
+        another plugin must consciously choose: bare contributions ignore the user's
+        toggle; wrapped togglables respect it. A lint that flags non-essential plugins
+        importing other plugins' bare contributions (forcing an explicit comment or
+        opt-in marker) would help avoid accidental hard-deps.</li>
+      <li><strong><code>validateAndPrefix</code> needs two fixes for this design.</strong>
+        At <code>src/extensions/dynamicExtensions.ts:103</code>:
+        <strong>(a)</strong> the array branch <code>.map()</code>s into a fresh array,
+        which strips the non-enumerable <code>BOUNDARY</code> symbol — copy it onto the
+        mapped array so dynamic extension toggles survive normalization;
+        <strong>(b)</strong> the leaf branch must recurse into
+        <code>contribution.enables</code> and source-prefix nested contributions,
+        otherwise user-supplied <code>enables</code> contributions slip past
+        validation and lose block-source attribution.</li>
+      <li><strong>Bootstrap ordering.</strong> The meta-plugin owning the overrides map
+        must be <code>essential</code> and must read the block from PowerSync after the
+        kernel is up — same async second-pass pattern
+        <code>dynamicExtensionsExtension</code> already uses.</li>
+      <li><strong>id ↔ source drift.</strong> Renaming a plugin's manifest <code>id</code>
+        invalidates stored disable entries. Startup assert catches new drift; one-time
+        migrations handle historical renames.</li>
+      <li><strong>Conditional togglables.</strong> A togglable behind a
+        <code>(ctx) =&gt; ...</code> appears in the discovered tree only when that condition
+        holds. Probably fine — conditional togglables are conditional in the UI too — but
+        worth knowing.</li>
+    </ul>
+
+    <p class="footnote">
+      Related: <code>docs/extensibility-axes.md</code>,
+      <code>docs/decorator-facet-design.md</code>,
+      <code>src/extensions/facet.ts</code>,
+      <code>src/extensions/AppRuntimeProvider.tsx</code>,
+      <code>src/extensions/dynamicExtensions.ts</code>.
+    </p>
+  </main>
+</body>
+</html>
