@@ -120,17 +120,21 @@ export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = (
           }
 
           const aliases = await searchAliasLabels(repo, {workspaceId, query: filter})
-          const dateCompletions = relativeDateCandidates(filter).map(candidate => ({
-            label: formatRoamDate(candidate.date),
-            apply: candidate.iso,
-            detail: candidate.phrase,
-            type: 'constant',
-          }))
+          const dateCompletions = relativeDateCandidates(filter).map(candidate => {
+            const label = formatRoamDate(candidate.date)
+            return {
+              label,
+              apply: label,
+              detail: candidate.phrase,
+              iso: candidate.iso,
+              type: 'constant',
+            }
+          })
           if (dateCompletions.length === 0) return aliases
 
           const dateLabels = new Set(dateCompletions.flatMap(candidate => [
             candidate.label,
-            candidate.apply,
+            candidate.iso,
           ]))
           return [
             ...dateCompletions,
