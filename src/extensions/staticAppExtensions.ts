@@ -38,58 +38,71 @@ import { srsReschedulingPlugin } from '@/plugins/srs-rescheduling'
 import { todoPlugin } from '@/plugins/todo'
 import { syncStatusPlugin } from '@/plugins/sync-status'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
+
+/** Local helper to keep the catalog readable. `essential` defaults
+ *  to false — only kernel-level items and the recovery affordance
+ *  (command palette) set it true. */
+const sys = (
+  id: string,
+  name: string,
+  ext: AppExtension,
+  opts: {essential?: boolean; description?: string} = {},
+): AppExtension => systemToggle({id: `system:${id}`, name, ...opts}).of(ext)
 
 export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // kernelDataExtension contributes KERNEL_MUTATORS and core data
   // registries. repo.setFacetRuntime REPLACES those registries, so the
   // kernel contribution must be present in every static runtime.
-  kernelDataExtension,
-  kernelPropertyUiExtension,
-  kernelValuePresetsExtension,
-  defaultRenderersExtension,
-  toastAppMountExtension,
-  dialogAppMountExtension,
-  breadcrumbsPlugin,
-  defaultEditorInteractionExtension,
-  defaultActionsExtension({repo}),
+  sys('kernel-data', 'Kernel data', kernelDataExtension, {essential: true}),
+  sys('kernel-property-ui', 'Property editors', kernelPropertyUiExtension, {essential: true}),
+  sys('kernel-value-presets', 'Property value presets', kernelValuePresetsExtension, {essential: true}),
+  sys('default-renderers', 'Default renderers', defaultRenderersExtension, {essential: true}),
+  sys('toast-mount', 'Toasts', toastAppMountExtension, {essential: true}),
+  sys('dialog-mount', 'Dialogs', dialogAppMountExtension, {essential: true}),
+  sys('breadcrumbs', 'Breadcrumbs', breadcrumbsPlugin),
+  sys('default-editor-interactions', 'Default editor interactions', defaultEditorInteractionExtension, {essential: true}),
+  sys('default-actions', 'Default keyboard shortcuts', defaultActionsExtension({repo}), {essential: true}),
   // dailyNotesPlugin contributes both the workspace-landing resolver
   // (used by App.tsx pre-mount) and the open_today / prev / next
   // shortcut actions. Order vs other landing-contributing plugins:
   // higher-precedence resolvers should be appended LATER so the
   // facet's "last wins" arrangement does the right thing without an
   // explicit precedence number.
-  dailyNotesPlugin({repo}),
-  leftSidebarPlugin,
-  workspaceHeaderPlugin,
-  commandPalettePlugin,
-  quickFindPlugin,
-  findReplacePlugin,
-  themeTogglePlugin,
-  accountHeaderPlugin,
-  plainOutlinerPlugin,
-  mobileBottomNavPlugin,
-  mobileKeyboardToolbarPlugin,
-  swipeQuickActionsPlugin,
-  visualNavigationPlugin,
-  vimNormalModePlugin({repo}),
-  videoPlayerPlugin,
-  referencesPlugin,
-  aliasPlugin,
-  mergeBlocksPlugin,
+  sys('daily-notes', 'Daily notes', dailyNotesPlugin({repo})),
+  sys('left-sidebar', 'Left sidebar', leftSidebarPlugin),
+  sys('workspace-header', 'Workspace header', workspaceHeaderPlugin),
+  // Command palette is the recovery affordance — disabling everything
+  // else still leaves a way to run actions, so it stays essential.
+  sys('command-palette', 'Command palette', commandPalettePlugin, {essential: true}),
+  sys('quick-find', 'Quick find', quickFindPlugin),
+  sys('find-replace', 'Find and replace', findReplacePlugin),
+  sys('theme-toggle', 'Theme toggle', themeTogglePlugin),
+  sys('account-header', 'Account header', accountHeaderPlugin),
+  sys('plain-outliner', 'Plain outliner', plainOutlinerPlugin),
+  sys('mobile-bottom-nav', 'Mobile bottom nav', mobileBottomNavPlugin),
+  sys('mobile-keyboard-toolbar', 'Mobile keyboard toolbar', mobileKeyboardToolbarPlugin),
+  sys('swipe-quick-actions', 'Swipe quick actions', swipeQuickActionsPlugin),
+  sys('visual-navigation', 'Visual navigation', visualNavigationPlugin),
+  sys('vim-normal-mode', 'Vim normal mode', vimNormalModePlugin({repo})),
+  sys('video-player', 'Video player', videoPlayerPlugin),
+  sys('references', 'References', referencesPlugin),
+  sys('alias', 'Aliases', aliasPlugin),
+  sys('merge-blocks', 'Merge blocks', mergeBlocksPlugin),
   // The backlinks-view coordinator reads variants registered by
   // `backlinksPlugin` and `groupedBacklinksPlugin`. Order matters only
   // for the picker UI (variants render in registration order); the
   // selection itself is driven by `backlinksViewProp`.
-  backlinksPlugin,
-  groupedBacklinksPlugin,
-  backlinksViewPlugin,
-  todoPlugin,
-  blockTaggingPlugin,
-  srsReschedulingPlugin,
-  syncStatusPlugin,
-  updateIndicatorPlugin,
-  agentRuntimePlugin,
-  roamImportPlugin({repo}),
+  sys('backlinks', 'Backlinks', backlinksPlugin),
+  sys('grouped-backlinks', 'Grouped backlinks', groupedBacklinksPlugin),
+  sys('backlinks-view', 'Backlinks view', backlinksViewPlugin),
+  sys('todo', 'Todo', todoPlugin),
+  sys('block-tagging', 'Block tagging', blockTaggingPlugin),
+  sys('srs-rescheduling', 'SRS rescheduling', srsReschedulingPlugin),
+  sys('sync-status', 'Sync status', syncStatusPlugin),
+  sys('update-indicator', 'Update indicator', updateIndicatorPlugin),
+  sys('agent-runtime', 'Agent runtime', agentRuntimePlugin),
+  sys('roam-import', 'Roam import', roamImportPlugin({repo})),
   // appIntentsPlugin's bootstrap effect resolves the layout-session
   // block via getUIStateBlock + getLayoutSessionBlock and then
   // dispatches any PWA-shortcut / share-target / note-taker intent
@@ -97,5 +110,5 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   // other plugin's data-layer setup is in place — the dispatch may
   // call appendTodayDailyBlockInStack, which depends on the
   // daily-notes data extension being live.
-  appIntentsPlugin,
+  sys('app-intents', 'App intents', appIntentsPlugin, {essential: true}),
 ]
