@@ -43,6 +43,7 @@ describe('systemToggle', () => {
     expect(handle.description).toBe('Two-way link surface')
     expect(handle.essential).toBe(false)
     expect(handle.defaultEnabled).toBe(true)
+    expect(handle.kind).toBe('system')
 
     const wrapped = handle.of([])
     expect(getBoundary(wrapped)).toBe(handle)
@@ -71,6 +72,7 @@ describe('userExtensionToggle', () => {
     expect(handle.id).toBe('block-123')
     expect(handle.defaultEnabled).toBe(true)
     expect(handle.essential).toBe(false)
+    expect(handle.kind).toBe('user')
   })
 
   it('uses the first alias as the display name when present', () => {

@@ -23,23 +23,28 @@ import {Label} from '@/components/ui/label.tsx'
 import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
 import {isEnabled, type Overrides, type Togglable} from '@/extensions/togglable.ts'
 
-/** Stable-sort the tree so essentials surface first within each level.
- *  Within "essential" and "non-essential" groups, the original catalog
- *  order is preserved (Array.prototype.sort is stable in modern engines)
- *  so the grouping is the only visible change — plugin authors keep
- *  control of the relative order of their entries. */
+/** Stable-sort the tree so essentials surface first within each level,
+ *  then alphabetical (case-insensitive, locale-aware) within each
+ *  (essential / non-essential) group. Catalog order in
+ *  `staticAppExtensions.ts` stays the source of truth for plugin
+ *  authors; the settings UI reorders purely for discoverability. */
+const nameComparator = new Intl.Collator(undefined, {sensitivity: 'base'})
+const compareNodes = (a: ToggleNode, b: ToggleNode): number => {
+  const aEss = a.handle.essential === true ? 0 : 1
+  const bEss = b.handle.essential === true ? 0 : 1
+  if (aEss !== bEss) return aEss - bEss
+  return nameComparator.compare(a.handle.name, b.handle.name)
+}
+
 const groupEssentialsFirst = (
   nodes: ReadonlyArray<ToggleNode>,
 ): ToggleNode[] => {
-  const sorted = nodes.toSorted((a, b) => {
-    const aEss = a.handle.essential === true ? 0 : 1
-    const bEss = b.handle.essential === true ? 0 : 1
-    return aEss - bEss
-  })
-  return sorted.map(node => ({
-    handle: node.handle,
-    children: groupEssentialsFirst(node.children),
-  }))
+  return nodes
+    .toSorted(compareNodes)
+    .map(node => ({
+      handle: node.handle,
+      children: groupEssentialsFirst(node.children),
+    }))
 }
 
 export interface SystemPluginsSettingsProps {
@@ -53,12 +58,24 @@ export const SystemPluginsSettings = ({
   overrides,
   onToggle,
 }: SystemPluginsSettingsProps) => {
-  // Essentials grouped first within each level. Recomputed only when
-  // the tree reference changes — the sort is shallow per level and
-  // recursion bounded by tree depth, so this is cheap.
-  const orderedTree = useMemo(() => groupEssentialsFirst(tree), [tree])
+  // Bucket the top level by handle.kind so user extensions get their
+  // own section. Within each bucket: essentials first, then
+  // alphabetical. Nested children inherit the same sort but stay
+  // under their parent regardless of kind.
+  const sections = useMemo(() => {
+    const system: ToggleNode[] = []
+    const user: ToggleNode[] = []
+    for (const root of tree) {
+      if (root.handle.kind === 'user') user.push(root)
+      else system.push(root)
+    }
+    return {
+      system: groupEssentialsFirst(system),
+      user: groupEssentialsFirst(user),
+    }
+  }, [tree])
 
-  if (orderedTree.length === 0) {
+  if (sections.system.length === 0 && sections.user.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
         No plugins to display.
@@ -67,8 +84,33 @@ export const SystemPluginsSettings = ({
   }
 
   return (
+    <div className="flex flex-col gap-4">
+      {sections.system.length > 0 && (
+        <Section title="System plugins" nodes={sections.system}
+          overrides={overrides} onToggle={onToggle}/>
+      )}
+      {sections.user.length > 0 && (
+        <Section title="User extensions" nodes={sections.user}
+          overrides={overrides} onToggle={onToggle}/>
+      )}
+    </div>
+  )
+}
+
+interface SectionProps {
+  title: string
+  nodes: ReadonlyArray<ToggleNode>
+  overrides: Overrides
+  onToggle: (handle: Togglable, nextState: boolean) => void
+}
+
+const Section = ({title, nodes, overrides, onToggle}: SectionProps) => (
+  <section className="flex flex-col gap-1">
+    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      {title}
+    </h3>
     <ul role="tree" className="flex flex-col gap-1">
-      {orderedTree.map(node => (
+      {nodes.map(node => (
         <ToggleRow
           key={node.handle.id}
           node={node}
@@ -78,8 +120,8 @@ export const SystemPluginsSettings = ({
         />
       ))}
     </ul>
-  )
-}
+  </section>
+)
 
 interface ToggleRowProps {
   node: ToggleNode

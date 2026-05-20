@@ -38,6 +38,13 @@ import {aliasesProp} from '@/data/internals/coreProperties.ts'
 // Handle + boundary marker
 // ──────────────────────────────────────────────────────────────────────
 
+/** Where a togglable came from. The settings UI uses this to bucket
+ *  toggles into "System plugins" vs "User extensions" sections, since
+ *  the two have different ergonomics (system plugins ship with the
+ *  app; user extensions can be added/removed/reloaded by the user).
+ *  Set by the factory and not user-settable. */
+export type TogglableKind = 'system' | 'user'
+
 export interface Togglable {
   readonly id: string
   readonly name: string
@@ -46,6 +53,7 @@ export interface Togglable {
   /** undefined ≡ true. Honoured for system plugins; forced true for
    *  user extensions (see `userExtensionToggle`). */
   readonly defaultEnabled?: boolean
+  readonly kind: TogglableKind
   of(ext: AppExtension): AppExtension
 }
 
@@ -104,6 +112,7 @@ export function systemToggle(opts: SystemToggleOptions): Togglable {
     description: opts.description,
     essential: opts.essential,
     defaultEnabled: opts.defaultEnabled,
+    kind: 'system',
     of: (ext) => markBoundary(handle, ext),
   }
   return handle
@@ -141,6 +150,7 @@ export function userExtensionToggle(
     description: authoredHints?.description,
     essential: false,
     defaultEnabled: true,
+    kind: 'user',
     of: (ext) => markBoundary(handle, ext),
   }
   return handle

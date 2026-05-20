@@ -12,7 +12,12 @@ import {render, screen} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {describe, expect, it, vi} from 'vitest'
 import type {ToggleNode} from '@/extensions/discoverToggleTree.ts'
-import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
+import {makeBlockData} from '@/data/test/factories.ts'
+import {
+  systemToggle,
+  userExtensionToggle,
+  type Overrides,
+} from '@/extensions/togglable.ts'
 import {SystemPluginsSettings} from '@/plugins/system-plugins/SystemPluginsSettings.tsx'
 
 const node = (
@@ -33,6 +38,17 @@ const node = (
     defaultEnabled: opts.defaultEnabled,
   }),
   children: opts.children ?? [],
+})
+
+const userNode = (
+  blockId: string,
+  hintsName?: string,
+): ToggleNode => ({
+  handle: userExtensionToggle(
+    makeBlockData({id: blockId, workspaceId: 'ws'}),
+    hintsName ? {name: hintsName} : undefined,
+  ),
+  children: [],
 })
 
 describe('SystemPluginsSettings', () => {
@@ -162,9 +178,10 @@ describe('SystemPluginsSettings', () => {
     expect(screen.getByText(/no plugins/i)).toBeInTheDocument()
   })
 
-  it('groups essentials at the top, preserving order within each group', () => {
+  it('groups essentials at the top, then non-essentials below', () => {
     // Catalog ordering mixes essentials and non-essentials freely;
     // the settings UI should hoist essentials so they're not scattered.
+    // Within each group, alphabetical (see next test).
     const tree = [
       node('system:opt-a', 'OptA'),
       node('system:ess-1', 'Ess1', {essential: true}),
@@ -180,6 +197,74 @@ describe('SystemPluginsSettings', () => {
     const rows = screen.getAllByRole('treeitem')
     const orderedNames = rows.map(r => r.getAttribute('aria-label'))
     expect(orderedNames).toEqual(['Ess1', 'Ess2', 'OptA', 'OptB', 'OptC'])
+  })
+
+  it('sorts alphabetically within each (essential / non-essential) group', () => {
+    // Mixed-case + accent to confirm locale-aware compare.
+    const tree = [
+      node('id:c', 'Charlie'),
+      node('id:a', 'alpha'),
+      node('id:b', 'Bravo'),
+      node('id:ess-z', 'Zulu', {essential: true}),
+      node('id:ess-a', 'Alpha-E', {essential: true}),
+    ]
+
+    render(
+      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+    )
+
+    const rows = screen.getAllByRole('treeitem')
+    const orderedNames = rows.map(r => r.getAttribute('aria-label'))
+    // Essentials first, then non-essentials. Within each group:
+    // case-insensitive alphabetical.
+    expect(orderedNames).toEqual(['Alpha-E', 'Zulu', 'alpha', 'Bravo', 'Charlie'])
+  })
+
+  it('renders separate "System plugins" and "User extensions" sections when both are present', () => {
+    const tree = [
+      node('system:a', 'Alpha'),
+      userNode('block-uuid-1', 'Custom Editor'),
+      node('system:b', 'Bravo'),
+      userNode('block-uuid-2', 'Tag Buddy'),
+    ]
+
+    render(
+      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+    )
+
+    // Both section headers present.
+    expect(screen.getByText(/system plugins/i)).toBeInTheDocument()
+    expect(screen.getByText(/user extensions/i)).toBeInTheDocument()
+
+    // System rows come before user rows in DOM order.
+    const rows = screen.getAllByRole('treeitem')
+    const labels = rows.map(r => r.getAttribute('aria-label'))
+    expect(labels.indexOf('Alpha')).toBeLessThan(labels.indexOf('Custom Editor'))
+    expect(labels.indexOf('Bravo')).toBeLessThan(labels.indexOf('Tag Buddy'))
+    // Within each section, alphabetical.
+    expect(labels.indexOf('Alpha')).toBeLessThan(labels.indexOf('Bravo'))
+    expect(labels.indexOf('Custom Editor')).toBeLessThan(labels.indexOf('Tag Buddy'))
+  })
+
+  it('omits the "User extensions" header when no user-kind handles exist', () => {
+    const tree = [node('system:a', 'Alpha'), node('system:b', 'Bravo')]
+
+    render(
+      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+    )
+
+    expect(screen.queryByText(/user extensions/i)).not.toBeInTheDocument()
+  })
+
+  it('omits the "System plugins" header when only user extensions exist', () => {
+    const tree = [userNode('block-uuid-only', 'Just Mine')]
+
+    render(
+      <SystemPluginsSettings tree={tree} overrides={new Map()} onToggle={vi.fn()} />,
+    )
+
+    expect(screen.queryByText(/system plugins/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/user extensions/i)).toBeInTheDocument()
   })
 
   it('groups essentials first within nested children too', () => {
