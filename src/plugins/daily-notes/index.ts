@@ -51,6 +51,7 @@ import {
   type AppMountContribution,
   type HeaderItemContribution,
 } from '@/extensions/core.ts'
+import { dialogAppMountExtension } from '@/extensions/dialogAppMount.tsx'
 import { blockContentSurfacePropsFacet } from '@/extensions/blockInteraction.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { parseAppHash } from '@/utils/routing.ts'
@@ -157,8 +158,14 @@ export const openDailyNotePickerAction = (
 // `getOrCreateDailyNote` / `ensureDailyNoteTarget` throws on
 // `repo.addTypeInTx(DAILY_NOTE_TYPE)`. Same pattern as `todoPlugin`,
 // `backlinksPlugin`, `srsReschedulingPlugin`.
+// `spreadDatesAction.ts` calls `openDialog(SpreadDatesDialog)`, which
+// is inert without DialogHost mounted. Pull the dialog-mount extension
+// in here (same as block-tagging) so the host is present whenever any
+// dialog-using plugin is enabled. Dedup by FacetContribution reference
+// keeps the registry to exactly one appMountsFacet entry.
 export const dailyNotesPlugin = ({repo}: {repo: Repo}): AppExtension => [
   dailyNotesDataExtension,
+  dialogAppMountExtension,
   appMountsFacet.of(dailyNotePickerMount, {source: 'daily-notes'}),
   appMountsFacet.of(reschedulePickerMount, {source: 'daily-notes'}),
   appMountsFacet.of(dateScrubOverlayMount, {source: 'daily-notes'}),

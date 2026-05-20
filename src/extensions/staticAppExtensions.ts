@@ -2,7 +2,6 @@ import type { Repo } from '@/data/repo'
 import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.tsx'
-import { dialogAppMountExtension } from '@/extensions/dialogAppMount.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
 import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
@@ -86,10 +85,14 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
     essential: true,
     description: 'Mount point for transient notifications. Disabling silently drops every toast.',
   }),
-  sys('dialog-mount', 'Dialogs', dialogAppMountExtension, {
-    essential: true,
-    description: 'Mount point for every openDialog() caller (agent tokens, find-replace, add tag, …). Disabling silently swallows all dialog opens.',
-  }),
+  // The dialog mount (DialogHost reading the openDialog queue) is no
+  // longer a top-level toggle — it's pulled in by every dialog-using
+  // plugin (block-tagging, daily-notes) inside its own AppExtension
+  // array. Dedup by FacetContribution reference means a single
+  // appMountsFacet contribution is registered no matter how many
+  // plugins reference it; if every dialog-using plugin is disabled
+  // the mount drops out automatically. This avoids a "shared infra"
+  // toggle the user has no real reason to flip independently.
   sys('breadcrumbs', 'Breadcrumbs', breadcrumbsPlugin, {
     description: 'Ancestor chain rendered above each panel.',
   }),
