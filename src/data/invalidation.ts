@@ -4,6 +4,7 @@ export type PluginInvalidationKeys = ReadonlySet<string> | readonly string[]
 export type PluginInvalidationMap = ReadonlyMap<string, PluginInvalidationKeys>
 
 export interface ChangeSnapshotSide {
+  id?: string
   parentId: string | null
   orderKey?: string
   workspaceId: string

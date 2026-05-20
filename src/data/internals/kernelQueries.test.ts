@@ -89,6 +89,7 @@ const create = async (args: {
 // previously narrowed `unknown`; kept as no-op identities to keep
 // the `await ... .load()` call sites stable while we verify behavior.
 const asBlocks = (v: BlockData[] | undefined): BlockData[] => v ?? []
+const asIds = (v: string[] | undefined): string[] => v ?? []
 const asBlockOrNull = (v: BlockData | null | undefined): BlockData | null => v ?? null
 
 // ════════════════════════════════════════════════════════════════════
@@ -731,6 +732,100 @@ describe('invalidation', () => {
         expect(asBlocks(handle.peek()).map(b => b.id)).toEqual(['src'])
       })
       expect(fired.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      unsub()
+    }
+  })
+
+  it('typedBlockIds (referencedBy): a content edit on a matched source does NOT invalidate', async () => {
+    await create({id: 'target'})
+    await create({id: 'src', references: [{id: 'target', alias: 'target'}]})
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+    })
+    expect(asIds(await handle.load())).toEqual(['src'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(value) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('src', {content: 'edited but still references target'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired).toEqual([])
+      expect(asIds(handle.peek())).toEqual(['src'])
+    } finally {
+      unsub()
+    }
+  })
+
+  it('typedBlockIds (ancestor filter): moving a source across matching ancestors invalidates', async () => {
+    await create({id: 'target'})
+    await create({id: 'project'})
+    await create({
+      id: 'matching-parent',
+      references: [{id: 'project', alias: 'Project'}],
+    })
+    await create({id: 'plain-parent'})
+    await create({
+      id: 'src',
+      parentId: 'matching-parent',
+      references: [{id: 'target', alias: 'Target'}],
+    })
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor', referencedBy: {id: 'project'}}],
+    })
+    expect(asIds(await handle.load())).toEqual(['src'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(value) })
+    try {
+      await env.repo.tx(
+        tx => tx.move('src', {parentId: 'plain-parent', orderKey: 'a0'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await vi.waitFor(() => {
+        expect(asIds(handle.peek())).toEqual([])
+      })
+      expect(fired).toContainEqual([])
+    } finally {
+      unsub()
+    }
+  })
+
+  it('typedBlockIds (ancestor filter): ancestor content edits do NOT invalidate', async () => {
+    await create({id: 'target'})
+    await create({id: 'project'})
+    await create({
+      id: 'parent',
+      references: [{id: 'project', alias: 'Project'}],
+    })
+    await create({
+      id: 'src',
+      parentId: 'parent',
+      references: [{id: 'target', alias: 'Target'}],
+    })
+    const handle = env.repo.query.typedBlockIds({
+      workspaceId: WS,
+      referencedBy: {id: 'target'},
+      match: [{scope: 'ancestor', referencedBy: {id: 'project'}}],
+    })
+    expect(asIds(await handle.load())).toEqual(['src'])
+
+    const fired: string[][] = []
+    const unsub = handle.subscribe((value) => { fired.push(value) })
+    try {
+      await env.repo.tx(
+        tx => tx.update('parent', {content: 'renamed parent, refs unchanged'}),
+        {scope: ChangeScope.BlockDefault},
+      )
+      await new Promise(r => setTimeout(r, 30))
+      expect(fired).toEqual([])
+      expect(asIds(handle.peek())).toEqual(['src'])
     } finally {
       unsub()
     }

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { defineQuery, type BlockData, type QueryCtx, type Schema } from '@/data/api'
+import { defineQuery, type QueryCtx, type Schema } from '@/data/api'
 import {
   buildQualifiedBlockColumnsSql,
   type BlockRow,
@@ -10,8 +10,16 @@ import {
   normalizeBacklinksFilter,
   type BacklinksFilter,
 } from '@/plugins/backlinks/query.ts'
-import { resolveTypedBlocks } from '@/data/internals/kernelQueries.ts'
+import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.ts'
 import { manyAncestorsSql } from '@/data/internals/treeQueries.ts'
+import {
+  TYPED_BLOCKS_LABEL_CHANNEL,
+  TYPED_BLOCKS_REFS_OF_CHANNEL,
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  typedBlocksLabelKey,
+  typedBlocksRefsOfKey,
+  typedBlocksStructureKey,
+} from '@/data/internals/kernelInvalidation.ts'
 import {
   buildGroupedBacklinks,
   type GroupedBacklinkCandidate,
@@ -27,13 +35,13 @@ export const GROUPED_BACKLINKS_FOR_BLOCK_QUERY = 'groupedBacklinks.forBlock'
 
 export interface GroupedBacklinkSourceParents {
   sourceId: string
-  parents: BlockData[]
+  parentIds: string[]
 }
 
 export interface GroupedBacklinksResult {
   groups: GroupedBacklinkGroup[]
   total: number
-  unfilteredSources: BlockData[]
+  unfilteredSourceIds: string[]
   sourceParents: GroupedBacklinkSourceParents[]
 }
 
@@ -78,22 +86,52 @@ const groupedBacklinksConfigSchema = z.object({
 const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string, unknown>> =>
   rows as unknown as ReadonlyArray<Record<string, unknown>>
 
-const resolveBacklinkSources = async (
+const dependOnSourceContextNode = (
+  ctx: QueryCtx,
+  workspaceId: string,
+  id: string,
+): void => {
+  ctx.depend({
+    kind: 'plugin',
+    channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+    key: typedBlocksStructureKey(workspaceId, id),
+  })
+  ctx.depend({
+    kind: 'plugin',
+    channel: TYPED_BLOCKS_REFS_OF_CHANNEL,
+    key: typedBlocksRefsOfKey(workspaceId, id),
+  })
+}
+
+const dependOnGroupLabel = (
+  ctx: QueryCtx,
+  workspaceId: string,
+  id: string,
+): void => {
+  ctx.depend({
+    kind: 'plugin',
+    channel: TYPED_BLOCKS_LABEL_CHANNEL,
+    key: typedBlocksLabelKey(workspaceId, id),
+  })
+}
+
+const resolveBacklinkSourceIds = async (
   ctx: QueryCtx,
   workspaceId: string,
   id: string,
   filter?: Required<BacklinksFilter>,
-): Promise<BlockData[]> =>
-  (await resolveTypedBlocks({
+): Promise<string[]> =>
+  (await resolveTypedBlockIds({
     workspaceId,
     referencedBy: {id},
     match: filter?.include,
     exclude: filter?.exclude,
     order: 'created-desc',
-  }, ctx)).filter(row => row.id !== id)
+  }, ctx)).filter(sourceId => sourceId !== id)
 
 const resolveSourceParents = async (
   ctx: QueryCtx,
+  workspaceId: string,
   sourceIds: readonly string[],
 ): Promise<GroupedBacklinkSourceParents[]> => {
   if (sourceIds.length === 0) return []
@@ -105,10 +143,15 @@ const resolveSourceParents = async (
   for (const row of rows) {
     rowsBySourceId.get(row.chain_start_id)?.push(row)
   }
+  const ancestorData = ctx.primeBlocks(asBlockRows(rows))
+  for (const sourceId of sourceIds) dependOnSourceContextNode(ctx, workspaceId, sourceId)
+  for (const ancestor of ancestorData) {
+    dependOnSourceContextNode(ctx, ancestor.workspaceId, ancestor.id)
+  }
 
   return sourceIds.map(sourceId => ({
     sourceId,
-    parents: ctx.hydrateBlocks(asBlockRows(rowsBySourceId.get(sourceId) ?? [])).reverse(),
+    parentIds: (rowsBySourceId.get(sourceId) ?? []).map(row => row.id).reverse(),
   }))
 }
 
@@ -204,7 +247,7 @@ export const groupedBacklinksForBlockQuery = defineQuery<
   resultSchema: groupedBacklinksSchema,
   resolve: async ({workspaceId, id, filter, groupingConfig}, ctx) => {
     if (!workspaceId || !id) {
-      return {groups: [], total: 0, unfilteredSources: [], sourceParents: []}
+      return {groups: [], total: 0, unfilteredSourceIds: [], sourceParents: []}
     }
 
     const normalizedFilter = normalizeBacklinksFilter(filter)
@@ -212,34 +255,33 @@ export const groupedBacklinksForBlockQuery = defineQuery<
       groupingConfig ?? EMPTY_GROUPED_BACKLINKS_CONFIG,
     )
 
-    // Target row dep — mirrors the backlinks wrapper. Re-resolve if
-    // the target row itself changes (e.g. soft-delete).
-    ctx.depend({kind: 'row', id})
+    // Target structural dep — mirrors the backlinks wrapper. Re-resolve
+    // if the target is deleted/restored without making target content
+    // part of the collection query contract.
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, id),
+    })
 
-    // Inline-resolve the typed-blocks calls so their deps (typed-blocks
-    // reference channel, per-source row deps via hydrateBlocks, etc.)
+    // Inline-resolve the typed-block-id calls so their deps (typed-blocks
+    // reference/property/type channels, plus structural deps for filters)
     // register against THIS handle, not the sub-query's handle. A
     // `repo.query[BACKLINKS_FOR_BLOCK_QUERY](...).load()` would
     // execute correctly but leave the grouped handle without the
     // invalidation triggers that wake the backlinks handle.
-    const unfilteredSources = await resolveBacklinkSources(ctx, workspaceId, id)
-    const sourceData = hasBacklinksFilter(normalizedFilter)
-      ? await resolveBacklinkSources(ctx, workspaceId, id, normalizedFilter)
-      : unfilteredSources
-    if (sourceData.length === 0) {
-      return {groups: [], total: 0, unfilteredSources, sourceParents: []}
+    const unfilteredSourceIds = await resolveBacklinkSourceIds(ctx, workspaceId, id)
+    const sourceIds = hasBacklinksFilter(normalizedFilter)
+      ? await resolveBacklinkSourceIds(ctx, workspaceId, id, normalizedFilter)
+      : unfilteredSourceIds
+    if (sourceIds.length === 0) {
+      return {groups: [], total: 0, unfilteredSourceIds, sourceParents: []}
     }
 
-    const sourceIds = sourceData.map(source => source.id)
-    const sourceParents = await resolveSourceParents(ctx, sourceIds)
+    const sourceParents = await resolveSourceParents(ctx, workspaceId, sourceIds)
     // One JSON-array bind for the source-ids CTE (vs one per id).
     // Avoids the SQLite parameter ceiling on heavily-linked targets.
     const sourceIdsJson = JSON.stringify(sourceIds)
-
-    // `sourceParents` is part of the result now, so hydrating those
-    // rows also declares deps for every ancestor that can affect
-    // grouping. The source rows themselves were hydrated by
-    // `resolveTypedBlocks`.
 
     const candidateRows = await ctx.db.getAll<CandidateRow>(
       SELECT_GROUPED_BACKLINK_CANDIDATES_SQL,
@@ -254,7 +296,8 @@ export const groupedBacklinksForBlockQuery = defineQuery<
     for (const row of candidateRows) {
       groupRowsById.set(row.id, row)
     }
-    const groupData = ctx.hydrateBlocks(asBlockRows(Array.from(groupRowsById.values())))
+    const groupData = ctx.primeBlocks(asBlockRows(Array.from(groupRowsById.values())))
+    for (const group of groupData) dependOnGroupLabel(ctx, group.workspaceId, group.id)
     const labelByGroupId = new Map(groupData.map(data => [data.id, labelForBlockData(data, data.id)]))
 
     const candidates: GroupedBacklinkCandidate[] = candidateRows.map(row => ({
@@ -279,8 +322,8 @@ export const groupedBacklinksForBlockQuery = defineQuery<
         candidates,
         groupingConfig: normalizedGroupingConfig,
       }),
-      total: sourceData.length,
-      unfilteredSources,
+      total: sourceIds.length,
+      unfilteredSourceIds,
       sourceParents,
     }
   },

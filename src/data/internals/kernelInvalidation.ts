@@ -15,6 +15,13 @@
  *   - `typedBlocks.property`  — a property value changed for (ws, name)
  *   - `typedBlocks.reference` — incoming-edge set changed for (ws, target)
  *   - `typedBlocks.referenceField` — same, sourceField-granular
+ *   - `typedBlocks.structure` — a known block's parent/workspace/live
+ *                               shape changed (for id projections that
+ *                               walk ancestor chains)
+ *   - `typedBlocks.refsOf`    — a known block's outgoing reference set
+ *                               changed (for aggregate context queries)
+ *   - `typedBlocks.label`     — content or alias changed for a known
+ *                               block used as a display label
  *
  *   alias index (`core.aliasLookup` / `core.aliasMatches` /
  *   `core.aliasesInWorkspace`):
@@ -47,6 +54,9 @@ export const TYPED_BLOCKS_TYPE_CHANNEL = 'typedBlocks.type'
 export const TYPED_BLOCKS_PROPERTY_CHANNEL = 'typedBlocks.property'
 export const TYPED_BLOCKS_REFERENCE_CHANNEL = 'typedBlocks.reference'
 export const TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL = 'typedBlocks.referenceField'
+export const TYPED_BLOCKS_STRUCTURE_CHANNEL = 'typedBlocks.structure'
+export const TYPED_BLOCKS_REFS_OF_CHANNEL = 'typedBlocks.refsOf'
+export const TYPED_BLOCKS_LABEL_CHANNEL = 'typedBlocks.label'
 export const KERNEL_ALIASES_CHANNEL = 'kernel.aliases'
 export const KERNEL_CONTENT_CHANNEL = 'kernel.content'
 
@@ -64,6 +74,12 @@ export const typedBlocksReferenceFieldKey = (
   targetId: string,
   sourceField: string,
 ): string => `${workspaceId}${SEP}${targetId}${SEP}${sourceField}`
+export const typedBlocksStructureKey = (workspaceId: string, blockId: string): string =>
+  `${workspaceId}${SEP}${blockId}`
+export const typedBlocksRefsOfKey = (workspaceId: string, blockId: string): string =>
+  `${workspaceId}${SEP}${blockId}`
+export const typedBlocksLabelKey = (workspaceId: string, blockId: string): string =>
+  `${workspaceId}${SEP}${blockId}`
 
 export const kernelAliasesKey = (workspaceId: string): string => workspaceId
 export const kernelContentKey = (workspaceId: string): string => workspaceId
@@ -165,74 +181,138 @@ const emitReferenceChannels = (
   }
 }
 
+const emitBlockChannel = (
+  emit: Emit,
+  emitted: Set<string>,
+  channel: string,
+  keyOf: (workspaceId: string, blockId: string) => string,
+  workspaceId: string,
+  blockId: string | undefined,
+): void => {
+  if (!blockId) return
+  const key = keyOf(workspaceId, blockId)
+  if (emitted.has(key)) return
+  emitted.add(key)
+  emit(channel, key)
+}
+
+const refKey = (r: { id: string; sourceField?: string }): string =>
+  `${r.id}${SEP}${r.sourceField ?? ''}`
+
+const referenceSetChanged = (
+  before: ReadonlyArray<{ id: string; sourceField?: string }>,
+  after: ReadonlyArray<{ id: string; sourceField?: string }>,
+): boolean => {
+  if (before.length !== after.length) return true
+  const beforeSet = new Set(before.map(refKey))
+  for (const ref of after) {
+    if (!beforeSet.has(refKey(ref))) return true
+  }
+  return false
+}
+
 /** Diff a single ChangeSnapshot and emit every channel this rule owns
  *  (typedBlocks.* + kernel.aliases + kernel.content). Pure — no side
  *  effects beyond `emit`. */
 export const emitKernelInvalidations = (
   snapshot: ChangeSnapshot,
   emit: Emit,
+  fallbackBlockId?: string,
 ): void => {
   const beforeLive = !!snapshot.before && !snapshot.before.deleted
   const afterLive = !!snapshot.after && !snapshot.after.deleted
-  const workspaceId = snapshot.after?.workspaceId ?? snapshot.before?.workspaceId
-  if (!workspaceId) return
+  const blockId = snapshot.after?.id ?? snapshot.before?.id ?? fallbackBlockId
 
   const emittedTypes = new Set<string>()
   const emittedProps = new Set<string>()
   const emittedRefTargets = new Set<string>()
   const emittedRefFields = new Set<string>()
-  let emittedAliases = false
-  let emittedContent = false
+  const emittedAliases = new Set<string>()
+  const emittedContent = new Set<string>()
+  const emittedStructure = new Set<string>()
+  const emittedRefsOf = new Set<string>()
+  const emittedLabels = new Set<string>()
 
-  const emitAliasesOnce = (): void => {
-    if (emittedAliases) return
-    emittedAliases = true
+  const emitAliasesOnce = (workspaceId: string): void => {
+    if (emittedAliases.has(workspaceId)) return
+    emittedAliases.add(workspaceId)
     emit(KERNEL_ALIASES_CHANNEL, kernelAliasesKey(workspaceId))
   }
-  const emitContentOnce = (): void => {
-    if (emittedContent) return
-    emittedContent = true
+  const emitContentOnce = (workspaceId: string): void => {
+    if (emittedContent.has(workspaceId)) return
+    emittedContent.add(workspaceId)
     emit(KERNEL_CONTENT_CHANNEL, kernelContentKey(workspaceId))
   }
-
-  // Liveness change → live channel + emit every axis present on the
-  // newly-live (or just-departed) side. A query with no filters subscribes
-  // to `live`; queries with filters subscribe to type/property/reference
-  // channels matching their filters and pick up the relevant side here.
-  if (beforeLive !== afterLive) {
+  const emitStructure = (workspaceId: string): void => {
+    emitBlockChannel(
+      emit,
+      emittedStructure,
+      TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      typedBlocksStructureKey,
+      workspaceId,
+      blockId,
+    )
+  }
+  const emitRefsOf = (workspaceId: string): void => {
+    emitBlockChannel(
+      emit,
+      emittedRefsOf,
+      TYPED_BLOCKS_REFS_OF_CHANNEL,
+      typedBlocksRefsOfKey,
+      workspaceId,
+      blockId,
+    )
+  }
+  const emitLabel = (workspaceId: string): void => {
+    emitBlockChannel(
+      emit,
+      emittedLabels,
+      TYPED_BLOCKS_LABEL_CHANNEL,
+      typedBlocksLabelKey,
+      workspaceId,
+      blockId,
+    )
+  }
+  const emitLiveSideAxes = (side: NonNullable<ChangeSnapshot['before']>): void => {
+    const workspaceId = side.workspaceId
+    if (!workspaceId) return
     emit(TYPED_BLOCKS_LIVE_CHANNEL, typedBlocksLiveKey(workspaceId))
-    const liveSide = afterLive ? snapshot.after : snapshot.before
-    if (liveSide) {
-      for (const t of decodeTypes(liveSide.properties)) {
-        emitTypeChannel(emit, emittedTypes, workspaceId, t)
-      }
-      if (liveSide.properties) {
-        for (const name of Object.keys(liveSide.properties)) {
-          emitPropertyChannel(emit, emittedProps, workspaceId, name)
-        }
-      }
-      if (liveSide.references) {
-        for (const ref of liveSide.references) {
-          emitReferenceChannels(
-            emit,
-            emittedRefTargets,
-            emittedRefFields,
-            workspaceId,
-            ref.id,
-            ref.sourceField,
-          )
-        }
-      }
-      // kernel.content fires on any liveness flip — searchByContent's
-      // `content != ''` filter and recentBlocks' result set depend on
-      // membership.
-      emitContentOnce()
-      // kernel.aliases fires only if the live side actually carries an
-      // alias — block_aliases is keyed off `properties.alias`, so a
-      // restore/tombstone of a row with no aliases doesn't shift the
-      // index.
-      if (hasAlias(liveSide.properties)) emitAliasesOnce()
+    for (const t of decodeTypes(side.properties)) {
+      emitTypeChannel(emit, emittedTypes, workspaceId, t)
     }
+    if (side.properties) {
+      for (const name of Object.keys(side.properties)) {
+        emitPropertyChannel(emit, emittedProps, workspaceId, name)
+      }
+    }
+    if (side.references) {
+      for (const ref of side.references) {
+        emitReferenceChannels(
+          emit,
+          emittedRefTargets,
+          emittedRefFields,
+          workspaceId,
+          ref.id,
+          ref.sourceField,
+        )
+      }
+    }
+    emitContentOnce(workspaceId)
+    emitStructure(workspaceId)
+    emitRefsOf(workspaceId)
+    emitLabel(workspaceId)
+    if (hasAlias(side.properties)) emitAliasesOnce(workspaceId)
+  }
+
+  // Liveness or workspace changes are membership changes in at least
+  // one workspace. Treat them as a departure from the old workspace and
+  // an arrival in the new one so all per-axis indexed queries wake.
+  if (
+    beforeLive !== afterLive ||
+    (beforeLive && afterLive && snapshot.before?.workspaceId !== snapshot.after?.workspaceId)
+  ) {
+    if (beforeLive && snapshot.before) emitLiveSideAxes(snapshot.before)
+    if (afterLive && snapshot.after) emitLiveSideAxes(snapshot.after)
     return
   }
 
@@ -241,6 +321,13 @@ export const emitKernelInvalidations = (
   if (!beforeLive || !afterLive) return
 
   // Both sides live: per-axis diff.
+  const workspaceId = snapshot.after?.workspaceId ?? snapshot.before?.workspaceId
+  if (!workspaceId) return
+
+  if (snapshot.before?.parentId !== snapshot.after?.parentId) {
+    emitStructure(workspaceId)
+  }
+
   const beforeTypes = decodeTypes(snapshot.before?.properties)
   const afterTypes = decodeTypes(snapshot.after?.properties)
   if (beforeTypes.length > 0 || afterTypes.length > 0) {
@@ -263,14 +350,20 @@ export const emitKernelInvalidations = (
     seenNames.add(name)
     if (!encodedEqual(beforeProps[name], afterProps[name])) {
       emitPropertyChannel(emit, emittedProps, workspaceId, name)
-      if (name === ALIAS_PROPERTY_NAME) emitAliasesOnce()
+      if (name === ALIAS_PROPERTY_NAME) {
+        emitAliasesOnce(workspaceId)
+        emitLabel(workspaceId)
+      }
     }
   }
   for (const name of Object.keys(afterProps)) {
     if (seenNames.has(name)) continue
     if (!encodedEqual(beforeProps[name], afterProps[name])) {
       emitPropertyChannel(emit, emittedProps, workspaceId, name)
-      if (name === ALIAS_PROPERTY_NAME) emitAliasesOnce()
+      if (name === ALIAS_PROPERTY_NAME) {
+        emitAliasesOnce(workspaceId)
+        emitLabel(workspaceId)
+      }
     }
   }
 
@@ -279,14 +372,13 @@ export const emitKernelInvalidations = (
   // (rule-test scaffolding without a content key) is treated as "no
   // change" — we only fire when the values actually differ.
   if ((snapshot.before?.content ?? '') !== (snapshot.after?.content ?? '')) {
-    emitContentOnce()
+    emitContentOnce(workspaceId)
+    emitLabel(workspaceId)
   }
 
   const beforeRefs = snapshot.before?.references ?? []
   const afterRefs = snapshot.after?.references ?? []
   if (beforeRefs.length > 0 || afterRefs.length > 0) {
-    const refKey = (r: { id: string; sourceField?: string }): string =>
-      `${r.id}${SEP}${r.sourceField ?? ''}`
     const beforeMap = new Map<string, { id: string; sourceField?: string }>()
     for (const r of beforeRefs) beforeMap.set(refKey(r), r)
     const afterMap = new Map<string, { id: string; sourceField?: string }>()
@@ -316,13 +408,16 @@ export const emitKernelInvalidations = (
       }
     }
   }
+  if (referenceSetChanged(beforeRefs, afterRefs)) {
+    emitRefsOf(workspaceId)
+  }
 }
 
 export const kernelInvalidationRule: InvalidationRule = {
   id: 'core.kernelInvalidation',
   collectFromSnapshots: (snapshots, emit) => {
-    for (const snapshot of snapshots.values()) {
-      emitKernelInvalidations(snapshot, emit)
+    for (const [id, snapshot] of snapshots) {
+      emitKernelInvalidations(snapshot, emit, id)
     }
   },
   collectFromRowEvent: ({ before, after }, emit) => {
@@ -332,6 +427,7 @@ export const kernelInvalidationRule: InvalidationRule = {
     emitKernelInvalidations(
       { before: before as ChangeSnapshot['before'], after: after as ChangeSnapshot['after'] },
       emit,
+      before?.id ?? after?.id,
     )
   },
 }

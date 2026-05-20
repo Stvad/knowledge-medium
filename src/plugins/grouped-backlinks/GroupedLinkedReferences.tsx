@@ -48,7 +48,7 @@ const EMPTY_GROUPED_BACKLINKS_SNAPSHOT: GroupedBacklinksSnapshot = {
   grouped: {
     groups: [],
     total: 0,
-    unfilteredSources: [],
+    unfilteredSourceIds: [],
     sourceParents: [],
   },
   initialParentsByBacklinkId: new Map(),
@@ -70,12 +70,12 @@ const snapshotFromGroupedResult = (
   repo: Block['repo'],
   grouped: GroupedBacklinksResult,
 ): GroupedBacklinksSnapshot => ({
-  unfilteredBacklinks: grouped.unfilteredSources.map(source => repo.block(source.id)),
+  unfilteredBacklinks: grouped.unfilteredSourceIds.map(id => repo.block(id)),
   grouped,
   initialParentsByBacklinkId: new Map(
     grouped.sourceParents.map(entry => [
       entry.sourceId,
-      entry.parents.map(parent => repo.block(parent.id)),
+      entry.parentIds.map(parentId => repo.block(parentId)),
     ]),
   ),
 })

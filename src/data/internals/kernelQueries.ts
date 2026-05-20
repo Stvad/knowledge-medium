@@ -43,6 +43,7 @@ import {
   TYPED_BLOCKS_PROPERTY_CHANNEL,
   TYPED_BLOCKS_REFERENCE_CHANNEL,
   TYPED_BLOCKS_REFERENCE_FIELD_CHANNEL,
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
   TYPED_BLOCKS_TYPE_CHANNEL,
   kernelAliasesKey,
   kernelContentKey,
@@ -50,6 +51,7 @@ import {
   typedBlocksPropertyKey,
   typedBlocksReferenceFieldKey,
   typedBlocksReferenceKey,
+  typedBlocksStructureKey,
   typedBlocksTypeKey,
 } from './kernelInvalidation'
 
@@ -237,6 +239,9 @@ const asBlockRows = (rows: ReadonlyArray<BlockRow>): ReadonlyArray<Record<string
 // zod schema and pay the validation cost knowingly.
 const blockDataArraySchema: Schema<BlockData[]> = {
   parse: (input) => input as BlockData[],
+}
+const stringArraySchema: Schema<string[]> = {
+  parse: (input) => input as string[],
 }
 const blockDataOrNullSchema: Schema<BlockData | null> = {
   parse: (input) => input as BlockData | null,
@@ -519,16 +524,16 @@ const collectPredicateDeps = (
   }
 }
 
-/** Resolve a typed block query against the given context. Used both
- *  by `typedBlocksQuery` and by thin wrappers like `backlinksForBlockQuery`
- *  that compose typed-query semantics — sharing this resolver keeps
- *  the dep declarations and SQL in one place. */
-export const resolveTypedBlocks = async (
-  query: ResolvedTypedBlockQuery,
+const collectTypedBlockAxisDeps = (
+  normalized: ResolvedTypedBlockQuery,
   ctx: QueryCtx,
-): Promise<BlockData[]> => {
-  if (!query.workspaceId) return []
-  const normalized = normalizeTypedBlockQuery(query)
+): {
+  workspaceId: string
+  types: readonly string[]
+  referencedBy: ResolvedTypedBlockQuery['referencedBy']
+  matchPredicates: readonly BlockPredicate[]
+  excludePredicates: readonly BlockPredicate[]
+} => {
   const workspaceId = normalized.workspaceId
   const types = normalized.types ?? []
   const referencedBy = normalized.referencedBy
@@ -588,27 +593,64 @@ export const resolveTypedBlocks = async (
     })
   }
 
-  const needsAncestorChain =
-    matchPredicates.some(p => p.scope === 'ancestor') ||
-    excludePredicates.some(p => p.scope === 'ancestor')
+  return {workspaceId, types, referencedBy, matchPredicates, excludePredicates}
+}
+
+const typedBlockNeedsAncestorChain = (
+  matchPredicates: readonly BlockPredicate[],
+  excludePredicates: readonly BlockPredicate[],
+): boolean =>
+  matchPredicates.some(p => p.scope === 'ancestor') ||
+  excludePredicates.some(p => p.scope === 'ancestor')
+
+const declareAncestorDeps = async (
+  normalized: ResolvedTypedBlockQuery,
+  ctx: QueryCtx,
+  kind: 'row' | 'structure',
+): Promise<void> => {
+  assertAncestorWalkBounded(normalized)
+  const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
+  const ancestorRows = await ctx.db.getAll<{anc_id: string}>(
+    ANCESTOR_DEP_NODES_SQL(candidatesCte.sql),
+    candidatesCte.params,
+  )
+  for (const row of ancestorRows) {
+    if (kind === 'row') {
+      ctx.depend({kind: 'row', id: row.anc_id})
+    } else {
+      ctx.depend({
+        kind: 'plugin',
+        channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+        key: typedBlocksStructureKey(normalized.workspaceId, row.anc_id),
+      })
+    }
+  }
+}
+
+/** Resolve a typed block query against the given context. Used both
+ *  by `typedBlocksQuery` and by thin wrappers like `backlinksForBlockQuery`
+ *  that compose typed-query semantics — sharing this resolver keeps
+ *  the dep declarations and SQL in one place. */
+export const resolveTypedBlocks = async (
+  query: ResolvedTypedBlockQuery,
+  ctx: QueryCtx,
+): Promise<BlockData[]> => {
+  if (!query.workspaceId) return []
+  const normalized = normalizeTypedBlockQuery(query)
+  const {
+    workspaceId,
+    types,
+    referencedBy,
+    matchPredicates,
+    excludePredicates,
+  } = collectTypedBlockAxisDeps(normalized, ctx)
+  const needsAncestorChain = typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)
 
   // Ancestor-scope predicates inspect rows up the parent chain.
   // Register row deps on every ancestor id touched so a property /
   // content / parent_id change on any ancestor wakes the handle.
   if (needsAncestorChain) {
-    // Gate before the dep walk — same selectivity check the compiler
-    // will run later. Without this, an unbounded ancestor query would
-    // trigger the full recursive scan in the dep-seed step before
-    // bailing out in compile.
-    assertAncestorWalkBounded(normalized)
-    const candidatesCte = buildCandidatesCte(normalized, ctx.repo.propertySchemas)
-    const ancestorRows = await ctx.db.getAll<{anc_id: string}>(
-      ANCESTOR_DEP_NODES_SQL(candidatesCte.sql),
-      candidatesCte.params,
-    )
-    for (const row of ancestorRows) {
-      ctx.depend({kind: 'row', id: row.anc_id})
-    }
+    await declareAncestorDeps(normalized, ctx, 'row')
   }
 
   if (
@@ -627,6 +669,25 @@ export const resolveTypedBlocks = async (
   const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas)
   const rows = await ctx.db.getAll<BlockRow>(compiled.sql, [...compiled.params])
   return ctx.hydrateBlocks(asBlockRows(rows))
+}
+
+/** Id projection for typed queries. Same typed-query semantics and
+ *  membership invalidation as `resolveTypedBlocks`, but it intentionally
+ *  avoids hydrating result rows, so content-only edits to current
+ *  members do not invalidate collection consumers. */
+export const resolveTypedBlockIds = async (
+  query: ResolvedTypedBlockQuery,
+  ctx: QueryCtx,
+): Promise<string[]> => {
+  if (!query.workspaceId) return []
+  const normalized = normalizeTypedBlockQuery(query)
+  const {matchPredicates, excludePredicates} = collectTypedBlockAxisDeps(normalized, ctx)
+  if (typedBlockNeedsAncestorChain(matchPredicates, excludePredicates)) {
+    await declareAncestorDeps(normalized, ctx, 'structure')
+  }
+  const compiled = compileTypedBlockQuery(normalized, ctx.repo.propertySchemas, {projection: 'ids'})
+  const rows = await ctx.db.getAll<{id: string}>(compiled.sql, [...compiled.params])
+  return rows.map(row => row.id)
 }
 
 /** SQLite-backed typed block query. Repo.queryBlocks / subscribeBlocks
@@ -655,6 +716,13 @@ export const typedBlocksQuery = defineQuery<ResolvedTypedBlockQuery, BlockData[]
   argsSchema: typedBlocksArgsSchema,
   resultSchema: blockDataArraySchema,
   resolve: (query, ctx) => resolveTypedBlocks(query, ctx),
+})
+
+export const typedBlockIdsQuery = defineQuery<ResolvedTypedBlockQuery, string[]>({
+  name: 'core.typedBlockIds',
+  argsSchema: typedBlocksArgsSchema,
+  resultSchema: stringArraySchema,
+  resolve: (query, ctx) => resolveTypedBlockIds(query, ctx),
 })
 
 /** Substring-match content search. Empty `query` returns []. */
@@ -870,6 +938,7 @@ export const KERNEL_QUERIES: ReadonlyArray<AnyQuery> = [
   childIdsQuery,
   byTypeQuery,
   typedBlocksQuery,
+  typedBlockIdsQuery,
   searchByContentQuery,
   recentBlocksQuery,
   firstChildByContentQuery,
@@ -894,6 +963,7 @@ declare module '@/data/api' {
     'core.childIds': typeof childIdsQuery
     'core.byType': typeof byTypeQuery
     'core.typedBlocks': typeof typedBlocksQuery
+    'core.typedBlockIds': typeof typedBlockIdsQuery
     'core.searchByContent': typeof searchByContentQuery
     'core.recentBlocks': typeof recentBlocksQuery
     'core.firstChildByContent': typeof firstChildByContentQuery

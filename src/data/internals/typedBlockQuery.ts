@@ -13,6 +13,8 @@ export interface CompiledTypedBlockQuery {
   readonly params: readonly unknown[]
 }
 
+export type TypedBlockQueryProjection = 'rows' | 'ids'
+
 export const jsonPathForProperty = (name: string): string =>
   `$."${name.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
 
@@ -525,6 +527,7 @@ const ANCESTOR_CHAIN_CTE_SQL = `
 export const compileTypedBlockQuery = (
   query: ResolvedTypedBlockQuery,
   propertySchemas: ReadonlyMap<string, AnyPropertySchema>,
+  opts: {projection?: TypedBlockQueryProjection} = {},
 ): CompiledTypedBlockQuery => {
   const normalized = normalizeTypedBlockQuery(query)
   const matchPredicates = normalized.match ?? []
@@ -561,10 +564,13 @@ export const compileTypedBlockQuery = (
   const orderClause = normalized.order === 'created-desc'
     ? 'ORDER BY b.created_at DESC, b.id'
     : 'ORDER BY b.created_at ASC, b.id ASC'
+  const selectClause = opts.projection === 'ids'
+    ? 'b.id AS id'
+    : buildQualifiedBlockColumnsSql('b')
 
   const sql = `
     ${ctes}
-    SELECT ${buildQualifiedBlockColumnsSql('b')}
+    SELECT ${selectClause}
     FROM candidates c
     JOIN blocks b ON b.id = c.id
     ${filterClauses.length > 0 ? `WHERE ${filterClauses.join('\n      AND ')}` : ''}

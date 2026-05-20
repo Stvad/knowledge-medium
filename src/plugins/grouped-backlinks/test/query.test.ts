@@ -383,16 +383,12 @@ describe('groupedBacklinksDataExtension query', () => {
     }).load()
 
     expect(out.total).toBe(1)
-    expect(sorted(out.unfilteredSources.map(source => source.id))).toEqual(['hidden', 'visible'])
+    expect(sorted(out.unfilteredSourceIds)).toEqual(['hidden', 'visible'])
     expect(out.groups.map(group => group.sourceIds)).toEqual([['visible']])
     expect(out.sourceParents).toEqual([{
       sourceId: 'visible',
-      parents: expect.arrayContaining([
-        expect.objectContaining({id: 'page'}),
-        expect.objectContaining({id: 'section'}),
-      ]),
+      parentIds: ['page', 'section'],
     }])
-    expect(out.sourceParents[0].parents.map(parent => parent.id)).toEqual(['page', 'section'])
   })
 
   it('surfaces singleton high-priority groups at the top instead of folding them into Other', async () => {
@@ -551,6 +547,71 @@ describe('groupedBacklinksDataExtension query', () => {
 
     await vi.waitFor(() => {
       expect(fired).toEqual([['parent'], ['Project']])
+    })
+  })
+
+  it('does not re-resolve when a backlink source content changes without reference changes', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'project', content: 'Project'})
+    await create({
+      id: 'src-1',
+      references: [{id: 'target', alias: 'T'}, {id: 'project', alias: 'Project'}],
+    })
+    await create({
+      id: 'src-2',
+      references: [{id: 'target', alias: 'T'}, {id: 'project', alias: 'Project'}],
+    })
+
+    const handle = env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    })
+    const fired: string[][] = []
+    handle.subscribe((value) => {
+      fired.push(value.groups.map(group => group.label))
+    })
+    await vi.waitFor(() => expect(fired).toEqual([['Project']]))
+
+    await env.repo.tx(
+      tx => tx.update('src-1', {content: 'source content edited'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await new Promise(r => setTimeout(r, 30))
+    expect(fired).toEqual([['Project']])
+  })
+
+  it('re-resolves when a source moves to a different root grouping context', async () => {
+    await create({id: 'target', content: 'Target'})
+    await create({id: 'page-a', content: 'Page A'})
+    await create({id: 'page-b', content: 'Page B'})
+    await create({
+      id: 'src-1',
+      parentId: 'page-a',
+      references: [{id: 'target', alias: 'T'}],
+    })
+    await create({
+      id: 'src-2',
+      parentId: 'page-a',
+      references: [{id: 'target', alias: 'T'}],
+    })
+
+    const handle = env.repo.query[GROUPED_BACKLINKS_FOR_BLOCK_QUERY]({
+      workspaceId: WS,
+      id: 'target',
+    })
+    const fired: string[][] = []
+    handle.subscribe((value) => {
+      fired.push(value.groups.map(group => group.label))
+    })
+    await vi.waitFor(() => expect(fired).toEqual([['Page A']]))
+
+    await env.repo.tx(
+      tx => tx.move('src-1', {parentId: 'page-b', orderKey: 'key-src-1-moved'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+
+    await vi.waitFor(() => {
+      expect(fired[fired.length - 1]).toEqual(['Other'])
     })
   })
 

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
+import { ChangeScope, type BlockReference } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '@/data/repo'
@@ -22,7 +22,9 @@ import { backlinksDataExtension } from '../dataExtension.ts'
 import { referencesInvalidationRule } from '@/plugins/references/invalidation.ts'
 import {
   TYPED_BLOCKS_REFERENCE_CHANNEL,
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
   typedBlocksReferenceKey,
+  typedBlocksStructureKey,
 } from '@/data/internals/kernelInvalidation.ts'
 import {
   BACKLINKS_FOR_BLOCK_QUERY,
@@ -93,7 +95,7 @@ const create = async (args: {
   }, {scope: ChangeScope.BlockDefault})
 }
 
-const asBlocks = (v: BlockData[] | undefined): BlockData[] => v ?? []
+const asIds = (v: string[] | undefined): string[] => v ?? []
 
 const depIds = (deps: readonly Dependency[], kind: Dependency['kind']) =>
   deps
@@ -184,10 +186,10 @@ describe('backlinksDataExtension query', () => {
     await create({id: 'src1', references: [{id: 'target', alias: 't'}]})
     await create({id: 'src2', references: [{id: 'target', alias: 't'}]})
     await create({id: 'unrelated'})
-    const out = asBlocks(
+    const out = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
-    expect(out.map(r => r.id).sort()).toEqual(['src1', 'src2'])
+    expect(out.sort()).toEqual(['src1', 'src2'])
   })
 
   it('orders linked references by newest-created source first', async () => {
@@ -198,15 +200,15 @@ describe('backlinksDataExtension query', () => {
       scope: ChangeScope.BlockDefault,
     })
 
-    const out = asBlocks(
+    const out = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
-    expect(out.map(row => row.id)).toEqual(['src-new', 'src-old'])
+    expect(out).toEqual(['src-new', 'src-old'])
   })
 
   it('excludes self-reference', async () => {
     await create({id: 'self', references: [{id: 'self', alias: 'self'}]})
-    const out = asBlocks(
+    const out = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'self'}).load(),
     )
     expect(out).toEqual([])
@@ -216,7 +218,7 @@ describe('backlinksDataExtension query', () => {
     await create({id: 'target'})
     await create({id: 'src', references: [{id: 'target', alias: 't'}]})
     await env.repo.tx(tx => tx.delete('src'), {scope: ChangeScope.BlockDefault})
-    const out = asBlocks(
+    const out = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
     expect(out).toEqual([])
@@ -229,18 +231,18 @@ describe('backlinksDataExtension query', () => {
       workspaceId: OTHER_WS,
       references: [{id: 'target', alias: 't'}],
     })
-    const wsOut = asBlocks(
+    const wsOut = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
     expect(wsOut).toEqual([])
 
-    const otherWs = asBlocks(
+    const otherWs = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
         workspaceId: OTHER_WS,
         id: 'target',
       }).load(),
     )
-    expect(otherWs.map(r => r.id)).toEqual(['src-other'])
+    expect(otherWs).toEqual(['src-other'])
   })
 
   it('filters backlinks by direct references on the source block', async () => {
@@ -252,13 +254,13 @@ describe('backlinksDataExtension query', () => {
     })
     await create({id: 'src2', references: [{id: 'target', alias: 'T'}]})
 
-    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {include: [{scope: 'self', referencedBy: {id: 'tag'}}]},
     }).load())
 
-    expect(out.map(row => row.id)).toEqual(['src1'])
+    expect(out).toEqual(['src1'])
   })
 
   it('keeps newest-created ordering when backlinks are filtered', async () => {
@@ -276,13 +278,13 @@ describe('backlinksDataExtension query', () => {
       scope: ChangeScope.BlockDefault,
     })
 
-    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     }).load())
 
-    expect(out.map(row => row.id)).toEqual(['src-new', 'src-old'])
+    expect(out).toEqual(['src-new', 'src-old'])
   })
 
   it('filters backlinks by references on ancestor blocks', async () => {
@@ -296,13 +298,13 @@ describe('backlinksDataExtension query', () => {
     })
     await create({id: 'sibling', references: [{id: 'target', alias: 'T'}]})
 
-    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     }).load())
 
-    expect(out.map(row => row.id)).toEqual(['child'])
+    expect(out).toEqual(['child'])
   })
 
   it('filters backlinks by their containing root page (ancestor id predicate)', async () => {
@@ -320,13 +322,13 @@ describe('backlinksDataExtension query', () => {
       references: [{id: 'target', alias: 'T'}],
     })
 
-    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {include: [{scope: 'ancestor', id: 'page-a'}]},
     }).load())
 
-    expect(out.map(row => row.id)).toEqual(['child-a'])
+    expect(out).toEqual(['child-a'])
   })
 
   it('treats the containing page as a context tag for ancestor referencedBy', async () => {
@@ -349,19 +351,19 @@ describe('backlinksDataExtension query', () => {
       references: [{id: 'target', alias: 'T'}],
     })
 
-    const includeOut = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const includeOut = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {include: [{scope: 'ancestor', referencedBy: {id: 'roam-memo'}}]},
     }).load())
-    expect(includeOut.map(row => row.id)).toEqual(['on-roam-memo'])
+    expect(includeOut).toEqual(['on-roam-memo'])
 
-    const excludeOut = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const excludeOut = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {exclude: [{scope: 'ancestor', referencedBy: {id: 'roam-memo'}}]},
     }).load())
-    expect(excludeOut.map(row => row.id)).toEqual(['elsewhere'])
+    expect(excludeOut).toEqual(['elsewhere'])
   })
 
   it('filters out backlinks that match remove references in source context', async () => {
@@ -373,13 +375,13 @@ describe('backlinksDataExtension query', () => {
       references: [{id: 'target', alias: 'T'}, {id: 'done', alias: 'DONE'}],
     })
 
-    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {exclude: [{scope: 'ancestor', referencedBy: {id: 'done'}}]},
     }).load())
 
-    expect(out.map(row => row.id)).toEqual(['keep'])
+    expect(out).toEqual(['keep'])
   })
 
   it('requires every include filter to match the source context', async () => {
@@ -399,7 +401,7 @@ describe('backlinksDataExtension query', () => {
       ],
     })
 
-    const out = asBlocks(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
+    const out = asIds(await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({
       workspaceId: WS,
       id: 'target',
       filter: {
@@ -410,7 +412,7 @@ describe('backlinksDataExtension query', () => {
       },
     }).load())
 
-    expect(out.map(row => row.id)).toEqual(['full'])
+    expect(out).toEqual(['full'])
   })
 
   it('returns [] on empty workspaceId or id', async () => {
@@ -422,7 +424,7 @@ describe('backlinksDataExtension query', () => {
     ).resolves.toEqual([])
   })
 
-  it('declares target row, typed-blocks reference channel, and source row deps', async () => {
+  it('declares target row and typed-blocks reference channel without source row deps', async () => {
     await create({id: 't', workspaceId: WS})
     await create({id: 'linker', workspaceId: WS})
     await env.h.db.execute(
@@ -435,15 +437,18 @@ describe('backlinksDataExtension query', () => {
     await handle.load()
     const deps = handle.__depsForTest()
 
-    expect(depIds(deps, 'row')).toEqual(['linker', 't'])
+    expect(depIds(deps, 'row')).toEqual([])
     expect(depIds(deps, 'plugin')).toContain(
       `${TYPED_BLOCKS_REFERENCE_CHANNEL}:${typedBlocksReferenceKey(WS, 't')}`,
+    )
+    expect(depIds(deps, 'plugin')).toContain(
+      `${TYPED_BLOCKS_STRUCTURE_CHANNEL}:${typedBlocksStructureKey(WS, 't')}`,
     )
     expect(deps.some(d => d.kind === 'table')).toBe(false)
     expect(deps.some(d => d.kind === 'workspace')).toBe(false)
   })
 
-  it('filtered query declares source-context row deps for excluded backlinks', async () => {
+  it('filtered query declares structure deps for source context', async () => {
     await create({id: 'target'})
     await create({id: 'tag'})
     await create({id: 'parent'})
@@ -461,10 +466,12 @@ describe('backlinksDataExtension query', () => {
     await handle.load()
 
     expect(handle.peek()).toEqual([])
-    // Ancestor walk registers row deps on every traversed ancestor id.
-    // 'child' is the candidate (refs target), 'parent' is its ancestor;
-    // 'target' is registered by the wrapper.
-    expect(depIds(handle.__depsForTest(), 'row').sort()).toEqual(['child', 'parent', 'target'])
+    expect(depIds(handle.__depsForTest(), 'row')).toEqual([])
+    expect(depIds(handle.__depsForTest(), 'plugin')).toEqual(expect.arrayContaining([
+      `${TYPED_BLOCKS_STRUCTURE_CHANNEL}:${typedBlocksStructureKey(WS, 'target')}`,
+      `${TYPED_BLOCKS_STRUCTURE_CHANNEL}:${typedBlocksStructureKey(WS, 'child')}`,
+      `${TYPED_BLOCKS_STRUCTURE_CHANNEL}:${typedBlocksStructureKey(WS, 'parent')}`,
+    ]))
   })
 
   it('re-resolves only when sources gain or lose references to the target', async () => {
@@ -473,8 +480,8 @@ describe('backlinksDataExtension query', () => {
     await create({id: 'unrelated'})
     await create({id: 'src'})
     const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'})
-    const fired: BlockData[][] = []
-    handle.subscribe((value) => { fired.push(value as BlockData[]) })
+    const fired: string[][] = []
+    handle.subscribe((value) => { fired.push(value) })
     await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
 
     await env.repo.mutate.setContent({id: 'unrelated', content: 'noise'})
@@ -495,7 +502,14 @@ describe('backlinksDataExtension query', () => {
     await vi.waitFor(() => {
       expect(fired.map(items => items.length)).toEqual([0, 1])
     })
-    expect(handle.peek()?.map(block => block.id)).toEqual(['src'])
+    expect(handle.peek()).toEqual(['src'])
+
+    await env.repo.tx(tx => tx.update('src', {content: 'edited, refs unchanged'}), {
+      scope: ChangeScope.BlockDefault,
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(fired.map(items => items.length)).toEqual([0, 1])
 
     await env.repo.tx(tx => tx.update('src', {references: []}), {
       scope: ChangeScope.BlockDefault,
@@ -509,8 +523,8 @@ describe('backlinksDataExtension query', () => {
     await create({id: 'target'})
     await create({id: 'src'})
     const handle = env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'})
-    const fired: BlockData[][] = []
-    handle.subscribe((value) => { fired.push(value as BlockData[]) })
+    const fired: string[][] = []
+    handle.subscribe((value) => { fired.push(value) })
     await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
 
     await env.h.db.execute(
@@ -522,7 +536,7 @@ describe('backlinksDataExtension query', () => {
     await vi.waitFor(() => {
       expect(fired.map(items => items.length)).toEqual([0, 1])
     })
-    expect(handle.peek()?.map(block => block.id)).toEqual(['src'])
+    expect(handle.peek()).toEqual(['src'])
   })
 
   it('filtered query re-resolves when an ancestor gains a required reference', async () => {
@@ -539,8 +553,8 @@ describe('backlinksDataExtension query', () => {
       id: 'target',
       filter: {include: [{scope: 'ancestor', referencedBy: {id: 'tag'}}]},
     })
-    const fired: BlockData[][] = []
-    handle.subscribe((value) => { fired.push(value as BlockData[]) })
+    const fired: string[][] = []
+    handle.subscribe((value) => { fired.push(value) })
     await vi.waitFor(() => expect(fired.map(items => items.length)).toEqual([0]))
 
     await env.repo.tx(tx => tx.update('parent', {
@@ -550,7 +564,7 @@ describe('backlinksDataExtension query', () => {
     await vi.waitFor(() => {
       expect(fired.map(items => items.length)).toEqual([0, 1])
     })
-    expect(handle.peek()?.map(block => block.id)).toEqual(['child'])
+    expect(handle.peek()).toEqual(['child'])
   })
 
   it('works when alias side indexes are also present', async () => {
@@ -572,9 +586,9 @@ describe('backlinksDataExtension query', () => {
       })
     }, {scope: ChangeScope.BlockDefault})
 
-    const out = asBlocks(
+    const out = asIds(
       await env.repo.query[BACKLINKS_FOR_BLOCK_QUERY]({workspaceId: WS, id: 'target'}).load(),
     )
-    expect(out.map(row => row.id)).toEqual(['linker'])
+    expect(out).toEqual(['linker'])
   })
 })

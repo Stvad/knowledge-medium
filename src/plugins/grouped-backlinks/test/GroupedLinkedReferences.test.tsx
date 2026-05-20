@@ -2,7 +2,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { BlockData } from '@/data/api'
 import type { BacklinksViewRendererProps } from '@/plugins/backlinks-view/facet.ts'
 import type { GroupedBacklinksResult } from '../query.ts'
 import { GroupedLinkedReferences } from '../GroupedLinkedReferences.tsx'
@@ -16,8 +15,8 @@ const state = vi.hoisted(() => {
       fallback: false,
     }],
     total: 1,
-    unfilteredSources: [{id: 'src-1'} as BlockData],
-    sourceParents: [{sourceId: 'src-1', parents: []}],
+    unfilteredSourceIds: ['src-1'],
+    sourceParents: [{sourceId: 'src-1', parentIds: []}],
   }
 
   return {

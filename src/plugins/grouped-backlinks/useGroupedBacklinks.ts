@@ -13,7 +13,7 @@ import {
 const EMPTY_GROUPED_BACKLINKS: GroupedBacklinksResult = {
   groups: [],
   total: 0,
-  unfilteredSources: [],
+  unfilteredSourceIds: [],
   sourceParents: [],
 }
 

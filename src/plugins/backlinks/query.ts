@@ -1,11 +1,14 @@
 import { z } from 'zod'
 import {
   defineQuery,
-  type BlockData,
   type BlockPredicate,
   type Schema,
 } from '@/data/api'
-import { resolveTypedBlocks } from '@/data/internals/kernelQueries.ts'
+import { resolveTypedBlockIds } from '@/data/internals/kernelQueries.ts'
+import {
+  TYPED_BLOCKS_STRUCTURE_CHANNEL,
+  typedBlocksStructureKey,
+} from '@/data/internals/kernelInvalidation.ts'
 
 export const BACKLINKS_FOR_BLOCK_QUERY = 'backlinks.forBlock'
 
@@ -36,8 +39,8 @@ const backlinksFilterSchema = z.object({
   exclude: z.array(blockPredicateSchema).optional(),
 }).optional()
 
-const blockDataArraySchema: Schema<BlockData[]> = {
-  parse: (input) => input as BlockData[],
+const stringArraySchema: Schema<string[]> = {
+  parse: (input) => input as string[],
 }
 
 const isPredicateMeaningful = (p: BlockPredicate): boolean => {
@@ -100,7 +103,7 @@ export const hasBacklinksFilter = (filter: BacklinksFilter | undefined): boolean
  *  predicate. */
 export const backlinksForBlockQuery = defineQuery<
   {workspaceId: string; id: string; filter?: BacklinksFilter},
-  BlockData[]
+  string[]
 >({
   name: BACKLINKS_FOR_BLOCK_QUERY,
   argsSchema: z.object({
@@ -108,22 +111,26 @@ export const backlinksForBlockQuery = defineQuery<
     id: z.string(),
     filter: backlinksFilterSchema,
   }),
-  resultSchema: blockDataArraySchema,
+  resultSchema: stringArraySchema,
   resolve: async ({workspaceId, id, filter}, ctx) => {
     if (!workspaceId || !id) return []
-    // Target row dep — re-resolve when the target itself changes
-    // (e.g. soft-delete). The typed-blocks reference channel only
-    // fires on incoming-edge diffs, not on target-row writes.
-    ctx.depend({kind: 'row', id})
+    // Target structural dep — re-resolve when the target itself is
+    // deleted/restored without making target content part of the
+    // collection query contract.
+    ctx.depend({
+      kind: 'plugin',
+      channel: TYPED_BLOCKS_STRUCTURE_CHANNEL,
+      key: typedBlocksStructureKey(workspaceId, id),
+    })
     const normalized = normalizeBacklinksFilter(filter)
-    const rows = await resolveTypedBlocks({
+    const ids = await resolveTypedBlockIds({
       workspaceId,
       referencedBy: {id},
       match: normalized.include,
       exclude: normalized.exclude,
       order: 'created-desc',
     }, ctx)
-    return rows.filter(r => r.id !== id)
+    return ids.filter(sourceId => sourceId !== id)
   },
 })
 
