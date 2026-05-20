@@ -97,7 +97,7 @@
 <h1>User-defined types</h1>
 <p class="lede">
 Users author types as blocks &mdash; same shape as user-defined property schemas. Code-defined types stop being special.
-Kernel types get a clean override path. Per-type behavior moves from a <code>setup</code> callback to same-tx processors.
+Per-type behavior moves from a <code>setup</code> callback to same-tx processors.
 </p>
 
 <p class="lede">
@@ -147,9 +147,7 @@ export const blockTypePropertiesProp  = defineProperty&lt;readonly string[]&gt;(
   codec: codecs.refList({targetTypes: ['property-schema']}),
   defaultValue: [],
   changeScope: ChangeScope.BlockDefault,
-})
-<span class="comment">// Optional &mdash; if present, this is an override of an existing type, not a new one.</span>
-export const blockTypeExtendsProp     = defineProperty&lt;string&gt;('block-type:extends', {...})</code></pre>
+})</code></pre>
 
 <p>
 And the type contribution itself, registered in <span class="file">src/data/blockTypes.ts</span>:
@@ -164,7 +162,6 @@ defineBlockType({
     blockTypeLabelProp,
     blockTypeDescriptionProp,
     blockTypePropertiesProp,
-    blockTypeExtendsProp,
   ],
 })</code></pre>
 
@@ -300,7 +297,6 @@ export class UserTypesService {
     schemas: ReadonlyMap&lt;string, AnyPropertySchema&gt;,
   ): TypeContribution | null {
     const label = block.peekProperty(blockTypeLabelProp) ?? ''
-    const extendsId = block.peekProperty(blockTypeExtendsProp)
     const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
     const properties: AnyPropertySchema[] = []
     for (const refId of refIds) {
@@ -309,20 +305,6 @@ export class UserTypesService {
       if (typeof name !== 'string') continue            <span class="comment">// schema block not yet synced</span>
       const schema = schemas.get(name)
       if (schema) properties.push(schema)
-    }
-    if (extendsId) {
-      <span class="comment">// Overrides may legitimately omit label/description &mdash; the merge</span>
-      <span class="comment">// rule is "user wins if set, else kernel" (see &sect;Overriding kernel</span>
-      <span class="comment">// types). Pass undefined through so the rebuild step picks the</span>
-      <span class="comment">// kernel value rather than overwriting with empty string.</span>
-      const description = block.peekProperty(blockTypeDescriptionProp)
-      return {
-        kind: 'override',
-        target: extendsId,
-        label: label || undefined,
-        description: description || undefined,
-        properties,
-      } as TypeOverride
     }
     if (!label) {
       console.warn(`[UserTypesService] block ${block.id} has empty label; skipping`)
@@ -365,90 +347,6 @@ export class UserTypesService {
 The bootstrap path (<code>repo</code> construction in <span class="file">src/data/repo.ts</span>) starts the service
 after the workspace's <code>Types</code> page is ensured &mdash; same wiring as <code>UserSchemasService</code>.
 </p>
-
-<h2>Overriding kernel types via <code>extends</code></h2>
-
-<p>
-Plausible use case: a user wants <code>daily-note</code> blocks to surface <code>weather</code> and <code>mood</code>
-slots in the property panel. They author a <code>block-type</code> block with
-<code>block-type:extends = 'daily-note'</code> and <code>block-type:properties = [weather, mood]</code>.
-</p>
-
-<p>
-The naive path &mdash; let <code>typesFacet.combine</code>'s last-wins-on-id resolve it &mdash; is destructive:
-the user's contribution would <i>replace</i> the kernel <code>daily-note</code> entry, wiping
-<code>label</code>, kernel <code>properties[]</code>, and (if it existed) <code>setup</code>. That's not what
-they meant.
-</p>
-
-<p>
-The clean path: distinguish full contributions from <i>override</i> contributions. The
-<code>typesFacet.of(...)</code> contribution stays as-is for full types; user-defined override contributions arrive
-through the same <code>'user-data'</code> source bucket but as a different shape, and the rebuild step in
-<code>setFacetRuntime</code> (<span class="file">src/data/repo.ts:1783</span>) folds them in <i>after</i> combine:
-</p>
-
-<figure>
-  <svg viewBox="0 0 760 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Override merge">
-    <defs>
-      <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
-      </marker>
-    </defs>
-
-    <rect x="20" y="20" width="220" height="100" rx="6" class="diag-box diag-box-kernel"/>
-    <text x="130" y="38" class="diag-label" text-anchor="middle">kernel contribution</text>
-    <text x="30" y="58" class="diag-text">id: 'daily-note'</text>
-    <text x="30" y="76" class="diag-text">label: 'Daily note'</text>
-    <text x="30" y="94" class="diag-text">properties: [journalDate]</text>
-    <text x="30" y="112" class="diag-text">setup: createTemplate()</text>
-
-    <rect x="20" y="140" width="220" height="80" rx="6" class="diag-box diag-box-user"/>
-    <text x="130" y="158" class="diag-label" text-anchor="middle">user override</text>
-    <text x="30" y="178" class="diag-text">extends: 'daily-note'</text>
-    <text x="30" y="196" class="diag-text">label: undefined</text>
-    <text x="30" y="214" class="diag-text">properties: [weather, mood]</text>
-
-    <line x1="245" y1="120" x2="370" y2="135" class="diag-arrow"/>
-    <line x1="245" y1="180" x2="370" y2="155" class="diag-arrow"/>
-    <text x="305" y="105" class="diag-label" text-anchor="middle">merge</text>
-    <text x="305" y="200" class="diag-label" text-anchor="middle">at rebuild step</text>
-
-    <rect x="380" y="80" width="360" height="130" rx="6" class="diag-box diag-box-merged"/>
-    <text x="560" y="98" class="diag-label" text-anchor="middle">merged contribution (visible to consumers)</text>
-    <text x="390" y="120" class="diag-text">id: 'daily-note'</text>
-    <text x="390" y="138" class="diag-text">label: 'Daily note'           <tspan fill="#888">(kernel wins; user unset)</tspan></text>
-    <text x="390" y="156" class="diag-text">properties: [journalDate, weather, mood]</text>
-    <text x="390" y="174" class="diag-text">setup: createTemplate()        <tspan fill="#888">(kernel; user cannot)</tspan></text>
-    <text x="390" y="194" class="diag-text">_overriddenBy: ['user-data']   <tspan fill="#888">(audit trail)</tspan></text>
-  </svg>
-  <figcaption>Override merge: union <code>properties[]</code>, user-wins-if-set for <code>label</code> / <code>description</code>, kernel-only for behavioral fields.</figcaption>
-</figure>
-
-<p>The merge rules:</p>
-<ul class="tight">
-  <li><code>properties[]</code> &mdash; <b>union</b> with the kernel list, dedup by name via the existing object-identity rule in <code>mergeLiftedSchemas</code> (<span class="file">src/data/repo.ts:178</span>).</li>
-  <li><code>label</code> / <code>description</code> &mdash; <b>user wins if set</b>, else kernel.</li>
-  <li>Any behavioral field (today: <code>setup</code>) &mdash; <b>kernel only</b>. User-defined types ship no code, so this isn't a regression from the user's side; it's an architectural invariant.</li>
-  <li>
-    <code>block-type:template</code> &mdash; <b>NOT part of the contribution merge</b>. The template refList lives
-    on the source block (the type-definition block carrying the field), and the materializer (&sect;Type templates)
-    reads it directly at type-add time via <code>userTypes.getTypeBlockId(typeId)</code>. The v1 single-source-block
-    model means an override block's own template is currently ignored by the materializer; if a future caller
-    needs override-added templates, widen <code>UserTypesService</code> to track all source blocks per typeId
-    (base + overrides) and have the materializer iterate. Out of scope for Phase 5.
-  </li>
-</ul>
-
-<div class="callout">
-  <h4>Why not a separate <code>typeOverridesFacet</code></h4>
-  <p style="margin:0">
-    Tempting &mdash; the "clean Tana" answer is a parallel facet keyed by target type id. But it adds a service,
-    a publish path, and a rebuild step for one anticipated use case. The single-block-type-with-<code>extends</code>
-    shape is strictly less surface; if overrides grow real complexity later (per-type render overrides, chained
-    setups, etc.) extracting the facet is mechanical. Don't pre-extract.
-  </p>
-</div>
 
 <h2>Replace <code>setup</code> with same-tx processors</h2>
 
@@ -510,12 +408,12 @@ primitive, <code>setup</code> is redundant.
   <tr>
     <td><b>User-defined-types parity</b></td>
     <td>
-      Code-only. <code>extends</code>-overrides can't change it. Creates a "user types are second-class on
-      <code>setup</code>" carveout in the design.
+      Code-only. User-defined types can't ship a <code>setup</code> at all, leaving a "user types are
+      second-class on <code>setup</code>" asymmetry.
     </td>
     <td>
       Nobody ships behavior via the contribution &mdash; not kernel, not plugins, not users. Type contributions
-      become pure metadata. The override path stops having a carveout.
+      become pure metadata. The asymmetry disappears.
     </td>
   </tr>
   <tr>
@@ -991,16 +889,7 @@ await repo.tx(async tx =&gt; {
 </ul>
 <p><b>Acceptance:</b> creating a type block surfaces a new entry in the property panel's type picker; tagging a block with it shows the chosen properties as panel slots.</p>
 
-<h3>Phase 2 &mdash; <code>extends</code> overrides</h3>
-<ul class="tight">
-  <li>Add <code>blockTypeExtendsProp</code> to <span class="file">src/data/properties.ts</span>.</li>
-  <li>Extend <code>UserTypesService.tryBuildType</code> to emit override records when <code>extends</code> is set.</li>
-  <li>Extend the rebuild step that populates <code>_types</code> on <code>Repo</code> to fold overrides into the base contribution post-combine via <code>mergeTypeOverrides</code> (see <a href="design.ts"><code>design.ts</code></a>). Drop overrides whose <code>extends</code> target doesn't resolve, log a diagnostic.</li>
-  <li>Renderer surfaces an "extends" picker; tested against a kernel type (e.g., <code>daily-note</code>) plus a user type.</li>
-</ul>
-<p><b>Acceptance:</b> an override block extending <code>daily-note</code> with <code>[weather, mood]</code> adds those slots to every daily-note panel; kernel-defined behavior on daily-note is unchanged.</p>
-
-<h3>Phase 3 &mdash; replace <code>setup</code> with same-tx processors</h3>
+<h3>Phase 2 &mdash; replace <code>setup</code> with same-tx processors</h3>
 <ul class="tight">
   <li>Add <code>addedTypes</code> / <code>removedTypes</code> helpers to <span class="file">src/data/properties.ts</span>. Null-guard <code>row.before</code> and <code>row.after</code> &mdash; hard-deletes have <code>after === null</code>, inserts have <code>before === null</code>.</li>
   <li>Strip <code>setup</code> from <code>TypeContribution</code>; remove the orchestration calls in <code>repo.addType</code> / <code>addTypeInTx</code>.</li>
@@ -1009,7 +898,7 @@ await repo.tx(async tx =&gt; {
 </ul>
 <p><b>Acceptance:</b> existing kernel + plugin behavior unchanged. Raw <code>tx.update(typesProp)</code> from a fixture now triggers the same processor flow as a <code>repo.addType</code> call.</p>
 
-<h3>Phase 4 &mdash; Roam <code>isa</code> adoption</h3>
+<h3>Phase 3 &mdash; Roam <code>isa</code> adoption</h3>
 <ul class="tight">
   <li><code>promoteToType</code> action in <span class="file">src/plugins/roam-import/</span>, two-tx shape per &sect;Roam <code>isa</code> adoption.</li>
   <li>UI: "Adopt as type" button per high-confidence candidate in the import report; column of property checkboxes pre-checked at <code>&ge;50%</code> frequency.</li>
@@ -1018,7 +907,7 @@ await repo.tx(async tx =&gt; {
 </ul>
 <p><b>Acceptance:</b> on a Roam import with 53 blocks tagged <code>is a [[Person]]</code>, promoting Person turns the page into a <code>block-type</code> and re-tags all 53 instances; the Person panel section in the property panel reflects the chosen schemas. Locally completing a block's local edits and reattempting promotion leaves the local state untouched on the retag pass (since strict <code>addTypeInTx</code> on already-typed blocks is a no-op).</p>
 
-<h3>Phase 5 &mdash; <code>block-type:template</code> (optional, deferred until first consumer)</h3>
+<h3>Phase 4 &mdash; <code>block-type:template</code> (optional, deferred until first consumer)</h3>
 <ul class="tight">
   <li>Add <code>blockTypeTemplateProp</code> as a refList on the <code>block-type</code> contribution.</li>
   <li><code>typeTemplateMaterializer</code> same-tx processor in <span class="file">src/plugins/user-types/</span> (or a dedicated <code>user-types</code> plugin) per <a href="design.ts"><code>design.ts</code></a>. Watches <code>properties</code>; on each <code>addedTypes(row).includes(typeId)</code> match, walks the type's <code>block-type:template</code> refList and clones each root's <i>descendants</i> under the instance via <code>tx.run(createChild, ...)</code>. Idempotent per row (init-if-missing) so a re-add doesn't duplicate.</li>
@@ -1226,20 +1115,81 @@ append &mdash; PR #50's iteration sequence is the cautionary tale.
 </p>
 
 <h2>What's deferred</h2>
+
+<h3>Kernel-type overrides via <code>block-type:extends</code></h3>
+
+<p>
+The motivating use case &mdash; user wants <code>daily-note</code> blocks to surface <code>weather</code> and
+<code>mood</code> slots &mdash; is plausible but hypothetical. No concrete consumer exists today. The mechanism
+adds non-trivial complexity (a second contribution shape, a post-combine merge step, a renderer "extends"
+picker, the merge-rule matrix for user-wins-vs-kernel-wins) that's not worth carrying through v1.
+</p>
+
+<p>
+The cut is shaped so the v2 implementation slots in without re-deciding anything. The forward path:
+</p>
+
 <ul class="tight">
-  <li><b>Type inheritance for user types.</b> A user type extending <i>another user type</i> rather than a kernel type. The override merge already handles "child extends parent" semantics; only the resolver loop guard (cycle detection) is missing.</li>
-  <li><b>Required-field validation on add.</b> A type-definition block lists which of its <code>properties[]</code> are required; a same-tx processor rejects writes that leave them unset. Easy once Phase 3 lands.</li>
+  <li>
+    Add <code>blockTypeExtendsProp = defineProperty&lt;string&gt;('block-type:extends', ...)</code> to
+    <span class="file">src/data/properties.ts</span>; lift onto the <code>BLOCK_TYPE_TYPE</code> contribution.
+  </li>
+  <li>
+    Extend <code>UserTypesService.tryBuildType</code> to branch on <code>extendsId</code> &mdash; if present,
+    emit a <code>TypeOverride</code> record (<code>{kind: 'override', target, label?, description?,
+    properties[]}</code>) instead of a full <code>TypeContribution</code>.
+  </li>
+  <li>
+    Bucket overrides separately from full contributions when publishing into the user-data source on
+    <code>typesFacet</code>. The rebuild step that populates <code>_types</code> on <code>Repo</code> grows a
+    post-combine pass <code>mergeTypeOverrides(base, overrides)</code> that folds each override into its
+    target. Overrides whose target doesn't resolve get a logged diagnostic and are dropped.
+  </li>
+  <li>
+    Merge rules:
+    <ul class="tight">
+      <li><code>properties[]</code> &mdash; <b>union</b> with the kernel list, dedup by name via the object-identity rule in <code>mergeLiftedSchemas</code> (<span class="file">src/data/repo.ts:178</span>).</li>
+      <li><code>label</code> / <code>description</code> &mdash; <b>user wins if set</b>, else kernel (empty-string ⇒ undefined so kernel's value isn't blanked).</li>
+      <li>Any behavioral field (<code>setup</code>, if it ever returns) &mdash; <b>kernel only</b>.</li>
+      <li><code>block-type:template</code> &mdash; lives on the source block; out of contribution merge entirely.</li>
+    </ul>
+  </li>
+  <li>
+    Renderer surfaces an "extends" picker on the block-type block; tested against a kernel type
+    (<code>daily-note</code>) plus a user type.
+  </li>
+</ul>
+
+<div class="callout muted">
+  <h4>Why not a separate <code>typeOverridesFacet</code></h4>
+  <p style="margin:0">
+    The "clean Tana" answer is a parallel facet keyed by target type id. But it adds a service, a publish path,
+    and a rebuild step for one anticipated use case. The single-block-type-with-<code>extends</code> shape
+    above is strictly less surface; if overrides grow real complexity later (per-type render overrides, chained
+    setups, etc.) extracting the facet is mechanical. Don't pre-extract.
+  </p>
+</div>
+
+<p>
+<b>Trigger to build:</b> a real user wants per-type panel slots / labels on a kernel type, or a follow-up
+design (e.g. a "themes" or "workspace presets" mechanism) needs to customize kernel-type metadata. Until then,
+adding the same fields as their own user-defined type is workable &mdash; just not the same UX.
+</p>
+
+<h3>Other deferred items</h3>
+<ul class="tight">
+  <li><b>Type inheritance for user types.</b> A user type extending <i>another user type</i> rather than a kernel type. Same mechanism as kernel-type overrides above; only the resolver loop guard (cycle detection) is extra.</li>
+  <li><b>Required-field validation on add.</b> A type-definition block lists which of its <code>properties[]</code> are required; a same-tx processor rejects writes that leave them unset. Easy once Phase 2 lands.</li>
   <li><b>Property-schema authoring inline with the type.</b> Today the user creates schemas on the Properties page, then refs them from a type on the Types page. A combined "type editor" surface that creates schemas as side-effects of editing a type is ergonomic but not necessary for v1.</li>
   <li><b>Bulk reimport-time auto-promotion.</b> The import currently <i>suggests</i>; this design's promotion stays user-triggered. Heuristic-based auto-promotion at import time is plausible but a separate UX call.</li>
   <li><b>Include-root template materialization.</b> &sect;Type templates fixes descendants-only as the default. A separate slot for include-root semantics (when the template root itself should be cloned) is plausible but no current consumer.</li>
   <li>
-    <b><code>property-schema:extends</code> for symmetry with <code>block-type:extends</code>.</b> User-defined
-    property schemas could plausibly override a kernel schema (e.g., bind a different default value to
-    <code>statusProp</code> without redefining the codec). Today this isn't possible &mdash;
-    <code>propertySchemasFacet.combine</code> is last-wins-with-warn on duplicate names, not a merge. The
-    symmetric API surface is straightforward (mirror <code>blockTypeExtendsProp</code> + the merge step), but
-    there's no current consumer. Worth proposing alongside any future "let users tweak kernel schema defaults"
-    feature.
+    <b><code>property-schema:extends</code> for symmetry with the deferred <code>block-type:extends</code>.</b>
+    User-defined property schemas could plausibly override a kernel schema (e.g., bind a different default
+    value to <code>statusProp</code> without redefining the codec). Today this isn't possible &mdash;
+    <code>propertySchemasFacet.combine</code> is last-wins-with-warn on duplicate names, not a merge. Worth
+    proposing alongside any future "let users tweak kernel schema defaults" feature, in lockstep with the
+    types-side override mechanism above.
   </li>
   <li>
     <b>Shared user-contribution subscription primitive.</b> After <code>UserTypesService</code> ships, the
@@ -1258,10 +1208,10 @@ append &mdash; PR #50's iteration sequence is the cautionary tale.
   <li>User-defined types are blocks of kernel type <code>block-type</code>, hosted on a per-workspace Types page. The Types page itself follows the type-flow pattern: tagged with both <code>PAGE_TYPE</code> and <code>TYPES_PAGE_TYPE</code> at bootstrap.</li>
   <li>Type id is the block id. Display label is <code>block-type:label</code>. The picker shows the label; <code>block:types</code> arrays carry ids.</li>
   <li>A type-definition block is the user's block, not a hidden shadow. One block, dual role &mdash; navigable as a page, its subtree (if any) acts as the type template.</li>
-  <li>Override existing types via <code>block-type:extends</code>; merge at the rebuild step, never destructive. <code>properties[]</code> union, label/description user-wins-if-set, behavioral fields kernel-only.</li>
+  <li>Kernel-type overrides via <code>block-type:extends</code> are <i>deferred</i> &mdash; no real consumer yet. Design notes preserved under "What's deferred" so the v2 implementation has a starting point.</li>
   <li>Replace <code>setup</code> with same-tx processors for atomic per-add behavior. Type contributions become pure metadata. Do this before any current kernel use lands. Behaviors that must run on sync-applied type changes from other devices use a separate post-commit processor on the row_events tail (same path <code>parseReferences</code> uses).</li>
   <li>Roam <code>isa</code> adoption rides one primitive (<code>promoteToType</code>) usable from import time or after-the-fact. <b>Two-tx flow</b> bridged by the subscription rebuild &mdash; no <code>withProvisional</code>-style primitive (per &sect;Lessons).</li>
-  <li>Template materialization (Phase 5): refList on <code>block-type:template</code>; descendants-only clone (root not duplicated); cycle detection at tx-time via a <code>ProcessorRejection</code>.</li>
+  <li>Template materialization (Phase 4): refList on <code>block-type:template</code>; descendants-only clone (root not duplicated); cycle detection at tx-time via a <code>ProcessorRejection</code>.</li>
   <li><b>Companion <code>design.ts</code> typechecks against real codebase types.</b> Drift between this prose and the codebase fails <code>yarn tsc --noEmit --project docs/tsconfig.json</code>.</li>
 </ul>
 

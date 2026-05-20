@@ -93,16 +93,6 @@ export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Optional. Present ⇒ this block-type is an override of an existing
- *  type (kernel or user-defined) rather than a fresh definition. Value
- *  is the target type id (kernel semantic id like `'daily-note'`, or a
- *  block id for user-defined). See §4 merge rules. */
-export const blockTypeExtendsProp = defineProperty<string>('block-type:extends', {
-  codec: codecs.string,
-  defaultValue: '',
-  changeScope: ChangeScope.BlockDefault,
-})
-
 /** Optional. RefList of blocks whose subtree is materialized under a
  *  new instance when this type is first added to a block (the
  *  `setup`-replacement path; see §5). Descendants-only semantics:
@@ -122,10 +112,14 @@ export const blockTypeKernelType = defineBlockType({
     blockTypeLabelProp,
     blockTypeDescriptionProp,
     blockTypePropertiesProp,
-    blockTypeExtendsProp,
     blockTypeTemplateProp,
   ],
 })
+
+// NOTE: `block-type:extends` and the TypeOverride / mergeTypeOverrides
+// machinery are deferred (see design.html §What's deferred). The fields
+// are not declared here because v1 ships without them — adding them
+// later is mechanical and the design.html section preserves the spec.
 
 /** The Types page itself follows the "type flow" pattern landed in
  *  the merged kernel: it carries both PAGE_TYPE (for normal page
@@ -181,17 +175,15 @@ export class UserTypesService {
   }
 
   /** Build a TypeContribution from a user-authored block-type block.
-   *  Returns null + diagnostic when the label is empty (and it's NOT
-   *  an extends-override; overrides may legitimately omit label since
-   *  the kernel value wins). */
+   *  Returns null + diagnostic when the label is empty. */
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   private tryBuildType(
     block: Block,
     _schemas: ReadonlyMap<string, AnyPropertySchema>,
-  ): TypeContribution | TypeOverride | null {
-    // ... read blockTypeLabelProp / blockTypeExtendsProp / etc.
+  ): TypeContribution | null {
+    // ... read blockTypeLabelProp / blockTypePropertiesProp / etc.
     // ... resolve blockTypePropertiesProp refList → schema name → merged schemas map ...
-    // ... return TypeContribution (full) or TypeOverride (extends-set, see §4)
+    // ... return TypeContribution
     return null
   }
 
@@ -220,83 +212,15 @@ export class UserTypesService {
 // of kernel ids and block-uuid strings.)
 
 // ──────────────────────────────────────────────────────────────────────
-// 4. Override merge (extends)
+// 4. Override merge (extends) — DEFERRED
 //
-// When a block-type block has blockTypeExtendsProp set, its
-// contribution is folded INTO the existing target rather than
-// replacing it. The merge happens in the rebuild step that already
-// populates the merged `_types` map on Repo (the same site §1a-public
-// in type-system.md describes for property schemas).
+// `block-type:extends` and the merge step that folds overrides into
+// the base TypeContribution are deferred (see design.html §What's
+// deferred). No concrete consumer today. The cut keeps v1 simple;
+// adding the override mechanism later is mechanical and the
+// design.html section preserves the full spec (property name, merge
+// rules, renderer affordance).
 // ──────────────────────────────────────────────────────────────────────
-
-export interface TypeOverride {
-  readonly kind: 'override'
-  /** The type id being extended — kernel semantic id or user block id. */
-  readonly target: string
-  /** undefined ⇒ inherit kernel/base value (`label || undefined`
-   *  in tryBuildType so an empty string doesn't clobber the kernel). */
-  readonly label?: string
-  readonly description?: string
-  /** Always-unioned with the target's properties[]; dedup by object identity. */
-  readonly properties?: ReadonlyArray<AnyPropertySchema>
-  // Template membership is intentionally NOT part of the override
-  // merge. `block-type:template` lives on the source block; the
-  // materializer (§5) resolves at runtime by reading the type's
-  // source block(s) directly via UserTypesService. An earlier draft
-  // declared `template` on TypeOverride and noted "always-unioned"
-  // but didn't implement the union (because TypeContribution has no
-  // template field). Dropping the field avoids the silent-mismatch
-  // footgun the design-review caught: an override that declares a
-  // template now stores it on its own block-type:template property,
-  // and the materializer picks it up at type-add time when v1's
-  // single-source-block model is widened to multi-source.
-}
-
-/** Fold overrides into base contributions. Called inside the runtime
- *  rebuild step that already populates `_types` on Repo, AFTER
- *  typesFacet.combine has produced the base map. Overrides that
- *  target an unknown id are dropped with a logged diagnostic. */
-export function mergeTypeOverrides(
-  base: ReadonlyMap<string, TypeContribution>,
-  overrides: readonly TypeOverride[],
-): Map<string, TypeContribution> {
-  const out = new Map(base)
-  for (const ov of overrides) {
-    const target = out.get(ov.target)
-    if (!target) {
-      console.warn(`[mergeTypeOverrides] override targets unknown type ${JSON.stringify(ov.target)}; dropping`)
-      continue
-    }
-    // Behavioral fields (setup) are kernel-only. The override merge
-    // is metadata-only: properties[] union, label/description
-    // user-wins-if-set. setup stays whatever the base contribution
-    // declared. Template membership is NOT merged here — it lives on
-    // the source block and is resolved at materialization time
-    // (§5, see comment on TypeOverride).
-    out.set(ov.target, {
-      ...target,
-      label: ov.label ?? target.label,
-      description: ov.description ?? target.description,
-      properties: dedupBy(
-        [...(target.properties ?? []), ...(ov.properties ?? [])],
-        s => s.name,
-      ),
-    })
-  }
-  return out
-}
-
-function dedupBy<T, K>(xs: readonly T[], key: (x: T) => K): T[] {
-  const seen = new Set<K>()
-  const out: T[] = []
-  for (const x of xs) {
-    const k = key(x)
-    if (seen.has(k)) continue
-    seen.add(k)
-    out.push(x)
-  }
-  return out
-}
 
 // ──────────────────────────────────────────────────────────────────────
 // 5. Behavior replacement: same-tx processor, not setup
@@ -432,7 +356,7 @@ export async function promoteToType(
   userTypes: UserTypesService,
   args: PromoteToTypeArgs,
 ): Promise<void> {
-  // Phase 1 (tx A): turn the target page into a block-type block.
+  // Phase A (tx A): turn the target page into a block-type block.
   //   - Read workspaceId from the target before opening the tx (avoids
   //     queryActiveWorkspace silent fallback per the merged PR #48).
   //   - In-tx existence guard: addTypeInTx is strict-by-default per
@@ -463,7 +387,7 @@ export async function promoteToType(
   // dropped (§6).
   await waitForTypeRegistration(repo, args.targetBlockId)
 
-  // Phase 2 (tx B): query candidates outside the tx (avoids the
+  // Phase B (tx B): query candidates outside the tx (avoids the
   // bare-DB-read-inside-tx deadlock documented in
   // tasks/processor-tx-deadlock.md), retag each in-tx with strict
   // existence guards on every row.
@@ -543,10 +467,13 @@ async function waitForTypeRegistration(
 // 8. Phasing (see §Phases in design.html)
 //
 // Phase 1: BLOCK_TYPE_TYPE + TYPES_PAGE_TYPE + UserTypesService + Types page bootstrap
-// Phase 2: extends overrides (mergeTypeOverrides folded into _types rebuild step)
-// Phase 3: setup → same-tx processor migration + addedTypes/removedTypes helpers
-// Phase 4: Roam-isa promoteToType
-// Phase 5 (optional): block-type:template + materializer + cycle guard
+// Phase 2: setup → same-tx processor migration + addedTypes/removedTypes helpers
+// Phase 3: Roam-isa promoteToType
+// Phase 4 (optional): block-type:template + materializer + cycle guard
+//
+// Deferred: extends overrides (see design.html §What's deferred). The cut
+// keeps v1 simple; adding the override mechanism is mechanical when a
+// real consumer arrives.
 // ──────────────────────────────────────────────────────────────────────
 
 // Compile-only references to make this file fail if anything moves:
