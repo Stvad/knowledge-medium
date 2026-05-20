@@ -739,6 +739,15 @@ async function waitForTypeRegistrationBounded(
       timeoutMs,
     )
     signal?.addEventListener('abort', onAbort)
+    // Re-check abort AFTER attaching the listener — same race shape
+    // as the type-registration check above. If signal.aborted flipped
+    // true in the window between the top-of-function check and the
+    // addEventListener call, the 'abort' event already fired and our
+    // listener missed it. Without this re-check we'd wait until the
+    // 10s timeout (or resolve on a real registration) despite the
+    // caller having cancelled. Re-checking now closes the race; if
+    // already aborted, settle synchronously.
+    if (signal?.aborted) settle(() => reject(signal.reason))
   })
 }
 
