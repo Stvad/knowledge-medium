@@ -349,6 +349,37 @@ export interface PromoteToTypeArgs {
   propertySchemaIds: readonly string[]
   /** Default false: leave roam:isa refs on each instance for review. */
   rewriteIsaReferences?: boolean
+  /** Caller cancellation signal. Aborting between Phase A and Phase B
+   *  leaves the type-definition block committed but instances un-retagged;
+   *  the caller can re-run `promoteToType` to finish retagging (the
+   *  subscription will have registered the type by then, so the second
+   *  run skips the wait and goes straight to Phase B). */
+  signal?: AbortSignal
+  /** Sanity bound on the Phase-A→Phase-B handoff. If the subscription
+   *  doesn't register the new type within this window, throw a clear
+   *  PromotionRegistrationTimeout so the caller can surface a recovery
+   *  prompt instead of hanging indefinitely. Default 10s — long enough
+   *  to absorb event-loop load / inactive-tab throttling spikes, short
+   *  enough that a genuine "the type-definition block didn't parse"
+   *  bug surfaces within an interactive UI window. */
+  registrationTimeoutMs?: number
+}
+
+export class PromotionRegistrationTimeout extends Error {
+  constructor(
+    public readonly targetBlockId: string,
+    public readonly typeLabel: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(
+      `promoteToType: type-definition block for "${typeLabel}" was committed ` +
+      `but did not appear in the runtime registry within ${timeoutMs}ms. ` +
+      `Phase A committed; Phase B (instance retag) was not run. ` +
+      `Re-run promoteToType to finish retagging — the second call will ` +
+      `skip Phase A and proceed directly to retag.`,
+    )
+    this.name = 'PromotionRegistrationTimeout'
+  }
 }
 
 export async function promoteToType(
@@ -385,7 +416,20 @@ export async function promoteToType(
   // The next snapshotTypeRegistries() sees it. No synchronous-append
   // dance — that was the withProvisional approach, deliberately
   // dropped (§6).
-  await waitForTypeRegistration(repo, args.targetBlockId)
+  //
+  // Bounded wait: if the subscription doesn't fire within the timeout
+  // (real cause: tryBuildType returned null, e.g. the block-type block
+  // failed to parse against current presets/schemas), surface
+  // PromotionRegistrationTimeout with a clear recovery message rather
+  // than hanging on the unbounded wait. The caller's AbortSignal
+  // composes with the internal timeout.
+  await waitForTypeRegistrationBounded(
+    repo,
+    args.targetBlockId,
+    args.label,
+    args.signal,
+    args.registrationTimeoutMs ?? 10_000,
+  )
 
   // Phase B (tx B): query candidates outside the tx (avoids the
   // bare-DB-read-inside-tx deadlock documented in
@@ -417,48 +461,58 @@ export async function promoteToType(
 /** Wait for UserTypesService's subscription to publish `typeId` into
  *  the typesFacet runtime bucket. Event-driven via `repo.onTypesChange`
  *  (added in Phase 1, symmetric to the existing
- *  `onPropertySchemasChange` / `onValuePresetsChange`). No polling, no
- *  hard-coded timeout: the listener fires when the rebuild step
- *  republishes after the subscription tick, which can be delayed by
- *  event-loop load or inactive-tab throttling without harming
- *  correctness.
+ *  `onPropertySchemasChange` / `onValuePresetsChange`). The listener
+ *  fires when the rebuild step republishes after the subscription
+ *  tick, which can be delayed by event-loop load or inactive-tab
+ *  throttling without harming correctness.
  *
- *  Note on the deferred follow-up: an event-loop deadline can still be
- *  added as a sanity bound (e.g. 30s, AbortSignal-aware) once a real
- *  caller surfaces a "user-cancelled the promotion" UI path. v1 ships
- *  without one — a stuck registration here means tx A wrote a
- *  block-type block that doesn't parse into a valid contribution,
- *  which is a separate bug to surface via diagnostic logs in
- *  UserTypesService.tryBuildType.
+ *  Three exit paths:
+ *  1. Registration appears → resolve.
+ *  2. Caller aborts via signal → reject with the abort reason.
+ *  3. Timeout elapses → reject with PromotionRegistrationTimeout
+ *     (the type-definition block committed but tryBuildType is rejecting
+ *     it, e.g. because a referenced property-schema id doesn't resolve).
+ *     The error message instructs the caller's recovery path (re-run
+ *     promoteToType once the underlying issue is fixed; the second run
+ *     skips Phase A and goes straight to Phase B).
+ *
+ *  Cleanup invariant: every exit path disposes the onTypesChange
+ *  listener and clears the timer so a leaked listener can't accumulate
+ *  across retries.
  *
  *  Declared on Repo as part of Phase 1 (alongside onPropertySchemasChange):
  *
  *    onTypesChange(listener: () => void): () => void
  *
  *  Fires when the rebuild step republishes the merged _types map. */
-async function waitForTypeRegistration(
+async function waitForTypeRegistrationBounded(
   repo: Repo,
   typeId: string,
-  signal?: AbortSignal,
+  typeLabel: string,
+  signal: AbortSignal | undefined,
+  timeoutMs: number,
 ): Promise<void> {
   if (repo.types.has(typeId)) return
+  if (signal?.aborted) throw new Error('promoteToType: aborted')
+
   await new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error('promoteToType: aborted'))
-      return
-    }
-    const dispose = repo.onTypesChange(() => {
-      if (repo.types.has(typeId)) {
-        dispose()
-        signal?.removeEventListener('abort', onAbort)
-        resolve()
-      }
-    })
-    const onAbort = () => {
+    let settled = false
+    const settle = (cb: () => void) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
       dispose()
       signal?.removeEventListener('abort', onAbort)
-      reject(new Error('promoteToType: aborted'))
+      cb()
     }
+    const dispose = repo.onTypesChange(() => {
+      if (repo.types.has(typeId)) settle(resolve)
+    })
+    const onAbort = () => settle(() => reject(new Error('promoteToType: aborted')))
+    const timer = setTimeout(
+      () => settle(() => reject(new PromotionRegistrationTimeout(typeId, typeLabel, timeoutMs))),
+      timeoutMs,
+    )
     signal?.addEventListener('abort', onAbort)
   })
 }

@@ -763,13 +763,15 @@ await repo.tx(async tx =&gt; {
   await repo.addTypeInTx(tx, targetBlockId, PAGE_TYPE, {}, snapshotA)
 }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${label}`})
 
-<span class="comment">// Subscription rebuild publishes targetBlockId into the user-data bucket</span>
-<span class="comment">// on typesFacet, which re-runs the dependent rebuild step and fires</span>
-<span class="comment">// `repo.onTypesChange`. waitForTypeRegistration listens for that event</span>
-<span class="comment">// (no polling, no timer-based timeout). See design.ts for the helper</span>
-<span class="comment">// and the module augmentation declaring onTypesChange — Phase 1 adds</span>
-<span class="comment">// the kernel-side listener symmetric to onPropertySchemasChange.</span>
-await waitForTypeRegistration(repo, targetBlockId)
+<span class="comment">// Bridge tx A → tx B: wait for the subscription rebuild to publish</span>
+<span class="comment">// targetBlockId into the user-data bucket on typesFacet, then proceed.</span>
+<span class="comment">// Event-driven via repo.onTypesChange (added in Phase 1, symmetric to</span>
+<span class="comment">// onPropertySchemasChange). Bounded with a default 10s timeout so a</span>
+<span class="comment">// stuck registration (e.g. tryBuildType rejecting the block-type block</span>
+<span class="comment">// because a referenced property-schema doesn't resolve) surfaces a clear</span>
+<span class="comment">// PromotionRegistrationTimeout instead of hanging indefinitely. The</span>
+<span class="comment">// caller can pass its own AbortSignal for user-driven cancellation.</span>
+await waitForTypeRegistrationBounded(repo, targetBlockId, label, signal, 10_000)
 
 <span class="comment">// Phase B: retag instances. queryBlocks must run OUTSIDE the tx — bare DB reads</span>
 <span class="comment">// inside repo.tx reintroduce the PowerSync queue deadlock (follow-ups.md:19-21).</span>
@@ -815,6 +817,29 @@ await repo.tx(async tx =&gt; {
     throws <code>BlockNotFoundForTypeError</code> when the target row is missing or tombstoned. No explicit
     <code>tx.get</code> + <code>deleted</code> guard is needed before the addType call &mdash; the API surface
     encodes the invariant.
+  </p>
+</div>
+
+<div class="callout warn">
+  <h4>Partial-promotion recovery: tx A committed, registration timed out</h4>
+  <p style="margin:0 0 .4rem">
+    The Phase A&rarr;B handoff has a bounded wait (default 10s) on the subscription registering the new type id.
+    If the wait times out (real cause: the type-definition block committed in tx A, but
+    <code>UserTypesService.tryBuildType</code> is rejecting it &mdash; e.g. a referenced property-schema id doesn't
+    resolve against the current registry), <code>waitForTypeRegistrationBounded</code> throws
+    <code>PromotionRegistrationTimeout</code> <i>before</i> Phase B runs.
+  </p>
+  <p style="margin:0 0 .4rem">
+    <b>Recovery is well-defined.</b> Tx A's block-type block is on disk. The caller can re-run
+    <code>promoteToType</code> with the same args; the second run's tx A is idempotent (already-typed targets
+    re-addType to a no-op), the registration is by then live (the subscription has had time to either fire or
+    the underlying parse issue has been fixed), and Phase B runs against the now-registered type.
+  </p>
+  <p style="margin:0">
+    Caller-side cancellation works the same way: the caller passes <code>signal</code> on <code>PromoteToTypeArgs</code>;
+    aborting between Phase A and Phase B leaves the type-definition block committed and instances un-retagged.
+    The error surface tells the user "the type was created; some instances may not have been re-tagged. Re-run
+    to complete." &mdash; matches how partial bulk operations surface elsewhere in the app.
   </p>
 </div>
 
