@@ -10,10 +10,8 @@ import {
   resolveAppRuntime,
   resolveAppRuntimeSync,
 } from '@/extensions/resolveAppRuntime.ts'
-import type {Overrides} from '@/extensions/togglable.ts'
-import {readOverridesCache} from '@/extensions/overridesCache.ts'
+import {useOverrides} from '@/extensions/useOverrides.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
-import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
 import { ActiveContextsProvider } from '@/shortcuts/ActiveContexts.tsx'
 import { HotkeyReconciler } from '@/shortcuts/HotkeyReconciler.tsx'
@@ -32,8 +30,13 @@ export function AppRuntimeProvider({
   safeMode: boolean
 }) {
   const repo = useRepo()
-  const [generation, setGeneration] = useState('initial-load')
   const workspaceId = repo.activeWorkspaceId
+  // First-paint overrides + refresh-event subscription. The hook reads
+  // the localStorage cache mirroring the synced System Plugins block,
+  // and re-reads after any `refreshAppRuntime()` dispatch (which the
+  // meta-plugin's subscribe effect fires whenever the cache and the
+  // canonical block diverge).
+  const {overrides, generation} = useOverrides(workspaceId)
 
   // One store per provider instance — survives runtime re-resolutions
   // (so the renderer can show errors from the most recent load) and
@@ -52,36 +55,11 @@ export function AppRuntimeProvider({
 
   const baseExtensions: AppExtension[] = useMemo(() => staticAppExtensions({repo}), [repo])
 
-  // First-paint overrides come from a localStorage cache mirroring the
-  // synced System Plugins block. Reading sync at boot avoids the flash
-  // where every system plugin's effect would start and every mount
-  // would mount, only to be torn down ~one round-trip later. The
-  // system-plugins meta-plugin's effect (slice 5c) keeps the cache in
-  // sync with the PowerSync block and dispatches `refreshAppRuntime`
-  // whenever the canonical state diverges from the cache. The
-  // `generation` change forces this useMemo to recompute on dispatch.
-  const overrides: Overrides = useMemo(() => {
-    if (!workspaceId) return new Map<string, boolean>()
-    return readOverridesCache(workspaceId)
-    // generation participates so refreshAppRuntime invalidates this
-    // memo; the value itself doesn't come from it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, generation])
-
   const baseRuntime = useMemo(() =>
     resolveAppRuntimeSync(baseExtensions, {overrides, context: runtimeContext}),
   [baseExtensions, overrides, runtimeContext])
 
   const [runtime, setRuntime] = useState(baseRuntime)
-
-  useEffect(() => {
-    const reloadRuntime = (event: CustomEvent<string>) => {
-      setGeneration(event.detail)
-    }
-
-    window.addEventListener(appRuntimeUpdateEvent, reloadRuntime as EventListener)
-    return () => window.removeEventListener(appRuntimeUpdateEvent, reloadRuntime as EventListener)
-  }, [])
 
   // Sync state-from-prop pattern: when `baseRuntime` changes (rare —
   // only on `repo` swap or generation reload) the held `runtime` must
