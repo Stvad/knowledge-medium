@@ -6,6 +6,7 @@ import {
   type HeaderItemContribution,
 } from '@/extensions/core.ts'
 import type { AppExtension } from '@/extensions/facet.ts'
+import { systemToggle } from '@/extensions/togglable.ts'
 import { ActionContextTypes, type ActionConfig } from '@/shortcuts/types.ts'
 import { Search } from 'lucide-react'
 import { FindReplaceDialog } from './FindReplaceDialog.tsx'
@@ -48,12 +49,27 @@ export const findReplaceHeaderItem: HeaderItemContribution = {
   component: FindReplaceHeaderItem,
 }
 
+/** Nested toggle for the search icon in the header. Sits inside the
+ *  outer `system:find-replace` boundary, so disabling find-replace
+ *  drops everything including this item. Disabling just this inner
+ *  toggle removes the icon from the header while keeping the
+ *  Cmd+Shift+F action and the dialog wired — users who navigate via
+ *  the keyboard or command palette can still open find-replace, just
+ *  without the header affordance. */
+const findReplaceHeaderToggle = systemToggle({
+  id: 'system:find-replace/header-item',
+  name: 'Search icon in header',
+  description: 'Disable to hide find-replace from the global header (Cmd+Shift+F still works).',
+})
+
 export const findReplacePlugin: AppExtension = [
   findReplaceDataExtension,
   appMountsFacet.of(findReplaceMount, {source: 'find-replace'}),
   actionsFacet.of(findReplaceAction, {source: 'find-replace'}),
-  headerItemsFacet.of(findReplaceHeaderItem, {
-    source: 'find-replace',
-    precedence: 15,
-  }),
+  findReplaceHeaderToggle.of(
+    headerItemsFacet.of(findReplaceHeaderItem, {
+      source: 'find-replace',
+      precedence: 15,
+    }),
+  ),
 ]
