@@ -10,7 +10,11 @@
 // Typecheck (along with every other docs/**/*.ts sketch) with:
 //   yarn tsc --noEmit --project docs/tsconfig.json
 
-import type {AppExtension, FacetContribution} from '@/extensions/facet'
+import type {
+  AppExtension,
+  FacetContribution,
+  FacetResolveContext,
+} from '@/extensions/facet'
 import type {BlockData} from '@/data/api/blockData'
 import {aliasesProp} from '@/data/internals/coreProperties'
 
@@ -159,14 +163,23 @@ export function applyToggle(
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// 4. Collector — shared by sync and async resolution paths
+// 4. Collectors — sync + async pair sharing the walk
 //
-//   `collectContributions` is the single piece both
-//   resolveFacetRuntimeSync (AppRuntimeProvider.tsx:52) and the async
-//   resolveFacetRuntime path (AppRuntimeProvider.tsx:92) call. Putting
-//   the filter only in one path would diverge as soon as dynamic
-//   extensions arrive — which is exactly when user-extension boundaries
-//   start mattering.
+//   Mirrors the existing collectContributions / collectContributionsSync
+//   pair in facet.ts:259/287. Both apply the togglable filter, recurse
+//   into FacetContribution.enables, and dedup by reference; they differ
+//   only in how they handle function-valued AppExtensions:
+//
+//     - sync: throws (caller must have already expanded functions)
+//     - async: awaits the function, then walks its result
+//
+//   Why two and not just async? Initial render at
+//   AppRuntimeProvider.tsx:52 (resolveFacetRuntimeSync) must produce a
+//   FacetRuntime synchronously — React can't await before the first
+//   render. The static extension tree contains no functions in
+//   practice, so sync is safe there. Dynamic extensions arrive via the
+//   async path at AppRuntimeProvider.tsx:92 (resolveFacetRuntime),
+//   which can resolve `dynamicExtensionsExtension`'s top-level function.
 // ──────────────────────────────────────────────────────────────────────
 
 /** FacetContribution as it appears in the public type, plus an
@@ -185,9 +198,16 @@ function isFacetContribution(
   )
 }
 
-export function collectContributions(
+export interface CollectOptions {
+  overrides: Overrides
+}
+
+/** Sync variant. Throws if a function-valued AppExtension is reached —
+ *  consistent with the existing collectContributionsSync at
+ *  facet.ts:300. */
+export function collectContributionsSync(
   tree: AppExtension,
-  options: {overrides: Overrides},
+  options: CollectOptions,
 ): readonly FacetContribution<unknown>[] {
   const seen = new Set<FacetContribution<unknown>>()
   const out: FacetContribution<unknown>[] = []
@@ -197,10 +217,10 @@ export function collectContributions(
   function walk(node: AppExtension): void {
     if (!node) return
     if (typeof node === 'function') {
-      // Dynamic resolvers should already be resolved upstream. If we
-      // ever encounter one here, that's a contract violation worth
-      // surfacing rather than silently flattening.
-      throw new Error('collectContributions: unresolved function in tree')
+      throw new Error(
+        'collectContributionsSync: cannot resolve function-valued ' +
+        'AppExtension in sync context',
+      )
     }
     if (Array.isArray(node)) {
       const handle = getBoundary(node)
@@ -214,6 +234,46 @@ export function collectContributions(
         out.push(node)
       }
       if (node.enables) walk(node.enables)
+      return
+    }
+  }
+}
+
+/** Async variant. Resolves function-valued AppExtensions by awaiting
+ *  them and recursing into the result. The function receives a
+ *  FacetResolveContext (passed through from the caller, threaded from
+ *  AppRuntimeProvider's runtimeContext). */
+export async function collectContributions(
+  tree: AppExtension,
+  options: CollectOptions & {context: FacetResolveContext},
+): Promise<readonly FacetContribution<unknown>[]> {
+  const seen = new Set<FacetContribution<unknown>>()
+  const out: FacetContribution<unknown>[] = []
+  await walk(tree)
+  return out
+
+  async function walk(node: AppExtension): Promise<void> {
+    if (!node) return
+    if (typeof node === 'function') {
+      try {
+        await walk(await node(options.context))
+      } catch (error) {
+        console.error('Failed to resolve app extension', error)
+      }
+      return
+    }
+    if (Array.isArray(node)) {
+      const handle = getBoundary(node)
+      if (handle && !isEnabled(handle, options.overrides)) return
+      for (const inner of node) await walk(inner)
+      return
+    }
+    if (isFacetContribution(node)) {
+      if (!seen.has(node)) {
+        seen.add(node)
+        out.push(node)
+      }
+      if (node.enables) await walk(node.enables)
       return
     }
   }

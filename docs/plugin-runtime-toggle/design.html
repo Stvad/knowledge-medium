@@ -199,7 +199,7 @@
     <div class="tldr">
       <h3>Design at a glance</h3>
       <ul>
-        <li><strong>Identity via a Compartment-style handle.</strong> <code>togglable({id, name}).of(ext)</code> wraps a subtree with a boundary marker. Extensions stay plain values; the handle is the identity.</li>
+        <li><strong>Identity via a Compartment-style handle.</strong> Two constrained factories — <code>systemToggle({id, name, ...})</code> for code-defined plugins, <code>userExtensionToggle(block, hints?)</code> for blocks — both return a <code>Togglable</code> whose <code>.of(ext)</code> wraps a subtree with a boundary marker. Extensions stay plain values; the handle is the identity.</li>
         <li><strong>Dependencies are inclusion + dedup.</strong> Plugin A needs B → A's extension array contains B's contributions. Reference-equality dedup makes overlap free. Plugin authors export <em>both</em> a bare contributions const (hard-dep inclusion) <em>and</em> a wrapped togglable (user-facing toggle).</li>
         <li><strong>Ordering already exists</strong> as <code>precedence?: number</code> on <code>FacetContribution</code>. Keep it.</li>
         <li><strong>Implication via <code>enables</code>.</strong> A facet contribution can drag siblings along — they exist iff it does.</li>
@@ -436,7 +436,7 @@ export const referencesContributions: AppExtension = [
   /* bare facet contributions */
 ]
 
-export const referencesToggle = togglable({
+export const referencesToggle = systemToggle({
   id: 'references',
   name: 'References',
 })
@@ -485,18 +485,26 @@ export const backlinks = backlinksToggle.of(backlinksContributions)</code></pre>
     </p>
     <p>
       <strong>Important:</strong> the new collection logic (dedup, boundary-aware filter,
-      <code>enables</code> recursion) must live in <em>shared</em> code used by both
-      <code>resolveFacetRuntimeSync</code> (the sync initial render at
+      <code>enables</code> recursion) must live in <em>shared</em> walk logic used by
+      both <code>resolveFacetRuntimeSync</code> (the sync initial render at
       <code>AppRuntimeProvider.tsx:52</code>) <em>and</em> the async
       <code>resolveFacetRuntime</code> path that merges in dynamic extensions
       (<code>AppRuntimeProvider.tsx:92</code>). Putting dedup only in the sync path means
       behavior diverges the moment dynamic extensions load — which is exactly when the
-      user-extension case kicks in. Practically: factor a single
-      <code>collectContributions(tree, {overrides})</code> helper that walks
-      a tree, applies <code>isEnabled(handle, overrides)</code> at each boundary
-      (reading <code>handle</code> off the boundary symbol — no separate essential-id
-      registry needed), recurses into <code>enables</code>, and Set-dedups; call it from
-      both sync and async resolvers.
+      user-extension case kicks in.
+    </p>
+    <p>
+      Practically: mirror the existing sync/async pair in
+      <code>facet.ts:259/287</code>. Both collectors apply
+      <code>isEnabled(handle, overrides)</code> at each boundary (reading
+      <code>handle</code> off the boundary symbol — no separate essential-id registry
+      needed), recurse into <code>enables</code>, and Set-dedup. They differ only in
+      how they handle function-valued <code>AppExtension</code>s:
+      <code>collectContributionsSync</code> throws (initial render can't await, but
+      the static tree has no functions); <code>collectContributions</code> awaits
+      the function and walks its result (needed for
+      <code>dynamicExtensionsExtension</code>, which is itself a function passed into
+      the async path). See <code>design.ts</code> §4 for both signatures.
     </p>
 
     <div class="diagram">┌──────────────────────────┐
@@ -938,16 +946,20 @@ function discoverToggleTree(ext: AppExtension): ToggleNode[] {
 
     <h2>Smallest first slice</h2>
     <ol>
-      <li><strong>Add shared collection logic</strong> used by both
-        <code>resolveFacetRuntimeSync</code> and <code>resolveFacetRuntime</code> — a
-        single <code>collectContributions(tree, {overrides})</code> helper
-        that walks the tree, calls <code>isEnabled(handle, overrides)</code> at each
-        boundary using the handle stored on the boundary symbol, recurses into
-        <code>enables</code>, and Set-dedups by reference. Initial implementation only
+      <li><strong>Add the sync/async collector pair</strong> mirroring
+        <code>facet.ts:259/287</code>:
+        <code>collectContributionsSync(tree, {overrides})</code> for
+        <code>resolveFacetRuntimeSync</code> and
+        <code>collectContributions(tree, {overrides, context})</code> for the async
+        path. Both call <code>isEnabled(handle, overrides)</code> at each boundary,
+        recurse into <code>enables</code>, and Set-dedup by reference; the async one
+        additionally awaits function-valued extensions. Initial implementation only
         needs the dedup branch; the filter and <code>enables</code> branches land in
-        later steps but live in the same helper.</li>
-      <li><strong>Introduce <code>togglable</code></strong>. Wrap existing system plugins
-        in <code>togglable({id, name}).of(...)</code>. Mark a handful
+        later steps but live in the same walk.</li>
+      <li><strong>Introduce the two constrained factories.</strong> Define
+        <code>Togglable</code>, <code>systemToggle</code>, and
+        <code>userExtensionToggle</code>. Wrap existing system plugins in
+        <code>systemToggle({id, name, ...}).of(...)</code>. Mark a handful
         <code>essential: true</code> (kernel, prefs bootstrap, command palette).
         Add a startup assertion that each contribution's <code>source</code> matches the
         wrapping handle's <code>id</code>.</li>
