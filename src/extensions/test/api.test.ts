@@ -56,6 +56,8 @@ describe('@/extensions/api — public surface', () => {
     'codecs',
     'ChangeScope',
     'extensionDisabledProp',
+    // Runtime toggle (author-facing slice)
+    'authorHints',
   ]
 
   for (const name of requiredExports) {

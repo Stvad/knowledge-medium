@@ -26,6 +26,18 @@ export {
   type FacetRuntime,
   type OptionalContributionResult,
 } from '@/extensions/facet.ts'
+
+// --- Toggle metadata (author-facing slice; full surface lives in @/extensions/togglable.ts) ---
+// Extension authors call `authorHints({name, description}, ext)` to
+// give the platform a display name + description for the toggle row.
+// Platform-owned fields (id, essential, defaultEnabled) are
+// unrepresentable in this API by design — they're forced by the
+// loader to match block identity.
+export {
+  authorHints,
+  type Togglable,
+  type UserExtensionAuthorHints,
+} from '@/extensions/togglable.ts'
 export {
   defineVariantFacet,
   defineVariant,
