@@ -63,8 +63,8 @@ import { aliasSeatReaderFromDb, ensureAliasTarget, resolveAliasSeatId } from '@/
 import {
   dailyNoteBlockId,
   ensureDailyNoteTarget,
-  isValidDateAlias,
 } from '@/plugins/daily-notes/dailyNotes.ts'
+import { parseLiteralDailyPageTitle } from '@/utils/relativeDate.ts'
 
 export const PARSE_REFERENCES_PROCESSOR = 'references.parseReferences'
 export const CLEANUP_ORPHAN_ALIASES_PROCESSOR = 'references.cleanupOrphanAliases'
@@ -91,7 +91,7 @@ interface SourcePlan {
   /** Aliases to be created via `ensureAliasTarget` in the write phase.
    *  Excludes ids resolved by lookup (those already exist). */
   aliasesToEnsure: string[]
-  /** Dates to be created via `ensureDailyNoteTarget` in the write phase. */
+  /** ISO dates to be created via `ensureDailyNoteTarget` in the write phase. */
   datesToEnsure: string[]
   /** True iff the planned `references` differ from what's currently on
    *  the row — used to skip a no-op write that would re-fire the
@@ -119,20 +119,16 @@ const buildSourcePlan = async (
   for (const mark of aliasMarks) {
     if (seenAliases.has(mark.alias)) continue
     seenAliases.add(mark.alias)
-    if (isValidDateAlias(mark.alias)) {
+    const dailyTitle = parseLiteralDailyPageTitle(mark.alias)
+    if (dailyTitle !== null) {
       // Daily note path — distinct deterministic id, never feeds cleanup.
-      // Always-present id (deterministic from date+workspace); the write
-      // phase will ensureDailyNoteTarget which is idempotent.
-      //
-      // Calendar-invalid date-shaped aliases (`[[2026-13-01]]`,
-      // `[[2026-02-30]]`) deliberately fall through to the alias path
-      // below: the typo becomes a regular alias-target page named for
-      // the typo'd string. Routing them as daily notes would mint a
-      // deterministic seat for a nonexistent calendar day and roll
-      // over silently in any downstream date arithmetic.
-      const id = dailyNoteBlockId(source.workspaceId, mark.alias)
+      // Store the user's literal alias on the source reference, but
+      // materialise the canonical ISO daily-note target. `parseLiteral...`
+      // accepts ISO and Roam long-form titles while rejecting relative
+      // words like "today", "friday", and "may" so those remain aliases.
+      const id = dailyNoteBlockId(source.workspaceId, dailyTitle.iso)
       dateRefs.push({id, alias: mark.alias})
-      datesToEnsure.push(mark.alias)
+      datesToEnsure.push(dailyTitle.iso)
       continue
     }
     // Non-date alias — try lookup-first to skip the deterministic-id

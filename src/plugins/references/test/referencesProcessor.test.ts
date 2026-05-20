@@ -617,6 +617,39 @@ describe('parseReferences — daily-note routing (§7.6)', () => {
     expect(await env.read(aliasId('2026-04-28'))).toBeNull()
   })
 
+  it('[[Roam long-form date]] resolves to the canonical daily-note target while preserving the source alias', async () => {
+    const longForm = 'May 20th, 2026'
+    const iso = '2026-05-20'
+
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: `today: [[${longForm}]]`}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const dn = await env.read(dailyId(iso))
+    expect(dn).not.toBeNull()
+
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([{id: dailyId(iso), alias: longForm}])
+    expect(await env.read(aliasId(longForm))).toBeNull()
+  })
+
+  it('[[today]] stays an ordinary alias page, not a daily-note reference', async () => {
+    await env.repo.tx(
+      tx => tx.create({id: 'src', workspaceId: WS, parentId: null, orderKey: 'a0', content: 'see [[today]]'}),
+      {scope: ChangeScope.BlockDefault},
+    )
+    await flush()
+
+    const target = await env.read(aliasId('today'))
+    expect(target).not.toBeNull()
+    expect(JSON.parse(target!.properties_json).alias).toEqual(['today'])
+
+    const refs = JSON.parse((await env.read('src'))!.references_json) as BlockReference[]
+    expect(refs).toEqual([{id: aliasId('today'), alias: 'today'}])
+  })
+
   it('two concurrent [[YYYY-MM-DD]] writes converge on the same daily-note row', async () => {
     // Sequenced (writeTransaction serializes them) but same ISO date —
     // exercises the createOrGet "live row hit" path on the second.
