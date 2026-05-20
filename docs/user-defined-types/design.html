@@ -779,13 +779,20 @@ trivial concurrency model and a cleaner failure surface. See &sect;Lessons from 
     quietly mis-scoping.
   </li>
   <li>
-    Open tx A. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {label, properties: propertySchemaIds})</code>
-    materializes <code>block-type:label</code> and <code>block-type:properties</code> from the action args, plus
-    appends <code>'block-type'</code> to the target's <code>typesProp</code>. Per merged
+    Open tx A. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {})</code> appends
+    <code>'block-type'</code> to the target's <code>typesProp</code>. Per merged
     <a href="https://github.com/Stvad/knowledge-medium/pull/49">PR #49</a> <code>addTypeInTx</code> is strict by
     default &mdash; throws <code>BlockNotFoundForTypeError</code> if the target was deleted concurrently between the
     pre-tx <code>load()</code> and tx-open, no silent no-op possible. (Sync-apply / processor paths that legitimately
     want to no-op on tombstone use the new <code>addTypeInTxLenient</code>; promotion uses strict.)
+  </li>
+  <li>
+    Set <code>block-type:label</code> and <code>block-type:properties</code> via <code>tx.setProperty</code>,
+    <i>not</i> through <code>addTypeInTx</code>'s <code>initialValues</code>. Per
+    <span class="file">type-system.md</span> &sect;3a, <code>initialValues</code> is init-if-missing — fine on a
+    fresh promotion, but on a partial-promotion retry with corrected inputs the existing stale values would
+    silently persist. <code>setProperty</code> unconditionally overwrites, which is what every retry actually
+    wants.
   </li>
   <li>
     Also tag the target with <code>PAGE_TYPE</code> in the same tx if it isn't already &mdash; the "type flow" pattern

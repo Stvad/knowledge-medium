@@ -420,8 +420,10 @@ export class PromotionRegistrationTimeout extends Error {
       `promoteToType: type-definition block for "${typeLabel}" was committed ` +
       `but did not appear in the runtime registry within ${timeoutMs}ms. ` +
       `Phase A committed; Phase B (instance retag) was not run. ` +
-      `Re-run promoteToType to finish retagging — the second call will ` +
-      `skip Phase A and proceed directly to retag.`,
+      `Re-run promoteToType to finish retagging — Phase A is idempotent ` +
+      `(addType no-ops on already-typed blocks; setProperty overwrites ` +
+      `label/properties to repair any stale values) so a second call ` +
+      `safely re-runs both phases.`,
     )
     this.name = 'PromotionRegistrationTimeout'
   }
@@ -688,7 +690,11 @@ async function waitForTypeRegistrationBounded(
   timeoutMs: number,
 ): Promise<void> {
   if (repo.types.has(typeId)) return
-  if (signal?.aborted) throw new Error('promoteToType: aborted')
+  // Use signal.reason (standard AbortSignal API) so callers that pass
+  // a typed reason (DOMException, custom error class) get their typed
+  // value back instead of an opaque "promoteToType: aborted" string.
+  // throwIfAborted at the call sites uses the same convention.
+  if (signal?.aborted) throw signal.reason
 
   await new Promise<void>((resolve, reject) => {
     let settled = false
@@ -703,7 +709,7 @@ async function waitForTypeRegistrationBounded(
     const dispose = repo.onTypesChange(() => {
       if (repo.types.has(typeId)) settle(resolve)
     })
-    const onAbort = () => settle(() => reject(new Error('promoteToType: aborted')))
+    const onAbort = () => settle(() => reject(signal!.reason))
     const timer = setTimeout(
       () => settle(() => reject(new PromotionRegistrationTimeout(typeId, typeLabel, timeoutMs))),
       timeoutMs,
