@@ -7,7 +7,9 @@ import {
   defineProperty,
   propertySchemasFacet,
 } from '@/extensions/api.js'
+import { PAGE_TYPE } from '@/data/blockTypes.js'
 import { keyAtEnd, keysBetween } from '@/data/orderKey.js'
+import { aliasesProp } from '@/data/properties.js'
 
 const VERSION = 1
 const GLOBAL_KEY = '__knowledgeMediumReadwiseSync'
@@ -300,9 +302,12 @@ const findRootPage = async (tx, workspaceId) => {
   return roots.find(block => block.content.trim() === ROOT_PAGE_TITLE) ?? null
 }
 
-const ensureRootPage = async (tx, workspaceId) => {
+const ensureRootPage = async (tx, repo, workspaceId, typeSnapshot) => {
   const existing = await findRootPage(tx, workspaceId)
-  if (existing) return {id: existing.id, created: false}
+  if (existing) {
+    await repo.addTypeInTx(tx, existing.id, PAGE_TYPE, {[aliasesProp.name]: [ROOT_PAGE_TITLE]}, typeSnapshot)
+    return {id: existing.id, created: false}
+  }
 
   const roots = await tx.childrenOf(null, workspaceId)
   const id = await tx.create({
@@ -310,8 +315,8 @@ const ensureRootPage = async (tx, workspaceId) => {
     parentId: null,
     orderKey: keyAtEnd(roots.at(-1)?.orderKey ?? null),
     content: ROOT_PAGE_TITLE,
-    properties: {types: ['page']},
   })
+  await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [ROOT_PAGE_TITLE]}, typeSnapshot)
   return {id, created: true}
 }
 
@@ -473,8 +478,9 @@ const upsertBooks = async (repo, books) => {
     highlightsSkipped: 0,
   }
 
+  const typeSnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async tx => {
-    const root = await ensureRootPage(tx, workspaceId)
+    const root = await ensureRootPage(tx, repo, workspaceId, typeSnapshot)
     const index = root.created
       ? {books: new Map(), highlights: new Map()}
       : await buildReadwiseIndex(repo, root.id)
