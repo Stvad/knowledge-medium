@@ -1,4 +1,4 @@
-import { PanelRightOpen, Plus, Undo2, ZoomIn } from 'lucide-react'
+import { PanelRightOpen, Plus, Settings, Undo2, ZoomIn } from 'lucide-react'
 import { defaultActionContextConfigs } from './defaultContexts.ts'
 import {
   ActionContextTypes,
@@ -51,7 +51,7 @@ import { pasteFromClipboard } from '@/utils/paste.ts'
 import { actionContextsFacet, actionsFacet } from '@/extensions/core.ts'
 import { AppExtension } from '@/extensions/facet.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
-import { getLayoutSessionBlock } from '@/data/stateBlocks.ts'
+import { getLayoutSessionBlock, getUserPrefsBlock } from '@/data/stateBlocks.ts'
 import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
   navigate,
@@ -101,6 +101,7 @@ const splitCodeMirrorBlockAtCursor = async (
 }
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
+export const OPEN_PREFERENCES_ACTION_ID = 'open_preferences'
 
 const createNodeInActivePanelFromGlobalContext = async (
   uiStateBlock: Block,
@@ -192,7 +193,7 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       await navigateInPanel(uiStateBlock, parent.id)
     },
     defaultBinding: {
-      keys: ['cmd+,', 'ctrl+,'],
+      keys: 'ctrl+,',
     },
   }
 
@@ -280,6 +281,21 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
         // UndoRedoManager bindings used).
         keys: ['cmd+shift+z', 'ctrl+shift+z', 'ctrl+y'],
         eventOptions: {preventDefault: true},
+      },
+    },
+    {
+      id: OPEN_PREFERENCES_ACTION_ID,
+      description: 'Open preferences',
+      context: ActionContextTypes.GLOBAL,
+      icon: Settings,
+      handler: async () => {
+        const workspaceId = repo.activeWorkspaceId
+        if (!workspaceId) return
+        const prefsBlock = await getUserPrefsBlock(repo, workspaceId, repo.user)
+        navigateFromGlobalCommand(repo, {blockId: prefsBlock.id, workspaceId})
+      },
+      defaultBinding: {
+        keys: 'cmd+,',
       },
     },
     {

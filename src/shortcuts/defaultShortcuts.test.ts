@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { waitFor } from '@testing-library/react'
 import type { EditorView } from '@codemirror/view'
 import { BlockCache } from '@/data/blockCache'
 import { ChangeScope, type User } from '@/data/api'
@@ -12,16 +13,21 @@ import {
   focusedBlockIdProp,
   topLevelBlockIdProp,
 } from '@/data/properties'
-import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks'
+import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/data/stateBlocks'
 import {
   CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
+  OPEN_PREFERENCES_ACTION_ID,
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
 import {
   __resetLayoutSessionIdForTesting,
   getLayoutSessionId,
 } from '@/utils/layoutSessionId'
-import { insertPanelRow } from '@/utils/panelLayoutProjection'
+import {
+  insertPanelRow,
+  panelBlockId,
+  panelRowsInLayoutOrder,
+} from '@/utils/panelLayoutProjection'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -199,6 +205,32 @@ describe('default CodeMirror shortcuts', () => {
       keys: 'cmd+shift+down',
       eventOptions: {preventDefault: true},
     })
+  })
+
+  it('opens the root preferences block with Cmd+comma from global shortcuts', async () => {
+    const action = findGlobalAction(env.repo, OPEN_PREFERENCES_ACTION_ID)
+    expect(action.defaultBinding?.keys).toBe('cmd+,')
+
+    const rootUiState = await getUIStateBlock(env.repo, WS, USER, {})
+    const layoutSession = await getLayoutSessionBlock(rootUiState, getLayoutSessionId())
+    const prefsBlock = await getUserPrefsBlock(env.repo, WS, USER)
+
+    await action.handler(
+      {uiStateBlock: rootUiState},
+      {preventDefault: vi.fn()} as unknown as ActionTrigger,
+    )
+
+    await waitFor(async () => {
+      const rows = await env.repo.query.subtree({id: layoutSession.id}).load()
+      const panels = panelRowsInLayoutOrder(layoutSession.id, rows)
+      expect(panelBlockId(panels[0])).toBe(prefsBlock.id)
+    })
+  })
+
+  it('does not reserve Cmd+comma for zooming out anymore', () => {
+    const action = findNormalModeAction(env.repo, 'zoom_out')
+
+    expect(action.defaultBinding?.keys).toBe('ctrl+,')
   })
 
   it('closes the current panel from normal mode with ctrl+w', async () => {
