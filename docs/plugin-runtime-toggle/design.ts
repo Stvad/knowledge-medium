@@ -198,6 +198,26 @@ function isFacetContribution(
   )
 }
 
+/** Mirror of facet.ts:243 pushValidatedContribution. Returns whether
+ *  the contribution was accepted. The walk uses that to decide whether
+ *  to recurse into the contribution's `enables` — dragged-along
+ *  extensions should only exist when their parent survived. */
+function pushValidatedContribution(
+  contribution: FacetContributionWithEnables,
+  output: FacetContribution<unknown>[],
+): boolean {
+  const validate = contribution.facet.validate
+  if (validate && !validate(contribution.value)) {
+    console.error(
+      `Dropping invalid contribution for facet "${contribution.facet.id}"`,
+      {source: contribution.source, value: contribution.value},
+    )
+    return false
+  }
+  output.push(contribution)
+  return true
+}
+
 export interface CollectOptions {
   overrides: Overrides
 }
@@ -229,11 +249,10 @@ export function collectContributionsSync(
       return
     }
     if (isFacetContribution(node)) {
-      if (!seen.has(node)) {
-        seen.add(node)
-        out.push(node)
-      }
-      if (node.enables) walk(node.enables)
+      if (seen.has(node)) return
+      seen.add(node)
+      const accepted = pushValidatedContribution(node, out)
+      if (accepted && node.enables) walk(node.enables)
       return
     }
   }
@@ -269,11 +288,10 @@ export async function collectContributions(
       return
     }
     if (isFacetContribution(node)) {
-      if (!seen.has(node)) {
-        seen.add(node)
-        out.push(node)
-      }
-      if (node.enables) await walk(node.enables)
+      if (seen.has(node)) return
+      seen.add(node)
+      const accepted = pushValidatedContribution(node, out)
+      if (accepted && node.enables) await walk(node.enables)
       return
     }
   }

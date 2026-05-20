@@ -570,9 +570,18 @@ User disables "References":
     <h3>4. Implication — <code>enables</code></h3>
     <p>
       A facet contribution can carry an <code>enables: AppExtension</code> field. When the
-      contribution survives resolution, its <code>enables</code> enters the tree too (and
-      dedup handles overlap). It expresses "this contribution structurally implies these
-      others, lifecycle-bound to it."
+      contribution survives resolution (and passes facet-level validation), its
+      <code>enables</code> enters the tree too (and dedup handles overlap). It expresses
+      "this contribution structurally implies these others, lifecycle-bound to it."
+    </p>
+    <p>
+      Requires a one-field extension to <code>FacetContributionOptions</code>
+      (<code>src/extensions/facet.ts:13</code>): add
+      <code>enables?: AppExtension</code> alongside the existing
+      <code>precedence?</code> and <code>source?</code>. The collectors then recurse into
+      <code>enables</code> <em>after</em> <code>pushValidatedContribution</code> accepts
+      the parent — if the parent fails its facet's <code>validate</code> hook, its
+      enabled extensions don't enter the runtime.
     </p>
 
     <h4>Example: video-player today vs. with <code>enables</code></h4>
@@ -988,7 +997,14 @@ function discoverToggleTree(ext: AppExtension): ToggleNode[] {
         <code>refreshAppRuntime()</code> automatically (today users must run "Reload
         extensions" manually).</li>
       <li><strong>Add <code>enables</code></strong> support to the resolver; refactor
-        video-player as the demonstrator. Update <code>validateAndPrefix</code>
+        video-player as the demonstrator. Three concrete edits:
+        <strong>(i)</strong> extend <code>FacetContributionOptions</code>
+        (<code>src/extensions/facet.ts:13</code>) with <code>enables?: AppExtension</code>
+        — currently it only carries <code>precedence</code> and <code>source</code>;
+        <strong>(ii)</strong> in the collectors, recurse into <code>contribution.enables</code>
+        only when <code>pushValidatedContribution</code> accepts the parent — dragged-along
+        extensions exist iff their parent survived;
+        <strong>(iii)</strong> update <code>validateAndPrefix</code>
         (<code>src/extensions/dynamicExtensions.ts:103</code>) to recurse into
         <code>contribution.enables</code> so user-supplied nested contributions get
         validated and source-prefixed.</li>
