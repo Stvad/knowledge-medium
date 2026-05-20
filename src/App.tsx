@@ -34,6 +34,7 @@ import {
 } from '@/utils/panelLayoutProjection.ts'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import { ChangeScope } from '@/data/api'
+import { hasSafeModeSearchParam } from '@/utils/safeMode.ts'
 
 // Resolved-workspace bundle. `freshlyCreated` is true only when this run
 // inserted a brand-new personal workspace via ensure_personal_workspace;
@@ -316,7 +317,7 @@ const App = () => {
     hash: getCurrentHash(),
     version: 0,
   }))
-  const safeMode = Boolean(useSearchParam('safeMode'))
+  const safeMode = hasSafeModeSearchParam(useSearchParam('safeMode'))
   // hasRemoteSyncConfig is the build-time signal; localOnly is the runtime
   // override (the user clicked "Use without sync" on the login screen).
   // Both close the door on Supabase RPCs, so AND them together once here.

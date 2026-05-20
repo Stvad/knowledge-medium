@@ -4,17 +4,22 @@
  * `?safeMode` in the URL is the recovery escape hatch — when set, it
  * should disable every non-essential system plugin even if the
  * overrides map says otherwise. Essentials stay on (otherwise the app
- * couldn't recover: kernel data, command palette as recovery
- * affordance, etc).
+ * couldn't recover: kernel data, action-context validation, renderer
+ * fallback, etc).
  *
  * Tests guard the policy at the smallest unit (the resolver) so the
  * recovery path is verifiable independent of AppRuntimeProvider's
  * wiring.
  */
 import {describe, expect, it} from 'vitest'
+import {actionContextsFacet, actionsFacet} from '@/extensions/core.ts'
 import {defineFacet} from '@/extensions/facet.ts'
 import {resolveAppRuntimeSync, resolveAppRuntime} from '@/extensions/resolveAppRuntime.ts'
+import {staticAppExtensions} from '@/extensions/staticAppExtensions.ts'
 import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
+import {RELOAD_IN_SAFE_MODE_ACTION_ID} from '@/shortcuts/defaultShortcuts.ts'
+import {ActionContextTypes} from '@/shortcuts/types.ts'
+import type {Repo} from '@/data/repo.ts'
 
 const empty: Overrides = new Map()
 
@@ -132,5 +137,17 @@ describe('resolveAppRuntime — safeMode', () => {
     )
 
     expect(runtime.read(labels)).toBe('essential')
+  })
+
+  it('keeps action context registration available in safe mode', () => {
+    const runtime = resolveAppRuntimeSync(
+      staticAppExtensions({repo: {} as Repo}),
+      {overrides: empty, safeMode: true},
+    )
+
+    expect(runtime.read(actionContextsFacet).map(context => context.type)).toContain(
+      ActionContextTypes.GLOBAL,
+    )
+    expect(runtime.read(actionsFacet).some(action => action.id === RELOAD_IN_SAFE_MODE_ACTION_ID)).toBe(false)
   })
 })

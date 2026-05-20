@@ -102,8 +102,8 @@ export const dynamicExtensionsExtension = (
     //
     // Safe mode skips the compile for every block, regardless of the
     // override state. Why this matters: the user typically lands in
-    // `?safeMode` to recover from a broken extension, and the System
-    // plugins settings UI is the recovery surface. Returning [] here
+    // `?safeMode` to recover from a broken extension, and the Extensions
+    // settings UI is the recovery surface. Returning [] here
     // (the pre-fix behavior) would hide every extension row from the
     // toggle tree, leaving the broken extension unreachable for
     // disabling. Emitting shells makes the rows appear without running

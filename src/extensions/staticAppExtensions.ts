@@ -3,7 +3,10 @@ import { kernelDataExtension } from '@/data/kernelDataExtension.ts'
 import { defaultRenderersExtension } from '@/extensions/defaultRenderers.tsx'
 import { toastAppMountExtension } from '@/extensions/toastAppMount.tsx'
 import { defaultEditorInteractionExtension } from '@/extensions/defaultEditorInteractions.ts'
-import { defaultActionsExtension } from '@/shortcuts/defaultShortcuts.ts'
+import {
+  defaultActionContextsExtension,
+  defaultActionsExtension,
+} from '@/shortcuts/defaultShortcuts.ts'
 import { kernelPropertyUiExtension } from '@/components/propertyEditors/typesPropertyUi.ts'
 import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernelValuePresets.ts'
 import { accountHeaderPlugin } from '@/plugins/account-header'
@@ -42,12 +45,13 @@ import { systemToggle } from '@/extensions/togglable.ts'
 
 /** Local helper to keep the catalog readable. `essential` defaults
  *  to false — only items whose absence would break the data layer or
- *  fundamental rendering (kernel data, default renderers, toast +
- *  dialog hosts, default editor interactions, the extensions-settings
- *  meta-plugin itself, app-intents bootstrap) set it true. User-
- *  facing surfaces like the command palette or default keyboard
- *  shortcuts are toggleable: the user pays the consequence (no
- *  hotkeys) but the rest of the runtime stays intact. */
+ *  fundamental rendering (kernel data, default renderers, action
+ *  context validation, toast + dialog hosts, default editor
+ *  interactions, the extensions-settings meta-plugin itself,
+ *  app-intents bootstrap) set it true. User-facing surfaces like the
+ *  command palette or default keyboard shortcuts are toggleable: the
+ *  user pays the consequence (no hotkeys) but the rest of the runtime
+ *  stays intact. */
 const sys = (
   id: string,
   name: string,
@@ -99,6 +103,10 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   sys('default-editor-interactions', 'Default editor interactions', defaultEditorInteractionExtension, {
     essential: true,
     description: 'Baseline block-interaction handlers (click-to-edit, selection, focus transitions).',
+  }),
+  sys('action-contexts', 'Action contexts', defaultActionContextsExtension, {
+    essential: true,
+    description: 'Registers the built-in shortcut contexts (global, normal mode, edit mode, property editing, multi-select) so activation validation remains available.',
   }),
   sys('default-actions', 'Default keyboard shortcuts', defaultActionsExtension({repo}), {
     description: 'Built-in shortcuts (Enter/Tab/Cmd+K-style). Disabling removes the default bindings; user-defined ones still work.',

@@ -67,6 +67,7 @@ import { ensureMetricsConsoleHook } from '@/data/metricsConsoleHook.ts'
 import { showProgress } from '@/utils/toast.ts'
 import { downloadBlob, exportRawSqliteDb, importRawSqliteDb } from '@/utils/exportSqliteDb.ts'
 import { focusPropertyRow } from '@/utils/propertyNavigation.ts'
+import { reloadInSafeMode } from '@/utils/safeMode.ts'
 
 const splitCodeMirrorBlockAtCursor = async (
   block: Block,
@@ -102,6 +103,7 @@ const splitCodeMirrorBlockAtCursor = async (
 
 export const CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID = 'create_node_in_active_panel'
 export const OPEN_PREFERENCES_ACTION_ID = 'open_preferences'
+export const RELOAD_IN_SAFE_MODE_ACTION_ID = 'reload_in_safe_mode'
 
 const createNodeInActivePanelFromGlobalContext = async (
   uiStateBlock: Block,
@@ -314,6 +316,14 @@ export function getDefaultActionGroups({repo}: { repo: Repo }) {
       handler: () => {
         refreshAppRuntime()
         console.log('Runtime extensions reloaded')
+      },
+    },
+    {
+      id: RELOAD_IN_SAFE_MODE_ACTION_ID,
+      description: 'Reload in safe mode',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {
+        reloadInSafeMode()
       },
     },
     {
@@ -896,6 +906,9 @@ export function getDefaultActions({repo}: { repo: Repo }): ActionConfig[] {
   ] as ActionConfig[]
 }
 
+export const defaultActionContextsExtension: AppExtension =
+  defaultActionContextConfigs.map(context => actionContextsFacet.of(context))
+
 export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
   const {
     globalActions,
@@ -911,8 +924,5 @@ export function defaultActionsExtension({repo}: { repo: Repo }): AppExtension {
     ...multiSelectModeActions,
   ] as ActionConfig[]
 
-  return [
-    defaultActionContextConfigs.map(context => actionContextsFacet.of(context)),
-    actions.map(action => actionsFacet.of(action)),
-  ]
+  return actions.map(action => actionsFacet.of(action))
 }

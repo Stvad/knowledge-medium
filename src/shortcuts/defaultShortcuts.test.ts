@@ -17,6 +17,7 @@ import { getLayoutSessionBlock, getUIStateBlock, getUserPrefsBlock } from '@/dat
 import {
   CREATE_NODE_IN_ACTIVE_PANEL_ACTION_ID,
   OPEN_PREFERENCES_ACTION_ID,
+  RELOAD_IN_SAFE_MODE_ACTION_ID,
   getDefaultActions,
 } from '@/shortcuts/defaultShortcuts'
 import {
@@ -260,6 +261,12 @@ describe('default CodeMirror shortcuts', () => {
     } satisfies CodeMirrorEditModeDependencies, {preventDefault: vi.fn()} as unknown as ActionTrigger)
 
     expect(await isDeleted('panel')).toBe(true)
+  })
+
+  it('registers a command-palette action for reloading in safe mode', () => {
+    const action = findGlobalAction(env.repo, RELOAD_IN_SAFE_MODE_ACTION_ID)
+
+    expect(action.description).toBe('Reload in safe mode')
   })
 
   it('creates a new editable child in the active panel from the global action', async () => {
