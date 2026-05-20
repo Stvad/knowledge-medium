@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, KeyboardEvent } from 'react'
+import { Suspense, use, useState, useEffect, useMemo, KeyboardEvent } from 'react'
 import {
   CommandDialog,
   CommandInput,
@@ -8,9 +8,10 @@ import {
   CommandItem,
 } from '@/components/ui/command'
 import { Kbd } from '@/components/ui/kbd'
+import { useUser } from '@/components/Login.tsx'
 import { useRepo } from '@/context/repo.tsx'
-import { useLayoutSessionBlock, usePluginUIStateBlock, usePluginUIStateProperty } from '@/data/globalState.ts'
 import { ChangeScope } from '@/data/api'
+import type { Block } from '@/data/block'
 import { activePanelIdProp, aliasesProp } from '@/data/properties.ts'
 import { usePropertyValue } from '@/hooks/block.ts'
 import { PAGE_TYPE } from '@/data/blockTypes.ts'
@@ -19,11 +20,18 @@ import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.ts
 import { parseRelativeDate, relativeDateCandidates } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
+import { getLayoutSessionId } from '@/utils/layoutSessionId.ts'
 import {
   searchLinkTargetsProgressively,
   type LinkTargetAliasMatch,
   type LinkTargetBlockMatch,
 } from '@/utils/linkTargetAutocomplete.ts'
+import {
+  getLayoutSessionBlock,
+  getPluginUIStateBlock,
+  getUIStateBlock,
+  requireWorkspaceId,
+} from '@/data/stateBlocks.ts'
 import { toggleQuickFindEvent } from './events.ts'
 import { pushRecentBlockId, quickFindUIStateType, recentBlockIdsProp } from './recents.ts'
 import {
@@ -48,19 +56,81 @@ interface SearchResultState {
   blocks: LinkTargetBlockMatch[]
 }
 
+interface QuickFindDialogResources {
+  quickFindUIStateBlock: Block
+  layoutSessionBlock: Block
+}
+
 const truncate = (text: string, max = 80) =>
   text.length > max ? text.slice(0, max - 1) + '…' : text
 
 export function QuickFind() {
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    const handleToggle = () => {
+      setOpen(prev => !prev)
+    }
+    window.addEventListener(toggleQuickFindEvent, handleToggle)
+    return () => window.removeEventListener(toggleQuickFindEvent, handleToggle)
+  }, [])
+
+  if (!open) return null
+
+  return (
+    <Suspense fallback={null}>
+      <QuickFindResources open={open} onOpenChange={setOpen}/>
+    </Suspense>
+  )
+}
+
+function QuickFindResources({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   const repo = useRepo()
-  const quickFindUIStateBlock = usePluginUIStateBlock(quickFindUIStateType)
+  const user = useUser()
+  const workspaceId = requireWorkspaceId(repo, 'QuickFind')
+  const resourcesPromise = useMemo((): Promise<QuickFindDialogResources> => (async () => {
+    const rootUIStateBlock = await getUIStateBlock(repo, workspaceId, user, {})
+    const [quickFindUIStateBlock, layoutSessionBlock] = await Promise.all([
+      getPluginUIStateBlock(repo, workspaceId, user, quickFindUIStateType),
+      getLayoutSessionBlock(rootUIStateBlock, getLayoutSessionId()),
+    ])
+    return {quickFindUIStateBlock, layoutSessionBlock}
+  })(), [repo, user, workspaceId])
+  const {quickFindUIStateBlock, layoutSessionBlock} = use(resourcesPromise)
+
+  return (
+    <QuickFindDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      quickFindUIStateBlock={quickFindUIStateBlock}
+      layoutSessionBlock={layoutSessionBlock}
+    />
+  )
+}
+
+function QuickFindDialog({
+  open,
+  onOpenChange,
+  quickFindUIStateBlock,
+  layoutSessionBlock,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  quickFindUIStateBlock: Block
+  layoutSessionBlock: Block
+}) {
+  const repo = useRepo()
   const navigate = useNavigate()
   const navigateFromGlobalCommand = useNavigateFromGlobalCommand()
-  const layoutSessionBlock = useLayoutSessionBlock()
   const [activePanelId] = usePropertyValue(layoutSessionBlock, activePanelIdProp)
-  const [recentIds] = usePluginUIStateProperty(quickFindUIStateType, recentBlockIdsProp)
+  const [recentIds] = usePropertyValue(quickFindUIStateBlock, recentBlockIdsProp)
 
-  const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [value, setValue] = useState('')
   const [searchResults, setSearchResults] = useState<SearchResultState>({
@@ -86,21 +156,6 @@ export function QuickFind() {
   const aliases = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.aliases : []
   const blocks = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.blocks : []
   const [recents, setRecents] = useState<RecentItem[]>([])
-
-  useEffect(() => {
-    const handleToggle = () => {
-      setOpen(prev => {
-        const next = !prev
-        if (next) {
-          setQuery('')
-          setValue('')
-        }
-        return next
-      })
-    }
-    window.addEventListener(toggleQuickFindEvent, handleToggle)
-    return () => window.removeEventListener(toggleQuickFindEvent, handleToggle)
-  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -181,13 +236,13 @@ export function QuickFind() {
     if (!repo.activeWorkspaceId) return
     pushRecentBlockId(quickFindUIStateBlock, blockId)
     navigateFromGlobalCommand({blockId})
-    setOpen(false)
+    onOpenChange(false)
   }
 
   const openInStackedPanel = (blockId: string) => {
     pushRecentBlockId(quickFindUIStateBlock, blockId)
     navigate({blockId, target: 'sidebar-stack', sourcePanelId: activePanelId})
-    setOpen(false)
+    onOpenChange(false)
   }
 
   const createPage = async (alias: string) => {
@@ -264,7 +319,7 @@ export function QuickFind() {
   return (
     <CommandDialog
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={onOpenChange}
       title="Quick find"
       description="Find or create a page or block by alias or content."
       contentClassName="top-[12vh] translate-y-0"
