@@ -23,9 +23,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ChangeScope, type User } from '@/data/api'
+import { ChangeScope, codecs, defineProperty, type TypeContribution, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
+import { typesFacet } from '@/data/facets'
+import { kernelDataExtension } from '@/data/kernelDataExtension'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
+import { resolveFacetRuntimeSync } from '@/extensions/facet'
 import { Repo } from '../repo'
 import { PAGE_TYPE } from '@/data/blockTypes'
 import {
@@ -53,7 +56,7 @@ interface Harness {
   repo: Repo
 }
 
-const setup = async (): Promise<Harness> => {
+const setup = async (types: readonly TypeContribution[] = []): Promise<Harness> => {
   const h = await createTestDb()
   const cache = new BlockCache()
   const repo = new Repo({
@@ -63,7 +66,20 @@ const setup = async (): Promise<Harness> => {
     registerKernelProcessors: false,
   })
   repo.setActiveWorkspaceId(WS)
+  if (types.length > 0) {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      types.map(type => typesFacet.of(type, {source: 'test'})),
+    ]))
+  }
   return {h, repo}
+}
+
+const registerTypes = (repo: Repo, types: readonly TypeContribution[]): void => {
+  repo.setFacetRuntime(resolveFacetRuntimeSync([
+    kernelDataExtension,
+    types.map(type => typesFacet.of(type, {source: 'test'})),
+  ]))
 }
 
 let env: Harness
@@ -179,6 +195,7 @@ describe('getPluginPrefsBlock', () => {
   })
 
   it('ensures a sub-block under user-prefs keyed by the type id, titled by the label', async () => {
+    registerTypes(env.repo, [examplePrefsType])
     const userPrefs = await getUserPrefsBlock(env.repo, WS, USER)
     const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
 
@@ -188,9 +205,9 @@ describe('getPluginPrefsBlock', () => {
   })
 
   it('falls back to the type id when the contribution omits a label', async () => {
-    const otherEnv = await setup()
+    const unlabeled = defineBlockType({id: 'unlabeled-plugin-prefs'})
+    const otherEnv = await setup([unlabeled])
     try {
-      const unlabeled = defineBlockType({id: 'unlabeled-plugin-prefs'})
       const block = await getPluginPrefsBlock(otherEnv.repo, WS, USER, unlabeled)
       expect(block.peek()?.content).toBe('unlabeled-plugin-prefs')
     } finally {
@@ -199,6 +216,7 @@ describe('getPluginPrefsBlock', () => {
   })
 
   it('is idempotent — same type resolves to the same block', async () => {
+    registerTypes(env.repo, [examplePrefsType])
     const a = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
     const b = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
     expect(a).toBe(b)
@@ -206,6 +224,7 @@ describe('getPluginPrefsBlock', () => {
 
   it('isolates distinct plugin prefs into distinct sub-blocks', async () => {
     const otherType = defineBlockType({id: 'other-plugin-prefs'})
+    registerTypes(env.repo, [examplePrefsType, otherType])
     const a = await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
     const b = await getPluginPrefsBlock(env.repo, WS, USER, otherType)
 
@@ -216,11 +235,34 @@ describe('getPluginPrefsBlock', () => {
   })
 
   it('routes its bootstrap write through ChangeScope.UserPrefs', async () => {
+    registerTypes(env.repo, [examplePrefsType])
     await getPluginPrefsBlock(env.repo, WS, USER, examplePrefsType)
     const events = await env.h.db.getAll<{scope: string; source: string; workspace_id: string | null}>(
       'SELECT scope, source, workspace_id FROM command_events ORDER BY created_at',
     )
     expect(events.at(-1)).toEqual({scope: ChangeScope.UserPrefs, source: 'user', workspace_id: WS})
+  })
+
+  it('runs the registered type setup when bootstrapping a plugin prefs block', async () => {
+    const setupRanProp = defineProperty<boolean>('example-plugin-prefs:setup-ran', {
+      codec: codecs.boolean,
+      defaultValue: false,
+      changeScope: ChangeScope.UserPrefs,
+    })
+    const setupType = defineBlockType({
+      id: 'setup-plugin-prefs',
+      label: 'Setup plugin prefs',
+      properties: [setupRanProp],
+      setup: async ({tx, id}) => {
+        await tx.setProperty(id, setupRanProp, true)
+      },
+    })
+    registerTypes(env.repo, [setupType])
+
+    const pluginPrefs = await getPluginPrefsBlock(env.repo, WS, USER, setupType)
+
+    expect(pluginPrefs.peekProperty(typesProp)).toEqual(['setup-plugin-prefs'])
+    expect(pluginPrefs.peekProperty(setupRanProp)).toBe(true)
   })
 })
 
@@ -231,6 +273,7 @@ describe('getPluginUIStateBlock', () => {
   })
 
   it('ensures a sub-block under root ui-state titled by the label', async () => {
+    registerTypes(env.repo, [exampleUIStateType])
     const rootUI = await getUIStateBlock(env.repo, WS, USER, {})
     const pluginUI = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
 
@@ -240,12 +283,14 @@ describe('getPluginUIStateBlock', () => {
   })
 
   it('is idempotent — same type resolves to the same block', async () => {
+    registerTypes(env.repo, [exampleUIStateType])
     const a = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
     const b = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
     expect(a).toBe(b)
   })
 
   it('routes its bootstrap write through ChangeScope.UiState (local-ephemeral)', async () => {
+    registerTypes(env.repo, [exampleUIStateType])
     const pluginUI = await getPluginUIStateBlock(env.repo, WS, USER, exampleUIStateType)
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events ORDER BY created_at',

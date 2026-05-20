@@ -17,14 +17,15 @@ import {
   ChangeScope,
   type PropertySchema,
   type TypeContribution,
+  type TypeRegistrySnapshot,
   type User,
 } from '@/data/api'
 import { Block } from './block'
 import type { Repo } from './repo'
 import type { BlockContextType } from '@/types'
 import {
-  addBlockTypeToProperties,
   aliasesProp,
+  hasBlockType,
   selectionStateProp,
   type BlockSelectionState,
 } from '@/data/properties'
@@ -48,6 +49,19 @@ const userPageBlockId = (workspaceId: string, userId: string): string =>
 
 const stateChildBlockId = (parentId: string, content: string): string =>
   uuidv5(`${parentId}:${content}`, STATE_CHILD_NS)
+
+const snapshotIncludingType = (repo: Repo, type: TypeContribution): TypeRegistrySnapshot => {
+  const snapshot = repo.snapshotTypeRegistries()
+  if (snapshot.types.has(type.id)) return snapshot
+
+  const types = new Map(snapshot.types)
+  types.set(type.id, type)
+  const propertySchemas = new Map(snapshot.propertySchemas)
+  for (const schema of type.properties ?? []) {
+    if (!propertySchemas.has(schema.name)) propertySchemas.set(schema.name, schema)
+  }
+  return {types, propertySchemas}
+}
 
 // ──── Helpers ────
 
@@ -99,6 +113,7 @@ const ensureStateChild = async (
    *  label). Defaults to `namespace` for state children whose title is
    *  intentionally internal (`ui-state`, `layout-sessions`, …). */
   displayContent: string = namespace,
+  type?: TypeContribution,
 ): Promise<Block> => {
   const parentData = parent.peek() ?? await parent.load()
   if (!parentData) throw new Error(`ensureStateChild: parent ${parent.id} not loaded`)
@@ -106,16 +121,31 @@ const ensureStateChild = async (
 
   const live = await repo.load(childId)
   if (live && !live.deleted) {
+    if (type && !hasBlockType(live, type.id)) {
+      const typeSnapshot = snapshotIncludingType(repo, type)
+      await repo.tx(async tx => {
+        const current = await tx.get(childId)
+        if (!current || current.deleted || hasBlockType(current, type.id)) return
+        await repo.addTypeInTx(tx, childId, type.id, {}, typeSnapshot)
+      }, {scope, description: `ensureStateChild ${namespace}`})
+    }
     return repo.block(childId)
   }
 
+  const typeSnapshot = type ? snapshotIncludingType(repo, type) : undefined
   await repo.tx(async tx => {
     const existing = await tx.get(childId)
     if (existing && !existing.deleted) {
+      if (type && !hasBlockType(existing, type.id)) {
+        await repo.addTypeInTx(tx, childId, type.id, {}, typeSnapshot)
+      }
       return
     }
     if (existing && existing.deleted) {
       await tx.restore(childId, {content: displayContent})
+      if (type) {
+        await repo.addTypeInTx(tx, childId, type.id, {}, typeSnapshot)
+      }
       return
     }
     // Fresh insert. Use 'a0' as a starter order key — fine because
@@ -130,6 +160,9 @@ const ensureStateChild = async (
       content: displayContent,
       properties: initialProperties,
     })
+    if (type) {
+      await repo.addTypeInTx(tx, childId, type.id, {}, typeSnapshot)
+    }
   }, {scope, description: `ensureStateChild ${namespace}`})
 
   const child = repo.block(childId)
@@ -231,8 +264,9 @@ export const getPluginPrefsBlock = memoize(
       userPrefsBlock,
       type.id,
       ChangeScope.UserPrefs,
-      addBlockTypeToProperties({}, type.id),
+      {},
       type.label ?? type.id,
+      type,
     )
   },
   (repo, workspaceId, user, type) =>
@@ -289,8 +323,9 @@ export const getPluginUIStateBlock = memoize(
       rootUIStateBlock,
       type.id,
       ChangeScope.UiState,
-      addBlockTypeToProperties({}, type.id),
+      {},
       type.label ?? type.id,
+      type,
     )
   },
   (repo, workspaceId, user, type) =>
