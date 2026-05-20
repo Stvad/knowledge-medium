@@ -460,6 +460,7 @@ export class PromotionTypeUnregistered extends Error {
 export async function promoteToType(
   repo: Repo,
   userTypes: UserTypesService,
+  userSchemas: UserSchemasService,
   args: PromoteToTypeArgs,
 ): Promise<void> {
   // Preflight: if the caller's signal is already aborted, return before
@@ -542,12 +543,23 @@ export async function promoteToType(
         `${propertyNameProp.name}; tryBuildType would silently drop it.`,
       )
     }
-    if (!mergedSchemas.has(name)) {
+    // Resolve by block id, not by name. tryBuildType uses
+    // userSchemas.getSchemaForBlockId(refId) — checking
+    // mergedSchemas.has(name) would let a name-match-only ref pass
+    // (e.g. a kernel schema with the same name as a user-defined
+    // one whose block is malformed/unpublished). The name-by-name
+    // check would say "registered" while the block-id lookup at
+    // runtime would silently drop the ref because UserSchemasService
+    // never published a contribution mapped to THIS block id.
+    // Validating via the same path tryBuildType uses keeps the
+    // preflight in lockstep with runtime resolution.
+    const resolved = userSchemas.getSchemaForBlockId(schemaId)
+    if (!resolved) {
       throw new Error(
-        `promoteToType: property-schema "${name}" (block ${schemaId}) isn't in ` +
-        `the merged registry — e.g. UserSchemasService skipped it because its ` +
-        `preset isn't loaded or its config didn't validate. Fix the schema ` +
-        `block before retrying.`,
+        `promoteToType: property-schema block ${schemaId} ("${name}") isn't ` +
+        `published by UserSchemasService — e.g. its preset isn't loaded, its ` +
+        `config didn't validate, or the block hasn't synced yet. Fix the ` +
+        `schema block before retrying.`,
       )
     }
   }
@@ -698,19 +710,31 @@ async function waitForTypeRegistrationBounded(
 
   await new Promise<void>((resolve, reject) => {
     let settled = false
-    const settle = (cb: () => void) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      dispose()
-      signal?.removeEventListener('abort', onAbort)
-      cb()
-    }
+    let timer: ReturnType<typeof setTimeout> | undefined
     const dispose = repo.onTypesChange(() => {
       if (repo.types.has(typeId)) settle(resolve)
     })
     const onAbort = () => settle(() => reject(signal!.reason))
-    const timer = setTimeout(
+    const settle = (cb: () => void) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      dispose()
+      signal?.removeEventListener('abort', onAbort)
+      cb()
+    }
+    // Re-check AFTER attaching the listener. The registration can
+    // land in the gap between the early-return check at the top and
+    // the dispose-assignment above; if it does, no future
+    // onTypesChange event fires for it and we'd hang until timeout.
+    // Checking now closes the race — if the type is already there,
+    // settle immediately; if not, the listener catches the next
+    // event.
+    if (repo.types.has(typeId)) {
+      settle(resolve)
+      return
+    }
+    timer = setTimeout(
       () => settle(() => reject(new PromotionRegistrationTimeout(typeId, typeLabel, timeoutMs))),
       timeoutMs,
     )

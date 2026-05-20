@@ -861,8 +861,10 @@ const workspaceId = target.workspaceId
 <span class="comment">//   - block carries `property-schema` type tag</span>
 <span class="comment">//   - same workspace as the target</span>
 <span class="comment">//   - non-empty propertyNameProp value</span>
-<span class="comment">//   - resolved name registered in repo.propertySchemas (the merged map)</span>
-const mergedSchemas = repo.propertySchemas
+<span class="comment">//   - resolved BY BLOCK ID via userSchemas.getSchemaForBlockId — the</span>
+<span class="comment">//     same lookup tryBuildType uses. A name-only check would let a</span>
+<span class="comment">//     malformed user-schema block pass when a kernel schema with the</span>
+<span class="comment">//     same name exists; runtime would then silently drop the ref.</span>
 for (const schemaId of propertySchemaIds) {
   const schemaBlock = await repo.load(schemaId)
   if (!schemaBlock || schemaBlock.deleted) throw new Error(`...not live`)
@@ -870,7 +872,7 @@ for (const schemaId of propertySchemaIds) {
   if (!hasBlockType(schemaBlock, PROPERTY_SCHEMA_TYPE)) throw new Error(`...not a property-schema`)
   const name = schemaBlock.properties[propertyNameProp.name]
   if (typeof name !== 'string' || !name.trim()) throw new Error(`...empty propertyName`)
-  if (!mergedSchemas.has(name)) throw new Error(`...name "${name}" not registered`)
+  if (!userSchemas.getSchemaForBlockId(schemaId)) throw new Error(`...block-id not published by UserSchemasService`)
 }
 
 <span class="comment">// Phase A: commit the type-definition block. addTypeInTx is strict-by-default</span>
