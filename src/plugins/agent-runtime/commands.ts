@@ -10,7 +10,7 @@ import { actionsFacet, blockRenderersFacet } from '@/extensions/core.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
 import { refreshAppRuntime } from '@/extensions/runtimeEvents.ts'
 import { dynamicExtensionsExtension } from '@/extensions/dynamicExtensions.ts'
-import { resolveFacetRuntime } from '@/extensions/facet.ts'
+import { resolveAppRuntime } from '@/extensions/resolveAppRuntime.ts'
 import {
   describeFacets,
   describeRuntime,
@@ -135,7 +135,13 @@ const verifyExtensionBlock = async (
     },
   } as unknown as Repo
 
-  const verificationRuntime = await resolveFacetRuntime(
+  // Use resolveAppRuntime (not the bare resolveFacetRuntime) so the
+  // verification's action / facet lists match what production sees:
+  // resolveAppRuntime recurses into FacetContribution.enables, and the
+  // bare resolver does not. An extension whose contributions hang off
+  // an `enables` chain would otherwise verify against a smaller
+  // contribution surface than the running app would expose.
+  const verificationRuntime = await resolveAppRuntime(
     dynamicExtensionsExtension({
       repo: singleBlockRepo,
       workspaceId: block.workspaceId,
@@ -145,10 +151,13 @@ const verifyExtensionBlock = async (
       },
     }),
     {
-      repo,
-      workspaceId: repo.activeWorkspaceId,
-      safeMode: context.safeMode,
-      generation: 'agent-runtime-install-verify',
+      overrides: new Map(),
+      context: {
+        repo,
+        workspaceId: repo.activeWorkspaceId,
+        safeMode: context.safeMode,
+        generation: 'agent-runtime-install-verify',
+      },
     },
   )
 

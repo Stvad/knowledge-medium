@@ -8,6 +8,9 @@ import { Repo } from '@/data/repo'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { staticDataExtensions } from '@/extensions/staticDataExtensions'
 import { resolveFacetRuntimeSync } from '@/extensions/facet'
+import { __setCompileImplForTest } from '@/extensions/compileExtensionModule'
+import { actionsFacet } from '@/extensions/core'
+import { ActionContextTypes } from '@/shortcuts/types'
 import { createAgentRuntimeContext, executeCommand } from '../commands'
 import type { AgentRuntimeContext, InstallExtensionResult } from '../protocol'
 
@@ -65,5 +68,56 @@ describe('agent runtime commands', () => {
     const installed = await env.repo.load(result.id)
     expect(installed?.properties[aliasesProp.name]).toEqual(['Example extension'])
     expect(installed?.properties[typesProp.name]).toEqual([EXTENSION_TYPE, PAGE_TYPE])
+  })
+
+  it('verify reports actions reached via FacetContribution.enables', async () => {
+    // Regression: verify used to call the bare resolveFacetRuntime,
+    // which does not walk into `enables`. An extension whose action
+    // is contributed via `enables: actionsFacet.of(...)` would
+    // verify against a smaller surface than production sees, so the
+    // agent would see "no action 'inner.action' installed" even
+    // though production registers it. The fix swaps in
+    // resolveAppRuntime, which mirrors the production walk.
+    //
+    // The vitest jsdom env can't resolve `@/extensions/api.js` from
+    // inside a Babel-compiled blob URL, so we stub the compile to
+    // emit the AppExtension shape directly. The compile is just a
+    // text→module step — the rest of the install + verify path is
+    // exercised end-to-end.
+    const innerAction = {
+      id: 'inner.action',
+      description: 'Pulled in via enables',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {},
+    }
+    const outerAction = {
+      id: 'outer.action',
+      description: 'Outer action',
+      context: ActionContextTypes.GLOBAL,
+      handler: () => {},
+    }
+    const restore = __setCompileImplForTest(async () => ({
+      default: actionsFacet.of(outerAction, {
+        enables: actionsFacet.of(innerAction),
+      }),
+    }))
+
+    try {
+      const result = await executeCommand({
+        commandId: 'install-verify',
+        type: 'install-extension',
+        source: 'STUBBED', // ignored — compile is stubbed above
+        label: 'Enables verify',
+        reload: false,
+        verify: true,
+      }, env.context) as InstallExtensionResult
+
+      expect(result.verification?.ok).toBe(true)
+      const actionIds = result.verification?.actions.map(a => a.id) ?? []
+      expect(actionIds).toContain('outer.action')
+      expect(actionIds).toContain('inner.action')
+    } finally {
+      restore()
+    }
   })
 })
