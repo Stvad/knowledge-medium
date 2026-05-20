@@ -36,11 +36,34 @@ import {
   getBoundary,
   isEnabled,
   type Overrides,
+  type Togglable,
 } from '@/extensions/togglable.ts'
 
 export interface ResolveAppRuntimeOptions {
   overrides: Overrides
   context?: FacetResolveContext
+  /** Safe mode — when true, every non-essential togglable boundary is
+   *  forced off regardless of the override map. Essentials still
+   *  resolve to on. This is the URL `?safeMode` recovery escape hatch:
+   *  even an explicit `true` override on a non-essential plugin is
+   *  ignored, because the goal is "get the app to a working state",
+   *  not "honour user preferences." */
+  safeMode?: boolean
+}
+
+/** Resolver-internal gate: should this boundary's subtree be walked?
+ *  Wraps `isEnabled` with the safe-mode override. Kept separate from
+ *  `isEnabled` so that module stays pure (handle + overrides → boolean) —
+ *  UI callers reading "what's the user's preference?" want the bare
+ *  predicate; only the resolver applies the recovery override. */
+const shouldKeepBoundary = (
+  handle: Togglable,
+  overrides: Overrides,
+  safeMode: boolean,
+): boolean => {
+  if (handle.essential) return true
+  if (safeMode) return false
+  return isEnabled(handle, overrides)
 }
 
 /** Build a FacetRuntime from an AppExtension tree, evaluating toggle
@@ -51,9 +74,10 @@ export async function resolveAppRuntime(
   options: ResolveAppRuntimeOptions,
 ): Promise<FacetRuntime> {
   const context = options.context ?? {}
+  const safeMode = options.safeMode ?? false
   const collected: FacetContribution<unknown>[] = []
   const seen = new Set<FacetContribution<unknown>>()
-  await walk(extensions, options.overrides, context, collected, seen)
+  await walk(extensions, options.overrides, safeMode, context, collected, seen)
   return new FacetRuntime(context, collected)
 }
 
@@ -66,9 +90,10 @@ export function resolveAppRuntimeSync(
   options: ResolveAppRuntimeOptions,
 ): FacetRuntime {
   const context = options.context ?? {}
+  const safeMode = options.safeMode ?? false
   const collected: FacetContribution<unknown>[] = []
   const seen = new Set<FacetContribution<unknown>>()
-  walkSync(extensions, options.overrides, collected, seen)
+  walkSync(extensions, options.overrides, safeMode, collected, seen)
   return new FacetRuntime(context, collected)
 }
 
@@ -105,6 +130,7 @@ const isFacetContribution = (
 async function walk(
   node: AppExtension | readonly AppExtension[],
   overrides: Overrides,
+  safeMode: boolean,
   context: FacetResolveContext,
   output: FacetContribution<unknown>[],
   seen: Set<FacetContribution<unknown>>,
@@ -113,7 +139,7 @@ async function walk(
 
   if (typeof node === 'function') {
     try {
-      await walk(await node(context), overrides, context, output, seen)
+      await walk(await node(context), overrides, safeMode, context, output, seen)
     } catch (error) {
       console.error('Failed to resolve app extension', error)
     }
@@ -122,9 +148,9 @@ async function walk(
 
   if (Array.isArray(node)) {
     const handle = getBoundary(node)
-    if (handle && !isEnabled(handle, overrides)) return
+    if (handle && !shouldKeepBoundary(handle, overrides, safeMode)) return
     for (const child of node) {
-      await walk(child as AppExtension, overrides, context, output, seen)
+      await walk(child as AppExtension, overrides, safeMode, context, output, seen)
     }
     return
   }
@@ -134,7 +160,7 @@ async function walk(
     seen.add(node)
     const accepted = pushValidatedContribution(node, output)
     if (accepted && node.enables) {
-      await walk(node.enables, overrides, context, output, seen)
+      await walk(node.enables, overrides, safeMode, context, output, seen)
     }
   }
 }
@@ -142,6 +168,7 @@ async function walk(
 function walkSync(
   node: AppExtension | readonly AppExtension[],
   overrides: Overrides,
+  safeMode: boolean,
   output: FacetContribution<unknown>[],
   seen: Set<FacetContribution<unknown>>,
 ): void {
@@ -156,9 +183,9 @@ function walkSync(
 
   if (Array.isArray(node)) {
     const handle = getBoundary(node)
-    if (handle && !isEnabled(handle, overrides)) return
+    if (handle && !shouldKeepBoundary(handle, overrides, safeMode)) return
     for (const child of node) {
-      walkSync(child as AppExtension, overrides, output, seen)
+      walkSync(child as AppExtension, overrides, safeMode, output, seen)
     }
     return
   }
@@ -167,6 +194,6 @@ function walkSync(
     if (seen.has(node)) return
     seen.add(node)
     const accepted = pushValidatedContribution(node, output)
-    if (accepted && node.enables) walkSync(node.enables, overrides, output, seen)
+    if (accepted && node.enables) walkSync(node.enables, overrides, safeMode, output, seen)
   }
 }

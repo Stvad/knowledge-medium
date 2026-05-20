@@ -56,8 +56,8 @@ export function AppRuntimeProvider({
   const baseExtensions: AppExtension[] = useMemo(() => staticAppExtensions({repo}), [repo])
 
   const baseRuntime = useMemo(() =>
-    resolveAppRuntimeSync(baseExtensions, {overrides, context: runtimeContext}),
-  [baseExtensions, overrides, runtimeContext])
+    resolveAppRuntimeSync(baseExtensions, {overrides, safeMode, context: runtimeContext}),
+  [baseExtensions, overrides, safeMode, runtimeContext])
 
   const [runtime, setRuntime] = useState(baseRuntime)
 
@@ -103,7 +103,7 @@ export function AppRuntimeProvider({
               errorStore.reportError(blockId, error)
             },
           }),
-        ], {overrides, context: runtimeContext})
+        ], {overrides, safeMode, context: runtimeContext})
 
         if (!cancelled) {
           setRuntime(nextRuntime)
