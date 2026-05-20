@@ -351,18 +351,24 @@ export const staticAppExtensions = ({repo}) => [
     collected.push(userExtensionToggle(block).of([]))
     continue
   }
-  const {module} = await compileExtensionModule(block.content, block.id, cache)
-  const exported = module.default as AppExtension
-
-  // If the author wrapped their export in authorHints({...}, ext),
-  // pick up the hints. The authorHints primitive type-locks the shape
-  // so authors can't pass id/defaultEnabled/essential at all.
-  const hints = getAuthorHints(exported)
-  const inner = hints ? unwrapAuthorHints(exported) : exported
-
-  const handle = userExtensionToggle(block, hints)
-  const validated = validateAndPrefix(handle.of(inner), block.id)
-  if (validated) collected.push(validated)
+  // Compile + hint unwrap + validate are all per-block-fallible. Any
+  // failure must still emit a shell so the row appears in settings
+  // and the user can disable the broken extension. Errors continue to
+  // flow through ExtensionLoadErrorStore for status-icon rendering.
+  try {
+    const {module} = await compileExtensionModule(block.content, block.id, cache)
+    const exported = module.default as AppExtension
+    const hints = getAuthorHints(exported)
+    const inner = hints ? unwrapAuthorHints(exported) : exported
+    const handle = userExtensionToggle(block, hints)
+    const wrapped = handle.of(inner)
+    const validated = validateAndPrefix(wrapped, block.id)
+    if (validated) collected.push(validated)
+    else collected.push(userExtensionShellToggle(block).of([]))
+  } catch (error) {
+    errorReporter(block.id, error)
+    collected.push(userExtensionShellToggle(block).of([]))
+  }
 }</code></pre>
     <p>
       The disabled-shell line, <code>userExtensionToggle(block).of([])</code>, is just
@@ -1026,8 +1032,14 @@ async function discoverToggleTree(
         '@/extensions/api.js'</code> following the existing convention. Wrap existing
         system plugins in <code>systemToggle({id, name, ...}).of(...)</code>. Mark a
         handful <code>essential: true</code> (kernel, prefs bootstrap, command
-        palette). Add a startup assertion that each contribution's
-        <code>source</code> matches the wrapping handle's <code>id</code>.</li>
+        palette). At startup, log a warning when the overrides map contains ids that
+        don't appear in the discovered toggle tree — catches the id-drift case
+        (manifest rename leaves stored prefs orphaned) without forcing source/id
+        equality, which would be wrong for cross-plugin bare inclusions
+        (<code>backlinks</code> includes <code>referencesContributions</code> with
+        <code>source: 'references'</code>, intentionally) and for dynamic extensions
+        whose sources are <code>block:${id}</code>-prefixed at
+        <code>dynamicExtensions.ts:140</code>.</li>
       <li><strong>Add the filter pass</strong> inside <code>collectContributions</code>:
         evaluate <code>isEnabled(handle, overrides)</code> at each boundary; skip
         subtrees that resolve to off. Start with an empty overrides map and all manifest
@@ -1105,9 +1117,15 @@ async function discoverToggleTree(
         must be <code>essential</code> and must read the block from PowerSync after the
         kernel is up — same async second-pass pattern
         <code>dynamicExtensionsExtension</code> already uses.</li>
-      <li><strong>id ↔ source drift.</strong> Renaming a plugin's manifest <code>id</code>
-        invalidates stored disable entries. Startup assert catches new drift; one-time
-        migrations handle historical renames.</li>
+      <li><strong>Manifest id rename leaves stored prefs orphaned.</strong> Renaming a
+        plugin's manifest <code>id</code> invalidates any override entry keyed by the
+        old id. The startup warning (above) flags overrides whose id is missing from
+        the discovered tree — non-fatal, so users keep working, but visible enough
+        that maintainers can write a migration. Strict source/id equality is the wrong
+        invariant: bare cross-plugin inclusions (per §2) and the
+        <code>block:${id}</code> prefix that
+        <code>dynamicExtensions.ts:140</code> applies both legitimately produce
+        sources that don't match the wrapping handle.</li>
       <li><strong>Conditional togglables.</strong> A togglable behind a
         <code>(ctx) =&gt; ...</code> appears in the discovered tree only when that condition
         holds. Probably fine — conditional togglables are conditional in the UI too — but

@@ -462,29 +462,24 @@ export async function loadDynamicExtensions(
       continue
     }
 
-    let exported: AppExtension
+    // Compile + hint unwrap + validate are all per-block-fallible; any
+    // failure should emit a shell so the row appears in settings and
+    // the user can disable the broken extension. Errors continue to
+    // flow through ExtensionLoadErrorStore for status icon rendering.
     try {
       const compiled = await compileExtensionModule(block.content, block.id)
-      exported = compiled.module.default
+      const exported = compiled.module.default
+      const hints = getAuthorHints(exported)
+      const inner = hints ? unwrapAuthorHints(exported) : exported
+      const handle = userExtensionToggle(block, hints)
+      const wrapped = handle.of(inner)
+      const validated = validateAndPrefix(wrapped, block.id)
+      if (validated) collected.push(validated)
+      else collected.push(userExtensionShellToggle(block).of([]))
     } catch (error) {
-      // Compile/import failure for an enabled extension. Still emit a
-      // shell so the row appears in settings and the user can disable
-      // the broken extension. Errors continue to flow through
-      // ExtensionLoadErrorStore so the UI can show a status icon next
-      // to the row.
       console.error(`Failed to load extension ${block.id}`, error)
       collected.push(userExtensionShellToggle(block).of([]))
-      continue
     }
-
-    // Take name/description hints from any authorHints() wrapper.
-    // unwrapAuthorHints peels one layer if present.
-    const hints = getAuthorHints(exported)
-    const inner = hints ? unwrapAuthorHints(exported) : exported
-    const handle = userExtensionToggle(block, hints)
-    const wrapped = handle.of(inner)
-    const validated = validateAndPrefix(wrapped, block.id)
-    if (validated) collected.push(validated)
   }
 
   return collected
