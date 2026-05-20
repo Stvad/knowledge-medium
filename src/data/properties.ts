@@ -172,6 +172,33 @@ export const presetConfigProp = defineProperty<Record<string, unknown>>('propert
   changeScope: ChangeScope.BlockDefault,
 })
 
+// ──── block-type kernel fields (user-defined-types Phase 1) ────
+
+/** Human-readable label on a `'block-type'` block. Shown in the type
+ *  picker and as the section header in the property panel. */
+export const blockTypeLabelProp = defineProperty<string>('block-type:label', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** Optional free-form description on a `'block-type'` block. */
+export const blockTypeDescriptionProp = defineProperty<string>('block-type:description', {
+  codec: codecs.string,
+  defaultValue: '',
+  changeScope: ChangeScope.BlockDefault,
+})
+
+/** RefList over `'property-schema'` blocks. UserTypesService resolves
+ *  each ref to the merged property-schema map (via
+ *  `UserSchemasService.getSchemaForBlockId`) to build the lifted
+ *  property list on the resulting TypeContribution. */
+export const blockTypePropertiesProp = defineProperty<readonly string[]>('block-type:properties', {
+  codec: codecs.refList({targetTypes: ['property-schema']}),
+  defaultValue: [],
+  changeScope: ChangeScope.BlockDefault,
+})
+
 /** Re-export of the canonical alias schema (defined under
  *  `@/data/internals/coreProperties.ts` so the kernel parseReferences
  *  processor can reference it without circling back through this
@@ -302,4 +329,8 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   propertyNameProp,
   presetIdProp,
   presetConfigProp,
+  // block-type fields
+  blockTypeLabelProp,
+  blockTypeDescriptionProp,
+  blockTypePropertiesProp,
 ] as ReadonlyArray<PropertySchema<unknown>>

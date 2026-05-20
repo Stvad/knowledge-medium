@@ -39,8 +39,18 @@ import {
   typesFacet,
   valuePresetsFacet,
 } from '../facets'
-import { KERNEL_PROPERTY_SCHEMAS } from '@/data/properties'
-import { KERNEL_TYPE_CONTRIBUTIONS } from '@/data/blockTypes'
+import {
+  KERNEL_PROPERTY_SCHEMAS,
+  blockTypeDescriptionProp,
+  blockTypeLabelProp,
+  blockTypePropertiesProp,
+} from '@/data/properties'
+import {
+  BLOCK_TYPE_TYPE,
+  KERNEL_TYPE_CONTRIBUTIONS,
+  PROPERTY_SCHEMA_TYPE,
+  TYPES_PAGE_TYPE,
+} from '@/data/blockTypes'
 import { Repo } from '../repo'
 
 let h: TestDb
@@ -271,6 +281,31 @@ describe('typesFacet + schema lift', () => {
     } finally {
       warn.mockRestore()
     }
+  })
+
+  it('block-type kernel contribution lifts label, description, and properties props', () => {
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    repo.setFacetRuntime(runtime)
+    const blockType = repo.types.get(BLOCK_TYPE_TYPE)
+    expect(blockType).toBeDefined()
+    expect(blockType!.properties).toEqual(
+      expect.arrayContaining([blockTypeLabelProp, blockTypeDescriptionProp, blockTypePropertiesProp]),
+    )
+    expect(repo.propertySchemas.get(blockTypeLabelProp.name)).toBe(blockTypeLabelProp)
+    expect(repo.propertySchemas.get(blockTypeDescriptionProp.name)).toBe(blockTypeDescriptionProp)
+    expect(repo.propertySchemas.get(blockTypePropertiesProp.name)).toBe(blockTypePropertiesProp)
+  })
+
+  it('block-type:properties prop is a refList scoped to property-schema target type', () => {
+    expect(blockTypePropertiesProp.codec.type).toBe('refList')
+    const codec = blockTypePropertiesProp.codec as ReturnType<typeof codecs.refList>
+    expect(codec.targetTypes).toEqual([PROPERTY_SCHEMA_TYPE])
+  })
+
+  it('Types page marker block-type is registered as a kernel type', () => {
+    const runtime = resolveFacetRuntimeSync([kernelDataExtension])
+    repo.setFacetRuntime(runtime)
+    expect(repo.types.has(TYPES_PAGE_TYPE)).toBe(true)
   })
 
   it('shared schema object lifted by multiple types dedups without warning', () => {
