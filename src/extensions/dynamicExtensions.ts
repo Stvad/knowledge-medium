@@ -83,11 +83,6 @@ export const dynamicExtensionsExtension = (
   const {repo, workspaceId, safeMode, overrides, errorReporter, cache} = options
   const effectiveOverrides: Overrides = overrides ?? new Map()
 
-  if (safeMode) {
-    console.log('Safe mode enabled — skipping dynamic extension blocks')
-    return []
-  }
-
   let extensionBlocks: BlockData[]
   try {
     extensionBlocks = await repo.query.findExtensionBlocks({workspaceId}).load()
@@ -104,8 +99,17 @@ export const dynamicExtensionsExtension = (
     // an explicit `false` in the overrides map. This check is what
     // makes the toggle meaningful: if we didn't skip here, the block's
     // top-level module code would still execute every reload.
+    //
+    // Safe mode skips the compile for every block, regardless of the
+    // override state. Why this matters: the user typically lands in
+    // `?safeMode` to recover from a broken extension, and the System
+    // plugins settings UI is the recovery surface. Returning [] here
+    // (the pre-fix behavior) would hide every extension row from the
+    // toggle tree, leaving the broken extension unreachable for
+    // disabling. Emitting shells makes the rows appear without running
+    // any extension's top-level module code.
     const shell = userExtensionShellToggle(block)
-    if (!isEnabled(shell, effectiveOverrides)) {
+    if (safeMode || !isEnabled(shell, effectiveOverrides)) {
       collected.push(shell.of([]))
       continue
     }

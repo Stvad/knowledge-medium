@@ -308,20 +308,53 @@ describe('dynamicExtensionsExtension — boundary tagging', () => {
 })
 
 describe('dynamicExtensionsExtension — safeMode', () => {
-  it('returns empty without querying the repo', async () => {
-    const findExtensionBlocks = vi.fn(() => ({load: async () => []}))
+  it('enumerates blocks but emits shells (never compiles) so the settings tree can still surface them', async () => {
+    // Why the query MUST run: the user typically lands in `?safeMode`
+    // exactly to recover from a broken extension. Returning [] here
+    // would hide every extension row from the System plugins settings
+    // tree, leaving them unreachable for toggling. Emitting shells
+    // means the toggle rows appear without running any extension's
+    // top-level module code.
+    const compileImpl = vi.fn().mockImplementation(async () => ({
+      default: labelsFacet.of('should-not-run'),
+    }))
+    const restore = __setCompileImplForTest(compileImpl)
+    const blocks = [
+      blockData({id: 'block-a', content: 'src-a'}),
+      blockData({id: 'block-b', content: 'src-b'}),
+    ]
+    const findExtensionBlocks = vi.fn(() => ({load: async () => blocks}))
     const repo = {query: {findExtensionBlocks}} as unknown as Repo
 
-    const ext = dynamicExtensionsExtension({
-      repo,
-      workspaceId: 'ws-1',
-      cache,
-      safeMode: true,
-    })
-    const runtime = await resolveFacetRuntime(ext)
+    try {
+      const ext = dynamicExtensionsExtension({
+        repo,
+        workspaceId: 'ws-1',
+        cache,
+        safeMode: true,
+      })
+      const factory = ext as (
+        ctx: Record<string, unknown>,
+      ) => Promise<AppExtension[]>
+      const subtree = await factory({})
 
-    expect(runtime.read(labelsFacet)).toEqual([])
-    expect(findExtensionBlocks).not.toHaveBeenCalled()
+      expect(findExtensionBlocks).toHaveBeenCalledTimes(1)
+      expect(compileImpl).not.toHaveBeenCalled()
+
+      // Shells carry the boundary handle so discoverToggleTree can
+      // surface them, but the wrapped extension is empty so no
+      // contributions land in the runtime.
+      const ids = subtree
+        .map(node => getBoundary(node)?.id)
+        .filter((id): id is string => id !== undefined)
+        .sort()
+      expect(ids).toEqual(['block-a', 'block-b'])
+
+      const runtime = await resolveFacetRuntime(ext)
+      expect(runtime.read(labelsFacet)).toEqual([])
+    } finally {
+      restore()
+    }
   })
 })
 
