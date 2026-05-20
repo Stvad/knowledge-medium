@@ -12,11 +12,17 @@
  * wiring.
  */
 import {describe, expect, it} from 'vitest'
-import {actionContextsFacet, actionsFacet} from '@/extensions/core.ts'
+import {
+  actionContextsFacet,
+  actionsFacet,
+  appMountsFacet,
+  headerItemsFacet,
+} from '@/extensions/core.ts'
 import {defineFacet} from '@/extensions/facet.ts'
 import {resolveAppRuntimeSync, resolveAppRuntime} from '@/extensions/resolveAppRuntime.ts'
 import {staticAppExtensions} from '@/extensions/staticAppExtensions.ts'
 import {systemToggle, type Overrides} from '@/extensions/togglable.ts'
+import {COMMAND_PALETTE_ACTION_ID} from '@/plugins/command-palette'
 import {RELOAD_IN_SAFE_MODE_ACTION_ID} from '@/shortcuts/defaultShortcuts.ts'
 import {ActionContextTypes} from '@/shortcuts/types.ts'
 import type {Repo} from '@/data/repo.ts'
@@ -149,5 +155,22 @@ describe('resolveAppRuntime — safeMode', () => {
       ActionContextTypes.GLOBAL,
     )
     expect(runtime.read(actionsFacet).some(action => action.id === RELOAD_IN_SAFE_MODE_ACTION_ID)).toBe(false)
+  })
+
+  it('keeps header and command palette recovery UI available in safe mode', () => {
+    const runtime = resolveAppRuntimeSync(
+      staticAppExtensions({repo: {} as Repo}),
+      {overrides: empty, safeMode: true},
+    )
+    const headerItemIds = runtime.read(headerItemsFacet).map(item => item.id)
+    const mountIds = runtime.read(appMountsFacet).map(mount => mount.id)
+    const actionIds = runtime.read(actionsFacet).map(action => action.id)
+
+    expect(headerItemIds).toEqual(expect.arrayContaining([
+      'workspace-header.pending-invitations',
+      'command-palette.header',
+    ]))
+    expect(mountIds).toContain('command-palette.dialog')
+    expect(actionIds).toContain(COMMAND_PALETTE_ACTION_ID)
   })
 })

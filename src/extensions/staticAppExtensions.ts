@@ -47,11 +47,11 @@ import { systemToggle } from '@/extensions/togglable.ts'
  *  to false — only items whose absence would break the data layer or
  *  fundamental rendering (kernel data, default renderers, action
  *  context validation, toast + dialog hosts, default editor
- *  interactions, the extensions-settings meta-plugin itself,
- *  app-intents bootstrap) set it true. User-facing surfaces like the
- *  command palette or default keyboard shortcuts are toggleable: the
- *  user pays the consequence (no hotkeys) but the rest of the runtime
- *  stays intact. */
+ *  interactions, recovery UI like the workspace header + command
+ *  palette, the extensions-settings meta-plugin itself, app-intents
+ *  bootstrap) set it true. Most user-facing surfaces and default
+ *  keyboard shortcuts are toggleable: the user pays the consequence
+ *  (no hotkeys) but the rest of the runtime stays intact. */
 const sys = (
   id: string,
   name: string,
@@ -124,10 +124,12 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
     description: 'Collapsible sidebar with section contributions from other plugins.',
   }),
   sys('workspace-header', 'Workspace header', workspaceHeaderPlugin, {
+    essential: true,
     description: 'Top-of-app header with the workspace switcher.',
   }),
   sys('command-palette', 'Command palette', commandPalettePlugin, {
-    description: 'Cmd+K palette listing every registered action.',
+    essential: true,
+    description: 'Cmd+K palette listing every registered action. Kept enabled in safe mode as the recovery entry point.',
   }),
   sys('quick-find', 'Quick find', quickFindPlugin, {
     description: 'Cmd+P jump-to-block by alias, content, or relative date.',
