@@ -776,7 +776,14 @@ sees the new row, rebuilds its contribution list, and publishes via
   </li>
 </ol>
 
-<pre><code><span class="comment">// Pre-tx validation — fail fast on inputs UserTypesService.tryBuildType</span>
+<pre><code><span class="comment">// Preflight: bail before touching the DB if the caller's signal is</span>
+<span class="comment">// already aborted. waitForTypeRegistrationBounded handles abort during</span>
+<span class="comment">// the Phase A→B wait, but not before Phase A — without this guard, an</span>
+<span class="comment">// already-aborted call still commits the type-definition block and</span>
+<span class="comment">// then throws.</span>
+args.signal?.throwIfAborted()
+
+<span class="comment">// Pre-tx validation — fail fast on inputs UserTypesService.tryBuildType</span>
 <span class="comment">// would silently reject (empty label, unresolvable schema refs).</span>
 <span class="comment">// Without this, a bad-input promotion commits the type block in Phase A,</span>
 <span class="comment">// the subscription drops it, and Phase B's bounded wait surfaces</span>

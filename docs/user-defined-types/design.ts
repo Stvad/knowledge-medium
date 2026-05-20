@@ -415,6 +415,14 @@ export async function promoteToType(
   userTypes: UserTypesService,
   args: PromoteToTypeArgs,
 ): Promise<void> {
+  // Preflight: if the caller's signal is already aborted, return before
+  // touching the DB. waitForTypeRegistrationBounded handles abort during
+  // the Phase A→B wait, but doesn't help if abort happened before Phase
+  // A wrote anything — without this guard, an already-aborted call still
+  // commits the type-definition block and then throws, leaving an
+  // unexpected partial mutation despite cancellation.
+  args.signal?.throwIfAborted()
+
   // Pre-tx validation — fail fast on inputs that UserTypesService's
   // tryBuildType will silently reject, before Phase A writes anything.
   // Without this, a blank label (etc.) commits a block-type block,
@@ -443,6 +451,11 @@ export async function promoteToType(
       )
     }
   }
+
+  // Re-check abort after the async validation reads — if the caller
+  // cancelled during schema-resolution awaits we still want to bail
+  // before committing anything.
+  args.signal?.throwIfAborted()
 
   // Phase A (tx A): turn the target page into a block-type block.
   //   - Read workspaceId from the target before opening the tx (avoids
@@ -492,10 +505,12 @@ export async function promoteToType(
   // bare-DB-read-inside-tx deadlock documented in
   // tasks/processor-tx-deadlock.md), retag each in-tx with strict
   // existence guards on every row.
+  args.signal?.throwIfAborted()
   const candidates = await repo.queryBlocks({
     workspaceId,
     referencedBy: {id: args.targetBlockId, sourceField: 'roam:isa'},
   })
+  args.signal?.throwIfAborted()
 
   await repo.tx(async (tx: Tx) => {
     // Capture the registry snapshot INSIDE the tx body, not before.
