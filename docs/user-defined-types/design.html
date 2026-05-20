@@ -430,6 +430,14 @@ through the same <code>'user-data'</code> source bucket but as a different shape
   <li><code>properties[]</code> &mdash; <b>union</b> with the kernel list, dedup by name via the existing object-identity rule in <code>mergeLiftedSchemas</code> (<span class="file">src/data/repo.ts:178</span>).</li>
   <li><code>label</code> / <code>description</code> &mdash; <b>user wins if set</b>, else kernel.</li>
   <li>Any behavioral field (today: <code>setup</code>) &mdash; <b>kernel only</b>. User-defined types ship no code, so this isn't a regression from the user's side; it's an architectural invariant.</li>
+  <li>
+    <code>block-type:template</code> &mdash; <b>NOT part of the contribution merge</b>. The template refList lives
+    on the source block (the type-definition block carrying the field), and the materializer (&sect;Type templates)
+    reads it directly at type-add time via <code>userTypes.getTypeBlockId(typeId)</code>. The v1 single-source-block
+    model means an override block's own template is currently ignored by the materializer; if a future caller
+    needs override-added templates, widen <code>UserTypesService</code> to track all source blocks per typeId
+    (base + overrides) and have the materializer iterate. Out of scope for Phase 5.
+  </li>
 </ul>
 
 <div class="callout">
@@ -858,7 +866,11 @@ await repo.tx(async tx =&gt; {
 }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${label}`})
 
 <span class="comment">// Subscription rebuild publishes targetBlockId into the user-data bucket</span>
-<span class="comment">// on typesFacet. Wait for it before opening Phase B.</span>
+<span class="comment">// on typesFacet, which re-runs the dependent rebuild step and fires</span>
+<span class="comment">// `repo.onTypesChange`. waitForTypeRegistration listens for that event</span>
+<span class="comment">// (no polling, no timer-based timeout). See design.ts for the helper</span>
+<span class="comment">// and the module augmentation declaring onTypesChange — Phase 1 adds</span>
+<span class="comment">// the kernel-side listener symmetric to onPropertySchemasChange.</span>
 await waitForTypeRegistration(repo, targetBlockId)
 
 <span class="comment">// Phase B: retag instances. queryBlocks must run OUTSIDE the tx — bare DB reads</span>
@@ -954,6 +966,13 @@ await repo.tx(async tx =&gt; {
 <ul class="tight">
   <li>Add <code>blockTypeLabelProp</code>, <code>blockTypeDescriptionProp</code>, <code>blockTypePropertiesProp</code> to <span class="file">src/data/properties.ts</span>.</li>
   <li>Add <code>BLOCK_TYPE_TYPE</code> and <code>TYPES_PAGE_TYPE</code> to <span class="file">src/data/blockTypes.ts</span>; lift the three props onto the contribution.</li>
+  <li>
+    Add <code>Repo.onTypesChange(listener)</code> in <span class="file">src/data/repo.ts</span>, symmetric to
+    the existing <code>onPropertySchemasChange</code> / <code>onValuePresetsChange</code>
+    (<span class="file">src/data/repo.ts:1402</span>). Fires when the rebuild step republishes the merged
+    <code>_types</code> map. Required by <code>promoteToType</code>'s Phase A&rarr;B handoff to avoid the
+    1s-polling shape the design-review caught.
+  </li>
   <li>
     <b>Extract a shared <code>getOrCreateKernelPage</code> helper</b> rather than cloning
     <span class="file">src/data/propertiesPage.ts</span> verbatim. Both pages have the same shape: uuid-v5 from

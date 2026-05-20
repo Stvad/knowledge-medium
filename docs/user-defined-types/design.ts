@@ -32,6 +32,30 @@ import {PAGE_TYPE} from '@/data/blockTypes'
 import {propertySchemasFacet, typesFacet} from '@/data/facets'
 
 // ──────────────────────────────────────────────────────────────────────
+// Phase 1 API addition: Repo.onTypesChange
+//
+// Symmetric to the existing `onPropertySchemasChange` /
+// `onValuePresetsChange` listeners (src/data/repo.ts:1402, :1415).
+// Fires when the rebuild step republishes the merged `_types` map —
+// after a typesFacet contribution change (e.g. UserTypesService's
+// setRuntimeContributions publish lands and the step re-runs).
+//
+// Used by the Roam-isa promotion flow's `waitForTypeRegistration`
+// helper to bridge Phase A (commit type-definition block) and Phase B
+// (retag instances) without polling.
+//
+// Module augmentation here is intentional — the design file declares
+// the API addition concretely so consumers can compile against the
+// shape now; the kernel implementation lands in Phase 1.
+// ──────────────────────────────────────────────────────────────────────
+
+declare module '@/data/repo' {
+  interface Repo {
+    onTypesChange(listener: () => void): () => void
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // 1. Kernel `block-type` type and its slots
 //
 // Symmetric to the `property-schema` kernel type already in
@@ -215,8 +239,17 @@ export interface TypeOverride {
   readonly description?: string
   /** Always-unioned with the target's properties[]; dedup by object identity. */
   readonly properties?: ReadonlyArray<AnyPropertySchema>
-  /** Always-unioned with the target's template[]. */
-  readonly template?: ReadonlyArray<string>
+  // Template membership is intentionally NOT part of the override
+  // merge. `block-type:template` lives on the source block; the
+  // materializer (§5) resolves at runtime by reading the type's
+  // source block(s) directly via UserTypesService. An earlier draft
+  // declared `template` on TypeOverride and noted "always-unioned"
+  // but didn't implement the union (because TypeContribution has no
+  // template field). Dropping the field avoids the silent-mismatch
+  // footgun the design-review caught: an override that declares a
+  // template now stores it on its own block-type:template property,
+  // and the materializer picks it up at type-add time when v1's
+  // single-source-block model is widened to multi-source.
 }
 
 /** Fold overrides into base contributions. Called inside the runtime
@@ -235,9 +268,11 @@ export function mergeTypeOverrides(
       continue
     }
     // Behavioral fields (setup) are kernel-only. The override merge
-    // is metadata-only: properties[] union, template[] union,
-    // label/description user-wins-if-set. setup stays whatever the
-    // base contribution declared.
+    // is metadata-only: properties[] union, label/description
+    // user-wins-if-set. setup stays whatever the base contribution
+    // declared. Template membership is NOT merged here — it lives on
+    // the source block and is resolved at materialization time
+    // (§5, see comment on TypeOverride).
     out.set(ov.target, {
       ...target,
       label: ov.label ?? target.label,
@@ -246,8 +281,6 @@ export function mergeTypeOverrides(
         [...(target.properties ?? []), ...(ov.properties ?? [])],
         s => s.name,
       ),
-      // template is user-data only (no kernel base today, but the
-      // union is still well-defined when both are present).
     })
   }
   return out
@@ -457,26 +490,53 @@ export async function promoteToType(
   }, {scope: ChangeScope.BlockDefault, description: `promoteToType:retag ${args.label}`})
 }
 
-/** Wait for UserTypesService's subscription to publish args.targetBlockId
- *  into the typesFacet runtime bucket. Polls repo.types until the id
- *  appears or a small timeout expires. Polling because the subscription
- *  tick is microtask-bounded and very fast in practice; if it doesn't
- *  fire within the timeout the new type-definition block didn't write
- *  successfully and the second tx would no-op anyway. */
+/** Wait for UserTypesService's subscription to publish `typeId` into
+ *  the typesFacet runtime bucket. Event-driven via `repo.onTypesChange`
+ *  (added in Phase 1, symmetric to the existing
+ *  `onPropertySchemasChange` / `onValuePresetsChange`). No polling, no
+ *  hard-coded timeout: the listener fires when the rebuild step
+ *  republishes after the subscription tick, which can be delayed by
+ *  event-loop load or inactive-tab throttling without harming
+ *  correctness.
+ *
+ *  Note on the deferred follow-up: an event-loop deadline can still be
+ *  added as a sanity bound (e.g. 30s, AbortSignal-aware) once a real
+ *  caller surfaces a "user-cancelled the promotion" UI path. v1 ships
+ *  without one — a stuck registration here means tx A wrote a
+ *  block-type block that doesn't parse into a valid contribution,
+ *  which is a separate bug to surface via diagnostic logs in
+ *  UserTypesService.tryBuildType.
+ *
+ *  Declared on Repo as part of Phase 1 (alongside onPropertySchemasChange):
+ *
+ *    onTypesChange(listener: () => void): () => void
+ *
+ *  Fires when the rebuild step republishes the merged _types map. */
 async function waitForTypeRegistration(
   repo: Repo,
   typeId: string,
-  timeoutMs = 1000,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    if (repo.types.has(typeId)) return
-    if (Date.now() > deadline) {
-      throw new Error(`promoteToType: type ${typeId} did not appear in registry within ${timeoutMs}ms`)
+  if (repo.types.has(typeId)) return
+  await new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error('promoteToType: aborted'))
+      return
     }
-    await new Promise(resolve => setTimeout(resolve, 0))
-  }
+    const dispose = repo.onTypesChange(() => {
+      if (repo.types.has(typeId)) {
+        dispose()
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }
+    })
+    const onAbort = () => {
+      dispose()
+      signal?.removeEventListener('abort', onAbort)
+      reject(new Error('promoteToType: aborted'))
+    }
+    signal?.addEventListener('abort', onAbort)
+  })
 }
 
 // ──────────────────────────────────────────────────────────────────────
