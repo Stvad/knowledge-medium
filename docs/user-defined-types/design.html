@@ -100,6 +100,13 @@ Users author types as blocks &mdash; same shape as user-defined property schemas
 Kernel types get a clean override path. Per-type behavior moves from a <code>setup</code> callback to same-tx processors.
 </p>
 
+<p class="lede">
+<b>Companion file:</b> <a href="design.ts"><code>design.ts</code></a> specifies the type surfaces this doc
+describes by importing real codebase types. Drift between the prose and the codebase fails
+<code>yarn tsc --noEmit --project docs/tsconfig.json</code>. Pattern follows
+<a href="../plugin-runtime-toggle/design.html"><code>plugin-runtime-toggle</code></a>.
+</p>
+
 <h2>The premise has shifted</h2>
 
 <p>
@@ -317,44 +324,30 @@ export class UserTypesService {
     }
   }
 
-  <span class="comment">// Synchronous append used by callers that need a freshly-built</span>
-  <span class="comment">// type to be registered BEFORE their next write (e.g. Roam</span>
-  <span class="comment">// promotion's bulk re-tag step). Mirrors</span>
-  <span class="comment">// UserSchemasService.appendUserSchema at userSchemasService.ts:167.</span>
-  <span class="comment">// The block-write that backs `contribution` is the caller's</span>
-  <span class="comment">// responsibility &mdash; this only updates the runtime bucket so the</span>
-  <span class="comment">// id resolves in addTypeInTx's registry check.</span>
-  <span class="comment">// Look up the current user-data contribution for an id (if any).</span>
-  <span class="comment">// Callers using the synchronous-append pattern peek before</span>
-  <span class="comment">// appending so they can restore the prior value on tx failure</span>
-  <span class="comment">// rather than blindly removing it (which would wipe a legitimate</span>
-  <span class="comment">// pre-existing registration on a retry).</span>
-  peekContribution(typeId: string): {contribution: TypeContribution; blockId: string} | undefined {
-    const contribution = this.contributions.find(t =&gt; t.id === typeId)
-    const blockId = this.nameToBlockId.get(typeId)
-    return contribution && blockId !== undefined ? {contribution, blockId} : undefined
-  }
-
-  appendUserType(contribution: TypeContribution, blockId: string): void {
-    this.contributions = [
-      ...this.contributions.filter(t =&gt; t.id !== contribution.id),
-      contribution,
-    ]
-    this.nameToBlockId.set(contribution.id, blockId)
-    this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
-  }
-
-  <span class="comment">// Symmetric rollback for the synchronous-append path. Callers that</span>
-  <span class="comment">// append before opening a tx use this in a catch arm so a tx</span>
-  <span class="comment">// failure can't leave an orphan in the runtime. The subscription</span>
-  <span class="comment">// would only reconcile on the next block-write, which never fires</span>
-  <span class="comment">// if the tx aborted before writing any block.</span>
-  removeUserType(typeId: string): void {
-    this.contributions = this.contributions.filter(t =&gt; t.id !== typeId)
-    this.nameToBlockId.delete(typeId)
-    this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
+  <span class="comment">// Look up the user-data type contribution's source block id, if any.</span>
+  <span class="comment">// Used by UI surfaces that want to navigate from a `block:types` entry</span>
+  <span class="comment">// back to the type-definition block (e.g. a "edit this type" action</span>
+  <span class="comment">// on a panel section header).</span>
+  getTypeBlockId(typeId: string): string | undefined {
+    return this.nameToBlockId.get(typeId)
   }
 }</code></pre>
+
+<div class="callout muted">
+  <h4>No synchronous-append / rollback primitive in v1</h4>
+  <p style="margin:0">
+    Earlier drafts of this design included <code>appendUserType</code> / <code>removeUserType</code> /
+    <code>peekContribution</code> &mdash; a synchronous-write path symmetric to
+    <code>UserSchemasService.appendUserSchema</code>, intended to register a user-defined type before the in-tx
+    retag step of Roam-isa adoption. <a href="https://github.com/Stvad/knowledge-medium/pull/50">PR #50</a>
+    pursued the same primitive on the schemas service and found it compounds quickly under concurrent overlap
+    review (per-call CAS tokens, committed-only baselines, restore-vs-remove ordering) for a use case the
+    codebase doesn't actually produce. The two-tx Roam-isa adoption flow (&sect;Roam <code>isa</code> adoption)
+    removes the need entirely &mdash; the subscription bridges Phase A and Phase B. If a future caller can prove
+    single-caller-per-name semantics AND genuinely needs single-tx atomicity, a narrow primitive can be added
+    then with a documented contract.
+  </p>
+</div>
 
 <p>
 The bootstrap path (<code>repo</code> construction in <span class="file">src/data/repo.ts</span>) starts the service
@@ -769,132 +762,137 @@ What's missing is <b>promotion</b> &mdash; the action that turns a Roam page (wh
   <figcaption>Roam <code>roam:isa</code> adoption is mechanical because the type id is the target block's id &mdash; the same id Roam <code>[[Person]]</code> references already resolve to.</figcaption>
 </figure>
 
-<p>Order matters here. <code>repo.addTypeInTx</code> verifies the type id is in the merged registry and throws on
-unknown ids (<span class="file">docs/type-system.md</span> &sect;3a, <code>[addType] type id ... is not registered</code>);
-the brand-new <code>targetBlockId</code> isn't in the registry yet at the moment we want to retag instances with it,
-because <code>UserTypesService</code>'s subscription publishes the contribution after the tx commits. The
-service needs the same synchronous-append escape hatch <code>UserSchemasService</code> has
-(<code>appendUserSchema</code> at <span class="file">src/data/userSchemasService.ts:167</span>) &mdash; call it
-<code>appendUserType(contribution, blockId)</code>, same shape, updating the user-data bucket on
-<code>typesFacet</code> synchronously via <code>setRuntimeContributions</code>.</p>
+<p>
+The flow uses <b>two transactions</b> bridged by <code>UserTypesService</code>'s subscription, rather than a single
+tx with a synchronously-registered provisional type. The single-tx approach was explored on
+<a href="https://github.com/Stvad/knowledge-medium/pull/50">PR #50</a> (the parallel
+<code>withProvisionalSchema</code> for the property-schemas service); it compounds quickly under review &mdash;
+per-call CAS tokens, committed-only mirrors, capture-and-restore on failure &mdash; for a use case (concurrent
+overlapping calls for the same name) the codebase doesn't actually produce. Two txs trades one undo entry for a
+trivial concurrency model and a cleaner failure surface. See &sect;Lessons from <code>withProvisionalSchema</code>.
+</p>
 
-<p>With that primitive in place, plus a symmetric <code>removeUserType(typeId)</code> for cleanup:</p>
+<h4>Phase A: commit the type-definition block</h4>
 <ol>
   <li>
-    <b>Before opening the tx</b> &mdash; build the <code>TypeContribution</code> from the action args
-    (<code>id = targetBlockId</code>, <code>label</code>, <code>properties</code> = resolved schemas for
-    <code>propertySchemaIds</code>), then <code>userTypesService.appendUserType(contribution, targetBlockId)</code>.
-    <code>repo.types</code> now includes <code>targetBlockId</code>; the next <code>repo.snapshotTypeRegistries()</code>
-    (taken inside the tx) sees it.
+    Read the target block before opening the tx to capture its <code>workspaceId</code>. Background flows / import
+    runs / UI workspace switches must not silently re-scope to <code>activeWorkspaceId</code> &mdash; per the merged
+    <a href="https://github.com/Stvad/knowledge-medium/pull/48">PR #48</a> <code>repo.queryBlocks</code> now requires
+    <code>workspaceId</code> at the type level, so any code path that omits it fails to compile rather than
+    quietly mis-scoping.
   </li>
   <li>
-    <b>Still before the tx</b> &mdash; resolve the target's workspace and prefilter the instance set.
-    Read the target block to capture its <code>workspaceId</code>, then call
-    <code>repo.queryBlocks({workspaceId, referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code>
-    to get the candidate instance ids. The <code>block_references</code> edge index from
-    <span class="file">type-system.md</span> &sect;6b answers this in one EXISTS. Two reasons this runs <i>outside</i>
-    the tx (see callout):
-    <ul class="tight">
-      <li>
-        <code>repo.queryBlocks</code> reads via <code>ctx.db.getAll</code>, not the active write-tx lock context.
-        Running it inside <code>repo.tx</code> reintroduces the PowerSync queue deadlock documented in
-        <span class="file">tasks/processor-tx-deadlock.md</span> and called out at
-        <span class="file">docs/follow-ups.md:19-21</span>.
-      </li>
-      <li>
-        Explicit <code>workspaceId</code> avoids <code>queryBlocks</code> falling back to
-        <code>activeWorkspaceId</code>, which can differ from the target's workspace during background flows /
-        import runs / UI workspace switches and would silently mis-scope the retag set.
-      </li>
-    </ul>
+    Open tx A. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {label, properties: propertySchemaIds})</code>
+    materializes <code>block-type:label</code> and <code>block-type:properties</code> from the action args, plus
+    appends <code>'block-type'</code> to the target's <code>typesProp</code>. Per merged
+    <a href="https://github.com/Stvad/knowledge-medium/pull/49">PR #49</a> <code>addTypeInTx</code> is strict by
+    default &mdash; throws <code>BlockNotFoundForTypeError</code> if the target was deleted concurrently between the
+    pre-tx <code>load()</code> and tx-open, no silent no-op possible. (Sync-apply / processor paths that legitimately
+    want to no-op on tombstone use the new <code>addTypeInTxLenient</code>; promotion uses strict.)
   </li>
   <li>
-    Open the tx <i>under a try/catch</i>. <code>repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})</code>
-    on the Person page, materializing <code>block-type:label</code> and <code>block-type:properties</code>.
+    Also tag the target with <code>PAGE_TYPE</code> in the same tx if it isn't already &mdash; the "type flow" pattern
+    landed for the Properties page, Readwise root, plugin state, and alias user pages
+    (<span class="file">src/data/propertiesPage.ts</span>). The target stays navigable as a normal page; the new
+    <code>block-type</code> tag is additive, not exclusive.
+  </li>
+</ol>
+
+<h4>Subscription tick (between txs)</h4>
+
+<p>
+Tx A commits. The <code>row_events</code> machinery fires; <code>UserTypesService.subscribeBlocks({types: [BLOCK_TYPE_TYPE]})</code>
+sees the new row, rebuilds its contribution list, and publishes via
+<code>repo.setRuntimeContributions(typesFacet, 'user-data', ...)</code>. <code>repo.types</code> now contains
+<code>targetBlockId</code> as a registered type id. No synchronous-append dance; the subscription bridges the txs.
+</p>
+
+<h4>Phase B: retag isa instances</h4>
+<ol start="4">
+  <li>
+    Prefilter candidate instances OUTSIDE the tx via
+    <code>repo.queryBlocks({workspaceId, referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP}})</code>.
+    The <code>block_references</code> edge index from <span class="file">type-system.md</span> &sect;6b answers this
+    in one EXISTS. Outside-the-tx because <code>queryBlocks</code> reads via <code>ctx.db.getAll</code> on the read
+    DB handle; running it inside <code>repo.tx</code> reintroduces the PowerSync queue deadlock documented in
+    <span class="file">tasks/processor-tx-deadlock.md</span>.
   </li>
   <li>
-    For each prefiltered instance id, re-read in-tx via <code>tx.get(instanceId)</code> (cheap; the writer slot
-    is already held) and skip if the row is gone or no longer carries the <code>roam:isa</code> ref to the target
-    &mdash; the TOCTOU narrow guard. For survivors,
-    <code>repo.addTypeInTx(tx, instanceId, targetBlockId, {})</code> appends the new type id to
-    <code>block:types</code>. The id resolves because step 1 already registered it. Any
-    <code>sameTxProcessor</code> watching the field fires per row.
+    Open tx B. For each prefiltered candidate, <code>tx.get(candidateId)</code> re-checks the row (closes the
+    TOCTOU window — the candidate may have been deleted or had its <code>roam:isa</code> rewritten between the
+    pre-tx query and tx-open). If the row still references the target, <code>repo.addTypeInTx(tx, candidateId,
+    targetBlockId, {})</code> appends the new type id to <code>block:types</code>. The id resolves because the
+    subscription registered it in the interval.
   </li>
   <li>
     If <code>rewriteIsaReferences</code>: rewrite the <code>roam:isa</code> refList on each instance, dropping the
-    promoted alias. Default off &mdash; users typically want both for a while.
-  </li>
-  <li>
-    <b>On tx failure</b>: in the catch arm, call <code>userTypesService.removeUserType(targetBlockId)</code>
-    explicitly, then rethrow. Don't rely on the next subscription rebuild to clean up &mdash; see callout below.
+    promoted alias. Default off &mdash; users typically want both for a while as the promotion settles.
   </li>
 </ol>
 
 <pre><code>const target = await repo.load(targetBlockId)
+if (!target) throw new Error(`promoteToType: target ${targetBlockId} not found`)
 const workspaceId = target.workspaceId
+
+<span class="comment">// Phase A: commit the type-definition block. addTypeInTx is strict-by-default</span>
+<span class="comment">// per PR #49 — throws if targetBlockId is missing/tombstoned at tx-start.</span>
+const snapshotA = repo.snapshotTypeRegistries()
+await repo.tx(async tx =&gt; {
+  await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {
+    [blockTypeLabelProp.name]: label,
+    [blockTypePropertiesProp.name]: propertySchemaIds,
+  }, snapshotA)
+  await repo.addTypeInTx(tx, targetBlockId, PAGE_TYPE, {}, snapshotA)
+}, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${label}`})
+
+<span class="comment">// Subscription rebuild publishes targetBlockId into the user-data bucket</span>
+<span class="comment">// on typesFacet. Wait for it before opening Phase B.</span>
+await waitForTypeRegistration(repo, targetBlockId)
+
+<span class="comment">// Phase B: retag instances. queryBlocks must run OUTSIDE the tx — bare DB reads</span>
+<span class="comment">// inside repo.tx reintroduce the PowerSync queue deadlock (follow-ups.md:19-21).</span>
 const candidates = await repo.queryBlocks({
   workspaceId,
   referencedBy: {id: targetBlockId, sourceField: ROAM_ISA_PROP},
 })
 
-<span class="comment">// Capture the prior user-data contribution for this id (if any).</span>
-<span class="comment">// Restored on tx failure rather than blindly removed &mdash; see</span>
-<span class="comment">// "Rollback must preserve prior registration" callout.</span>
-const prior = userTypesService.peekContribution(targetBlockId)
-userTypesService.appendUserType(contribution, targetBlockId)
-try {
-  await repo.tx(async tx =&gt; {
-    <span class="comment">// In-tx guard: the target may have been deleted concurrently</span>
-    <span class="comment">// between our pre-tx load() and the tx opening. addTypeInTx is a</span>
-    <span class="comment">// no-op when tx.get(blockId) returns null (src/data/repo.ts) so</span>
-    <span class="comment">// without this guard the loop below would happily tag N instances</span>
-    <span class="comment">// with a type id whose backing block doesn't exist. Throwing here</span>
-    <span class="comment">// aborts the tx and triggers the rollback path below.</span>
-    const targetInTx = await tx.get(targetBlockId)
-    if (!targetInTx || targetInTx.deleted) {
-      throw new Error(`promoteToType: target ${targetBlockId} no longer exists`)
-    }
-    await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {...})
-
-    for (const candidate of candidates) {
-      const row = await tx.get(candidate.id)
-      if (!row) continue                          <span class="comment">// deleted between prefilter and tx</span>
-      const isaRefs = row.properties[ROAM_ISA_PROP] ?? []
-      if (!resolveRoamIsaTargets(isaRefs).includes(targetBlockId)) continue   <span class="comment">// no longer references target</span>
-      await repo.addTypeInTx(tx, candidate.id, targetBlockId, {})
-    }
-    if (rewriteIsaReferences) <span class="comment">/* ... */</span>
-  })
-} catch (err) {
-  if (prior) {
-    userTypesService.appendUserType(prior.contribution, prior.blockId)   <span class="comment">// restore</span>
-  } else {
-    userTypesService.removeUserType(targetBlockId)                       <span class="comment">// drop provisional</span>
+const snapshotB = repo.snapshotTypeRegistries()
+await repo.tx(async tx =&gt; {
+  for (const candidate of candidates) {
+    const row = await tx.get(candidate.id)
+    if (!row) continue                          <span class="comment">// deleted between prefilter and tx</span>
+    const isaRefs = row.properties[ROAM_ISA_PROP] ?? []
+    if (!resolveRoamIsaTargets(isaRefs).includes(targetBlockId)) continue
+    await repo.addTypeInTx(tx, candidate.id, targetBlockId, {}, snapshotB)
   }
-  throw err
-}</code></pre>
+  if (rewriteIsaReferences) <span class="comment">/* ... */</span>
+}, {scope: ChangeScope.BlockDefault, description: `promoteToType:retag ${label}`})</code></pre>
 
-<div class="callout warn">
-  <h4>In-tx existence guard for the target</h4>
+<div class="callout">
+  <h4>Why two txs, not one</h4>
+  <p style="margin:0 0 .4rem">
+    The single-tx alternative needs to <i>register</i> the new user-defined type before <code>addTypeInTx</code>
+    sees it. That's a <code>setRuntimeContributions</code> call BEFORE opening the tx, plus a rollback on tx
+    failure. <a href="https://github.com/Stvad/knowledge-medium/pull/50">PR #50</a> explored this shape on the
+    parallel <code>UserSchemasService</code>; the rollback semantics compound under review (CAS tokens,
+    committed-only baselines, retry safety) every round, for a concurrent-overlap scenario the codebase has zero
+    callers for.
+  </p>
   <p style="margin:0">
-    <code>repo.addTypeInTx(tx, blockId, ...)</code> silently no-ops when <code>tx.get(blockId)</code> returns null
-    or a tombstone &mdash; reasonable behavior on sync-applied deletes where another device removed the row, but
-    a footgun for orchestration code that's about to fan out work tied to the target. Without the explicit
-    <code>tx.get</code> + <code>deleted</code> check, a concurrent delete between the pre-tx <code>load()</code> and
-    the tx opening would let the loop persist <code>targetBlockId</code> on every candidate's <code>block:types</code>
-    while the target itself stays a non-<code>block-type</code> tombstone. The next runtime rebuild then drops the
-    provisional registration, leaving orphan ids on N rows.
+    Two txs sidestep the entire mechanism. The cost is one extra undo entry (create-type, then retag) instead of
+    one combined entry. Acceptable: users will reasonably think of them as two operations anyway, and an undo of
+    just-the-retag leaves the type definition intact, which is the right shape if they want to redo the retag
+    with a different property set.
   </p>
 </div>
 
-<div class="callout warn">
-  <h4>Rollback must preserve prior registration</h4>
+<div class="callout">
+  <h4>In-tx existence is enforced by strict <code>addTypeInTx</code></h4>
   <p style="margin:0">
-    A retry on an already-promoted target (e.g. user re-runs promotion with a different property set) has
-    <code>peekContribution(targetBlockId)</code> returning the existing user-data contribution. An unconditional
-    <code>removeUserType</code> on tx failure would wipe that legitimate registration, breaking every block
-    currently tagged with this id until the next subscription tick reconciles. Capture-and-restore is the right
-    primitive: <code>peek &rarr; append &rarr; on-failure-restore-or-drop</code>.
+    With <a href="https://github.com/Stvad/knowledge-medium/pull/49">PR #49</a> landed, <code>addTypeInTx</code>
+    throws <code>BlockNotFoundForTypeError</code> when the target row is missing or tombstoned. No explicit
+    <code>tx.get</code> + <code>deleted</code> guard is needed before the addType call &mdash; the API surface
+    encodes the invariant.
   </p>
 </div>
 
@@ -917,23 +915,6 @@ try {
   </p>
 </div>
 
-<div class="callout warn">
-  <h4>Why explicit rollback &mdash; subscription rebuild isn't enough</h4>
-  <p style="margin:0 0 .4rem">
-    The subscription that reconciles user-data type contributions from blocks fires <i>only on block writes</i>.
-    A tx that fails before writing any <code>block-type</code> block (validation error, mid-tx exception, abort
-    signal) doesn't trigger a subscription tick, so the provisionally-registered <code>targetBlockId</code>
-    persists in the runtime indefinitely. During that window <code>repo.addTypeInTx(_, _, targetBlockId, {})</code>
-    from any other caller would succeed, attaching an orphan type id to unrelated blocks.
-  </p>
-  <p style="margin:0">
-    Explicit <code>removeUserType</code> on the catch arm closes the window. The asymmetry vs. <code>addSchema</code>
-    (which appends after commit and doesn't need rollback) is justified by the in-tx dependency: step 4's
-    <code>addTypeInTx</code> calls need the registration to be visible before the tx commits, so the registration
-    has to precede the writes that depend on it.
-  </p>
-</div>
-
 <p>Two surfaces use the primitive:</p>
 <ul class="tight">
   <li>
@@ -949,16 +930,21 @@ try {
 
 <h2>Phasing</h2>
 
-<p>Each phase ships independently. Earlier phases don't depend on the deferred follow-ups in
-<span class="file">type-system.md</span>.</p>
+<p>Each phase ships independently.</p>
+
+<p><b>Prerequisites already landed on master:</b></p>
+<ul class="tight">
+  <li><a href="https://github.com/Stvad/knowledge-medium/pull/48">PR #48</a> &mdash; <code>workspaceId</code> required on <code>repo.queryBlocks</code> / <code>subscribeBlocks</code> (active-workspace callers use <code>queryActiveWorkspace</code>). Phase 4 below depends on the explicit-workspace contract.</li>
+  <li><a href="https://github.com/Stvad/knowledge-medium/pull/49">PR #49</a> &mdash; <code>addTypeInTx</code> strict-by-default; throws <code>BlockNotFoundForTypeError</code> on missing/tombstoned blocks. The lenient variant (<code>addTypeInTxLenient</code>) is opt-in for sync-apply paths only. Phase 4 below relies on strict semantics for the in-tx existence guard.</li>
+</ul>
 
 <h3>Phase 1 &mdash; <code>block-type</code> kernel type + Types page + UserTypesService</h3>
 <ul class="tight">
   <li>Add <code>blockTypeLabelProp</code>, <code>blockTypeDescriptionProp</code>, <code>blockTypePropertiesProp</code> to <span class="file">src/data/properties.ts</span>.</li>
   <li>Add <code>BLOCK_TYPE_TYPE</code> and <code>TYPES_PAGE_TYPE</code> to <span class="file">src/data/blockTypes.ts</span>; lift the three props onto the contribution.</li>
-  <li><span class="file">src/data/typesPage.ts</span> new &mdash; bootstrap helper near-clone of <span class="file">src/data/propertiesPage.ts</span>.</li>
-  <li><span class="file">src/data/userTypesService.ts</span> new &mdash; subscribe, build contributions, publish to <code>typesFacet</code>'s <code>'user-data'</code> bucket.</li>
-  <li>Start <code>UserTypesService</code> in <code>Repo</code> bootstrap, right after <code>UserSchemasService</code>.</li>
+  <li><span class="file">src/data/typesPage.ts</span> new &mdash; bootstrap helper near-clone of <span class="file">src/data/propertiesPage.ts</span>. <b>Type-flow pattern:</b> the Types page itself gets BOTH <code>PAGE_TYPE</code> AND <code>TYPES_PAGE_TYPE</code> tagged in its bootstrap tx, matching the convention now used by the Properties page (<span class="file">src/data/propertiesPage.ts</span>), Readwise root, plugin state, and alias user pages. Keeps the Types page navigable as a normal page while still findable via <code>block_types</code>-keyed lookups.</li>
+  <li><span class="file">src/data/userTypesService.ts</span> new &mdash; subscribe, build contributions, publish to <code>typesFacet</code>'s <code>'user-data'</code> bucket. Public surface: <code>start(workspaceId)</code>, <code>dispose</code>, <code>getTypeBlockId(typeId)</code>. No <code>appendUserType</code> / <code>peekContribution</code> / <code>removeUserType</code> &mdash; see &sect;Lessons.</li>
+  <li>Start <code>UserTypesService</code> in <code>Repo</code> bootstrap, right after <code>UserSchemasService</code>. Pin workspace at <code>start()</code> time; restart on workspace switch.</li>
   <li>Block renderer for <code>block-type</code> blocks (parallel to <span class="file">src/components/renderer/PropertySchemaBlockRenderer.tsx</span>): label / description / property-ref multi-picker.</li>
   <li>"New type" command on the Types page.</li>
 </ul>
@@ -968,14 +954,14 @@ try {
 <ul class="tight">
   <li>Add <code>blockTypeExtendsProp</code> to <span class="file">src/data/properties.ts</span>.</li>
   <li>Extend <code>UserTypesService.tryBuildType</code> to emit override records when <code>extends</code> is set.</li>
-  <li>Extend the rebuild step at <span class="file">src/data/repo.ts:1783</span> to fold overrides into the base contribution post-combine. Drop overrides whose <code>extends</code> target doesn't resolve, log a diagnostic.</li>
+  <li>Extend the rebuild step that populates <code>_types</code> on <code>Repo</code> to fold overrides into the base contribution post-combine via <code>mergeTypeOverrides</code> (see <a href="design.ts"><code>design.ts</code></a>). Drop overrides whose <code>extends</code> target doesn't resolve, log a diagnostic.</li>
   <li>Renderer surfaces an "extends" picker; tested against a kernel type (e.g., <code>daily-note</code>) plus a user type.</li>
 </ul>
 <p><b>Acceptance:</b> an override block extending <code>daily-note</code> with <code>[weather, mood]</code> adds those slots to every daily-note panel; kernel-defined behavior on daily-note is unchanged.</p>
 
 <h3>Phase 3 &mdash; replace <code>setup</code> with same-tx processors</h3>
 <ul class="tight">
-  <li>Add <code>addedTypes</code> / <code>removedTypes</code> helpers to <span class="file">src/data/properties.ts</span>.</li>
+  <li>Add <code>addedTypes</code> / <code>removedTypes</code> helpers to <span class="file">src/data/properties.ts</span>. Null-guard <code>row.before</code> and <code>row.after</code> &mdash; hard-deletes have <code>after === null</code>, inserts have <code>before === null</code>.</li>
   <li>Strip <code>setup</code> from <code>TypeContribution</code>; remove the orchestration calls in <code>repo.addType</code> / <code>addTypeInTx</code>.</li>
   <li>Update <span class="file">docs/type-system.md</span> &sect;3a, &sect;3a-setup, &sect;5 to match.</li>
   <li>Migrate any existing in-code <code>setup</code> use to <code>sameTxProcessorsFacet</code> contributions (kernel today: none, per audit).</li>
@@ -984,30 +970,211 @@ try {
 
 <h3>Phase 4 &mdash; Roam <code>isa</code> adoption</h3>
 <ul class="tight">
-  <li><code>promoteToType</code> action in <span class="file">src/plugins/roam-import/</span>.</li>
+  <li><code>promoteToType</code> action in <span class="file">src/plugins/roam-import/</span>, two-tx shape per &sect;Roam <code>isa</code> adoption.</li>
   <li>UI: "Adopt as type" button per high-confidence candidate in the import report; column of property checkboxes pre-checked at <code>&ge;50%</code> frequency.</li>
   <li>Standalone action on any page registered as a <code>roam:isa</code> target.</li>
   <li>Optional <code>rewriteIsaReferences</code> flag; default off.</li>
 </ul>
-<p><b>Acceptance:</b> on a Roam import with 53 blocks tagged <code>is a [[Person]]</code>, promoting Person turns the page into a <code>block-type</code> and re-tags all 53 instances; the Person panel section in the property panel reflects the chosen schemas.</p>
+<p><b>Acceptance:</b> on a Roam import with 53 blocks tagged <code>is a [[Person]]</code>, promoting Person turns the page into a <code>block-type</code> and re-tags all 53 instances; the Person panel section in the property panel reflects the chosen schemas. Locally completing a block's local edits and reattempting promotion leaves the local state untouched on the retag pass (since strict <code>addTypeInTx</code> on already-typed blocks is a no-op).</p>
+
+<h3>Phase 5 &mdash; <code>block-type:template</code> (optional, deferred until first consumer)</h3>
+<ul class="tight">
+  <li>Add <code>blockTypeTemplateProp</code> as a refList on the <code>block-type</code> contribution.</li>
+  <li><code>typeTemplateMaterializer</code> same-tx processor in <span class="file">src/plugins/user-types/</span> (or a dedicated <code>user-types</code> plugin) per <a href="design.ts"><code>design.ts</code></a>. Watches <code>properties</code>; on each <code>addedTypes(row).includes(typeId)</code> match, walks the type's <code>block-type:template</code> refList and clones each root's <i>descendants</i> under the instance via <code>tx.run(createChild, ...)</code>. Idempotent per row (init-if-missing) so a re-add doesn't duplicate.</li>
+  <li><code>templateCycleGuard</code> same-tx processor watches <code>properties</code> + <code>parentId</code> and throws <code>ProcessorRejection('userTypes.templateCycle')</code> when a write would create a self-referential cycle (e.g., a block typed X moved into the subtree of X's template root).</li>
+  <li>Driver / consumer: the recurring-tasks design (parallel work) builds on this for its template-spawn flow.</li>
+</ul>
+<p><b>Acceptance:</b> a <code>block-type</code> with <code>block-type:template = [[Meeting template]]</code> materializes <i>Attendees</i> / <i>Agenda</i> / <i>Action items</i> children under a new instance on type-add. Moving an instance into the meeting-template subtree throws the cycle-guard rejection; the move is rolled back.</p>
+
+<h2>Type templates &mdash; <code>block-type:template</code></h2>
+
+<p>
+Some types want to materialize a structured subtree under every new instance. The Roam-imported
+&ldquo;meeting&rdquo; type wants <i>Attendees</i> / <i>Agenda</i> / <i>Action items</i> child blocks; a
+&ldquo;weekly review&rdquo; type wants its standard rubric. The replaced-setup design (&sect;Replace
+<code>setup</code> with same-tx processors) handles the materialization mechanism; what's left to specify is the
+data shape of the template itself.
+</p>
+
+<p>
+A new property on the kernel <code>block-type</code> type: <code>block-type:template</code>, a refList of root
+blocks whose subtrees act as templates. When the type is first added to an instance, a same-tx processor
+materializes those subtrees under the instance.
+</p>
+
+<h3>The type-definition block is the user's block</h3>
+
+<p>
+A user-defined type is just a block. Marking a block as a type (via the type-system UI, or via the
+recurring-tasks template flow that builds on this) turns that <i>same</i> block into the type definition. It
+remains a navigable, editable page. Its subtree, if any, is what becomes the template. <b>One block, dual
+role.</b>
+</p>
+
+<p>
+This is worth saying out loud rather than leaving implicit. The alternative shape &mdash; a hidden type-definition
+block plus a refList back to user-visible content &mdash; is a worse mental model and forces every consumer to
+thread the indirection. Naming the dual-role intent here prevents a future maintainer from "tidying up" the
+redundancy and re-introducing the indirection.
+</p>
+
+<h3>Descendants-only materialization</h3>
+
+<p>
+When the processor materializes a template, it clones <b>the children</b> of each referenced root, not the root
+itself. The new instance gets those children attached directly underneath; the template root is never
+duplicated.
+</p>
+
+<ul class="tight">
+  <li>
+    <b>Include-root would surprise.</b> A &ldquo;meeting&rdquo; instance with a duplicate
+    <code>[[Meeting]]</code>-typed root block as its first child reads as a bug, not a feature.
+  </li>
+  <li>
+    <b>Descendants-only composes with every existing child-add path.</b> <code>createChild</code> /
+    <code>tx.run(createChild, ...)</code> already appends children under a parent; the materializer is the same
+    shape repeated for each template root's children.
+  </li>
+</ul>
+
+<p>
+A future use case for include-root materialization (where you really do want the root cloned along with its
+subtree) gets a separately-named slot (<code>block-type:template-root-included</code> or similar) rather than
+flipping the semantics of the existing one. Changing this after consumers exist is painful.
+</p>
+
+<h3>Cycle detection at tx-time</h3>
+
+<p>
+Easy to construct accidentally: user drags an instance back into a template subtree, or makes a typed block
+itself a template root for its own type. Materialization then recurses indefinitely.
+</p>
+
+<p>
+Reject at the moment the cycle is created, not at materialization time. A same-tx processor watches
+<code>typesProp</code> changes and <code>parentId</code> changes. For each affected row it walks the
+parent chain looking for an ancestor B such that any of the row's current types appears in B's
+<code>block-type:template</code> refList; if found, <code>throw new ProcessorRejection('userTypes.templateCycle', ...)</code>
+with the offending pair so the toast surface can format a clear &ldquo;this block can't be moved into its own
+type's template&rdquo; message.
+</p>
+
+<p>
+Tx-time rejection is preferable to a depth-guard at materialization for the same reason most validation should
+live at the boundary: the error surface is the action the user took, not a downstream symptom. A depth-guard
+catches recursion ("hit recursion limit during template materialization") but leaves the underlying cycle
+intact. Rejecting at the move/tag-add prevents the cycle from being persisted at all.
+</p>
+
+<p>
+See <code>templateCycleGuard</code> in <a href="design.ts"><code>design.ts</code></a> for the watch surface;
+implementation goes in <span class="file">src/plugins/user-types/</span> (or wherever the user-types plugin lands).
+</p>
+
+<h2>Lessons from <code>withProvisionalSchema</code></h2>
+
+<p>
+<a href="https://github.com/Stvad/knowledge-medium/pull/50">PR #50</a> built a capture-and-restore primitive on
+<code>UserSchemasService</code> for exactly the pattern this design's earlier draft applied to the Roam-isa
+adoption flow: register a contribution synchronously before an in-tx write that depends on it, roll back the
+registration if the tx fails. The PR closed without merging; the doc was updated in this round to drop the
+analogous primitive. The reasons are worth pinning down because they apply to any future "register +
+in-tx-dependent" pattern in this codebase.
+</p>
+
+<h3>What review surfaced, in order</h3>
+
+<ol>
+  <li>
+    <b>Unconditional <code>remove</code> on rollback wipes legit prior registrations.</b> A retry on an already-
+    registered name finds the prior entry, and unconditional removal erases it.
+    <i>Fix:</i> capture prior, restore-or-remove based on what was there.
+  </li>
+  <li>
+    <b>The captured prior can be stale if a concurrent caller has already overwritten the slot.</b>
+    <i>Fix:</i> compare-and-swap on the live entry before rolling back.
+  </li>
+  <li>
+    <b>CAS by <code>blockId</code> isn't unique enough.</b> Two concurrent calls for the same
+    <code>(name, blockId)</code> (retries / dupe submits) share the field.
+    <i>Fix:</i> per-call CAS token, stored in a parallel map; every mutation generates a fresh symbol.
+  </li>
+  <li>
+    <b>The captured prior can be another in-flight provisional, not a committed entry.</b> If A appends, B starts
+    and captures A as prior, then both fail: A skips rollback (token mismatch), B "restores" A &mdash; leaving a
+    failed provisional registered with no successful tx behind it.
+    <i>Fix:</i> track a committed-only mirror updated by successful operations only; rollback uses the committed
+    baseline, not the live peek.
+  </li>
+  <li>
+    <b>Success-path token check skips committed promotion under overlap.</b> If A's tx succeeds while B's
+    provisional has overwritten A's live token, the success guard fails the CAS and never promotes A to committed.
+    A subsequent B-failure rollback then wipes A's never-committed-but-real registration.
+    <i>Fix:</i> commit-on-success regardless of token state &mdash; which then has ordering issues with intervening
+    external commits, which the next round would have found.
+  </li>
+</ol>
+
+<h3>The shape of the failure mode</h3>
+
+<p>
+Each fix above is correct. Each one made the primitive heavier, and each round of review found a deeper
+edge case &mdash; entirely because the primitive had taken on responsibility for arbitrary concurrent-overlap
+correctness on a slot that the codebase doesn't actually contend on. The class of bug is unbounded: the API
+surface keeps growing to handle interleavings that don't happen.
+</p>
+
+<h3>What this design does instead</h3>
+
+<ul class="tight">
+  <li>
+    <b>No <code>withProvisionalType</code>, no <code>appendUserType</code>, no <code>peekContribution</code>.</b>
+    <code>UserTypesService</code> exposes only the read-side surface (<code>getTypeBlockId</code>) needed by UI.
+    Block writes go through the kernel orchestration entry points (<code>addTypeInTx</code> etc.) which already
+    handle the strict/lenient distinction and reject on missing/tombstoned blocks
+    (<a href="https://github.com/Stvad/knowledge-medium/pull/49">PR #49</a>).
+  </li>
+  <li>
+    <b>Where in-tx dependents exist, use two txs.</b> The Roam-isa adoption flow commits the type-definition
+    block in tx A, lets the subscription rebuild register the type, then opens tx B for the bulk retag. Two undo
+    entries instead of one; trivial concurrency model; no rollback machinery.
+  </li>
+  <li>
+    <b>If a future caller needs single-tx atomicity, design the primitive against that caller's actual
+    interleavings.</b> Single-caller-per-name semantics make this trivial. Arbitrary concurrent overlap is a much
+    deeper invariant; defer until there's a real caller that needs it.
+  </li>
+</ul>
+
+<p>
+The deeper meta-lesson: <b>design-time spec rigor on concurrency edge cases isn't free</b>. Each "what if two
+callers&hellip;" question that can be sidestepped at the design level by ordering txs differently or narrowing
+the API surface is worth sidestepping. The places where it truly can't be sidestepped &mdash; same-tx processors
+on user-driven property edits, post-commit processors on sync-applied writes &mdash; have their concurrency model
+documented at the primitive level (commit pipeline order, row_events tail semantics) and consumers compose
+against that documented model rather than re-deriving invariants per-feature.
+</p>
 
 <h2>What's deferred</h2>
 <ul class="tight">
-  <li><b>Type templates as data.</b> A subtree to materialize on instance creation, declared on the type-definition block via a <code>block-type:template</code> refList. Once the same-tx processor pattern is established, a single generic <code>typeTemplateProcessor</code> can dispatch from data. Defer until at least one type wants this in practice.</li>
   <li><b>Type inheritance for user types.</b> A user type extending <i>another user type</i> rather than a kernel type. The override merge already handles "child extends parent" semantics; only the resolver loop guard (cycle detection) is missing.</li>
   <li><b>Required-field validation on add.</b> A type-definition block lists which of its <code>properties[]</code> are required; a same-tx processor rejects writes that leave them unset. Easy once Phase 3 lands.</li>
   <li><b>Property-schema authoring inline with the type.</b> Today the user creates schemas on the Properties page, then refs them from a type on the Types page. A combined "type editor" surface that creates schemas as side-effects of editing a type is ergonomic but not necessary for v1.</li>
   <li><b>Bulk reimport-time auto-promotion.</b> The import currently <i>suggests</i>; this design's promotion stays user-triggered. Heuristic-based auto-promotion at import time is plausible but a separate UX call.</li>
+  <li><b>Include-root template materialization.</b> &sect;Type templates fixes descendants-only as the default. A separate slot for include-root semantics (when the template root itself should be cloned) is plausible but no current consumer.</li>
 </ul>
 
 <h2>Decisions locked in</h2>
 <ul class="tight">
-  <li>User-defined types are blocks of kernel type <code>block-type</code>, hosted on a per-workspace Types page.</li>
+  <li>User-defined types are blocks of kernel type <code>block-type</code>, hosted on a per-workspace Types page. The Types page itself follows the type-flow pattern: tagged with both <code>PAGE_TYPE</code> and <code>TYPES_PAGE_TYPE</code> at bootstrap.</li>
   <li>Type id is the block id. Display label is <code>block-type:label</code>. The picker shows the label; <code>block:types</code> arrays carry ids.</li>
-  <li>Override existing types via <code>block-type:extends</code>; merge at the rebuild step, never destructive.</li>
-  <li>Behavioral fields (today: <code>setup</code>) cannot come from data. The merge rule is "kernel only" for those.</li>
+  <li>A type-definition block is the user's block, not a hidden shadow. One block, dual role &mdash; navigable as a page, its subtree (if any) acts as the type template.</li>
+  <li>Override existing types via <code>block-type:extends</code>; merge at the rebuild step, never destructive. <code>properties[]</code> union, label/description user-wins-if-set, behavioral fields kernel-only.</li>
   <li>Replace <code>setup</code> with same-tx processors for atomic per-add behavior. Type contributions become pure metadata. Do this before any current kernel use lands. Behaviors that must run on sync-applied type changes from other devices use a separate post-commit processor on the row_events tail (same path <code>parseReferences</code> uses).</li>
-  <li>Roam <code>isa</code> adoption rides one primitive (<code>promoteToType</code>) usable from import time or after-the-fact.</li>
+  <li>Roam <code>isa</code> adoption rides one primitive (<code>promoteToType</code>) usable from import time or after-the-fact. <b>Two-tx flow</b> bridged by the subscription rebuild &mdash; no <code>withProvisional</code>-style primitive (per &sect;Lessons).</li>
+  <li>Template materialization (Phase 5): refList on <code>block-type:template</code>; descendants-only clone (root not duplicated); cycle detection at tx-time via a <code>ProcessorRejection</code>.</li>
+  <li><b>Companion <code>design.ts</code> typechecks against real codebase types.</b> Drift between this prose and the codebase fails <code>yarn tsc --noEmit --project docs/tsconfig.json</code>.</li>
 </ul>
 
 </body>
