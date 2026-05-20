@@ -31,6 +31,7 @@
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.41.1",
+    "@floating-ui/dom": "^1.7.0",
     "@journeyapps/wa-sqlite": "^1.7.0",
     "@powersync/common": "^1.53.1",
     "@powersync/react": "^1.10.0",

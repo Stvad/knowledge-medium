@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils.ts'
+import { useAnchoredFloating } from '@/components/ui/anchored-floating.ts'
 import { useAppRuntime } from '@/extensions/runtimeContext.ts'
 import { useRepo } from '@/context/repo.tsx'
 import { useIsMobile } from '@/utils/react.tsx'
@@ -29,8 +30,13 @@ import {
   type OpenReschedulePickerEventDetail,
 } from './rescheduleEvents.ts'
 
-const DESKTOP_PANEL_WIDTH = 448
 const DESKTOP_PANEL_MARGIN = 8
+const DESKTOP_FALLBACK_POSITION: CSSProperties = {
+  left: '50%',
+  position: 'fixed',
+  top: '50%',
+  transform: 'translate(-50%, -50%)',
+}
 const STRIP_PAST_DAYS = 7
 const STRIP_FUTURE_DAYS = 60
 const STRIP_CELL_WIDTH_PX = 48
@@ -68,25 +74,6 @@ const QUICK_CHIPS: readonly {label: string; offset: number}[] = [
   {label: '+1w', offset: 7},
   {label: '+1m', offset: 30},
 ]
-
-const desktopPickerPosition = (
-  anchorRect: ReschedulePickerAnchorRect | null,
-): CSSProperties => {
-  if (!anchorRect || typeof window === 'undefined') {
-    return {left: '50%', top: '50%', transform: 'translate(-50%, -50%)'}
-  }
-
-  const centeredLeft = anchorRect.left + anchorRect.width / 2 - DESKTOP_PANEL_WIDTH / 2
-  const left = Math.min(
-    Math.max(DESKTOP_PANEL_MARGIN, centeredLeft),
-    Math.max(DESKTOP_PANEL_MARGIN, window.innerWidth - DESKTOP_PANEL_WIDTH - DESKTOP_PANEL_MARGIN),
-  )
-
-  return {
-    left,
-    top: anchorRect.bottom + DESKTOP_PANEL_MARGIN,
-  }
-}
 
 interface ActiveSession {
   blockId: string
@@ -195,10 +182,14 @@ export const ReschedulePicker = () => {
     () => session ? buildStripCells(session.initialIso) : [],
     [session],
   )
-  const desktopPosition = useMemo(
-    () => isMobile ? undefined : desktopPickerPosition(anchorRect),
-    [anchorRect, isMobile],
-  )
+  const desktopFloating = useAnchoredFloating({
+    open: Boolean(session && !isMobile),
+    anchorRect,
+    gap: DESKTOP_PANEL_MARGIN,
+    viewportMargin: DESKTOP_PANEL_MARGIN,
+    fallbackStyle: DESKTOP_FALLBACK_POSITION,
+  })
+  const desktopPosition = isMobile ? undefined : desktopFloating.floatingStyle
 
   // Center the strip on the initial date the first time it appears, then
   // never auto-scroll again — the user's manual scroll position is more
@@ -270,6 +261,7 @@ export const ReschedulePicker = () => {
         onClick={dismiss}
       />
       <div
+        ref={isMobile ? undefined : desktopFloating.setFloatingElement}
         role="dialog"
         aria-label="Reschedule block"
         aria-busy={pending || undefined}
