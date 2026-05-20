@@ -56,12 +56,6 @@ export function getBoundary(node: unknown): Togglable | undefined {
   return (node as BoundaryArray)[BOUNDARY]
 }
 
-function unwrapBoundary(node: AppExtension): AppExtension {
-  // markBoundary always produces [inner]. Defensive: if the shape has
-  // drifted we return as-is rather than corrupt the contribution tree.
-  if (Array.isArray(node) && node.length === 1) return node[0] as AppExtension
-  return node
-}
 
 // ──────────────────────────────────────────────────────────────────────
 // 2. Constrained factories
@@ -472,7 +466,14 @@ export async function loadDynamicExtensions(
     try {
       const compiled = await compileExtensionModule(block.content, block.id)
       exported = compiled.module.default
-    } catch {
+    } catch (error) {
+      // Compile/import failure for an enabled extension. Still emit a
+      // shell so the row appears in settings and the user can disable
+      // the broken extension. Errors continue to flow through
+      // ExtensionLoadErrorStore so the UI can show a status icon next
+      // to the row.
+      console.error(`Failed to load extension ${block.id}`, error)
+      collected.push(userExtensionShellToggle(block).of([]))
       continue
     }
 

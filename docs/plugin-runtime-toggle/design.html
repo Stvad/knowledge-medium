@@ -402,7 +402,11 @@ export const staticAppExtensions = ({repo}) => [
       accept anything else. The loader detects the hints via a non-enumerable symbol
       and threads them into <code>userExtensionToggle(block, hints)</code>. Author
       usage:
-      <pre style="margin: 0.6rem 0;"><code>import { authorHints } from '@/extensions/togglable'
+      <pre style="margin: 0.6rem 0;"><code>// Authors import from the curated public surface re-exported
+// through @/extensions/api.js (see src/extensions/api.ts for the
+// existing convention; this design adds the togglable primitives to
+// that re-export list).
+import { authorHints, actionsFacet } from '@/extensions/api.js'
 
 export default authorHints(
   { name: 'My slash command', description: 'Inserts a snippet' },
@@ -1010,13 +1014,20 @@ async function discoverToggleTree(
         additionally awaits function-valued extensions. Initial implementation only
         needs the dedup branch; the filter and <code>enables</code> branches land in
         later steps but live in the same walk.</li>
-      <li><strong>Introduce the two constrained factories.</strong> Define
-        <code>Togglable</code>, <code>systemToggle</code>, and
-        <code>userExtensionToggle</code>. Wrap existing system plugins in
-        <code>systemToggle({id, name, ...}).of(...)</code>. Mark a handful
-        <code>essential: true</code> (kernel, prefs bootstrap, command palette).
-        Add a startup assertion that each contribution's <code>source</code> matches the
-        wrapping handle's <code>id</code>.</li>
+      <li><strong>Introduce the three primitives in a new module.</strong> Create
+        <code>src/extensions/togglable.ts</code> defining <code>Togglable</code>,
+        <code>systemToggle</code>, <code>userExtensionToggle</code>,
+        <code>userExtensionShellToggle</code>, <code>authorHints</code>,
+        <code>getBoundary</code>, <code>getAuthorHints</code>, <code>isEnabled</code>,
+        and the <code>BOUNDARY</code> / <code>AUTHOR_HINTS</code> symbols. Re-export
+        the author-facing surface (<code>authorHints</code>, the
+        <code>Togglable</code> type) from <code>src/extensions/api.ts</code> so
+        extension authors can <code>import &#123; authorHints &#125; from
+        '@/extensions/api.js'</code> following the existing convention. Wrap existing
+        system plugins in <code>systemToggle({id, name, ...}).of(...)</code>. Mark a
+        handful <code>essential: true</code> (kernel, prefs bootstrap, command
+        palette). Add a startup assertion that each contribution's
+        <code>source</code> matches the wrapping handle's <code>id</code>.</li>
       <li><strong>Add the filter pass</strong> inside <code>collectContributions</code>:
         evaluate <code>isEnabled(handle, overrides)</code> at each boundary; skip
         subtrees that resolve to off. Start with an empty overrides map and all manifest
@@ -1036,10 +1047,16 @@ async function discoverToggleTree(
         extension code never executes. Otherwise compile, read any
         <code>authorHints({name, description}, ...)</code> wrapping via
         <code>getAuthorHints</code>, and wrap the inner extension with
-        <code>userExtensionToggle(block, hints)</code>. Subscribe to overrides changes
-        so toggling fires
-        <code>refreshAppRuntime()</code> automatically (today users must run "Reload
-        extensions" manually).</li>
+        <code>userExtensionToggle(block, hints)</code>. <strong>On compile or
+        validation failure for an enabled block, still emit
+        <code>userExtensionShellToggle(block).of([])</code></strong> — otherwise a
+        broken extension simply disappears from settings and the user can't toggle
+        it off. Error state continues to flow through
+        <code>ExtensionLoadErrorStore</code>
+        (<code>src/extensions/extensionLoadErrors.tsx</code>) so the UI can show a
+        status icon next to the row. Subscribe to overrides changes so toggling
+        fires <code>refreshAppRuntime()</code> automatically (today users must run
+        "Reload extensions" manually).</li>
       <li><strong>Add <code>enables</code></strong> support to the resolver; refactor
         video-player as the demonstrator. Three concrete edits:
         <strong>(i)</strong> extend <code>FacetContributionOptions</code>
