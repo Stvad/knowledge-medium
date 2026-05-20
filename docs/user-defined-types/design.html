@@ -242,6 +242,18 @@ The picker UI shows <code>blockTypeLabelProp</code>, never the id.
   </p>
 </div>
 
+<div class="callout muted">
+  <h4>Asymmetry with property schemas: persisted key matches its audience</h4>
+  <p style="margin:0">
+    Property schemas use <b>name</b> as the persisted identifier (the key in <code>properties_json</code>, e.g.
+    <code>status</code>); types use <b>block id</b> (the entry in <code>block:types</code>). The asymmetry is
+    deliberate: property names are read by humans &mdash; in DB dumps, in debug tools, in raw JSON inspection
+    &mdash; so a human-readable persisted key earns its keep. Type ids are only read by the runtime (the picker
+    UI shows the label); opaque is fine. <i>Rule of thumb for future meta-types: human-readable identifier when
+    a human reads the persisted form, block id otherwise.</i>
+  </p>
+</div>
+
 <h2>UserTypesService</h2>
 
 <p>
@@ -942,7 +954,17 @@ await repo.tx(async tx =&gt; {
 <ul class="tight">
   <li>Add <code>blockTypeLabelProp</code>, <code>blockTypeDescriptionProp</code>, <code>blockTypePropertiesProp</code> to <span class="file">src/data/properties.ts</span>.</li>
   <li>Add <code>BLOCK_TYPE_TYPE</code> and <code>TYPES_PAGE_TYPE</code> to <span class="file">src/data/blockTypes.ts</span>; lift the three props onto the contribution.</li>
-  <li><span class="file">src/data/typesPage.ts</span> new &mdash; bootstrap helper near-clone of <span class="file">src/data/propertiesPage.ts</span>. <b>Type-flow pattern:</b> the Types page itself gets BOTH <code>PAGE_TYPE</code> AND <code>TYPES_PAGE_TYPE</code> tagged in its bootstrap tx, matching the convention now used by the Properties page (<span class="file">src/data/propertiesPage.ts</span>), Readwise root, plugin state, and alias user pages. Keeps the Types page navigable as a normal page while still findable via <code>block_types</code>-keyed lookups.</li>
+  <li>
+    <b>Extract a shared <code>getOrCreateKernelPage</code> helper</b> rather than cloning
+    <span class="file">src/data/propertiesPage.ts</span> verbatim. Both pages have the same shape: uuid-v5 from
+    <code>workspaceId</code>, alias-based discovery, soft-delete restore, type-flow tagging
+    (<code>PAGE_TYPE</code> + a marker type). Lift to a single helper that takes
+    <code>(repo, workspaceId, {namespace, alias, types})</code>; refactor
+    <code>getOrCreatePropertiesPage</code> to call it. The future Saved Queries page, Dashboards page,
+    Command palette page (see <span class="file">docs/follow-ups.md:153</span>) all fit the same shape; building
+    the shared helper now keeps the count at one implementation forever.
+  </li>
+  <li><span class="file">src/data/typesPage.ts</span> new &mdash; thin wrapper around <code>getOrCreateKernelPage</code> with the Types-specific args. <b>Type-flow pattern:</b> the Types page gets BOTH <code>PAGE_TYPE</code> AND <code>TYPES_PAGE_TYPE</code> tagged in its bootstrap tx, matching the convention used by the Properties page (<span class="file">src/data/propertiesPage.ts</span>), Readwise root, plugin state, and alias user pages. Keeps the Types page navigable as a normal page while still findable via <code>block_types</code>-keyed lookups.</li>
   <li><span class="file">src/data/userTypesService.ts</span> new &mdash; subscribe, build contributions, publish to <code>typesFacet</code>'s <code>'user-data'</code> bucket. Public surface: <code>start(workspaceId)</code>, <code>dispose</code>, <code>getTypeBlockId(typeId)</code>. No <code>appendUserType</code> / <code>peekContribution</code> / <code>removeUserType</code> &mdash; see &sect;Lessons.</li>
   <li>Start <code>UserTypesService</code> in <code>Repo</code> bootstrap, right after <code>UserSchemasService</code>. Pin workspace at <code>start()</code> time; restart on workspace switch.</li>
   <li>Block renderer for <code>block-type</code> blocks (parallel to <span class="file">src/components/renderer/PropertySchemaBlockRenderer.tsx</span>): label / description / property-ref multi-picker.</li>
@@ -1156,6 +1178,34 @@ documented at the primitive level (commit pipeline order, row_events tail semant
 against that documented model rather than re-deriving invariants per-feature.
 </p>
 
+<h3>Cross-service rule</h3>
+
+<p>
+The "no sync-append-with-rollback primitive" lesson isn't service-specific. It applies symmetrically to the
+existing <code>UserSchemasService</code> (<span class="file">src/data/userSchemasService.ts</span>) and any
+future user-data contribution service. Stated as a shared invariant for future maintainers:
+</p>
+
+<div class="callout warn">
+  <h4>Invariant for all user-data contribution services</h4>
+  <p style="margin:0">
+    Do not add a synchronous-append-with-rollback primitive (<code>appendUserX</code> / <code>removeUserX</code>
+    / <code>withProvisionalX</code>) to a user-data contribution service unless every consumer can prove
+    single-caller-per-key semantics AND single-tx atomicity is actually required. Default to <b>two txs bridged
+    by the subscription</b>: commit the contribution block in one tx, let the service's subscription rebuild
+    register it, then open the dependent tx. The cost is one extra undo entry; the savings are the entire class
+    of concurrent-overlap correctness bugs that <a href="https://github.com/Stvad/knowledge-medium/pull/50">
+    PR #50</a> documented.
+  </p>
+</div>
+
+<p>
+<b>Action item for the user-defined-properties doc:</b> add a cross-link from
+<span class="file">docs/user-defined-properties.md</span> &sect;7 (<code>addSchema</code>) noting that the
+post-tx <code>appendUserSchema</code> ordering is deliberate and not to be inverted into a pre-tx synchronous-
+append &mdash; PR #50's iteration sequence is the cautionary tale.
+</p>
+
 <h2>What's deferred</h2>
 <ul class="tight">
   <li><b>Type inheritance for user types.</b> A user type extending <i>another user type</i> rather than a kernel type. The override merge already handles "child extends parent" semantics; only the resolver loop guard (cycle detection) is missing.</li>
@@ -1163,6 +1213,25 @@ against that documented model rather than re-deriving invariants per-feature.
   <li><b>Property-schema authoring inline with the type.</b> Today the user creates schemas on the Properties page, then refs them from a type on the Types page. A combined "type editor" surface that creates schemas as side-effects of editing a type is ergonomic but not necessary for v1.</li>
   <li><b>Bulk reimport-time auto-promotion.</b> The import currently <i>suggests</i>; this design's promotion stays user-triggered. Heuristic-based auto-promotion at import time is plausible but a separate UX call.</li>
   <li><b>Include-root template materialization.</b> &sect;Type templates fixes descendants-only as the default. A separate slot for include-root semantics (when the template root itself should be cloned) is plausible but no current consumer.</li>
+  <li>
+    <b><code>property-schema:extends</code> for symmetry with <code>block-type:extends</code>.</b> User-defined
+    property schemas could plausibly override a kernel schema (e.g., bind a different default value to
+    <code>statusProp</code> without redefining the codec). Today this isn't possible &mdash;
+    <code>propertySchemasFacet.combine</code> is last-wins-with-warn on duplicate names, not a merge. The
+    symmetric API surface is straightforward (mirror <code>blockTypeExtendsProp</code> + the merge step), but
+    there's no current consumer. Worth proposing alongside any future "let users tweak kernel schema defaults"
+    feature.
+  </li>
+  <li>
+    <b>Shared user-contribution subscription primitive.</b> After <code>UserTypesService</code> ships, the
+    machinery shared with <code>UserSchemasService</code> (subscribe to <code>{types: [META]}</code>, build
+    contributions, publish to facet's <code>'user-data'</code> bucket, re-resolve on dependency change, pin
+    workspace at <code>start()</code>) should be lifted into a single composable
+    (<code>makeUserContributionSubscription({metaType, facet, source, tryBuild, dependsOn})</code>). Best done
+    after both services exist concretely &mdash; refactor against two real instances rather than designing the
+    abstraction upfront. Lower priority than the page-bootstrap helper because the two services genuinely diverge
+    on their dependency listeners (presets vs schemas) and per-row build logic.
+  </li>
 </ul>
 
 <h2>Decisions locked in</h2>
