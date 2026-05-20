@@ -4,7 +4,7 @@ import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
 import { aliasesProp, extensionDisabledProp } from '@/data/properties.ts'
-import { EXTENSION_TYPE } from '@/data/blockTypes'
+import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import { actionsFacet, blockRenderersFacet } from '@/extensions/core.ts'
 import { readRuntimeActions } from '@/extensions/runtimeActions.ts'
@@ -239,10 +239,13 @@ const updateRuntimeBlock = async (
   return repo.load(input.id)
 }
 
-const extensionAliasValues = (data: BlockData | null): string[] => {
-  const value = data?.properties[aliasesProp.name]
+const aliasValuesFromProperties = (properties: BlockProperties | undefined): string[] => {
+  const value = properties?.[aliasesProp.name]
   return Array.isArray(value) && value.every(isString) ? value : []
 }
+
+const extensionAliasValues = (data: BlockData | null): string[] =>
+  aliasValuesFromProperties(data?.properties)
 
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
@@ -288,11 +291,16 @@ const installRuntimeExtension = async (
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
+      const properties = extensionBlockProperties(current.properties, label, input.disabled)
       await tx.update(existing.id, {
         content: source,
-        properties: extensionBlockProperties(current.properties, label, input.disabled),
+        properties,
       })
       await repo.addTypeInTx(tx, existing.id, EXTENSION_TYPE, {}, typeSnapshot)
+      const aliases = aliasValuesFromProperties(properties)
+      if (aliases.length > 0) {
+        await repo.addTypeInTx(tx, existing.id, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
+      }
     }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? existing.id}`})
     const reloaded = input.reload !== false
     if (reloaded) refreshAppRuntime()
@@ -321,22 +329,31 @@ const installRuntimeExtension = async (
         parentId: null,
         orderKey: keyAtEnd(rootSiblings.at(-1)?.orderKey ?? null),
         content: agentExtensionsParentAlias,
-        properties: {
-          [aliasesProp.name]: aliasesProp.codec.encode([agentExtensionsParentAlias]),
-        },
       })
+      await repo.addTypeInTx(
+        tx,
+        parentId,
+        PAGE_TYPE,
+        {[aliasesProp.name]: [agentExtensionsParentAlias]},
+        typeSnapshot,
+      )
     }
 
     const siblings = await tx.childrenOf(parentId, workspaceId)
+    const properties = extensionBlockProperties(undefined, label, input.disabled)
     installedId = await tx.create({
       id: installedId || undefined,
       workspaceId,
       parentId,
       orderKey: keyAtEnd(siblings.at(-1)?.orderKey ?? null),
       content: source,
-      properties: extensionBlockProperties(undefined, label, input.disabled),
+      properties,
     })
     await repo.addTypeInTx(tx, installedId, EXTENSION_TYPE, {}, typeSnapshot)
+    const aliases = aliasValuesFromProperties(properties)
+    if (aliases.length > 0) {
+      await repo.addTypeInTx(tx, installedId, PAGE_TYPE, {[aliasesProp.name]: aliases}, typeSnapshot)
+    }
   }, {scope: ChangeScope.BlockDefault, description: `agent runtime install extension ${label ?? 'unnamed'}`})
 
   const reloaded = input.reload !== false

@@ -27,6 +27,7 @@ import { ChangeScope, type User } from '@/data/api'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
 import { Repo } from '../repo'
+import { PAGE_TYPE } from '@/data/blockTypes'
 import {
   aliasesProp,
   selectionStateProp,
@@ -78,6 +79,7 @@ describe('getUserBlock', () => {
     expect(data?.workspaceId).toBe(WS)
     expect(data?.content).toBe('Alice')
     expect(userBlock.peekProperty(aliasesProp)).toEqual(['Alice'])
+    expect(userBlock.peekProperty(typesProp)).toEqual([PAGE_TYPE])
 
     const events = await env.h.db.getAll<{scope: string; source: string}>(
       'SELECT scope, source FROM command_events ORDER BY created_at',
@@ -119,6 +121,7 @@ describe('getUserBlock', () => {
       await fresh.repo.load(restored.id)
       expect(restored.peek()?.deleted).toBe(false)
       expect(restored.peekProperty(aliasesProp)).toEqual(['Alice'])
+      expect(restored.peekProperty(typesProp)).toEqual([PAGE_TYPE])
     } finally {
       await fresh.h.cleanup()
     }

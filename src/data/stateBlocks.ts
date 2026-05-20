@@ -29,6 +29,7 @@ import {
   type BlockSelectionState,
 } from '@/data/properties'
 import { USER_PREFS_PATH_PART } from '@/data/userPrefs.ts'
+import { PAGE_TYPE } from '@/data/blockTypes.ts'
 
 // ──── Deterministic-id namespaces ────
 
@@ -170,6 +171,7 @@ export const getUserBlock = memoize(
     // to the id so the user-page block always has *some* content
     // and an addressable alias.
     const displayName = user.name ?? user.id
+    const typeSnapshot = repo.snapshotTypeRegistries()
 
     await repo.tx(async tx => {
       // Re-read inside the tx with the unfiltered `tx.get` so we see
@@ -182,7 +184,7 @@ export const getUserBlock = memoize(
       if (existing && !existing.deleted) return
       if (existing && existing.deleted) {
         await tx.restore(id, {content: displayName})
-        await tx.setProperty(id, aliasesProp, [displayName])
+        await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [displayName]}, typeSnapshot)
         return
       }
       await tx.create({
@@ -191,8 +193,8 @@ export const getUserBlock = memoize(
         parentId: null,
         orderKey: 'a0',
         content: displayName,
-        properties: {[aliasesProp.name]: aliasesProp.codec.encode([displayName])},
       })
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: [displayName]}, typeSnapshot)
     }, {scope: ChangeScope.UserPrefs})
 
     return repo.block(id)
