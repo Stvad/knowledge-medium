@@ -18,15 +18,12 @@ import type { Block } from '../data/block'
 import { ChangeScope } from '@/data/api'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { createChild } from '@/data/internals/kernelMutators'
-import { extensionDisabledProp } from '@/data/properties'
 
 export interface ExampleExtensionDefinition {
   /** Stable, kebab-case label used in commit history and source attribution. */
   id: string
   /** ESM module text. */
   source: string
-  /** Seed/insert this extension with `system:disabled = true`. */
-  disabledByDefault?: boolean
 }
 
 const HELLO_RENDERER_SOURCE = `import {
@@ -378,19 +375,12 @@ export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
   {
     id: 'layout-renderer-override',
     source: LAYOUT_RENDERER_OVERRIDE_SOURCE,
-    disabledByDefault: true,
   },
   {
     id: 'default-renderer-placeholder',
     source: DEFAULT_RENDERER_OVERRIDE_SOURCE,
-    disabledByDefault: true,
   },
 ]
-
-export const getExampleExtensionInitialProperties = (
-  example: ExampleExtensionDefinition,
-): Record<string, unknown> | undefined =>
-  example.disabledByDefault ? {[extensionDisabledProp.name]: true} : undefined
 
 export const TUTORIAL_README = `Welcome — this is a malleable thought medium.
 
@@ -430,7 +420,6 @@ export const insertExampleExtensionsUnder = async (
       const childId = await tx.run(createChild, {
         parentId: parentBlock.id,
         content: example.source,
-        properties: getExampleExtensionInitialProperties(example),
       })
       await repo.addTypeInTx(tx, childId, EXTENSION_TYPE, {}, typeSnapshot)
       return childId

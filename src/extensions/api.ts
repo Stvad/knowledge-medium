@@ -170,8 +170,6 @@ export {
   // Atomic focus + edit transition (single primitive — `setFocusedBlockId`
   // and `setIsEditing` were removed in favor of this).
   focusBlock,
-  // Extension-lifecycle prop
-  extensionDisabledProp,
 } from '@/data/properties.ts'
 export type {
   BlockRenderer,

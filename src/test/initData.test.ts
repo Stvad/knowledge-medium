@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { aliasesProp, extensionDisabledProp } from '@/data/properties'
+import { aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE } from '@/data/blockTypes'
 import { BlockCache } from '@/data/blockCache'
 import { createTestDb, type TestDb } from '@/data/test/createTestDb'
@@ -117,11 +117,8 @@ describe('seedTutorial', () => {
     const extBlocks = extBlockIds.map(id => env.repo.block(id))
 
     expect(extBlocks).toHaveLength(exampleExtensions.length)
-    for (let i = 0; i < extBlocks.length; i++) {
-      const block = extBlocks[i]
+    for (const block of extBlocks) {
       expect(block.hasType(EXTENSION_TYPE)).toBe(true)
-      expect(block.peek()?.properties[extensionDisabledProp.name] === true)
-        .toBe(exampleExtensions[i].disabledByDefault === true)
     }
     // Source content matches example extensions in declaration order.
     expect(extBlocks.map(b => b.peek()?.content)).toEqual(

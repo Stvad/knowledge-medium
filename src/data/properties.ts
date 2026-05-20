@@ -133,14 +133,6 @@ export const rendererNameProp = defineProperty<string | undefined>('rendererName
   changeScope: ChangeScope.BlockDefault,
 })
 
-/** Extension lifecycle — content-scope (a flagged extension stays
- *  disabled across reloads, so writes go to the upload queue). */
-export const extensionDisabledProp = defineProperty<boolean>('system:disabled', {
-  codec: codecs.boolean,
-  defaultValue: false,
-  changeScope: ChangeScope.BlockDefault,
-})
-
 export const createdAtProp = defineProperty<number | undefined>('createdAt', {
   codec: codecs.optionalNumber,
   defaultValue: undefined,
@@ -303,7 +295,6 @@ export const KERNEL_PROPERTY_SCHEMAS: ReadonlyArray<PropertySchema<unknown>> = [
   typesProp,
   rendererProp,
   rendererNameProp,
-  extensionDisabledProp,
   createdAtProp,
   sourceBlockIdProp,
   aliasesProp,

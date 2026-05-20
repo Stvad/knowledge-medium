@@ -55,7 +55,6 @@ describe('@/extensions/api — public surface', () => {
     'typesFacet',
     'codecs',
     'ChangeScope',
-    'extensionDisabledProp',
     // Runtime toggle (author-facing slice)
     'authorHints',
   ]

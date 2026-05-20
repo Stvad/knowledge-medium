@@ -5,7 +5,6 @@ import { aliasesProp } from '@/data/properties'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import {
   exampleExtensions,
-  getExampleExtensionInitialProperties,
   TUTORIAL_README,
 } from '@/extensions/exampleExtensions.ts'
 
@@ -86,7 +85,6 @@ export const seedTutorial = async (repo: Repo, workspaceId: string): Promise<str
         parentId: extensionsParentId,
         orderKey: `a${i}`,
         content: example.source,
-        properties: getExampleExtensionInitialProperties(example),
       })
       await repo.addTypeInTx(tx, extensionIds[i], EXTENSION_TYPE, {}, typeSnapshot)
     }

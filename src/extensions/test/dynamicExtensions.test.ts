@@ -12,7 +12,6 @@ import {
   type AppExtension,
   type FacetContribution,
 } from '@/extensions/facet'
-import { extensionDisabledProp } from '@/data/properties'
 import { getBoundary } from '@/extensions/togglable'
 import type { Overrides } from '@/extensions/togglable'
 import type { Repo } from '../../data/repo'
@@ -39,16 +38,6 @@ const blockData = (overrides: Partial<BlockData>): BlockData => ({
   createdBy: overrides.createdBy ?? 'user-1',
   updatedBy: overrides.updatedBy ?? 'user-1',
   deleted: overrides.deleted ?? false,
-})
-
-/** Flat-property shape: the boolean codec is identity, so the encoded
- *  value stored in `properties[extensionDisabledProp.name]` is the
- *  raw boolean. The loader no longer consults this property (overrides
- *  are the single source of truth), but the property is still used by
- *  the one-shot migration effect that folds legacy state into
- *  overrides — see `system-plugins` plugin. */
-const legacyDisabledProperty = (value: boolean): Record<string, unknown> => ({
-  [extensionDisabledProp.name]: value,
 })
 
 // Stub repo that just returns the supplied blocks for the
@@ -285,38 +274,6 @@ describe('dynamicExtensionsExtension — overrides-driven disable', () => {
     }
   })
 
-  it('ignores the legacy extensionDisabledProp (overrides are the single source of truth)', async () => {
-    const restore = stubCompileByBlockId({
-      'src': {default: labelsFacet.of('legacy-ignored')},
-    })
-    // Block has the legacy property set to true, but overrides has no
-    // entry for it. The loader treats overrides as authoritative, so
-    // the block loads normally. The migration effect in the
-    // system-plugins plugin is responsible for translating legacy
-    // state into overrides at startup.
-    const blocks = [
-      blockData({
-        id: 'legacy-flagged',
-        content: 'src',
-        properties: legacyDisabledProperty(true),
-      }),
-    ]
-
-    try {
-      const ext = dynamicExtensionsExtension({
-        repo: makeRepo(blocks),
-        workspaceId: 'ws-1',
-        cache,
-        safeMode: false,
-        // No overrides argument — empty map.
-      })
-      const runtime = await resolveFacetRuntime(ext)
-
-      expect(runtime.read(labelsFacet)).toEqual(['legacy-ignored'])
-    } finally {
-      restore()
-    }
-  })
 })
 
 describe('dynamicExtensionsExtension — boundary tagging', () => {

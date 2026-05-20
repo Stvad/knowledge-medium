@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom'
 import type { Repo } from '@/data/repo'
 import type { Block } from '@/data/block'
 import { ChangeScope, type BlockData, type BlockReference } from '@/data/api'
-import { aliasesProp, extensionDisabledProp } from '@/data/properties.ts'
+import { aliasesProp } from '@/data/properties.ts'
 import { EXTENSION_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { keyAtEnd } from '@/data/orderKey.ts'
 import { actionsFacet, blockRenderersFacet } from '@/extensions/core.ts'
@@ -250,7 +250,6 @@ const extensionAliasValues = (data: BlockData | null): string[] =>
 const extensionBlockProperties = (
   existing: BlockProperties | undefined,
   label: string | null,
-  disabled: boolean | undefined,
 ): BlockProperties => {
   const aliases = new Set<string>(Array.isArray(existing?.[aliasesProp.name])
     ? (existing?.[aliasesProp.name] as unknown[]).filter(isString)
@@ -260,7 +259,6 @@ const extensionBlockProperties = (
   return {
     ...(existing ?? {}),
     ...(aliases.size > 0 ? {[aliasesProp.name]: aliasesProp.codec.encode([...aliases])} : {}),
-    ...(disabled !== undefined ? {[extensionDisabledProp.name]: extensionDisabledProp.codec.encode(disabled)} : {}),
   }
 }
 
@@ -291,7 +289,7 @@ const installRuntimeExtension = async (
     await repo.tx(async tx => {
       const current = await tx.get(existing.id)
       if (!current) throw new Error(`Extension block ${existing.id} disappeared before update`)
-      const properties = extensionBlockProperties(current.properties, label, input.disabled)
+      const properties = extensionBlockProperties(current.properties, label)
       await tx.update(existing.id, {
         content: source,
         properties,
@@ -340,7 +338,7 @@ const installRuntimeExtension = async (
     }
 
     const siblings = await tx.childrenOf(parentId, workspaceId)
-    const properties = extensionBlockProperties(undefined, label, input.disabled)
+    const properties = extensionBlockProperties(undefined, label)
     installedId = await tx.create({
       id: installedId || undefined,
       workspaceId,
@@ -585,9 +583,6 @@ export const executeCommand = async (
         id: command.id === undefined
           ? undefined
           : requireString(command.id, 'id'),
-        disabled: command.disabled === undefined
-          ? undefined
-          : Boolean(command.disabled),
         reload: command.reload === undefined
           ? undefined
           : Boolean(command.reload),

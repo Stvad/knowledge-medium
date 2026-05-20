@@ -38,7 +38,6 @@ export interface InstallExtensionInput {
   label?: string
   parentId?: string
   id?: string
-  disabled?: boolean
   reload?: boolean
   verify?: boolean
 }
