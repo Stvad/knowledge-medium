@@ -42,6 +42,12 @@ const resultSummary = (result: ApplyContentReplaceResult): string => {
   return `${changed}; ${skipped} skipped`
 }
 
+const pluralize = (count: number, singular: string, plural = `${singular}s`): string =>
+  `${count} ${count === 1 ? singular : plural}`
+
+const blockMatchCountLabel = (blockCount: number, matchCount: number): string =>
+  `${pluralize(blockCount, 'block')} · ${pluralize(matchCount, 'match', 'matches')}`
+
 export function FindReplaceDialog() {
   const repo = useRepo()
   const [open, setOpen] = useState(false)
@@ -66,6 +72,7 @@ export function FindReplaceDialog() {
     () => matches.filter(match => selectedIds.has(match.blockId)),
     [matches, selectedIds],
   )
+  const totalMatchCount = matches.reduce((sum, match) => sum + match.matchCount, 0)
   const selectedReplacementCount = selectedItems.reduce((sum, match) => sum + match.matchCount, 0)
 
   useEffect(() => {
@@ -223,7 +230,7 @@ export function FindReplaceDialog() {
               {loading
                 ? 'Searching...'
                 : trimmedFind
-                  ? `${matches.length} block${matches.length === 1 ? '' : 's'}`
+                  ? blockMatchCountLabel(matches.length, totalMatchCount)
                   : 'Type text to search'}
               {searchResult.truncated && ' (limited)'}
             </span>
@@ -259,8 +266,12 @@ export function FindReplaceDialog() {
                     <span className="block truncate text-foreground">{match.preview}</span>
                     <span className="block truncate text-xs text-muted-foreground">{match.blockId}</span>
                   </span>
-                  <span className="rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                    {match.matchCount}
+                  <span
+                    className="rounded-sm bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                    title={pluralize(match.matchCount, 'match')}
+                    aria-label={pluralize(match.matchCount, 'match')}
+                  >
+                    {match.matchCount}x
                   </span>
                 </label>
               )
@@ -268,30 +279,34 @@ export function FindReplaceDialog() {
           </div>
         </div>
 
-        <DialogFooter className="border-t px-5 py-4">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => setOpen(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={repo.isReadOnly || applying || matches.length === 0}
-            onClick={() => void applyReplace(matches)}
-          >
-            Replace all shown
-          </Button>
-          <Button
-            type="button"
-            disabled={repo.isReadOnly || applying || selectedItems.length === 0}
-            onClick={() => void applyReplace(selectedItems)}
-          >
-            Replace selected
-            {selectedReplacementCount > 0 ? ` (${selectedReplacementCount})` : ''}
-          </Button>
+        <DialogFooter className="flex-col gap-3 border-t px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:space-x-0">
+          <div className="text-sm text-muted-foreground">
+            Selected: {blockMatchCountLabel(selectedItems.length, selectedReplacementCount)}
+          </div>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={repo.isReadOnly || applying || matches.length === 0}
+              onClick={() => void applyReplace(matches)}
+            >
+              Replace all shown
+            </Button>
+            <Button
+              type="button"
+              disabled={repo.isReadOnly || applying || selectedItems.length === 0}
+              onClick={() => void applyReplace(selectedItems)}
+            >
+              Replace selected
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
