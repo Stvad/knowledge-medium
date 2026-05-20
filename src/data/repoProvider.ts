@@ -70,7 +70,7 @@ appSchema.withRawTables({
 // 40 (user) + 3 (suffix) = 50 — safe headroom.
 const MAX_USER_SEGMENT = 40
 
-// v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.0).
+// v6 = baseline (OPFSCoopSync + multi-tabs on @powersync/web@1.38.1).
 // History: v3 was the original IDB layout; v4 introduced OPFS; v5
 // reverted to IDB to test whether the bucket-wipe pattern was
 // OPFS-specific (it wasn't — wipes reproduce identically on both, so
