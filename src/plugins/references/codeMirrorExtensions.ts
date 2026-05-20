@@ -1,5 +1,6 @@
 import { autocompletion } from '@codemirror/autocomplete'
 import { EditorView, keymap } from '@codemirror/view'
+import { EditorSelection, Prec } from '@codemirror/state'
 import type { CodeMirrorExtensionContribution } from '@/extensions/editor.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import { parseRelativeDate } from '@/utils/relativeDate.ts'
@@ -66,7 +67,47 @@ const referenceAutocompleteTheme = EditorView.theme({
   },
 })
 
+/**
+ * Workaround for Chrome's contenteditable mis-positioning printable text
+ * inserted at the end of a `[[wikilink]]`. Repro: with the doc `[[i]]` and
+ * the cursor at position 5 (past the second `]`), typing a space yields
+ * `[[i] ]` with the cursor between the two `]`. The visual caret was
+ * correct (past both `]`), but the DOM caret was actually inside the last
+ * bracket's text node, and Chrome inserted the space there. CodeMirror's
+ * MutationObserver reads back `[[i] ]`, runs `findDiff` against `[[i]]`,
+ * and (since both diff anchors are valid) lands the insertion at position
+ * 4 instead of 5. The same path explains the `[[i| ]]` → `[[i] |]` case
+ * in the bug report. No code in the app is wrong here — it's an upstream
+ * DOM/diff interaction.
+ *
+ * Fix: a high-precedence `inputHandler` that, for plain single-cursor
+ * insertions whose diff anchor landed *strictly before* the cursor,
+ * redirects the change to the cursor position. Normal typing always
+ * inserts at the caret; cases where a diff legitimately lands earlier
+ * (selection replace, composition/IME) are excluded.
+ */
+const insertAtCaretForMisplacedDiff = Prec.highest(
+  EditorView.inputHandler.of((view, from, to, insert) => {
+    if (insert.length === 0) return false
+    if (from !== to) return false
+    if (view.composing) return false
+
+    const sel = view.state.selection.main
+    if (!sel.empty) return false
+    if (from >= sel.from) return false
+
+    view.dispatch({
+      changes: {from: sel.from, insert},
+      selection: EditorSelection.cursor(sel.from + insert.length),
+      userEvent: 'input.type',
+      scrollIntoView: true,
+    })
+    return true
+  }),
+)
+
 export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = ({repo}) => [
+  insertAtCaretForMisplacedDiff,
   referenceAutocompleteTheme,
   autocompletion({
     override: [
