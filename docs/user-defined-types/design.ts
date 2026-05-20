@@ -12,6 +12,7 @@
 
 import type {Block} from '@/data/block'
 import type {Repo} from '@/data/repo'
+import type {UserSchemasService} from '@/data/userSchemasService'
 import type {Tx} from '@/data/api/tx'
 import type {
   AnyPropertySchema,
@@ -52,6 +53,33 @@ import {propertySchemasFacet, typesFacet} from '@/data/facets'
 declare module '@/data/repo' {
   interface Repo {
     onTypesChange(listener: () => void): () => void
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Phase 1 API addition: UserSchemasService.getSchemaForBlockId
+//
+// Routes UserTypesService's `block-type:properties` ref resolution
+// through the existing schemas service rather than peeking the
+// referenced schema blocks directly. Avoids two cold-start footguns:
+//
+//   1. BlockCache hydration race — peek() on an unloaded row returns
+//      undefined, so valid refs would silently drop on first rebuild
+//      until something else triggered hydration.
+//   2. Cross-block invariant duplication — UserSchemasService already
+//      validates schemas pass workspace/type/name/preset checks
+//      before publishing; a successful getSchemaForBlockId proves
+//      those invariants hold, no re-derivation needed.
+//
+// Implementation: UserSchemasService grows a private blockIdToName
+// map populated alongside the existing nameToBlockId in rebuild and
+// appendUserSchema. getSchemaForBlockId(blockId) reads blockIdToName,
+// then this.contributions for the matching schema. O(1).
+// ──────────────────────────────────────────────────────────────────────
+
+declare module '@/data/userSchemasService' {
+  interface UserSchemasService {
+    getSchemaForBlockId(blockId: string): AnyPropertySchema | undefined
   }
 }
 
@@ -167,7 +195,14 @@ export class UserTypesService {
   private nameToBlockId = new Map<string, string>()
   private subscriptionDisposer: (() => void) | null = null
 
-  constructor(private readonly repo: Repo) {}
+  constructor(
+    private readonly repo: Repo,
+    // Phase 1 addition: UserSchemasService grows getSchemaForBlockId
+    // (with internal blockIdToName mirror) so UserTypesService can
+    // resolve block-type:properties refs without peek-based cache-
+    // hydration races. See design.html §Phase 1 checklist.
+    private readonly userSchemas: UserSchemasService,
+  ) {}
 
   start(_workspaceId: string): () => void {
     // Pin the workspace at start() time. The React provider restarts
@@ -527,14 +562,22 @@ export async function promoteToType(
 
   const typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: Tx) => {
-    await repo.addTypeInTx(tx, args.targetBlockId, BLOCK_TYPE_TYPE, {
-      [blockTypeLabelProp.name]: trimmedLabel,
-      [blockTypePropertiesProp.name]: args.propertySchemaIds,
-    }, typeSnapshot)
+    // Tag with BLOCK_TYPE_TYPE (idempotent on retry; addTypeInTx
+    // no-ops when the type is already present).
+    await repo.addTypeInTx(tx, args.targetBlockId, BLOCK_TYPE_TYPE, {}, typeSnapshot)
     // The page also gets PAGE_TYPE so it stays navigable as a page —
     // matches the "type flow" pattern (properties page / readwise
     // root / plugin state / alias user pages).
     await repo.addTypeInTx(tx, args.targetBlockId, PAGE_TYPE, {}, typeSnapshot)
+    // Set the type's metadata explicitly with tx.setProperty rather
+    // than via addTypeInTx's initialValues. initialValues is
+    // init-if-missing (per type-system.md §3a) — on a retry with a
+    // corrected label or different property set, the existing
+    // values would silently persist and the retry would never
+    // repair the type. setProperty unconditionally overwrites, which
+    // is what every retry actually wants.
+    await tx.setProperty(args.targetBlockId, blockTypeLabelProp, trimmedLabel)
+    await tx.setProperty(args.targetBlockId, blockTypePropertiesProp, args.propertySchemaIds)
   }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${trimmedLabel}`})
 
   // The subscription on `block-type` blocks fires between txs and

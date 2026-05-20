@@ -270,9 +270,20 @@ export class UserTypesService {
   <span class="comment">// UserSchemasService.latestBlocks.</span>
   private latestBlocks: readonly Block[] = []
 
-  constructor(private readonly repo: Repo) {}
+  constructor(
+    private readonly repo: Repo,
+    private readonly userSchemas: UserSchemasService,
+  ) {}
 
   start(workspaceId: string): () =&gt; void {
+    <span class="comment">// Guard against double-start: re-entry would overwrite</span>
+    <span class="comment">// subscriptionDisposer without disposing the prior subscription,</span>
+    <span class="comment">// leaking listeners and racing two rebuild loops that publish</span>
+    <span class="comment">// competing contribution lists into the user-data bucket. Match</span>
+    <span class="comment">// UserSchemasService.start at src/data/userSchemasService.ts:67-69.</span>
+    if (this.subscriptionDisposer !== null) {
+      throw new Error('[UserTypesService] already started')
+    }
     <span class="comment">// Pin the workspace at start() time — required since PR #48 made</span>
     <span class="comment">// workspaceId required on queryBlocks / subscribeBlocks. The React</span>
     <span class="comment">// provider restarts the service on workspace switch, so capturing</span>
@@ -282,11 +293,22 @@ export class UserTypesService {
       this.latestBlocks = blocks
       const schemas = this.repo.propertySchemas
       const next: TypeContribution[] = []
+      const nextNameToBlockId = new Map&lt;string, string&gt;()
       for (const block of blocks) {
         const built = this.tryBuildType(block, schemas)
-        if (built) next.push(built)
+        if (built) {
+          next.push(built)
+          <span class="comment">// Type id = block id (§"Type id = block id"), so the registry</span>
+          <span class="comment">// key matches the source block id directly. Rebuilding here</span>
+          <span class="comment">// keeps getTypeBlockId in sync with contributions; without</span>
+          <span class="comment">// this the map would be stale for newly-created/edited types</span>
+          <span class="comment">// and any UI flow navigating from block:types back to the</span>
+          <span class="comment">// type-definition block would silently fail.</span>
+          nextNameToBlockId.set(built.id, block.id)
+        }
       }
       this.contributions = next
+      this.nameToBlockId = nextNameToBlockId
       this.repo.setRuntimeContributions(typesFacet, 'user-data', this.contributions)
     }
 
@@ -314,21 +336,34 @@ export class UserTypesService {
 
   private tryBuildType(
     block: Block,
-    schemas: ReadonlyMap&lt;string, AnyPropertySchema&gt;,
+    _schemas: ReadonlyMap&lt;string, AnyPropertySchema&gt;,
   ): TypeContribution | null {
     const label = block.peekProperty(blockTypeLabelProp) ?? ''
     const refIds = block.peekProperty(blockTypePropertiesProp) ?? []
     const properties: AnyPropertySchema[] = []
     for (const refId of refIds) {
-      <span class="comment">// repo.block returns a Block facade; .peek() is the sync read</span>
-      <span class="comment">// of the row data. We then re-validate the ref against the same</span>
-      <span class="comment">// invariants the promoteToType pre-tx validation enforces (type,</span>
-      <span class="comment">// workspace, registered name) — a ref that's stale or invalid</span>
-      <span class="comment">// silently drops with a diagnostic.</span>
-      const schemaBlock = this.repo.block(refId).peek()
-      const name = schemaBlock?.properties[propertyNameProp.name]
-      if (typeof name !== 'string') continue            <span class="comment">// schema block not yet synced</span>
-      const schema = schemas.get(name)
+      <span class="comment">// Route through UserSchemasService rather than peeking the</span>
+      <span class="comment">// schema block directly. Two reasons:</span>
+      <span class="comment">//</span>
+      <span class="comment">//   1. Cold-start hydration: this.repo.block(refId).peek() returns</span>
+      <span class="comment">//      undefined for rows the BlockCache hasn't loaded yet. Our</span>
+      <span class="comment">//      subscribeBlocks watches {types: [BLOCK_TYPE_TYPE]}; it does</span>
+      <span class="comment">//      NOT hydrate property-schema blocks. Using peek would silently</span>
+      <span class="comment">//      drop refs to schemas that exist on disk but aren't yet in</span>
+      <span class="comment">//      the cache — Phase 1 user types would register with missing</span>
+      <span class="comment">//      panel slots until something else triggered hydration.</span>
+      <span class="comment">//   2. Validation: UserSchemasService only publishes contributions</span>
+      <span class="comment">//      for blocks that pass its tryBuildSchema filter (right type,</span>
+      <span class="comment">//      workspace match via the workspace-pinned subscription, valid</span>
+      <span class="comment">//      name + config). getSchemaForBlockId returning a schema is</span>
+      <span class="comment">//      proof those invariants hold; we don't have to re-derive them.</span>
+      <span class="comment">//</span>
+      <span class="comment">// Eventual consistency: refs to schemas that aren't yet published</span>
+      <span class="comment">// drop silently here AND fire onPropertySchemasChange when they</span>
+      <span class="comment">// land, which rebuildFromBlocks listens for. So a type starts with</span>
+      <span class="comment">// partial properties on cold start, then fills in as schemas</span>
+      <span class="comment">// register. Documented; not a "permanently missing slot" footgun.</span>
+      const schema = this.userSchemas.getSchemaForBlockId(refId)
       if (schema) properties.push(schema)
     }
     if (!label) {
@@ -835,11 +870,14 @@ for (const schemaId of propertySchemaIds) {
 <span class="comment">// per PR #49 — throws if targetBlockId is missing/tombstoned at tx-start.</span>
 const snapshotA = repo.snapshotTypeRegistries()
 await repo.tx(async tx =&gt; {
-  await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {
-    [blockTypeLabelProp.name]: label,
-    [blockTypePropertiesProp.name]: propertySchemaIds,
-  }, snapshotA)
+  await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {}, snapshotA)
   await repo.addTypeInTx(tx, targetBlockId, PAGE_TYPE, {}, snapshotA)
+  <span class="comment">// setProperty (not initialValues): label/properties must overwrite</span>
+  <span class="comment">// on retry. initialValues is init-if-missing per type-system.md §3a;</span>
+  <span class="comment">// a retry with a corrected label or different property set would</span>
+  <span class="comment">// otherwise silently keep the stale values.</span>
+  await tx.setProperty(targetBlockId, blockTypeLabelProp, label)
+  await tx.setProperty(targetBlockId, blockTypePropertiesProp, propertySchemaIds)
 }, {scope: ChangeScope.BlockDefault, description: `promoteToType:create ${label}`})
 
 <span class="comment">// Bridge tx A → tx B: wait for the subscription rebuild to publish</span>
@@ -1000,8 +1038,14 @@ await repo.tx(async tx =&gt; {
     the shared helper now keeps the count at one implementation forever.
   </li>
   <li><span class="file">src/data/typesPage.ts</span> new &mdash; thin wrapper around <code>getOrCreateKernelPage</code> with the Types-specific args. <b>Type-flow pattern:</b> the Types page gets BOTH <code>PAGE_TYPE</code> AND <code>TYPES_PAGE_TYPE</code> tagged in its bootstrap tx, matching the convention used by the Properties page (<span class="file">src/data/propertiesPage.ts</span>), Readwise root, plugin state, and alias user pages. Keeps the Types page navigable as a normal page while still findable via <code>block_types</code>-keyed lookups.</li>
+  <li>
+    Extend <code>UserSchemasService</code> with <code>getSchemaForBlockId(blockId): AnyPropertySchema | undefined</code>
+    and an internal <code>blockIdToName: Map&lt;string, string&gt;</code> populated alongside <code>nameToBlockId</code>
+    during rebuild + <code>appendUserSchema</code>. <code>UserTypesService.tryBuildType</code> uses this to resolve
+    <code>block-type:properties</code> refs to live schemas without cache-hydration races (see <a href="#typesservice"><code>UserTypesService</code> sketch</a>). Cheap O(1) lookup; the reverse map mirrors what the service already maintains.
+  </li>
   <li><span class="file">src/data/userTypesService.ts</span> new &mdash; subscribe, build contributions, publish to <code>typesFacet</code>'s <code>'user-data'</code> bucket. Public surface: <code>start(workspaceId)</code>, <code>dispose</code>, <code>getTypeBlockId(typeId)</code>. No <code>appendUserType</code> / <code>peekContribution</code> / <code>removeUserType</code> &mdash; see &sect;Lessons.</li>
-  <li>Start <code>UserTypesService</code> in <code>Repo</code> bootstrap, right after <code>UserSchemasService</code>. Pin workspace at <code>start()</code> time; restart on workspace switch.</li>
+  <li>Start <code>UserTypesService</code> in <code>Repo</code> bootstrap, right after <code>UserSchemasService</code>. Pass the existing <code>UserSchemasService</code> instance to the constructor (UserTypesService depends on it for the block-id&rarr;schema lookup). Pin workspace at <code>start()</code> time; restart on workspace switch.</li>
   <li>Block renderer for <code>block-type</code> blocks (parallel to <span class="file">src/components/renderer/PropertySchemaBlockRenderer.tsx</span>): label / description / property-ref multi-picker.</li>
   <li>"New type" command on the Types page.</li>
 </ul>
