@@ -10,6 +10,7 @@ import { kernelValuePresetsExtension } from '@/components/propertyEditors/kernel
 import { accountHeaderPlugin } from '@/plugins/account-header'
 import { commandPalettePlugin } from '@/plugins/command-palette'
 import { dailyNotesPlugin } from '@/plugins/daily-notes'
+import { findReplacePlugin } from '@/plugins/find-replace'
 import { quickFindPlugin } from '@/plugins/quick-find'
 import { themeTogglePlugin } from '@/plugins/theme-toggle'
 import { workspaceHeaderPlugin } from '@/plugins/workspace-header'
@@ -62,6 +63,7 @@ export const staticAppExtensions = ({repo}: {repo: Repo}): AppExtension[] => [
   workspaceHeaderPlugin,
   commandPalettePlugin,
   quickFindPlugin,
+  findReplacePlugin,
   themeTogglePlugin,
   accountHeaderPlugin,
   plainOutlinerPlugin,
