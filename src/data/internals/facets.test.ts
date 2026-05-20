@@ -370,3 +370,44 @@ describe('facet variance — typed plugin contributions register without widenin
     expect(registered.get('tasks:due-date')).toBe(typedSchema)
   })
 })
+
+describe('Repo.onTypesChange', () => {
+  // Symmetric to onPropertySchemasChange / onValuePresetsChange. Fires
+  // when the rebuild step republishes the merged `_types` map — used by
+  // user-types adoption flows (e.g. promoteToType's Phase A→B handoff)
+  // to bridge between txs without polling.
+
+  it('fires when setRuntimeContributions publishes into the typesFacet user-data bucket', () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    let calls = 0
+    repo.onTypesChange(() => { calls++ })
+    const userType = defineBlockType({id: 'user-defined-type-1'})
+    repo.setRuntimeContributions(typesFacet, 'user-data', [userType])
+    expect(calls).toBe(1)
+    expect(repo.types.get('user-defined-type-1')).toBe(userType)
+  })
+
+  it('fires when setFacetRuntime swaps in a runtime with new type contributions', () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    let calls = 0
+    repo.onTypesChange(() => { calls++ })
+    const extra = defineBlockType({id: 'extra-type'})
+    repo.setFacetRuntime(resolveFacetRuntimeSync([
+      kernelDataExtension,
+      typesFacet.of(extra, {source: 'test'}),
+    ]))
+    expect(calls).toBeGreaterThan(0)
+    expect(repo.types.get('extra-type')).toBe(extra)
+  })
+
+  it('disposer prevents subsequent notifications', () => {
+    repo.setFacetRuntime(resolveFacetRuntimeSync([kernelDataExtension]))
+    let calls = 0
+    const dispose = repo.onTypesChange(() => { calls++ })
+    dispose()
+    repo.setRuntimeContributions(typesFacet, 'user-data', [
+      defineBlockType({id: 'a-type'}),
+    ])
+    expect(calls).toBe(0)
+  })
+})

@@ -501,6 +501,13 @@ export class Repo {
    *  runtime-bucket update). Used by `usePropertySchemas` to drive
    *  React reruns. */
   private readonly propertySchemasListeners = new CallbackSet<[]>('Repo.propertySchemas')
+  /** Listeners for `_types` map changes (full rebuild OR runtime-bucket
+   *  update on `typesFacet`). Symmetric to propertySchemasListeners.
+   *  Used by promoteToType's Phase A→B handoff to bridge two txs
+   *  without polling: once UserTypesService's subscription publishes a
+   *  new type contribution, the rebuild step re-reads typesFacet, this
+   *  listener fires, and the bridge wait resolves. */
+  private readonly typesListeners = new CallbackSet<[]>('Repo.types')
   /** Listeners for property-editor-override map changes. */
   private readonly propertyEditorOverridesListeners = new CallbackSet<[]>('Repo.propertyEditorOverrides')
   /** Listeners for value-preset map changes. */
@@ -1403,6 +1410,17 @@ export class Repo {
     return this.propertySchemasListeners.add(listener)
   }
 
+  /** Subscribe to changes on `_types`. Fires whenever the rebuild step
+   *  that owns `_types` re-runs — i.e. after `setFacetRuntime` AND
+   *  after `setRuntimeContributions(typesFacet, ...)` publishes into
+   *  the user-data bucket. Symmetric to `onPropertySchemasChange`.
+   *  Consumers (e.g. `promoteToType` waiting for `UserTypesService`
+   *  to publish a freshly-committed type-definition block) recheck
+   *  `repo.types` inside the listener; spurious firings are tolerated. */
+  onTypesChange(listener: () => void): () => void {
+    return this.typesListeners.add(listener)
+  }
+
   /** Subscribe to changes on the merged `propertyEditorOverrides` map
    *  (currently driven exclusively by `propertyEditorOverridesFacet`,
    *  but exposed as a Repo-level event so future runtime-contribution
@@ -1878,6 +1896,12 @@ export class Repo {
           // Notify React subscribers (usePropertySchemas) so panels
           // re-render against the new merged map.
           this.propertySchemasListeners.notify()
+          // Notify types subscribers (promoteToType's Phase A→B bridge,
+          // future useTypes-style hooks). Fires unconditionally — same
+          // convention as propertySchemasListeners: "the step that owns
+          // this map ran" not "this map changed." Spurious firings are
+          // tolerated by consumers.
+          this.typesListeners.notify()
         },
       },
       {
