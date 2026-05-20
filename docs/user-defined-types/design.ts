@@ -576,6 +576,29 @@ export async function promoteToType(
 
   const typeSnapshot: TypeRegistrySnapshot = repo.snapshotTypeRegistries()
   await repo.tx(async (tx: Tx) => {
+    // In-tx re-check of every schema ref. Mirrors the target's
+    // strict-addTypeInTx existence guard but for the schema refs:
+    // sync-applied writes between the preflight loop and tx-open can
+    // delete a schema block, move it to another workspace, or strip
+    // its property-schema type tag. Without re-checking, Phase A
+    // would commit block-type:properties referencing a now-stale
+    // schema id; tryBuildType would silently drop it at runtime,
+    // leaving the promoted type with missing panel slots. tx.get is
+    // cheap and same-tick (no interleaving possible during this
+    // synchronous body).
+    for (const schemaId of args.propertySchemaIds) {
+      const row = await tx.get(schemaId)
+      if (!row || row.deleted) {
+        throw new Error(`promoteToType: schema block ${schemaId} no longer exists`)
+      }
+      if (row.workspaceId !== workspaceId) {
+        throw new Error(`promoteToType: schema block ${schemaId} moved to a different workspace`)
+      }
+      if (!hasBlockType(row, PROPERTY_SCHEMA_TYPE)) {
+        throw new Error(`promoteToType: schema block ${schemaId} no longer carries ${PROPERTY_SCHEMA_TYPE}`)
+      }
+    }
+
     // Tag with BLOCK_TYPE_TYPE (idempotent on retry; addTypeInTx
     // no-ops when the type is already present).
     await repo.addTypeInTx(tx, args.targetBlockId, BLOCK_TYPE_TYPE, {}, typeSnapshot)

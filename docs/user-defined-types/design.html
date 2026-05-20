@@ -879,6 +879,18 @@ for (const schemaId of propertySchemaIds) {
 <span class="comment">// per PR #49 — throws if targetBlockId is missing/tombstoned at tx-start.</span>
 const snapshotA = repo.snapshotTypeRegistries()
 await repo.tx(async tx =&gt; {
+  <span class="comment">// In-tx re-check of each schema ref. Closes the TOCTOU window</span>
+  <span class="comment">// between preflight and tx-open: sync-applied writes can delete a</span>
+  <span class="comment">// schema block, move it cross-workspace, or strip its</span>
+  <span class="comment">// property-schema type tag. Without this, Phase A would commit</span>
+  <span class="comment">// block-type:properties pointing at a stale id and tryBuildType</span>
+  <span class="comment">// would silently drop it at runtime.</span>
+  for (const schemaId of propertySchemaIds) {
+    const row = await tx.get(schemaId)
+    if (!row || row.deleted) throw new Error(`schema ${schemaId} not live`)
+    if (row.workspaceId !== workspaceId) throw new Error(`schema ${schemaId} moved workspace`)
+    if (!hasBlockType(row, PROPERTY_SCHEMA_TYPE)) throw new Error(`schema ${schemaId} lost ${PROPERTY_SCHEMA_TYPE}`)
+  }
   await repo.addTypeInTx(tx, targetBlockId, BLOCK_TYPE_TYPE, {}, snapshotA)
   await repo.addTypeInTx(tx, targetBlockId, PAGE_TYPE, {}, snapshotA)
   <span class="comment">// setProperty (not initialValues): label/properties must overwrite</span>
