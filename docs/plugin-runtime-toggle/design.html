@@ -354,16 +354,13 @@ export const staticAppExtensions = ({repo}) => [
   const {module} = await compileExtensionModule(block.content, block.id, cache)
   const exported = module.default as AppExtension
 
-  // If the author wrapped their export, take name/description hints only.
-  // Their id/defaultEnabled/essential are discarded — the factory's
-  // signature physically cannot accept them.
-  const authoredBoundary = getBoundary(exported)
-  const inner = authoredBoundary ? unwrapBoundary(exported) : exported
-  const authoredHints = authoredBoundary
-    ? {name: authoredBoundary.name, description: authoredBoundary.description}
-    : undefined
+  // If the author wrapped their export in authorHints({...}, ext),
+  // pick up the hints. The authorHints primitive type-locks the shape
+  // so authors can't pass id/defaultEnabled/essential at all.
+  const hints = getAuthorHints(exported)
+  const inner = hints ? unwrapAuthorHints(exported) : exported
 
-  const handle = userExtensionToggle(block, authoredHints)
+  const handle = userExtensionToggle(block, hints)
   const validated = validateAndPrefix(handle.of(inner), block.id)
   if (validated) collected.push(validated)
 }</code></pre>
@@ -382,22 +379,45 @@ export const staticAppExtensions = ({repo}) => [
       title field. Two paths:
       <ul>
         <li><strong>Compiled (enabled) blocks</strong> resolve name via
-          <code>authored?.name</code> ?? alias ?? "Extension {id-link}". The author's
-          <code>togglable({name})</code> wrapping is consulted post-compile for the label
-          only.</li>
+          <code>authorHints?.name</code> ?? alias ?? "Extension {id-link}". The author's
+          <code>authorHints({name, description}, ext)</code> wrapping is consulted
+          post-compile for the label only.</li>
         <li><strong>Shell (disabled) blocks</strong> resolve name via alias →
           "Extension {id-link}". The author's name is unavailable because the module is
           intentionally not compiled.</li>
       </ul>
     </div>
 
+    <div class="decision">
+      <strong>How authors provide name + description: <code>authorHints</code>, the
+      third primitive.</strong> Authors don't have <code>BlockData</code> in their
+      module — that's the platform's. They also can't call <code>systemToggle</code>:
+      <code>id</code> / <code>essential</code> / <code>defaultEnabled</code> are
+      platform-owned for user extensions, so a primitive that accepts them would have
+      to "silently discard" — exactly the prose-rule anti-pattern the two-factory
+      design was meant to eliminate.
+      <br><br>
+      Solution: a third, minimal primitive
+      <code>authorHints({name?, description?}, ext)</code> whose type physically cannot
+      accept anything else. The loader detects the hints via a non-enumerable symbol
+      and threads them into <code>userExtensionToggle(block, hints)</code>. Author
+      usage:
+      <pre style="margin: 0.6rem 0;"><code>import { authorHints } from '@/extensions/togglable'
+
+export default authorHints(
+  { name: 'My slash command', description: 'Inserts a snippet' },
+  [
+    actionsFacet.of(myAction, { source: 'my-ext' }),
+  ],
+)</code></pre>
+      Three primitives total — <code>systemToggle</code>,
+      <code>userExtensionToggle</code>, <code>authorHints</code> — each carrying
+      exactly the fields its context can express.
+    </div>
+
     <div class="warn">
-      <strong>Author metadata is name/description only — the platform owns identity and
-      default-enabled.</strong> If a user-extension module exports
-      <code>togglable({id: 'custom', defaultEnabled: false}).of([...])</code>, the
-      loader takes only <code>name</code> and <code>description</code>; it re-wraps the
-      inner extension with a new handle whose <code>id = block.id</code> and
-      <code>defaultEnabled = true</code>. Reasons:
+      <strong>Why <code>authorHints</code> can't carry id / defaultEnabled.</strong>
+      The type-system constraint is backed by real reasons:
       <ul>
         <li>Pre-compile skip can only check by <code>block.id</code> — an author-chosen
           id wouldn't be visible until the module ran, defeating the skip.</li>
@@ -827,38 +847,62 @@ export const videoPlayerPlugin: AppExtension = [
     <p>
       "Currently-off branches" needs a precise meaning for user extensions, since their
       modules can't be safely compiled just to populate the settings UI. The convention:
-      a disabled user extension contributes a metadata-only <code>shellToggle</code>
-      (id + name, empty extension subtree). The shell appears in the discovered tree
-      with the right handle, but no inner contributions to walk into. For nested
-      togglables that live <em>inside</em> a disabled parent's real subtree (i.e. an
-      enabled child of a disabled system plugin), they still appear via the BOUNDARY
-      symbols in the parent's already-resolved tree — those didn't require module
-      compilation.
+      a disabled user extension contributes a metadata-only
+      <code>userExtensionToggle(block).of([])</code> — the same factory used for
+      enabled extensions, just with no <code>authorHints</code> and an empty subtree.
+      The shell appears in the discovered tree with the right handle, but no inner
+      contributions to walk into. For nested togglables that live <em>inside</em> a
+      disabled parent's real subtree (an enabled child of a disabled system plugin),
+      they still appear via the BOUNDARY symbols in the parent's already-resolved tree
+      — those didn't require module compilation.
     </p>
+
+    <div class="warn">
+      <strong>Discovery must use the async variant.</strong>
+      <code>dynamicExtensionsExtension</code> (<code>dynamicExtensions.ts:51</code>) is a
+      top-level <em>function</em> on the async resolver path
+      (<code>AppRuntimeProvider.tsx:92</code>). A sync walk that bails on functions
+      (the natural first sketch) never sees user-extension boundaries. So the design
+      ships a pair: <code>discoverToggleTreeSync</code> for callers that already hold a
+      materialized tree, and <code>discoverToggleTree</code> (async) that awaits and
+      walks function-valued extensions. <code>AppRuntimeProvider</code> calls the async
+      variant once dynamic extensions finish resolving and caches the result alongside
+      the runtime; the settings UI reads from the cached tree.
+    </div>
 
 <pre><code>type ToggleNode = { handle: Togglable; children: ToggleNode[] }
 
-function discoverToggleTree(ext: AppExtension): ToggleNode[] {
+// Async variant — required when the tree contains
+// dynamicExtensionsExtension (a function-valued AppExtension).
+async function discoverToggleTree(
+  tree: AppExtension,
+  context: FacetResolveContext,
+): Promise&lt;ToggleNode[]&gt; {
   const out: ToggleNode[] = []
-  walk(ext, out)
+  await walk(tree, out)
   return out
 
-  function walk(node: AppExtension, sink: ToggleNode[]) {
+  async function walk(node: AppExtension, sink: ToggleNode[]) {
     if (!node) return
+    if (typeof node === 'function') {
+      try { await walk(await node(context), sink) }
+      catch (e) { console.error('discoverToggleTree: failed to resolve', e) }
+      return
+    }
     const handle = getBoundary(node)
     if (handle) {
       const child: ToggleNode = { handle, children: [] }
       sink.push(child)
-      for (const inner of node as readonly AppExtension[]) walk(inner, child.children)
+      for (const inner of node as readonly AppExtension[]) await walk(inner, child.children)
       return
     }
     if (Array.isArray(node)) {
-      for (const inner of node) walk(inner, sink)
+      for (const inner of node) await walk(inner, sink)
       return
     }
     // FacetContribution: nothing to discover at the value itself, but if it
     // carries an `enables` payload, nested togglables can live inside it.
-    if (isFacetContribution(node) && node.enables) walk(node.enables, sink)
+    if (isFacetContribution(node) && node.enables) await walk(node.enables, sink)
   }
 }</code></pre>
 
@@ -985,15 +1029,15 @@ function discoverToggleTree(ext: AppExtension): ToggleNode[] {
         blocks with <code>system:disabled === true</code> into the overrides map as
         <code>{[block.id]: false}</code>; drop the property. Generalize the existing
         per-block skip at <code>dynamicExtensions.ts:72</code> to consult the overrides
-        map: if disabled, emit a shell boundary using <code>shellDisplayName(block)</code>
-        — alias if present, else block-id link (the module is intentionally
-        <em>not</em> compiled, so author-provided names aren't available) — and
-        <em>skip <code>compileExtensionModule</code> entirely</em> so disabled
-        extension code never executes. Otherwise compile, unwrap any author togglable
-        for its <code>name</code>/<code>description</code> hints, and re-wrap the inner
-        extension with a platform-owned handle: <code>id = block.id</code>,
-        <code>defaultEnabled = true</code>. Subscribe to overrides changes so toggling
-        fires
+        map: if disabled, push <code>userExtensionToggle(block).of([])</code> (no
+        <code>authorHints</code>, empty subtree — name falls back to alias or block-id
+        link automatically because the module is intentionally <em>not</em> compiled)
+        and <em>skip <code>compileExtensionModule</code> entirely</em> so disabled
+        extension code never executes. Otherwise compile, read any
+        <code>authorHints({name, description}, ...)</code> wrapping via
+        <code>getAuthorHints</code>, and wrap the inner extension with
+        <code>userExtensionToggle(block, hints)</code>. Subscribe to overrides changes
+        so toggling fires
         <code>refreshAppRuntime()</code> automatically (today users must run "Reload
         extensions" manually).</li>
       <li><strong>Add <code>enables</code></strong> support to the resolver; refactor

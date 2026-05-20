@@ -135,6 +135,50 @@ export function userExtensionShellToggle(block: BlockData): Togglable {
 }
 
 // ──────────────────────────────────────────────────────────────────────
+// 2b. Author-facing metadata wrapper
+//
+//   User-extension authors don't have BlockData (it's the platform's),
+//   so they cannot call userExtensionToggle themselves. But they may
+//   still want to provide a display name + description. authorHints is
+//   the only API exposed to extension modules: it wraps the export
+//   with non-enumerable hint metadata; the loader reads it and threads
+//   it into userExtensionToggle. The type physically cannot accept id,
+//   essential, or defaultEnabled — those are platform-owned for user
+//   extensions, so they're unrepresentable in the author-facing API
+//   instead of "silently discarded by the loader."
+// ──────────────────────────────────────────────────────────────────────
+
+const AUTHOR_HINTS = Symbol('togglable.author-hints')
+
+interface AuthorHintsArray extends Array<AppExtension> {
+  [AUTHOR_HINTS]?: UserExtensionAuthorHints
+}
+
+export function authorHints(
+  hints: UserExtensionAuthorHints,
+  ext: AppExtension,
+): AppExtension {
+  const wrapped: AuthorHintsArray = [ext]
+  Object.defineProperty(wrapped, AUTHOR_HINTS, {
+    value: hints,
+    enumerable: false,
+  })
+  return wrapped
+}
+
+export function getAuthorHints(
+  node: unknown,
+): UserExtensionAuthorHints | undefined {
+  if (!node || typeof node !== 'object') return undefined
+  return (node as AuthorHintsArray)[AUTHOR_HINTS]
+}
+
+function unwrapAuthorHints(node: AppExtension): AppExtension {
+  if (Array.isArray(node) && node.length === 1) return node[0] as AppExtension
+  return node
+}
+
+// ──────────────────────────────────────────────────────────────────────
 // 3. Overrides & the enabled-state computation
 // ──────────────────────────────────────────────────────────────────────
 
@@ -311,14 +355,23 @@ export interface ToggleNode {
   children: ToggleNode[]
 }
 
-export function discoverToggleTree(tree: AppExtension): ToggleNode[] {
+/** Sync discovery — usable on the static extension tree (no function
+ *  branches). Throws if a function is reached, like
+ *  collectContributionsSync. */
+export function discoverToggleTreeSync(tree: AppExtension): ToggleNode[] {
   const roots: ToggleNode[] = []
   walk(tree, roots)
   return roots
 
   function walk(node: AppExtension, sink: ToggleNode[]): void {
     if (!node) return
-    if (typeof node === 'function') return
+    if (typeof node === 'function') {
+      throw new Error(
+        'discoverToggleTreeSync: cannot resolve function-valued ' +
+        'AppExtension. Use discoverToggleTree (async) for trees that ' +
+        'include dynamicExtensionsExtension.',
+      )
+    }
     if (Array.isArray(node)) {
       const handle = getBoundary(node)
       if (handle) {
@@ -331,6 +384,50 @@ export function discoverToggleTree(tree: AppExtension): ToggleNode[] {
       return
     }
     if (isFacetContribution(node) && node.enables) walk(node.enables, sink)
+  }
+}
+
+/** Async discovery — required for the settings UI in this app, because
+ *  dynamicExtensionsExtension is a top-level function on the async
+ *  resolver path (AppRuntimeProvider.tsx:92). Without resolving that
+ *  function, user-extension shell rows and any toggles inside it never
+ *  surface. Runs the same walk as the async collector minus the
+ *  filter/dedup. */
+export async function discoverToggleTree(
+  tree: AppExtension,
+  context: FacetResolveContext,
+): Promise<ToggleNode[]> {
+  const roots: ToggleNode[] = []
+  await walk(tree, roots)
+  return roots
+
+  async function walk(
+    node: AppExtension,
+    sink: ToggleNode[],
+  ): Promise<void> {
+    if (!node) return
+    if (typeof node === 'function') {
+      try {
+        await walk(await node(context), sink)
+      } catch (error) {
+        console.error('discoverToggleTree: failed to resolve function', error)
+      }
+      return
+    }
+    if (Array.isArray(node)) {
+      const handle = getBoundary(node)
+      if (handle) {
+        const child: ToggleNode = {handle, children: []}
+        sink.push(child)
+        for (const inner of node) await walk(inner, child.children)
+      } else {
+        for (const inner of node) await walk(inner, sink)
+      }
+      return
+    }
+    if (isFacetContribution(node) && node.enables) {
+      await walk(node.enables, sink)
+    }
   }
 }
 
@@ -379,19 +476,11 @@ export async function loadDynamicExtensions(
       continue
     }
 
-    // Take name/description hints from any author togglable; discard
-    // their id/defaultEnabled/essential. unwrapBoundary peels one layer.
-    const authoredBoundary = getBoundary(exported)
-    const inner = authoredBoundary ? unwrapBoundary(exported) : exported
-    const authoredHints: UserExtensionAuthorHints | undefined =
-      authoredBoundary
-        ? {
-            name: authoredBoundary.name,
-            description: authoredBoundary.description,
-          }
-        : undefined
-
-    const handle = userExtensionToggle(block, authoredHints)
+    // Take name/description hints from any authorHints() wrapper.
+    // unwrapAuthorHints peels one layer if present.
+    const hints = getAuthorHints(exported)
+    const inner = hints ? unwrapAuthorHints(exported) : exported
+    const handle = userExtensionToggle(block, hints)
     const wrapped = handle.of(inner)
     const validated = validateAndPrefix(wrapped, block.id)
     if (validated) collected.push(validated)
