@@ -9,7 +9,7 @@ import { ChangeScope } from '@/data/api'
 import { Block } from '@/data/block'
 import type { Repo } from '@/data/repo'
 import { aliasesProp, hasBlockType } from '@/data/properties'
-import { PROPERTIES_PAGE_TYPE } from '@/data/blockTypes'
+import { PAGE_TYPE, PROPERTIES_PAGE_TYPE } from '@/data/blockTypes'
 
 const PROPERTIES_PAGE_NS = '94f9a6d9-c651-4b75-aef3-a5c1bbef0e1a'
 
@@ -38,6 +38,7 @@ export const getOrCreatePropertiesPage = async (
   if (live && !live.deleted) {
     const aliases = stringListProperty(live.properties[aliasesProp.name])
     const needsRepair =
+      !hasBlockType(live, PAGE_TYPE) ||
       !hasBlockType(live, PROPERTIES_PAGE_TYPE) ||
       !includesAll(aliases, PROPERTIES_ALIASES)
     if (!needsRepair) return repo.block(id)
@@ -50,6 +51,7 @@ export const getOrCreatePropertiesPage = async (
       if (!includesAll(currentAliases, PROPERTIES_ALIASES)) {
         await tx.setProperty(id, aliasesProp, mergeStrings([...PROPERTIES_ALIASES, ...currentAliases]))
       }
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: PROPERTIES_ALIASES}, typeSnapshot)
       await repo.addTypeInTx(tx, id, PROPERTIES_PAGE_TYPE, {[aliasesProp.name]: PROPERTIES_ALIASES}, typeSnapshot)
     }, {scope: ChangeScope.BlockDefault})
     return repo.block(id)
@@ -62,6 +64,7 @@ export const getOrCreatePropertiesPage = async (
     if (existing && existing.deleted) {
       await tx.restore(id, {content: PROPERTIES_ALIAS})
       await tx.setProperty(id, aliasesProp, [...PROPERTIES_ALIASES])
+      await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: PROPERTIES_ALIASES}, typeSnapshot)
       await repo.addTypeInTx(tx, id, PROPERTIES_PAGE_TYPE, {[aliasesProp.name]: PROPERTIES_ALIASES}, typeSnapshot)
       return
     }
@@ -72,6 +75,7 @@ export const getOrCreatePropertiesPage = async (
       orderKey: 'a0',
       content: PROPERTIES_ALIAS,
     })
+    await repo.addTypeInTx(tx, id, PAGE_TYPE, {[aliasesProp.name]: PROPERTIES_ALIASES}, typeSnapshot)
     await repo.addTypeInTx(tx, id, PROPERTIES_PAGE_TYPE, {[aliasesProp.name]: PROPERTIES_ALIASES}, typeSnapshot)
   }, {scope: ChangeScope.BlockDefault})
 
