@@ -27,6 +27,7 @@ export interface ExampleExtensionDefinition {
 }
 
 const HELLO_RENDERER_SOURCE = `import {
+  authorHints,
   blockContentRendererFacet,
   ChangeScope,
   codecs,
@@ -58,20 +59,27 @@ const HelloContent = ({ block }) => (
   </div>
 )
 
-export default [
-  // Register the schema so the value-preset / property-editor lookups
-  // can find this prop, and describeRuntime can list it.
-  propertySchemasFacet.of(helloProp),
-  blockContentRendererFacet.of((ctx) => {
-    if (!ctx.block.peekProperty(helloProp)) return null
-    return defineVariant('user.hello', 'Hello', HelloContent)
-  }),
-]
+export default authorHints(
+  {
+    name: 'Hello renderer',
+    description: "Content-renderer variant gated by 'user:hello = true'.",
+  },
+  [
+    // Register the schema so the value-preset / property-editor lookups
+    // can find this prop, and describeRuntime can list it.
+    propertySchemasFacet.of(helloProp),
+    blockContentRendererFacet.of((ctx) => {
+      if (!ctx.block.peekProperty(helloProp)) return null
+      return defineVariant('user.hello', 'Hello', HelloContent)
+    }),
+  ],
+)
 `
 
 const FOLD_ALL_ACTION_SOURCE = `import {
   actionsFacet,
   ActionContextTypes,
+  authorHints,
   ChangeScope,
   isCollapsedProp,
   topLevelBlockIdProp,
@@ -87,7 +95,12 @@ const FOLD_ALL_ACTION_SOURCE = `import {
 // Note on key syntax: this app uses hotkeys-js, which has no 'mod'
 // alias — list cmd and ctrl variants explicitly for cross-platform
 // support.
-export default actionsFacet.of({
+export default authorHints(
+  {
+    name: 'Fold all',
+    description: 'Action that folds/unfolds every block in the current view (Cmd+Shift+F).',
+  },
+  actionsFacet.of({
   id: 'user.fold-all',
   description: 'Fold/unfold every block in the current view',
   context: ActionContextTypes.NORMAL_MODE,
@@ -113,14 +126,16 @@ export default actionsFacet.of({
       }
     }, { scope: ChangeScope.BlockDefault, description: 'fold all' })
   },
-})
+}),
+)
 `
 
 const EMOJI_REACT_SOURCE = `import {
   actionsFacet,
+  ActionContextTypes,
+  authorHints,
   blockClickHandlersFacet,
   blockContentDecoratorsFacet,
-  ActionContextTypes,
   ChangeScope,
   codecs,
   defineProperty,
@@ -157,7 +172,12 @@ const cycleReaction = async (block) => {
   await block.set(reactionsProp, [...current, nextEmoji])
 }
 
-export default [
+export default authorHints(
+  {
+    name: 'Emoji reactions',
+    description: 'Multi-facet plugin: content decorator + click handler + keyboard action for adding emoji reactions to blocks.',
+  },
+  [
   // Register the schema so the codec/editor lookups know about this
   // property and describeRuntime can list it.
   propertySchemasFacet.of(reactionsProp),
@@ -194,10 +214,11 @@ export default [
       return Decorated
     }
   }),
-]
+  ],
+)
 `
 
-const KUDOS_FACET_SOURCE = `import { defineFacet, blockRenderersFacet } from '@/extensions/api.js'
+const KUDOS_FACET_SOURCE = `import { authorHints, defineFacet, blockRenderersFacet } from '@/extensions/api.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 
 // Demonstrates defining a brand-new facet inside an extension block,
@@ -228,16 +249,23 @@ const KudosBannerContent = ({ block }) => (
 const KudosBannerRenderer = (props) =>
   <DefaultBlockRenderer {...props} ContentRenderer={KudosBannerContent} />
 
-export default [
-  kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
-  blockRenderersFacet.of({
-    id: 'kudos-banner',
-    renderer: KudosBannerRenderer,
-  }),
-]
+export default authorHints(
+  {
+    name: 'Kudos facet',
+    description: "Defines a brand-new facet and registers a property-keyed 'kudos-banner' renderer that other extensions can contribute to.",
+  },
+  [
+    kudosFacet.of({ from: 'self', message: 'Hello from the defining block' }),
+    blockRenderersFacet.of({
+      id: 'kudos-banner',
+      renderer: KudosBannerRenderer,
+    }),
+  ],
+)
 `
 
 const SPLIT_LAYOUT_SOURCE = `import {
+  authorHints,
   blockLayoutFacet,
   ChangeScope,
   codecs,
@@ -286,24 +314,30 @@ const SplitLayout = ({ Content, Children, Properties, Footer }) => (
 // {id, label, render} (or use defineVariant() sugar) so a future
 // picker UI could enumerate them. Returning null still means "this
 // variant doesn't apply here".
-export default [
-  // Register the schema so describeRuntime / property-editor lookups
-  // know about this property.
-  propertySchemasFacet.of(layoutProp),
-  blockLayoutFacet.of((ctx) => {
-    if (ctx.block.peekProperty(layoutProp) !== 'split') return null
-    return defineVariant('split', 'Split (content / children)', SplitLayout)
-  }),
-]
+export default authorHints(
+  {
+    name: 'Split layout',
+    description: "Block-layout variant for blocks tagged 'user:layout = split' — places content and children side by side.",
+  },
+  [
+    // Register the schema so describeRuntime / property-editor lookups
+    // know about this property.
+    propertySchemasFacet.of(layoutProp),
+    blockLayoutFacet.of((ctx) => {
+      if (ctx.block.peekProperty(layoutProp) !== 'split') return null
+      return defineVariant('split', 'Split (content / children)', SplitLayout)
+    }),
+  ],
+)
 `
 
-const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
+const LAYOUT_RENDERER_OVERRIDE_SOURCE = `import { authorHints, blockRenderersFacet } from '@/extensions/api.js'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.js'
 
-// Disabled by default because this replaces the app-wide renderer
-// registered under id 'layout'. Enable it to see how a dynamic
-// extension can wrap the host layout while preserving the original
-// LayoutRenderer's matching rules.
+// Replaces the app-wide renderer registered under id 'layout', so
+// inserting this example wraps every panel with the custom frame
+// below. Disable the row in System plugins settings (or delete the
+// block) to revert to the host LayoutRenderer.
 
 const DemoLayoutRenderer = (props) => (
   <div style={{
@@ -327,21 +361,28 @@ const DemoLayoutRenderer = (props) => (
 DemoLayoutRenderer.canRender = LayoutRenderer.canRender
 DemoLayoutRenderer.priority = LayoutRenderer.priority
 
-export default blockRenderersFacet.of({
-  id: 'layout',
-  renderer: DemoLayoutRenderer,
-})
+export default authorHints(
+  {
+    name: 'Layout renderer override',
+    description: "Overrides the app-wide 'layout' renderer id and wraps the normal panel layout with a custom frame.",
+  },
+  blockRenderersFacet.of({
+    id: 'layout',
+    renderer: DemoLayoutRenderer,
+  }),
+)
 `
 
-const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { blockRenderersFacet } from '@/extensions/api.js'
+const DEFAULT_RENDERER_OVERRIDE_SOURCE = `import { authorHints, blockRenderersFacet } from '@/extensions/api.js'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.js'
 import { MarkdownContentRenderer } from '@/components/renderer/MarkdownContentRenderer.js'
 
-// Disabled by default because this replaces the fallback renderer
-// registered under id 'default'. Enable it to change one small
-// behavior for every ordinary block that falls through to the default:
-// empty blocks render a muted read-mode placeholder while edit mode,
-// children, properties, bullets, and selection chrome stay unchanged.
+// Replaces the fallback renderer registered under id 'default'.
+// Inserting this example immediately changes every ordinary block
+// that falls through to the default renderer: empty blocks show a
+// muted read-mode placeholder while edit mode, children, properties,
+// bullets, and selection chrome stay unchanged. Disable the row in
+// System plugins settings (or delete the block) to revert.
 
 const PlaceholderContent = ({ block }) => {
   const content = block.peek()?.content ?? ''
@@ -360,10 +401,16 @@ const PlaceholderDefaultRenderer = (props) => (
   <DefaultBlockRenderer {...props} ContentRenderer={PlaceholderContent} />
 )
 
-export default blockRenderersFacet.of({
-  id: 'default',
-  renderer: PlaceholderDefaultRenderer,
-})
+export default authorHints(
+  {
+    name: 'Default renderer placeholder',
+    description: "Overrides the fallback 'default' renderer id so ordinary empty blocks show a muted read-mode placeholder.",
+  },
+  blockRenderersFacet.of({
+    id: 'default',
+    renderer: PlaceholderDefaultRenderer,
+  }),
+)
 `
 
 export const exampleExtensions: readonly ExampleExtensionDefinition[] = [
@@ -391,8 +438,8 @@ Below are example **extension blocks** (\`types: ['extension']\`) that show the 
 - **emoji-react** — a multi-facet plugin (decorating content renderer + click handler + action).
 - **kudos-facet** — defines a brand-new facet and decorates the content with a banner.
 - **split-layout** — replaces the block layout for blocks tagged \`user:layout = split\`, placing content and children side by side.
-- **layout-renderer-override** — disabled by default; overrides the app-wide \`layout\` renderer id and wraps the normal panel layout with a custom frame.
-- **default-renderer-placeholder** — disabled by default; overrides the fallback \`default\` renderer id so ordinary empty blocks show a muted read-mode placeholder.
+- **layout-renderer-override** — overrides the app-wide \`layout\` renderer id and wraps the normal panel layout with a custom frame. Inserting it changes every panel until you disable it in System plugins settings.
+- **default-renderer-placeholder** — overrides the fallback \`default\` renderer id so ordinary empty blocks show a muted read-mode placeholder. Inserting it changes every default-rendered block until you disable it in System plugins settings.
 
 To author your own:
 1. Create a block with property \`types = ['extension']\`.
@@ -402,7 +449,7 @@ To author your own:
 
 To re-insert these examples beside any block, run **Insert example extensions** from the command palette.
 
-To turn an extension off without deleting it, set its \`system:disabled\` property to true. Some app-wide renderer override examples start disabled; set \`system:disabled\` to false and run "Reload extensions" to try them.`
+To turn an extension off without deleting it, open **System plugins** from the command palette and untick its row. The override is per-device and persists across reloads.`
 
 /**
  * Append the example-extension blocks under `parentBlock`. Used by the
