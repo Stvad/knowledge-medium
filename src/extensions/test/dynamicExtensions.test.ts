@@ -206,6 +206,49 @@ describe('dynamicExtensionsExtension — provenance', () => {
       restore()
     }
   })
+
+  it('walks FacetContribution.enables so nested contributions get the block:<id> prefix too', async () => {
+    // Authors can attach a "dragged-along" subtree via `enables`.
+    // Without recursion the spread in prefixContributionSource leaves
+    // those nested contributions with their original source string
+    // (or none), so describeRuntime / agent attribution would
+    // mis-credit them. The loader must walk into `enables` exactly
+    // like it walks the rest of the AppExtension tree.
+    const blocks = [blockData({id: 'ext-enables', content: 'src-enables'})]
+    const restore = stubCompileByBlockId({
+      'src-enables': {
+        default: labelsFacet.of('outer', {
+          enables: [
+            labelsFacet.of('inner-no-source'),
+            labelsFacet.of('inner-with-source', {source: 'helper'}),
+          ],
+        }),
+      },
+    })
+
+    try {
+      const ext = dynamicExtensionsExtension({
+        repo: makeRepo(blocks),
+        workspaceId: 'ws-1',
+        cache,
+        safeMode: false,
+      })
+      // resolveAppRuntime (not resolveFacetRuntime) is what production
+      // uses — it's the one that recurses into `enables`.
+      const {resolveAppRuntime} = await import('@/extensions/resolveAppRuntime.ts')
+      const runtime = await resolveAppRuntime([ext], {overrides: new Map()})
+
+      const sources = runtime.contributions(labelsFacet).map(c => c.source)
+      expect(sources).toContain('block:ext-enables')
+      expect(sources).toContain('block:ext-enables/helper')
+      // The unsourced enables sibling should pick up the bare prefix
+      // (same composition rule as the outer contribution).
+      const innerNoSource = sources.filter(s => s === 'block:ext-enables')
+      expect(innerNoSource.length).toBe(2)
+    } finally {
+      restore()
+    }
+  })
 })
 
 describe('dynamicExtensionsExtension — overrides-driven disable', () => {

@@ -197,6 +197,14 @@ const validateAndPrefix = (
   )
 }
 
+/** Prefix the contribution's `source` with `block:<id>` (composing
+ *  with any author-supplied source) AND recurse into `enables` so
+ *  dragged-along contributions get the same provenance treatment as
+ *  the top-level export. Without the `enables` recursion, a nested
+ *  contribution would bypass validateAndPrefix entirely — keeping its
+ *  original source string and skipping any per-contribution
+ *  validation. The resolver itself walks `enables`, so production
+ *  would happily register an attributed-to-nobody contribution. */
 const prefixContributionSource = (
   contribution: FacetContribution<unknown>,
   blockId: string,
@@ -205,7 +213,11 @@ const prefixContributionSource = (
   const composed = contribution.source
     ? `${blockSource}/${contribution.source}`
     : blockSource
-  return {...contribution, source: composed}
+  const result: FacetContribution<unknown> = {...contribution, source: composed}
+  if (contribution.enables !== undefined) {
+    result.enables = validateAndPrefix(contribution.enables, blockId)
+  }
+  return result
 }
 
 const describeShape = (value: unknown): string => {
