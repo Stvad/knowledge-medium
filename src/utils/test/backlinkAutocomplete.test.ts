@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { EditorState } from '@codemirror/state'
 import { CompletionContext } from '@codemirror/autocomplete'
 import {
+  type BacklinkCompletionCandidate,
   backlinkCompletionSource,
   createBacklinkAutocomplete,
   isInsideBacklinkBrackets,
@@ -94,7 +95,11 @@ describe('backlinkAutocomplete', () => {
   })
 
   describe('completion source filter behavior', () => {
-    const callSource = async (text: string, cursorPos: number, aliases: string[]) => {
+    const callSource = async (
+      text: string,
+      cursorPos: number,
+      aliases: Array<string | BacklinkCompletionCandidate>,
+    ) => {
       const state = EditorState.create({doc: text})
       const context = new CompletionContext(state, cursorPos, false)
       const source = backlinkCompletionSource({getAliases: async () => aliases})
@@ -112,6 +117,21 @@ describe('backlinkAutocomplete', () => {
     it('still surfaces option labels verbatim — CM uses them for insertion', async () => {
       const result = await callSource('[[fri', 5, ['April 30th, 2026'])
       expect(result!.options.map(opt => opt.label)).toEqual(['April 30th, 2026'])
+    })
+
+    it('supports candidates whose visible label differs from inserted text', async () => {
+      const result = await callSource('[[to', 4, [{
+        label: 'April 28th, 2026',
+        apply: '2026-04-28',
+        detail: 'today',
+      }])
+      expect(result!.options.map(opt => ({
+        label: opt.label,
+        detail: opt.detail,
+      }))).toEqual([{
+        label: 'April 28th, 2026',
+        detail: 'today',
+      }])
     })
   })
 

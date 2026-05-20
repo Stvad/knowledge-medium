@@ -16,7 +16,7 @@ import { usePropertyValue } from '@/hooks/block.ts'
 import { PAGE_TYPE } from '@/data/blockTypes.ts'
 import { v4 as uuidv4 } from 'uuid'
 import { useNavigate, useNavigateFromGlobalCommand } from '@/utils/navigation.ts'
-import { parseRelativeDate } from '@/utils/relativeDate.ts'
+import { parseRelativeDate, relativeDateCandidates } from '@/utils/relativeDate.ts'
 import { getOrCreateDailyNote } from '@/plugins/daily-notes'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
 import {
@@ -75,8 +75,14 @@ export function QuickFind() {
     () => (trimmedQuery ? parseRelativeDate(trimmedQuery) : null),
     [trimmedQuery],
   )
-  const dateItemValue = parsedDate ? quickFindDateValue(parsedDate.iso) : ''
-  const dateLabel = parsedDate ? formatRoamDate(parsedDate.date) : null
+  const dateCandidates = useMemo(
+    () => (trimmedQuery ? relativeDateCandidates(trimmedQuery) : []),
+    [trimmedQuery],
+  )
+  const dateValues = useMemo(
+    () => dateCandidates.map(candidate => quickFindDateValue(candidate.iso)),
+    [dateCandidates],
+  )
   const aliases = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.aliases : []
   const blocks = trimmedQuery && searchResults.query === trimmedQuery ? searchResults.blocks : []
   const [recents, setRecents] = useState<RecentItem[]>([])
@@ -123,7 +129,7 @@ export function QuickFind() {
             query: trimmedQuery,
             aliases: aliasResults,
             blocks: [],
-            dateValue: dateItemValue,
+            dateValues,
             currentValue: current,
           }))
         },
@@ -138,7 +144,7 @@ export function QuickFind() {
             query: trimmedQuery,
             aliases: results.aliases,
             blocks: blockResults,
-            dateValue: dateItemValue,
+            dateValues,
             currentValue: current,
           }))
         },
@@ -149,7 +155,7 @@ export function QuickFind() {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, trimmedQuery, dateItemValue, repo])
+  }, [open, trimmedQuery, dateValues, repo])
 
   useEffect(() => {
     if (!open) return
@@ -297,17 +303,24 @@ export function QuickFind() {
           </CommandGroup>
         )}
 
-        {parsedDate && (
+        {dateCandidates.length > 0 && (
           <CommandGroup heading="Date">
-            <CommandItem
-              key={`date:${parsedDate.iso}`}
-              value={dateItemValue}
-              onSelect={selectedValue => handleSelect(selectedValue, false)}
-              className="flex justify-between items-center gap-2"
-            >
-              <span className="truncate">{dateLabel}</span>
-              <span className="text-xs text-muted-foreground">{parsedDate.iso}</span>
-            </CommandItem>
+            {dateCandidates.map((candidate, index) => {
+              const detail = candidate.phrase.toLowerCase() === trimmedQuery.toLowerCase()
+                ? candidate.iso
+                : candidate.phrase
+              return (
+                <CommandItem
+                  key={`date:${candidate.iso}:${candidate.phrase}`}
+                  value={dateValues[index]}
+                  onSelect={selectedValue => handleSelect(selectedValue, false)}
+                  className="flex justify-between items-center gap-2"
+                >
+                  <span className="truncate">{formatRoamDate(candidate.date)}</span>
+                  <span className="text-xs text-muted-foreground">{detail}</span>
+                </CommandItem>
+              )
+            })}
           </CommandGroup>
         )}
 

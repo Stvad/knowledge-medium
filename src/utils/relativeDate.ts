@@ -6,6 +6,26 @@ export interface ParsedRelativeDate {
   date: Date
 }
 
+export interface RelativeDateCandidate extends ParsedRelativeDate {
+  /** Complete phrase this candidate represents, shown as completion detail. */
+  phrase: string
+}
+
+interface RelativeDatePrefixSpec {
+  phrase: string
+  offsetDays: number
+}
+
+const PREFIX_MIN_LENGTH = 2
+
+const RELATIVE_DATE_PREFIXES: RelativeDatePrefixSpec[] = [
+  {phrase: 'today', offsetDays: 0},
+  {phrase: 'tomorrow', offsetDays: 1},
+]
+
+const localDateWithOffset = (now: Date, offsetDays: number): Date =>
+  new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays)
+
 // `forwardDate: true` so bare weekdays ("Friday") and month/day phrases
 // ("April 28") resolve to the nearest *future* occurrence — matches the
 // Roam/Logseq behavior. `chrono.casual` includes "today", "tomorrow",
@@ -43,6 +63,43 @@ export const parseRelativeDate = (
   if (year < 1000 || year > 9999) return null
 
   return {iso: formatIsoDate(date), date}
+}
+
+/**
+ * Completion-oriented date candidates. Unlike `parseRelativeDate`, this
+ * accepts partial prefixes and may return multiple dates (`"to"` means
+ * both "today" and "tomorrow"). Keep this out of storage-time parsing:
+ * it is a query/autocomplete helper, not a statement that the input is a
+ * complete date expression.
+ */
+export const relativeDateCandidates = (
+  input: string,
+  now: Date = new Date(),
+): RelativeDateCandidate[] => {
+  const trimmed = input.trim()
+  const normalized = trimmed.toLowerCase()
+  if (!normalized) return []
+
+  const candidates: RelativeDateCandidate[] = []
+  const seenIso = new Set<string>()
+  const add = (candidate: RelativeDateCandidate): void => {
+    if (seenIso.has(candidate.iso)) return
+    seenIso.add(candidate.iso)
+    candidates.push(candidate)
+  }
+
+  if (normalized.length >= PREFIX_MIN_LENGTH) {
+    for (const spec of RELATIVE_DATE_PREFIXES) {
+      if (!spec.phrase.startsWith(normalized)) continue
+      const date = localDateWithOffset(now, spec.offsetDays)
+      add({phrase: spec.phrase, iso: formatIsoDate(date), date})
+    }
+  }
+
+  const parsed = parseRelativeDate(trimmed, now)
+  if (parsed) add({phrase: trimmed, ...parsed})
+
+  return candidates
 }
 
 /**

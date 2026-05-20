@@ -8,13 +8,20 @@ import { autocompletion, CompletionContext, CompletionResult } from '@codemirror
 import { keymap } from '@codemirror/view'
 import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
 
+export interface BacklinkCompletionCandidate {
+  label: string
+  apply?: string
+  detail?: string
+  type?: string
+}
+
 export interface BacklinkAutocompleteOptions {
   /**
-   * Function to get aliases based on a filter string
+   * Function to get completion candidates based on a filter string
    * @param filter The current search term to filter aliases
-   * @returns Promise resolving to array of matching aliases
+   * @returns Promise resolving to array of matching candidates
    */
-  getAliases: (filter: string) => Promise<string[]>
+  getAliases: (filter: string) => Promise<Array<string | BacklinkCompletionCandidate>>
 }
 
 /**
@@ -58,10 +65,10 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
     const searchTerm = openBracketMatch[1]
     const startPos = line.from + openBracketMatch.index! + 2 // Position after [[
 
-    // Get filtered aliases
-    const aliases = await options.getAliases(searchTerm)
+    // Get filtered candidates
+    const candidates = await options.getAliases(searchTerm)
 
-    if (aliases.length === 0) {
+    if (candidates.length === 0) {
       return null
     }
 
@@ -75,17 +82,24 @@ export function backlinkCompletionSource(options: BacklinkAutocompleteOptions) {
       // filter would hide those, since the label doesn't contain the
       // typed substring.
       filter: false,
-      options: aliases.map(alias => ({
-        label: alias,
-        apply: (view, _, from, to) => {
-          view.dispatch({
-            changes: { from, to, insert: hasClosingBrackets ? alias : `${alias}]]` },
-            // Place cursor two characters past the insertion start (after ']]')
-            selection: EditorSelection.cursor(from + alias.length + 2)
-          });
-        },
-        type: 'class',
-      }))
+      options: candidates.map(candidate => {
+        const label = typeof candidate === 'string' ? candidate : candidate.label
+        const applyText = typeof candidate === 'string' ? candidate : candidate.apply ?? candidate.label
+        const detail = typeof candidate === 'string' ? undefined : candidate.detail
+        const type = typeof candidate === 'string' ? 'class' : candidate.type ?? 'class'
+        return {
+          label,
+          detail,
+          apply: (view, _, from, to) => {
+            view.dispatch({
+              changes: { from, to, insert: hasClosingBrackets ? applyText : `${applyText}]]` },
+              // Place cursor two characters past the insertion start (after ']]')
+              selection: EditorSelection.cursor(from + applyText.length + 2)
+            });
+          },
+          type,
+        }
+      })
     }
   }
 }

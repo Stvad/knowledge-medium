@@ -3,7 +3,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { EditorSelection, Prec } from '@codemirror/state'
 import type { CodeMirrorExtensionContribution } from '@/extensions/editor.ts'
 import { formatRoamDate } from '@/utils/dailyPage.ts'
-import { parseRelativeDate } from '@/utils/relativeDate.ts'
+import { relativeDateCandidates } from '@/utils/relativeDate.ts'
 import { backlinkCompletionSource } from '@/utils/backlinkAutocomplete.ts'
 import { blockrefCompletionSource } from '@/utils/blockrefAutocomplete.ts'
 import { completionKeymapWithEscapeFallthrough } from '@/utils/codemirrorCompletion.ts'
@@ -112,7 +112,7 @@ export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = (
   autocompletion({
     override: [
       backlinkCompletionSource({
-        getAliases: async (filter: string): Promise<string[]> => {
+        getAliases: async (filter: string) => {
           const workspaceId = repo.activeWorkspaceId
           if (!workspaceId) {
             console.warn('No active workspace for alias search')
@@ -120,11 +120,22 @@ export const referencesCodeMirrorExtensions: CodeMirrorExtensionContribution = (
           }
 
           const aliases = await searchAliasLabels(repo, {workspaceId, query: filter})
-          const dateMatch = parseRelativeDate(filter)
-          if (!dateMatch) return aliases
+          const dateCompletions = relativeDateCandidates(filter).map(candidate => ({
+            label: formatRoamDate(candidate.date),
+            apply: candidate.iso,
+            detail: candidate.phrase,
+            type: 'constant',
+          }))
+          if (dateCompletions.length === 0) return aliases
 
-          const dateAlias = formatRoamDate(dateMatch.date)
-          return [dateAlias, ...aliases.filter(alias => alias !== dateAlias)]
+          const dateLabels = new Set(dateCompletions.flatMap(candidate => [
+            candidate.label,
+            candidate.apply,
+          ]))
+          return [
+            ...dateCompletions,
+            ...aliases.filter(alias => !dateLabels.has(alias)),
+          ]
         },
       }),
       blockrefCompletionSource({

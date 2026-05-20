@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { parseLiteralDailyPageTitle, parseRelativeDate } from '@/utils/relativeDate'
+import {
+  parseLiteralDailyPageTitle,
+  parseRelativeDate,
+  relativeDateCandidates,
+} from '@/utils/relativeDate'
 
 // 2026-04-28 (Tuesday) — anchor date for tests, matches the user's
 // "now" in the working session so test failures correlate with what
@@ -81,6 +85,42 @@ describe('parseRelativeDate', () => {
     // string as a non-date and import as a regular page.
     expect(parseRelativeDate('20201-04-01', NOW)).toBeNull()
     expect(parseRelativeDate('999-04-01', NOW)).toBeNull()
+  })
+})
+
+describe('relativeDateCandidates', () => {
+  it('returns today and tomorrow for the shared "to" prefix', () => {
+    expect(relativeDateCandidates('to', NOW).map(candidate => ({
+      phrase: candidate.phrase,
+      iso: candidate.iso,
+    }))).toEqual([
+      {phrase: 'today', iso: '2026-04-28'},
+      {phrase: 'tomorrow', iso: '2026-04-29'},
+    ])
+  })
+
+  it('narrows today/tomorrow prefixes as the query becomes less ambiguous', () => {
+    expect(relativeDateCandidates('tod', NOW).map(candidate => candidate.phrase)).toEqual(['today'])
+    expect(relativeDateCandidates('tom', NOW).map(candidate => candidate.phrase)).toEqual(['tomorrow'])
+  })
+
+  it('falls back to full relative-date parsing for complete date phrases', () => {
+    expect(relativeDateCandidates('fri', NOW).map(candidate => ({
+      phrase: candidate.phrase,
+      iso: candidate.iso,
+    }))).toEqual([{phrase: 'fri', iso: '2026-05-01'}])
+  })
+
+  it('deduplicates prefix candidates and parsed candidates', () => {
+    expect(relativeDateCandidates('today', NOW).map(candidate => ({
+      phrase: candidate.phrase,
+      iso: candidate.iso,
+    }))).toEqual([{phrase: 'today', iso: '2026-04-28'}])
+  })
+
+  it('does not treat one-letter prefixes or non-dates as date candidates', () => {
+    expect(relativeDateCandidates('t', NOW)).toEqual([])
+    expect(relativeDateCandidates('topic', NOW)).toEqual([])
   })
 })
 

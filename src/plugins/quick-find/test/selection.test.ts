@@ -14,7 +14,7 @@ describe('quick find selection', () => {
       query: 'alp',
       aliases: [firstAlias],
       blocks: [],
-      dateValue: '',
+      dateValues: [],
       currentValue: quickFindCreateValue('alp'),
     })).toBe(quickFindAliasValue(firstAlias))
   })
@@ -24,7 +24,7 @@ describe('quick find selection', () => {
       query: 'zzzz',
       aliases: [],
       blocks: [],
-      dateValue: '',
+      dateValues: [],
       currentValue: 'page:stale-id:stale',
     })).toBe(quickFindCreateValue('zzzz'))
   })
@@ -36,8 +36,34 @@ describe('quick find selection', () => {
       query: 'tomorrow',
       aliases: [firstAlias],
       blocks: [],
-      dateValue: quickFindDateValue('2026-05-12'),
+      dateValues: [quickFindDateValue('2026-05-12')],
       currentValue: quickFindCreateValue('tomorrow'),
+    })).toBe(quickFindDateValue('2026-05-12'))
+  })
+
+  it('selects the first date candidate when multiple date candidates are visible', () => {
+    expect(nextQuickFindSelection({
+      query: 'to',
+      aliases: [],
+      blocks: [],
+      dateValues: [
+        quickFindDateValue('2026-05-11'),
+        quickFindDateValue('2026-05-12'),
+      ],
+      currentValue: '',
+    })).toBe(quickFindDateValue('2026-05-11'))
+  })
+
+  it('keeps the current selection when it is one of several date candidates', () => {
+    expect(nextQuickFindSelection({
+      query: 'to',
+      aliases: [],
+      blocks: [],
+      dateValues: [
+        quickFindDateValue('2026-05-11'),
+        quickFindDateValue('2026-05-12'),
+      ],
+      currentValue: quickFindDateValue('2026-05-12'),
     })).toBe(quickFindDateValue('2026-05-12'))
   })
 })

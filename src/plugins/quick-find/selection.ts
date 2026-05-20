@@ -17,7 +17,7 @@ interface SelectionArgs {
   query: string
   aliases: LinkTargetAliasMatch[]
   blocks: LinkTargetBlockMatch[]
-  dateValue: string
+  dateValues: string[]
   currentValue: string
 }
 
@@ -25,12 +25,12 @@ export const nextQuickFindSelection = ({
   query,
   aliases,
   blocks,
-  dateValue,
+  dateValues,
   currentValue,
 }: SelectionArgs): string => {
   const createValue = quickFindCreateValue(query)
   const visibleValues = [
-    ...(dateValue ? [dateValue] : []),
+    ...dateValues,
     ...aliases.map(quickFindAliasValue),
     ...blocks.map(quickFindBlockValue),
   ]
@@ -38,7 +38,7 @@ export const nextQuickFindSelection = ({
     match => match.alias.toLowerCase() === query.toLowerCase(),
   )
 
-  if (!dateValue && !hasExactAliasMatch) {
+  if (dateValues.length === 0 && !hasExactAliasMatch) {
     visibleValues.push(createValue)
   }
 
