@@ -11,6 +11,7 @@ import {
   resolveAppRuntimeSync,
 } from '@/extensions/resolveAppRuntime.ts'
 import type {Overrides} from '@/extensions/togglable.ts'
+import {readOverridesCache} from '@/extensions/overridesCache.ts'
 import { AppRuntimeContextProvider } from '@/extensions/runtimeContext.ts'
 import { appRuntimeUpdateEvent } from '@/extensions/runtimeEvents.ts'
 import { appEffectsFacet, appMountsFacet, type AppEffectCleanup } from '@/extensions/core.ts'
@@ -51,11 +52,21 @@ export function AppRuntimeProvider({
 
   const baseExtensions: AppExtension[] = useMemo(() => staticAppExtensions({repo}), [repo])
 
-  // Overrides — slice-5 wires this to the System Plugins config block +
-  // ClientLocalSettings cache. For now we pass an empty map so every
-  // togglable resolves to its manifest default (isEnabled returns
-  // `defaultEnabled ?? true`), which matches pre-toggle behaviour.
-  const overrides: Overrides = useMemo(() => new Map<string, boolean>(), [])
+  // First-paint overrides come from a localStorage cache mirroring the
+  // synced System Plugins block. Reading sync at boot avoids the flash
+  // where every system plugin's effect would start and every mount
+  // would mount, only to be torn down ~one round-trip later. The
+  // system-plugins meta-plugin's effect (slice 5c) keeps the cache in
+  // sync with the PowerSync block and dispatches `refreshAppRuntime`
+  // whenever the canonical state diverges from the cache. The
+  // `generation` change forces this useMemo to recompute on dispatch.
+  const overrides: Overrides = useMemo(() => {
+    if (!workspaceId) return new Map<string, boolean>()
+    return readOverridesCache(workspaceId)
+    // generation participates so refreshAppRuntime invalidates this
+    // memo; the value itself doesn't come from it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, generation])
 
   const baseRuntime = useMemo(() =>
     resolveAppRuntimeSync(baseExtensions, {overrides, context: runtimeContext}),
