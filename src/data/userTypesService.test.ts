@@ -14,6 +14,7 @@ import {
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
+import { getOrCreateTypesPage } from '@/data/typesPage'
 import { Repo } from '@/data/repo'
 import { UserTypesService } from '@/data/userTypesService'
 
@@ -47,10 +48,11 @@ const setup = async (): Promise<Harness> => {
     kernelValuePresetsExtension,
   ]))
   await getOrCreatePropertiesPage(repo, WS)
+  await getOrCreateTypesPage(repo, WS)
   const userSchemas = repo.userSchemas
   const disposeUserSchemas = userSchemas.start()
-  const service = new UserTypesService(repo, userSchemas)
-  const disposeService = service.start(WS)
+  const service = repo.userTypes
+  const disposeService = service.start()
   const dispose = (): void => {
     disposeService()
     disposeUserSchemas()
@@ -68,7 +70,7 @@ const createBlockTypeBlock = async (
   repo: Repo,
   args: {label: string; description?: string; properties?: readonly string[]},
 ): Promise<string> => {
-  const id = await repo.mutate.createChild({parentId: repo.propertiesPageId!})
+  const id = await repo.mutate.createChild({parentId: repo.typesPageId!})
   await repo.tx(async tx => {
     await repo.addTypeInTx(tx, id, BLOCK_TYPE_TYPE, {})
     await tx.setProperty(id, blockTypeLabelProp, args.label)
@@ -151,6 +153,6 @@ describe('UserTypesService subscription', () => {
 
   it('double-start throws to surface lifecycle bugs', async () => {
     env = await setup()
-    expect(() => env.service.start(WS)).toThrow(/already started/)
+    expect(() => env.service.start()).toThrow(/already started/)
   })
 })

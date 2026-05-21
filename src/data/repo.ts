@@ -106,7 +106,9 @@ import type { InvalidationRule } from './invalidation'
 import { KERNEL_PROPERTY_SCHEMAS, getBlockTypes, typesProp } from './properties'
 import { KERNEL_TYPE_CONTRIBUTIONS } from './blockTypes'
 import { propertiesPageBlockId } from './propertiesPage'
+import { typesPageBlockId } from './typesPage'
 import { UserSchemasService } from './userSchemasService'
+import { UserTypesService } from './userTypesService'
 
 /** Convert a `Mutator<Args, Result>` into the `repo.mutate` dispatcher
  *  signature `(args: Args) => Promise<Result>`. Used to project
@@ -654,6 +656,21 @@ export class Repo {
    *  The block-subscription path is opt-in via `start()`; the React
    *  provider starts it once per workspace. */
   readonly userSchemas: UserSchemasService = new UserSchemasService(this)
+
+  /** UserTypesService singleton bound to this Repo. Symmetric to
+   *  `userSchemas`: owns the user-data contribution bucket on
+   *  `typesFacet` and is started once per workspace by the React
+   *  provider. Depends on `userSchemas` for resolving
+   *  block-type:properties refList entries to live property schemas. */
+  readonly userTypes: UserTypesService = new UserTypesService(this, this.userSchemas)
+
+  /** Deterministic id of the workspace's Types page (parent of every
+   *  `'block-type'` block in the workspace). Created lazily by
+   *  `getOrCreateTypesPage` during workspace bootstrap. */
+  get typesPageId(): string | null {
+    if (!this._activeWorkspaceId) return null
+    return typesPageBlockId(this._activeWorkspaceId)
+  }
 
   /** Run `CHILDREN_SQL` for `parentId` and hydrate every row into the
    *  per-row cache. Shared by the `repo.load(id, {children: true})`

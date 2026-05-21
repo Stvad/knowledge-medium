@@ -66,9 +66,17 @@ export class UserTypesService {
     return this.blockIdByTypeId.get(typeId)
   }
 
-  start(workspaceId: string): () => void {
+  start(): () => void {
     if (this.subscriptionDisposer) {
       throw new Error('[UserTypesService] already started')
+    }
+
+    // Pin the workspace at start() time, mirroring UserSchemasService.
+    // The React provider restarts the service on workspace switch, so
+    // capturing here pairs the subscription's lifetime to one workspace.
+    const workspaceId = this.repo.activeWorkspaceId
+    if (!workspaceId) {
+      throw new Error('[UserTypesService] no active workspace at start()')
     }
 
     const rebuildFromBlocks = (blocks: readonly Block[]): void => {

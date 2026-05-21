@@ -189,6 +189,16 @@ export function AppRuntimeProvider({
     return () => dispose()
   }, [repo, workspaceId])
 
+  // Symmetric bridge for user-defined block-type blocks → typesFacet's
+  // user-data bucket (user-defined-types Phase 1). Started after
+  // userSchemas because the type build path resolves
+  // block-type:properties refs through UserSchemasService.
+  useEffect(() => {
+    if (!workspaceId) return
+    const dispose = repo.userTypes.start()
+    return () => dispose()
+  }, [repo, workspaceId])
+
   return (
     <AppRuntimeContextProvider value={runtime}>
       <ExtensionLoadErrorsProvider store={errorStore}>

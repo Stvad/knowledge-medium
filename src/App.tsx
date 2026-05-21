@@ -21,6 +21,7 @@ import { buildLayout, layoutWorkspaceChanged, parseLayout } from '@/utils/routin
 import { recallRememberedWorkspace, rememberWorkspace } from '@/utils/lastWorkspace.ts'
 import { seedTutorial } from '@/initData.ts'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage.ts'
+import { getOrCreateTypesPage } from '@/data/typesPage.ts'
 import { useMyWorkspaceRoles } from '@/hooks/useWorkspaces.ts'
 import { getLayoutSessionBlock, getUIStateBlock } from '@/data/stateBlocks.ts'
 import { workspaceLandingFacet } from '@/extensions/core.ts'
@@ -226,6 +227,10 @@ const resolveInitialLayout = async (
   // Ensure the Properties page exists (idempotent, deterministic id).
   // User-defined property-schema blocks live under it.
   await getOrCreatePropertiesPage(repo, workspaceId)
+
+  // Ensure the Types page exists (idempotent, deterministic id).
+  // User-defined block-type blocks live under it.
+  await getOrCreateTypesPage(repo, workspaceId)
 
   const uiState = await getUIStateBlock(repo, workspaceId, repo.user, {})
   const layoutSessionBlock = await getLayoutSessionBlock(uiState, getLayoutSessionId())
