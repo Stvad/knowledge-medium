@@ -58,6 +58,7 @@ const filterSuggestions = (
   uis: ReadonlyMap<string, AnyPropertyEditorOverride>,
   presets: ReadonlyMap<string, AnyValuePreset>,
   excludedNames: ReadonlySet<string>,
+  filterSchema: ((schema: AnyPropertySchema) => boolean) | undefined,
 ): readonly NameSuggestion[] => {
   const q = query.trim().toLowerCase()
   const out: NameSuggestion[] = []
@@ -66,6 +67,7 @@ const filterSuggestions = (
     const ui = uis.get(schema.name)
     if (ui?.hidden) continue
     if (q !== '' && !schema.name.toLowerCase().includes(q)) continue
+    if (filterSchema && !filterSchema(schema)) continue
     out.push({schema, preset: presets.get(schema.codec.type)})
     if (out.length >= MAX_SUGGESTIONS) break
   }
@@ -83,6 +85,11 @@ export interface PropertyPickerProps {
   ) => Promise<AnyPropertySchema | undefined>
   /** Names to hide from suggestions (e.g. already-picked schemas). */
   excludedNames?: ReadonlyArray<string>
+  /** Optional predicate to narrow the suggestion list further. Returning
+   *  false on a schema hides it from autocomplete. Inline-create still
+   *  works for names not in `usePropertySchemas` — the predicate only
+   *  gates EXISTING suggestions, not what the user can type. */
+  filterSchema?: (schema: AnyPropertySchema) => boolean
   /** Placeholder text shown in the name input. */
   placeholder?: string
   /** Optional className overrides for the input shell. */
@@ -102,6 +109,7 @@ export function PropertyPicker({
   onAdd,
   onConfigureNewSchema,
   excludedNames,
+  filterSchema,
   placeholder = 'Field',
   inputClassName,
   autoFocus = false,
@@ -153,8 +161,8 @@ export function PropertyPicker({
   }, [autoFocus, focusNameInput])
 
   const suggestions = useMemo(
-    () => filterSuggestions(propertyName, schemas, uis, presets, excludedNamesSet),
-    [propertyName, schemas, uis, presets, excludedNamesSet],
+    () => filterSuggestions(propertyName, schemas, uis, presets, excludedNamesSet, filterSchema),
+    [propertyName, schemas, uis, presets, excludedNamesSet, filterSchema],
   )
 
   const reset = useCallback(() => {

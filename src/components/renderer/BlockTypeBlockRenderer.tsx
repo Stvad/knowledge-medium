@@ -246,6 +246,15 @@ const BlockTypeContentRenderer: BlockRenderer = ({block}: BlockRendererProps) =>
                 onAdd={handlePick}
                 onConfigureNewSchema={handleConfigureNewSchema}
                 excludedNames={excludedNames}
+                // Phase 1 limitation: block-type:properties is a refList
+                // of property-schema BLOCK ids. Kernel/plugin schemas
+                // (status, aliases, etc.) have no backing block and
+                // can't be appended, so hide them from autocomplete to
+                // match what the picker can actually do. Inline-create
+                // for a new name still works. Tracked as a follow-up
+                // (see docs/follow-ups.md — block-id keying / kernel-
+                // schemas-as-blocks design question).
+                filterSchema={schema => userSchemas.getSchemaBlockId(schema.name) !== undefined}
                 placeholder="Add property"
               />
             </div>

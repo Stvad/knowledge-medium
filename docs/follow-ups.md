@@ -242,3 +242,36 @@ Originally surfaced while debugging codex-flagged P2s on PR #21 (palette quick-a
 
 Fix shape: thread an optional `Tx` parameter through `getOrCreateDailyNote` / `getOrCreateJournalBlock` so callers that are already inside a tx can co-opt it. `rescheduleBlock` opens one outer `repo.tx`, calls a `getOrCreateDailyNoteInTx(tx, …)` helper for both daily notes, then performs its own update — collapses to a single undo entry. The standalone `repo`-only signature stays as a thin wrapper for the existing call sites (`actions.ts:98,109,141`) so this isn't a forced migration. Slight wrinkle: `getOrCreateDailyNote` reads outside the tx, then opens a new one to write; the in-tx variant has to do its existence check via `tx.get`, which matches the pattern already in `srsBlockDateAdapter.setIso`. Worth doing before any future surface that needs single-entry undo (e.g. "duplicate card with new schedule", calendar drag-to-reschedule).
 
+## Schema-rename does not cascade — instance values orphan on rename
+
+When a user renames a `property-schema` block (editing `property-schema:name` via `PropertySchemaBlockRenderer`), the schema republishes under the new name but every instance block's `properties_json` is still keyed by the OLD name. The old name has values but no schema; the new name has a schema but no values. The renamed property silently disappears from the UI.
+
+Surfaced inline during the user-defined-types Phase 1 design review while pushing back on the rename-safety argument for block-id refs in `block-type:properties`: that argument keeps the type→schema pointer stable, but the instance values are already broken at a lower level.
+
+Two viable fixes:
+
+- **Cascade-rename**: on schema name change, walk every block where `properties_json` has the old key and rewrite the key to the new name in one tx. Surgical; no data-model change. Costs: high-fanout schemas (e.g. renaming `status` when 50K blocks have it) rewrite a lot of rows under PowerSync's serialized writer; conflict resolution mid-rename has to handle blocks that transiently carry both keys.
+- **Block-id keying**: `properties_json` keys become schema block-ids instead of names. Renames become free at the value layer (label decoupled from identity). Requires solving "what's the block-id for a kernel/plugin schema?" (see the block-id keying entry below) and a one-time migration of every existing `properties_json` blob. Reads stay 1× Map.get — no per-read indirection vs today.
+
+The user is currently leaning toward **block-id keying as the destination** (per the user-defined-types design review session) because it composes with the same "id-stable handle" decision already made for types and resolves the rename problem cleanly for every consumer at once. Cascade-rename remains a viable interim step that doesn't paint into a corner.
+
+## Block-id keying for `properties_json` + kernel-schemas-as-blocks
+
+Companion to the schema-rename follow-up above. The longer-term direction is to key `properties_json` by the schema block's id rather than its name. That removes rename fragility everywhere properties are stored or referenced, and lines up with the user-defined-types "type id = block id" decision.
+
+Open sub-questions to resolve before committing:
+
+- **Kernel/plugin schemas without backing blocks.** Today `defineProperty` calls in code don't materialize a block. For block-id keying to work uniformly, kernel/plugin schemas need either:
+  - **Synthetic deterministic ids** — `uuid-v5(kernel:status)` etc. The runtime resolves them through a registry without persisting a row. Lowest cost, keeps source-of-truth in code.
+  - **Full materialization** — bootstrap a property-schema block per kernel/plugin schema per workspace. Composes with all block-based machinery (sync, history, future overrides), but moves source-of-truth from code to data and raises plugin-unload lifecycle questions ("does the orphan block stay?"). Per-workspace storage cost scales with kernel-schema growth × workspace count.
+  - The middle path that doesn't lock either choice: ship synthetic ids now; the same id space can later back real materialized blocks if a use case emerges.
+- **Migration cost.** Every existing `properties_json` blob needs rekeying. Doable as a one-shot pass at workspace open; safety-net by versioning the workspace so old clients don't write back with name keys.
+- **DB readability.** Raw `properties_json` becomes opaque to humans (`{"a3f9-…": "open"}` instead of `{"status": "open"}`). Debug-only friction; mitigate with a tooling pretty-printer that resolves ids via the schemas table.
+- **Properties-as-blocks (Tana-style) is a different question, not this one.** Tana-style means each VALUE is a block — different shape, real per-read indirection. Block-id keying just renames the JSON keys; reads stay 1× Map.get. Worth keeping these separate when discussing.
+
+Acceptance for landing this:
+1. Kernel/plugin schemas resolve through the same `getSchemaForBlockId` path as user schemas (synthetic or materialized — pick one).
+2. `block-type:properties` refs work uniformly across all schema kinds, replacing the current Phase-1 "hide kernel schemas in the picker" workaround in `BlockTypeBlockRenderer`.
+3. `properties_json` migration runs once at workspace open; idempotent.
+4. The schema-rename follow-up above is satisfied as a side effect (renames touch labels, never keys).
+
