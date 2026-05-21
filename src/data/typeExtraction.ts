@@ -279,10 +279,18 @@ export async function retagBlocks(
 export interface PropertyShapeFilter {
   /** Property name that must be set on the candidate. */
   name: string
-  /** Optional equality filter — the candidate's value at `name` must
-   *  equal `value` (compared via the schema's where-encoder). When
-   *  omitted, any value is acceptable as long as the property is set. */
+  /** Scalar equality filter — the candidate's value at `name` must
+   *  equal `value` (compared via the schema's where-encoder). Mutually
+   *  exclusive with `targetIds`; use for non-ref properties. */
   value?: unknown
+  /** Permissive ref / refList match: the candidate's value at `name`
+   *  must reference EVERY id in `targetIds` (i.e. block's refList must
+   *  be a superset). Compiled into one `match` predicate per id, each
+   *  with `referencedBy: {id, sourceField: name}` — multiple ids ANDed.
+   *
+   *  Empty array is treated as no filter (presence-only), same as
+   *  omitting. Mutually exclusive with `value`. */
+  targetIds?: readonly string[]
 }
 
 export interface FindCandidatesByPropertyShapeArgs {
@@ -304,13 +312,19 @@ export interface FindCandidatesByPropertyShapeArgs {
 }
 
 /** Find blocks whose property bag carries every name in `shape`,
- *  optionally constrained by per-property equality filters. Returns
- *  block ids (not full `BlockData`) — callers that need the rows can
- *  load them via `repo.load`.
+ *  optionally constrained by per-property equality / ref-target
+ *  filters. Returns block ids (not full `BlockData`) — callers that
+ *  need the rows can load them via `repo.load`.
  *
- *  Built on `repo.queryBlocks` with `where: {[name]: {exists: true}}`
- *  per name + `where: {[name]: value}` per value filter. No new
- *  index needed — the existing properties projection handles it. */
+ *  Filter semantics (per `PropertyShapeFilter`):
+ *   - `value === undefined && (!targetIds || targetIds.length === 0)`:
+ *     presence-only via `where: {[name]: {exists: true}}`.
+ *   - `value` set: scalar equality via `where: {[name]: value}`.
+ *   - `targetIds` non-empty: permissive ref / refList match — compiles
+ *     to one `match` predicate per id with `referencedBy: {id,
+ *     sourceField: name}`. ANDing these means the candidate's ref(List)
+ *     at `name` must be a superset of `targetIds` (block can have
+ *     additional refs). */
 export async function findCandidatesByPropertyShape(
   repo: Repo,
   args: FindCandidatesByPropertyShapeArgs,
@@ -318,13 +332,28 @@ export async function findCandidatesByPropertyShape(
   if (args.shape.length === 0) return []
 
   const where: Record<string, unknown> = {}
+  const match: { referencedBy: { id: string; sourceField: string } }[] = []
   for (const filter of args.shape) {
+    const targetIds = filter.targetIds ?? []
+    if (targetIds.length > 0) {
+      // One `match` entry per target id; ANDed by the query compiler.
+      // Each says "candidate sources a reference to <id> via property
+      // <name>" — i.e. <name>'s ref(List) value contains <id>.
+      for (const id of targetIds) {
+        match.push({referencedBy: {id, sourceField: filter.name}})
+      }
+      continue
+    }
     where[filter.name] = filter.value === undefined
       ? {exists: true}
       : filter.value
   }
 
-  const rows = await repo.queryBlocks({workspaceId: args.workspaceId, where})
+  const rows = await repo.queryBlocks({
+    workspaceId: args.workspaceId,
+    where: Object.keys(where).length === 0 ? undefined : where,
+    match: match.length === 0 ? undefined : match,
+  })
   const excluded = new Set(args.exclude ?? [])
   const limit = args.limit ?? 1000
   const out: string[] = []

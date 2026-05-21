@@ -1,17 +1,12 @@
 /** PropertyShapePicker — shared subcomponent for the property-subset
- *  picker used by both `ExtractTypeDialog` (step 1 of extract-type)
- *  and `FindSimilarDialog` (step 1 of find-similar).
+ *  picker used by `ExtractTypeDialog` (Step 1 of extract-type).
  *
- *  Renders a checkbox list of the prototype block's properties with a
- *  per-row "match value" toggle. Reading from `propertyShapeChoices`
- *  utility keeps the picker stateless; the parent owns the choices
- *  array and the per-row update callback.
+ *  Renders a checkbox list of the prototype block's properties. The
+ *  picker is stateless; the parent owns the choices array and the
+ *  per-row update callback.
  *
- *  Why a shared component, not a shared function: the dialog flows
- *  diverge after the picker (extract-type asks for a type name and
- *  runs createTypeBlock + retagBlocks; find-similar shows a clickable
- *  result list that navigates on click). The picker is the only
- *  meaningfully-shared UI piece. */
+ *  Note: FindTypeInstancesDialog uses its own custom row renderer
+ *  (typed editors per property) rather than this picker. */
 
 import { useMemo } from 'react'
 import type { Repo } from '@/data/repo'

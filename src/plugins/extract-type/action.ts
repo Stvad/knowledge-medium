@@ -1,14 +1,18 @@
 /** NORMAL_MODE actions wired around the typeExtraction primitives:
  *
- *   - `extractTypeAction` — opens the full extract-type dialog
- *     (name → property subset → confirm candidates → create + retag).
- *   - `findSimilarAction` — opens the find-similar dialog (property
- *     subset → navigable result list, no type creation).
+ *   - `extractTypeAction` — opens the extract-type dialog: name +
+ *     property subset → create the type, then delegate to
+ *     `findTypeInstancesAction` on the new type to find candidates
+ *     to retag.
+ *   - `findTypeInstancesAction` — opens the find-type-instances dialog:
+ *     pick a subset of the type's properties (optionally with value
+ *     filters) and retag matching blocks. Only surfaces on
+ *     block-type blocks.
  *
  *  Same shape as `rescheduleBlockDateAction`: each handler dispatches
  *  a window CustomEvent the globally-mounted dialog listens for. */
 
-import { Sparkles, Telescope, Users } from 'lucide-react'
+import { Sparkles, Users } from 'lucide-react'
 import {
   ActionContextTypes,
   type ActionConfig,
@@ -18,7 +22,6 @@ import { BLOCK_TYPE_TYPE } from '@/data/blockTypes'
 import { getBlockTypes } from '@/data/properties'
 import {
   openExtractTypeDialog,
-  openFindSimilarDialog,
   openFindTypeInstancesDialog,
 } from './events.ts'
 
@@ -31,18 +34,6 @@ export const extractTypeAction: ActionConfig<typeof ActionContextTypes.NORMAL_MO
   icon: Sparkles,
   handler: ({block}: BlockShortcutDependencies) => {
     openExtractTypeDialog({prototypeBlockId: block.id})
-  },
-}
-
-export const FIND_SIMILAR_ACTION_ID = 'block.find_similar'
-
-export const findSimilarAction: ActionConfig<typeof ActionContextTypes.NORMAL_MODE> = {
-  id: FIND_SIMILAR_ACTION_ID,
-  description: 'Find blocks with similar properties',
-  context: ActionContextTypes.NORMAL_MODE,
-  icon: Telescope,
-  handler: ({block}: BlockShortcutDependencies) => {
-    openFindSimilarDialog({prototypeBlockId: block.id})
   },
 }
 

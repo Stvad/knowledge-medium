@@ -28,7 +28,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useRepo } from '@/context/repo.tsx'
-import type { BlockData } from '@/data/api'
+import { isRefCodec, isRefListCodec, type BlockData } from '@/data/api'
 import {
   blockTypeLabelProp,
   getBlockTypes,
@@ -67,6 +67,21 @@ const isMeaningfulValue = (value: unknown): boolean => {
   if (typeof value === 'string') return value.length > 0
   if (Array.isArray(value)) return value.length > 0
   return true
+}
+
+/** Normalize the user-entered editor value for a ref / refList
+ *  property into the array of target ids `PropertyShapeFilter.targetIds`
+ *  expects. Drops empties and de-dupes. */
+const collectTargetIds = (value: unknown): readonly string[] => {
+  const ids: string[] = []
+  if (typeof value === 'string' && value.trim() !== '') {
+    ids.push(value.trim())
+  } else if (Array.isArray(value)) {
+    for (const item of value) {
+      if (typeof item === 'string' && item.trim() !== '') ids.push(item.trim())
+    }
+  }
+  return Array.from(new Set(ids))
 }
 
 export function FindTypeInstancesDialog() {
@@ -124,12 +139,23 @@ export function FindTypeInstancesDialog() {
     setError(null)
     setBusy(true)
     try {
-      // For each picked property, build a PropertyShapeFilter. A
-      // meaningful user-entered value becomes an equality filter; an
-      // unset value matches on property presence only.
-      const shape: PropertyShapeFilter[] = pickedChoices.map(c =>
-        isMeaningfulValue(c.value) ? {name: c.name, value: c.value} : {name: c.name},
-      )
+      // For each picked property, build a PropertyShapeFilter. Ref /
+      // refList properties get `targetIds` (permissive contains —
+      // candidate's refList must include all picked ids); scalars
+      // get `value` (exact match); empty values fall back to presence.
+      const shape: PropertyShapeFilter[] = pickedChoices.map(c => {
+        const schema = repo.propertySchemas.get(c.name)
+        const isRef = schema && (isRefCodec(schema.codec) || isRefListCodec(schema.codec))
+        if (isRef) {
+          const targetIds = collectTargetIds(c.value)
+          return targetIds.length > 0
+            ? {name: c.name, targetIds}
+            : {name: c.name}
+        }
+        return isMeaningfulValue(c.value)
+          ? {name: c.name, value: c.value}
+          : {name: c.name}
+      })
       const ids = await findCandidatesByPropertyShape(repo, {
         workspaceId: typeBlock.workspaceId,
         shape,

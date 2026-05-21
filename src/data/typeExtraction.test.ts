@@ -76,6 +76,36 @@ const createBlock = async (env: Harness, content: string, properties: Record<str
   return id
 }
 
+/** Test-only helper: create a block carrying a refList property AND
+ *  the corresponding `references_json` entries (one per target id,
+ *  with the same sourceField).
+ *
+ *  Production keeps `references_json` in sync with refList properties
+ *  via `parseReferencesProcessor` (post-commit, in the references
+ *  plugin). The kernel-only test harness here doesn't load that
+ *  plugin, so refList writes alone wouldn't populate `block_references`
+ *  — and the `referencedBy`-based query under test would return nothing.
+ *  Writing the references explicitly stands in for the missing
+ *  processor. */
+const createBlockWithRefs = async (
+  env: Harness,
+  content: string,
+  sourceField: string,
+  targetIds: readonly string[],
+): Promise<string> => {
+  const id = await env.repo.mutate.createChild({parentId: env.repo.typesPageId!})
+  await env.repo.tx(async tx => {
+    const block = await tx.get(id)
+    if (!block) throw new Error(`createChild missed: ${id}`)
+    await tx.update(id, {
+      content,
+      properties: {...block.properties, [sourceField]: targetIds},
+      references: targetIds.map(targetId => ({id: targetId, alias: targetId, sourceField})),
+    })
+  }, {scope: ChangeScope.BlockDefault})
+  return id
+}
+
 let env: Harness
 afterEach(async () => {
   env.dispose()
@@ -321,6 +351,66 @@ describe('findCandidatesByPropertyShape', () => {
       limit: 3,
     })
     expect(candidates).toHaveLength(3)
+  })
+
+  it('targetIds: permissive refList match — block ⊇ targetIds counts', async () => {
+    env = await setup()
+    await env.repo.userSchemas.addSchema({name: 'tags', presetId: 'refList'})
+
+    const person = await createBlock(env, 'Person')
+    const friend = await createBlock(env, 'Friend')
+    const stranger = await createBlock(env, 'Stranger')
+
+    const onlyPerson = await createBlockWithRefs(env, 'OnlyPerson', 'tags', [person])
+    const personAndFriend = await createBlockWithRefs(env, 'PersonAndFriend', 'tags', [person, friend])
+    const onlyStranger = await createBlockWithRefs(env, 'OnlyStranger', 'tags', [stranger])
+
+    const candidates = await findCandidatesByPropertyShape(env.repo, {
+      workspaceId: WS,
+      shape: [{name: 'tags', targetIds: [person]}],
+    })
+
+    expect(candidates).toContain(onlyPerson)
+    expect(candidates).toContain(personAndFriend)
+    expect(candidates).not.toContain(onlyStranger)
+  })
+
+  it('targetIds with multiple ids ANDs them — refList must be a superset', async () => {
+    env = await setup()
+    await env.repo.userSchemas.addSchema({name: 'tags', presetId: 'refList'})
+
+    const a = await createBlock(env, 'A')
+    const b = await createBlock(env, 'B')
+
+    const hasA = await createBlockWithRefs(env, 'HasA', 'tags', [a])
+    const hasB = await createBlockWithRefs(env, 'HasB', 'tags', [b])
+    const hasBoth = await createBlockWithRefs(env, 'HasBoth', 'tags', [a, b])
+
+    const candidates = await findCandidatesByPropertyShape(env.repo, {
+      workspaceId: WS,
+      shape: [{name: 'tags', targetIds: [a, b]}],
+    })
+
+    expect(candidates).toContain(hasBoth)
+    expect(candidates).not.toContain(hasA)
+    expect(candidates).not.toContain(hasB)
+  })
+
+  it('targetIds: empty array is treated as presence-only', async () => {
+    env = await setup()
+    await env.repo.userSchemas.addSchema({name: 'tags', presetId: 'refList'})
+
+    const tag = await createBlock(env, 'Tag')
+    const tagged = await createBlockWithRefs(env, 'Tagged', 'tags', [tag])
+    const untagged = await createBlock(env, 'Untagged')
+
+    const candidates = await findCandidatesByPropertyShape(env.repo, {
+      workspaceId: WS,
+      shape: [{name: 'tags', targetIds: []}],
+    })
+
+    expect(candidates).toContain(tagged)
+    expect(candidates).not.toContain(untagged)
   })
 })
 
