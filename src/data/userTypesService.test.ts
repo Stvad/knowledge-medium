@@ -155,4 +155,24 @@ describe('UserTypesService subscription', () => {
     env = await setup()
     expect(() => env.service.start()).toThrow(/already started/)
   })
+
+  it('does not feedback-loop with the propertySchemas rebuild step', async () => {
+    // Regression: the propertySchemas rebuild step in Repo fires BOTH
+    // propertySchemasListeners (which UserTypesService subscribes to)
+    // AND typesListeners. Before the fix, an unconditional republish
+    // from inside the schemas listener triggered the step again and
+    // re-fired the listener, exceeding the call stack. The fix
+    // short-circuits when the new contribution list is field-equal to
+    // the previous one.
+    env = await setup()
+    await createBlockTypeBlock(env.repo, {label: 'Person'})
+
+    // Adding an unrelated schema fires onPropertySchemasChange. Before
+    // the fix, this triggered an infinite recursion through
+    // UserTypesService → setRuntimeContributions(typesFacet, ...) →
+    // step → propertySchemasListeners → UserTypesService → ...
+    // (RangeError: Maximum call stack size exceeded).
+    await expect(env.repo.userSchemas.addSchema({name: 'mood', presetId: 'string'}))
+      .resolves.toBeDefined()
+  })
 })

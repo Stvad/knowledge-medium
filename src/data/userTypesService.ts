@@ -90,6 +90,15 @@ export class UserTypesService {
           nextBlockIdByTypeId.set(built.id, block.id)
         }
       }
+      // The propertySchemas rebuild step in Repo notifies BOTH
+      // propertySchemasListeners AND typesListeners — they share a
+      // step because mergeLiftedSchemas reads typesFacet to lift
+      // properties. We listen to onPropertySchemasChange to re-resolve
+      // refList entries when a new schema lands, so an unconditional
+      // republish would form a feedback loop: our publish triggers the
+      // step, the step fires propertySchemasListeners, we fire again.
+      // Short-circuit when nothing materially changed.
+      if (this.contributionsEqual(next, this.contributions)) return
       this.contributions = next
       this.blockIdByTypeId = nextBlockIdByTypeId
       this.repo.setRuntimeContributions(typesFacet, USER_DATA_SOURCE_ID, this.contributions)
@@ -116,6 +125,31 @@ export class UserTypesService {
     this.subscriptionDisposer = null
     this.schemasListenerDisposer?.()
     this.schemasListenerDisposer = null
+  }
+
+  /** Field-wise equality on the contribution list. Element identity
+   *  isn't useful because tryBuildType creates fresh objects per
+   *  rebuild; compare the load-bearing fields and check the properties
+   *  array element-wise (schemas come from UserSchemasService and ARE
+   *  reused across rebuilds, so reference identity is the right check
+   *  there). */
+  private contributionsEqual(
+    a: readonly TypeContribution[],
+    b: readonly TypeContribution[],
+  ): boolean {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      const ac = a[i]
+      const bc = b[i]
+      if (ac.id !== bc.id || ac.label !== bc.label || ac.description !== bc.description) return false
+      const ap = ac.properties ?? []
+      const bp = bc.properties ?? []
+      if (ap.length !== bp.length) return false
+      for (let j = 0; j < ap.length; j++) {
+        if (ap[j] !== bp[j]) return false
+      }
+    }
+    return true
   }
 
   /** Build a TypeContribution from a user-authored block-type block.

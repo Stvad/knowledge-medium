@@ -1,3 +1,4 @@
+import { BlockTypeBlockRenderer } from '@/components/renderer/BlockTypeBlockRenderer.tsx'
 import { CodeMirrorExtensionBlockRenderer } from '@/components/renderer/CodeMirrorExtensionBlockRenderer.tsx'
 import { DefaultBlockRenderer } from '@/components/renderer/DefaultBlockRenderer.tsx'
 import { LayoutRenderer } from '@/components/renderer/LayoutRenderer.tsx'
@@ -13,6 +14,7 @@ export const defaultRendererContributions: RendererContribution[] = [
   {id: 'default', renderer: DefaultBlockRenderer},
   {id: 'extension', renderer: CodeMirrorExtensionBlockRenderer},
   {id: 'propertySchema', renderer: PropertySchemaBlockRenderer},
+  {id: 'blockType', renderer: BlockTypeBlockRenderer},
   {id: 'topLevel', renderer: TopLevelRenderer},
   {id: 'layout', renderer: LayoutRenderer},
   {id: 'panel', renderer: PanelRenderer},
