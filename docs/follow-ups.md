@@ -275,3 +275,19 @@ Acceptance for landing this:
 3. `properties_json` migration runs once at workspace open; idempotent.
 4. The schema-rename follow-up above is satisfied as a side effect (renames touch labels, never keys).
 
+## Extract-type-from-prototype is the user-facing model — current `promoteToType` is the wrong primitive for it
+
+`promoteToType` as shipped in `src/plugins/roam-import/typePromotion.ts` is the Roam-isa adoption flow: take a *referenced* page, turn it into a `block-type`, retag blocks that point at it via `roam:isa`. That fits Roam migration but it isn't the model users actually want for "I have a Task block; turn this into a Task type."
+
+The real user model is **extract-type-from-prototype**:
+
+1. Start from a prototype block whose property bag is the shape the user wants to canonize (e.g. `{status: 'open', due: 2026-05-20, priority: 'high'}`).
+2. Action surface: "Extract type from this block." Prompt the user for the type *name* — the type's label is supplied at extraction time, not derived from the prototype's content (the prototype is just a data shape carrier; its content is unrelated to the type name).
+3. Create a **new** `block-type` block on the Types page (the prototype stays as one untouched instance — no in-place promotion). `block-type:properties` is populated by resolving each name on the prototype's `properties_json` to its property-schema block id via `userSchemas.getSchemaBlockId(name)` (and the eventual kernel-schemas-as-blocks bridge in the entry above for kernel/plugin schemas).
+4. Show the user a property-subset picker on extraction: which of the prototype's properties belong on the type vs. which are noise on this particular instance. Per-property optional value constraint — "match only when `status='open'`" vs. "match when `status` is set at all."
+5. Run a query for blocks whose property bag satisfies the picked subset (plus optional value filters). Surface the candidate list interactively — "47 blocks match this shape; retag which?" — and the user confirms. Auto-retag is wrong; the match is heuristic and the user is the arbiter.
+
+The current Roam-coupled `promoteToType` doesn't go away — it remains the right shape for "this Roam-isa target page IS the type" because the discovery there is reference-based, not property-shape-based. Both produce the same end state (a `block-type` block + retagged instances); they differ only in how instances are discovered. The underlying primitive that both should compose is something like `createTypeBlock(label, propertySchemaIds)` + `retagBlocks(typeId, instanceIds)`, with the two flows owning their own discovery logic. Pull that primitive out of `typePromotion.ts` when wiring the extract-type UI — the standalone Phase 3 task ("Promote page to type") is also a candidate consumer of the same primitive.
+
+Property-shape matching needs a query primitive that doesn't exist today: `typedBlocks` filters by type id, not by "has these property names set." Implementing it is a `block_properties` join (the indexed `properties_json` projection on individual property names — same shape as `block_references` but for `(blockId, propName)` pairs); cost goes up with property fanout but the query is bounded. Lower-effort interim: scan all blocks in the workspace and filter in memory — fine for the early-user MVP, untenable past O(10K) blocks.
+
