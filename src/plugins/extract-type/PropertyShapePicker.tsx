@@ -149,6 +149,10 @@ export interface PropertyShapePickerProps {
    *  find-type-instances flow passes false: the type definition
    *  carries no per-property instance values to match against. */
   showMatchValue?: boolean
+  /** Show the value preview row (the muted line under the property
+   *  name). Default true. Extract-type Step 1 passes false: type
+   *  assembly is pure name selection, not value matching. */
+  showValuePreview?: boolean
   /** Replacement string shown in the value preview slot when the
    *  choice has no value (e.g. find-type-instances, where the type
    *  definition has no instance values). Default '' (renders empty). */
@@ -202,6 +206,7 @@ export function PropertyShapePicker({
   idPrefix = 'shape-pick',
   showNoSchemaNote = false,
   showMatchValue = true,
+  showValuePreview = true,
   emptyValuePlaceholder = '',
 }: PropertyShapePickerProps) {
   if (choices.length === 0) return null
@@ -241,9 +246,11 @@ export function PropertyShapePicker({
                   </span>
                 )}
               </div>
-              <div className="truncate text-xs text-muted-foreground">
-                <ValuePreview choice={choice} emptyValuePlaceholder={emptyValuePlaceholder} />
-              </div>
+              {showValuePreview && (
+                <div className="truncate text-xs text-muted-foreground">
+                  <ValuePreview choice={choice} emptyValuePlaceholder={emptyValuePlaceholder} />
+                </div>
+              )}
             </div>
             {showMatchValue && (
               <label className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">

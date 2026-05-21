@@ -1,18 +1,19 @@
-/** FindTypeInstancesDialog — "Find instances of this type."
+/** FindTypeInstancesDialog — "Find blocks to retag as this type."
  *
- *  Invoked on an existing block-type block. Mirrors the second half
- *  of the extract-type flow:
+ *  Step 1 of the extract-type flow delegates here after creating the
+ *  type, and the dialog is also usable standalone on any existing
+ *  block-type block.
  *
- *  Step 1 (configure): pre-filled picker showing the type's declared
- *  properties (resolved from `block-type:properties` refList). User
- *  can deselect any to broaden the match. No type-name input (the
- *  type already exists), no match-value toggle (the type carries no
- *  per-property instance values to compare against).
+ *  Step 1 (configure): list the type's declared properties. For each
+ *  picked property the user can optionally enter a value via the
+ *  property's normal property-panel editor (Date picker, ref
+ *  autocomplete, etc.). Picked properties without a value match on
+ *  presence only ("the property is set, any value"); picked
+ *  properties with a value require exact match.
  *
  *  Step 2 (confirm): candidate list with checkboxes — blocks whose
  *  property bag covers the picked subset AND aren't already tagged
- *  with this type. User unchecks any false positives, clicks
- *  "Retag N blocks." */
+ *  with this type. */
 
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -35,15 +36,15 @@ import {
 import {
   findCandidatesByPropertyShape,
   retagBlocks,
+  type PropertyShapeFilter,
 } from '@/data/typeExtraction'
+import { resolvePropertyDisplay } from '@/components/propertyEditors/defaults.tsx'
 import {
   openFindTypeInstancesDialogEvent,
   type OpenFindTypeInstancesDialogEventDetail,
 } from './events'
 import {
-  PropertyShapePicker,
   buildTypeShapeChoices,
-  choicesToShape,
   type PropertyShapeChoice,
 } from './PropertyShapePicker'
 
@@ -59,6 +60,13 @@ const typeLabelOf = (typeBlock: BlockData): string => {
   const raw = typeBlock.properties[blockTypeLabelProp.name]
   if (typeof raw === 'string' && raw.trim()) return raw.trim()
   return typeBlock.content?.trim() || `(unlabeled ${typeBlock.id.slice(0, 8)})`
+}
+
+const isMeaningfulValue = (value: unknown): boolean => {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.length > 0
+  if (Array.isArray(value)) return value.length > 0
+  return true
 }
 
 export function FindTypeInstancesDialog() {
@@ -116,9 +124,15 @@ export function FindTypeInstancesDialog() {
     setError(null)
     setBusy(true)
     try {
+      // For each picked property, build a PropertyShapeFilter. A
+      // meaningful user-entered value becomes an equality filter; an
+      // unset value matches on property presence only.
+      const shape: PropertyShapeFilter[] = pickedChoices.map(c =>
+        isMeaningfulValue(c.value) ? {name: c.name, value: c.value} : {name: c.name},
+      )
       const ids = await findCandidatesByPropertyShape(repo, {
         workspaceId: typeBlock.workspaceId,
-        shape: choicesToShape(pickedChoices),
+        shape,
         // Exclude the type-definition block itself — it'd otherwise
         // surface as a self-match (its properties_json carries the
         // block-type:* fields, not the type's instance fields, so it
@@ -166,11 +180,11 @@ export function FindTypeInstancesDialog() {
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            {typeBlock ? `Find instances of “${typeLabel}”` : 'Find instances of type'}
+            {typeBlock ? `Find blocks to retag as “${typeLabel}”` : 'Find blocks to retag'}
           </DialogTitle>
           <DialogDescription>
             {step === 'configure'
-              ? 'Pick which of this type’s properties to search for. Deselect any to broaden the match.'
+              ? 'Pick which of this type’s properties to match on. Optionally enter a value to require exact match instead of just presence.'
               : `Review the candidates and confirm which should be retagged as ${typeLabel}.`}
           </DialogDescription>
         </DialogHeader>
@@ -184,13 +198,11 @@ export function FindTypeInstancesDialog() {
                   This type declares no user-defined properties — there’s nothing to match candidates against. Add property-schema refs to the type’s block-type:properties first.
                 </p>
               ) : (
-                <PropertyShapePicker
+                <TypeInstanceRows
                   choices={choices}
                   onChange={setChoices}
+                  typeBlockId={typeBlock.id}
                   disabled={busy}
-                  idPrefix="find-type-instances-pick"
-                  showMatchValue={false}
-                  emptyValuePlaceholder="—"
                 />
               )}
             </div>
@@ -259,5 +271,82 @@ export function FindTypeInstancesDialog() {
         )}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Row list for the find-type-instances picker. Each row is the
+ *  property's checkbox + name on the left, and the property-panel
+ *  Editor (resolved via the normal codec → preset chain) on the right
+ *  for capturing an optional value filter.
+ *
+ *  The Editor's `block` slot is filled with the type-block facade so
+ *  ref/refList editors (which need repo + workspace context) work
+ *  unmodified. The type block is never written to by these editors —
+ *  they only call our local `onChange`. */
+function TypeInstanceRows({
+  choices,
+  onChange,
+  typeBlockId,
+  disabled,
+}: {
+  choices: readonly PropertyShapeChoice[]
+  onChange: (next: readonly PropertyShapeChoice[]) => void
+  typeBlockId: string
+  disabled: boolean
+}) {
+  const repo = useRepo()
+  const ownerBlock = useMemo(() => repo.block(typeBlockId), [repo, typeBlockId])
+  return (
+    <ul className="max-h-96 min-w-0 space-y-1 overflow-auto rounded-md border p-2">
+      {choices.map((choice, idx) => {
+        const display = resolvePropertyDisplay({
+          name: choice.name,
+          encodedValue: undefined,
+          schemas: repo.propertySchemas,
+          uis: repo.propertyEditorOverrides,
+          presets: repo.valuePresets,
+        })
+        const Editor = display.Editor
+        const setChoice = (next: Partial<PropertyShapeChoice>) => {
+          onChange(choices.map((c, i) => (i === idx ? {...c, ...next} : c)))
+        }
+        return (
+          <li
+            key={choice.name}
+            className="flex min-w-0 items-start gap-3 rounded px-2 py-1.5 hover:bg-muted/60"
+          >
+            <Checkbox
+              id={`find-type-instances-pick-${idx}`}
+              checked={choice.picked}
+              onCheckedChange={next => setChoice({picked: next === true})}
+              disabled={disabled}
+              className="mt-1.5"
+            />
+            <div className="min-w-0 flex-1 space-y-1">
+              <Label
+                htmlFor={`find-type-instances-pick-${idx}`}
+                className="cursor-pointer truncate font-mono text-sm"
+              >
+                {choice.name}
+              </Label>
+              <div className={choice.picked ? '' : 'opacity-50 pointer-events-none'}>
+                {Editor !== undefined ? (
+                  <Editor
+                    value={choice.value}
+                    onChange={(next: unknown) => setChoice({value: next})}
+                    block={ownerBlock}
+                    schema={display.schema}
+                  />
+                ) : (
+                  <div className="text-xs text-muted-foreground/70">
+                    No editor registered for {display.shape}.
+                  </div>
+                )}
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
