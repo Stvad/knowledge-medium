@@ -184,7 +184,7 @@ export function ExtractTypeDialog() {
         </DialogHeader>
 
         {step === 'configure' && prototype && (
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2">
               <Label htmlFor="extract-type-name">Type name</Label>
               <Input
@@ -231,7 +231,7 @@ export function ExtractTypeDialog() {
         )}
 
         {step === 'confirm' && (
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <p className="text-sm">
               {candidates.length === 0
                 ? 'No other blocks match this shape. The new type will be created with the prototype as its only instance, if you proceed.'

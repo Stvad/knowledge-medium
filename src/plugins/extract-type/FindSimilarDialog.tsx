@@ -135,7 +135,7 @@ export function FindSimilarDialog() {
         </DialogHeader>
 
         {step === 'configure' && prototype && (
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2">
               <Label>Properties</Label>
               {choices.length === 0 ? (
@@ -164,7 +164,7 @@ export function FindSimilarDialog() {
         )}
 
         {step === 'results' && (
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <p className="text-sm">
               {candidates.length === 0
                 ? 'No other blocks match this shape.'

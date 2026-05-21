@@ -13,6 +13,7 @@
  *  result list that navigates on click). The picker is the only
  *  meaningfully-shared UI piece. */
 
+import { useMemo } from 'react'
 import type { Repo } from '@/data/repo'
 import {
   aliasesProp,
@@ -21,9 +22,12 @@ import {
   rendererProp,
   typesProp,
 } from '@/data/properties'
-import type { BlockData } from '@/data/api'
+import { isRefCodec, isRefListCodec, type BlockData } from '@/data/api'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
+import { useRepo } from '@/context/repo.tsx'
+import { useHandle } from '@/hooks/block.ts'
+import { labelForBlockData } from '@/utils/linkTargetAutocomplete.ts'
 
 export interface PropertyShapeChoice {
   /** Property name as it appears on the prototype's properties_json. */
@@ -42,6 +46,19 @@ export interface PropertyShapeChoice {
    *  type only includes choices with a resolved id in the new type's
    *  properties refList. */
   schemaBlockId: string | undefined
+  /** Codec kind for this property's schema, used by the value preview
+   *  to decide whether to render block labels (ref/refList) or fall
+   *  back to JSON-stringified text. `undefined` for properties with no
+   *  resolved schema or scalar codecs. */
+  refKind: 'ref' | 'refList' | undefined
+}
+
+const refKindFor = (repo: Repo, name: string): 'ref' | 'refList' | undefined => {
+  const schema = repo.propertySchemas.get(name)
+  if (!schema) return undefined
+  if (isRefListCodec(schema.codec)) return 'refList'
+  if (isRefCodec(schema.codec)) return 'ref'
+  return undefined
 }
 
 /** Properties that never make sense to extract from a prototype.
@@ -68,6 +85,7 @@ export const buildPropertyShapeChoices = (
     matchValue: false,
     value,
     schemaBlockId: repo.userSchemas.getSchemaBlockId(name),
+    refKind: refKindFor(repo, name),
   }))
 }
 
@@ -96,6 +114,7 @@ export const buildTypeShapeChoices = (
       matchValue: false,
       value: undefined,
       schemaBlockId: schemaId,
+      refKind: refKindFor(repo, schema.name),
     })
   }
   return out.sort((a, b) => a.name.localeCompare(b.name))
@@ -136,6 +155,46 @@ export interface PropertyShapePickerProps {
   emptyValuePlaceholder?: string
 }
 
+/** Reactive label for a single block id. Subscribes to the block via
+ *  repo.block + useHandle so the preview updates if the referenced
+ *  block's content/aliases change while the dialog is open. Falls back
+ *  to a shortened id for blocks that fail to load. */
+const RefLabel = ({id}: {id: string}) => {
+  const repo = useRepo()
+  const handle = useMemo(() => repo.block(id), [repo, id])
+  const fallback = `(${id.slice(0, 8)})`
+  const label = useHandle(handle, {selector: data => labelForBlockData(data, fallback)})
+  return <>{label}</>
+}
+
+const ValuePreview = ({
+  choice,
+  emptyValuePlaceholder,
+}: {
+  choice: PropertyShapeChoice
+  emptyValuePlaceholder: string
+}) => {
+  if (choice.value === undefined) return <>{emptyValuePlaceholder}</>
+  if (choice.refKind === 'refList' && Array.isArray(choice.value)) {
+    const ids = choice.value.filter((v): v is string => typeof v === 'string')
+    if (ids.length === 0) return <>{emptyValuePlaceholder}</>
+    return (
+      <>
+        {ids.map((id, i) => (
+          <span key={id}>
+            {i > 0 && ', '}
+            <RefLabel id={id} />
+          </span>
+        ))}
+      </>
+    )
+  }
+  if (choice.refKind === 'ref' && typeof choice.value === 'string') {
+    return <RefLabel id={choice.value} />
+  }
+  return <>{formatPropertyValue(choice.value)}</>
+}
+
 export function PropertyShapePicker({
   choices,
   onChange,
@@ -147,13 +206,13 @@ export function PropertyShapePicker({
 }: PropertyShapePickerProps) {
   if (choices.length === 0) return null
   return (
-    <ul className="max-h-72 space-y-1 overflow-auto rounded-md border p-2">
+    <ul className="max-h-72 min-w-0 space-y-1 overflow-auto rounded-md border p-2">
       {choices.map((choice, idx) => {
         const hasNoSchema = choice.schemaBlockId === undefined
         return (
           <li
             key={choice.name}
-            className="flex items-center gap-3 rounded px-2 py-1 hover:bg-muted/60"
+            className="flex min-w-0 items-center gap-3 rounded px-2 py-1 hover:bg-muted/60"
           >
             <Checkbox
               id={`${idPrefix}-${idx}`}
@@ -183,9 +242,7 @@ export function PropertyShapePicker({
                 )}
               </div>
               <div className="truncate text-xs text-muted-foreground">
-                {choice.value === undefined
-                  ? emptyValuePlaceholder
-                  : formatPropertyValue(choice.value)}
+                <ValuePreview choice={choice} emptyValuePlaceholder={emptyValuePlaceholder} />
               </div>
             </div>
             {showMatchValue && (

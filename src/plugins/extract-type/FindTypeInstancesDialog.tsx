@@ -176,7 +176,7 @@ export function FindTypeInstancesDialog() {
         </DialogHeader>
 
         {step === 'configure' && typeBlock && (
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <div className="space-y-2">
               <Label>Type properties</Label>
               {choices.length === 0 ? (
@@ -207,7 +207,7 @@ export function FindTypeInstancesDialog() {
         )}
 
         {step === 'confirm' && typeBlock && (
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <p className="text-sm">
               {candidates.length === 0
                 ? `No untagged blocks match this shape.`
