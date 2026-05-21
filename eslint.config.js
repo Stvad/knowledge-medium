@@ -9,8 +9,11 @@ export default tseslint.config(
   // Top-level ignores. ESLint flat config doesn't honor .gitignore unless
   // you opt in (eslint-config-flat-gitignore), so list ephemeral / agent
   // dirs explicitly. .claude/worktrees/ in particular contains full repo
-  // copies that shouldn't be re-linted.
-  { ignores: ['dist', '.claude/**', '.playwright-mcp/**', 'tmp/**'] },
+  // copies that shouldn't be re-linted. docs/**/*.ts are design-sketch
+  // files (typechecked via docs/tsconfig.json) — they intentionally have
+  // unused stub params and let-vs-const looseness so the prose stays
+  // readable; ESLint shouldn't gate on them.
+  { ignores: ['dist', '.claude/**', '.playwright-mcp/**', 'tmp/**', 'docs/**'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],
