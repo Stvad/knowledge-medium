@@ -43,6 +43,7 @@ import {
 } from '@/data/properties'
 import type { Repo } from '@/data/repo'
 import { createChild } from '@/data/internals/kernelMutators'
+import { typesPageBlockId } from '@/data/typesPage'
 
 // ──── Error classes ─────────────────────────────────────────────────
 
@@ -116,17 +117,23 @@ export async function createTypeBlock(
     )
   }
 
-  // The Types page must exist before we can parent the new type
-  // block under it. App bootstrap calls `getOrCreateTypesPage` per
-  // workspace, so this is normally already true — the explicit
-  // check guards against tests / tooling that skipped bootstrap.
-  if (!repo.typesPageId) {
+  // The Types page must exist in `args.workspaceId` before we can
+  // parent the new type block under it. We resolve the id from
+  // `args.workspaceId` directly — `repo.typesPageId` is derived from
+  // `repo.activeWorkspaceId`, which can differ when callers operate
+  // on a workspace other than the user's current one (e.g. an import
+  // run, a background task). Mismatched parenting would land the new
+  // block under the wrong workspace's Types page and either register
+  // in the wrong workspace or leave a partial block after the
+  // registration timeout.
+  const typesPageId = typesPageBlockId(args.workspaceId)
+  const typesPage = await repo.load(typesPageId)
+  if (!typesPage || typesPage.workspaceId !== args.workspaceId) {
     throw new Error(
       `createTypeBlock: no Types page for workspace ${args.workspaceId}. ` +
       `Call getOrCreateTypesPage during workspace bootstrap.`,
     )
   }
-  const typesPageId = repo.typesPageId
 
   // Pre-tx validation: each property-schema ref must survive every
   // invariant tryBuildType applies. Validating upfront surfaces the
@@ -263,12 +270,28 @@ export async function retagBlocks(
       )
     }
 
+    // Pin the type's workspace from the live row so we can reject
+    // instance ids that don't belong to the same workspace. Stale
+    // callers (the candidate list was built before a sync-applied
+    // move) could otherwise tag a cross-workspace block.
+    const typeRow = await tx.get(args.typeId)
+    if (!typeRow || typeRow.deleted) {
+      throw new Error(
+        `retagBlocks: type-definition block ${args.typeId} doesn't exist ` +
+        `or was deleted inside the tx.`,
+      )
+    }
+    const typeWorkspaceId = typeRow.workspaceId
+
     for (const instanceId of args.instanceIds) {
       const row = await tx.get(instanceId)
-      // Silently skip rows that were deleted or are missing. The
-      // candidate list is a snapshot from the caller's discovery
-      // step; a stale entry shouldn't fail the whole retag.
+      // Silently skip rows that were deleted, missing, or moved to
+      // a different workspace. The candidate list is a snapshot from
+      // the caller's discovery step; a stale entry shouldn't fail
+      // the whole retag — and tagging across workspaces would break
+      // the type-stays-in-its-workspace invariant.
       if (!row || row.deleted) continue
+      if (row.workspaceId !== typeWorkspaceId) continue
       await repo.addTypeInTx(tx, instanceId, args.typeId, {}, snapshotInTx)
     }
   }, {scope: ChangeScope.BlockDefault, description: `retagBlocks ${args.typeId}`})

@@ -16,7 +16,7 @@ import {
 } from '@/data/properties'
 import { BLOCK_TYPE_TYPE, PAGE_TYPE } from '@/data/blockTypes'
 import { getOrCreatePropertiesPage } from '@/data/propertiesPage'
-import { getOrCreateTypesPage } from '@/data/typesPage'
+import { getOrCreateTypesPage, typesPageBlockId } from '@/data/typesPage'
 import { Repo } from '@/data/repo'
 import {
   TypeRegistrationTimeout,
@@ -196,6 +196,20 @@ describe('createTypeBlock', () => {
     expect(err.timeoutMs).toBe(1500)
     expect(err.message).toContain('did not appear in the runtime registry within 1500ms')
   })
+
+  it('parents under args.workspaceId\'s Types page, not the active workspace', async () => {
+    // Guard against the regression where createTypeBlock used
+    // `repo.typesPageId` (derived from `activeWorkspaceId`) instead of
+    // `args.workspaceId`. With only `WS` bootstrapped, asking for a
+    // type in some other workspace must surface the missing-Types-page
+    // error rather than silently parenting under WS.
+    env = await setup()
+    await expect(createTypeBlock(env.repo, {
+      workspaceId: 'ws-other-no-bootstrap',
+      label: 'Task',
+      propertySchemaIds: [],
+    })).rejects.toThrow(/no Types page for workspace ws-other-no-bootstrap/)
+  })
 })
 
 // ──── retagBlocks ───────────────────────────────────────────────────
@@ -267,6 +281,39 @@ describe('retagBlocks', () => {
     })).rejects.toBeDefined()
     const row = await env.repo.load(id)
     expect(getBlockTypes(row!)).not.toContain(typeId)
+  })
+
+  it('silently skips instance ids that live in a different workspace', async () => {
+    // Guard against the regression where retagBlocks trusted every
+    // supplied instanceId without enforcing the type's workspace. A
+    // stale caller (e.g. candidate list built before a sync-applied
+    // move) could otherwise tag a cross-workspace block, breaking the
+    // type-stays-in-its-workspace invariant.
+    env = await setup()
+    const typeId = await createTypeBlock(env.repo, {workspaceId: WS, label: 'Task', propertySchemaIds: []})
+
+    // Plant a real block in a foreign workspace by bootstrapping its
+    // Types page — that creates a kernel page row under `WS_OTHER`.
+    // The page id is a perfectly valid block id from retagBlocks's
+    // perspective, but its workspaceId is `WS_OTHER` (not `WS`).
+    const WS_OTHER = 'ws-other'
+    await getOrCreateTypesPage(env.repo, WS_OTHER)
+    const foreignBlockId = typesPageBlockId(WS_OTHER)
+    const foreignRow = await env.repo.load(foreignBlockId)
+    expect(foreignRow?.workspaceId).toBe(WS_OTHER)
+
+    // A same-workspace instance for the positive control.
+    const liveId = await createBlock(env, 'A')
+
+    await retagBlocks(env.repo, {
+      typeId,
+      instanceIds: [liveId, foreignBlockId],
+    })
+
+    const live = await env.repo.load(liveId)
+    const foreign = await env.repo.load(foreignBlockId)
+    expect(getBlockTypes(live!)).toContain(typeId)
+    expect(getBlockTypes(foreign!)).not.toContain(typeId)
   })
 })
 
